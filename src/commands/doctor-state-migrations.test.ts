@@ -14,7 +14,6 @@ import {
   runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
 } from "../infra/state-migrations.doctor.js";
 import { writeLegacySessionsFixture } from "../infra/state-migrations.session-store.test-support.js";
-import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
 import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
@@ -34,7 +33,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
-    resetAutoMigrateLegacyStateDirForTest();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     resetPluginStateStoreForTests();
@@ -148,15 +146,6 @@ vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
     ...actual,
     collectRelevantDoctorPluginIds: vi.fn(() => []),
     listPluginDoctorSessionStoreAgentIds: vi.fn(() => []),
-    resolveLivePluginDoctorStateMigrationInventory: vi.fn(() => ({
-      knownPluginIds: mockedLegacyMigrationDetectors.entries.map(({ pluginId }) => pluginId),
-      sessionStoreOwnerPluginIds: [],
-      descriptors: mockedLegacyMigrationDetectors.entries.map(({ pluginId }) => ({
-        pluginId,
-        id: `${pluginId}-legacy-channel-state`,
-      })),
-      unresolvedPluginIds: [],
-    })),
     listPluginDoctorStateMigrationEntries: vi.fn(() =>
       mockedLegacyMigrationDetectors.entries.map(({ pluginId, detector }) => ({
         pluginId,
@@ -167,6 +156,24 @@ vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
         }),
       })),
     ),
+  };
+});
+
+vi.mock("../plugins/doctor-contract-preparation.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/doctor-contract-preparation.js")>();
+  return {
+    ...actual,
+    prepareLivePluginDoctorStateMigrationInventory: vi.fn(async () => ({
+      knownPluginIds: mockedLegacyMigrationDetectors.entries.map(({ pluginId }) => pluginId),
+      sessionStoreOwnerPluginIds: [],
+      descriptors: mockedLegacyMigrationDetectors.entries.map(({ pluginId }) => ({
+        pluginId,
+        id: `${pluginId}-legacy-channel-state`,
+      })),
+      unresolvedPluginIds: [],
+    })),
+    // This suite supplies callback entries directly and owns no source modules.
+    preparePluginDoctorContractModules: vi.fn(async () => {}),
   };
 });
 

@@ -1,12 +1,12 @@
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  buildCapabilityProviderDefaultRefs,
   resolveCapabilityModelRefForProviders,
   type CapabilityModelRef as ParsedProviderModelRef,
   type CapabilityModelProviderCandidate,
 } from "../../packages/media-generation-core/src/capability-model-ref.js";
 import { parseGenerationModelRef } from "../../packages/media-generation-core/src/model-ref.js";
-import type { MediaGenerationNormalizationMetadataInput } from "../../packages/media-generation-core/src/normalization.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
@@ -159,19 +159,6 @@ type CapabilityProviderCandidate = CapabilityModelProviderCandidate & {
   isConfiguredAsync?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => Promise<boolean>;
 };
 
-type ParsedAspectRatio = {
-  width: number;
-  height: number;
-  value: number;
-};
-
-type ParsedSize = {
-  width: number;
-  height: number;
-  aspectRatio: number;
-  area: number;
-};
-
 function resolveCurrentDefaultProviderId(cfg?: OpenClawConfig): string {
   const trimmed = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.model);
   if (!trimmed) {
@@ -195,35 +182,9 @@ function buildAutoCapabilityFallbackRefs(
   params: CapabilityFallbackParams,
   configuredProviders: CapabilityProviderCandidate[],
 ): string[] {
-  const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
-  for (const provider of configuredProviders) {
-    const providerId = normalizeOptionalString(provider.id);
-    const modelId = normalizeOptionalString(provider.defaultModel);
-    if (!providerId || !modelId || providerDefaults.has(providerId)) {
-      continue;
-    }
-    const aliases = (provider.aliases ?? []).flatMap((alias) => {
-      const normalized = normalizeOptionalString(alias);
-      return normalized ? [normalized] : [];
-    });
-    providerDefaults.set(providerId, { ref: `${providerId}/${modelId}`, aliases });
-  }
-
-  const defaultProvider = resolveCurrentDefaultProviderId(params.cfg);
-  const providerIds = [...providerDefaults.keys()].toSorted();
-  const matchesDefaultProvider = (providerId: string): boolean => {
-    const entry = providerDefaults.get(providerId);
-    return providerId === defaultProvider || (entry?.aliases ?? []).includes(defaultProvider);
-  };
-  const orderedProviders = [
-    ...providerIds.filter(matchesDefaultProvider),
-    ...providerIds.filter((providerId) => !matchesDefaultProvider(providerId)),
-  ];
-  // Keep the user's default text provider first when it also has media support;
-  // then add the remaining configured media providers deterministically.
-  return orderedProviders.flatMap((providerId) => {
-    const entry = providerDefaults.get(providerId);
-    return entry ? [entry.ref] : [];
+  return buildCapabilityProviderDefaultRefs({
+    providers: configuredProviders,
+    preferredProvider: resolveCurrentDefaultProviderId(params.cfg),
   });
 }
 
@@ -384,279 +345,6 @@ export async function resolveCapabilityModelCandidatesAsync(
     }
   }
   return prepared.candidates;
-}
-
-function normalizeSupportedValues<TValue extends string>(values?: readonly TValue[]): TValue[] {
-  return (values ?? []).filter((entry) => Boolean(normalizeOptionalString(entry)));
-}
-
-function selectClosestValue<T extends string>(
-  values: readonly T[],
-  score: (value: T) => { primary: number; secondary: number } | undefined,
-): T | undefined {
-  let best: { value: T; primary: number; secondary: number } | undefined;
-  for (const value of values) {
-    const next = score(value);
-    if (
-      next &&
-      (!best ||
-        (next.primary !== best.primary
-          ? next.primary < best.primary
-          : next.secondary !== best.secondary
-            ? next.secondary < best.secondary
-            : value.localeCompare(best.value) < 0))
-    ) {
-      best = { value, ...next };
-    }
-  }
-  return best?.value;
-}
-
-function parsePositiveDimensionPair(
-  raw: string | null | undefined,
-  pattern: RegExp,
-): { width: number; height: number } | null {
-  const trimmed = normalizeOptionalString(raw);
-  if (!trimmed) {
-    return null;
-  }
-  const match = pattern.exec(trimmed);
-  if (!match) {
-    return null;
-  }
-  const width = Number(match[1]);
-  const height = Number(match[2]);
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-    return null;
-  }
-  return { width, height };
-}
-
-function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
-  const pair = parsePositiveDimensionPair(raw, /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
-  if (!pair) {
-    return null;
-  }
-  return {
-    width: pair.width,
-    height: pair.height,
-    value: pair.width / pair.height,
-  };
-}
-
-function parseSizeValue(raw?: string | null): ParsedSize | null {
-  const pair = parsePositiveDimensionPair(raw, /^(\d+)\s*x\s*(\d+)$/i);
-  if (!pair) {
-    return null;
-  }
-  if (!Number.isSafeInteger(pair.width) || !Number.isSafeInteger(pair.height)) {
-    return null;
-  }
-  return {
-    width: pair.width,
-    height: pair.height,
-    aspectRatio: pair.width / pair.height,
-    area: pair.width * pair.height,
-  };
-}
-
-function greatestCommonDivisor(a: number, b: number): number {
-  let left = Math.abs(a);
-  let right = Math.abs(b);
-  while (right !== 0) {
-    const next = left % right;
-    left = right;
-    right = next;
-  }
-  return left || 1;
-}
-
-/** Derives a reduced aspect ratio string from a WIDTHxHEIGHT size. */
-function deriveAspectRatioFromSize(size?: string): string | undefined {
-  const parsed = parseSizeValue(size);
-  if (!parsed) {
-    return undefined;
-  }
-  const divisor = greatestCommonDivisor(parsed.width, parsed.height);
-  return `${parsed.width / divisor}:${parsed.height / divisor}`;
-}
-
-export function resolveClosestAspectRatio(params: {
-  requestedAspectRatio?: string;
-  requestedSize?: string;
-  supportedAspectRatios?: readonly string[];
-}): string | undefined {
-  const supported = normalizeSupportedValues(params.supportedAspectRatios);
-  if (supported.length === 0) {
-    return params.requestedAspectRatio ?? deriveAspectRatioFromSize(params.requestedSize);
-  }
-  if (params.requestedAspectRatio && supported.includes(params.requestedAspectRatio)) {
-    return params.requestedAspectRatio;
-  }
-  const requested =
-    parseAspectRatioValue(params.requestedAspectRatio) ??
-    parseAspectRatioValue(deriveAspectRatioFromSize(params.requestedSize));
-  if (!requested) {
-    return undefined;
-  }
-
-  return selectClosestValue(supported, (candidate) => {
-    const parsed = parseAspectRatioValue(candidate);
-    if (!parsed) {
-      return undefined;
-    }
-    return {
-      primary: Math.abs(Math.log(parsed.value / requested.value)),
-      secondary: Math.abs(parsed.width * requested.height - requested.width * parsed.height),
-    };
-  });
-}
-
-/** Chooses the closest supported size by aspect ratio and area. */
-export function resolveClosestSize(params: {
-  requestedSize?: string;
-  requestedAspectRatio?: string;
-  supportedSizes?: readonly string[];
-}): string | undefined {
-  const supported = normalizeSupportedValues(params.supportedSizes);
-  if (supported.length === 0) {
-    return params.requestedSize;
-  }
-  if (params.requestedSize && supported.includes(params.requestedSize)) {
-    return params.requestedSize;
-  }
-  const requested = parseSizeValue(params.requestedSize);
-  const requestedAspectRatio = parseAspectRatioValue(params.requestedAspectRatio);
-  if (!requested && !requestedAspectRatio) {
-    return undefined;
-  }
-
-  return selectClosestValue(supported, (candidate) => {
-    const parsed = parseSizeValue(candidate);
-    if (!parsed) {
-      return undefined;
-    }
-    return {
-      primary: Math.abs(
-        Math.log(parsed.aspectRatio / (requested?.aspectRatio ?? requestedAspectRatio!.value)),
-      ),
-      secondary: requested ? Math.abs(Math.log(parsed.area / requested.area)) : parsed.area,
-    };
-  });
-}
-
-/** Chooses the closest supported resolution within the same numeric unit. */
-export function resolveClosestResolution<TResolution extends string>(params: {
-  requestedResolution?: TResolution;
-  supportedResolutions?: readonly TResolution[];
-}): TResolution | undefined {
-  const supported = normalizeSupportedValues(params.supportedResolutions);
-  if (supported.length === 0) {
-    return params.requestedResolution;
-  }
-  if (params.requestedResolution && supported.includes(params.requestedResolution)) {
-    return params.requestedResolution;
-  }
-  const requestedNumeric = parseResolutionRank(params.requestedResolution);
-  if (!requestedNumeric) {
-    return undefined;
-  }
-  return selectClosestValue(supported, (candidate) => {
-    const candidateNumeric = parseResolutionRank(candidate);
-    if (!candidateNumeric || candidateNumeric.unit !== requestedNumeric.unit) {
-      return undefined;
-    }
-    return {
-      primary: Math.abs(candidateNumeric.value - requestedNumeric.value),
-      secondary: candidateNumeric.value < requestedNumeric.value ? 1 : 0,
-    };
-  });
-}
-
-function parseResolutionRank(
-  resolution: string | undefined,
-): { value: number; unit: "K" | "P" } | undefined {
-  const match = resolution?.trim().match(/^(\d+(?:\.\d+)?)([kp])$/iu);
-  if (!match) {
-    return undefined;
-  }
-  const value = Number(match[1]);
-  if (!Number.isFinite(value)) {
-    return undefined;
-  }
-  const unit = match[2]?.toUpperCase() === "K" ? "K" : "P";
-  return {
-    value: unit === "K" ? value * 1000 : value,
-    unit,
-  };
-}
-
-/** Rounds duration and clamps it to a provider maximum when supplied. */
-export function normalizeDurationToClosestMax(
-  durationSeconds?: number,
-  maxDurationSeconds?: number,
-) {
-  if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds)) {
-    return undefined;
-  }
-  const rounded = Math.max(1, Math.round(durationSeconds));
-  if (
-    typeof maxDurationSeconds !== "number" ||
-    !Number.isFinite(maxDurationSeconds) ||
-    maxDurationSeconds <= 0
-  ) {
-    return rounded;
-  }
-  return Math.min(rounded, Math.max(1, Math.round(maxDurationSeconds)));
-}
-
-export function buildMediaGenerationNormalizationMetadata(params: {
-  normalization?: MediaGenerationNormalizationMetadataInput;
-  requestedSizeForDerivedAspectRatio?: string;
-  includeSupportedDurationSeconds?: boolean;
-}): Record<string, unknown> {
-  const metadata: Record<string, unknown> = {};
-  const { normalization } = params;
-  if (normalization?.size?.requested !== undefined && normalization.size.applied !== undefined) {
-    metadata.requestedSize = normalization.size.requested;
-    metadata.normalizedSize = normalization.size.applied;
-  }
-  if (normalization?.aspectRatio?.applied !== undefined) {
-    if (normalization.aspectRatio.requested !== undefined) {
-      metadata.requestedAspectRatio = normalization.aspectRatio.requested;
-    }
-    metadata.normalizedAspectRatio = normalization.aspectRatio.applied;
-    if (
-      normalization.aspectRatio.derivedFrom === "size" &&
-      params.requestedSizeForDerivedAspectRatio
-    ) {
-      metadata.requestedSize = params.requestedSizeForDerivedAspectRatio;
-      metadata.aspectRatioDerivedFromSize = deriveAspectRatioFromSize(
-        params.requestedSizeForDerivedAspectRatio,
-      );
-    }
-  }
-  if (
-    normalization?.resolution?.requested !== undefined &&
-    normalization.resolution.applied !== undefined
-  ) {
-    metadata.requestedResolution = normalization.resolution.requested;
-    metadata.normalizedResolution = normalization.resolution.applied;
-  }
-  if (
-    normalization?.durationSeconds?.requested !== undefined &&
-    normalization.durationSeconds.applied !== undefined
-  ) {
-    metadata.requestedDurationSeconds = normalization.durationSeconds.requested;
-    metadata.normalizedDurationSeconds = normalization.durationSeconds.applied;
-    if (
-      params.includeSupportedDurationSeconds &&
-      normalization.durationSeconds.supportedValues?.length
-    ) {
-      metadata.supportedDurationSeconds = normalization.durationSeconds.supportedValues;
-    }
-  }
-  return metadata;
 }
 
 /** Throws a summarized error after all provider/model candidates fail. */

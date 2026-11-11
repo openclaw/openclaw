@@ -59,15 +59,6 @@ const EXEC_SECRET_REF_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$/;
 /** Canonical id for file secret providers that expose exactly one value. */
 export const SINGLE_VALUE_FILE_REF_ID = "value";
 
-type ExecSecretRefIdValidationReason = "pattern" | "traversal-segment";
-
-type ExecSecretRefIdValidationResult =
-  | { ok: true }
-  | {
-      ok: false;
-      reason: ExecSecretRefIdValidationReason;
-    };
-
 type SecretRefDefaultsCarrier = {
   secrets?: {
     /** Explicit per-source provider aliases selected by the operator. */
@@ -174,22 +165,18 @@ export function isValidSecretProviderAlias(value: string): boolean {
   return SECRET_PROVIDER_ALIAS_PATTERN.test(value);
 }
 
-export function validateExecSecretRefId(value: string): ExecSecretRefIdValidationResult {
+export function isValidExecSecretRefId(value: string): boolean {
   if (!EXEC_SECRET_REF_ID_PATTERN.test(value)) {
-    return { ok: false, reason: "pattern" };
+    return false;
   }
   // The JSON schema uses a negative lookahead for traversal. Runtime validation keeps the same
-  // rule explicit so UI/doctor flows can explain the safer failure class.
+  // rule explicit so config, plugin SDK, and Gateway validation accept the same ids.
   for (const segment of value.split("/")) {
     if (segment === "." || segment === "..") {
-      return { ok: false, reason: "traversal-segment" };
+      return false;
     }
   }
-  return { ok: true };
-}
-
-export function isValidExecSecretRefId(value: string): boolean {
-  return validateExecSecretRefId(value).ok;
+  return true;
 }
 
 export function isValidSecretRef(ref: SecretRef): boolean {

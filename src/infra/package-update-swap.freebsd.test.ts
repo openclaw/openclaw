@@ -10,6 +10,12 @@ import {
   createRootRunner,
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
+import {
+  expectInstallation,
+  expectNoCalls,
+  expectVersion,
+  readText,
+} from "./package-update-swap.assertions.test-support.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import {
   createPackageSwapFixture,
@@ -26,14 +32,6 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
-async function expectVersion(root: string, version: string) {
-  expect(await readText(root, "package.json")).toContain(`"version":"${version}"`);
-}
-async function expectUnchanged(fixture: Awaited<ReturnType<typeof createPackageSwapFixture>>) {
-  await expectVersion(fixture.packageRoot, "1.0.0");
-  expect(await readText(fixture.launcher)).toBe("old launcher\n");
-}
 function update(
   installTarget: ReturnType<typeof createNpmTarget>,
   runStep: Parameters<typeof runGlobalPackageUpdateSteps>[0]["runStep"],
@@ -198,9 +196,8 @@ describe("system package replacement ownership", () => {
       expect(beforeActivate).toHaveBeenCalledOnce();
       expect(query).toHaveBeenCalledTimes(2);
     }
-    expect(onLiveMutation).not.toHaveBeenCalled();
-    expect(onTransaction).not.toHaveBeenCalled();
-    await expectUnchanged(f);
+    expectNoCalls(onLiveMutation, onTransaction);
+    await expectInstallation(f.packageRoot, f.launcher);
   });
 
   it("refuses pkg ownership before package-manager staging or in-place installation", async () => {

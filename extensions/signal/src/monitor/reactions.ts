@@ -1,4 +1,5 @@
 import type { SignalReactionNotificationMode } from "openclaw/plugin-sdk/config-contracts";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isSignalSenderAllowed, type SignalSender } from "../identity.js";
@@ -14,11 +15,8 @@ export function resolveSignalStatusReactionTimestamp(params: {
   timestamp?: number;
   messageId?: string;
 }): number | null {
-  if (typeof params.timestamp === "number") {
-    return Number.isFinite(params.timestamp) && params.timestamp > 0 ? params.timestamp : null;
-  }
-  const parsed = Number(params.messageId);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  const value = typeof params.timestamp === "number" ? params.timestamp : Number(params.messageId);
+  return asPositiveFiniteNumber(value) ?? null;
 }
 
 export function resolveSignalReactionTargets(

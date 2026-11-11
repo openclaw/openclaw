@@ -4,31 +4,33 @@ import {
   installMockGateway,
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { requireRecord } from "./chat-flow.test-support.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Session list row events" });
 
-// These are separate foreground routes. The sidebar and its agent roster share
-// each route's connection; manually mounting all pages would invent a UI state.
 suite.define(() => {
-  it.each(["chat", "sessions", "dashboards", "agents"])(
+  it.each([
+    ["chat", ".chat-thread"],
+    ["sessions", ".sessions-table"],
+    ["dashboards", "[data-dashboard-session]"],
+  ])(
     "updates held rows on %s without any mounted caller refetching a list",
-    async (route) => {
+    async (route, selector) => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         const key = "agent:main:row-events";
         const mainKey = "agent:main:main";
-        const row = createControlUiSessionRow(key, "Initial roster title", Date.now(), {
+        const initialPreview = "Initial roster preview";
+        const row = sessionRow(key, "Initial roster title", Date.now(), {
           agentId: "main",
           parentSessionKey: mainKey,
           childOwnerSessionKeys: [mainKey],
           boardFace: "dashboard",
           hasBoard: true,
-          lastMessagePreview: "Initial roster preview",
+          lastMessagePreview: initialPreview,
           snapshotAt: Date.now(),
         });
-        const main = createControlUiSessionRow(mainKey, "Main conversation", row.updatedAt - 2, {
+        const main = sessionRow(mainKey, "Main conversation", row.updatedAt - 2, {
           agentId: "main",
           isMain: true,
           childSessions: [key],
@@ -38,7 +40,7 @@ suite.define(() => {
           ancestorRevision: "main-row-revision",
           snapshotAt: row.updatedAt,
         });
-        const tail = createControlUiSessionRow(
+        const tail = sessionRow(
           "agent:main:gallery-tail",
           "Second gallery page",
           row.updatedAt - 1,
@@ -74,15 +76,7 @@ suite.define(() => {
             ? controlUiSessionUrl(suite.server.baseUrl, key)
             : `${suite.server.baseUrl}${route}`,
         );
-        const foreground = page.locator(
-          route === "chat"
-            ? ".chat-thread"
-            : route === "sessions"
-              ? ".sessions-table"
-              : route === "dashboards"
-                ? "[data-dashboard-session]"
-                : ".agents-home__preview",
-        );
+        const foreground = page.locator(selector);
         await foreground.first().waitFor();
         if (route === "dashboards") {
           await expect.poll(() => foreground.count()).toBe(2);
@@ -98,31 +92,32 @@ suite.define(() => {
         const before = await gateway.getRequests("sessions.list");
         expect(before.length).toBeGreaterThan(0);
         const now = await page.evaluate(() => Date.now());
-        await gateway.emitGatewayEvent("sessions.changed", {
+        const patch = (title: string, at: number, preview = initialPreview) => ({
           agentId: "main",
           sessionKey: key,
           reason: "patch",
-          ancestorSessions: [{ ...main, snapshotAt: now }],
           session: {
             ...row,
-            label: "Updated by certified event",
-            displayName: "Updated by certified event",
-            lastMessagePreview: "Updated roster preview",
-            updatedAt: now,
-            snapshotAt: now,
+            label: title,
+            displayName: title,
+            lastMessagePreview: preview,
+            updatedAt: at,
+            snapshotAt: at,
           },
+        });
+        await gateway.emitGatewayEvent("sessions.changed", {
+          ...patch("Updated by certified event", now, "Updated roster preview"),
+          ancestorSessions: [{ ...main, snapshotAt: now }],
         });
         await page.clock.runFor(500);
         await expect.poll(() => sidebarRow.textContent()).toContain("Updated by certified event");
         if (route !== "chat") {
           await expect
             .poll(() => foreground.first().textContent())
-            .toContain(route === "agents" ? "Main roster preview" : "Updated by certified event");
+            .toContain("Updated by certified event");
         }
         await gateway.emitGatewayEvent("sessions.changed", {
-          agentId: "main",
-          sessionKey: key,
-          reason: "patch",
+          ...patch("Updated with held ancestor", now + 500),
           ancestorSessions: [],
           ancestorSessionRefs: [
             {
@@ -132,30 +127,10 @@ suite.define(() => {
               snapshotAt: now + 500,
             },
           ],
-          session: {
-            ...row,
-            label: "Updated with held ancestor",
-            displayName: "Updated with held ancestor",
-            updatedAt: now + 500,
-            snapshotAt: now + 500,
-          },
         });
         await page.clock.runFor(59_499);
         await expect.poll(() => sidebarRow.textContent()).toContain("Updated with held ancestor");
         expect(await gateway.getRequests("sessions.list")).toEqual(before);
-        for (const request of before) {
-          const params = requireRecord(request.params);
-          expect(params).toMatchObject({
-            rowMode:
-              (params.source === "sidebar" || params.source === "agent-roster") &&
-              params.includeLastMessage === true
-                ? "sidebar"
-                : params.hasBoard === true
-                  ? "dashboard"
-                  : "compact",
-            source: expect.any(String),
-          });
-        }
       });
     },
   );

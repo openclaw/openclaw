@@ -149,7 +149,6 @@ export async function runManagerCloseSession(params: {
         }
         assertCurrent();
         if (input.discardPersistentState) {
-          input.assertActive?.();
           await tryPrepareFreshManagerRuntimeSession({
             deps: params.deps,
             cfg: input.cfg,
@@ -163,7 +162,6 @@ export async function runManagerCloseSession(params: {
         }
         // Treat unavailable backends as terminal for this cached handle so a
         // later operation cannot reuse an unusable runtime.
-        assertCurrentAcpActor(params.isCurrentActor(), sessionKey);
         params.runtimeHandles.clear(params);
         runtimeNotice = acpError.message;
       } else {

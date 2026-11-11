@@ -1,10 +1,10 @@
-import { createMemo, createSignal, merge, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, merge, onSettled, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import type { SessionCreatedActor } from "../lib/session-owner.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { activateMenuShortcut } from "./menu-shortcuts.ts";
+import { activateMenuShortcut } from "./menu-shortcut-activation.ts";
 import {
-  EMPTY_SESSION_MENU_DATA,
   SessionMenuActions,
   type SessionManagementAction,
   type SessionMenuData,
@@ -13,14 +13,20 @@ import {
   compactSessionMenuViewForValue,
   type CompactSessionMenuView,
 } from "./session-menu-compact.ts";
+import { EMPTY_SESSION_MENU_DATA } from "./session-menu-data.ts";
 import { SessionMenuShortcut, useSessionMenuEntries } from "./session-menu-view.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
-import { Menu, type MenuEntry, type MenuItem, type MenuHandle } from "./solid/menu.tsx";
+import {
+  createMenuControls,
+  Menu,
+  type MenuEntry,
+  type MenuItem,
+  type MenuHandle,
+} from "./solid/menu.tsx";
 
 /** Only resolved local worktree destinations are offered by the menu host. */
 export type SessionMenuWork = {
-  loading: boolean;
   pullRequestUrl: string | null;
   worktreePath: string | null;
 };
@@ -40,17 +46,22 @@ type SessionMenuProps = {
   copyMarkdownAllowed: boolean;
   splitAllowed: boolean;
   selectionCount: number;
-  lastActive: string;
   anchor: { x: number; y: number };
   trigger: HTMLElement | null;
   disabled: boolean;
   actionDisabledReasons: Partial<Record<SessionMenuActionKind, string>>;
+  nestedSession: {
+    creating: boolean;
+    disabledReason?: string;
+    onCreate: () => void;
+  } | null;
   forkDisabled: boolean;
   forkFromLastCompleted: boolean;
   archiveAllowed: boolean;
   snoozeAllowed: boolean;
   deleteAllowed: boolean;
   cloudWorkerStopAllowed: boolean;
+  cloudWorkerStopLabel?: string;
   groups: readonly string[];
   currentOwner: SessionCreatedActor | null;
   work: SessionMenuWork | null;
@@ -66,6 +77,7 @@ function SessionMenuContent(
   anchor: SessionMenuProps["anchor"],
 ) {
   const menuId = `session-menu-${++nextSessionMenuId}`;
+  const controls = createMenuControls();
   const [compactView, setCompactView] = createSignal<CompactSessionMenuView>("root");
   let menu: MenuHandle | undefined;
   const state = merge(props, {
@@ -87,18 +99,31 @@ function SessionMenuContent(
     }
   };
   const actions = new SessionMenuActions(
-    host,
+    () => {
+      void host.updateComplete.then(() => {
+        if (compactView() === "icon") {
+          view.appearance.focusFirst();
+        } else {
+          menu?.focusFirst();
+        }
+      });
+    },
     readState,
     (action) => props.onAction(action),
     close,
   );
-  const view = useSessionMenuEntries(actions, readState);
+  const view = useSessionMenuEntries(actions, readState, { controls });
   const shortcut = (event: KeyboardEvent) => {
     if (!actions.handleKeydown(event, view.appearance)) {
-      activateMenuShortcut(host, event);
+      activateMenuShortcut(menu?.overlay.surface, event);
     }
   };
-  onCleanup(() => menu?.overlay.surface.removeEventListener("keydown", shortcut, true));
+  let stopShortcut: (() => void) | undefined;
+  let stopAfterHide: (() => void) | undefined;
+  onSettled(() => () => {
+    stopShortcut?.();
+    stopAfterHide?.();
+  });
   const batch = () => props.selectionCount > 1;
   const label = () =>
     batch()
@@ -121,22 +146,37 @@ function SessionMenuContent(
   const primaryDivider = separator("primary-divider");
   const prDivider = separator("pr-divider");
   const advancedDivider = separator("advanced-divider");
-  const lastActive: MenuEntry = {
-    kind: "content",
-    id: "last-active",
-    content: (
-      <div class="session-menu__info">
-        {t("sessionsView.lastActive", { time: props.lastActive })}
-      </div>
-    ),
-  };
   const items = createMemo((): MenuEntry[] => {
     if (props.compact && compactView() !== "root") {
       return view.compact(compactView());
     }
     return [
-      ...(!batch() && props.lastActive ? [lastActive] : []),
       ...view.primary(),
+      ...(!batch() && props.nestedSession
+        ? [
+            {
+              id: "new-nested-session",
+              label: t(
+                props.nestedSession.creating
+                  ? "sessionsView.creatingNestedSession"
+                  : "sessionsView.newNestedSession",
+              ),
+              class: "session-menu__item",
+              labelClass: "session-menu__text",
+              disabled:
+                props.disabled ||
+                props.nestedSession.creating ||
+                Boolean(props.nestedSession.disabledReason),
+              attributes: { title: props.nestedSession.disabledReason },
+              icon: (
+                <span class="session-menu__icon" aria-hidden="true">
+                  <Icon name="plus" />
+                </span>
+              ),
+              closeOnSelect: false,
+            },
+          ]
+        : []),
       primaryDivider,
       ...view.organization(),
       ...(!batch()
@@ -184,7 +224,7 @@ function SessionMenuContent(
         ? [
             {
               id: "stop-cloud-worker",
-              label: t("sessionsView.stopCloudWorker"),
+              label: props.cloudWorkerStopLabel || t("sessionsView.stopCloudWorker"),
               class: "session-menu__item session-menu__item--destructive",
               labelClass: "session-menu__text",
               variant: "danger" as const,
@@ -224,6 +264,11 @@ function SessionMenuContent(
       if (action && props.selectionCount === 1 && !actionDisabled("plugin", action.disabled)) {
         runAction({ kind: "plugin", id: action.id });
       }
+    } else if (value === "new-nested-session") {
+      const nested = props.nestedSession;
+      if (nested && !props.disabled && !nested.creating && !nested.disabledReason) {
+        nested.onCreate();
+      }
     } else if (value === "stop-cloud-worker") {
       runAction({ kind: value });
     } else if (value === "open-pr" && props.work?.pullRequestUrl) {
@@ -240,9 +285,9 @@ function SessionMenuContent(
       closed();
     }
   };
-  onCleanup(() => menu?.overlay.surface.removeEventListener("overlay-after-hide", afterHide));
   return (
     <Menu
+      controls={controls}
       id={menuId}
       class={["session-menu", { "session-menu--compact": props.compact }]}
       panelClass="session-menu__panel"
@@ -259,8 +304,10 @@ function SessionMenuContent(
         if (props.trigger) {
           handle.overlay.setReturnTarget(props.trigger);
         }
-        handle.overlay.surface.addEventListener("keydown", shortcut, true);
-        handle.overlay.surface.addEventListener("overlay-after-hide", afterHide);
+        stopShortcut?.();
+        stopAfterHide?.();
+        stopShortcut = listen(handle.overlay.surface, "keydown", shortcut, true);
+        stopAfterHide = listen(handle.overlay.surface, "overlay-after-hide", afterHide);
         if (!handle.open()) {
           closed();
         }
@@ -309,17 +356,18 @@ export const SessionMenu = defineSolidBridge<SessionMenuProps>(
       copyMarkdownAllowed: { default: false, attribute: false },
       splitAllowed: { default: false, attribute: false },
       selectionCount: { default: 1, attribute: false },
-      lastActive: { default: "", attribute: false },
       anchor: { default: { x: 0, y: 0 }, attribute: false },
       trigger: { default: null, attribute: false },
       disabled: { default: false, attribute: false },
       actionDisabledReasons: { default: {}, attribute: false },
+      nestedSession: { default: null, attribute: false },
       forkDisabled: { default: false, attribute: false },
       forkFromLastCompleted: { default: false, attribute: false },
       archiveAllowed: { default: false, attribute: false },
       snoozeAllowed: { default: false, attribute: false },
       deleteAllowed: { default: false, attribute: false },
       cloudWorkerStopAllowed: { default: false, attribute: false },
+      cloudWorkerStopLabel: { default: "", attribute: false },
       groups: { default: [], attribute: false },
       currentOwner: { default: null, attribute: false },
       work: { default: null, attribute: false },

@@ -1,10 +1,11 @@
 import type { ItemProgressPayload } from "./progress-draft-events.js";
 import type { ChannelProgressDraftLine } from "./progress-draft-lines.js";
-import { buildChannelProgressDraftLine } from "./streaming.js";
+import { buildChannelProgressDraftLine, type ChannelProgressLineOptions } from "./streaming.js";
 
 /** Status is not a tool log: never project arguments, command titles or result prose. */
 export function projectChannelWorkStatus(
   item: ItemProgressPayload,
+  options?: Pick<ChannelProgressLineOptions, "toolIcons">,
 ): ChannelProgressDraftLine | undefined {
   if (item.hideFromChannelProgress || item.suppressChannelProgress || !item.itemId) {
     return undefined;
@@ -32,25 +33,36 @@ export function projectChannelWorkStatus(
   ) {
     return undefined;
   }
-  const label = child
-    ? item.title?.trim() || "Delegated work"
-    : buildChannelProgressDraftLine({ event: "item", itemKind: item.kind, name: item.name })?.label;
-  if (!label) {
+  if (child) {
+    // A child's terminal state matters to its wait, so every state stays visible.
+    return {
+      id: item.itemId,
+      kind: "subagent-status",
+      label: "",
+      text: `${item.title?.trim() || "Delegated work"}: ${state}`,
+      // Bounded cards reserve lines for failures by status, ahead of plans and routine rows.
+      status: state,
+      prefix: false,
+    };
+  }
+  // The tool log's own row, reduced to its name, so both views render alike.
+  const row = buildChannelProgressDraftLine(
+    { event: "item", itemKind: item.kind, name: item.name },
+    { toolIcons: options?.toolIcons },
+  );
+  if (!row?.label) {
     return undefined;
   }
-  // A finished operation is not a finished task. Ordinary diagnostic outcomes
-  // remain in the optional tool log; a child's terminal state matters to its wait.
-  const text =
-    child || state === "running" || state === "blocked"
-      ? `${label}: ${state}`
-      : `Last activity: ${label}`;
   return {
     id: item.itemId,
-    kind: child ? "subagent-status" : "operation-status",
-    label: "",
-    text,
-    // Bounded cards reserve lines for failures by status, ahead of plans and routine rows.
-    ...(child ? { status: state } : {}),
+    kind: "operation-status",
+    label: row.label,
+    text: row.label,
+    ...(row.icon ? { icon: row.icon } : {}),
+    ...(row.toolName ? { toolName: row.toolName } : {}),
+    // A finished operation is not a finished task, and ordinary diagnostic
+    // outcomes belong to the optional tool log: only live states are shown.
+    ...(state === "running" || state === "blocked" ? { status: state } : {}),
     prefix: false,
   };
 }

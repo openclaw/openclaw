@@ -307,7 +307,7 @@ struct AppStateIsolationTests {
 
             let stateDirectory = OpenClawPaths.stateDirURL
             #expect(stateDirectory != launchState)
-            #expect(stateDirectory.path.hasPrefix(fm.temporaryDirectory.path))
+            #expect(stateDirectory.path.hasPrefix(temporaryDirectoryForTests().path + "/"))
             #expect(OpenClawConfigFile.saveDict([
                 "gateway": [
                     "mode": "remote",

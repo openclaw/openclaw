@@ -11,6 +11,8 @@ export type PanelTabStripTab<Content = unknown> = {
   className?: string;
   closeLabel: string;
   closeDisabled?: boolean;
+  /** Fixed tabs keep native selection and keyboard navigation, without a close action. */
+  closable?: boolean;
   group?: string;
   draggable?: boolean;
   reorderId?: string;

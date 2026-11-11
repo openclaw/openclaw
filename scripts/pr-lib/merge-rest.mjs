@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { parseGithubResponse } from "./gh-api-preflight.mjs";
 import { execPrGh, execPrGhAsync, execPrGhJson } from "./github.mjs";
@@ -16,6 +17,17 @@ const RULE_TYPES = new Set([
   "required_linear_history",
   "pull_request",
   "required_status_checks",
+]);
+// Only these workflow-job events can fulfill PR checks; merge queues have their
+// own event. External App checks and commit statuses do not use this restriction.
+const REQUIRED_CHECK_EVENTS = new Set([
+  "push",
+  "pull_request",
+  "pull_request_review",
+  "pull_request_target",
+  "deployment",
+  "deployment_status",
+  "merge_group",
 ]);
 
 function requireEvidence(condition, message) {
@@ -168,31 +180,10 @@ export function readMergePolicyAsync(repo) {
 }
 
 function* mergePolicySteps(repo) {
-  const [protectionResult, rulesResult] = yield [
-    request(repo, "/branches/main/protection", false, true),
-    request(repo, "/rules/branches/main?per_page=100", true),
-  ];
-  let response;
-  try {
-    response = requestResult(protectionResult);
-  } catch (error) {
-    // A missing classic protection rule is authoritative only with its HTTP body;
-    // stderr, inaccessible repositories, and generic 404s do not prove absence.
-    response = String(error.stdout ?? "");
-    const parsed = parseGithubResponse(response);
-    requireEvidence(
-      !(parsed.status === "404" && parsed.body?.message === "Not Found"),
-      "classic branch-protection policy is unavailable to this writer; a generic 404 or hidden GraphQL rule cannot prove absence. The CI exception requires an authoritative policy read. Repair failed CI and use ordinary green-CI landing when its normal admission succeeds; do not change credentials or supply a policy snapshot. This refusal does not establish environment approval or production deployment authority",
-    );
-    if (parsed.status !== "404" || parsed.body?.message !== "Branch not protected") {
-      throw error;
-    }
-  }
-  const protection = parseGithubResponse(response);
-  requireRestSupport(
-    protection.status === "404" && protection.body?.message === "Branch not protected",
-    "classic branch protection is not supported",
-  );
+  // GitHub enforces classic protection at the pinned merge request. Its
+  // admin-only discovery endpoint is not a prerequisite for maintainer landing.
+  // Applicable rules still supply required-check and delegated CI evidence.
+  const [rulesResult] = yield [request(repo, "/rules/branches/main?per_page=100", true)];
   const rules = pageArrays(requestResult(rulesResult));
   for (const rule of rules) {
     requireEvidence(nonemptyString(rule?.type), "missing effective branch rule");
@@ -218,6 +209,7 @@ function* mergePolicySteps(repo) {
       }
     }
   }
+  // Preserve retained snapshot/hash shape; null is not an absence attestation.
   return canonical({ classicProtection: null, rules });
 }
 
@@ -308,10 +300,10 @@ function repositoryAuthority(repo, response) {
   return authority;
 }
 
-function beginRead(repo, pr, observe, priorCiObservation) {
+function beginRead(repo, pr, observe) {
   const startedAtMs = Date.now();
   // Included headers select the protected writer route, so pooled-reader
-  // permissions cannot establish the actor's access to branch policy.
+  // permissions cannot establish the actor's repository write access.
   const response = parseGithubResponse(
     execPrGh(apiArgs(repo, "", ["--include"]), { encoding: "utf8" }, "plain"),
   );
@@ -322,10 +314,8 @@ function beginRead(repo, pr, observe, priorCiObservation) {
   // reduced privileges cannot invalidate the retained head and tree proof.
   const receipt = observe && record.merged;
   requireRestSupport(
-    receipt ||
-      authority.permissions?.admin === true ||
-      (priorCiObservation && authority.permissions?.push === true),
-    "policy-reader admin access changed",
+    receipt || authority.permissions?.admin === true || authority.permissions?.push === true,
+    "repository write access changed",
   );
   const policy = receipt ? null : readMergePolicy(repo);
   return { authority, main: mainSha, record, policy, startedAtMs };
@@ -449,7 +439,7 @@ function* latestRequiredChecksSteps(repo, head, checks) {
     }
     names.add(name);
   }
-  if (repeated.size === 0) {
+  if (repeated.size === 0 && !checks.some((check) => check.app.slug === "github-actions")) {
     return checks;
   }
   const runs = yield* checkPagesSteps(
@@ -478,11 +468,17 @@ function* latestRequiredChecksSteps(repo, head, checks) {
   const groups = new Map();
   const unique = [];
   for (const check of checks) {
+    const run = suites.get(check.check_suite?.id);
+    if (check.app.slug === "github-actions") {
+      requireEvidence(run, "cannot establish required-check workflow or start time");
+      if (!REQUIRED_CHECK_EVENTS.has(run.event)) {
+        continue;
+      }
+    }
     if (!repeated.has(JSON.stringify([check.app.id, check.name]))) {
       unique.push(check);
       continue;
     }
-    const run = suites.get(check.check_suite?.id);
     const started = Date.parse(check.started_at);
     requireEvidence(
       check.app.slug === "github-actions" && run && Number.isFinite(started),
@@ -726,7 +722,7 @@ export async function withPriorCiObservation(repo, pr, { prepare, finish }) {
   const policy = record.merged ? null : requestResult(policyResult);
   requireRestSupport(
     record.merged || authority.permissions?.admin === true || authority.permissions?.push === true,
-    "policy-reader admin access changed",
+    "repository write access changed",
   );
   const shared = {
     policy,
@@ -802,8 +798,7 @@ export async function withPriorCiObservation(repo, pr, { prepare, finish }) {
   };
 }
 
-function mergeBody(value) {
-  const snapshot = JSON.parse(value);
+function mergeBody(snapshot) {
   requireEvidence(
     typeof snapshot?.base64 === "string" && /^[0-9a-f]{64}$/.test(snapshot.sha256 ?? ""),
     "invalid merge body snapshot",
@@ -916,15 +911,33 @@ async function main([
       Number.isSafeInteger(Number(prValue)) &&
       extra.length === 0 &&
       (mode === "merge"
-        ? OID.test(head ?? "") &&
-          nonemptyString(bodySnapshot) &&
-          nonemptyString(expectedObservation)
+        ? OID.test(head ?? "") && bodySnapshot === undefined && expectedObservation === undefined
         : head === undefined),
     "invalid command arguments",
   );
   const repo = parseMergeRepository(repository);
   const pr = Number(prValue);
-  const body = mode === "merge" ? mergeBody(bodySnapshot) : undefined;
+  let envelope;
+  if (mode === "merge") {
+    try {
+      envelope = JSON.parse(readFileSync(0, "utf8"));
+    } catch {
+      requireEvidence(false, "invalid merge dispatch envelope");
+    }
+    requireEvidence(
+      envelope !== null &&
+        typeof envelope === "object" &&
+        !Array.isArray(envelope) &&
+        Object.keys(envelope).length === 2 &&
+        Object.hasOwn(envelope, "bodySnapshot") &&
+        Object.hasOwn(envelope, "expectedObservation") &&
+        envelope.expectedObservation !== null &&
+        typeof envelope.expectedObservation === "object" &&
+        !Array.isArray(envelope.expectedObservation),
+      "invalid merge dispatch envelope",
+    );
+  }
+  const body = mode === "merge" ? mergeBody(envelope.bodySnapshot) : undefined;
   if (mode === "projection") {
     const response = parseGithubResponse(
       execPrGh(apiArgs(repo, `/pulls/${pr}`, ["--include"]), { encoding: "utf8" }, "plain"),
@@ -964,7 +977,7 @@ async function main([
     process.stdout.write(`${JSON.stringify(observation)}\n`);
     return;
   }
-  const snapshot = beginRead(repo, pr, observing, priorCiObservation);
+  const snapshot = beginRead(repo, pr, observing);
   const checks =
     mode === "checks" || ((observing || mode === "merge") && snapshot.record.state === "open")
       ? readRequiredMergeChecks(repo, snapshot.record.head.sha, snapshot.policy)
@@ -1034,7 +1047,7 @@ async function main([
         nonemptyString(current.title),
       "immediate squash requires the prepared open, non-draft, clean PR head",
     );
-    const { main: _main, ...expectedFacts } = JSON.parse(expectedObservation);
+    const { main: _main, ...expectedFacts } = envelope.expectedObservation;
     requireEvidence(
       JSON.stringify(
         canonical({

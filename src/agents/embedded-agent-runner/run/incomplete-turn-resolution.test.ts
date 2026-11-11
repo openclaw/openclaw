@@ -10,6 +10,31 @@ import {
 } from "./incomplete-turn-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
+function payloadText(attempt: EmbeddedRunAttemptResult, payloadCount = 0) {
+  return resolveIncompleteTurnPayloadText({
+    payloadCount,
+    aborted: false,
+    externalAbort: false,
+    timedOut: false,
+    attempt,
+  });
+}
+
+function refusalAttempt(provider: string, replaySafe: boolean) {
+  const assistant = buildEmbeddedRunnerAssistant({
+    provider,
+    stopReason: "error",
+    diagnostics: [
+      { type: "provider_refusal", timestamp: 0, details: { provider, category: "cyber" } },
+    ],
+  });
+  return makeEmbeddedRunnerAttempt({
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
+    replayMetadata: { hadPotentialSideEffects: !replaySafe, replaySafe },
+  });
+}
+
 describe("incomplete-turn terminal metadata", () => {
   it("accepts a completed speech-only answer with provider reasoning", () => {
     const assistant = buildEmbeddedRunnerAssistant({
@@ -25,72 +50,20 @@ describe("incomplete-turn terminal metadata", () => {
       currentAttemptCompletedAssistant: assistant,
     });
 
-    expect(
-      resolveIncompleteTurnPayloadText({
-        payloadCount: 1,
-        aborted: false,
-        externalAbort: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBeNull();
+    expect(payloadText(attempt, 1)).toBeNull();
   });
 
   it("keeps the side-effect warning when the terminal error is a provider refusal", () => {
-    const assistant = buildEmbeddedRunnerAssistant({
-      provider: "anthropic",
-      stopReason: "error",
-      diagnostics: [
-        {
-          type: "provider_refusal",
-          timestamp: 0,
-          details: { provider: "anthropic", category: "cyber" },
-        },
-      ],
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-    });
+    const attempt = refusalAttempt("anthropic", false);
 
-    expect(
-      resolveIncompleteTurnPayloadText({
-        payloadCount: 0,
-        aborted: false,
-        externalAbort: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(
+    expect(payloadText(attempt)).toBe(
       "No answer was returned. Ask again if you still need one. Note: some tool actions may have already been executed — please verify before retrying.",
     );
   });
 
   it("keeps an explicitly replay-safe structured provider refusal replayable", () => {
-    const assistant = buildEmbeddedRunnerAssistant({
-      provider: "openai",
-      stopReason: "error",
-      diagnostics: [
-        {
-          type: "provider_refusal",
-          timestamp: 0,
-          details: { provider: "openai", category: "cyber" },
-        },
-      ],
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
-    const incompleteTurnText = resolveIncompleteTurnPayloadText({
-      payloadCount: 0,
-      aborted: false,
-      externalAbort: false,
-      timedOut: false,
-      attempt,
-    });
+    const attempt = refusalAttempt("openai", true);
+    const incompleteTurnText = payloadText(attempt);
 
     expect(incompleteTurnText).toContain("provider refused this request");
     expect(resolveReplayInvalidFlag({ attempt, incompleteTurnText })).toBe(false);
@@ -106,15 +79,7 @@ describe("incomplete-turn terminal metadata", () => {
       currentAttemptCompletedAssistant: assistant,
     });
 
-    expect(
-      resolveIncompleteTurnPayloadText({
-        payloadCount: 1,
-        aborted: false,
-        externalAbort: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(
+    expect(payloadText(attempt, 1)).toBe(
       "No answer was returned. Ask again if you still need one. Note: some tool actions may have already been executed — please verify before retrying.",
     );
   });
@@ -130,15 +95,7 @@ describe("incomplete-turn terminal metadata", () => {
         } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
       ],
     });
-    expect(
-      resolveIncompleteTurnPayloadText({
-        payloadCount: 0,
-        aborted: false,
-        externalAbort: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).not.toBeNull();
+    expect(payloadText(attempt)).not.toBeNull();
   });
 
   it("marks compaction-timeout retries as paused and replay-invalid", () => {
@@ -159,67 +116,51 @@ describe("incomplete-turn terminal metadata", () => {
 });
 
 describe("tool-authored source replies", () => {
-  // A `canDeliverSourceReply` tool wrote the final answer; the host delivers it, so a
-  // tool-use stop with no post-tool assistant text is not an incomplete turn.
-  it("does not let an earlier authored reply complete an unfinished later input", () => {
-    const assistant = buildEmbeddedRunnerAssistant({
-      stopReason: "toolUse",
-      content: [{ type: "toolCall", id: "later-call", name: "read", arguments: {} }],
-    });
-    const result = resolveIncompleteTurnPayloadText({
-      payloadCount: 1,
-      aborted: false,
-      externalAbort: false,
-      timedOut: false,
-      attempt: makeEmbeddedRunnerAttempt({
-        lastAssistant: assistant,
-        sourceReplyDeliveryState: "missing",
-        messagingToolSourceReplyPayloads: [
+  it.each([
+    [
+      "earlier-call",
+      "later-call",
+      "read",
+      "Earlier answer.",
+      undefined,
+      "No answer was returned. Ask again if you still need one.",
+    ],
+    [
+      "tool_1",
+      "tool_1",
+      "order_status",
+      "Pedido SO1 creado.",
+      [{ toolName: "order_status", meta: "orderId=SO1" }],
+      null,
+    ],
+  ] as const)(
+    "only completes the owning tool-use turn (%s / %s)",
+    (replyId, callId, name, text, toolMetas, expected) => {
+      const assistant = buildEmbeddedRunnerAssistant({
+        stopReason: "toolUse",
+        content: [
           {
-            text: "Earlier answer.",
-            sourceReplyFinal: true,
-            toolAuthored: true,
-            toolAuthoredForToolCallId: "earlier-call",
+            type: "toolCall",
+            id: callId,
+            name,
+            arguments: name === "order_status" ? { orderId: "SO1" } : {},
           },
         ],
-      }),
-    });
-    expect(result).toBe("No answer was returned. Ask again if you still need one.");
-  });
-
-  it("treats a final tool-authored source reply as a complete tool-use turn", () => {
-    expect(
-      resolveIncompleteTurnPayloadText({
-        payloadCount: 1,
-        aborted: false,
-        externalAbort: false,
-        timedOut: false,
-        attempt: makeEmbeddedRunnerAttempt({
-          assistantTexts: [],
-          toolMetas: [{ toolName: "order_status", meta: "orderId=SO1" }],
-          // A live run starts with no source reply delivered yet.
-          sourceReplyDeliveryState: "missing",
-          messagingToolSourceReplyPayloads: [
-            {
-              text: "Pedido SO1 creado.",
-              sourceReplyFinal: true,
-              toolAuthored: true,
-              toolAuthoredForToolCallId: "tool_1",
-            },
-          ],
-          lastAssistant: buildEmbeddedRunnerAssistant({
-            stopReason: "toolUse",
-            content: [
-              {
-                type: "toolCall",
-                id: "tool_1",
-                name: "order_status",
-                arguments: { orderId: "SO1" },
-              },
-            ],
-          }),
-        }),
-      }),
-    ).toBeNull();
-  });
+      });
+      const attempt = makeEmbeddedRunnerAttempt({
+        lastAssistant: assistant,
+        sourceReplyDeliveryState: "missing",
+        ...(toolMetas ? { assistantTexts: [], toolMetas: [...toolMetas] } : {}),
+        messagingToolSourceReplyPayloads: [
+          {
+            text,
+            sourceReplyFinal: true,
+            toolAuthored: true,
+            toolAuthoredForToolCallId: replyId,
+          },
+        ],
+      });
+      expect(payloadText(attempt, 1)).toBe(expected);
+    },
+  );
 });

@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isSubagentSessionRow } from "../../shared/session-list-visibility.js";
 import type { SessionActivitySummary } from "./activity-summary.js";
 import {
@@ -11,7 +10,6 @@ import {
   type PreparedSessionMetaPatch,
 } from "./metadata-projection.js";
 import { resolveSessionObserverDigestForLifecycle } from "./observer-digest.js";
-import { buildRestartRecoveryClaimCleanupPatch } from "./restart-recovery-state.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
 import type { buildSessionCreationStamp } from "./session-entry-provenance.js";
@@ -65,11 +63,14 @@ export type SessionEntryBookkeepingReducer =
 /** Closed internal operations; arbitrary updater callbacks retain prepare/CAS. */
 type SessionEntryPatchStep = (
   | { kind: "fields"; patch: Partial<SessionEntry> }
+  | { kind: "writer-revoke"; runId: string; terminalAtMs?: number }
   | {
       kind: "cron-session";
       sessionKey: string;
       initial?: SessionEntry;
       next: SessionEntry;
+      /** Final run accounting supersedes its own provider-boundary snapshots. */
+      contextTotalsAccounted?: true;
       creation: ReturnType<typeof buildSessionCreationStamp>;
     }
   | {
@@ -110,23 +111,7 @@ type SessionEntryPatchStep = (
       kind: "pending-final-clear";
       sessionId: string;
       intentId: string;
-      recoveryRunId?: string;
       now: number;
-    }
-  | {
-      kind: "restart-safe-terminal";
-      runId: string;
-      retryable: boolean;
-      patch: Partial<SessionEntry>;
-    }
-  | {
-      kind: "restart-claim-clear";
-      sessionId: string;
-      recoveryRunId: string;
-      recoverySourceRunId?: string;
-      executionRunId: string;
-      executionGeneration: string;
-      terminalRunId?: string;
     }
   | {
       kind: "compaction-accounting";
@@ -150,9 +135,18 @@ export function projectCronSessionEntry(
   ) {
     throw createSessionWorkStartChangedError(operation.sessionKey);
   }
-  return current && initial
-    ? mergeSessionSnapshotChanges({ initial, next, current })
-    : { ...next, ...(!current ? operation.creation : {}) };
+  const merged =
+    current && initial
+      ? mergeSessionSnapshotChanges({ initial, next, current })
+      : { ...next, ...(!current ? operation.creation : {}) };
+  return operation.contextTotalsAccounted
+    ? {
+        ...merged,
+        totalTokens: next.totalTokens,
+        totalTokensFresh: next.totalTokensFresh,
+        totalTokensVersion: next.totalTokensVersion,
+      }
+    : merged;
 }
 
 /** Each reducer observes its predecessor's postimage; callers persist only the result. */
@@ -245,6 +239,21 @@ export function reduceSessionEntryPatch(
     return null;
   }
   switch (operation.kind) {
+    case "writer-revoke":
+      return {
+        activeWriterRunId: undefined,
+        ...(operation.terminalAtMs !== undefined &&
+        entry.status === undefined &&
+        entry.lifecycleRunId === operation.runId
+          ? {
+              status: "killed",
+              abortedLastRun: true,
+              lifecycleRunId: undefined,
+              endedAt: operation.terminalAtMs,
+              updatedAt: operation.terminalAtMs,
+            }
+          : {}),
+      };
     case "cron-session":
       return projectCronSessionEntry(operation, existingEntry);
     case "cron-run-continuation": {
@@ -340,116 +349,13 @@ export function reduceSessionEntryPatch(
     case "compaction-accounting":
       return projectCompactionAccountingPatch(entry, operation.accounting);
     case "pending-final-clear": {
-      const recoveryRunId = normalizeOptionalString(entry.restartRecoveryDeliveryRunId);
       const deliveries = entry.pendingFinalDelivery?.deliveries;
-      if (
-        entry.sessionId !== operation.sessionId ||
-        entry.pendingFinalDelivery?.intentId !== operation.intentId ||
-        !deliveries?.length ||
-        !deliveries.every(({ state }) => state === "delivered" || state === "suppressed") ||
-        (recoveryRunId !== undefined && recoveryRunId !== operation.recoveryRunId)
-      ) {
-        return null;
-      }
-      const completesHookTurn =
-        recoveryRunId === undefined &&
-        (entry.restartRecoveryBeforeAgentReplyState === "handled-reply" ||
-          entry.restartRecoveryBeforeAgentReplyState === "handled-unrecoverable");
-      return {
-        ...(recoveryRunId
-          ? buildRestartRecoveryClaimCleanupPatch({ entry, recordTerminalSource: true })
-          : {
-              restartRecoveryBeforeAgentReplyState: undefined,
-              restartRecoverySourceIngress: undefined,
-              restartRecoveryOperatorSource: undefined,
-              restartRecoveryForceSafeTools: undefined,
-            }),
-        pendingFinalDelivery: undefined,
-        ...(completesHookTurn
-          ? {
-              abortedLastRun: false,
-              endedAt: operation.now,
-              lifecycleRunId: undefined,
-              runtimeMs:
-                typeof entry.startedAt === "number"
-                  ? Math.max(0, operation.now - entry.startedAt)
-                  : undefined,
-              status: "done" as const,
-            }
-          : {}),
-      };
-    }
-    case "restart-safe-terminal":
-      return entry.restartRecoveryDeliveryRunId === operation.runId
-        ? {
-            ...operation.patch,
-            ...(!operation.retryable
-              ? buildRestartRecoveryClaimCleanupPatch({
-                  entry,
-                  recordTerminalSource: true,
-                  terminalSourceRunId: entry.restartRecoveryDeliverySourceRunId,
-                })
-              : {}),
-          }
+      return entry.sessionId === operation.sessionId &&
+        entry.pendingFinalDelivery?.intentId === operation.intentId &&
+        deliveries?.length &&
+        deliveries.every(({ state }) => state === "delivered" || state === "suppressed")
+        ? { pendingFinalDelivery: undefined }
         : null;
-    case "restart-claim-clear": {
-      const isExecutionFence = (run: NonNullable<SessionEntry["restartRecoveryRuns"]>[number]) =>
-        run.runId === operation.executionRunId &&
-        run.lifecycleGeneration === operation.executionGeneration;
-      const ownsClaim =
-        entry.restartRecoveryDeliveryRunId !== undefined
-          ? entry.restartRecoveryDeliveryRunId === operation.recoveryRunId &&
-            normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ===
-              operation.recoverySourceRunId
-          : entry.restartRecoveryRuns?.some(isExecutionFence) === true;
-      if (
-        entry.sessionId !== operation.sessionId ||
-        (entry.abortedLastRun === true && entry.mainRestartRecovery !== undefined) ||
-        !ownsClaim
-      ) {
-        return null;
-      }
-      // Unknown provider outcomes retire their source without replay. Until this
-      // commit, the active receipt still belongs to restart-safe reconciliation.
-      const terminalPending = entry.restartRecoveryDeliveryReceiptState === "terminal-pending";
-      const preservesPendingFinal = !terminalPending && entry.pendingFinalDelivery !== undefined;
-      const completesHandledSilent =
-        entry.restartRecoveryBeforeAgentReplyState === "handled-silent" && !preservesPendingFinal;
-      const endedAt = terminalPending || completesHandledSilent ? Date.now() : undefined;
-      const remainingRuns = entry.restartRecoveryRuns?.filter((run) => !isExecutionFence(run));
-      return {
-        ...buildRestartRecoveryClaimCleanupPatch({
-          entry,
-          recordTerminalSource: true,
-          terminalSourceRunId: operation.recoverySourceRunId,
-          terminalRunId:
-            operation.terminalRunId ??
-            (entry.restartRecoveryDeliveryRunId ? undefined : operation.executionRunId),
-        }),
-        restartRecoveryRuns: remainingRuns?.length ? remainingRuns : undefined,
-        ...(terminalPending ? { pendingFinalDelivery: undefined } : {}),
-        // Transport settlement owns the pending intent and its hook-safety provenance.
-        ...(preservesPendingFinal
-          ? {
-              restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
-              restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
-              restartRecoveryForceSafeTools: entry.restartRecoveryForceSafeTools,
-            }
-          : {}),
-        ...(endedAt !== undefined
-          ? {
-              abortedLastRun: terminalPending,
-              endedAt,
-              lifecycleRunId: undefined,
-              runtimeMs:
-                typeof entry.startedAt === "number"
-                  ? Math.max(0, endedAt - entry.startedAt)
-                  : undefined,
-              status: terminalPending ? ("failed" as const) : ("done" as const),
-            }
-          : {}),
-        updatedAt: endedAt ?? entry.updatedAt,
-      };
     }
   }
   return operation satisfies never;

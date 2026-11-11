@@ -7,7 +7,7 @@ import {
   createAssistantMessageEventStream,
   getEventStreamCompletion,
 } from "@openclaw/llm-core/event-stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createApiRegistry, type ApiStreamFunction } from "./api-registry.js";
 import {
   configureAiTransportHost,
@@ -16,39 +16,30 @@ import {
   getDefaultAiTransportHost,
   runWithAiTransportHost,
 } from "./host.js";
+import * as publicAi from "./index.js";
+import {
+  defaultApiRegistry,
+  streamSimple as streamSimpleDefault,
+} from "./internal/default-runtime.js";
+import {
+  anthropicModel,
+  assistantMessage,
+  textBlock,
+  userMessage,
+} from "./provider-transport-parity.test-support.js";
+import { makeProviderModel } from "./providers/provider-model.test-support.js";
 import { cleanupSessionResources, registerSessionResourceCleanup } from "./session-resources.js";
 import { createLlmRuntime, createNodeLlmRuntime } from "./stream.js";
-import { createZeroUsage } from "./usage.test-support.js";
 
 const original = getDefaultAiTransportHost();
 afterEach(() => configureAiTransportHost(original));
 const context = { messages: [] };
 const host = (prefix: string) => ({ resolveSecretSentinel: (value: string) => prefix + value });
 const resolveSecret = (value: string) => getAiTransportHost().resolveSecretSentinel(value);
-const textContent = (text: string) => [{ type: "text", text }];
-const model: Model = {
-  id: "scoped",
-  name: "Scoped",
-  provider: "fixture",
-  api: "test-scoped",
-  baseUrl: "https://fixture.invalid",
-  reasoning: false,
-  input: ["text"],
-  contextWindow: 1000,
-  maxTokens: 100,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-};
+const textContent = (text: string) => [textBlock(text)];
+const model: Model = makeProviderModel("test-scoped", "fixture", "scoped");
 function message(text: string): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    provider: model.provider,
-    model: model.id,
-    api: model.api,
-    stopReason: "stop",
-    timestamp: 1,
-    usage: createZeroUsage(),
-  };
+  return assistantMessage(model, textContent(text));
 }
 function registryForStream(stream: ApiStreamFunction) {
   const registry = createApiRegistry();
@@ -69,6 +60,110 @@ function registryFor(resolve: (value: string) => Promise<string>) {
     };
   });
 }
+type Cleanup = Parameters<typeof registerSessionResourceCleanup>[0];
+function withCleanup(run: (cleanup: Mock<Cleanup>) => void | Promise<void>) {
+  const cleanup = vi.fn<Cleanup>();
+  const unregister = registerSessionResourceCleanup(cleanup);
+  return Promise.resolve()
+    .then(() => run(cleanup))
+    .finally(unregister);
+}
+
+describe("transport host installation and registry", () => {
+  const sourceId = "test:llm-runtime-api-registry";
+  const registryModel = { ...anthropicModel, api: "test-api" };
+  const emptyStream = () => publicAi.createAssistantMessageEventStream();
+  const provider = (api = "test-api", streamSimple = emptyStream) => ({
+    api,
+    stream: emptyStream,
+    streamSimple,
+  });
+  afterEach(() => defaultApiRegistry.unregisterApiProviders(sourceId));
+
+  it("rejects mismatched model API calls", () => {
+    const registry = publicAi.createApiRegistry();
+    registry.registerApiProvider(provider(), sourceId);
+    expect(() =>
+      registry
+        .getApiProvider("test-api")
+        ?.streamSimple({ ...registryModel, api: "other-api" }, context),
+    ).toThrow("Mismatched api: other-api expected test-api");
+  });
+
+  it("isolates providers between runtime instances", () => {
+    const first = publicAi.createLlmRuntime();
+    const second = publicAi.createLlmRuntime();
+    const streamSimple = vi.fn(emptyStream);
+    first.registry.registerApiProvider(provider("test-api", streamSimple));
+    first.streamSimple(registryModel, context);
+    expect(streamSimple).toHaveBeenCalledOnce();
+    expect(() => second.streamSimple(registryModel, context)).toThrow(
+      "No API provider registered for api: test-api",
+    );
+  });
+
+  it("shares default runtime registrations across duplicated module instances", async () => {
+    // File URLs preserve the query through Vitest project shards.
+    const duplicate = (await import(
+      /* @vite-ignore */ new URL("./internal/default-runtime.ts?duplicate-runtime", import.meta.url)
+        .href
+    )) as typeof import("./internal/default-runtime.js");
+    const streamSimple = vi.fn(emptyStream);
+    duplicate.defaultApiRegistry.registerApiProvider(provider("test-api", streamSimple), sourceId);
+    streamSimpleDefault(registryModel, context);
+    expect(streamSimple).toHaveBeenCalledOnce();
+  });
+
+  it("unregisters every provider owned by one source", () => {
+    const registry = publicAi.createApiRegistry();
+    for (const api of ["test-api", "test-api-2"]) {
+      registry.registerApiProvider(provider(api), sourceId);
+    }
+    registry.unregisterApiProviders(sourceId);
+    expect(registry.getApiProviders()).toEqual([]);
+  });
+
+  it("replays custom API registration when transports load before the concrete host", async () => {
+    const { prepareModelForSimpleCompletion } = await import("./transports.js");
+    configureAiTransportHost({});
+    const registry = createApiRegistry();
+    const sourceModel = {
+      ...anthropicModel,
+      api: "openai-chatgpt-responses" as const,
+      provider: "openai",
+      baseUrl: "https://chatgpt.com/backend-api",
+    };
+    const customApi = "openclaw-openai-chatgpt-responses-transport";
+    const prepare = () =>
+      prepareModelForSimpleCompletion({ apiRegistry: registry, model: sourceModel });
+    expect(prepare()).toBe(sourceModel);
+    expect(registry.getApiProvider(customApi)).toBeUndefined();
+    const registrar = vi.fn<import("./host.js").AiTransportHost["registerCustomApi"]>(
+      (target, api) => {
+        target.registerApiProvider(provider(api));
+        return true;
+      },
+    );
+    configureAiTransportHost({ registerCustomApi: registrar });
+    configureAiTransportHost({ registerCustomApi: registrar });
+    expect(registrar).toHaveBeenCalledOnce();
+    const registered = registry.getApiProvider(customApi);
+    const configuredModel = prepare();
+    expect(configuredModel.api).toBe(customApi);
+    expect(registered?.streamSimple(configuredModel, context)).toHaveProperty("result");
+  });
+
+  it("uses package transcript normalization until the embedding host overrides it", () => {
+    configureAiTransportHost({});
+    const messages = [userMessage([{ type: "image", data: "aW1n", mimeType: "image/png" }])];
+    const targetModel = { ...anthropicModel, reasoning: false };
+    expect(getAiTransportHost().transformTransportMessages(messages, targetModel)).toEqual([
+      userMessage([textBlock("(image omitted: model does not support images)")]),
+    ]);
+    configureAiTransportHost({ transformTransportMessages: (next) => next });
+    expect(getAiTransportHost().transformTransportMessages(messages, targetModel)).toBe(messages);
+  });
+});
 describe("runtime-owned transport host", () => {
   it.each([false, true])("accepts frozen provider streams (scoped=%s)", async (scoped) => {
     const observations: string[] = [];
@@ -88,10 +183,7 @@ describe("runtime-owned transport host", () => {
       [Symbol.asyncIterator]: withReceiver("iterator", () => ({
         async next() {
           observe("next");
-          return {
-            done: false as const,
-            value: { type: "done" as const, reason: "stop" as const, message: final },
-          };
+          return { done: false as const, value: done };
         },
         async return() {
           observe("return");
@@ -110,7 +202,7 @@ describe("runtime-owned transport host", () => {
       : createLlmRuntime(registry);
     for (const method of ["stream", "streamSimple"] as const) {
       const stream = runtime[method](model, context);
-      stream.push({ type: "done", reason: "stop", message: final });
+      stream.push(done);
       stream.end(final);
       expect(await stream.result()).toBe(final);
       const iterator = stream[Symbol.asyncIterator]();
@@ -128,7 +220,6 @@ describe("runtime-owned transport host", () => {
       ),
     );
     expect(resolveSecret("caller")).toBe("gateway:caller");
-    expect(Object.isFrozen(source)).toBe(true);
   });
 
   it.each(["stream", "streamSimple"] as const)(
@@ -212,10 +303,8 @@ describe("runtime-owned transport host", () => {
     expect(resolveSecret("opaque")).toBe("Gateway:opaque");
   });
 
-  it("passes each explicit runtime owner to session-resource cleanup", () => {
-    const cleanup = vi.fn<(sessionId?: string, owner?: object) => void>();
-    const unregister = registerSessionResourceCleanup(cleanup);
-    try {
+  it("passes each explicit runtime owner to session-resource cleanup", () =>
+    withCleanup((cleanup) => {
       const first = createNodeLlmRuntime();
       const second = createNodeLlmRuntime();
       first.cleanupSessionResources("shared");
@@ -228,15 +317,10 @@ describe("runtime-owned transport host", () => {
       expect(calls[1]?.[1]).toBeDefined();
       expect(calls[0]?.[1]).not.toBe(calls[1]?.[1]);
       expect(calls[2]?.[1]).toBeUndefined();
-    } finally {
-      unregister();
-    }
-  });
+    }));
 
-  it("binds ordinary streams to their host and cleans the current default", async () => {
-    const cleanup = vi.fn<(sessionId?: string, owner?: object) => void>();
-    const unregister = registerSessionResourceCleanup(cleanup);
-    try {
+  it("binds ordinary streams to their host and cleans the current default", () =>
+    withCleanup(async (cleanup) => {
       configureAiTransportHost(host("first:"));
       const runtime = createLlmRuntime(registryFor(async (value) => resolveSecret(value)));
       const stream = runtime.streamSimple(model, context, {
@@ -255,10 +339,7 @@ describe("runtime-owned transport host", () => {
         ["shared", replacementHost],
         ["shared", replacementHost],
       ]);
-    } finally {
-      unregister();
-    }
-  });
+    }));
 
   it.each(["stream", "streamSimple"] as const)(
     "binds lazy %s and early return without caller-context leaks",

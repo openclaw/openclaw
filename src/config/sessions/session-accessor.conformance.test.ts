@@ -1,15 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { StatementSync } from "node:sqlite";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { readSessionArchiveText } from "../../../test/helpers/session-archive.js";
 import {
   readPersistedAuthProfileStateRaw,
   writePersistedAuthProfileStateRaw,
 } from "../../agents/auth-profiles/sqlite.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -18,14 +18,11 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
-import {
-  encodeSessionArchiveContent,
-  readSessionArchiveContentSync,
-} from "./archive-compression.js";
+import { encodeSessionArchiveContent } from "./archive-compression.js";
 import { isSessionArchiveArtifactName } from "./artifacts.js";
 import {
   appendTranscriptEvent,
@@ -133,7 +130,7 @@ function appendTrajectory(storePath: string, sessionId: string, type: string) {
 }
 
 function readArchive(file: string) {
-  return readSessionArchiveContentSync(file)
+  return readSessionArchiveText(file)
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
@@ -283,16 +280,14 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         updatedAt: 42,
         skillsSnapshot: { prompt: `TIMESTAMP_COLD_PAYLOAD_${"x".repeat(65_536)}`, skills: [] },
       });
-      const reads = observeMainThreadReads();
+      const queries: string[] = [];
+      const reads = observeMainThreadSql({ onStatement: (sql) => queries.push(sql) });
       const parse = vi.spyOn(JSON, "parse");
       try {
         expect(adapter.readSessionUpdatedAtCore(scope)).toBe(42);
-        const queries = reads.calls
-          .flatMap((call) => call.mock.contexts)
-          .map((statement) => (statement as StatementSync).sourceSQL)
-          .filter((sql) => /from "session_nodes"/i.test(sql));
-        expect(queries).toHaveLength(1);
-        expect.soft(queries.some((sql) => sql.includes("session_entry_snapshots"))).toBe(false);
+        const nodeQueries = queries.filter((sql) => /from "session_nodes"/i.test(sql));
+        expect(nodeQueries).toHaveLength(1);
+        expect.soft(nodeQueries.some((sql) => sql.includes("session_entry_snapshots"))).toBe(false);
         expect(parse.mock.calls.some(([value]) => value.includes("TIMESTAMP_COLD_PAYLOAD_"))).toBe(
           false,
         );
@@ -302,7 +297,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       }
     });
 
-    it("conforms for exact persisted-key lookup without canonical alias fallback", async () => {
+    t("conforms for exact persisted-key lookup without canonical alias fallback", async () => {
       const scope = adapter.entryScope(paths);
       const mixedCaseScope = { ...scope, sessionKey: "AGENT:MAIN:MAIN" };
 
@@ -319,7 +314,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       });
     });
 
-    it("conforms for lifecycle entry and transcript cleanup", async () => {
+    t("conforms for lifecycle entry and transcript cleanup", async () => {
       const nowMs = Date.now();
       const oldTimestamp = nowMs - 600_000;
       const cleanupStorePath = path.join(
@@ -448,7 +443,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       ]);
     });
 
-    it("conforms for raw transcript event load and append", async () => {
+    t("conforms for raw transcript event load and append", async () => {
       const scope = adapter.transcriptScope(paths);
       const readScope = adapter.transcriptReadScope(paths);
       const event = {
@@ -723,7 +718,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       ]);
     });
 
-    it("rejects raw message transcript event writes", async () => {
+    t("rejects raw message transcript event writes", async () => {
       const scope = adapter.transcriptScope(paths, "session-raw-message");
       await expect(
         adapter.appendTranscriptEvent(scope, {
@@ -803,7 +798,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       ]);
     });
 
-    it("conforms for transcript message append, idempotency, and update publication", async () => {
+    t("conforms for transcript message append, idempotency, and update publication", async () => {
       const scope = adapter.transcriptScope(paths, "session-2");
       const updates: unknown[] = [];
       const unsubscribe = onSessionTranscriptUpdate((update) => {
@@ -1419,7 +1414,7 @@ describe("sqlite session normalization", () => {
     }
 
     await seedEntry(admittedScope(dashboardKey), dashboardEntry);
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: paths.storePath,
       identities: [dashboardKey, dashboardEntry.sessionId],
       assertAllowed: () => {},

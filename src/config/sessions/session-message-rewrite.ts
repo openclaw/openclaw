@@ -8,16 +8,14 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
+import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-admitted-read.js";
 import {
   rewriteNativeAssistantTranscriptMessageForRun,
   rewriteNativeTranscriptMessageAtAnchor,
 } from "./session-accessor.sqlite-transcript-message-rewrite.js";
 import type { SessionTranscriptAccessScope } from "./session-accessor.types.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import type { SessionEntryReadSource } from "./session-entry-read-source.types.js";
@@ -117,11 +115,11 @@ async function rewritePreparedTranscriptMessage<T>(
     resolveSqliteTranscriptScope(requested, params.readSource),
   );
   const database = { ...toDatabaseOptions(scope), path: scope.path };
-  const selection = structuredClone({
+  const selection = {
     scope,
     target: params.target,
     expectedEntry: params.expectedEntry,
-  });
+  };
   return await runSessionEntryWorkerOperation<
     SessionMessageRewriteCommitted,
     MessageRewriteResult<T> | null

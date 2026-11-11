@@ -10,6 +10,7 @@ on:
       - scripts/build-installers.mjs
       - scripts/lib/standalone-installers.mjs
       - scripts/install.ps1
+      - test/scripts/install-ps1-entrypoint.ps1
       - .github/workflows/website-installer-sync.yml
   push:
     branches: [main]
@@ -20,6 +21,7 @@ on:
       - scripts/build-installers.mjs
       - scripts/lib/standalone-installers.mjs
       - scripts/install.ps1
+      - test/scripts/install-ps1-entrypoint.ps1
       - .github/workflows/website-installer-sync.yml
   workflow_dispatch:
     inputs:
@@ -88,6 +90,7 @@ jobs:
                   ],
                   windows: [
                     "scripts/install.ps1",
+                    "test/scripts/install-ps1-entrypoint.ps1",
                     ".github/workflows/website-installer-sync.yml",
                   ],
                 };
@@ -158,6 +161,11 @@ jobs:
   linux-docker:
     needs: scope
     if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
+    name: Docker installers (${{ matrix.debian }})
+    strategy: &debian_strategy
+      fail-fast: false
+      matrix:
+        debian: [bookworm, trixie]
     runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
@@ -169,7 +177,7 @@ jobs:
         run: |
           timeout --kill-after=30s 20m docker run --rm \
             -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
-            node:24-bookworm-slim \
+            node:24.22.1-${{ matrix.debian }}-slim \
             bash -lc 'bash /tmp/install.sh --version latest && openclaw --version'
 
       - name: install-cli.sh in Docker
@@ -178,12 +186,14 @@ jobs:
             -e OPENCLAW_NO_ONBOARD=1 \
             -e OPENCLAW_NO_PROMPT=1 \
             -v "$PWD/dist/installers/install-cli.sh:/tmp/install-cli.sh:ro" \
-            node:24-bookworm-slim \
+            node:24.22.1-${{ matrix.debian }}-slim \
             bash -lc 'apt-get update -y && apt-get install -y curl && bash /tmp/install-cli.sh --prefix /tmp/openclaw --no-onboard --version latest && /tmp/openclaw/bin/openclaw --version'
 
   debian-installer:
     needs: scope
     if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
+    name: Debian installer (${{ matrix.debian }})
+    strategy: *debian_strategy
     runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
@@ -195,7 +205,7 @@ jobs:
         run: |
           timeout --kill-after=30s 20m docker run --rm -i \
             -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
-            debian:bookworm-slim \
+            debian:${{ matrix.debian }}-slim \
             bash -s <<'CONTAINER'
           set -euo pipefail
           apt-get update -qq
@@ -214,6 +224,8 @@ jobs:
   linux-build-tools-failure:
     needs: scope
     if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
+    name: Build tools failure (${{ matrix.debian }})
+    strategy: *debian_strategy
     runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
@@ -225,7 +237,7 @@ jobs:
         run: |
           timeout --kill-after=10s 5m docker run --rm -i \
             -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
-            debian:bookworm \
+            debian:${{ matrix.debian }} \
             bash -s <<'CONTAINER'
           set -euo pipefail
           export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -281,6 +293,8 @@ jobs:
   linux-non-root:
     needs: scope
     if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
+    name: Non-root installer (${{ matrix.debian }})
+    strategy: *debian_strategy
     runs-on: *linux_runner_ubuntu
     steps:
       - name: Checkout
@@ -292,7 +306,7 @@ jobs:
         run: |
           timeout --kill-after=30s 20m docker run --rm -i \
             -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
-            node:24-bookworm-slim \
+            node:24.22.1-${{ matrix.debian }}-slim \
             bash -s <<'CONTAINER'
           set -euo pipefail
           apt-get update -qq
@@ -382,14 +396,14 @@ jobs:
   macos-installer:
     needs: scope
     if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.unix == 'true' }}
-    runs-on: macos-15
+    runs-on: xcode-27
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 24.22.1
 
       - name: Assemble standalone installers
         run: node scripts/build-installers.mjs
@@ -415,7 +429,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 24.22.1
 
       - name: install.ps1 strict option binding
         shell: pwsh
@@ -438,6 +452,9 @@ jobs:
             if (-not (Get-Command $hostCommand -ErrorAction SilentlyContinue)) {
               throw "Required PowerShell host is unavailable: $hostCommand"
             }
+
+            & $hostCommand -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test/scripts/install-ps1-entrypoint.ps1 -InstallerPath $scriptPath
+            if ($LASTEXITCODE -ne 0) { throw "$hostCommand failed the piped installer regression." }
 
             $invalidCases = @(
               @{ Label = "unknown option"; Args = @("-DryRnu") },
@@ -542,7 +559,7 @@ jobs:
         if: steps.changes.outputs.changed == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: "24.22.1"
 
       - name: Verify website with synced installers
         if: steps.changes.outputs.changed == 'true'

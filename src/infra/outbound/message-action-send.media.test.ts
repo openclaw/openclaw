@@ -138,16 +138,17 @@ describe("runMessageAction media behavior", () => {
     });
   });
 
-  maybeIt.each([{ name: "OpenShell", containerWorkdir: "/sandbox" }])(
-    "dedupes resolved $name media while retaining first-entry metadata",
-    async ({ containerWorkdir }) => {
+  maybeIt.each([{ contentType: "image/png", mimeType: "image/jpeg" }, { mimeType: "image/png" }])(
+    "dedupes resolved media while retaining first-entry metadata (%j)",
+    async (metadata) => {
+      const containerWorkdir = "/sandbox";
       await withSandbox(async (sandboxDir) => {
         await runDrySend(
           {
             message: "attachments ready",
             media: `file://${containerWorkdir}/assets/photo.png`,
             filename: "first.png",
-            contentType: "image/png",
+            ...metadata,
             mediaUrls: [
               ` file://${containerWorkdir}/assets/photo.png `,
               `${containerWorkdir}/assets/photo.png`,
@@ -175,6 +176,7 @@ describe("runMessageAction media behavior", () => {
 
         expect(mocks.executeSendAction).toHaveBeenCalledTimes(1);
         const args = sendArgs();
+        expect(args.contentType).toBe("image/png");
         const mediaUrls = [
           path.join(sandboxDir, "assets", "photo.png"),
           "buffer://message-send/attachment",

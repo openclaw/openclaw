@@ -199,6 +199,21 @@ export function createClient() {
     },
     completeNative: sender(nativeCompletionNotification),
     sendInputOutput: sender(successfulSendInputOutput),
+    closeAgent: sender(closeAgentNotification),
+    spawn(
+      childThreadId = "child-thread",
+      turnId = "parent-turn",
+      version: DirectSpawnVersion = "v2",
+      parentThreadId = "parent-thread",
+    ) {
+      return fixture.notify(
+        itemNotification(
+          directSpawnItem(version, parentThreadId, childThreadId),
+          turnId,
+          parentThreadId,
+        ),
+      );
+    },
     close: () => fixture.close(),
   };
 }
@@ -227,6 +242,18 @@ export function createMonitorFixture(
   const captureSource = async (request: Parameters<typeof monitor.captureModelSource>[0]) =>
     requireNativeModelSourceCapture(await monitor.captureModelSource(request));
   return { client, runtime, monitor, captureSource };
+}
+
+export function parentRegistration(
+  overrides: Partial<Parameters<CodexNativeSubagentMonitorInstance["registerParent"]>[0]> = {},
+) {
+  return {
+    parentThreadId: "parent-thread",
+    requesterSessionKey: "agent:main:discord:channel:C123",
+    completionScope: createCompletionScope(),
+    agentId: "main",
+    ...overrides,
+  };
 }
 
 export function createCompletionScope(requesterSessionKey = "agent:main:discord:channel:C123") {

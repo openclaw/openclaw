@@ -11,6 +11,7 @@ import { touchPresence } from "../../infra/system-presence.js";
 import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
 import { resolveHostedPluginSurfaceUrl } from "../hosted-plugin-surface-url.js";
 import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js";
+import { recordOpenClawIdTunnelActivity } from "../openclaw-id/tunnel-principal.js";
 import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../server-constants.js";
 import { startWebSocketKeepalive } from "../websocket-keepalive.js";
@@ -78,11 +79,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         "unsupported ws permessage-deflate extension; compressed frames use the slower ws path",
       );
     }
-    const transport = createGatewayWebSocketTransport(
-      socket,
-      upgradeReq.socket,
-      compression?.acceptsDeflatedSegments ?? false,
-    );
+    const transport = createGatewayWebSocketTransport(socket, upgradeReq.socket, compression);
     const ingressSocket = socket as GatewayIngressWebSocket;
     const connectionKind = ingressSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] ?? "gateway";
     const publicWorkerIngress =
@@ -166,6 +163,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         });
         socket.on("pong", () => {
           const client = lifecycle.getClient();
+          if (client?.internal?.openclawIdPrincipal) {
+            recordOpenClawIdTunnelActivity(client.internal.openclawIdPrincipal);
+          }
           if (client?.presenceKey) {
             touchPresence(client.presenceKey);
           }
@@ -174,6 +174,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           return attachWorkerWsMessageHandler({
             ...lifecycle,
             socket,
+            transport,
             service: params.workerConnectionService,
             publicAdmission: publicWorkerIngress,
           });

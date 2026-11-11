@@ -13,12 +13,11 @@ import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agen
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { runEmbeddedAgent } from "../embedded-agent-runner.js";
 import { useLiveTestRuntimeConfig } from "../live-test-helpers.js";
+import { cleanupLiveSessions } from "./agent-session-live-cleanup.test-support.js";
+import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
-import { createExtensionRuntime } from "./extensions/loader.js";
-import type { LoadExtensionsResult } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
-import type { ResourceLoader } from "./resource-loader.js";
 import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
@@ -65,22 +64,6 @@ const ownedTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 const sessions: AgentSession[] = [];
 const tempRoots: string[] = [];
-
-function createResourceLoader(): ResourceLoader {
-  const extensionsResult: LoadExtensionsResult = {
-    extensions: [],
-    errors: [],
-    runtime: createExtensionRuntime(),
-  };
-  return {
-    getExtensions: () => extensionsResult,
-    getSkills: () => ({ skills: [], diagnostics: [] }),
-    getPrompts: () => ({ prompts: [], diagnostics: [] }),
-    getThemes: () => ({ themes: [], diagnostics: [] }),
-    extendResources: () => {},
-    reload: async () => {},
-  };
-}
 
 function buildContextChunk(targetChars: number): string {
   const lines: string[] = [];
@@ -168,7 +151,7 @@ async function createLiveSession() {
     model,
     thinkingLevel: "medium",
     tools: [],
-    resourceLoader: createResourceLoader(),
+    resourceLoader: await createResourceLoader(undefined, { cwd, agentDir }),
     modelRegistry,
     sessionManager,
     settingsManager,
@@ -178,14 +161,7 @@ async function createLiveSession() {
 }
 
 afterEach(async () => {
-  for (const session of sessions.splice(0)) {
-    session.dispose();
-  }
-  await Promise.all(
-    tempRoots.splice(0).map(async (root) => {
-      await rm(root, { recursive: true, force: true });
-    }),
-  );
+  await cleanupLiveSessions(sessions, tempRoots);
 });
 
 describeLive("OpenAI AgentSession repeated compaction live", () => {
@@ -285,6 +261,9 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
             thinkLevel: "low",
             timeoutMs: 2 * 60 * 1000,
             runId,
+            // The proof needs raw read output in tool history. Code Mode lets the model keep
+            // file data in guest state (for example a session-store entry) instead.
+            codeModeOverride: false,
             disableTools: !allowRead,
             ...(allowRead ? { toolsAllow: ["read"] } : {}),
             onExecutionPhase: ({ phase }) => {
@@ -318,9 +297,13 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
         );
         const seeded = await reopen();
         const history = seeded.buildSessionContext().messages;
+        // A rejected call (for example offset 0) may precede the retry that supplies the file.
         const suppliedText = history
-          .filter((message) => message.role === "toolResult")
-          .flatMap((message) => message.content)
+          .flatMap((message) =>
+            message.role === "toolResult" && message.toolName === "read" && !message.isError
+              ? message.content
+              : [],
+          )
           .filter((block) => block.type === "text")
           .map((block) => block.text)
           .join("\n");

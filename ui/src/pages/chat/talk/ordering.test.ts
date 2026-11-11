@@ -1,13 +1,10 @@
-// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
-import {
-  createRealtimeTalkConversationState,
-  orderRealtimeTalkConversation,
-  updateRealtimeTalkConversation,
-} from "./conversation.ts";
+// @vitest-environment jsdom
+import { createRealtimeTalkConversationState } from "./conversation-state.ts";
+import { orderRealtimeTalkConversation, updateRealtimeTalkConversation } from "./conversation.ts";
 import { useRealtimeTalkMicrophoneFixture } from "./input.test-support.ts";
 import { RealtimeTalkSession } from "./session.ts";
 import type { RealtimeTalkTranscript } from "./shared.ts";
@@ -86,13 +83,11 @@ function createCall(
       : { ok: true };
   });
   const onStatus = vi.fn();
-  const onTalkEvent = vi.fn();
   const session = new RealtimeTalkSession(
     { request } as unknown as GatewayBrowserClient,
     "agent:main:main",
     {
       onStatus,
-      onTalkEvent,
       onTranscriptOrder: (orders) => {
         conversation = orderRealtimeTalkConversation(conversation, orders);
       },
@@ -111,7 +106,6 @@ function createCall(
     request,
     requests,
     onStatus,
-    onTalkEvent,
     entries: () => conversation.entries.map(({ role, text }) => ({ role, text })),
     entryStates: () => conversation.entries,
     texts: () => conversation.entries.map(({ text }) => text),
@@ -187,10 +181,6 @@ describe("browser Talk provider item ordering", () => {
       ]);
       expect(call.entryStates().every((entry) => entry.isStreaming)).toBe(true);
       expect(transcripts.every((entry) => !entry.final && entry.itemId === undefined)).toBe(true);
-      expect(call.onTalkEvent.mock.calls.map(([event]) => event.type)).not.toContain("turn.ended");
-      expect(call.onTalkEvent.mock.calls.map(([event]) => event.type)).not.toContain(
-        "transcript.done",
-      );
       expect(call.writes()).toEqual([]);
       void call.session.stop();
       await waitForFast(() => expect(call.requests.at(-1)?.method).toBe("talk.client.close"));
@@ -482,13 +472,6 @@ describe("browser Talk provider item ordering", () => {
           error: { message: "speech decoder failed" },
         });
         expect(call.onStatus).toHaveBeenLastCalledWith("error", "speech decoder failed");
-        expect(call.onTalkEvent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            type: "session.error",
-            itemId: "u1",
-            payload: { message: "speech decoder failed" },
-          }),
-        );
       } else {
         final(call.peer, "u1", "user", "");
       }

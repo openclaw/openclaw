@@ -1,5 +1,6 @@
 // Control UI tests cover schema defaults and restoring inherited config values.
 
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -30,7 +31,69 @@ const withPage = pageRunner(suite, settingsPageOptions);
 
 const capture = proof.capture;
 
+async function expectApplyChanges(page: Page) {
+  await expect
+    .poll(async () => {
+      // Let each real config.get settle before advancing the next polling window.
+      await page.clock.runFor(1_000);
+      return page.locator("openclaw-settings-save-indicator").textContent();
+    })
+    .toContain("Apply changes");
+  await page.clock.resume();
+}
+
 suite.define(() => {
+  it("shows omitted automation triggers as enabled and persists explicit overrides", async () => {
+    const { buildConfigSchemaCore } = await import("../../../src/config/schema.ts");
+    const schema = buildConfigSchemaCore();
+    const config = (enabled?: boolean) => ({
+      cron: {
+        triggers: enabled === undefined ? {} : { enabled },
+        skipMissedJobs: true,
+        sessionRetention: "7d",
+      },
+    });
+    await withPage(async ({ page }) => {
+      await page.clock.install();
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "config.get": configSnapshot(config(), "trigger-default-initial", true),
+          "config.schema": schema,
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/automation?section=cron&advanced=1`);
+      const triggers = page.locator("#config-section-cron details.cfg-object").filter({
+        has: page.locator(".cfg-object__summary .settings-row__title").getByText("Triggers", {
+          exact: true,
+        }),
+      });
+      await revealControl(triggers.locator('select, input[role="switch"]'));
+      await capture(triggers, "04-automation-triggers-default.png");
+
+      const control = triggers.locator("select");
+      expect(await control.count()).toBe(1);
+      expect((await control.locator("option:checked").textContent())?.trim()).toBe("Default: On");
+      expect(await gateway.getRequests("config.set")).toHaveLength(0);
+
+      for (const [label, enabled] of [
+        ["Off", false],
+        ["On", true],
+        ["Default: On", undefined],
+      ] as const) {
+        const before = (await gateway.getRequests("config.set")).length;
+        await gateway.deferNext("config.set");
+        await control.selectOption({ label });
+        const request = await gateway.waitForRequest("config.set", { after: before });
+        expect(requestRaw(request)).toEqual(config(enabled));
+        await gateway.resolveDeferred("config.set");
+        await expectApplyChanges(page);
+        await page.reload();
+        await revealControl(control);
+        expect((await control.locator("option:checked").textContent())?.trim()).toBe(label);
+      }
+    });
+  });
+
   it("shows node automatic updates as inherited enabled and restores omission after opting out", async () => {
     const { buildConfigSchemaCore } = await import("../../../src/config/schema.ts");
     const schema = buildConfigSchemaCore();
@@ -41,6 +104,7 @@ suite.define(() => {
       },
     });
     await withPage(async ({ page }) => {
+      await page.clock.install();
       const initial = config();
       const gateway = await installMockGateway(page, {
         methodResponses: {
@@ -49,7 +113,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}settings/infrastructure?section=nodeHost&advanced=1`);
-      const control = page.locator('select[aria-label="Node Automatic Updates Enabled"]');
+      const control = page.locator('select[aria-label="Node automatic updates enabled"]');
 
       await revealControl(control);
       expect((await control.locator("option:checked").textContent())?.trim()).toBe(
@@ -67,9 +131,7 @@ suite.define(() => {
         const request = await gateway.waitForRequest("config.set", { after: before });
         expect(requestRaw(request)).toEqual(config(enabled));
         await gateway.resolveDeferred("config.set");
-        await expect
-          .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-          .toContain("Saved");
+        await expectApplyChanges(page);
         await page.reload();
         await revealControl(control);
         expect((await control.locator("option:checked").textContent())?.trim()).toBe(label);
@@ -83,6 +145,7 @@ suite.define(() => {
 
   it("shows defaults and removes cleared optional scalars from config.set", async () => {
     await withPage(async ({ page }) => {
+      await page.clock.install();
       const config = {
         runtime: {
           enabled: false,
@@ -146,28 +209,33 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
 
       const panel = page.locator("#config-section-panel");
-      const enabledRow = settingsRow(page, "Enabled");
-      const modeRow = settingsRow(page, "Mode");
+      const enabledRow = settingsRow(page, "Enabled").first();
+      const modeRow = settingsRow(page, "Mode").first();
       const payloadRow = settingsRow(page, "Payload");
-      const profileBlock = panel.locator("details.cfg-object").filter({
-        has: page.locator(".cfg-object__summary .settings-row__title").getByText("Profile", {
-          exact: true,
-        }),
-      });
       const retriesRow = settingsRow(page, "Retries");
       const tagsBlock = panel.locator(".cfg-array").filter({ hasText: "Tags" });
 
+      const helpText = async (row: Locator, label: string) => {
+        await row.getByRole("button", { name: `Help for ${label}`, exact: true }).click();
+        const popover = page.locator(".config-field-help__popover:popover-open");
+        await popover.waitFor();
+        const text = await popover.textContent();
+        await page.keyboard.press("Escape");
+        await popover.waitFor({ state: "hidden" });
+        return text;
+      };
       await expect
         .poll(() => enabledRow.textContent().then((text) => text?.replace(/\s+/gu, " ").trim()))
-        .toContain("Controls runtime processing. Default: true");
-      await expect.poll(() => modeRow.textContent()).toContain("Default: balanced");
+        .toContain("Controls runtime processing.");
+      expect(await helpText(enabledRow, "Enabled")).toContain("Default: true");
+      expect(await helpText(modeRow, "Mode")).toMatch(/Default: balanced/iu);
       await expect.poll(() => modeRow.locator("select").inputValue()).not.toBe("__unset__");
-      await expect.poll(() => payloadRow.textContent()).toContain('Default: {"mode":"balanced"}');
+      expect(await helpText(payloadRow, "Payload")).toContain('Default: {"mode":"balanced"}');
       await expect
-        .poll(() => profileBlock.textContent())
+        .poll(() => panel.textContent())
         .not.toContain('{"enabled":true,"mode":"balanced"}');
       await expect.poll(() => retriesRow.getByRole("spinbutton").inputValue()).toBe("9");
-      await expect.poll(() => tagsBlock.textContent()).toContain('Default: ["stable","default"]');
+      expect(await helpText(tagsBlock, "Tags")).toContain('Default: ["stable","default"]');
 
       await capture(panel, "01-explicit-overrides.png");
 
@@ -188,7 +256,7 @@ suite.define(() => {
       });
       await expect
         .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-        .toContain("Saving");
+        .toBe("Saving…");
 
       await expect.poll(() => modeRow.locator("select").inputValue()).toBe("__unset__");
       await expect.poll(() => retriesRow.getByRole("spinbutton").inputValue()).toBe("");
@@ -197,9 +265,7 @@ suite.define(() => {
         .toBe("Default: 3");
 
       await gateway.resolveDeferred("config.set");
-      await expect
-        .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-        .toContain("Saved");
+      await expectApplyChanges(page);
       expect((await page.reload())?.status()).toBe(200);
       await gateway.waitForRequest("config.get");
 

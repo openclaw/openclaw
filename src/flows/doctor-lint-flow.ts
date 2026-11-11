@@ -1,6 +1,6 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
@@ -20,15 +20,60 @@ export const stateSchemaHealthCheck: HealthCheck = {
   kind: "core",
   description: "Shared state migrations require explicit repair.",
   async detect(ctx) {
-    const state = withExistingOpenClawStateDatabaseReadOnly(
-      ({ db, path }) => ({ version: readStateSchemaContentVersion(db), path }),
+    const [{ readRetainedAgentDeletionsFromDatabase }, { readAgentDatabasePreflightTargets }] =
+      await Promise.all([
+        import("../state/agent-deletion-journal.read.js"),
+        import("../state/openclaw-agent-db-registry.read.js"),
+      ]);
+    const state = await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+      ({ db, path }) => {
+        const journal = readRetainedAgentDeletionsFromDatabase(db, path);
+        const held =
+          journal.status === "present"
+            ? journal.held
+            : journal.status === "unavailable"
+              ? [...readAgentDatabasePreflightTargets(db, path), ...(journal.known?.held ?? [])]
+              : [];
+        return {
+          version: readStateSchemaContentVersion(db),
+          path,
+          journal,
+          held: [
+            ...new Map(
+              held.map((entry) => [JSON.stringify([entry.agentId, entry.path]), entry]),
+            ).values(),
+          ],
+        };
+      },
       { env: ctx.env },
     );
-    if (!state || state.version >= OPENCLAW_STATE_SCHEMA_VERSION) {
+    if (!state) {
       return [];
     }
     const command = formatCliCommand("openclaw doctor --fix", ctx.env);
+    const unavailable = state.journal.status === "unavailable" ? state.journal : undefined;
+    const recovery: Omit<HealthFinding, "message"> = {
+      checkId: "core/doctor/agent-deletion-journal",
+      severity: "warning",
+      errorCode: unavailable
+        ? `agent-deletion-journal-${unavailable.cause}`
+        : "agent-deletion-journal-held",
+      fixHint: `Run ${command} to verify deletion history and ownership, and back up configured stores before restoration; follow its guidance for stores still held.`,
+    };
+    const findings: HealthFinding[] = state.held.map((entry) => ({
+      ...recovery,
+      target: entry.agentId,
+      path: entry.path,
+      message: `Held agent ${entry.agentId} database ${entry.path}: ${unavailable?.reason ?? "deletion journal reconstructed"}. The store remains untouched until ownership can be verified.`,
+    }));
+    if (unavailable && findings.length === 0) {
+      findings.push({ ...recovery, path: state.path, message: unavailable.reason });
+    }
+    if (state.version >= OPENCLAW_STATE_SCHEMA_VERSION) {
+      return findings;
+    }
     return [
+      ...findings,
       {
         checkId: "core/doctor/state-schema",
         severity: "warning",

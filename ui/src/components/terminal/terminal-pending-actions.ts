@@ -1,3 +1,4 @@
+import { refreshControlUiServiceWorker } from "../../app/sw-refresh.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { TerminalPanelToggleDetail } from "../panel-toggle-contract.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
@@ -7,11 +8,13 @@ import type {
   TerminalPanelError,
   TerminalPanelSessionTab,
   TerminalPanelSessionState,
+  TerminalStagedInput,
 } from "./terminal-panel-session-types.ts";
 import {
   loadPersistedTerminalActions,
   persistTerminalActions,
 } from "./terminal-session-storage.ts";
+import { CATALOG_TERMINAL_READY_TIMEOUT_MS } from "./terminal-tab-readiness.ts";
 import type { TerminalTaskQueue } from "./terminal-task-queue.ts";
 
 type TerminalHandoff = {
@@ -26,7 +29,12 @@ export type TerminalIntentHost = {
   bootQueue: Pick<TerminalTaskQueue, "enqueue">;
   currentGeneration: () => number;
   canRun: () => boolean;
-  attach: (sessionId: string, agentOwned: boolean, cancelIntent: () => void) => Promise<boolean>;
+  attach: (
+    sessionId: string,
+    agentOwned: boolean,
+    cancelIntent: () => void,
+    stagedInput?: TerminalStagedInput,
+  ) => Promise<boolean>;
   client: () => TerminalGatewayClient | null;
   present: (tab: TerminalPanelSessionTab) => void;
   showError: (text: string) => void;
@@ -41,7 +49,6 @@ export type TerminalIntentHost = {
   hasTabs: () => boolean;
   publish: () => void;
   setBooting: (booting: boolean) => void;
-  timeoutMs: () => number;
   showTimeout: () => void;
   clearTimeout: () => void;
 };
@@ -111,11 +118,21 @@ export function createTerminalIntentQueue(persistent = true) {
     return ownedHosts.at(-1) ?? null;
   }
 
+  // Every bound panel derives handoff availability from this shared queue.
+  function publishHosts(): void {
+    for (const host of ownedHosts) {
+      host.publish();
+    }
+  }
+
   function retireAction(action: QueuedTerminalAction): void {
     const index = ownedActions.indexOf(action);
     if (index !== -1) {
       ownedActions.splice(index, 1);
       persist();
+      if (ownedActions.length === 0) {
+        publishHosts();
+      }
     }
   }
 
@@ -149,7 +166,12 @@ export function createTerminalIntentQueue(persistent = true) {
         retireAction(action);
         host.present(tab);
       } else if (
-        !(await host.attach(tab.gatewaySessionId, tab.agentOwned ?? false, cancelIntent))
+        !(await host.attach(
+          tab.gatewaySessionId,
+          tab.agentOwned ?? false,
+          cancelIntent,
+          tab.stagedInput,
+        ))
       ) {
         return false;
       }
@@ -216,7 +238,8 @@ export function createTerminalIntentQueue(persistent = true) {
       ownedTimeoutHost = fenceHost;
       fenceHost.showTimeout();
       fenceHost.setBooting(false);
-    }, fenceHost.timeoutMs());
+      publishHosts();
+    }, CATALOG_TERMINAL_READY_TIMEOUT_MS);
   }
   function releaseRefreshFence(host: TerminalIntentHost): void {
     if (ownedFenceHost !== host) {
@@ -275,17 +298,22 @@ export function createTerminalIntentQueue(persistent = true) {
           releaseRefreshFence(host);
         }
       };
-      void import("../../app/sw-refresh.runtime.ts")
-        .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
-        .then((replacementActivated) => (replacementActivated ? undefined : release()), release);
+      void refreshControlUiServiceWorker().then(
+        (replacementActivated) => (replacementActivated ? undefined : release()),
+        release,
+      );
     },
     beginRefreshFence(host: TerminalIntentHost, generation: number): void {
+      const changed = !ownedRefreshPending || ownedRefreshTimedOut;
       ownedRefreshPending = true;
       ownedFenceHost = host;
       ownedFenceGeneration = generation;
       clearRefreshFailure();
       clearRefreshTimer();
       armRefreshTimer();
+      if (changed) {
+        publishHosts();
+      }
     },
     // Only the panel that opened the fence may drop it; another panel disposing
     // its tabs must not unblock a refresh it knows nothing about.
@@ -293,10 +321,14 @@ export function createTerminalIntentQueue(persistent = true) {
       if (ownedFenceHost !== null && ownedFenceHost !== host) {
         return;
       }
+      const changed = ownedRefreshPending || ownedRefreshTimedOut;
       clearRefreshTimer();
       ownedRefreshPending = false;
       ownedFenceHost = null;
       clearRefreshFailure();
+      if (changed) {
+        publishHosts();
+      }
     },
     canHandoff(source: Pick<TerminalPanelSessionState, "booting" | "tabs">): boolean {
       return (
@@ -311,6 +343,7 @@ export function createTerminalIntentQueue(persistent = true) {
       source: Pick<TerminalPanelSessionState, "tabs" | "activeId" | "error">,
       client: TerminalGatewayClient | null,
     ): TerminalPanelSessionTab[] {
+      const hadActions = ownedActions.length > 0;
       const tabs = source.tabs.toSorted(
         (a, b) => Number(a.id === source.activeId) - Number(b.id === source.activeId),
       );
@@ -324,6 +357,9 @@ export function createTerminalIntentQueue(persistent = true) {
         })),
       );
       persist();
+      if (hadActions !== ownedActions.length > 0) {
+        publishHosts();
+      }
       // The queue owns retained emulators; only live views follow source teardown.
       return source.tabs.filter((tab) => tab.status !== "exited");
     },
@@ -331,6 +367,7 @@ export function createTerminalIntentQueue(persistent = true) {
       action: TerminalPanelAction,
       options: { deferUntilHostChange?: boolean } = {},
     ): Promise<void> {
+      const hadActions = ownedActions.length > 0;
       let changed = action.kind !== "restore" && discardRestoreActions();
       const explicitIntentPending = ownedActions.some((pending) => pending.kind !== "restore");
       const key = JSON.stringify(action);
@@ -345,6 +382,9 @@ export function createTerminalIntentQueue(persistent = true) {
       }
       if (changed) {
         persist();
+        if (hadActions !== ownedActions.length > 0) {
+          publishHosts();
+        }
       }
       // A session-route intent is persisted before its embedded panel mounts.
       // The shell's bottom-only panel must not claim it in that gap; the next
@@ -354,9 +394,7 @@ export function createTerminalIntentQueue(persistent = true) {
       }
       armRefreshTimer();
       const host = readHost();
-      if (ownedRefreshPending) {
-        host?.publish();
-      } else if (host && !host.hasTabs()) {
+      if (!ownedRefreshPending && host && !host.hasTabs()) {
         host.setBooting(true);
       }
       await api.drain();
@@ -385,7 +423,6 @@ export function createTerminalIntentQueue(persistent = true) {
       } finally {
         ownedDrainScheduled = false;
         const current = readHost();
-        current?.publish();
         if (ownedActions.length > 0 && current && canRun(current)) {
           void api.drain();
         } else if (ownedActions.length === 0 && current && !current.hasTabs()) {
@@ -399,6 +436,7 @@ export function createTerminalIntentQueue(persistent = true) {
       if (readHost() !== host) {
         return;
       }
+      const changed = ownedActions.length > 0 || ownedRefreshTimedOut;
       for (const action of ownedActions.splice(0)) {
         if (action.kind === "handoff" && action.tab.status === "exited") {
           disposeTerminalController(action.tab.controller, action.tab.host);
@@ -407,6 +445,9 @@ export function createTerminalIntentQueue(persistent = true) {
       persist();
       host.setBooting(false);
       clearRefreshFailure();
+      if (changed) {
+        publishHosts();
+      }
     },
   };
 

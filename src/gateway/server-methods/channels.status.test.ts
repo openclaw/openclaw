@@ -10,6 +10,7 @@ import type {
   ChannelPlugin,
   ChannelStatusIssue,
 } from "../../channels/plugins/types.public.js";
+import * as restartHealth from "../../cli/daemon-cli/restart-health.constants.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createPluginRecord } from "../../plugins/status.test-fixtures.js";
@@ -158,6 +159,7 @@ function recordAccount(snapshot: Partial<ChannelAccountSnapshot>, channel = "wha
 describe("channelsHandlers channels.status", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     setActiveDegradedSecretOwners([]);
     setActivePluginRegistry(createTestRegistry([]));
   });
@@ -737,6 +739,30 @@ describe("channelsHandlers channels.status", () => {
     expect(payload.partial).toBe(true);
   });
 
+  it.each([-60_000, 60_000])(
+    "keeps the live probe deadline on the monotonic clock when wall time jumps by %i ms",
+    async (wallJumpMs) => {
+      vi.useFakeTimers();
+      const healthyProbe = vi.fn(async () => {
+        await delay(500);
+        return { ok: true, identity: "healthy" };
+      });
+      usePlugins(createChannelPlugin({ id: "healthy", probeAccount: healthyProbe }));
+      await useRealSnapshotBuilder();
+      const run = runStatus({ probe: true, timeoutMs: 1000 });
+
+      await vi.advanceTimersByTimeAsync(0);
+      vi.setSystemTime(Date.now() + wallJumpMs);
+      await vi.advanceTimersByTimeAsync(600);
+      const payload = await run;
+
+      expect(firstAccount(payload, "healthy")).toMatchObject({
+        probe: { ok: true, identity: "healthy" },
+      });
+      expect(payload.partial).toBeUndefined();
+    },
+  );
+
   it("preserves channel account rows when a live probe throws", async () => {
     const probeAccount = vi.fn(async () => fail("probe failed"));
     mocks.buildChannelAccountSnapshotFromAccount.mockImplementation(
@@ -871,10 +897,12 @@ describe("channelsHandlers channels.status", () => {
           (method === "status" ? statusStarted : channelsStarted).resolve();
         });
       });
+      vi.spyOn(restartHealth, "DEFAULT_RESTART_HEALTH_TIMEOUT_MS", "get").mockReturnValue(
+        roundTripMs < 3_000 ? 3_000 : 10_000,
+      );
       const result = checkGatewayHealth({
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         cfg: {},
-        timeoutMs: roundTripMs < 3_000 ? 3_000 : 10_000,
       });
       await statusStarted.promise;
       await vi.advanceTimersByTimeAsync(roundTripMs);

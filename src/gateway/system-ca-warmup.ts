@@ -1,61 +1,30 @@
-import type { EventEmitter } from "node:events";
-import type { WorkerOptions } from "node:worker_threads";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 
 const SYSTEM_CA_WARMUP_TIMEOUT_MS = 10_000;
-const SYSTEM_CA_WORKER_SOURCE = String.raw`
-  const { getCACertificates } = require("node:tls");
-  const { parentPort } = require("node:worker_threads");
-
-  try {
-    const certificateCount = getCACertificates("default").length;
-    parentPort.postMessage({ ok: true, certificateCount });
-  } catch (error) {
-    parentPort.postMessage({
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  } finally {
-    parentPort.close();
-  }
-`;
-
-type SystemCaWarmupWorker = Pick<EventEmitter, "once" | "removeAllListeners"> & {
-  terminate: () => Promise<number>;
-  unref: () => void;
-};
 
 type SystemCaWarmupOptions = {
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
   log?: { warn: (message: string) => void };
-  timeoutMs?: number;
-  createWorker?: (source: string, options: WorkerOptions) => SystemCaWarmupWorker;
 };
 
-type SystemCaWarmupMessage = { ok: true; certificateCount: number } | { ok: false; error: string };
+type SystemCaWarmupMessage = { ok: true } | { ok: false; error: string };
 
 let macOSSystemCaWarmupPromise: Promise<void> | undefined;
 
 /** Warm Node's effective default CA set without blocking the gateway event loop on macOS. */
-export async function warmMacOSSystemCaOffMainThread(
-  options: SystemCaWarmupOptions = {},
-): Promise<void> {
-  const env = options.env ?? process.env;
-  const platform = options.platform ?? process.platform;
-  if (
-    platform !== "darwin" ||
-    (options.env === undefined && options.platform === undefined && isVitestRuntimeEnv(env))
-  ) {
+async function warmMacOSSystemCaOffMainThread(options: SystemCaWarmupOptions = {}): Promise<void> {
+  if (process.platform !== "darwin" || isVitestRuntimeEnv()) {
     return;
   }
 
-  let worker: SystemCaWarmupWorker;
+  let worker: ReturnType<typeof createCpuTrackedWorker>;
   try {
-    worker = (options.createWorker ?? createCpuTrackedWorker)(SYSTEM_CA_WORKER_SOURCE, {
-      eval: true,
+    const url = resolveRuntimeProcessEntrypointUrl("systemCaWarmup");
+    worker = createCpuTrackedWorker(url, {
+      execArgv: resolveRuntimeWorkerThreadExecArgv(url),
     });
   } catch (error) {
     // CA prewarming is an optimization. Node can still load trust settings lazily.
@@ -68,8 +37,6 @@ export async function warmMacOSSystemCaOffMainThread(
 
   await new Promise<void>((resolve) => {
     let settled = false;
-    const timeoutMs = options.timeoutMs ?? SYSTEM_CA_WARMUP_TIMEOUT_MS;
-
     const settle = (warning?: string, terminate = false) => {
       if (settled) {
         return;
@@ -111,11 +78,10 @@ export async function warmMacOSSystemCaOffMainThread(
 
     const timeout = setTimeout(() => {
       settle(
-        `macOS CA warmup timed out after ${timeoutMs}ms; gateway startup will continue and trust settings will load lazily`,
+        `macOS CA warmup timed out after ${SYSTEM_CA_WARMUP_TIMEOUT_MS}ms; gateway startup will continue and trust settings will load lazily`,
         true,
       );
-    }, timeoutMs);
-    timeout.unref?.();
+    }, SYSTEM_CA_WARMUP_TIMEOUT_MS).unref();
 
     // A wedged trustd lookup must not keep an otherwise stopped gateway process alive.
     worker.unref();

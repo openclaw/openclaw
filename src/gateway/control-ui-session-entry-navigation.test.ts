@@ -1,22 +1,23 @@
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
+import { sessionNavigationTarget } from "../../ui/src/lib/sessions/route-navigation.ts";
 
 const workerSource = readFileSync(new URL("../../ui/public/sw.js", import.meta.url), "utf8");
 
 function navigationWorker(basePath = "", proxySessionEntry = true) {
   const scope = `https://gateway.test${basePath}/`;
   const listeners = new Map<string, (event: unknown) => void>();
+  const document = new Response("public conversation");
   const fetch = vi.fn<typeof globalThis.fetch>();
   const source = workerSource.replace(
     "const OFFLINE_BOOT = null;",
-    () =>
-      `const OFFLINE_BOOT = ${JSON.stringify({
-        id: "navigation-fixture",
-        routes: ["/chat", "/new"],
-        routePrefixes: ["/chat/"],
-        publicAssets: [],
-      })};`,
+    `const OFFLINE_BOOT = ${JSON.stringify({
+      id: "navigation-fixture",
+      routes: ["/chat", "/new"],
+      routePrefixes: ["/chat/"],
+      publicAssets: [],
+    })};`,
   );
   runInNewContext(source, {
     URL,
@@ -35,6 +36,7 @@ function navigationWorker(basePath = "", proxySessionEntry = true) {
   });
   return {
     fetch,
+    document,
     navigate(path: string) {
       let response: Promise<Response> | undefined;
       listeners.get("fetch")!({
@@ -54,16 +56,35 @@ function navigationWorker(basePath = "", proxySessionEntry = true) {
 }
 
 describe("operator browser chat document navigation", () => {
-  it("keeps token/password deployments on the existing public-reader credential handoff", async () => {
-    const worker = navigationWorker("", false);
-    const document = new Response("public conversation");
-    worker.fetch.mockResolvedValueOnce(document);
-    expect(await worker.navigate("/chat/main/topic")).toBe(document);
-    expect(worker.fetch).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ url: "https://gateway.test/chat/main/topic" }),
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    );
-  });
+  it.each(["", "/control"])(
+    "reloads in-app session navigation hints under %s",
+    async (basePath) => {
+      const worker = navigationWorker(basePath);
+      const sessionKey = "agent:main:dashboard:12345678-aaaa-4000-8000-000000000001";
+      const target = sessionNavigationTarget({
+        face: "chat",
+        sessionKey,
+        navigationKey: sessionKey,
+        focusComposer: true,
+        preferenceDerivedFace: true,
+        fallbackAgentId: "main",
+        basePath,
+      });
+      const path = target.options.pathname + target.options.search;
+      const app = new Response("app", { headers: { "X-OpenClaw-Session-Entry": "1" } });
+      worker.fetch.mockResolvedValueOnce(app);
+      expect(await worker.navigate(path)).toBe(app);
+      expect(worker.fetch).toHaveBeenCalledExactlyOnceWith(
+        `https://gateway.test${basePath}/__openclaw__/session-entry?${new URLSearchParams({ path })}`,
+        expect.objectContaining({
+          credentials: "same-origin",
+          redirect: "manual",
+          cache: "no-store",
+        }),
+      );
+    },
+  );
+
   it.each(["", "/control"])("loads one protected app document under %s", async (basePath) => {
     const worker = navigationWorker(basePath);
     const path = `${basePath}/chat/main/dashboard/12345678-aaaa-4000-8000-000000000001?dashboard=expanded&openclaw_mount_recovery=1791731984160`;
@@ -91,15 +112,26 @@ describe("operator browser chat document navigation", () => {
       } else {
         worker.fetch.mockResolvedValueOnce(new Response("not app", { status: Number(result) }));
       }
-      const publicDocument = new Response("public conversation");
-      worker.fetch.mockResolvedValueOnce(publicDocument);
-      expect(await worker.navigate("/chat/main/topic")).toBe(publicDocument);
+      worker.fetch.mockResolvedValueOnce(worker.document);
+      expect(await worker.navigate("/chat/main/topic")).toBe(worker.document);
       expect(worker.fetch).toHaveBeenCalledTimes(2);
       expect(worker.fetch.mock.calls[1]?.[0]).toMatchObject({
         url: "https://gateway.test/chat/main/topic",
       });
     },
   );
+
+  it("keeps an agent-selector reload on the protected session entry", async () => {
+    const worker = navigationWorker();
+    const path = "/chat/new-bot?__openclawSessionFacePreference=1";
+    const app = new Response("app", { headers: { "X-OpenClaw-Session-Entry": "1" } });
+    worker.fetch.mockResolvedValueOnce(app);
+    expect(await worker.navigate(path)).toBe(app);
+    expect(worker.fetch).toHaveBeenCalledExactlyOnceWith(
+      `https://gateway.test/__openclaw__/session-entry?${new URLSearchParams({ path })}`,
+      expect.objectContaining({ credentials: "same-origin", redirect: "manual" }),
+    );
+  });
 
   it("leaves the browser a native navigation when the public route also challenges", async () => {
     const worker = navigationWorker();
@@ -118,22 +150,38 @@ describe("operator browser chat document navigation", () => {
   });
 
   it.each([
-    "/",
-    "/chat",
-    "/chat/",
-    "/new",
-    "/chat/main/topic?offset=100",
-    "/chat/main/topic?openclaw_mount_recovery=1&token=secret",
-    "/chat/main/topic?openclaw_mount_recovery=1&unknown=value",
-    "/chat/main?catalog=x&host=y&thread=z",
-  ])("fetches %s without rewriting it to a protected session entry", async (path) => {
-    const worker = navigationWorker();
-    const document = new Response("document");
-    worker.fetch.mockResolvedValueOnce(document);
-    expect(await worker.navigate(path)).toBe(document);
-    expect(worker.fetch.mock.calls[0]?.[0]).toMatchObject({ url: `https://gateway.test${path}` });
-    expect(worker.fetch).toHaveBeenCalledOnce();
-  });
+    ["/chat/main/topic", false],
+    ["/", true],
+    ["/chat", true],
+    ["/chat/", true],
+    ["/new", true],
+    ["/chat/main/topic?offset=100", true],
+    ["/chat/main/topic?openclaw_mount_recovery=1&token=secret", true],
+    ["/chat/main/topic?openclaw_mount_recovery=1&unknown=value", true],
+    ["/chat/main?catalog=x&host=y&thread=z", true],
+    ["/chat/main?__openclawSessionKey=first&__openclawSessionKey=second", true],
+    ["/chat/main?__openclawSessionKey=", true],
+    ["/chat/main?__openclawSessionKey=+%20", true],
+    ["/chat/main?__openclawSessionKey=agent%3Amain%3Aa%00", true],
+    ["/chat/main?__openclawSessionKey=agent%3Amain%3Aa%1F", true],
+    ["/chat/main?__openclawSessionKey=agent%3Amain%3Aa%7F", true],
+    ["/chat/main?__openclawSessionKey=agent%3Amain%3Aa&token=secret", true],
+    ["/chat/main?__openclawSessionKey=agent%3Amain%3Aa&unknown=value", true],
+    ["/chat/main?__openclawComposerFocus=1&__openclawComposerFocus=1", true],
+    ["/chat/main?__openclawComposerFocus=0", true],
+    ["/chat/main?__openclawComposerFocus=", true],
+  ] as const)(
+    "fetches %s without rewriting it to a protected session entry",
+    async (path, proxy) => {
+      const worker = navigationWorker("", proxy);
+      worker.fetch.mockResolvedValueOnce(worker.document);
+      expect(await worker.navigate(path)).toBe(worker.document);
+      expect(worker.fetch).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ url: `https://gateway.test${path}` }),
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    },
+  );
 
   it.each([
     "/__openclaw__/session-entry?path=%2Fchat%2Fmain%2Ftopic",

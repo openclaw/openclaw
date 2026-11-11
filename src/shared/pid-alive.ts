@@ -67,12 +67,17 @@ function isValidPid(pid: number): boolean {
   return Number.isInteger(pid) && pid > 0;
 }
 
+// Android (Termux) runs the Linux kernel and reports its own process.platform.
+function hasLinuxProcfs(): boolean {
+  return process.platform === "linux" || process.platform === "android";
+}
+
 /**
- * Check whether a Linux task is terminal and has no live sibling threads.
+ * Reject recycled worker TIDs and terminal leaders without live sibling threads.
  * Missing or reaped procfs snapshots require a fresh existence probe.
  */
 function isExitedLinuxProcess(pid: number): boolean {
-  if (process.platform !== "linux") {
+  if (!hasLinuxProcfs()) {
     return false;
   }
   try {
@@ -80,9 +85,14 @@ function isExitedLinuxProcess(pid: number): boolean {
     const state = status.match(/^State:\s+(\S)/m)?.[1];
     const threads = status.match(/^Threads:[ \t]+(\d+)[ \t]*$/m)?.[1];
     if (threads !== "0") {
+      // process.pid records a leader; kill(pid, 0) also accepts recycled worker TIDs.
+      const tgid = status.match(/^Tgid:[ \t]+(\d+)[ \t]*$/m)?.[1];
       // pthread_exit can leave a terminal leader with live workers. Reaping also
       // moves the last retained task from Z to X before removing its PID.
-      return (state === "Z" || state === "X") && threads === "1";
+      return (
+        (tgid !== undefined && Number(tgid) !== pid) ||
+        ((state === "Z" || state === "X") && threads === "1")
+      );
     }
   } catch {
     // Reaping can remove procfs after the caller's existence probe.
@@ -120,18 +130,21 @@ export function isPidDefinitelyDead(pid: number): boolean {
   if (!isValidPid(pid)) {
     return true;
   }
+  let missing = false;
   try {
     process.kill(pid, 0);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ESRCH" && !(process.platform === "win32" && code === "EPERM")) {
       return false;
     }
-    const native = readNativeLiveness(pid);
-    // Without native visibility facts, FreeBSD ESRCH can still mean a hidden PID.
-    return native === undefined ? process.platform !== "freebsd" : !native;
+    missing = code === "ESRCH";
   }
   const native = readNativeLiveness(pid);
-  return native === undefined ? isExitedLinuxProcess(pid) : !native;
+  // Windows EPERM needs native exit evidence; FreeBSD ESRCH may hide a live PID.
+  return native === undefined
+    ? (missing && process.platform !== "freebsd") || isExitedLinuxProcess(pid)
+    : !native;
 }
 
 function getDarwinProcessStartTime(
@@ -171,15 +184,15 @@ function getDarwinProcessStartTime(
   }
 }
 
-/** Read the Linux procfs start identity used by Linux-owned runtime state. */
-export function getProcessStartTime(pid: number): number | null {
-  if (!isValidPid(pid) || process.platform !== "linux") {
+/** Kernel parent and birth ticks share one procfs snapshot, independent of native addons. */
+export function readLinuxProcessStat(pid: number): { parentPid: number; startedAt: number } | null {
+  if (!isValidPid(pid) || !hasLinuxProcfs()) {
     return null;
   }
   try {
     const stat = fsSync.readFileSync(`/proc/${pid}/stat`, "utf8");
     const commEndIndex = stat.lastIndexOf(")");
-    if (commEndIndex < 0) {
+    if (commEndIndex < 0 || !stat.startsWith(`${pid} (`)) {
       return null;
     }
     // The comm field (field 2) is wrapped in parens and can contain spaces,
@@ -188,10 +201,21 @@ export function getProcessStartTime(pid: number): number | null {
     const fields = afterComm.split(/\s+/);
     // field 22 (starttime) = index 19 after the comm-split (field 3 is index 0).
     const starttime = Number(fields[19]);
-    return Number.isInteger(starttime) && starttime >= 0 ? starttime : null;
+    const parentPid = Number(fields[1]);
+    return Number.isSafeInteger(starttime) &&
+      starttime >= 0 &&
+      Number.isSafeInteger(parentPid) &&
+      parentPid >= 0
+      ? { parentPid, startedAt: starttime }
+      : null;
   } catch {
     return null;
   }
+}
+
+/** Read the Linux procfs start identity used by Linux-owned runtime state. */
+export function getProcessStartTime(pid: number): number | null {
+  return readLinuxProcessStat(pid)?.startedAt ?? null;
 }
 
 /** Custody recovery needs native birth precision rather than the shipped lease timestamp format. */
@@ -199,7 +223,7 @@ export function getProcessInstanceStartTime(pid: number): number | null {
   if (!isValidPid(pid)) {
     return null;
   }
-  if (process.platform === "linux") {
+  if (hasLinuxProcfs()) {
     const startedAt = getProcessStartTime(pid);
     return Number.isSafeInteger(startedAt) ? startedAt : null;
   }

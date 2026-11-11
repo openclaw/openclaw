@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentConfig,
@@ -11,38 +12,38 @@ import {
   isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileOrderWithMetadata,
 } from "../../../agents/auth-profiles/order.js";
+import { resolveAuthProfileDatabasePath } from "../../../agents/auth-profiles/sqlite.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../../../agents/auth-profiles/store-runtime.js";
 import { resolveProviderModelAuthPolicy } from "../../../agents/model-auth-policy.js";
 import {
   hasSyntheticLocalProviderAuthConfig,
   resolveProviderEntryApiKeyProfileReference,
 } from "../../../agents/model-auth-provider-config.js";
-import {
-  isCliRuntimeProvider,
-  resolveCliRuntimeExecutionProvider,
-} from "../../../agents/model-runtime-aliases.js";
 import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
 import { isConfiguredKeyAuthSource } from "../../../agents/provider-model-auth-source-plan.js";
 import { prepareAgentRuntimeAuth } from "../../../agents/runtime-plan/prepare-auth.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../../agents/session-runtime-compat.js";
 import { quoteCliArg } from "../../../cli/quote-cli-arg.js";
 import { resolveMergedModelProviderConfig } from "../../../config/model-provider-config.js";
+import { captureRuntimeConfig } from "../../../config/runtime-source-projection.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../../config/sessions/auth-profile-override-provenance.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import { prepareSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import type { CronInferenceBinding } from "../../../cron/inference-binding.js";
-import { resolveCronModelSelection } from "../../../cron/isolated-agent/model-selection.js";
-import { resolveCronAgentSessionKey } from "../../../cron/isolated-agent/session-key.js";
-import { prepareCronSession } from "../../../cron/isolated-agent/session.js";
-import { normalizeCronJobCreate } from "../../../cron/normalize.js";
 import {
-  isDetachedCronSessionTarget,
-  isInvalidCronSessionTargetIdError,
-  resolveCronSessionTargetSessionKey,
-} from "../../../cron/session-target.js";
+  inspectCronInferenceAccount,
+  prepareCronInferenceDiagnosticSession,
+} from "../../../cron/inference-diagnostics.js";
+import { resolveCronModelSelection } from "../../../cron/isolated-agent/model-selection.js";
+import { normalizeCronJobCreate } from "../../../cron/normalize.js";
+import { isInvalidCronSessionTargetIdError } from "../../../cron/session-target.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { prepareArtifactPreservingSqliteRead } from "../../../infra/sqlite-snapshot-source.js";
 import type { PluginDoctorCronJob } from "../../../plugins/doctor-contract-module.js";
 import { resolveProviderAuthProfileId } from "../../../plugins/provider-runtime.js";
+import { isArtifactPreservingStateRead } from "../../../state/artifact-preserving-state-reads.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { isUserModelAuthProfileId } from "../../../state/user-model-account-id.js";
@@ -59,6 +60,16 @@ export async function maybeRepairCronInferenceBindings(params: {
   const retained: AuthProfileAuthorization[] = [];
   const changes: Array<{ job: PluginDoctorCronJob; binding: CronInferenceBinding }> = [];
   const descriptions: string[] = [];
+  const capturedConfigs = new Map<OpenClawConfig, OpenClawConfig>();
+  const inspectedAgents = new Set<string>();
+  const captureConfig = (config: OpenClawConfig): OpenClawConfig => {
+    let captured = capturedConfigs.get(config);
+    if (!captured) {
+      captured = captureRuntimeConfig(config);
+      capturedConfigs.set(config, captured);
+    }
+    return captured;
+  };
   try {
     const maintenance = getOpenClawDatabaseMaintenanceScope();
     if (params.shouldRepair && !maintenance?.ownsSchemaMaintenance) {
@@ -77,6 +88,7 @@ export async function maybeRepairCronInferenceBindings(params: {
         continue;
       }
       let modelRef: string | undefined;
+      let listAccountsCommand = "openclaw models auth list";
       const label = `${normalizeOptionalString(definition.name) ?? stored.id} (${stored.id})`;
       try {
         // Malformed legacy rows must not abandon adoption for unrelated jobs or partitions.
@@ -93,25 +105,30 @@ export async function maybeRepairCronInferenceBindings(params: {
         if (!agentId || !resolveAgentConfig(params.cfg, agentId)) {
           throw new Error("Select the job's execution agent before adopting an inference account.");
         }
-        const baseKey =
-          resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${stored.id}`;
-        const sessionKey = resolveCronAgentSessionKey({
-          cfg: params.cfg,
+        listAccountsCommand += ` --agent ${quoteCliArg(agentId)}`;
+        // Resolve legacy ownership before capturing; matching provider loads share this generation.
+        // Account selection and authorization still use each job's own agent and session.
+        const config = captureConfig(params.cfg);
+        // The inspection owner retains one image for sessions, auth and catalogs across jobs.
+        if (isArtifactPreservingStateRead("agent") && !inspectedAgents.has(agentId)) {
+          const sessionTarget = await prepareSqliteTargetFromSessionStorePath(
+            resolveSessionStorePathCore(config.session?.store, { agentId, env }),
+            { agentId, env },
+          );
+          for (const agentPath of new Set([
+            resolveAuthProfileDatabasePath(resolveAgentDir(config, agentId, env)),
+            sessionTarget.path,
+          ])) {
+            if (existsSync(agentPath)) {
+              await prepareArtifactPreservingSqliteRead(agentPath);
+            }
+          }
+          inspectedAgents.add(agentId);
+        }
+        const session = await prepareCronInferenceDiagnosticSession({
+          cfg: config,
           agentId,
-          sessionKey: baseKey,
-        });
-        const sourceSessionKey =
-          job.sessionTarget === "current" && job.sessionKey
-            ? resolveCronAgentSessionKey({ cfg: params.cfg, agentId, sessionKey: job.sessionKey })
-            : undefined;
-        const session = await prepareCronSession({
-          cfg: params.cfg,
-          agentId,
-          sessionKey,
-          sourceSessionKey,
-          forceNew: isDetachedCronSessionTarget(job.sessionTarget),
-          exactRunSession: true,
-          nowMs: Date.now(),
+          job: { ...job, id: stored.id },
         });
         if (session.initialSessionEntry?.modelSelectionLocked === true) {
           warnings.push(
@@ -120,29 +137,34 @@ export async function maybeRepairCronInferenceBindings(params: {
           continue;
         }
         const selected = await resolveCronModelSelection({
-          cfg: params.cfg,
+          cfg: config,
           agentId,
-          agentDir: resolveAgentDir(params.cfg, agentId),
-          workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId),
-          agentConfigOverride: resolveAgentConfig(params.cfg, agentId),
+          agentDir: resolveAgentDir(config, agentId),
+          workspaceDir: resolveAgentWorkspaceDir(config, agentId),
+          agentConfigOverride: resolveAgentConfig(config, agentId),
           sessionEntry: session.sessionEntry,
-          payload: job.payload,
+          payloadModel: job.payload.model,
           isGmailHook: job.payload.externalContentSource === "gmail",
         });
         if (!selected.ok) {
           throw new Error(selected.error);
         }
         modelRef = `${selected.provider}/${selected.model}`;
-        const cfg = selected.owner.config;
-        if (
-          isCliRuntimeProvider(selected.provider, { config: cfg }) ||
-          resolveCliRuntimeExecutionProvider({
-            cfg,
-            agentId,
-            provider: selected.provider,
-            modelId: selected.model,
-          })
-        ) {
+        const cfg = captureConfig(selected.owner.config);
+        const account = await inspectCronInferenceAccount({
+          cfg: selected.cfgWithAgentDefaults,
+          agentId,
+          agentDir: selected.owner.agentDir,
+          job: { id: stored.id, name: job.name },
+          provider: selected.provider,
+          model: selected.model,
+          configuredProfileId: selected.configuredProfileId,
+          session,
+        });
+        if (account.cliExecution) {
+          if (account.warning) {
+            warnings.push(account.warning);
+          }
           continue;
         }
         const runtime =
@@ -157,12 +179,22 @@ export async function maybeRepairCronInferenceBindings(params: {
             provider: selected.provider,
             modelId: selected.model,
           }).policy?.id;
-        if (runtime && runtime !== "openclaw" && runtime !== "auto") {
+        if (runtime && runtime !== "openclaw" && runtime !== "auto" && runtime !== "codex") {
           warnings.push(
             `Automation ${label}: runtime ${runtime} inference ownership was left unchanged; no host account was adopted. Use that runtime's account/recovery flow if this job needs adoption.`,
           );
           continue;
         }
+        // Codex also runs with host-managed accounts. Its core auth planner owns that
+        // choice; selecting the runtime alone does not establish native login ownership.
+        const runtimeAuth =
+          runtime === "codex"
+            ? {
+                harnessId: runtime,
+                harnessRuntime: runtime,
+                harnessAuthBootstrap: "harness" as const,
+              }
+            : {};
         const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(
           selected.owner.agentDir,
         );
@@ -183,6 +215,7 @@ export async function maybeRepairCronInferenceBindings(params: {
             : undefined);
         const explicitUserSelection = Boolean(explicitProfileId);
         const currentAuth = prepareAgentRuntimeAuth({
+          ...runtimeAuth,
           config: cfg,
           provider: selected.provider,
           modelId: selected.model,
@@ -233,6 +266,10 @@ export async function maybeRepairCronInferenceBindings(params: {
             "The current route uses an ambient credential, not a durable stored account.",
           );
         }
+        if (runtime === "codex" && firstSource?.kind !== "profile") {
+          // Native/credentialless auth has no host account for Doctor to adopt.
+          continue;
+        }
         if (!explicitProfileId) {
           const providerPin = resolveProviderEntryApiKeyProfileReference({
             cfg,
@@ -253,7 +290,7 @@ export async function maybeRepairCronInferenceBindings(params: {
           : resolveAuthProfileOrderWithMetadata({
               cfg,
               store,
-              provider: selected.provider,
+              provider: currentAuth.plan.harnessAuthProvider ?? selected.provider,
               forModel: selected.model,
               readinessMode: "read-only",
               includePendingOAuthRefresh: true,
@@ -265,6 +302,7 @@ export async function maybeRepairCronInferenceBindings(params: {
         for (const profileId of order) {
           try {
             const prepared = prepareAgentRuntimeAuth({
+              ...runtimeAuth,
               config: cfg,
               provider: selected.provider,
               modelId: selected.model,
@@ -296,6 +334,7 @@ export async function maybeRepairCronInferenceBindings(params: {
         }
         if (candidates.length === 0 && !explicitProfileId) {
           const prepared = prepareAgentRuntimeAuth({
+            ...runtimeAuth,
             config: cfg,
             provider: selected.provider,
             modelId: selected.model,
@@ -348,7 +387,7 @@ export async function maybeRepairCronInferenceBindings(params: {
         const description = `Automation ${label}: retain ${candidate.profileId} for ${modelRef}; model/default/fallback selections stay unchanged.${alternatives.length > 0 ? ` Also eligible: ${alternatives.join(", ")}; to change, run openclaw automations edit ${quoteCliArg(stored.id)} --model ${quoteCliArg(`${modelRef}@<profileId>`)}.` : ""}`;
         if (!params.shouldRepair) {
           warnings.push(
-            `${description} Run openclaw doctor --fix to record its inference account.`,
+            `${description} Its runs are refused until it records this account. Run openclaw doctor --fix to record it.`,
           );
           continue;
         }
@@ -369,6 +408,7 @@ export async function maybeRepairCronInferenceBindings(params: {
             profileId: candidate.profileId,
             authorizationId: authority.authorizationId,
             authRequirement: candidate.authRequirement,
+            ...(runtime === "codex" ? { runtime } : {}),
             source: explicitUserSelection
               ? "user"
               : (currentAuth.plan.forwardedAuthProfileSource ?? "auto"),
@@ -378,7 +418,7 @@ export async function maybeRepairCronInferenceBindings(params: {
       } catch (error) {
         const recovery = isInvalidCronSessionTargetIdError(error)
           ? `Repair its session target with openclaw automations edit ${quoteCliArg(stored.id)} --session <target>, then retry Doctor.`
-          : `Explicitly adopt the intended stored account with openclaw automations edit ${quoteCliArg(stored.id)} --model ${quoteCliArg(`${modelRef ?? "<provider/model>"}@<profileId>`)}.`;
+          : `Inspect available accounts with ${listAccountsCommand}, then explicitly adopt the intended stored account with openclaw automations edit ${quoteCliArg(stored.id)} --model ${quoteCliArg(`${modelRef ?? "<provider/model>"}@<profileId>`)}.`;
         warnings.push(
           `Automation ${label}: inference account was not migrated: ${formatErrorMessage(error)} ${recovery}`,
         );
@@ -404,7 +444,7 @@ export async function maybeRepairCronInferenceBindings(params: {
     );
     return {
       changes: [...descriptions, `Saved pre-repair cron backup: ${result.backupPath}`],
-      warnings,
+      warnings: [...warnings, ...(result.warnings ?? [])],
     };
   } catch (error) {
     return {

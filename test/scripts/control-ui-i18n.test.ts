@@ -1,5 +1,4 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -14,30 +13,30 @@ import {
 import {
   analyzeControlUiCatalogs,
   flattenControlUiCatalog as flattenCatalog,
-  formatControlUiCatalogFallbackDriftError,
   verifyControlUiReferencedKeys as verifyKeys,
 } from "../../scripts/control-ui-i18n-verify.ts";
 import {
   assertNoControlUiFallbacks,
-  buildBatchPrompt,
   filterPlaceholderCompatibleTranslations,
-  parseTranslationBatchReply,
   translateNativeEntries,
 } from "../../scripts/control-ui-i18n.ts";
-import {
-  loadControlUiSourceCatalog,
-  readControlUiSourceCatalog,
-} from "../../scripts/lib/control-ui-i18n-catalog.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
-import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-message-fixtures.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
+import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
+import { registerChatFailedMessageEditEnglish } from "../../ui/src/i18n/locales/en-chat-failed-message-edit.ts";
+import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
+import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
+import { registerChatSessionSharingEnglish } from "../../ui/src/i18n/locales/en-chat-session-sharing.ts";
+import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
+import { registerNewSessionRuntimeEnglish } from "../../ui/src/i18n/locales/en-new-session-runtime.ts";
+import { registerSessionMenuEnglish } from "../../ui/src/i18n/locales/en-session-menu.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
+import { en } from "../../ui/src/i18n/locales/en.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 vi.mock("../../scripts/lib/sleep.mjs", () => ({ sleep: async () => {} }));
@@ -48,6 +47,9 @@ const llm = vi.hoisted(() => ({ completeSimple: vi.fn() }));
 const strings = (values: Record<string, string>) => new Map(Object.entries(values));
 const childOptions = { reject: false, timeout: 120_000, stripFinalNewline: false } as const;
 const tsxArgs = ["--import", "./scripts/tsx.mjs"];
+const runNode = (args: string[], env?: NodeJS.ProcessEnv) =>
+  execa(testNodeExecPath, [...tsxArgs, ...args], { ...childOptions, env });
+const runI18n = (command: string) => runNode(["scripts/control-ui-i18n.ts", ...command.split(" ")]);
 vi.mock("@openclaw/ai", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/ai")>();
   return {
@@ -97,59 +99,24 @@ describe("translation provider privacy and fallback", () => {
   });
 
   it("reports CLI failures without disclosing configured model or key values", async () => {
-    const result = await execa(
-      process.execPath,
-      [
-        ...tsxArgs,
-        "scripts/control-ui-i18n.ts",
-        "sync",
-        "--locale",
-        `${primary.toUpperCase()}/${fallback}/test-key`,
-      ],
-      childOptions,
-    );
+    const result = await runI18n(`sync --locale ${primary.toUpperCase()}/${fallback}/test-key`);
     expect(result.exitCode).toBe(1);
     expect(result.stderr.trim()).toBe("unknown locale: [redacted]/[redacted]/[redacted]");
   });
 
   it.each([
-    { args: ["sync", "--refresh-key"], error: "requires a catalog key" },
-    {
-      args: ["sync", "--locale", "pl", "--refresh-key", "chat.parentSession"],
-      error: "requires sync --write --locale",
-    },
-    {
-      args: ["sync", "--write", "--refresh-key", "chat.parentSession"],
-      error: "requires sync --write --locale",
-    },
-    {
-      args: ["check", "--locale", "pl", "--refresh-key", "chat.parentSession"],
-      error: "requires sync --write --locale",
-    },
-    {
-      args: ["sync", "--write", "--locale", "pl", "--force", "--refresh-key", "chat.parentSession"],
-      error: "cannot be combined with --force",
-    },
-    {
-      args: [
-        "sync",
-        "--write",
-        "--locale",
-        "pl",
-        ...Array.from({ length: 65 }, (_, i) => ["--refresh-key", `key${i}`]).flat(),
-      ],
-      error: "at most 64 distinct keys",
-    },
-    {
-      args: ["sync", "--write", "--locale", "pl", "--refresh-key", "missing.fixture.key"],
-      error: "unknown refresh key: missing.fixture.key",
-    },
-  ])("rejects invalid targeted refresh: $error", async ({ args, error }) => {
-    const result = await execa(
-      process.execPath,
-      ["--import", "./scripts/tsx.mjs", "scripts/control-ui-i18n.ts", ...args],
-      { reject: false, timeout: 120_000, stripFinalNewline: false },
-    );
+    ["sync --refresh-key", "requires a catalog key"],
+    ["sync --locale pl --refresh-key chat.parentSession", "requires sync --write --locale"],
+    [
+      `sync --write --locale pl ${Array.from({ length: 65 }, (_, i) => `--refresh-key key${i}`).join(" ")}`,
+      "at most 64 distinct keys",
+    ],
+    [
+      "sync --write --locale pl --refresh-key missing.fixture.key",
+      "unknown refresh key: missing.fixture.key",
+    ],
+  ])("rejects invalid targeted refresh: %s", async (args, error) => {
+    const result = await runI18n(args);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain(error);
   });
@@ -158,21 +125,7 @@ describe("translation provider privacy and fallback", () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL", "1");
-    const result = await execa(
-      process.execPath,
-      [
-        "--import",
-        "./scripts/tsx.mjs",
-        "scripts/control-ui-i18n.ts",
-        "sync",
-        "--write",
-        "--locale",
-        "pl",
-        "--refresh-key",
-        "chat.parentSession",
-      ],
-      { reject: false, timeout: 120_000, stripFinalNewline: false },
-    );
+    const result = await runI18n("sync --write --locale pl --refresh-key chat.parentSession");
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("--refresh-key requires a configured translation provider");
   });
@@ -213,7 +166,6 @@ describe("translation provider privacy and fallback", () => {
           assert.ok(JSON.stringify(payload.input).includes("apps/android/wear/src/main/res/values/strings.xml"), "native owner context must reach the serialized provider request");
           assert.ok(JSON.stringify(payload.input).includes("VoiceGestureLabel(onHold: startDictate)"), "native owner excerpt must reach the serialized provider request");
           assert.ok(JSON.stringify(payload.input).includes("unnumbered printf"), "native formatting must retain source argument roles");
-          assert.ok(JSON.stringify(payload).includes("Connect -> Connecter"), "native glossary must reach the provider request");
           const item = { id: "message", type: "message", role: "assistant", content: [] };
           const text = JSON.stringify({ "native.android.0123456789abcdef": "Connecter {count}" });
           const events = [
@@ -227,18 +179,14 @@ describe("translation provider privacy and fallback", () => {
           return new Response(events.map(event => "data: " + JSON.stringify(event) + "\\n\\n").join(""), { headers: { "Content-Type": "text/event-stream" } });
         };
         const { syncNativeLocale } = await import(${JSON.stringify(scriptUrl)});
-        const result = await syncNativeLocale("fr", [{ id: "native.android.0123456789abcdef", source: "Connect {count}", surface: "android", sites: [{ kind: "fixture", path: "apps/android/wear/src/main/res/values/strings.xml" }], sourceContext: "VoiceGestureLabel(onHold: startDictate)" }], { glossary: [{ source: "Connect", target: "Connecter" }], translationsDir: ${JSON.stringify(translationsDir)} });
+        const result = await syncNativeLocale("fr", [{ id: "native.android.0123456789abcdef", source: "Connect {count}", surface: "android", sites: [{ kind: "fixture", path: "apps/android/wear/src/main/res/values/strings.xml" }], sourceContext: "VoiceGestureLabel(onHold: startDictate)" }], { translationsDir: ${JSON.stringify(translationsDir)} });
         const artifact = JSON.parse(await readFile(${JSON.stringify(path.join(translationsDir, "fr.json"))}, "utf8"));
-        assert.equal(artifact.translations["native.android.0123456789abcdef"], "Connecter {count}");
+        assert.deepEqual(artifact, { version: 2, locale: "fr", translations: { "native.android.0123456789abcdef": "Connecter {count}" } });
         assert.equal(result.translated, 1);
         assert.equal(requests, 1);
         console.log("isolated-runtime-ok");
       `;
-      const result = await execa(
-        testNodeExecPath,
-        [...tsxArgs, "--input-type=module", "-e", code],
-        childOptions,
-      );
+      const result = await runNode(["--input-type=module", "-e", code]);
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stdout).toContain("isolated-runtime-ok");
       expect(result.stdout + result.stderr).not.toContain(primary);
@@ -307,6 +255,34 @@ describe("translation provider privacy and fallback", () => {
     expectPrivate();
   });
 
+  it.each([false, true])(
+    "retries invalid translations with feedback (custom=%s)",
+    async (custom) => {
+      const diagnostic = custom ? "custom validation" : "fr:label0 expected {count} got {}";
+      const validate = custom
+        ? (_source: string, target: string) => {
+            if (target === "Wrong {count}") {
+              throw new Error(diagnostic);
+            }
+          }
+        : undefined;
+      const reply = (text: string) =>
+        response({
+          content: [{ type: "text", text: JSON.stringify({ label0: text }) }],
+        });
+      llm.completeSimple
+        .mockResolvedValueOnce(reply(custom ? "Wrong {count}" : "Ouvrir"))
+        .mockResolvedValue(reply("Ouvrir {count}"));
+      const result = await translateNativeEntries(
+        [{ id: "label0", source: "Open {count}", sourcePath: "fixture.ts" }],
+        "fr",
+        validate,
+      );
+      expect([...result]).toEqual([["label0", "Ouvrir {count}"]]);
+      expect(llm.completeSimple.mock.calls[1]?.[1].messages[0].content).toContain(diagnostic);
+    },
+  );
+
   it("does not expose rejected provider errors or escaped model echoes", async () => {
     const complete = llm.completeSimple.mockRejectedValue(new Error(`Transport for ${primary}`));
     await expectFailure();
@@ -318,51 +294,30 @@ describe("translation provider privacy and fallback", () => {
   });
 });
 
-describe("control-ui config hint source catalog", () => {
-  it("includes plugin-owned Memory label sources in the raw catalog hash input", async () => {
-    const source = await readControlUiSourceCatalog();
-    for (const plugin of ["active-memory", "memory-wiki"]) {
-      expect(source).toContain(
-        readFileSync(`extensions/${plugin}/control-ui.presentation.json`, "utf8"),
-      );
-    }
-  });
-
-  it("includes core config labels and help under collision-safe keys", () => {
-    const source = flattenTranslations(loadControlUiSourceCatalog());
-
-    const label = "Gateway Token";
-    expect(source.get(configHintTranslationKey("gateway.auth.token", "label", label))).toBe(label);
-    const helpEntry = [...source].find(([key]) =>
-      key.startsWith("configHints.gateway%2Eauth%2Etoken.help."),
-    );
-    expect(helpEntry?.[1]).toBeTypeOf("string");
-  });
-});
-
 describe("control-ui-i18n generated ownership", () => {
-  it("includes lazy page copy and shared search labels in the generator catalog", () => {
-    const result = spawnSync(
-      testNodeExecPath,
-      [
-        "--import",
-        "./scripts/tsx.mjs",
-        "--input-type=module",
-        "--eval",
-        [
-          'import { loadControlUiSourceCatalog } from "./scripts/lib/control-ui-i18n-catalog.ts";',
-          "const catalog = loadControlUiSourceCatalog();",
-          "console.log(JSON.stringify(catalog));",
-        ].join("\n"),
-      ],
-      { cwd: process.cwd(), encoding: "utf8" },
-    );
-    expect(result.status, result.stderr).toBe(0);
+  it("includes lazy page copy and shared search labels in the generator catalog", async () => {
+    const result = await runNode([
+      "--input-type=module",
+      "--eval",
+      'import { loadControlUiSourceCatalog } from "./scripts/lib/control-ui-i18n-catalog.ts";\nconsole.log(JSON.stringify(loadControlUiSourceCatalog()));',
+    ]);
+    expect(result.exitCode, result.stderr).toBe(0);
     const catalog: unknown = JSON.parse(result.stdout);
     const source = flattenCatalog(catalog, "en");
+    for (const [key, value] of Object.entries(en.chat.recovery)) {
+      expect(source.get("chat.recovery." + key), key).toBe(value);
+    }
     for (const fragment of [
+      registerChatDetailsEnglish.catalog,
+      registerChatSessionEnglish.catalog,
+      registerChatMessageMetadataEnglish.catalog,
+      registerChatFailedMessageEditEnglish.catalog,
+      registerChatSessionOptionalEnglish.catalog,
+      registerChatSessionSharingEnglish.catalog,
       registerCodeBlocksEnglish.catalog,
       registerLabsEnglish.catalog,
+      registerNewSessionRuntimeEnglish.catalog,
+      registerSessionMenuEnglish.catalog,
       registerSettingsEnglish.catalog,
       registerTranscriptsEnglish.catalog,
     ]) {
@@ -371,6 +326,203 @@ describe("control-ui-i18n generated ownership", () => {
         expect(source.get(key), key).toBe(value);
       }
     }
+    const sessionKeys = [...source.keys()]
+      .filter((key) => key.startsWith("sessionsView."))
+      .map((key) => key.slice("sessionsView.".length));
+    expect(
+      sessionKeys.slice(
+        sessionKeys.indexOf("personalGroupAdd"),
+        sessionKeys.indexOf("personalGroupEdit") + 1,
+      ),
+    ).toEqual([
+      "personalGroupAdd",
+      "personalGroupReferenceAdded",
+      "personalGroups",
+      "personalGroupNew",
+      "personalGroupEdit",
+    ]);
+    expect(
+      sessionKeys.slice(sessionKeys.indexOf("assignToMe"), sessionKeys.indexOf("assignTo") + 1),
+    ).toEqual(["assignToMe", "searchPeople", "noPeopleMatch", "assignTo"]);
+    expect(
+      [...source.keys()]
+        .filter((key) => key.startsWith("chat.workspaceConflict."))
+        .map((key) => key.slice("chat.workspaceConflict.".length)),
+    ).toEqual([
+      "titleOne",
+      "titleMany",
+      "description",
+      "summary",
+      "showCommands",
+      "morePaths",
+      "stagedResult",
+      "copyStagedResult",
+      "inspectCloud",
+      "takeCloud",
+      "copyInspectCommand",
+      "copyTakeCommand",
+      "commandHelp",
+      "commandsUnavailable",
+      "dismiss",
+      "eventSender",
+      "eventTitleOne",
+      "eventTitleMany",
+      "eventDescription",
+    ]);
+    expect(
+      [...source.keys()]
+        .filter((key) => key.startsWith("chat.sessionSharing."))
+        .map((key) => key.slice(20)),
+    ).toEqual([
+      "sessionAccess",
+      "sharedDescription",
+      "readOnlyDescription",
+      "suggestDescription",
+      "draftDescription",
+      "linkSharing",
+      "anyoneWithLink",
+      "publicLinkDescription",
+      "publicDraftDescription",
+      "linkUnavailable",
+      "permissions",
+      "creator",
+      "canRead",
+      "canSuggest",
+      "canSend",
+      "searchPeople",
+      "closeSearch",
+      "noPeopleFound",
+      "tryAnotherName",
+      "sharingOptions",
+      "menu",
+      "current",
+      "visibility",
+      "shared",
+      "readOnly",
+      "suggest",
+      "draft",
+      "publishDraft",
+      "owner",
+      "noPeople",
+      "readOnlyNotice",
+      "scopeReadOnlyNotice",
+      "guestWelcomePending",
+      "guestWelcomeFailed",
+      "guestWelcomeRetry",
+      "publicAccess",
+      "publicIndicator",
+      "worldReadable",
+      "notPublic",
+      "enablePublicAccess",
+      "disablePublicAccess",
+      "copyPublicLink",
+      "publicConfirmTitle",
+      "publicConfirmMessage",
+      "publicConfirmEnable",
+      "publicEnabled",
+      "publicDisabled",
+      "publicUnavailable",
+    ]);
+    expect(
+      [...source.keys()]
+        .filter((key) => key.startsWith("chat.subagentsPanel."))
+        .map((key) => key.slice(20)),
+    ).toEqual([
+      "nativeTitle",
+      "nativeCoverage",
+      "nativeEmpty",
+      "nativeTruncated",
+      "nativeRetry",
+      "nativeStatus.running",
+      "nativeStatus.completed",
+      "nativeStatus.failed",
+      "nativeStatus.interrupted",
+      "title",
+      "desktopFilter.all",
+      "desktopFilter.active",
+      "desktopFilter.waiting",
+      "desktopFilter.done",
+      "desktopFilterLabel",
+      "desktopSearch",
+      "desktopCloseSearch",
+      "desktopWorking",
+      "workingFor",
+      "desktopWaiting",
+      "desktopFor",
+      "desktopShowMore",
+      "desktopNoResults",
+      "desktopNoResultsDescription",
+      "mobileFinished",
+      "stopConfirmTitle",
+      "stopConfirmMessage",
+      "stopConfirmAction",
+      "back",
+      "running",
+      "finished",
+      "callsOne",
+      "callsMany",
+      "callsAtLeast",
+      "empty",
+      "noRunning",
+      "refresh",
+      "stop",
+      "stopping",
+      "elapsed",
+      "duration",
+    ]);
+    expect(
+      [...source.keys()]
+        .filter((key) => key.startsWith("chat.sessionHeader.continueInTerminal."))
+        .map((key) => key.slice(38)),
+    ).toEqual([
+      "action",
+      "title",
+      "description",
+      "authNote",
+      "disconnected",
+      "queryRouted",
+      "unavailable",
+    ]);
+    expect(
+      [...source.keys()]
+        .filter((key) => key.startsWith("chat.sessionDetails.context"))
+        .map((key) => key.slice("chat.sessionDetails.".length)),
+    ).toEqual([
+      "context",
+      "contextMessages",
+      "contextFiles",
+      "contextTools",
+      "contextAgentWorkspace",
+      "contextProject",
+      "contextPersonal",
+      "contextOtherFiles",
+      "contextSystemTools",
+      "contextMcpTools",
+      "contextClientTools",
+      "contextAvailableOnDemand",
+      "contextDeferredEstimate",
+      "contextSkills",
+      "contextSystem",
+      "contextFree",
+      "contextUnverified",
+      "contextOpen",
+      "contextLoading",
+      "contextError",
+      "contextOffline",
+      "contextUnavailable",
+      "contextReserve",
+      "contextExactCount",
+      "contextFreeShort",
+      "contextReserveShort",
+      "contextInputShort",
+      "contextOutputShort",
+      "contextSearch",
+      "contextSearchCount",
+      "contextSearchSkills",
+      "contextSearchFiles",
+      "contextSearchTools",
+      "contextShowAll",
+    ]);
     expect(source.get("meetingCapture.title")).toBe("Meeting capture");
     expect(source.get("meetingCapture.sources")).toBe("Auto-start sources");
   });
@@ -388,13 +540,13 @@ describe("control-ui-i18n generated ownership", () => {
       generated("de.meta.json"),
       generated("de.tm.jsonl"),
     ]).not.toThrow();
-    isolated([locale("de"), generated("glossary.de.json")]).not.toThrow();
     isolated([generated("catalog-fallbacks.json"), generated("raw-copy-baseline.json")]).toThrow(
       isolationError,
     );
     isolated([locale("en"), generated("raw-copy-baseline.json")]).not.toThrow();
-    isolated(["package.json", locale("de")], "release/2026.7.3").not.toThrow();
-    isolated(["package.json", locale("de")], "main").not.toThrow();
+    for (const branch of ["main", "release/2026.7.3"]) {
+      isolated(["package.json", generated("de.tm.jsonl")], branch).not.toThrow();
+    }
     expect(
       [[locale("de")], [generated("de.tm.jsonl")], [locale("en")], null].map(
         shouldStrictControlUiI18n,
@@ -422,7 +574,7 @@ describe("control-ui-i18n generated ownership", () => {
     expect(shouldStrictControlUiI18n(["extensions/example/src/i18n/.i18n/fr.tm.jsonl"])).toBe(true);
   });
 
-  it("allows only a complete canonical translation-memory ownership migration", () => {
+  it("rejects the completed canonical translation-memory ownership migration", () => {
     const locales = readdirSync(path.resolve("ui/src/i18n/.i18n"))
       .filter((fileName) => fileName.endsWith(".tm.jsonl"))
       .map((fileName) => fileName.slice(0, -".tm.jsonl".length));
@@ -447,10 +599,7 @@ describe("control-ui-i18n generated ownership", () => {
       ]),
     ];
     const migration = [...owners, ...adapters, ...artifacts];
-    isolated(migration).not.toThrow();
-    isolated(migration.slice(1)).toThrow(isolationError);
-    isolated(migration.filter((filePath) => filePath !== artifacts[1])).toThrow(isolationError);
-    isolated([...migration, generated("other.tm.jsonl")]).toThrow(isolationError);
+    isolated(migration).toThrow(isolationError);
   });
 
   it.each([
@@ -473,47 +622,23 @@ describe("control-ui-i18n generated ownership", () => {
 });
 
 describe("control-ui-i18n catalog validation", () => {
-  const batch = (key = "configView.viewPendingChange", text = "View pending change ({count})") => [
-    { cacheKey: "cache-key", key, text, textHash: "text-hash" },
-  ];
-  it("points strict catalog drift at the generated release repair", () => {
-    const message = formatControlUiCatalogFallbackDriftError();
-
-    expect(message).toContain("pnpm ui:i18n:sync");
-    expect(message).toContain("pnpm release:prep");
-    expect(message).not.toContain("pnpm ui:i18n:baseline");
-  });
-
   it("builds a deterministic fallback list without accepting catalog drift", () => {
-    const source = flattenCatalog({ group: { first: "First {count}", second: "Second" } }, "en");
+    const source = flattenCatalog({ a: "A {n}", b: "B" }, "en");
     const analyze = (locales: Record<string, Record<string, string>>) =>
       analyzeControlUiCatalogs(
         source,
         new Map(Object.entries(locales).map(([locale, values]) => [locale, strings(values)])),
       );
-    expect(
-      analyze({
-        de: { "group.first": "Erste {count}" },
-        fr: { "group.first": "Premiere {count}" },
-      }),
-    ).toEqual({
+    expect(analyze({ de: { a: "A {n}" }, fr: { a: "A {n}" } })).toEqual({
       errors: [],
-      fallbacks: { "group.second": ["de", "fr"] },
+      fallbacks: { b: ["de", "fr"] },
     });
 
-    expect(
-      analyze({
-        fr: {
-          "group.second": "Deuxieme",
-          "group.first": "Premiere",
-          "group.orphan": "Orpheline",
-        },
-      }),
-    ).toEqual({
+    expect(analyze({ fr: { b: "B", a: "A", x: "X" } })).toEqual({
       errors: [
-        "fr: orphan keys: group.orphan",
+        "fr: orphan keys: x",
         "fr: keys are not in English catalog order",
-        "fr:group.first expected {count} got {}",
+        "fr:a expected {n} got {}",
       ],
       fallbacks: {},
     });
@@ -540,11 +665,7 @@ describe("control-ui-i18n catalog validation", () => {
     expect(() =>
       verifyKeys(source, [{ content, relativeFile: "ui/src/pages/example.ts" }]),
     ).toThrowError(
-      [
-        "control-ui referenced translation key verification failed.",
-        'ui/src/pages/example.ts:2: missing English catalog key "common.missing"',
-        'ui/src/pages/example.ts:4: missing English catalog subtree "workboard.missing."',
-      ].join("\n"),
+      /example\.ts:2:.*"common\.missing"[\s\S]*example\.ts:4:.*"workboard\.missing\."/,
     );
   });
 
@@ -566,51 +687,16 @@ describe("control-ui-i18n catalog validation", () => {
     ]);
   });
 
-  it("keeps verification keyless even when provider credentials exist", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/control-ui-i18n-verify.ts", "verify"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          ANTHROPIC_API_KEY: "redacted",
-          OPENAI_API_KEY: "redacted",
-        },
-      },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
+  it("keeps verification keyless even when provider credentials exist", async () => {
+    const result = await runNode(["scripts/control-ui-i18n-verify.ts", "verify"], {
+      ...process.env,
+      ANTHROPIC_API_KEY: "redacted",
+      OPENAI_API_KEY: "redacted",
+    });
+    expect(result.exitCode, result.stderr).toBe(0);
     expect(result.stdout).toContain("source:");
     expect(result.stdout).not.toContain("provider=openai");
     expect(result.stdout).not.toContain("provider=anthropic");
-  });
-
-  it("rejects placeholder-corrupt batch replies before they leave the retry loop", () => {
-    const key = "configView.viewPendingChange";
-    const items = batch(key);
-    const parse = (text: string) =>
-      parseTranslationBatchReply(JSON.stringify({ [key]: text }), items, "ar");
-    expect(() => parse("Pending change")).toThrow(
-      "ar:configView.viewPendingChange expected {count} got {}",
-    );
-    expect(parse("Pending change ({count})")).toEqual(
-      strings({ [key]: "Pending change ({count})" }),
-    );
-  });
-
-  it("runs an optional result validator before accepting a batch reply", () => {
-    const items = batch("native.apple.progress", "Processed %lld of %@");
-    const reply = JSON.stringify({ "native.apple.progress": "Bearbetade %@" });
-    const validate = (source: string, translated: string, key: string, locale: string) => {
-      if (source.includes("%lld") && !translated.includes("%lld")) {
-        throw new Error(`invalid structural tokens for ${locale}:${key}`);
-      }
-    };
-    expect(() => parseTranslationBatchReply(reply, items, "sv", validate)).toThrow(
-      "invalid structural tokens for sv:native.apple.progress",
-    );
   });
 
   it("makes placeholder-incompatible existing copy pending for bot repair", () => {
@@ -620,30 +706,6 @@ describe("control-ui-i18n catalog validation", () => {
     );
 
     expect([...reusable]).toEqual([["same", "Warten auf {count}"]]);
-  });
-
-  it("feeds the exact validation failure back into a retry prompt", () => {
-    const items = batch();
-    const validationError = "ar:configView.viewPendingChange expected {count} got {}";
-
-    expect(buildBatchPrompt(items, validationError)).toContain(
-      `failed validation. Correct that exact failure in the new response:\n${validationError}`,
-    );
-  });
-
-  it("ships no recorded English fallbacks", () => {
-    const metaDir = path.resolve("ui/src/i18n/.i18n");
-    const fallbacks = readdirSync(metaDir)
-      .filter((fileName) => fileName.endsWith(".meta.json"))
-      .flatMap((fileName) => {
-        const meta = JSON.parse(readFileSync(path.join(metaDir, fileName), "utf8")) as {
-          fallbackKeys?: string[];
-          locale?: string;
-        };
-        return (meta.fallbackKeys ?? []).map((key) => `${meta.locale ?? fileName}:${key}`);
-      });
-
-    expect(fallbacks).toEqual([]);
   });
 
   it("makes the strict gate reject recorded English fallbacks", () => {

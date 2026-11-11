@@ -4,18 +4,14 @@ import type { WorkerMachineOption } from "../../../../packages/gateway-protocol/
 import {
   compareCloudProfiles,
   resolveCloudProfileIconData,
-} from "../../components/provider-icon-data.ts";
+} from "../../components/cloud-profile-icon-data.ts";
+import { CloudProfileIcon } from "../../components/solid/cloud-profile-icon.tsx";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
-import { CloudProfileIcon } from "../../components/solid/provider-icon.tsx";
+import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
-import {
-  machineShapeText,
-  type SessionMenuItemOptions,
-  type CloudProfileMenuItemsOptions,
-  type CloudChoiceMenuItemsOptions,
-} from "./cloud-target.ts";
+import { machineShapeText, type CloudChoiceMenuItemsOptions } from "./cloud-target.ts";
 import {
   cloudMachinesForOs,
   defaultCloudMachine,
@@ -23,11 +19,50 @@ import {
   type DraftCloudProfile,
 } from "./discovery.ts";
 
-type NativeSessionMenuItem = Omit<SessionMenuItemOptions, "icon"> & { icon?: JSX.Element };
+type NativeSessionMenuItem = {
+  value: string;
+  label: string;
+  accessibleProvider?: string;
+  description?: string;
+  icon?: JSX.Element;
+  sub?: string;
+  checked: boolean;
+  disabled?: boolean;
+  title?: string;
+  keepOpen?: boolean;
+  compact?: boolean;
+  capacityLabel?: string;
+  platform?: string;
+  summary?: string;
+  selectedSummary?: string;
+  hasSubmenu?: boolean;
+  suggested?: boolean;
+  capabilityLabels?: readonly string[];
+  hardware?: string;
+  hideDetails?: boolean;
+  remediation?: "enable-session-hosting" | "update-device";
+  provider?: string;
+  trust?: DraftCloudProfile["trust"];
+  onSelect: () => void;
+};
+
+type CloudProfileMenuItemsOptions = {
+  profiles: readonly DraftCloudProfile[];
+  selectedId: string;
+  selectedOs?: string;
+  selectedMachine?: string;
+  onSelectOs?: (osId: string) => void;
+  onSelectMachine?: (machineId: string) => void;
+  submitting: boolean;
+  disabled?: boolean;
+  disabledReason?: string;
+  profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
+  onSelect: (profileId: string, useDefaults?: boolean) => void;
+};
 
 function UnavailableReason(props: {
   reason: string;
-  remediation: SessionMenuItemOptions["remediation"];
+  remediation: NativeSessionMenuItem["remediation"];
 }) {
   return (
     <>
@@ -71,6 +106,7 @@ function DetailRow(props: { icon: IconName; text: string | undefined; capacity?:
 }
 
 export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting: boolean }) {
+  let rowElement: HTMLButtonElement | undefined;
   const unavailableReason = () =>
     props.item.disabled ? props.item.title || props.item.description : undefined;
   const description = () => (props.item.compact ? undefined : props.item.description);
@@ -113,7 +149,7 @@ export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting
       title={props.item.compact ? undefined : props.item.title}
       disabled={props.submitting || (Boolean(props.item.disabled) && !accessibleBlocker())}
       aria-disabled={accessibleBlocker() ? "true" : undefined}
-      ref={select}
+      ref={[select, (element) => (rowElement = element)]}
     >
       {props.item.icon ? (
         <span class="session-menu__icon" aria-hidden="true">
@@ -133,15 +169,6 @@ export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting
             <Icon name="alertTriangle" />
           </span>
           {t("newSession.environmentUnavailable")}
-        </span>
-      ) : undefined}
-      {!props.item.compact && props.item.facts?.length ? (
-        <span class="new-session-page__menu-meta">
-          <span class="new-session-page__menu-facts">
-            <For each={props.item.facts}>
-              {(fact) => <span class="new-session-page__menu-fact">{fact}</span>}
-            </For>
-          </span>
         </span>
       ) : undefined}
       {!props.item.compact && props.item.sub ? (
@@ -164,6 +191,7 @@ export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting
           class="new-session-page__environment-details"
           placement="right-start"
           prop:openOnClick={Boolean(accessibleBlocker() || touchDetails())}
+          prop:descriptionTarget={() => rowElement ?? null}
         >
           <div class="new-session-page__environment-detail-trigger">
             {row()}
@@ -213,7 +241,6 @@ export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting
                     ...new Set(
                       [
                         props.item.description,
-                        ...(props.item.facts ?? []),
                         props.item.provider && !props.item.disabled ? undefined : props.item.title,
                       ].filter(Boolean),
                     ),
@@ -265,58 +292,44 @@ function CloudProfileMenuItem(props: {
   const disabledReason = () => props.params.profileDisabledReason?.(props.profile);
   const presentation = createMemo(() => resolveCloudProfileIconData(props.profile));
   const hasSubmenu = () =>
-    Boolean(
-      props.params.compact &&
-      !props.params.disabled &&
-      !disabledReason() &&
-      ((props.profile.operatingSystems?.some((option) => !option.disabledReason) ?? false) ||
-        machines().length > 0),
-    );
+    !props.params.disabled &&
+    !disabledReason() &&
+    ((props.profile.operatingSystems?.some((option) => !option.disabledReason) ?? false) ||
+      machines().length > 0);
   const item = () => (
     <SessionMenuItem
       submitting={props.params.submitting}
       item={{
         value: `cloud:${props.profile.id}`,
-        label: props.params.compact
-          ? props.profile.id
-          : t("newSession.cloudWorker", { profile: props.profile.id }),
+        label: props.profile.id,
         hasSubmenu: hasSubmenu(),
-        selectedSummary:
-          props.params.compact && selected()
-            ? [
-                os()?.label,
-                machine()?.label,
-                props.profile.inference === "worker"
-                  ? t("sessionsView.inferenceWorker")
-                  : undefined,
-              ]
-                .filter(Boolean)
-                .join(" · ")
-            : undefined,
+        selectedSummary: selected()
+          ? [
+              os()?.label,
+              machine()?.label,
+              props.profile.inference === "worker" ? t("sessionsView.inferenceWorker") : undefined,
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          : undefined,
         description:
           props.profile.inference === "worker" ? t("sessionsView.inferenceWorker") : undefined,
         icon: <CloudProfileIcon profile={props.profile} />,
         accessibleProvider: presentation().label,
-        compact: props.params.compact,
-        facts:
-          !props.params.compact && props.profile.trust === "disposable"
-            ? [t("newSession.environmentDisposable")]
-            : !props.params.compact && props.profile.trust === "persistent"
-              ? [t("newSession.environmentPersistent")]
-              : undefined,
-        trust: props.params.compact ? props.profile.trust : undefined,
-        provider: props.params.compact ? presentation().label : undefined,
-        platform: props.params.compact ? os()?.label : undefined,
-        hardware: props.params.compact && machine() ? machineShapeText(machine()!) : undefined,
-        hideDetails: Boolean(props.params.compact && !props.params.disabled && !disabledReason()),
-        keepOpen: props.params.compact,
+        compact: true,
+        trust: props.profile.trust,
+        provider: presentation().label,
+        platform: os()?.label,
+        hardware: machine() ? machineShapeText(machine()!) : undefined,
+        hideDetails: !props.params.disabled && !disabledReason(),
+        keepOpen: true,
         checked: selected(),
         disabled: props.params.disabled || Boolean(disabledReason()),
         title:
           (props.params.disabled ? props.params.disabledReason : disabledReason()) ??
           t("newSession.cloudWorkerProvider", { provider: presentation().label }),
         onSelect: () =>
-          props.params.compact && !selected()
+          !selected()
             ? props.params.onSelect(props.profile.id, true)
             : props.params.onSelect(props.profile.id),
       }}
@@ -404,7 +417,7 @@ function CloudConfiguration(props: {
           <>
             {group().choices.length ? (
               <>
-                <div class="new-session-page__environment-heading">{group().label}</div>
+                <MenuHeading class="new-session-page__environment-heading" label={group().label} />
                 <div
                   class="new-session-page__cloud-choice-list"
                   role="group"
@@ -442,7 +455,7 @@ function CloudConfiguration(props: {
   );
 }
 
-export function CloudChoiceMenuItems(props: { params: CloudChoiceMenuItemsOptions }) {
+function CloudChoiceMenuItems(props: { params: CloudChoiceMenuItemsOptions }) {
   return (
     <For each={props.params.choices} keyed={(choice) => choice.id}>
       {(choice) => (

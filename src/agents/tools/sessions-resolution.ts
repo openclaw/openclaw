@@ -18,6 +18,7 @@ import {
 import {
   isAcpSessionKey,
   isIncognitoSessionKey,
+  normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
@@ -123,7 +124,11 @@ export async function lookupRequesterSessionOwnership(params: {
       },
       gatewayCall,
     );
-    return ok(resolved?.key === params.targetSessionKey);
+    return ok(
+      resolved?.key === params.targetSessionKey &&
+        (resolved.agentId ?? parseAgentSessionKey(resolved.key)?.agentId) ===
+          (params.targetAgentId ?? params.requesterAgentId),
+    );
   } catch (error) {
     if (isExpectedSessionLookupMiss(error)) {
       return ok(false);
@@ -180,22 +185,6 @@ type SessionReferenceResolution =
   | { ok: false; status: "error" | "forbidden"; error: string; notFound?: boolean };
 
 type SessionReferenceAction = "history" | "send" | "status" | "list" | "search";
-
-type VisibleSessionReferenceResolution =
-  | {
-      ok: true;
-      agentId?: string;
-      key: string;
-      displayKey: string;
-      missing?: true;
-      requesterOwned: boolean;
-    }
-  | {
-      ok: false;
-      status: "error" | "forbidden";
-      error: string;
-      displayKey: string;
-    };
 
 async function requestResolvedSession(
   params: Record<string, unknown> & { allowMissing?: boolean },
@@ -376,16 +365,16 @@ export async function resolveVisibleSessionReference(params: {
   allowMissingKey?: boolean;
   concealResolutionError?: string;
   callGateway?: GatewayCaller;
-}): Promise<VisibleSessionReferenceResolution> {
+}) {
   let resolvedKey = params.resolvedSession.key;
   let resolvedAgentId =
     params.resolvedSession.agentId ?? parseAgentSessionKey(resolvedKey)?.agentId;
   let displayKey = params.resolvedSession.displayKey;
   let missing = false;
   const requesterOwnedByResolution = params.resolvedSession.requesterOwned;
-  const invisible = (): VisibleSessionReferenceResolution => ({
-    ok: false,
-    status: "forbidden",
+  const invisible = () => ({
+    ok: false as const,
+    status: "forbidden" as const,
     error: `Session not visible from session tools: ${params.visibilitySessionKey}`,
     displayKey,
   });
@@ -408,11 +397,22 @@ export async function resolveVisibleSessionReference(params: {
     (params.action === "history" || params.action === "send")
   ) {
     try {
+      // An agent-qualified key already selects its owner; repeating the same id
+      // only re-gates the request against the native roster and rejects
+      // configured ACP store owners (#164847). Keep the id when it adds a check
+      // the key cannot perform: unqualified keys or a genuine owner mismatch.
+      const keyAgentId = parseAgentSessionKey(resolvedKey)?.agentId;
+      const probeAgentId =
+        keyAgentId &&
+        resolvedAgentId &&
+        normalizeAgentId(keyAgentId) === normalizeAgentId(resolvedAgentId)
+          ? undefined
+          : resolvedAgentId;
       const resolved = await requestResolvedSession(
         buildSessionResolveQuery({
           input: resolvedKey,
           kind: "key",
-          agentId: resolvedAgentId,
+          agentId: probeAgentId,
           requesterInternalKey: params.requesterSessionKey,
           restrictToSpawned: params.restrictToSpawned,
           allowMissing: params.allowMissingKey,
@@ -428,8 +428,8 @@ export async function resolveVisibleSessionReference(params: {
       }
     } catch (error) {
       return {
-        ok: false,
-        status: params.concealResolutionError ? "forbidden" : "error",
+        ok: false as const,
+        status: params.concealResolutionError ? ("forbidden" as const) : ("error" as const),
         error:
           params.concealResolutionError ||
           formatErrorMessage(error) ||
@@ -442,13 +442,13 @@ export async function resolveVisibleSessionReference(params: {
     return invisible();
   }
   return {
-    ok: true,
+    ok: true as const,
     ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
     key: resolvedKey,
     displayKey,
     requesterOwned:
       requesterOwnedByResolution ||
       (params.requesterSessionKey === resolvedKey && resolvedAgentId === params.requesterAgentId),
-    ...(missing ? { missing: true } : {}),
+    ...(missing ? { missing: true as const } : {}),
   };
 }

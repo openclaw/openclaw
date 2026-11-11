@@ -254,6 +254,30 @@ it.each(
 );
 
 describe("eligible status recovery", () => {
+  it.each([false, true])(
+    "keeps host warnings separate from unit repair (repairable=%s)",
+    async (repairable) => {
+      await withStatusFixture(
+        () => ({}),
+        async (accountHome, print) => {
+          const status = await createStatus("config-audit", accountHome);
+          const host = {
+            code: "systemd-user-manager-stop-timeout",
+            message: "Host shutdown limits the Gateway drain to 5s",
+            repair: "host" as const,
+          };
+          status.service.configAudit = {
+            ok: false,
+            issues: [...(repairable ? status.service.configAudit!.issues : []), host],
+          };
+          print(status, { json: false });
+          expect(humanOutput()).toContain(host.message);
+          expect(humanOutput().includes("openclaw gateway install --force")).toBe(repairable);
+        },
+      );
+    },
+  );
+
   it("reports incomplete definition inspection without recommending a reinstall", async () => {
     await withStatusFixture(
       () => ({}),

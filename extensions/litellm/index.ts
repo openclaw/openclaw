@@ -16,16 +16,25 @@ import {
 import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { resolveMergedModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildLitellmImageGenerationProvider } from "./image-generation-provider.js";
 import {
   applyLitellmConfig,
   applyLitellmModelConfig,
+  buildLitellmModelDefinition,
   LITELLM_BASE_URL,
   LITELLM_DEFAULT_MODEL_REF,
 } from "./onboard.js";
-import { buildLitellmProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "litellm";
+
+function buildLitellmProvider(): ModelProviderConfig {
+  return {
+    baseUrl: LITELLM_BASE_URL,
+    api: "openai-completions",
+    models: [buildLitellmModelDefinition()],
+  };
+}
 
 function applyLitellmBaseUrl(cfg: OpenClawConfig, baseUrl: unknown): OpenClawConfig {
   const normalized = normalizeOptionalSecretInput(baseUrl)?.replace(/\/+$/, "");
@@ -219,6 +228,22 @@ export default definePluginEntry({
           runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
             const runNonInteractive = apiKeyAuth.runNonInteractive;
             if (!runNonInteractive) {
+              return null;
+            }
+            const urlError = validateProxyBaseUrl(
+              normalizeOptionalSecretInput(ctx.opts.customBaseUrl) ?? "",
+            );
+            if (urlError) {
+              // Resolve the key as usual so setup parity holds, but never store it for a bad URL.
+              await runNonInteractive({
+                ...ctx,
+                resolveApiKey: async (params) => {
+                  await ctx.resolveApiKey(params);
+                  return null;
+                },
+              });
+              ctx.runtime.error(urlError);
+              ctx.runtime.exit(1);
               return null;
             }
             return await runNonInteractive({

@@ -407,7 +407,6 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
   cfg: OpenClawConfig;
   accountId: string;
   message: IMessagePayload;
-  gatewayUrl?: string;
   gatewayRuntime?: IMessageApprovalGatewayRuntime;
 }): Promise<boolean> {
   const event = readPollVoteEvent(params.message);
@@ -514,7 +513,6 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
       channel: "imessage",
       accountId: params.accountId,
       senderId: event.actorHandle,
-      gatewayUrl: params.gatewayUrl,
       ...(params.gatewayRuntime ? { gatewayRuntime: params.gatewayRuntime } : {}),
     });
     await unregisterIMessageApprovalPollTarget({
@@ -551,15 +549,8 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
   }
 }
 
-function clearIMessageApprovalPollTargetsForTest(): void {
-  pollTargets.clearForTest();
-  pollTombstones.clearForTest();
-  loadResolveApprovalOverGateway.clear();
-}
-
 export const iMessageApprovalPollTargets = {
   register: registerIMessageApprovalPollTarget,
   unregister: unregisterIMessageApprovalPollTarget,
   registerTombstone: registerIMessageApprovalPollTombstone,
-  clearForTest: clearIMessageApprovalPollTargetsForTest,
 };

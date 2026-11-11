@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
-import { admitStoreSearch, databaseEngineAdapters } from "./adapters.js";
+import { admitStoreSearch } from "./adapters.js";
 import { openEngineStore } from "./open.js";
 
 const schema = {
@@ -67,15 +67,7 @@ describe("experimental admitted search capabilities", () => {
     expect(() => owner.fullText!.rank(owner.text.notes!)).toThrow("not admitted");
   });
 
-  it("preserves adapter labels and refuses unadmitted PostgreSQL descriptors", () => {
-    expect(databaseEngineAdapters.sqlite.capabilities).toEqual({
-      fullText: "fts5",
-      vector: "sqlite-vec",
-    });
-    expect(databaseEngineAdapters.postgres.capabilities).toEqual({
-      fullText: "tsvector",
-      vector: null,
-    });
+  it("refuses unadmitted PostgreSQL descriptors", () => {
     expect(() =>
       admitStoreSearch(
         {

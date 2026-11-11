@@ -1,5 +1,8 @@
 import type { ExistingOpenClawStateWriter } from "../state/openclaw-state-db-existing-write.js";
-import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
+import {
+  SqliteWorkerAdmissionTimeoutError,
+  type SqliteWorkerCommand,
+} from "./sqlite-worker-contract.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { persistInterruptedUpdateObservation } from "./update-run-interruption-store.js";
 import type { UpdateRunWorkerOperations } from "./update-run-mutation.types.js";
@@ -8,6 +11,7 @@ import {
   withUpdateRunWriteAdmission,
 } from "./update-run-mutation.worker.js";
 import { reconcileUpdateRunCandidatesInWorker } from "./update-run-reconciliation.worker.js";
+import { isRequiredUpdateRunStep } from "./update-run-write.js";
 
 export { openUpdateRunWriter } from "./update-run-mutation.worker.js";
 
@@ -23,13 +27,28 @@ export function executeUpdateRunCommand(
   options: UpdateRunLedgerOptions,
   writer: () => ExistingOpenClawStateWriter,
 ): UpdateRunWorkerOperations[keyof UpdateRunWorkerOperations]["output"] {
-  return withUpdateRunWriteAdmission((assertCurrent) => {
-    if (command.type === "updateRuns.reconcile") {
-      return reconcileUpdateRunCandidatesInWorker(command.input, options, assertCurrent);
+  try {
+    return withUpdateRunWriteAdmission((assertCurrent) => {
+      if (command.type === "updateRuns.reconcile") {
+        return reconcileUpdateRunCandidatesInWorker(command.input, options, assertCurrent);
+      }
+      if (command.type === "updateRuns.reconcileInterrupted") {
+        return persistInterruptedUpdateObservation(command.input, options, assertCurrent);
+      }
+      return recordUpdateRunMutationInWorker(command, options, assertCurrent, writer);
+    });
+  } catch (cause) {
+    if (!(cause instanceof SqliteWorkerAdmissionTimeoutError)) {
+      throw cause;
     }
-    if (command.type === "updateRuns.reconcileInterrupted") {
-      return persistInterruptedUpdateObservation(command.input, options, assertCurrent);
+    // Expired admission certifies rollback. Progress is advisory even while
+    // recovery exclusion is required; no mutation was accepted by these attempts.
+    if (command.type === "updateRuns.recordStep" && !isRequiredUpdateRunStep(command.input.step)) {
+      return { kind: "bookkeeping-skipped" };
     }
-    return recordUpdateRunMutationInWorker(command, options, assertCurrent, writer);
-  });
+    throw new Error(
+      "Update history could not obtain commit admission after 3 attempts. The transaction was rolled back; check storage performance before retrying the update.",
+      { cause },
+    );
+  }
 }

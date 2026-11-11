@@ -6,7 +6,7 @@ import {
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   canonicalSessionValidationQuery,
@@ -83,7 +83,7 @@ export function readPendingCanonicalSessionValidationBatch(
   ) {
     throw new Error("Canonical validation batch limits must be positive safe integers");
   }
-  return runSqliteDeferredTransactionSync(database.db, () => {
+  return runSqliteReadSnapshotSync(database.db, () => {
     if (!hasCanonicalSessionValidationProjection(database)) {
       return { mainKey: "main", rows: [], absentKeys: [], hasMore: false, oversizedRows: 0 };
     }

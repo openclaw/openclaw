@@ -22,7 +22,7 @@ Voice Wake requires Apple Speech to support on-device recognition for the select
 
 ## Runtime behavior (wake-word)
 
-- The recognizer lives in `VoiceWakeRuntime`.
+- `VoiceWakeRuntime` manages wake-word sessions; `SpeechCaptureResources` owns the shared recognizer and microphone lifecycle used by Voice Wake, push-to-talk, and Quick Chat dictation.
 - Trigger fires only when there is a meaningful pause between the wake word and the next word (`triggerPauseWindow` = 0.55s). The overlay/chime can start on the pause even before the command begins.
 - Silence windows: 2.0s (`silenceWindow`) when speech is flowing, 5.0s (`triggerOnlySilenceWindow`) if only the trigger was heard.
 - Hard stop: 120s (`captureHardStop`) to prevent runaway sessions.
@@ -63,9 +63,9 @@ voice settings. Microphone and speech permissions are under
 
 ## Forwarding behavior
 
-- On forward, `VoiceWakeForwarder.selectedSessionOptions` picks the active WebChat session key if one is set, otherwise the gateway's main session key.
+- On forward, `VoiceWakeForwarder.selectedSessionInvocation` picks the active WebChat session key if one is set, otherwise the gateway's main session key.
 - It looks up that session via `sessions.list` and derives the delivery channel and target from the session's delivery context (falling back to its last channel/target, then to a parsed session key), defaulting to WebChat if nothing resolves.
-- If delivery fails, the error is logged (`voicewake.forward` category) and the run is still visible via WebChat/session logs.
+- If submission fails, the error is logged (`voicewake.forward` category) and the overlay keeps the transcript for manual retry. Sent feedback means the Gateway accepted the submission, not that the agent run or external delivery finished successfully. See [Voice overlay](/platforms/mac/voice-overlay) for retry identity and cancellation behavior.
 
 ## Forwarding payload
 

@@ -17,7 +17,11 @@ installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 test("replaces offline rows across signed Control UI reconnects in hello and presence events", async () => {
-  const identityPath = path.join(tempDirs.make("presence-reconnect-"), "device.sqlite");
+  const identityPath = path.join(
+    tempDirs.make("presence-reconnect-"),
+    "client",
+    "credentials.sqlite",
+  );
   const instanceId = "presence-reconnect";
   await withGatewayServer(async ({ port }) => {
     const origin = `http://127.0.0.1:${port}`;

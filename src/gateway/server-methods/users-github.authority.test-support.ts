@@ -2,7 +2,7 @@ import { StatementSync } from "node:sqlite";
 import { expect } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { updateUserGitHubConnection } from "../../state/user-github-connections.test-support.js";
-import { preparePersonalGitHubActionV2 } from "./github-personal-authorization.js";
+import { preparePersonalProfileAction } from "./personal-profile-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 export function preparePersonalGitHubPoll(owner: string) {
@@ -24,7 +24,7 @@ export async function expectReceiptBackedPersonalGitHubAuthority(options: {
   merge: () => void;
   disconnect: () => void;
 }) {
-  const action = await preparePersonalGitHubActionV2(options);
+  const action = await preparePersonalProfileAction(options);
   const reads = observeSqliteReadSql(StatementSync.prototype);
   try {
     action.assertCurrent();
@@ -32,7 +32,7 @@ export async function expectReceiptBackedPersonalGitHubAuthority(options: {
 
     options.merge();
     reads.queries.length = 0;
-    expect(() => action.assertCurrent()).toThrow("My GitHub owner changed");
+    expect(() => action.assertCurrent()).toThrow("Personal profile owner changed");
     expect(reads.queries).toEqual([]);
 
     options.disconnect();

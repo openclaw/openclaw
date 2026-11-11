@@ -22,7 +22,7 @@ export {
   mapAgentHarnessMessagingMediaValues,
 } from "../agents/harness/messaging-media.js";
 export { getCoreTtsToolResultMediaUrls } from "../agents/tools/tts-tool-result-provenance.js";
-export { consumeTrustedToolNoStartError } from "../agents/tool-result-error.js";
+export { consumeToolExecutionNotStarted as consumeTrustedToolNoStartError } from "../agents/tool-effect-receipt.js";
 export {
   recordAgentHarnessMessagingDelivery,
   recordAgentHarnessToolResultTelemetry,
@@ -31,6 +31,10 @@ export {
   type AgentHarnessMessagingDeliveryFacts,
   type AgentHarnessToolMediaFacts,
 } from "../agents/harness/tool-result-facts.js";
+export {
+  applyGatewayToolPolicy,
+  createGatewayToolPolicyAssertion,
+} from "../agents/gateway-tool-policy.js";
 export { runAgentHarnessToolInvocation } from "../agents/harness/tool-invocation.js";
 export { runWithToolExecutionValidation } from "../agents/agent-tools.execution-validation.js";
 export {
@@ -41,7 +45,7 @@ export {
 export {
   acknowledgeInternalToolResult,
   copyInternalToolResultState,
-} from "../agents/runtime/internal-hooks.js";
+} from "../../packages/agent-core/src/internal-hooks.js";
 
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<typeof import("./agent-harness.js").createOpenClawCodingToolsAsync>[0]
@@ -54,7 +58,7 @@ export type AgentHarnessToolSurfaceRuntime = ReturnType<
 
 export type AgentHarnessToolSurfaceRuntimeParams = Omit<
   Parameters<typeof createAgentHarnessToolSurfaceRuntimeCore>[0],
-  "executeTool" | "disableToolSearch" | "forceCodeModeControls" | "preparedToolOverrideAllowlist"
+  "executeTool" | "disableToolSearch" | "preparedToolOverrideAllowlist"
 > & {
   executeTool: NonNullable<OpenClawCodingToolsOptions["toolSearchCatalogExecutor"]>;
 };

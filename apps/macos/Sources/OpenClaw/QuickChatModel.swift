@@ -252,7 +252,7 @@ final class QuickChatModel {
     @ObservationIgnored private var sendTask: Task<String, Error>?
     private var permissionTask: Task<Void, Never>?
     @ObservationIgnored private var permissionPollTask: Task<Void, Never>?
-    @ObservationIgnored private var retryIdentity: RetryIdentity?
+    private var retryIdentity: RetryIdentity?
     @ObservationIgnored private var capturePipelineID: UUID?
     private var textContextCaptureID: UUID?
     @ObservationIgnored private var textContextCaptureTask: Task<Void, Never>?
@@ -279,16 +279,7 @@ final class QuickChatModel {
                 emoji: emoji,
                 avatar: QuickChatAgentDisplay.avatar(fromRendered: identity.avatar))
         },
-        sendProvider: @escaping SendProvider = { sessionKey, agentID, message, thinking, idempotencyKey, attachments in
-            let response = try await GatewayConnection.shared.chatSend(
-                sessionKey: sessionKey,
-                agentID: agentID,
-                message: message,
-                thinking: thinking,
-                idempotencyKey: idempotencyKey,
-                attachments: attachments)
-            return response.status
-        },
+        sendProvider: @escaping SendProvider = QuickChatModel.gatewaySendProvider(gateway: .shared),
         permissionStatusProvider: @escaping PermissionStatusProvider = { capabilities in
             await PermissionManager.grantedStatus(capabilities)
         },
@@ -373,9 +364,20 @@ final class QuickChatModel {
         !self.permissionsDismissedThisSession && !self.missingPermissions.isEmpty
     }
 
+    private var failedSend: RetryIdentity? {
+        guard case .failed = self.sendState,
+              let retryIdentity,
+              retryIdentity.draft == self.text,
+              retryIdentity.route == self.routingTarget,
+              retryIdentity.thinking == self.selectedThinkingLevel
+        else { return nil }
+        return retryIdentity
+    }
+
     var canSend: Bool {
         let hasPendingOverrideState = self.selectedModelSelectionID != nil || self.selectedThinkingLevel != nil
-        return (!self.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || self.textContext != nil) &&
+        return (!self.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            self.textContext != nil || self.failedSend != nil) &&
             !self.sessionKey.isEmpty &&
             self.connectionGate == .available &&
             !self.isCapturingTextContext &&
@@ -527,7 +529,8 @@ final class QuickChatModel {
     }
 
     func send() async -> Bool {
-        await self.performSend(messageOverride: nil, attachments: [])
+        let retry = self.failedSend
+        return await self.performSend(messageOverride: retry?.message, attachments: retry?.attachments ?? [])
     }
 
     func captureFocusedAppText() {
@@ -811,6 +814,7 @@ final class QuickChatModel {
         let previousTarget = self.routingTarget
         self.setRoutingTarget(target)
         if previousTarget != target {
+            self.retryIdentity = nil
             self.invalidateModelChoices()
             // Explicit overrides survive target changes, but the target's underlying
             // session state must be read again before the compact control claims a value.
@@ -826,6 +830,23 @@ final class QuickChatModel {
     private func setRoutingTarget(_ target: OpenClawChatSessionTarget?) {
         self.sessionKey = target?.sessionKey ?? ""
         self.sendAgentID = target?.agentID
+    }
+
+    static func gatewaySendProvider(gateway: GatewayConnection) -> SendProvider {
+        { sessionKey, agentID, message, thinking, idempotencyKey, attachments in
+            let route = try await gateway.captureRequiredRoute()
+            let response = try await withGatewayStartupAdmission(method: "chat.send") {
+                try await gateway.chatSend(
+                    sessionKey: sessionKey,
+                    agentID: agentID,
+                    message: message,
+                    thinking: thinking,
+                    idempotencyKey: idempotencyKey,
+                    attachments: attachments,
+                    ifCurrentRoute: route)
+            }
+            return response.status
+        }
     }
 
     private func performSend(
@@ -1074,8 +1095,12 @@ extension QuickChatModel {
         guard self.isCurrentPresentation(presentationID), let target = self.routingTarget else { return }
         switch push {
         case let .event(event):
-            guard event.event == "config.changed" || event.event == "chat.metadata.changed" else { return }
-            if case .modelSelectionChanged = OpenClawChatGatewayPayloadCodec.event(from: event) {
+            guard event.event == "config.changed" || event.event == "chat.metadata.changed",
+                  let metadata = OpenClawChatGatewayPayloadCodec.event(from: event),
+                  metadata.refreshesModelCatalog(
+                      forAgentID: target.agentID ?? OpenClawChatSessionKey.agentID(from: target.sessionKey))
+            else { return }
+            if case .modelSelectionChanged = metadata {
                 self.invalidateModelChoices()
             }
         case .snapshot, .seqGap:

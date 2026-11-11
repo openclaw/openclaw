@@ -6,8 +6,9 @@ import type {
   QuestionRequestedEvent,
   QuestionResolvedEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { registerListener } from "../../../src/shared/listeners.js";
-import { GatewayRequestError, type GatewayEventFrame } from "../api/gateway.ts";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayEventFrame } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
@@ -31,8 +32,6 @@ export type QuestionDraft = {
   freeText: string;
 };
 
-type QuestionPromptStatus = QuestionRecord["status"] | "unavailable";
-
 export type QuestionPrompt = Pick<
   QuestionRecord,
   "id" | "questions" | "createdAtMs" | "expiresAtMs"
@@ -40,7 +39,7 @@ export type QuestionPrompt = Pick<
   agentId?: string;
   sessionKey?: string;
   runId?: string;
-  status: QuestionPromptStatus;
+  status: QuestionRecord["status"] | "unavailable";
   answers?: QuestionAnswers;
   submittedAnswers?: QuestionAnswers;
   answeredElsewhere: boolean;
@@ -119,7 +118,7 @@ function parseQuestionRecord(payload: QuestionRecord): QuestionRecord | null {
 }
 
 export function createQuestionPromptState(onChange: () => void = () => {}): QuestionPromptState {
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners();
   let snapshot: QuestionPrompt[] = [];
   const state: QuestionPromptState = {
     client: null,
@@ -138,11 +137,9 @@ export function createQuestionPromptState(onChange: () => void = () => {}): Ques
         (left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id),
       );
       onChange();
-      for (const listener of listeners) {
-        listener();
-      }
+      listeners.publish();
     },
-    subscribe: (listener) => registerListener(listeners, listener),
+    subscribe: listeners.subscribe,
     onQuestionResolution: (resolution) => recordQuestionResolution(state, resolution),
   };
   return state;

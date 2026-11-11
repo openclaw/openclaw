@@ -36,8 +36,13 @@ import {
   GatewayStoredDeviceAuthUnavailableError,
   loadStoredOperatorDeviceAuthToken,
   resolveGatewayCallDeviceAuth,
-  type GatewayCallDeviceAuthOptions,
 } from "./call-device-auth.js";
+import type {
+  CallGatewayBaseOptions,
+  CallGatewayCliOptions,
+  CallGatewayOptions,
+  GatewayRequestFunction,
+} from "./call-options.js";
 import { ensureGatewaySupportsRequiredFeatures } from "./call-required-features.js";
 import {
   ensureExplicitGatewayAuth,
@@ -48,10 +53,7 @@ import {
 import {
   GatewayClient,
   isGatewayConnectAssemblyError,
-  prepareGatewayClientDeviceAuth,
   type GatewayClientCloseInfo,
-  type GatewayClientOptions,
-  type GatewayClientRequestOptions,
 } from "./client.js";
 import {
   buildGatewayConnectionDetailsWithResolvers,
@@ -101,70 +103,11 @@ export {
   type GatewayTransportErrorKind,
 } from "./transport-error.js";
 
-export type GatewayRequestFunction = <T = Record<string, unknown>>(
-  method: string,
-  params?: unknown,
-  opts?: GatewayClientRequestOptions,
-) => Promise<T>;
-
-type CallGatewayBaseOptions = Pick<GatewayClientOptions, "caps"> &
-  GatewayCallDeviceAuthOptions & {
-    url?: string;
-    /** Require this resolved endpoint without overriding target selection or authentication. */
-    expectUrl?: string;
-    token?: string;
-    password?: string;
-    tlsFingerprint?: string;
-    preauthHandshakeTimeoutMs?: number;
-    config?: OpenClawConfig;
-    method: string;
-    params?: unknown;
-    expectFinal?: boolean;
-    timeoutMs?: number | null;
-    signal?: AbortSignal;
-    prepareDispatchCurrent?: () => Promise<void>;
-    assertDispatchCurrent?: () => void;
-    onAccepted?: GatewayClientRequestOptions["onAccepted"];
-    onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
-    /** Continue a multi-request operation on this exact authenticated connection. */
-    onResponse?: (request: GatewayRequestFunction, signal: AbortSignal) => Promise<void>;
-    clientDisplayName?: string;
-    clientVersion?: string;
-    platform?: string;
-    requiredStoredDeviceAuthScopes?: OperatorScope[];
-    /** Keep caller-resolved token/password authoritative, including an empty result. */
-    skipImplicitAuth?: boolean;
-    onHelloOk?: GatewayClientOptions["onHelloOk"];
-    instanceId?: string;
-    minProtocol?: number;
-    maxProtocol?: number;
-    requiredCapabilities?: string[];
-    requiredMethods?: string[];
-    /**
-     * Overrides the config path shown in connection error details.
-     * Does not affect config loading; callers still control auth via opts.token/password/env/config.
-     */
-    configPath?: string;
-    /**
-     * Explicit local gateway port for command-line overrides such as `gateway health --port`.
-     * Bypasses OPENCLAW_GATEWAY_URL and OPENCLAW_GATEWAY_PORT for this call only.
-     */
-    localPortOverride?: number;
-    /** Keep a caller-supplied config target authoritative over OPENCLAW_GATEWAY_URL. */
-    ignoreEnvUrlOverride?: boolean;
-    /**
-     * Service-derived probe target (e.g. custom bind host or Tailnet address).
-     * Used as the connection URL without classifying it as a caller URL override,
-     * so the explicit-credential guard does not fire.
-     */
-    serviceTargetUrl?: string;
-  };
-
-export type CallGatewayCliOptions = CallGatewayOptions;
-
-export type CallGatewayOptions = CallGatewayBaseOptions & {
-  scopes?: OperatorScope[];
-};
+export type {
+  CallGatewayCliOptions,
+  CallGatewayOptions,
+  GatewayRequestFunction,
+} from "./call-options.js";
 
 export { GatewayExplicitAuthRequiredError } from "./client-bootstrap.js";
 export {
@@ -377,15 +320,7 @@ function resolveGatewayConfigPath(env: NodeJS.ProcessEnv): string {
 }
 
 export function buildGatewayConnectionDetails(
-  options: {
-    config?: OpenClawConfig;
-    url?: string;
-    configPath?: string;
-    urlSource?: "cli" | "env";
-    ignoreEnvUrlOverride?: boolean;
-    localPortOverride?: number;
-    serviceTargetUrl?: string;
-  } = {},
+  options: Parameters<typeof buildGatewayConnectionDetailsWithResolvers>[0] = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
     getRuntimeConfig: readGatewayDispatchConfig,
@@ -679,29 +614,6 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       });
     }
   }
-  try {
-    await prepareGatewayClientDeviceAuth(
-      {
-        url,
-        token,
-        password,
-        edgeAuthHeaders,
-        tlsFingerprint,
-        deviceIdentity,
-        deviceAuthScope,
-        sharedStateMode: opts.sharedStateMode,
-        preparedDeviceAuth: storedAuth ?? undefined,
-        approvalRuntimeToken: opts.approvalRuntimeToken,
-        agentRuntimeIdentityToken: opts.agentRuntimeIdentityToken,
-      },
-      opts.signal,
-    );
-  } catch (error) {
-    if (opts.signal?.aborted) {
-      throw createGatewayRequestAbortError(opts.method);
-    }
-    throw error;
-  }
   // A one-shot shared-auth CLI connection cannot match an earlier run's owner.
   // Request admin authority for cancellation; the Gateway still validates it.
   const effectiveScopes: OperatorScope[] | undefined =
@@ -731,9 +643,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     const cleanup = () => {
       startAbort.abort();
       opts.signal?.removeEventListener("abort", abortHandler);
-      if (timer) {
-        clearTimeout(timer);
-      }
+      clearTimeout(timer);
     };
     const stopClientThenSettle = (err?: Error, value?: T) => {
       const complete = () => {
@@ -787,6 +697,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       edgeAuthHeaders,
       tlsFingerprint,
       preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
+      assertConnectionCurrent: opts.assertConnectionCurrent,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: resolveGatewayClientDisplayName(opts),

@@ -50,9 +50,10 @@ async function withEmbeddedBroker(
   embedded: boolean,
   registered: boolean,
   run: (broker: EmbeddedQuestionBroker) => Promise<void>,
+  onEvent?: ConstructorParameters<typeof EmbeddedQuestionBroker>[1],
 ) {
   const previousMode = isEmbeddedMode();
-  const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler());
+  const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler(), onEvent);
   setEmbeddedMode(embedded);
   if (registered) {
     setEmbeddedQuestionBroker(broker);
@@ -70,7 +71,6 @@ function startQuestion(
   fixture: Fixture,
   owner: "harness" | "ask_user",
   gatewayCall?: Parameters<typeof runAgentHarnessGatewayQuestion>[0]["gatewayCall"],
-  onPrompt?: () => void,
 ) {
   if (owner === "harness") {
     const delivered = deferred();
@@ -80,12 +80,7 @@ function startQuestion(
       timeoutMs: 60_000,
       gatewayCall,
       signal: fixture.backingRun.signal,
-      delivery: {
-        onBlockReply: async () => {
-          onPrompt?.();
-          delivered.resolve();
-        },
-      },
+      delivery: { onBlockReply: async () => delivered.resolve() },
     });
     return { run, showPrompt: () => delivered.promise };
   }
@@ -106,7 +101,7 @@ function startQuestion(
   if (!reservation) {
     throw new Error("expected prompt reservation");
   }
-  const run = createAskUserTool({ sessionKey, gatewayCall })
+  const run = createAskUserTool({ sessionKey })
     .execute(
       toolCallId,
       { questions: [askUserQuestion], timeoutSeconds: 60 },
@@ -187,36 +182,40 @@ describe("question dispatch ownership", () => {
   });
 
   it("keeps plain replies answerable locally and refuses retired source input", async () => {
-    await withEmbeddedBroker(true, true, async (broker) => {
-      const requested = deferred();
-      broker.subscribe((event) => {
+    const requested = deferred();
+    await withEmbeddedBroker(
+      true,
+      true,
+      async (broker) => {
+        const run = createAskUserTool({ sessionKey }).execute("local-question", {
+          questions: [askUserQuestion],
+        });
+        try {
+          await requested.promise;
+          await expect(
+            claimAnswer("obsolete", {
+              authority: {
+                kind: "source-bound",
+                assertCurrent: () => {
+                  throw new Error("retired source");
+                },
+              },
+            }),
+          ).rejects.toThrow("retired source");
+          expect(broker.list().questions).toHaveLength(1);
+          await expect(claimAnswer("Continue")).resolves.toBe(true);
+          expectAnswer((await run).details, "Continue");
+        } finally {
+          broker.stop();
+          await run;
+        }
+      },
+      (event) => {
         if (event.event === "question.requested") {
           requested.resolve();
         }
-      });
-      const run = createAskUserTool({ sessionKey }).execute("local-question", {
-        questions: [askUserQuestion],
-      });
-      try {
-        await requested.promise;
-        await expect(
-          claimAnswer("obsolete", {
-            authority: {
-              kind: "source-bound",
-              assertCurrent: () => {
-                throw new Error("retired source");
-              },
-            },
-          }),
-        ).rejects.toThrow("retired source");
-        expect(broker.list().questions).toHaveLength(1);
-        await expect(claimAnswer("Continue")).resolves.toBe(true);
-        expectAnswer((await run).details, "Continue");
-      } finally {
-        broker.stop();
-        await run;
-      }
-    });
+      },
+    );
   });
 
   it("rechecks source authority after loading the local dispatcher and before resolving", async () => {
@@ -274,8 +273,7 @@ describe("question dispatch ownership", () => {
     async ({ owner, stage }) => {
       await withQuestionGateway(async (fixture) => {
         const registration = fixture.holdRegistration();
-        const onPrompt = vi.fn();
-        const question = startQuestion(fixture, owner, undefined, onPrompt);
+        const question = startQuestion(fixture, owner);
         const { source, authority } = currentSource(fixture);
         const persisting = deferred();
         const persisted = deferred();

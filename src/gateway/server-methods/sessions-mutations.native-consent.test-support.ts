@@ -10,8 +10,16 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewaySession } from "../session-create-service.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import { sessionCreateHandlers } from "./sessions-create.js";
+import { sessionMutationHandlers } from "./sessions-mutations.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  RespondFn,
+} from "./types.js";
 
 const nativeModel: ModelCatalogEntry = {
   provider: "anthropic",
@@ -50,6 +58,17 @@ export function registerSessionNativeRuntimeConsentTests(support: {
   const { catalogSnapshot, client, context, patchSession, queueRuntimeSelection } = support;
   const selectModel = { model: `${nativeModel.provider}/${nativeModel.id}` };
   const harness = nativeHarness;
+  const nativeSelection = {
+    providerOverride: "anthropic",
+    modelOverride: "claude-sonnet-4-6",
+    agentRuntimeOverride: "claude-cli",
+  };
+  const readyRuntime = (validate: () => string | undefined = () => undefined) => ({
+    kind: "ready" as const,
+    runtimeId: harness.id,
+    harness,
+    validate,
+  });
   let nextConsentSession = 0;
   const nativeContext = () => {
     const requestContext = context();
@@ -75,28 +94,19 @@ export function registerSessionNativeRuntimeConsentTests(support: {
 
   async function prepareConsent(entry: Partial<SessionEntry> = {}) {
     const sessionKey = `agent:main:native-consent-${++nextConsentSession}`;
-    const scope = { agentId: "main", sessionKey };
+    const { scope, seed, read } = sessionMutationFixture(sessionKey);
     support.getConfig().agents!.defaults!.sandbox = { mode: "all" };
     support.getConfig().tools = { fs: { workspaceOnly: true }, deny: ["exec"] };
-    await upsertSessionEntryCore(scope, {
-      sessionId: sessionKey,
+    await seed({
       lifecycleRevision: "native-consent-generation",
-      updatedAt: 1,
       label: "Keep this chat",
-      providerOverride: nativeModel.provider,
-      modelOverride: nativeModel.id,
-      agentRuntimeOverride: harness.id,
+      ...nativeSelection,
       permissionMode: "workspace",
       ...entry,
     });
-    const before = loadSessionEntry(scope);
+    const before = read();
     const requestContext = nativeContext();
-    support.prepareRuntime.mockResolvedValue({
-      kind: "ready",
-      runtimeId: harness.id,
-      harness,
-      validate: () => undefined,
-    });
+    support.prepareRuntime.mockResolvedValue(readyRuntime());
     const patch = {
       key: sessionKey,
       nativeRuntimeConsent: harness.id,
@@ -115,7 +125,6 @@ export function registerSessionNativeRuntimeConsentTests(support: {
     ) => patchSession({ key: sessionKey, ...params }, scopes, requestContext, requestClient);
     const accept = async (params: Record<string, unknown>) =>
       expect((await run(params))[0]).toBe(true);
-    const read = () => loadSessionEntry(scope);
     const claim = (runId: string) =>
       claimAgentRunContext(
         runId,
@@ -233,7 +242,7 @@ export function registerSessionNativeRuntimeConsentTests(support: {
     if (late) {
       support.prepareRuntime.mockImplementation(async () => {
         revoke();
-        return { kind: "ready", runtimeId: harness.id, harness, validate: () => undefined };
+        return readyRuntime();
       });
     } else {
       support.getConfig().agents!.entries = { main: { nativeRuntimeConsent: [harness.id] } };
@@ -279,43 +288,33 @@ export function registerSessionNativeRuntimeConsentTests(support: {
     support.getConfig().tools = { deny: ["browser"] };
     const sessionKey = `agent:main:model-only-${stale}`;
     const requestContext = nativeContext();
-    support.prepareRuntime.mockResolvedValue({
-      kind: "ready",
-      runtimeId: "claude-cli",
-      harness: nativeHarness,
-      validate: vi
-        .fn<() => string | undefined>()
-        .mockReturnValueOnce(undefined)
-        .mockReturnValue(stale ? "Native owner replaced" : undefined),
-    });
+    support.prepareRuntime.mockResolvedValue(
+      readyRuntime(
+        vi
+          .fn<() => string | undefined>()
+          .mockReturnValueOnce(undefined)
+          .mockReturnValue(stale ? "Native owner replaced" : undefined),
+      ),
+    );
     const create = createNative(sessionKey, requestContext);
     if (stale) {
       await expect(create).rejects.toThrow("Native owner replaced");
       expect(loadSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
     } else {
       await expect(create).resolves.toMatchObject({ ok: true });
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-        providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4-6",
-        agentRuntimeOverride: "claude-cli",
-      });
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey })?.nativeRuntimeConsent,
-      ).toBeUndefined();
+      const stored = loadSessionEntry({ agentId: "main", sessionKey });
+      expect(stored).toMatchObject(nativeSelection);
+      expect(stored?.nativeRuntimeConsent).toBeUndefined();
     }
   });
 
   it("retargets queued work on native model selection", async () => {
     const sessionKey = "agent:main:model-only-patch";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      {
-        sessionId: sessionKey,
-        updatedAt: 1,
-        agentRuntimeOverride: "openclaw",
-        nativeRuntimeConsent: "previous-native-runtime",
-      },
-    );
+    const { seed, read } = sessionMutationFixture(sessionKey);
+    await seed({
+      agentRuntimeOverride: "openclaw",
+      nativeRuntimeConsent: "previous-native-runtime",
+    });
     const requestContext = nativeContext();
     support.prepareRuntime.mockResolvedValue({
       kind: "ready",
@@ -331,16 +330,83 @@ export function registerSessionNativeRuntimeConsentTests(support: {
       );
       expect(response[0]).toBe(true);
       expect(queued).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-        providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4-6",
-        agentRuntimeOverride: "claude-cli",
-      });
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).not.toHaveProperty(
-        "nativeRuntimeConsent",
-      );
+      const stored = read();
+      expect(stored).toMatchObject(nativeSelection);
+      expect(stored).not.toHaveProperty("nativeRuntimeConsent");
     } finally {
       clearFollowupQueue(sessionKey);
     }
   });
+}
+
+export function startSessionMutationRequest(
+  method: string,
+  params: Record<string, unknown>,
+  options: Pick<GatewayRequestHandlerOptions, "client" | "context"> &
+    Partial<GatewayRequestHandlerOptions>,
+) {
+  const respond = vi.fn<RespondFn>(options.respond);
+  const handler = (method === "sessions.create" ? sessionCreateHandlers : sessionMutationHandlers)[
+    method
+  ]!;
+  const running = Promise.resolve(
+    handler({
+      req: { type: "req", id: method, method, params },
+      isWebchatConnect: () => true,
+      ...options,
+      params,
+      respond,
+    }),
+  );
+  return { respond, responses: respond.mock.calls, running };
+}
+
+export function createSessionMutationCatalog(
+  config: OpenClawConfig,
+  state: Pick<OpenClawTestState, "agentDir" | "workspaceDir">,
+  entries: ModelCatalogEntry[],
+  routeVariants = entries,
+) {
+  return {
+    config,
+    entries,
+    routeVariants,
+    agentId: "main",
+    agentDir: state.agentDir("main"),
+    workspaceDir: state.workspaceDir,
+    catalogComplete: true,
+  };
+}
+
+export function createSessionMutationContext(
+  config: OpenClawConfig = {},
+  loadCatalog?: GatewayRequestContext["loadGatewayModelCatalog"],
+  cron?: Pick<
+    GatewayRequestContext["cron"],
+    "list" | "updateWithPrecondition" | "getDefaultAgentId"
+  >,
+): GatewayRequestContext {
+  return {
+    getRuntimeConfig: () => config,
+    loadGatewayModelCatalogSnapshot: vi.fn(
+      async (params: Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0]) => {
+        const entries = loadCatalog ? await loadCatalog(params) : [];
+        return { entries, routeVariants: entries };
+      },
+    ),
+    broadcastToConnIds: vi.fn(),
+    getSessionEventSubscriberConnIds: () => new Set(),
+    dedupe: new Map(),
+    ...(cron ? { cron } : {}),
+  } as unknown as GatewayRequestContext;
+}
+
+export function sessionMutationFixture(sessionKey: string, agentId = "main") {
+  const scope = { agentId, sessionKey };
+  return {
+    scope,
+    read: () => loadSessionEntry(scope),
+    seed: (entry: Partial<SessionEntry> = {}) =>
+      upsertSessionEntryCore(scope, { sessionId: sessionKey, updatedAt: 1, ...entry }),
+  };
 }

@@ -1,6 +1,7 @@
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionRow } from "../../packages/gateway-protocol/src/index.js";
+import { isHeartbeatAcknowledgementText } from "../auto-reply/heartbeat.js";
 import {
   isSessionTranscriptTerminalModel,
   readSessionTranscriptTerminalModel,
@@ -105,7 +106,10 @@ export function readStoredSessionRowTranscriptProjection(params: {
         value.lastAssistantMessage === "unknown" ||
         value.lastAssistantMessage === "unchanged" ||
         value.lastAssistantMessage === null ||
-        isSessionRowAssistantMessage(value.lastAssistantMessage)) &&
+        // Cached text lacks forwarding/media facts. Rebuild acknowledgements from
+        // the bounded transcript; a legitimate forwarded literal remains visible.
+        (isSessionRowAssistantMessage(value.lastAssistantMessage) &&
+          !isHeartbeatAcknowledgementText(value.lastAssistantMessage.text))) &&
       (value.terminalModel === null || isSessionTranscriptTerminalModel(value.terminalModel)) &&
       value.indexedSeq === (params.indexedSeq ?? null)
       ? {

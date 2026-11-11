@@ -135,6 +135,8 @@ function childHistoryFixture(name: string, replace = false) {
             key: targetSessionKey,
             sessionId: expectedSessionId,
             parentSessionKey: requesterSessionKey,
+            // Older Gateways exposed the expired display projection alongside durable lineage.
+            childOwnerSessionKeys: [],
           },
         };
       }
@@ -198,8 +200,15 @@ it("declares complete success and closed error contracts", async () => {
         state: "queued",
         queued: true,
       },
+      {
+        id: "pending-stopped",
+        message: { role: "user", content: "Stopped before execution" },
+        acceptedAt: 2,
+        state: "cancelled",
+        cancelledByUser: true,
+      },
     ],
-    total: 1,
+    total: 2,
     queuedCount: 1,
   };
   expect(Value.Check(ChatPendingInputsPageSchema, pendingInputs)).toBe(true);
@@ -207,7 +216,7 @@ it("declares complete success and closed error contracts", async () => {
     true,
   );
   expect(compactToolOutputHint(tool.outputSchema)).toBe(
-    '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; pendingInputs?: { items: Array<{ acceptedAt: number; id: string; message: unknown; state: "queued" | "cancelled" | "interrupted"; queued?: true; runId?: string }>; total: number; nextBefore?: number; queuedCount?: number }; sessionLinkRule?: string; totalMessages?: number; windowReset?: boolean } | { error: string; status: "error" | "forbidden" }',
+    '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; pendingInputs?: { items: Array<{ acceptedAt: number; id: string; message: unknown; state: "queued" | "cancelled" | "interrupted"; cancelledByUser?: true; queued?: true; runId?: string }>; total: number; nextBefore?: number; queuedCount?: number }; sessionLinkRule?: string; totalMessages?: number; windowReset?: boolean } | { error: string; status: "error" | "forbidden" }',
   );
 });
 
@@ -287,6 +296,7 @@ it("keeps accepted inputs separate, bounded, and addressable by their own cursor
     runId: "do-not-expose-correlation",
     state: "interrupted",
     acceptedAt: 1_700_000_000_000,
+    steerNow: { status: "available", tools: ["exec"] },
     message: {
       role: "user",
       content: `OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789 ${"queued input ".repeat(1000)}`,
@@ -312,6 +322,7 @@ it("keeps accepted inputs separate, bounded, and addressable by their own cursor
   expect(Buffer.byteLength(JSON.stringify(details.pendingInputs))).toBeLessThanOrEqual(4096);
   expect(JSON.stringify(details.pendingInputs)).not.toContain("sk-or-v1-abcdef0123456789");
   expect(JSON.stringify(details.pendingInputs)).not.toContain("do-not-expose-correlation");
+  expect(JSON.stringify(details.pendingInputs)).not.toContain("steerNow");
   expect(details.contentRedacted).toBe(false);
   expect(details.bytes).toBeLessThanOrEqual(80 * 1024);
   expect(Value.Check(tool.outputSchema!, details)).toBe(true);
@@ -597,9 +608,14 @@ it.each([
     );
 
     await tool.execute("owned-history", { sessionKey: requested });
+    // A qualified key implies its owner; repeating the same id would re-gate
+    // the read against the fixed-store owner (#164847).
     expect(requests).toContainEqual({
       method: "chat.history",
-      params: expect.objectContaining({ sessionKey: resolved, agentId }),
+      params:
+        requested === "current"
+          ? { sessionKey: resolved }
+          : expect.objectContaining({ sessionKey: resolved, agentId }),
     });
     if (requested === "current") {
       expect(requests.some((request) => request.method === "sessions.resolve")).toBe(false);

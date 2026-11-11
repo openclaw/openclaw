@@ -1,7 +1,10 @@
 /** In-process Gateway seam for streaming a Claude CLI turn from a paired node. */
 import { randomUUID } from "node:crypto";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
-import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../infra/node-commands.js";
+import {
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  NODE_CLAUDE_NATIVE_AUTH_CAPABILITY,
+} from "../infra/node-commands.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   invokeNodeClaudeSkillRuntime,
@@ -19,6 +22,7 @@ export async function invokeNodeClaudeCliRun(params: {
   cwd?: string;
   env?: Record<string, string>;
   clearEnv?: string[];
+  nativeAuthOnly?: true;
   systemPrompt?: string;
   agentId?: string;
   sessionKey?: string;
@@ -78,6 +82,10 @@ export async function invokeNodeClaudeCliRun(params: {
       ...(params.cwd ? { cwd: params.cwd } : {}),
       ...(params.env ? { env: params.env } : {}),
       ...(params.clearEnv ? { clearEnv: params.clearEnv } : {}),
+      // Older, independently updated nodes reject unknown invocation fields.
+      ...(params.nativeAuthOnly && node.caps.includes(NODE_CLAUDE_NATIVE_AUTH_CAPABILITY)
+        ? { nativeAuthOnly: true }
+        : {}),
       ...(params.systemPrompt !== undefined ? { systemPrompt: params.systemPrompt } : {}),
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),

@@ -10,8 +10,10 @@ import {
   startGatewayDiagnosticHeartbeat,
   stopGatewayDiagnosticHeartbeat,
 } from "../logging/diagnostic.js";
-import { resolveQaDiagnosticHeartbeatTimings } from "./server-qa-diagnostic-timings.js";
 import type { GatewayEventLoopHealth } from "./server/event-loop-health.js";
+
+const QA_DIAGNOSTIC_ABORT_MS_ENV = "QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS";
+const MIN_QA_DIAGNOSTIC_ABORT_MS = 30_000;
 
 /** The Gateway lifetime owns diagnostics configuration and its heartbeat job. */
 export function createGatewayDiagnosticsConfigurator(params: {
@@ -26,10 +28,25 @@ export function createGatewayDiagnosticsConfigurator(params: {
     }
     setDiagnosticsEnabledForProcess(isDiagnosticsEnabled(config));
     notifyGatewayWorkMetricsChanged();
+    const raw =
+      process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1" &&
+      process.env.OPENCLAW_GATEWAY_HOST_LIFELINE?.trim() === "stdin"
+        ? process.env[QA_DIAGNOSTIC_ABORT_MS_ENV]?.trim()
+        : undefined;
+    const stuckSessionAbortMs = raw && /^\d+$/.test(raw) ? Number(raw) : undefined;
+    const testTimings =
+      stuckSessionAbortMs !== undefined &&
+      Number.isSafeInteger(stuckSessionAbortMs) &&
+      stuckSessionAbortMs >= MIN_QA_DIAGNOSTIC_ABORT_MS
+        ? {
+            stuckSessionWarnMs: Math.max(15_000, Math.floor(stuckSessionAbortMs / 2)),
+            stuckSessionAbortMs,
+          }
+        : undefined;
     startGatewayDiagnosticHeartbeat(params.scheduler, undefined, {
       getConfig: getRuntimeConfig,
       startupGraceMs: 60_000,
-      testTimings: resolveQaDiagnosticHeartbeatTimings(process.env),
+      testTimings,
       sampleLiveness: () => {
         const sample = params.sampleLiveness();
         if (!sample || sample.degradedSinceMs == null) {

@@ -1,4 +1,4 @@
-// Server chat agent-event tests protect event fanout, heartbeat visibility,
+// Server chat agent-event tests protect event fanout, visibility,
 // session lifecycle persistence, and subscriber registry behavior.
 
 import { expectDefined } from "@openclaw/normalization-core";
@@ -64,14 +64,6 @@ vi.mock("../config/io.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../infra/heartbeat-visibility.js", () => ({
-  resolveHeartbeatVisibility: vi.fn(() => ({
-    showOk: false,
-    showAlerts: true,
-    useIndicator: true,
-  })),
-}));
-
 // mock-isolation: Session projection fixtures own their entries without native database admission.
 const loadSessionEntryAsync = vi.hoisted(() =>
   vi.fn<typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync>(),
@@ -82,8 +74,8 @@ vi.mock("./session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: async () => await loadSessionEntryAsync("session-1"),
 }));
 
+import { waitForFast } from "../../test/helpers/vitest-wait.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { makeClient, registerNodeSession } from "./node-registry.test-helpers.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
@@ -105,24 +97,12 @@ import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.j
 import * as sessionEventRows from "./session-event-prepared-row.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
-
 describe("agent event handler", () => {
   let lineageProjection: ReturnType<typeof createSessionRowProjectionFixture> | undefined;
   beforeEach(() => {
     lineageProjection = undefined;
     resetAgentEventsForTest({ preserveListeners: true });
     vi.mocked(getRuntimeConfig).mockReturnValue({});
-    vi.mocked(resolveHeartbeatVisibility).mockReturnValue({
-      showOk: false,
-      showAlerts: true,
-      useIndicator: true,
-    });
     vi.mocked(loadSessionEntryAsync).mockReset().mockResolvedValue(emptySessionLookup());
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     loadGatewaySessionLifecycleSnapshotMock
@@ -175,6 +155,28 @@ describe("agent event handler", () => {
       "run owner claim",
     );
   }
+
+  it("resolves each synchronous streamed event once while keeping routing current", () => {
+    let sessionKey = "agent:main:first";
+    const resolveSessionKeyForRun = vi.fn(() => sessionKey);
+    const h = createHarness({ resolveSessionKeyForRun });
+    onTestFinished(async () => {
+      await h.handler.dispose();
+      h.chatRunState.clear();
+    });
+    const expected = [];
+    for (let seq = 1; seq <= 12; seq++) {
+      if (seq === 7) {
+        sessionKey = "agent:main:second";
+      }
+      const stream = seq % 2 ? "assistant" : "thinking";
+      const data = { text: `fragment ${seq}` };
+      expect(h.emit("streamed-run", stream, data, { seq })).toBeUndefined();
+      expected.push({ runId: "streamed-run", sessionKey, stream, seq, data });
+    }
+    expect(h.agent().map(([, payload]) => payload)).toMatchObject(expected);
+    expect(resolveSessionKeyForRun).toHaveBeenCalledTimes(12);
+  });
 
   it("projects successful widgets into live assistant snapshots without final text", async () => {
     const h = createHarness();
@@ -242,19 +244,6 @@ describe("agent event handler", () => {
   });
 
   registerBoundedWidgetSnapshotsTest({ createHarness, widgetResult, logWarnMock });
-
-  it("does not revive widgets from a hidden heartbeat turn", async () => {
-    const h = createHarness();
-    h.registerNamed("widgets");
-    registerAgentRunContext("run-widgets", { sessionKey: "session-widgets", isHeartbeat: true });
-    await h.emitMany("run-widgets", [
-      ["tool", { phase: "result", name: "show_widget", result: widgetResult("hidden") }],
-      ["assistant", { text: "" }],
-      ["lifecycle", { phase: "end", terminalReply: { disposition: "empty" } }],
-    ]);
-    expect(h.chat().at(-1)?.[1].message).toBeUndefined();
-    await h.handler.dispose();
-  });
 
   it("drops failed-attempt widgets before a runtime retry succeeds", async () => {
     vi.useFakeTimers();
@@ -1262,7 +1251,6 @@ describe("agent event handler", () => {
     registerAgentRunContext(runId, {
       sessionKey,
       isControlUiVisible: true,
-      isHeartbeat: false,
       verboseLevel: "full",
     });
     h.toolEventRecipients.add(runId, "conn-selected");
@@ -1458,36 +1446,6 @@ describe("agent event handler", () => {
     },
   );
 
-  it("suppresses heartbeat tool events for Control UI and verbose node subscribers", async () => {
-    const h = createHarness({
-      resolveSessionKeyForRun: () => "session-heartbeat",
-    });
-
-    registerAgentRunContext("run-heartbeat-tool", {
-      sessionKey: "session-heartbeat",
-      isHeartbeat: true,
-      verboseLevel: "on",
-    });
-    h.toolEventRecipients.add("run-heartbeat-tool", "conn-run");
-    h.sessionEventSubscribers.subscribe("conn-session");
-
-    await h.emit(
-      "run-heartbeat-tool",
-      "tool",
-      {
-        phase: "start",
-        name: "read",
-        toolCallId: "tool-heartbeat-1",
-        args: { path: "HEARTBEAT.md" },
-      },
-      { ts: 1_234 },
-    );
-
-    expect(h.broadcastToConnIds).not.toHaveBeenCalled();
-    const nodeToolCalls = h.nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
-    expect(nodeToolCalls).toHaveLength(0);
-  });
-
   it("broadcasts terminal session status to session subscribers on lifecycle end", async () => {
     const runId = "provider-run";
     const clientRunId = "client-run";
@@ -1592,80 +1550,7 @@ describe("agent event handler", () => {
     }
   });
 
-  it("suppresses late interrupted pre-restart lifecycle events from live projections", async () => {
-    mockSessionEntry(
-      {
-        sessionId: "session-recovery",
-        updatedAt: 2_000,
-        status: "interrupted",
-        abortedLastRun: true,
-        restartRecoveryRuns: [
-          {
-            runId: "interrupted-run",
-            lifecycleGeneration: "pre-restart",
-          },
-        ],
-      },
-      "session-recovery",
-    );
-    const h = createHarness({
-      resolveSessionKeyForRun: () => "session-recovery",
-      lifecycleErrorRetryGraceMs: 0,
-    });
-    h.sessionEventSubscribers.subscribe("conn-session");
-    h.register("interrupted-run", "session-recovery", "interrupted-run");
-
-    await h.emit(
-      "interrupted-run",
-      "lifecycle",
-      {
-        phase: "end",
-        aborted: true,
-        stopReason: "restart",
-        endedAt: 2_100,
-      },
-      {
-        seq: 2,
-        lifecycleGeneration: "pre-restart",
-        sessionKey: "session-recovery",
-        sessionId: "session-recovery",
-        ts: 2_100,
-      },
-    );
-
-    expect(h.chat()).toHaveLength(0);
-    expect(h.changes()).toHaveLength(0);
-    expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
-    expect(h.chatRunState.registry.peek("interrupted-run")).toBeUndefined();
-    expect(h.clearAgentRunContext).toHaveBeenCalledWith("interrupted-run");
-    expect(h.clearTrackedActiveRun).toHaveBeenCalledWith({
-      runId: "interrupted-run",
-      clientRunId: "interrupted-run",
-      sessionKey: "session-recovery",
-    });
-  });
-
-  it("broadcasts canonical state after concurrent recovery completions persist", async () => {
-    const restartRecoveryRuns = [
-      {
-        runId: "run-a",
-        lifecycleGeneration: "pre-restart-a",
-      },
-      {
-        runId: "run-b",
-        lifecycleGeneration: "pre-restart-b",
-      },
-    ];
-    mockSessionEntry(
-      {
-        sessionId: "session-recovery",
-        updatedAt: 2_000,
-        status: "interrupted",
-        abortedLastRun: true,
-        restartRecoveryRuns,
-      },
-      "session-recovery",
-    );
+  it("broadcasts canonical state after concurrent completions persist", async () => {
     let currentRow = {
       key: "session-recovery",
       kind: "direct" as const,
@@ -1844,15 +1729,6 @@ describe("agent event handler", () => {
       { ...oldEvent, ts: 2_000 },
     );
     expect(vi.getTimerCount()).toBe(1);
-    mockSessionEntry(
-      {
-        sessionId: sessionKey,
-        updatedAt: 2_000,
-        status: "interrupted",
-        restartRecoveryRuns: [{ runId, lifecycleGeneration: "pre-restart" }],
-      },
-      sessionKey,
-    );
     activeLifecycleGeneration = "post-restart";
     registerAgentRunContext(runId, { ...context, lifecycleGeneration: activeLifecycleGeneration });
     h.agentRunSeq.set(runId, 4);
@@ -2133,7 +2009,6 @@ describe("agent event handler", () => {
         h.chat().filter(([, event]) => ["final", "error", "aborted"].includes(event.state));
       h.register(runId, "session-provider-detail", runId);
       const state: AgentAttemptLifecycleState = {
-        currentTurnUserMessagePersisted: true,
         lifecycleFinishing: false,
         lifecycleEnded: false,
       };
@@ -2279,7 +2154,7 @@ describe("agent event handler", () => {
       const h = createHarness({
         resolveSessionKeyForRun: () => sessionKey,
         lifecycleErrorRetryGraceMs: 100,
-        isChatSendRunActive: (id) => id === runId,
+        delegateChatError: (id) => id === runId,
       });
       if (linked) {
         h.register(runId, sessionKey, runId);
@@ -2438,53 +2313,26 @@ describe("agent event handler", () => {
     }
   });
 
-  it.each(["recovery provenance", "owner claim"])(
-    "preserves %s in terminal persistence",
-    async (metadata) => {
-      const runId = "run-terminal-metadata";
-      const sessionKey = "session-terminal-metadata";
-      const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      const claimed = metadata === "owner claim";
-      const claimId = claimed
-        ? expectDefined(
-            claimAgentRunContext(runId, { sessionKey }, { exclusive: true, trackOwner: true }),
-            "terminal owner claim",
-          )
-        : undefined;
-      if (!claimed) {
-        registerAgentRunContext(runId, {
-          lifecycleGeneration,
-          mainSessionRestartRecovery: true,
-          sessionKey,
-        });
-      }
-      const h = createHarness({ resolveSessionKeyForRun: () => sessionKey });
-      let event: Parameters<typeof h.handler>[0] | undefined;
-      const stop = onAgentRuntimeEvent((received) => {
-        event = received;
-      });
-      const terminal = { runId, stream: "lifecycle", data: { phase: "end" } };
-      if (claimId) {
-        emitAgentEventForOwner(terminal, claimId);
-      } else {
-        emitRuntimeAgentEvent(terminal);
-      }
-      stop();
-      await h.handler(expectDefined(event, "terminal runtime event"));
-      expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: expect.objectContaining(
-            claimId
-              ? { contextClaimId: claimId }
-              : { lifecycleGeneration, mainSessionRestartRecovery: true, runId },
-          ),
-        }),
-      );
-      if (claimId) {
-        releaseAgentRunContext(runId, claimId);
-      }
-    },
-  );
+  it("preserves the owner claim in terminal persistence", async () => {
+    const runId = "run-terminal-metadata";
+    const sessionKey = "session-terminal-metadata";
+    const claimId = expectDefined(
+      claimAgentRunContext(runId, { sessionKey }, { exclusive: true, trackOwner: true }),
+      "terminal owner claim",
+    );
+    const h = createHarness({ resolveSessionKeyForRun: () => sessionKey });
+    let event: Parameters<typeof h.handler>[0] | undefined;
+    const stop = onAgentRuntimeEvent((received) => {
+      event = received;
+    });
+    emitAgentEventForOwner({ runId, stream: "lifecycle", data: { phase: "end" } }, claimId);
+    stop();
+    await h.handler(expectDefined(event, "terminal runtime event"));
+    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({ event: expect.objectContaining({ contextClaimId: claimId }) }),
+    );
+    releaseAgentRunContext(runId, claimId);
+  });
 
   it.each([
     ["assistant", { text: "owned reply", delta: "owned reply", phase: "commentary" }],

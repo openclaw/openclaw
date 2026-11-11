@@ -128,6 +128,7 @@ openclaw approvals set --gateway --file ./exec-approvals.json
 ```
 
 `set` accepts JSON5, not only strict JSON. Use either `--file` or `--stdin`, not both.
+Input must be valid UTF-8. Malformed bytes are rejected before replacing the saved policy.
 
 Host-native Windows nodes use their own policy shape:
 
@@ -295,7 +296,7 @@ controls. Check the updated preview and verify execution in a run.
 
 ### Synchronize local command approvals
 
-Presets (`yolo`, `cautious`, `deny-all`) apply `host`, `security`, `ask`, and `askFallback` together. `set` applies only the flags you pass; each accepted value is validated (`--host auto|sandbox|gateway|node`, `--security deny|allowlist|full`, `--ask off|on-miss|always`, `--ask-fallback deny|allowlist|full`).
+Presets (`yolo`, `cautious`, `deny-all`) apply `host`, `security`, `ask`, and `askFallback` together. `set` applies only the flags you pass and preserves `tools.exec.mode=auto` when the resulting security/ask policy is unchanged; each accepted value is validated (`--host auto|sandbox|gateway|node`, `--security deny|allowlist|full`, `--ask off|on-miss|always`, `--ask-fallback deny|allowlist|full`).
 
 These commands retain their local config/policy synchronization owner. The
 automatic owner routing of `openclaw approvals` does not apply to `exec-policy`.

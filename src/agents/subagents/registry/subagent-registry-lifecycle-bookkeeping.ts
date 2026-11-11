@@ -122,7 +122,7 @@ export async function completeCleanupBookkeeping(
     }
   };
   if (cleanupParams.provisionalKill) {
-    // The provider result or bounded kill reconciliation owns terminal settle.
+    // The provider result or the kill's confirmation owns terminal settle.
     // Its kill marker was committed by the caller before reaching this tail.
     scheduleCleanupTails({ allowRetiredRow: false, isDeleteCleanup: false });
     return;
@@ -151,20 +151,24 @@ export async function completeCleanupBookkeeping(
     retire: () => retireImmediately,
     mutate: (draft, current) => {
       const suppressSessionEffects = !context.sessionEffectsHostCurrent(current);
-      // Cron reads settled child rows directly; delete rows retire through the archive sweep.
+      cleanupParams.finalizeDelivery?.(draft);
+      // Cron reads settled rows until archive; expired discards have no remaining reader.
       retireAfterSettle =
         !draft.collect &&
-        ((isDeleteCleanup && !isCronRunSessionKey(draft.requesterSessionKey)) ||
+        ((isDeleteCleanup &&
+          (!isCronRunSessionKey(draft.requesterSessionKey) ||
+            (draft.delivery?.status === "discarded" &&
+              draft.delivery.discardReason === "expired"))) ||
           (draft.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
             draft.suppressAnnounceReason !== "killed"));
-      retireImmediately = retireAfterSettle && cleanupParams.skipRequesterSettleWake === true;
-      cleanupParams.finalizeDelivery?.(draft);
+      retireImmediately =
+        retireAfterSettle &&
+        cleanupParams.skipRequesterSettleWake === true &&
+        cleanupParams.retainForCleanup !== true;
       if (!retireImmediately) {
         draft.cleanupCompletedAt = cleanupParams.completedAt;
         if (suppressSessionEffects) {
-          draft.execution.restartRecovery = undefined;
           draft.execution.suppressSessionEffects = true;
-          draft.terminalOwner = undefined;
         }
         if (draft.collect) {
           draft.requesterSettleWake = undefined;
@@ -189,8 +193,7 @@ export async function completeCleanupBookkeeping(
   scheduleCleanupTails({ allowRetiredRow: retireAfterSettle, isDeleteCleanup });
   assertPublishedOwner();
   if (!entry.collect && !cleanupParams.skipRequesterSettleWake) {
-    assertPublishedOwner();
-    scheduleRequesterSettleWake(context, entry.runId, entry, stateContext, true);
+    scheduleRequesterSettleWake(context, entry.runId, entry, stateContext);
   }
   context.resumeAncestorCleanup(entry);
 }

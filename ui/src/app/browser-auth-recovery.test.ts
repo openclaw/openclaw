@@ -148,6 +148,36 @@ describe("browser sign-in recovery", () => {
     },
   );
 
+  it("keeps sign-in controls mounted while a follow-up probe is pending", async () => {
+    const probe = createDeferred<Response>();
+    let probes = 0;
+    mockFailedRead(() => (++probes <= 2 ? redirectResponse() : probe.promise));
+    vi.spyOn(window, "open").mockReturnValue(null);
+    await failedRead();
+    await finishRenewal();
+    const { dialog } = await getRenderedModalDialog(document.body);
+    await waitForSolid(() => expect(dialog.querySelector('[role="status"]')?.textContent).toBe(""));
+    const signIn = button("Sign in");
+    signIn.click();
+    const checkAgain = button("Check again");
+    checkAgain.click();
+    await waitForSolid(() => {
+      expect(checkAgain.disabled).toBe(true);
+      expect(dialog.querySelector('[role="status"]')?.textContent).toBe("Checking access…");
+      expect(button("Sign in")).toBe(signIn);
+    });
+    probe.resolve(redirectResponse());
+    await waitForSolid(() => {
+      expect(checkAgain.disabled).toBe(false);
+      expect(dialog.querySelector('[role="status"]')?.textContent).toContain(
+        "Sign-in is still required",
+      );
+      expect(button("Sign in")).toBe(signIn);
+    });
+    expect(probes).toBe(3);
+    expect(restored).not.toHaveBeenCalled();
+  });
+
   it.each(["offline", "gateway-auth"])(
     "does not turn %s into a sign-in dialog",
     async (failure) => {

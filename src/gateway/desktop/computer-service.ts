@@ -166,8 +166,7 @@ export function createGatewayComputerService(options: {
     runtime.idleTimer = setTimeout(
       () => retireInBackground(runtime),
       runtime.execution ? 300_000 : 60_000,
-    );
-    runtime.idleTimer.unref?.();
+    ).unref();
   };
   const assertAvailable = () => {
     if (stopped || paused) {

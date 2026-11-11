@@ -4,14 +4,17 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { commitGitHubPublicationBookkeeping } from "../state/github-publication-bookkeeping.worker.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
 import type { PersonalPublicationSelector } from "../state/github-publication-worker.types.js";
+import type { PublicationWorkerOperations } from "../state/github-publication.worker-contract.js";
 import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolvePersonalGitHubOwnerInDatabase } from "../state/user-github-connections.kernel.js";
+import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import { personalGitHubRequestDigest } from "./github-personal-publication-store.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 
@@ -126,13 +129,8 @@ export function writePersonalGitHubPublicationInDatabase(
   instanceId: string,
   executionId: string,
   values: Partial<PersonalGitHubPublicationRow>,
-  requireAction: boolean,
-  assertCurrent: () => void,
 ): PersonalGitHubPublicationRow {
   const { db } = database;
-  if (requireAction) {
-    assertCurrent();
-  }
   const updated = executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -227,3 +225,18 @@ export function markPersonalGitHubPublicationReportedInDatabase(
   }
   return row;
 }
+
+export const personalPublicationRestartOperations = {
+  "githubPublications.personalRestart": (
+    input: PublicationWorkerOperations["githubPublications.personalRestart"]["input"],
+    { open },
+  ) => {
+    const database = open();
+    return commitGitHubPublicationBookkeeping(database, input.operation, () => ({
+      operationId: input.operationId,
+      operation: input.operation,
+      kind: "personal",
+      rows: requirePersonalGitHubPublicationConfirmationInDatabase(database, input.instanceId),
+    }));
+  },
+} satisfies WorkerOperationHandlers;

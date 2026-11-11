@@ -13,28 +13,6 @@ export function resolveNativeVitestReportPath(
   return path.join(outputDir, `${scenario.id}.vitest-report.json`);
 }
 
-async function canonicalizeNativeTestFilePath(params: {
-  canonicalRepoRoot: string;
-  repoRoot: string;
-  testPath: string;
-}) {
-  const absoluteTestPath = path.resolve(params.repoRoot, params.testPath);
-  const canonicalTestPath = await fs.realpath(absoluteTestPath).catch(() => undefined);
-  if (canonicalTestPath) {
-    return canonicalTestPath;
-  }
-
-  const repoRelativePath = path.relative(params.repoRoot, absoluteTestPath);
-  if (
-    repoRelativePath !== ".." &&
-    !repoRelativePath.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(repoRelativePath)
-  ) {
-    return path.resolve(params.canonicalRepoRoot, repoRelativePath);
-  }
-  return absoluteTestPath;
-}
-
 export async function readNativeVitestExecutionFailure(params: {
   outputDir: string;
   repoRoot: string;
@@ -76,11 +54,17 @@ export async function readNativeVitestExecutionFailure(params: {
         if (!result || typeof result.name !== "string") {
           return undefined;
         }
-        const reportedTestPath = await canonicalizeNativeTestFilePath({
-          canonicalRepoRoot,
-          repoRoot: params.repoRoot,
-          testPath: result.name,
-        });
+        const absoluteTestPath = path.resolve(params.repoRoot, result.name);
+        let reportedTestPath = await fs.realpath(absoluteTestPath).catch(() => undefined);
+        if (!reportedTestPath) {
+          const repoRelativePath = path.relative(params.repoRoot, absoluteTestPath);
+          reportedTestPath =
+            repoRelativePath !== ".." &&
+            !repoRelativePath.startsWith(`..${path.sep}`) &&
+            !path.isAbsolute(repoRelativePath)
+              ? path.resolve(canonicalRepoRoot, repoRelativePath)
+              : absoluteTestPath;
+        }
         return reportedTestPath === expectedTestPath ? result : undefined;
       }),
     )

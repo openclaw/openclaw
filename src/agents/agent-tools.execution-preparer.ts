@@ -1,6 +1,6 @@
+import type { InternalToolExecutionPreparer } from "../../packages/agent-core/src/internal-hooks.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import type { InternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 
 const INTERNAL_EXECUTION_CONTROL = Symbol("openclawInternalExecutionControl");
 

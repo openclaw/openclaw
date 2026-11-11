@@ -73,8 +73,10 @@ type CodexSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
  */
 export async function startCodexAttemptThread(params: {
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
   authority?: CodexBindingAuthority;
   attemptClientFactory: CodexAppServerClientFactory;
+  callerOwnedAttemptClient?: boolean;
   bindingStore: CodexAppServerBindingStore;
   runtime?: PluginRuntime;
   appServer: CodexAppServerRuntimeOptions;
@@ -98,9 +100,11 @@ export async function startCodexAttemptThread(params: {
   effectiveWorkspace: string;
   effectiveCwd: string;
   dynamicTools: CodexDynamicToolSpec[];
+  askUserAvailable?: boolean;
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed: boolean;
   developerInstructions: string | undefined;
+  systemPromptReplaced?: boolean;
   refreshableInstructions?: string;
   agentWorkspaceDeveloperInstructions?: string;
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
@@ -262,7 +266,10 @@ export async function startCodexAttemptThread(params: {
                 return;
               }
               startupClientLeaseReleased = true;
-              if (params.attemptClientFactory === createIsolatedCodexAppServerClient) {
+              if (
+                params.callerOwnedAttemptClient ||
+                params.attemptClientFactory === createIsolatedCodexAppServerClient
+              ) {
                 activeStartupClient.close();
               } else {
                 releaseLeasedSharedCodexAppServerClient(activeStartupClient);
@@ -360,6 +367,7 @@ export async function startCodexAttemptThread(params: {
                 sandbox: params.sandbox,
                 nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
                 sandboxExecServerEnabled: params.sandboxExecServerEnabled,
+                pluginConfig: params.pluginConfig,
               });
               enterStartupStage("sandbox-environment");
               startupSandboxEnvironment = sandboxEnvironmentRequired
@@ -439,6 +447,7 @@ export async function startCodexAttemptThread(params: {
                 reserveResumeThread,
                 bindingStore: params.bindingStore,
                 assertCurrent: params.assertCurrent,
+                assertCurrentAsync: params.assertCurrentAsync,
                 authority: params.authority,
                 params: params.buildAttemptParams(),
                 runtimeModelId: params.runtimeModelId,
@@ -446,10 +455,12 @@ export async function startCodexAttemptThread(params: {
                 agentDir: params.agentDir,
                 cwd: startupExecutionCwd,
                 dynamicTools: params.dynamicTools,
+                askUserAvailable: params.askUserAvailable,
                 persistentWebSearchAllowed: params.persistentWebSearchAllowed,
                 webSearchAllowed: params.webSearchAllowed,
                 appServer: pluginAppServer,
                 developerInstructions: params.developerInstructions,
+                systemPromptReplaced: params.systemPromptReplaced,
                 refreshableInstructions: params.refreshableInstructions,
                 agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
                 config: threadConfig,

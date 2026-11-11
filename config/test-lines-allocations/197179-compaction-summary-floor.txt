@@ -1,0 +1,2 @@
+# Exact net test-line growth from PR #197179: the successful-summary compaction floor regressions (core and hook paths, floor replacement across compactions, summary cap kept separate).
+120

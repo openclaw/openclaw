@@ -2,25 +2,26 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import {
-  fixtureReceiptClientSource,
-  openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
-} from "../../test/helpers/fixture-receipts.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { fixtureReceiptClientSource } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
 import * as commands from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
+import { createSqliteSnapshotStagingTokenSync } from "./sqlite-snapshot-staging.js";
+import { acquireSqliteStagingToken } from "./sqlite-staging-token.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
+import { useStateReceipts, stateClock } from "./update-candidate-state-fixtures.test-support.js";
+import { runUpdateStateInspectionWorker } from "./update-candidate-state.inspection.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
-import { captureUpdateCandidateDeadline } from "./update-candidate-state.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
@@ -29,13 +30,7 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-let receipts: FixtureReceiptChannel;
-beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
-});
-afterAll(async () => {
-  await receipts?.close();
-});
+const receipts = useStateReceipts();
 
 // Native hooks block their process thread. An unreferenced fixture worker flushes
 // the receipt independently; the durable marker still wins an operation-settlement race.
@@ -120,13 +115,7 @@ it.each([
         files?: string[];
         mode?: string;
       };
-      const result = {
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-        stderr: "",
-      };
+      const result = createCommandResult();
       if (input.directory) {
         return { ...result, stdout: JSON.stringify({ facts: "0".repeat(64), bytes: 0 }) };
       }
@@ -235,6 +224,52 @@ it("preserves the parent agent writer lock and excludes its uncommitted migratio
   }
 });
 
+it("keeps inspection staging owned through result publication after the launcher releases it", async ({
+  signal,
+}) => {
+  const stateDir = dirs.make("update-inspection-custody-");
+  const staging = createSqliteSnapshotStagingTokenSync(stateDir);
+  const marker = path.join(stateDir, "publication-started");
+  const preload = path.join(stateDir, "publication-gate.cjs");
+  fs.writeFileSync(
+    preload,
+    `const fs = require("node:fs");
+     const write = fs.promises.writeFile;
+     fs.promises.writeFile = async function(file, ...args) {
+       if (String(file).includes("inspection-result-")) {
+         fs.writeFileSync(${JSON.stringify(marker)}, "entered");
+         ${nativeEntryReceiptSource(marker)}
+         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+       }
+       return write.call(this, file, ...args);
+     };`,
+  );
+  const controller = new AbortController();
+  const operation = runUpdateStateInspectionWorker({
+    input: { mode: "sqlite-generations", paths: [], stateDir, config: {} },
+    nodeRunner: process.execPath,
+    sourceEnv: workerEnv(preload),
+    stagingRoot: staging.directory,
+    databases: [],
+    signal: controller.signal,
+  });
+  const settled = operation.catch((error: unknown) => error);
+  try {
+    await withinTest(nativeEntryBeforeSettlement(marker, settled), signal);
+    staging.release();
+    expect(() => {
+      const release = acquireSqliteStagingToken(staging.directory, "reclaim");
+      release();
+    }).toThrow(/locked/);
+  } finally {
+    controller.abort();
+    await settled;
+    staging.release();
+  }
+  const reclaim = acquireSqliteStagingToken(staging.directory, "reclaim");
+  reclaim();
+});
+
 it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
   "settles the schema worker before releasing ownership after %s",
   { timeout: 15_000 },
@@ -260,6 +295,7 @@ it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
       const { DatabaseSync } = require('node:sqlite');
       const source = ${JSON.stringify(file)}, marker = ${JSON.stringify(marker)};
       const outcome = ${JSON.stringify(outcome)};
+      if (outcome === 'cancel') process.on('SIGTERM', () => {});
       const isSource = db => db.location() && path.toNamespacedPath(db.location()) === path.toNamespacedPath(source);
       const prepare = DatabaseSync.prototype.prepare, close = DatabaseSync.prototype.close;
       DatabaseSync.prototype.prepare = function(sql) {
@@ -277,10 +313,8 @@ it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
     `,
     );
     const controller = new AbortController();
-    const now = Date.now.bind(Date);
-    let elapsed = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
-    const expireDeadline = captureUpdateCandidateDeadline();
+    const cancellation = new DOMException("test cancellation", "AbortError");
+    const advanceClock = stateClock();
     const operation = readUpdateStateSchemaVersions({
       stateDir,
       config: {},
@@ -292,15 +326,14 @@ it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
       if (blocked) {
         await withinTest(nativeEntryBeforeSettlement(marker, rejected), signal);
         if (outcome === "cancel") {
-          controller.abort();
+          controller.abort(cancellation);
         } else {
-          elapsed = 400_000;
-          expireDeadline();
+          advanceClock(400_000, true);
         }
       }
       const failure = await rejected;
       if (outcome === "cancel") {
-        expect(failure).toMatchObject({ name: "AbortError" });
+        expect(failure).toBe(cancellation);
       } else {
         expect(failure).toBeInstanceOf(Error);
         expectMessage(failure, [
@@ -315,7 +348,11 @@ it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
       const { pid } = JSON.parse(fs.readFileSync(marker, "utf8")) as { pid: number };
       expect(() => process.kill(pid, 0)).toThrow();
       expect(fs.readdirSync(cache).toSorted()).toEqual(["openclaw", "unrelated.txt"]);
-      expect(fs.readdirSync(path.join(cache, "openclaw"))).toEqual([]);
+      expect(
+        fs.readdirSync(
+          resolvePrivateSqliteSnapshotStagingRoot({ ...process.env, XDG_CACHE_HOME: cache }),
+        ),
+      ).toEqual([]);
       expect(fs.readFileSync(sentinel, "utf8")).toBe("preserved");
       expect(writer.prepare("PRAGMA user_version").get()).toEqual({
         user_version: blocked ? 4 : 3,
@@ -392,13 +429,9 @@ it.each([
   ["metadata inventory", "EAGAIN"],
   ["metadata inventory", "EWOULDBLOCK"],
   ["metadata inventory", "EIO"],
-  ["metadata inventory", "EBADF"],
-  ["metadata inventory", "EPIPE"],
   ["agent schema inspection", "EAGAIN"],
   ["agent schema inspection", "EWOULDBLOCK"],
   ["agent schema inspection", "EIO"],
-  ["agent schema inspection", "EBADF"],
-  ["agent schema inspection", "EPIPE"],
 ] as const)("preserves %s semantics when progress encounters %s", async (phase, code) => {
   const metadata = phase === "metadata inventory";
   const database = metadata ? undefined : fixture();

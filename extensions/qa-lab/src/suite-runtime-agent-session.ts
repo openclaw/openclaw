@@ -17,6 +17,8 @@ import {
   extractGatewayMessageText,
 } from "./gateway-log-sentinel.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
+import { readQaAssistantToolCalls } from "./runtime-transcript.js";
+import { findSubagentHandoffReply } from "./subagent-handoff-reply.js";
 import type { QaSkillStatusEntry, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import { projectQaToolActivity, readQaNestedToolActivity } from "./tool-activity.js";
 
@@ -25,13 +27,19 @@ type QaGatewayCallEnv = Pick<
   "gateway" | "primaryModel" | "alternateModel" | "providerMode"
 >;
 
+type QaSessionTranscriptSeedMessage =
+  | {
+      role: "assistant" | "user";
+      text: string;
+      timestamp: number;
+      // Assistant tool calls let seeds carry paired tool results for compaction flows.
+      toolCalls?: readonly { id: string; name: string }[];
+    }
+  | { role: "toolResult"; toolCallId: string; toolName: string; text: string; timestamp: number };
+
 type QaSessionTranscriptSeedParams = {
   label?: string;
-  messages: readonly {
-    role: "assistant" | "user";
-    text: string;
-    timestamp: number;
-  }[];
+  messages: readonly QaSessionTranscriptSeedMessage[];
   sessionId: string;
   sessionKey: string;
   updatedAt: number;
@@ -64,35 +72,6 @@ function readSessionTranscriptEventMessage(event: unknown) {
   return isRecord(event) && isRecord(event.message) ? event.message : undefined;
 }
 
-function readAssistantToolCalls(message: Record<string, unknown>): Array<{
-  arguments?: unknown;
-  id?: string;
-  name: string;
-}> {
-  if (!Array.isArray(message.content)) {
-    return [];
-  }
-  return message.content.flatMap((block) => {
-    if (!isRecord(block)) {
-      return [];
-    }
-    const type = readNonEmptyString(block.type);
-    if (type !== "toolCall" && type !== "toolUse" && type !== "tool_use") {
-      return [];
-    }
-    const name = readNonEmptyString(block.name);
-    return name
-      ? [
-          {
-            arguments: block.arguments ?? block.input,
-            id: readNonEmptyString(block.id),
-            name,
-          },
-        ]
-      : [];
-  });
-}
-
 function readWaitingCodeModeRunId(message: Record<string, unknown>) {
   const details = isRecord(message.details) ? message.details : undefined;
   return details?.status === "waiting" ? readNonEmptyString(details.runId) : undefined;
@@ -121,8 +100,6 @@ function summarizeSessionTranscriptEvents(
   let lastAssistantContentTypes: string[] = [];
   let lastAssistantErrorMessage: string | undefined;
   let lastAssistantStopReason: string | undefined;
-  let lastAssistantToolNames: string[] = [];
-  let lastMessageRole: string | undefined;
   let userMessageCount = 0;
 
   for (const event of events) {
@@ -140,7 +117,6 @@ function summarizeSessionTranscriptEvents(
     if (!message) {
       continue;
     }
-    lastMessageRole = readNonEmptyString(message.role);
     if (message.role === "user") {
       userMessageCount += 1;
       continue;
@@ -191,9 +167,7 @@ function summarizeSessionTranscriptEvents(
       : [];
     lastAssistantErrorMessage = readNonEmptyString(message.errorMessage);
     lastAssistantStopReason = readNonEmptyString(message.stopReason);
-    const assistantToolCalls = readAssistantToolCalls(message);
-    lastAssistantToolNames = assistantToolCalls.map((toolCall) => toolCall.name);
-    for (const toolCall of assistantToolCalls) {
+    for (const toolCall of readQaAssistantToolCalls(message, readNonEmptyString)) {
       if (toolCall.id) {
         if (
           pendingCodeModeExecNeedle &&
@@ -272,8 +246,6 @@ function summarizeSessionTranscriptEvents(
     ...(lastAssistantContentTypes.length > 0 ? { lastAssistantContentTypes } : {}),
     ...(lastAssistantErrorMessage ? { lastAssistantErrorMessage } : {}),
     ...(lastAssistantStopReason ? { lastAssistantStopReason } : {}),
-    ...(lastAssistantToolNames.length > 0 ? { lastAssistantToolNames } : {}),
-    ...(lastMessageRole ? { lastMessageRole } : {}),
   };
 }
 
@@ -357,6 +329,33 @@ async function seedQaSessionEntries(
   }
 }
 
+function buildSeedTranscriptMessage(seed: QaSessionTranscriptSeedMessage) {
+  if (seed.role === "toolResult") {
+    return {
+      role: seed.role,
+      toolCallId: seed.toolCallId,
+      toolName: seed.toolName,
+      isError: false,
+      timestamp: seed.timestamp,
+      content: [{ type: "text" as const, text: seed.text }],
+    };
+  }
+  const toolCalls = seed.role === "assistant" ? (seed.toolCalls ?? []) : [];
+  return {
+    role: seed.role,
+    timestamp: seed.timestamp,
+    content: [
+      ...(seed.text ? [{ type: "text" as const, text: seed.text }] : []),
+      ...toolCalls.map((call) => ({
+        type: "toolCall" as const,
+        id: call.id,
+        name: call.name,
+        arguments: {},
+      })),
+    ],
+  };
+}
+
 async function seedQaSessionTranscript(
   env: Pick<QaSuiteRuntimeEnv, "gateway">,
   params: QaSessionTranscriptSeedParams,
@@ -396,11 +395,7 @@ async function seedQaSessionTranscript(
       sessionKey,
       storePath,
       now: seed.timestamp,
-      message: {
-        role: seed.role,
-        timestamp: seed.timestamp,
-        content: [{ type: "text", text: seed.text }],
-      },
+      message: buildSeedTranscriptMessage(seed),
     });
     if (!appended?.appended) {
       throw new Error(`failed to seed QA session transcript for ${sessionKey}`);
@@ -472,6 +467,19 @@ async function readSessionToolActivity(
   return projectQaToolActivity(selectedEvents);
 }
 
+async function readSubagentHandoffReply(
+  env: Parameters<typeof readQaSessionTranscriptEvents>[0],
+  requesterSessionKey: string,
+  childSessionKey: string,
+  childReply: string,
+  visibleMessages: readonly unknown[],
+) {
+  return findSubagentHandoffReply(visibleMessages, childSessionKey, childReply, async () => {
+    const { events } = await readQaSessionTranscriptEvents(env, requesterSessionKey);
+    return events;
+  });
+}
+
 async function readSessionTranscriptSummary(
   env: Pick<QaSuiteRuntimeEnv, "gateway">,
   sessionKey: string,
@@ -520,9 +528,11 @@ async function readSessionTranscriptSummary(
 export {
   createSession,
   readEffectiveTools,
+  readQaSessionTranscriptEvents,
   readRawQaSessionStore,
   readSessionTranscriptSummary,
   readSessionToolActivity,
+  readSubagentHandoffReply,
   readSkillStatus,
   seedQaSessionEntries,
   seedQaSessionTranscript,

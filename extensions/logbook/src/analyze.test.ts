@@ -1,5 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
   parseCardsJson,
   parseObservationSegments,
@@ -9,17 +8,20 @@ import {
 } from "./analyze.js";
 
 const DAY = "2026-07-03";
-const dayMs = (clock: string) => {
-  const ms = new Date(`${DAY}T${clock}`).getTime();
-  if (!Number.isFinite(ms)) {
-    throw new Error(`bad clock ${clock}`);
-  }
-  return ms;
-};
+const dayMs = (clock: string) => new Date(`${DAY}T${clock}`).getTime();
+const content = { title: "t", summary: "s", detail: "", category: "coding", distractions: [] };
+function expectError(
+  result: ReturnType<typeof parseCardsJson> | ReturnType<typeof validateCardCoverage>,
+  message: string,
+) {
+  expect(result).toMatchObject({ ok: false, error: expect.stringContaining(message) });
+}
 
 describe("parseObservationSegments", () => {
   const startMs = dayMs("10:00:00");
   const endMs = dayMs("10:15:00");
+  const parse = (raw: string, window = { startMs, endMs }, day = DAY) =>
+    parseObservationSegments({ raw, day, ...window });
 
   it("parses and clamps segments into the batch window", () => {
     const raw = JSON.stringify({
@@ -28,35 +30,22 @@ describe("parseObservationSegments", () => {
         { start: "10:05:00", end: "10:20:00", description: "Chrome: reviewing PR #99" },
       ],
     });
-    const segments = parseObservationSegments({ raw, day: DAY, startMs, endMs });
-    expect(segments).toHaveLength(2);
-    expect(expectDefined(segments[0], "first observation segment").startMs).toBe(startMs);
-    expect(expectDefined(segments[1], "second observation segment").endMs).toBe(endMs);
+    expect(parse(raw)).toEqual([
+      expect.objectContaining({ startMs }),
+      expect.objectContaining({ endMs }),
+    ]);
   });
 
   it("returns empty on unparseable output", () => {
-    expect(parseObservationSegments({ raw: "no json here", day: DAY, startMs, endMs })).toEqual([]);
+    expect(parse("no json here")).toEqual([]);
   });
 
   it("parses 12h clocks from fenced model output", () => {
-    const raw = [
-      "Here you go:",
-      "```json",
-      JSON.stringify({
-        segments: [{ start: "1:05 pm", end: "1:05:30 pm", description: "Reviewing the timeline" }],
-      }),
-      "```",
-      "Hope that helps!",
-    ].join("\n");
-    const segments = parseObservationSegments({
-      raw,
-      day: DAY,
-      startMs: dayMs("13:00:00"),
-      endMs: dayMs("13:10:00"),
-    });
-    expect(segments).toHaveLength(1);
-    const segment = expectDefined(segments[0], "12h observation segment");
-    expect(segment.endMs - segment.startMs).toBe(30_000);
+    const raw =
+      'Here you go:\n```json\n{"segments":[{"start":"1:05 pm","end":"1:05:30 pm","description":"Reviewing the timeline"}]}\n```\nHope that helps!';
+    expect(parse(raw, { startMs: dayMs("13:00:00"), endMs: dayMs("13:10:00") })).toEqual([
+      expect.objectContaining({ startMs: dayMs("13:05:00"), endMs: dayMs("13:05:30") }),
+    ]);
   });
 
   it.each([
@@ -65,7 +54,7 @@ describe("parseObservationSegments", () => {
     ["not-a-day", "10:00:00"],
   ])("rejects malformed clock %s %s", (day, clock) => {
     const raw = JSON.stringify([{ start: clock, end: "13:06:00", description: "Invalid clock" }]);
-    expect(parseObservationSegments({ raw, day, startMs, endMs })).toEqual([]);
+    expect(parse(raw, undefined, day)).toEqual([]);
   });
 });
 
@@ -73,154 +62,99 @@ describe("parseCardsJson", () => {
   const card = (overrides: Record<string, unknown> = {}) => ({
     startTime: "10:00:00",
     endTime: "10:30:00",
-    category: "coding",
-    title: "Working on logbook store",
-    summary: "Implemented SQLite store",
+    ...content,
     detailedSummary: "Added frames and cards tables.",
-    distractions: [],
     appSites: { primary: "github.com" },
     ...overrides,
   });
-  const parse = (raw: string) => parseCardsJson({ raw, day: DAY });
+  const parse = (...cards: ReturnType<typeof card>[]) =>
+    parseCardsJson({ raw: JSON.stringify(cards), day: DAY });
+  const overlap = (firstEnd: string, secondEnd = "11:00:00") =>
+    parse(card({ endTime: firstEnd }), card({ startTime: "10:30:00", endTime: secondEnd }));
 
   it("maps unknown categories to other", () => {
-    expect(parse(JSON.stringify([card({ category: "quantum-vibes" })]))).toMatchObject({
+    expect(parse(card({ category: "quantum-vibes" }))).toMatchObject({
       ok: true,
       drafts: [{ category: "other" }],
     });
   });
 
-  it("trims sub-minute overlaps and rejects large ones", () => {
-    const trimmed = parse(
-      JSON.stringify([
-        card({ startTime: "10:00:00", endTime: "10:30:30" }),
-        card({ startTime: "10:30:00", endTime: "11:00:00", title: "Second" }),
-      ]),
-    );
-    expect(trimmed.ok).toBe(true);
-    if (trimmed.ok) {
-      const first = expectDefined(trimmed.drafts[0], "first overlap-trimmed draft");
-      const second = expectDefined(trimmed.drafts[1], "second overlap-trimmed draft");
-      expect(second.startMs).toBe(first.endMs);
-    }
-
-    const rejected = parse(
-      JSON.stringify([
-        card({ startTime: "10:00:00", endTime: "10:45:00" }),
-        card({ startTime: "10:30:00", endTime: "11:00:00", title: "Second" }),
-      ]),
-    );
-    expect(rejected).toMatchObject({ ok: false, error: expect.stringContaining("overlap") });
+  it("trims sub-minute overlaps", () => {
+    expect(overlap("10:30:30")).toMatchObject({
+      ok: true,
+      drafts: [{ endMs: dayMs("10:30:30") }, { startMs: dayMs("10:30:30") }],
+    });
   });
 
-  it.each(["10:30:30"])(
-    "rejects an overlap that would leave no duration for a card ending at %s",
-    (endTime) => {
-      const result = parse(
-        JSON.stringify([
-          card({ startTime: "10:00:00", endTime: "10:30:30" }),
-          card({ startTime: "10:30:00", endTime, title: "Second" }),
-        ]),
-      );
-      expect(result).toMatchObject({ ok: false, error: expect.stringContaining("endTime") });
-    },
+  it.each([
+    [() => overlap("10:45:00"), "overlap"],
+    [() => overlap("10:30:30", "10:30:30"), "endTime"],
+    [() => parse(card({ startTime: "13:05 pm" })), "startTime"],
+  ] as const)("reports actionable card errors: %s", (parseInvalid, error) => {
+    expectError(parseInvalid(), error);
+  });
+
+  it("orders model cards before validating revision coverage", () => {
+    const result = parse(card({ startTime: "10:30:00", endTime: "11:00:00" }), card());
+    assert(result.ok);
+    expect(coverage(result.drafts)).toEqual({ ok: true });
+  });
+});
+
+function select(offsets: number[], now: number, force = false, t0 = dayMs("10:00:00")) {
+  return selectBatchFrames({
+    frames: offsets.map((seconds, i) => ({ id: i + 1, capturedAtMs: t0 + seconds * 1000 })),
+    windowMs: 900_000,
+    nowMs: t0 + now,
+    force,
+  });
+}
+type SelectionCase = [string, number[], number, boolean, number[] | null, number, number?];
+it.each<SelectionCase>([
+  ["elapsed boundary", [0, 30, 60, 900], 901_000, false, [1, 2, 3], 900_000],
+  ["capture gap", [0, 30, 400], 60_000, false, [1, 2], 30_001],
+  ["pending window", [0, 30], 60_000, false, null, 0],
+  ["forced window", [0, 30], 60_000, true, [1, 2], 30_001],
+  ...["2026-07-03", "2026-03-08", "2026-11-01"].map((day): SelectionCase => [
+    `midnight ${day}`,
+    [0, 30, 60],
+    60_000,
+    false,
+    [1, 2],
+    30_001,
+    new Date(`${day}T23:59:00`).getTime(),
+  ]),
+])("selectBatchFrames: %s", (_name, offsets, now, force, ids, end, t0 = dayMs("10:00:00")) => {
+  expect(select(offsets, now, force, t0)).toEqual(
+    ids ? { frameIds: ids, startMs: t0, endMs: t0 + end } : null,
   );
-
-  it("reports actionable errors for the correction round-trip", () => {
-    expect(parse(JSON.stringify([card({ startTime: "13:05 pm" })]))).toMatchObject({
-      ok: false,
-      error: expect.stringContaining("startTime"),
-    });
-  });
 });
 
-describe("selectBatchFrames", () => {
-  const windowMs = 15 * 60_000;
-  const t0 = dayMs("10:00:00");
-  const frame = (id: number, offsetSec: number) => ({ id, capturedAtMs: t0 + offsetSec * 1000 });
-
-  it("keeps the boundary when the next frame starts the following window", () => {
-    const frames = [frame(1, 0), frame(2, 30), frame(3, 60), frame(4, 15 * 60)];
-    const selection = selectBatchFrames({ frames, windowMs, nowMs: t0 + windowMs + 1000 });
-    expect(selection?.frameIds).toEqual([1, 2, 3]);
-    expect(selection?.endMs).toBe(t0 + windowMs);
-  });
-
-  it("splits on capture gaps without claiming the idle span", () => {
-    const frames = [frame(1, 0), frame(2, 30), frame(3, 400)];
-    const selection = selectBatchFrames({ frames, windowMs, nowMs: t0 + 60_000 });
-    expect(selection?.frameIds).toEqual([1, 2]);
-    expect(selection?.endMs).toBe(t0 + 30_000 + 1);
-  });
-
-  it("force-closes an in-progress window at the last observed frame", () => {
-    const frames = [frame(1, 0), frame(2, 30)];
-    expect(selectBatchFrames({ frames, windowMs, nowMs: t0 + 60_000 })).toBeNull();
-    const forced = selectBatchFrames({ frames, windowMs, nowMs: t0 + 60_000, force: true });
-    expect(forced?.frameIds).toEqual([1, 2]);
-    expect(forced?.endMs).toBe(t0 + 30_000 + 1);
-  });
+type Span = [number, number];
+const span = ([start, end]: Span) => ({
+  startMs: dayMs("10:00:00") + start * 60_000,
+  endMs: dayMs("10:00:00") + end * 60_000,
+});
+const coverageWindow = { windowStartMs: dayMs("10:00:00"), windowEndMs: dayMs("11:00:00") };
+type Intervals = ReturnType<typeof span>[];
+const coverage = (drafts: Intervals, requiredSpans = [span([0, 60])]) =>
+  validateCardCoverage({ drafts, requiredSpans, ...coverageWindow });
+it.each<[Intervals, Intervals, string | null]>([
+  [[span([30, 60])], [span([0, 30]), span([30, 60])], "not covered"],
+  [[span([-60, 60])], [span([0, 60])], "outside the revision window"],
+  [[span([0, 29]), span([30.5, 60])], [span([0, 60])], null],
+])("validates card coverage: %j over %j", (drafts, required, error) => {
+  expect(coverage(drafts, required)).toMatchObject(
+    error ? { ok: false, error: expect.stringContaining(error) } : { ok: true },
+  );
 });
 
-describe("validateCardCoverage", () => {
-  const window = { windowStartMs: dayMs("10:00:00"), windowEndMs: dayMs("11:00:00") };
-  const span = (start: string, end: string) => ({ startMs: dayMs(start), endMs: dayMs(end) });
-
-  it("rejects partial outputs that would erase previous cards", () => {
-    // Model returned only the new batch span, dropping the 10:00-10:30 card.
-    const result = validateCardCoverage({
-      drafts: [span("10:30:00", "11:00:00")],
-      requiredSpans: [span("10:00:00", "10:30:00"), span("10:30:00", "11:00:00")],
-      ...window,
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("not covered");
-    }
-  });
-
-  it("rejects drafts outside the revision window", () => {
-    const result = validateCardCoverage({
-      drafts: [span("09:00:00", "11:00:00")],
-      requiredSpans: [span("10:00:00", "11:00:00")],
-      ...window,
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("outside the revision window");
-    }
-  });
-
-  it("tolerates gaps inside required spans up to the tolerance", () => {
-    const result = validateCardCoverage({
-      drafts: [span("10:00:00", "10:29:00"), span("10:30:30", "11:00:00")],
-      requiredSpans: [span("10:00:00", "11:00:00")],
-      ...window,
-    });
-    expect(result.ok).toBe(true);
-  });
-});
-
-describe("revisionWindow", () => {
-  it("expands the window to cover previous draft cards", () => {
-    const window = revisionWindow({
+it("expands the revision window to cover previous draft cards", () => {
+  expect(
+    revisionWindow({
       batchStartMs: dayMs("10:30:00"),
       batchEndMs: dayMs("10:45:00"),
-      previousCards: [
-        {
-          id: 1,
-          day: DAY,
-          startMs: dayMs("10:00:00"),
-          endMs: dayMs("10:30:00"),
-          title: "t",
-          summary: "s",
-          detail: "",
-          category: "coding",
-          distractions: [],
-        },
-      ],
-    });
-    expect(window.startMs).toBe(dayMs("10:00:00"));
-    expect(window.endMs).toBe(dayMs("10:45:00"));
-  });
+      previousCards: [{ id: 1, day: DAY, ...span([0, 30]), ...content }],
+    }),
+  ).toEqual({ startMs: dayMs("10:00:00"), endMs: dayMs("10:45:00") });
 });

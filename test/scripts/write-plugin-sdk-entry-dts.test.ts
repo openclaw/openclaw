@@ -9,6 +9,7 @@ import {
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import {
   createDeclarationFixture as createFixture,
+  createDeclarationFixtureWriter,
   createDeclarationTest,
   declarationCacheRecords,
   declarationInputs,
@@ -34,6 +35,30 @@ function expectCompiled(result: { status: number | null; stdout: string; stderr:
 }
 
 describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () => {
+  it("refuses fixture writes through borrowed dependencies before changing their files", ({
+    command,
+  }) => {
+    const root = fs.realpathSync(command.createTempDir("declaration-fixture-writer-"));
+    const borrowed = fs.realpathSync(command.createTempDir("declaration-borrowed-dependency-"));
+    fs.writeFileSync(path.join(borrowed, "worker.js"), "export const untouched = true;\n");
+    fs.mkdirSync(path.join(root, "node_modules"));
+    fs.symlinkSync(borrowed, path.join(root, "node_modules/borrowed"), "junction");
+    const write = createDeclarationFixtureWriter(root);
+    for (const file of ["worker.js", "new/directory/worker.js"]) {
+      expect(() => write(`node_modules/borrowed/${file}`, "export {};\n")).toThrow(
+        "Declaration input escapes checkout",
+      );
+    }
+    expect(fs.readFileSync(path.join(borrowed, "worker.js"), "utf8")).toBe(
+      "export const untouched = true;\n",
+    );
+    expect(fs.readdirSync(borrowed)).toEqual(["worker.js"]);
+    write("node_modules/synthetic/worker.js", "export const owned = true;\n");
+    expect(fs.readFileSync(path.join(root, "node_modules/synthetic/worker.js"), "utf8")).toBe(
+      "export const owned = true;\n",
+    );
+  });
+
   // POSIX uses the nested-writer retention case in dist-artifact-ownership.test.ts.
   it.skipIf(process.platform !== "win32").concurrent(
     "retains private stages and both compiler errors when a child is unjoined",
@@ -72,6 +97,8 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
     command,
   }) =>
     command.lifetime.run(async () => {
+      const watchWorker = path.resolve("node_modules/@openclaw/fs-safe/dist/watch-io-worker.js");
+      const dependencyBefore = fs.readFileSync(watchWorker);
       const { root, write, declarations, production } = createFixture(command);
       for (const [name, roots] of Object.entries(declarations)) {
         write(
@@ -92,6 +119,7 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
       expect(treeHashes(path.join(root, "compiler-inputs"))).toEqual(before);
       expectOutputs(root, production, Object.keys(treeHashes(path.join(root, "dist"))));
       expectStagingClean(root);
+      expect(fs.readFileSync(watchWorker)).toEqual(dependencyBefore);
     }));
 
   it.concurrent.for<[string, string, NodeJS.ProcessEnv, NodeJS.ProcessEnv]>([

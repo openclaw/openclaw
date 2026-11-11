@@ -22,17 +22,6 @@ export type GatewayRpcExtraOptions = {
   sharedStateMode?: Parameters<typeof callGateway>[0]["sharedStateMode"];
 };
 
-type CallGatewayFromCliRuntimeExtra = GatewayRpcExtraOptions & {
-  defaultTimeoutMs?: number;
-  timeoutMs?: number | null;
-  label?: string;
-  useStoredDeviceAuth?: boolean;
-  requiredStoredDeviceAuthScopes?: Parameters<
-    typeof callGateway
-  >[0]["requiredStoredDeviceAuthScopes"];
-  requireLocalBackendSharedAuth?: boolean;
-};
-
 type GatewayCliTransportRpcOpts = Omit<GatewayRpcOpts, "timeout"> & {
   config?: OpenClawConfig;
   timeout?: string | null;
@@ -69,7 +58,16 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
   method: string,
   opts: GatewayCliTransportRpcOpts,
   params?: unknown,
-  extra?: CallGatewayFromCliRuntimeExtra,
+  extra?: GatewayRpcExtraOptions & {
+    defaultTimeoutMs?: number;
+    timeoutMs?: number | null;
+    label?: string;
+    useStoredDeviceAuth?: boolean;
+    requiredStoredDeviceAuthScopes?: Parameters<
+      typeof callGateway
+    >[0]["requiredStoredDeviceAuthScopes"];
+    requireLocalBackendSharedAuth?: boolean;
+  },
 ) {
   assertGatewayCliMessageContext(method, params);
   const localPortOverride = resolveGatewayLocalPortOverride(opts);

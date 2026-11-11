@@ -1,6 +1,9 @@
-import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  asFiniteNumber,
+  isRecord,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { sanitizeTerminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import type { CodexThreadTurnsListResponse } from "./app-server/protocol.js";
 import {
   CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES,
@@ -74,28 +77,25 @@ export function boundedCatalogString(
     : undefined;
 }
 
-/** Select a bounded input only for the canonical terminal sanitizer. */
-export function selectCodexCatalogPreviewInput(value: string): string {
-  if (value.length <= SESSION_PREVIEW_PREFIX_LENGTH) {
-    return value;
-  }
-  const prefix = value.slice(0, SESSION_PREVIEW_PREFIX_LENGTH).replace(/\s+/g, " ").trim();
-  // Without controls the sanitizer is identity; the extra unit preserves trim
-  // and surrogate lookahead at the output boundary, regardless of the raw tail.
-  return prefix.length > MAX_SESSION_PREVIEW_LENGTH && !/\p{Cc}/u.test(prefix) ? prefix : value;
-}
-
 /** Detach the small preview from V8's potentially large sliced-string backing store. */
 export function truncateCodexCatalogPreview(
   value: string,
   sanitize: typeof sanitizeTerminalText,
 ): string {
-  const preview = boundedCatalogString(
-    sanitize(value.replace(/\s+/g, " ")),
+  let normalized: string | undefined;
+  if (value.length > SESSION_PREVIEW_PREFIX_LENGTH) {
+    const prefix = value.slice(0, SESSION_PREVIEW_PREFIX_LENGTH).replace(/\s+/g, " ").trim();
+    // Without controls the canonical sanitizer is identity. This already-trimmed
+    // prefix also retains lookahead across the UTF-16 output boundary.
+    if (prefix.length > MAX_SESSION_PREVIEW_LENGTH && !/\p{Cc}/u.test(prefix)) {
+      normalized = prefix;
+    }
+  }
+  const preview = truncateUtf16Safe(
+    normalized ?? sanitize(value.replace(/\s+/g, " ")).trim(),
     MAX_SESSION_PREVIEW_LENGTH,
-    "truncate",
   );
-  return Buffer.from(preview ?? "", "utf8").toString("utf8");
+  return Buffer.from(preview, "utf8").toString("utf8");
 }
 
 function normalizeInteractiveThreadSource(source: unknown) {
@@ -430,15 +430,14 @@ export function filterCatalogPageByTitle(
   page: CodexSessionCatalogPage,
   searchTerm: string | undefined,
 ): CodexSessionCatalogPage {
-  if (!searchTerm) {
+  const search = searchTerm?.toLocaleLowerCase().normalize("NFC");
+  if (!search) {
     return page;
   }
   return {
     ...page,
     sessions: page.sessions.filter((session) =>
-      (session.name ?? session.fallbackName)
-        ?.toLocaleLowerCase()
-        .includes(searchTerm.toLocaleLowerCase()),
+      (session.name ?? session.fallbackName)?.toLocaleLowerCase().normalize("NFC").includes(search),
     ),
   };
 }

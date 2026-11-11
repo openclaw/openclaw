@@ -37,6 +37,10 @@ export const sqliteTestSingletonPublications: ReadonlyMap<string, readonly symbo
   [source("src/state/openclaw-state-read-worker.ts"), [Symbol.for("openclaw.stateReadWorkers")]],
   [source("src/gateway/session-group-catalog.ts"), [Symbol.for("openclaw.sessionGroupCatalog")]],
   [agentSource, [agentKey]],
+  [
+    source("src/state/openclaw-agent-db-borrower.ts"),
+    [Symbol.for("openclaw.agentDatabaseBorrowers")],
+  ],
   [source("src/infra/agent-database-readers.ts"), [Symbol.for("openclaw.agentDatabaseReaders")]],
   [
     source("src/infra/sqlite-wal-checkpoint.ts"),
@@ -66,8 +70,8 @@ export const sqliteTestSingletonPublications: ReadonlyMap<string, readonly symbo
     ],
   ],
   [
-    source("src/plugin-state/plugin-state-observation-cache.ts"),
-    [Symbol.for("openclaw.pluginStateObservationCache")],
+    source("src/plugin-state/plugin-state-namespace-owner.ts"),
+    [Symbol.for("openclaw.pluginStateNamespaceOwner")],
   ],
   [
     source("src/agents/workspace-state-publication.ts"),

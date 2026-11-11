@@ -1,6 +1,5 @@
 // Provides stop-safe defaults for timers, sidecars, subscriptions, and services.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type {
   GatewayDeferredChannelReload,
@@ -13,7 +12,6 @@ import {
   type MediaCleanupStopResult,
   waitForMediaCleanupDrains,
 } from "./server-media-cleanup-lifecycle.js";
-import { createNoopHeartbeatRunner } from "./server-runtime-service-shared.js";
 import {
   createGatewaySidecarStopOwner,
   type GatewaySidecarStopOwner,
@@ -38,7 +36,7 @@ export type GatewayServerMutableState = {
   discovery: GatewayDiscovery | null;
   maintenance: GatewayMaintenanceHandles | null;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
-  heartbeatRunner: HeartbeatRunner;
+  stopScheduledServices: () => Promise<void>;
   stopDeliveryRecovery: () => Promise<void>;
   stopGatewayUpdateCheck: () => Promise<void>;
   tailscaleCleanup: (() => Promise<void>) | null;
@@ -49,7 +47,6 @@ export type GatewayServerMutableState = {
   configReloader: GatewayConfigReloaderHandle;
   reconcileAuditPolicy: ((config: OpenClawConfig) => void) | null;
   agentUnsub: (() => Promise<void> | void) | null;
-  heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
 };
@@ -60,7 +57,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     discovery: null,
     maintenance: null,
     stopMediaCleanup: () => waitForMediaCleanupDrains({ timeoutMs: MEDIA_CLEANUP_STOP_TIMEOUT_MS }),
-    heartbeatRunner: createNoopHeartbeatRunner(),
+    stopScheduledServices: async () => {},
     stopDeliveryRecovery: async () => {},
     stopGatewayUpdateCheck: async () => {},
     tailscaleCleanup: null,
@@ -77,7 +74,6 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     },
     reconcileAuditPolicy: null,
     agentUnsub: null,
-    heartbeatUnsub: null,
     transcriptUnsub: null,
     lifecycleUnsub: null,
   };

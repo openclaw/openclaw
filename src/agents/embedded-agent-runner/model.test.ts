@@ -11,6 +11,7 @@ import {
 import { discoverAuthStorageFacts, discoverModelsAsync } from "../agent-model-discovery.js";
 import { clearRuntimeAuthProfileStoreSnapshots, saveAuthProfileStore } from "../auth-profiles.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
+import { MODELS_JSON_STATE } from "../models-config-state.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { registerModelAuthReadTests } from "./model.auth-read.test-support.js";
 import {
@@ -47,12 +48,9 @@ const resolveManifestModelCatalogProviderAliasMetadataMock = vi.hoisted(() =>
 const preparedSnapshots = vi.hoisted(() => new Map<string, unknown>());
 
 // mock-isolation: Model-resolution fixtures own prepared auth snapshots; provider discovery must not add host credentials or registries.
-vi.mock("../../plugins/provider-external-auth-core.js", () => ({
-  createProviderExternalAuthResolver: () => ({
-    resolveExternalAuthProfilesWithPlugins: () => [],
-    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
-  }),
-}));
+vi.mock("../../plugins/provider-external-auth-core.js", async () =>
+  (await import("../../plugins/provider-external-auth.test-support.js")).createExternalAuthMock(),
+);
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
   applyProviderResolvedTransportWithPlugin: () => undefined,
@@ -119,19 +117,14 @@ vi.mock("../prepared-model-runtime.js", async () => {
     }
     const metadataSnapshot = createPluginMetadataSnapshotFixture();
     const snapshot = {
-      catalogOwner: undefined,
-      agentDir: input.agentDir,
+      ...createEmptyPreparedModelRuntimeFixture({
+        agentDir: input.agentDir,
+        config: input.config ?? {},
+        metadataSnapshot,
+        createStores: () => ({ authStorage, modelRegistry }),
+      }),
       ...(workspaceDir ? { workspaceDir } : {}),
-      activeProjectKeys: [],
-      config: input.config ?? {},
-      authModes: {},
-      metadataSnapshot,
-      allowGatewaySubagentBinding: false,
-      modelCatalog: { entries: [], routeVariants: [] },
-      configuredRuntimeModels: [],
       findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup([], metadataSnapshot),
-      inlineProviderModels: [],
-      createStores: () => ({ authStorage, modelRegistry }),
     };
     preparedSnapshots.set(key, snapshot);
     return snapshot;
@@ -150,7 +143,10 @@ vi.mock("../agent-model-discovery.js", () => ({
   discoverModelsAsync: vi.fn(async () => ({ find: vi.fn(() => null) })),
 }));
 
+// mock-isolation: Resolution tests supply their own rows; bundled vendor rows must not leak in.
 vi.mock("./model.static-catalog.js", () => ({
+  createBundledStaticCatalogModelResolver: () => () => undefined,
+  listBundledVendorCatalogRows: () => [],
   canonicalizeManifestModelCatalogProviderAlias: (params: { provider: string }) =>
     resolveManifestModelCatalogProviderAliasMetadataMock(params).provider,
   resolveBundledProviderStaticCatalogModel: resolveBundledProviderStaticCatalogModelMock,
@@ -509,6 +505,42 @@ describe("resolveModel", () => {
     expect(discoverModelsAsync).not.toHaveBeenCalled();
   });
 
+  it("prices a zero-placeholder model at its resolved rate, and keeps authored zeros", async () => {
+    const rates = { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 };
+    fs.mkdirSync(state.agentDir(), { recursive: true });
+    const resolve = async (cost: typeof rates) => {
+      fs.writeFileSync(
+        `${state.agentDir()}/models.json`,
+        JSON.stringify({ providers: { google: { models: [{ id: "fresh-model", cost }] } } }),
+      );
+      MODELS_JSON_STATE.costCache.clear();
+      resolveBundledProviderStaticCatalogModelMock.mockResolvedValueOnce(
+        makeProviderModelFixture({
+          provider: "google",
+          id: "fresh-model",
+          api: "google-generative-ai",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        }),
+      );
+      const config = {};
+      const result = await resolveWithoutDiscovery("google", "fresh-model", undefined, {
+        allowBundledStaticCatalogFallback: true,
+        preparedModelRuntime: createEmptyPreparedModelRuntimeFixture({
+          agentDir: state.agentDir(),
+          config,
+          metadataSnapshot: createPluginMetadataSnapshotFixture(),
+          createStores: createEmptyAgentDiscoveryStores,
+        }),
+      });
+      return expectResolvedModel(result).cost;
+    };
+
+    // The transport bills each call from this cost: a placeholder must not record $0.
+    expect(await resolve(rates)).toMatchObject(rates);
+    const free = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    expect(await resolve(free)).toMatchObject(free);
+  });
+
   it("keeps the prepared auth mode through async provider model resolution", async () => {
     const authProfileId = "openai:prepared";
     auth.spy.mockImplementation(() => {
@@ -656,7 +688,10 @@ describe("resolveModel", () => {
       if (apiOverride) {
         expect(model.thinkingLevelMap).toEqual({ off: null });
       } else {
-        expect(model.compat).toMatchObject(deepSeekCatalogCompat);
+        expect(model.compat).toMatchObject({
+          ...deepSeekCatalogCompat,
+          supportsReasoningEffort: mode !== "fallback",
+        });
       }
       if (mode === "fallback") {
         expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({

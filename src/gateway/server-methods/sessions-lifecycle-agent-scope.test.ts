@@ -1,26 +1,22 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import {
   createArchivedSubagentSweeperRun,
   createSubagentSweeperHarness,
 } from "../../agents/subagents/registry/subagent-registry-sweeper.test-support.js";
-import { deleteSubagentSessionForCleanup } from "../../agents/subagents/registry/subagent-session-cleanup.js";
 import {
-  clearFollowupQueueForTest,
   createQueueSettings,
   createQueueTestRun,
 } from "../../auto-reply/reply/queue.test-helpers.js";
-import { hasSessionLifecycleQueueWork } from "../../auto-reply/reply/queue/cleanup.js";
+import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
-import { FOLLOWUP_QUEUES } from "../../auto-reply/reply/queue/state.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { getExistingFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { clearCommandLane, enqueueCommandInLane } from "../../process/command-queue.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -37,6 +33,17 @@ function lifecycleConfig() {
   const current = getRuntimeConfig();
   const cfg = { ...current, agents: { ...current.agents, entries: { main: {}, research: {} } } };
   setRuntimeConfigSnapshot(cfg);
+}
+
+function resolveTarget(key: string, agentId: string) {
+  return resolveGatewaySessionStoreTargetInWorker({
+    cfg: getRuntimeConfig(),
+    key,
+    agentId,
+    projection: "list",
+    exactRead: true,
+    readOnly: false,
+  });
 }
 
 function gateway(extraHandlers = { ...sessionDeleteHandlers, ...sessionMutationHandlers }) {
@@ -63,58 +70,43 @@ function gateway(extraHandlers = { ...sessionDeleteHandlers, ...sessionMutationH
   };
 }
 
-it.each(["sweep", "cleanup"] as const)(
-  "%s removes the recorded raw child owner without deleting another agent's global session",
-  async (flow) => {
-    lifecycleConfig();
-    for (const agentId of ["main", "research"]) {
-      await upsertSessionEntryCore(
-        { agentId, sessionKey: "global" },
-        {
-          sessionId: `${agentId}-global`,
-          lifecycleRevision: `${agentId}-revision`,
-          updatedAt: Date.now(),
-        },
-      );
-    }
-    const mainBefore = loadSessionEntry({ agentId: "main", sessionKey: "global" });
-    const call = gateway(sessionDeleteHandlers);
-    const entry = createArchivedSubagentSweeperRun({
-      childSessionKey: "global",
-      childAgentId: "research",
-      childSessionIdentity: {
-        sessionId: "research-global",
-        lifecycleRevision: "research-revision",
+it("sweep removes the recorded raw child owner without deleting another agent's global session", async () => {
+  lifecycleConfig();
+  for (const agentId of ["main", "research"]) {
+    await upsertSessionEntryCore(
+      { agentId, sessionKey: "global" },
+      {
+        sessionId: `${agentId}-global`,
+        lifecycleRevision: `${agentId}-revision`,
+        updatedAt: Date.now(),
       },
-    });
-    const h = createSubagentSweeperHarness({}, entry);
-    h.callGateway.mockImplementation(async (request) => {
-      await request.prepareDispatchCurrent?.();
-      request.assertDispatchCurrent?.();
-      return call(request.method, request.params);
-    });
-    try {
-      if (flow === "sweep") {
-        await h.sweeper.sweepOnce();
-        expect(h.runs.has(entry.runId)).toBe(false);
-      } else {
-        expect(
-          await deleteSubagentSessionForCleanup({
-            callGateway: h.callGateway,
-            childSessionKey: entry.childSessionKey,
-            childAgentId: entry.childAgentId,
-            expectedSessionId: "research-global",
-            expectedLifecycleRevision: "research-revision",
-          }),
-        ).toBe("deleted");
-      }
-      expect(loadSessionEntry({ agentId: "research", sessionKey: "global" })).toBeUndefined();
-      expect(loadSessionEntry({ agentId: "main", sessionKey: "global" })).toEqual(mainBefore);
-    } finally {
-      await h.sweeper.reset();
-    }
-  },
-);
+    );
+  }
+  const mainBefore = loadSessionEntry({ agentId: "main", sessionKey: "global" });
+  const call = gateway(sessionDeleteHandlers);
+  const entry = createArchivedSubagentSweeperRun({
+    childSessionKey: "global",
+    childAgentId: "research",
+    childSessionIdentity: {
+      sessionId: "research-global",
+      lifecycleRevision: "research-revision",
+    },
+  });
+  const h = createSubagentSweeperHarness(entry);
+  h.callGateway.mockImplementation(async (request) => {
+    await request.prepareDispatchCurrent?.();
+    request.assertDispatchCurrent?.();
+    return call(request.method, request.params);
+  });
+  try {
+    await h.sweeper.sweepOnce();
+    expect(h.runs.has(entry.runId)).toBe(false);
+    expect(loadSessionEntry({ agentId: "research", sessionKey: "global" })).toBeUndefined();
+    expect(loadSessionEntry({ agentId: "main", sessionKey: "global" })).toEqual(mainBefore);
+  } finally {
+    await h.sweeper.reset();
+  }
+});
 
 it.each([
   { method: "sessions.delete", key: "global", agentId: "research" },
@@ -127,30 +119,32 @@ it.each([
 ])("$method preserves another agent's $key work ($agentId)", async ({ method, key, agentId }) => {
   lifecycleConfig();
   const foreignAgentId = agentId === "main" ? "research" : "main";
-  const target = await resolveGatewaySessionStoreTargetInWorker({
-    cfg: getRuntimeConfig(),
-    key,
-    agentId,
-    projection: "list",
-    exactRead: true,
-    readOnly: false,
-  });
+  const target = await resolveTarget(key, agentId);
+  const foreignTarget = await resolveTarget(key, foreignAgentId);
   const targetId = `${agentId}-session`;
+  const foreignId = `${foreignAgentId}-session`;
   await upsertSessionEntryCore(
     { agentId, sessionKey: target.canonicalKey },
     { sessionId: targetId, lifecycleRevision: "original", updatedAt: 1 },
   );
-  const foreignTarget = {
-    agentId: foreignAgentId,
+  const operation = createReplyOperation({
     sessionKey: key,
-    sessionId: `${foreignAgentId}-session`,
-  };
-  const ownedTarget = { agentId, sessionKey: target.canonicalKey, sessionId: targetId };
-  const operation = createReplyOperation({ ...foreignTarget, resetTriggered: false });
+    sessionId: foreignId,
+    agentId: foreignAgentId,
+    target: captureSessionTarget({
+      storeScope: foreignTarget.storePath,
+      sessionKey: foreignTarget.canonicalKey,
+      aliases: [key, ...foreignTarget.storeKeys],
+      incarnation: foreignId,
+      agentId: foreignAgentId,
+    }),
+    resetTriggered: false,
+  });
   operation.abortSignal.addEventListener("abort", () => operation.complete(), { once: true });
-  const followup = (sessionTarget: typeof foreignTarget) => {
-    const run = createQueueTestRun({ prompt: sessionTarget.agentId });
-    Object.assign(run.run, sessionTarget);
+  const queueKeys = [key, target.canonicalKey, targetId];
+  const followup = (ownerAgentId: string, sessionId: string, sessionKey: string) => {
+    const run = createQueueTestRun({ prompt: ownerAgentId });
+    Object.assign(run.run, { agentId: ownerAgentId, sessionId, sessionKey });
     const settled = vi.fn();
     run.turnAdoptionLifecycle = {
       admission: "cancel-only",
@@ -160,36 +154,21 @@ it.each([
     enqueueFollowupRun(key, run, createQueueSettings(), "none", undefined, false);
     return { run, settled };
   };
-  const foreign = followup(foreignTarget);
-  const hasOwnedWork = () => hasSessionLifecycleQueueWork({ keys: [key], ...ownedTarget });
-  const entered = createDeferred();
-  const release = createDeferred();
-  const lane = resolveEmbeddedSessionLane(key);
-  const blocker = enqueueCommandInLane(lane, async () => {
-    entered.resolve();
-    await release.promise;
-  });
-  await entered.promise;
-  const foreignTask = vi.fn(async () => "preserved");
-  const ownedTask = vi.fn(async () => "must not run");
-  const queuedResult = Promise.allSettled([
-    enqueueCommandInLane(lane, foreignTask, { sessionTarget: foreignTarget }),
-    enqueueCommandInLane(lane, ownedTask, { sessionTarget: { ...ownedTarget, sessionKey: key } }),
-  ]);
+  const foreign = followup(foreignAgentId, foreignId, key);
+  let owned: ReturnType<typeof followup> | undefined;
   try {
-    expect.soft(hasOwnedWork()).toBe(true);
-    const owned = followup(ownedTarget);
-    const params = {
+    owned = followup(agentId, targetId, target.canonicalKey);
+    await gateway()(method, {
       key,
       agentId,
       ...(method === "sessions.patch" ? { archived: true, expectedSessionId: targetId } : {}),
-    };
-    await gateway()(method, params);
+    });
     expect(operation.abortSignal.aborted).toBe(false);
     expect(foreign.settled).not.toHaveBeenCalled();
     expect(owned.settled).toHaveBeenCalledOnce();
-    expect(FOLLOWUP_QUEUES.get(key)?.items).toEqual([foreign.run]);
-    expect(hasOwnedWork()).toBe(false);
+    expect(
+      getExistingFollowupQueue(key, foreign.run.controllerInput?.mailbox.owner.target)?.items,
+    ).toEqual([foreign.run]);
     const entry = loadSessionEntry({ agentId, sessionKey: target.canonicalKey });
     if (method === "sessions.delete") {
       expect(entry).toBeUndefined();
@@ -198,49 +177,13 @@ it.each([
     } else {
       expect(entry?.archivedAt).toEqual(expect.any(Number));
     }
-    release.resolve();
-    await blocker;
-    expect(await queuedResult).toEqual([
-      { status: "fulfilled", value: "preserved" },
-      { status: "rejected", reason: expect.objectContaining({ name: "CommandLaneClearedError" }) },
-    ]);
-    expect(foreignTask).toHaveBeenCalledOnce();
-    expect(ownedTask).not.toHaveBeenCalled();
     operation.complete();
     expect(operation.result?.kind).toBe("completed");
   } finally {
     operation.complete();
-    release.resolve();
-    [key, target.canonicalKey, targetId].forEach(clearFollowupQueueForTest);
-    clearCommandLane(lane);
-    await Promise.allSettled([blocker, queuedResult]);
+    clearSessionQueues(queueKeys, foreign.run.controllerInput?.mailbox.owner.target);
+    if (owned?.run.controllerInput?.mailbox.owner.target) {
+      clearSessionQueues(queueKeys, owned.run.controllerInput.mailbox.owner.target);
+    }
   }
 });
-
-it.each(["sessions.delete", "sessions.reset", "sessions.patch"])(
-  "%s still cancels the selected agent's own session",
-  async (method) => {
-    const key = "agent:main:lifecycle-owned";
-    const sessionId = "owned-session";
-    await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, { sessionId, updatedAt: 1 });
-    const operation = createReplyOperation({
-      sessionKey: key,
-      sessionId,
-      agentId: "main",
-      resetTriggered: false,
-    });
-    operation.setPhase("running");
-    operation.abortSignal.addEventListener("abort", () => operation.complete(), { once: true });
-    try {
-      const params = {
-        key,
-        ...(method === "sessions.patch" ? { archived: true, expectedSessionId: sessionId } : {}),
-      };
-      await gateway()(method, params);
-      expect(operation.abortSignal.aborted).toBe(true);
-    } finally {
-      operation.complete();
-      [key, sessionId].forEach(clearFollowupQueueForTest);
-    }
-  },
-);

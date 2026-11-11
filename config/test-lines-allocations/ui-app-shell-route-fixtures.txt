@@ -1,0 +1,4 @@
+# ui/src/app/app-host.test.ts: +3 LF lines in #194506.
+# Keep the late-mount fixture connected while route readiness is held, and
+# identify a ready route for the merged-header drawer regression assertions.
+3

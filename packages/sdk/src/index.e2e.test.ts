@@ -1,16 +1,16 @@
-import type { AddressInfo } from "node:net";
-import net from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocketServer } from "ws";
 import { installGatewayTestHooks, startServer } from "../../../src/gateway/test-helpers.js";
 import { emitAgentEvent } from "../../../src/infra/agent-events.js";
 import {
   clearAgentRunContext,
   registerAgentRunContext,
 } from "../../../src/infra/agent-run-registry.js";
-import { withTimeout } from "../../../src/utils/with-timeout.js";
-import { GatewayClientTransport, OpenClaw, type OpenClawEvent } from "./index.js";
+import { withTimeout } from "../../../src/infra/fs-safe.js";
+import { getFreePort } from "../../../src/test-utils/ports.js";
+import { collectUntil } from "./client.test-support.js";
+import { GatewayClientTransport, OpenClaw } from "./index.js";
+import { startSdkWebSocketServer } from "./transport.websocket.test-support.js";
 
 type JsonObject = Record<string, unknown>;
 type FakeGatewayRequest = {
@@ -57,34 +57,9 @@ async function expectResponse(response: Promise<unknown>, fields: JsonObject) {
   expect(expectJsonObject(await response)).toEqual(expect.objectContaining(fields));
 }
 
-async function collectRun(events: AsyncIterable<OpenClawEvent>) {
-  const seen: OpenClawEvent[] = [];
-  for await (const event of events) {
-    seen.push(event);
-    if (event.type === "run.completed") {
-      break;
-    }
-  }
-  return seen;
-}
-
-async function reservePort(): Promise<number> {
-  const server = net.createServer();
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const { port } = server.address() as AddressInfo;
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  return port;
-}
-
 async function createFakeGateway(port = 0): Promise<FakeGateway> {
-  const server = new WebSocketServer({ host: "127.0.0.1", port });
-  await new Promise<void>((resolve) => {
-    server.once("listening", resolve);
-  });
+  const fixture = await startSdkWebSocketServer(port);
+  const { server } = fixture;
   let seq = 1;
   const requests: FakeGatewayRequest[] = [];
   server.on("connection", (socket) => {
@@ -197,16 +172,11 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
     });
   });
   const gateway: FakeGateway = {
-    url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    url: fixture.url,
     requests,
     close: async () => {
       gateways.delete(gateway);
-      for (const socket of server.clients) {
-        socket.terminate();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await fixture.close();
     },
   };
   gateways.add(gateway);
@@ -224,7 +194,7 @@ describe("OpenClaw SDK websocket e2e", () => {
         sessionKey: "main",
         idempotencyKey: "sdk-e2e",
       });
-      const seenPromise = collectRun(run.events());
+      const seenPromise = collectUntil(run.events(), (event) => event.type === "run.completed");
       const [seen, result] = await Promise.all([
         withTimeout(seenPromise, 2_000, { message: "timed out waiting for SDK run events" }),
         run.wait({ timeoutMs: 2_000 }),
@@ -332,7 +302,7 @@ describe("OpenClaw SDK websocket e2e", () => {
   }, 10_000);
 
   it("retries after an initial websocket connection failure", async () => {
-    const port = await reservePort();
+    const port = await getFreePort();
     const url = `ws://127.0.0.1:${port}`;
     const transport = new GatewayClientTransport({
       url,
@@ -371,7 +341,7 @@ describe("OpenClaw SDK real Gateway e2e", () => {
       await oc.connect();
       registerRun(runId);
       const run = await oc.runs.get(runId);
-      const eventsPromise = collectRun(run.events());
+      const eventsPromise = collectUntil(run.events(), (event) => event.type === "run.completed");
       for (const [stream, data] of [
         ["lifecycle", { phase: "start", startedAt: 111 }],
         ["assistant", { delta: "hello from real gateway" }],

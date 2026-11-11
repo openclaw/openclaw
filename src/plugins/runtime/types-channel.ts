@@ -5,20 +5,13 @@
  * inside the owning plugin package instead of hanging off core runtime slots
  * keyed by plugin id.
  */
-import type {
-  IsControlCommandMessage,
-  ShouldComputeCommandAuthorized,
-} from "../../auto-reply/command-detection.runtime-types.js";
-import type { ShouldHandleTextCommands } from "../../auto-reply/commands-registry.runtime-types.js";
 import type { DispatchReplyFromConfig as CoreDispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.types.js";
 import type {
   BuildMentionRegexes,
   MatchesMentionPatterns,
   MatchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.types.js";
-import type { CreateReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.runtime-types.js";
 import type { ChannelRuntimeContextRegistry } from "../../channels/plugins/channel-runtime-surface.types.js";
-import type { LoadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.types.js";
 import type { ResolveMarkdownTableMode } from "../../config/markdown-tables.types.js";
 import type {
   ReadSessionUpdatedAt,
@@ -67,7 +60,7 @@ export type PluginRuntimeChannel = {
      * `dispatchReplyWithBufferedBlockDispatcher` or channel turn helpers.
      * This is a low-level legacy dispatcher escape hatch.
      */
-    createReplyDispatcherWithTyping: CreateReplyDispatcherWithTyping;
+    createReplyDispatcherWithTyping: typeof import("../../auto-reply/reply/reply-dispatcher.js").createReplyDispatcherWithTyping;
     resolveEffectiveMessagesConfig: typeof import("../../agents/identity.js").resolveEffectiveMessagesConfig;
     /**
      * @deprecated Prefer the channel-message reply pipeline helpers. This is
@@ -152,12 +145,12 @@ export type PluginRuntimeChannel = {
   };
   commands: {
     resolveCommandAuthorizedFromAuthorizers: typeof import("../../channels/command-gating.js").resolveCommandAuthorizedFromAuthorizers;
-    isControlCommandMessage: IsControlCommandMessage;
-    shouldComputeCommandAuthorized: ShouldComputeCommandAuthorized;
-    shouldHandleTextCommands: ShouldHandleTextCommands;
+    isControlCommandMessage: typeof import("../../auto-reply/command-detection.js").isControlCommandMessage;
+    shouldComputeCommandAuthorized: typeof import("../../auto-reply/command-detection.js").shouldComputeCommandAuthorized;
+    shouldHandleTextCommands: typeof import("../../auto-reply/commands-text-routing.js").shouldHandleTextCommands;
   };
   outbound: {
-    loadAdapter: LoadChannelOutboundAdapter;
+    loadAdapter: typeof import("../../channels/plugins/outbound/load.js").loadChannelOutboundAdapter;
   };
   inbound: {
     /** Ingress policy and identity handoff bound to this channel's host instance. */

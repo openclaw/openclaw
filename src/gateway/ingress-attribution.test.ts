@@ -46,7 +46,7 @@ function warningFixture() {
   vi.setSystemTime(0);
   const warn = vi.fn();
   const report = createGatewayUnattributableProxyReporter({ warn });
-  return { warn, report, attribution: unattributableSource(10) };
+  return { warn, report };
 }
 
 const source = (kind: string, clientIp: string) => ({
@@ -139,56 +139,39 @@ describe("gateway ingress attribution", () => {
     expect(prepareGatewayIngressAttribution({ req })).toMatchObject(expected);
   });
 
-  it("does not let continued traffic keep a source suppressed forever", () => {
-    const { warn, report, attribution } = warningFixture();
-
-    // A peer that never stops sending must not refresh its own suppression record.
-    for (let minute = 0; minute <= 6; minute += 1) {
-      vi.setSystemTime(minute * 60_000);
-      report(attribution);
-    }
-
-    expect(warn).toHaveBeenCalledTimes(2);
-  });
-
-  it("retains a full late-window source set across the next budget", () => {
+  it.each<{
+    name: string;
+    steps: Array<[time: number, sources: number[], warnings: number]>;
+  }>([
+    {
+      name: "does not refresh suppression under continuous traffic",
+      steps: Array.from({ length: 7 }, (_, minute) => [minute * 60_000, [10], minute < 5 ? 1 : 2]),
+    },
+    {
+      name: "retains late-window sources across the next budget",
+      steps: [
+        [299_000, Array.from({ length: 16 }, (_, i) => i), 16],
+        [301_000, [16, 0], 17],
+      ],
+    },
+    {
+      name: "resets suppression on clock rollback",
+      steps: [
+        [240_000, [10], 1],
+        [120_000, [10, 10], 2],
+        [420_000, [10], 3],
+      ],
+    },
+    {
+      name: "bounds a flood of unique sources",
+      steps: [[0, Array.from({ length: 1_000 }, (_, i) => i), 16]],
+    },
+  ])("$name", ({ steps }) => {
     const { warn, report } = warningFixture();
-
-    vi.setSystemTime(5 * 60_000 - 1_000);
-    for (let index = 0; index < 16; index += 1) {
-      report(unattributableSource(index));
+    for (const [time, sources, warnings] of steps) {
+      vi.setSystemTime(time);
+      sources.forEach((index) => report(unattributableSource(index)));
+      expect(warn).toHaveBeenCalledTimes(warnings);
     }
-    expect(warn).toHaveBeenCalledTimes(16);
-
-    vi.setSystemTime(5 * 60_000 + 1_000);
-    report(unattributableSource(16));
-    report(unattributableSource(0));
-
-    expect(warn).toHaveBeenCalledTimes(17);
-  });
-
-  it("resets source suppression when the wall clock moves backward", () => {
-    const { warn, report, attribution } = warningFixture();
-
-    vi.setSystemTime(4 * 60_000);
-    report(attribution);
-    vi.setSystemTime(2 * 60_000);
-    report(attribution);
-    report(attribution);
-    expect(warn).toHaveBeenCalledTimes(2);
-
-    vi.setSystemTime(7 * 60_000);
-    report(attribution);
-    expect(warn).toHaveBeenCalledTimes(3);
-  });
-
-  it("bounds warnings from a flood of unique proxy sources", () => {
-    const { warn, report } = warningFixture();
-
-    for (let index = 0; index < 1_000; index += 1) {
-      report(unattributableSource(index));
-    }
-
-    expect(warn).toHaveBeenCalledTimes(16);
   });
 });

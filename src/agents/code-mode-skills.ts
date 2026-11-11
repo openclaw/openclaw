@@ -20,7 +20,6 @@ export type CodeModeSkillReader = (params: {
 export function resolveCodeModeSkills(params: {
   skillsPrompt: string;
   candidates: readonly Skill[];
-  reader?: CodeModeSkillReader;
 }): CodeModeSkill[] {
   const catalog = parseSkillsPromptCatalog(params.skillsPrompt);
   if (catalog.length === 0) {
@@ -42,7 +41,6 @@ export function resolveCodeModeSkills(params: {
         filePath: source.filePath,
         readContent: source.readContent,
       },
-      reader: params.reader,
     });
   }
   return result;

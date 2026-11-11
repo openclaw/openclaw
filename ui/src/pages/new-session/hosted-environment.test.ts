@@ -1,33 +1,23 @@
-import { createComponent } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
-import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
+import { nativeRuntime } from "../../test-helpers/chat-model.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { resolveHostedEnvironments } from "./hosted-environments.ts";
+import { createNewSessionRouteData } from "./location.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { managedModelControls, controlQueries } from "./model-control-view-queries.test-support.ts";
-import { contextWith, renderControl } from "./model-control.test-support.ts";
-import { NewSessionPlaceControls } from "./target-controls-view.tsx";
+import { contextWith, renderControl, waitForModelControl } from "./model-control.test-support.ts";
+import {
+  hostedRuntime as runtime,
+  mountPlacement as renderPlace,
+  placementDevice,
+} from "./placement.test-support.ts";
+import { replaceBrowserPreference } from "./preferences.ts";
 const modelRef = "openai/hosted-model";
 const createSelection = { message: "hello", visibility: "normal" as const };
-const nativeRuntime = (id = "openclaw", mode: "worker-turn" | "remote-exec" = "worker-turn") => ({
-  id,
-  source: "model" as const,
-  cloudPlacementSupported: true,
-  cloudPlacementExecutionMode: mode,
-  devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-});
-
-const runtime = {
-  id: "agentsapi",
-  source: "model" as const,
-  cloudPlacementSupported: false,
-  workspaceEnvironment: { kind: "provider-hosted" as const, label: "OpenAI (Agents API)" },
-};
 const model: ModelCatalogEntry = {
   id: "hosted-model",
   name: "Hosted model",
@@ -39,32 +29,38 @@ const model: ModelCatalogEntry = {
 const agent = { id: "main", model: { primary: modelRef } };
 const preferred = { model: modelRef, agentRuntime: "agentsapi" };
 const managed = managedModelControls();
+beforeEach(() => {
+  replaceBrowserPreference("ws://gateway.example", "main", {});
+});
 afterEach(() => {
   managed.reset();
   vi.restoreAllMocks();
+  replaceBrowserPreference("ws://gateway.example", "main", {});
 });
 function modelControl(context: Parameters<typeof renderControl>[1]) {
   const control = managed.make(() => {});
   return { control, ...controlQueries(control, context, "main", agent) };
 }
-function renderPlace(
-  f: Pick<ReturnType<typeof createDraftFixture>, "context" | "gateway" | "place">,
-  data?: NewSessionRouteData,
-) {
-  const params = {
-    ...f,
-    data,
-    submitting: false,
-    pendingPlacement: false,
-    onConnectMachine: vi.fn(),
-    onNavigate: vi.fn(),
-    onFocusComposer: vi.fn(),
-    onChange: vi.fn(),
-  };
-  const element = document.createElement("div");
-  mountSolid(() => createComponent(NewSessionPlaceControls, { params }), { container: element });
-  return element;
-}
+it("keeps an unavailable hosted workspace distinct from an available one", () => {
+  const unavailableRuntime = { ...runtime, id: "unavailable" };
+  const choices = resolveHostedEnvironments(
+    [
+      model,
+      {
+        ...model,
+        runtimeChoices: [{ agentRuntime: unavailableRuntime, available: false }],
+      },
+    ],
+    modelRef,
+    true,
+  );
+  expect(choices.map((choice) => choice.id)).toEqual([runtime.id, unavailableRuntime.id]);
+  expect(choices.find((choice) => choice.id === runtime.id)?.disabledReason).toBeUndefined();
+  expect(choices.find((choice) => choice.id === unavailableRuntime.id)?.disabledReason).toBe(
+    "This hosted workspace isn’t available. Check its setup or choose another workspace.",
+  );
+});
+
 const catalog = (overrides: Partial<ModelCatalogEntry>) => ({
   models: [{ ...model, ...overrides }],
 });
@@ -115,6 +111,7 @@ it("uses model-picker changes and configured defaults as the environment authori
   const { control, find } = modelControl(context);
   control.load(context, "main", true, { agent });
   await vi.waitFor(() => expect(control.hostedEnvironments()).toHaveLength(1));
+  await waitForModelControl(control, context, "main", agent);
   find("model-runtime", "agentsapi")!.click();
   expect(control.resolveAgentRuntime()?.workspaceEnvironment).toEqual(runtime.workspaceEnvironment);
   expect(control.selectHostEnvironment()).toBe(true);
@@ -122,6 +119,20 @@ it("uses model-picker changes and configured defaults as the environment authori
   control.load(context, "other", true, { agent: { ...agent, id: "other" }, preference: preferred });
   await vi.waitFor(() => expect(control.resolveAgentRuntime()?.id).toBe("agentsapi"));
   expect(control.modelForSubmission()).toBe(modelRef);
+});
+it("returns to the Gateway's implicit host runtime without pinning it", async () => {
+  const implicitHost = {
+    ...model,
+    agentRuntime: { ...nativeRuntime(), source: "implicit" as const },
+  };
+  const { context } = contextWith([implicitHost]);
+  const { control, find } = modelControl(context);
+  control.load(context, "main", true, { agent });
+  await waitForModelControl(control, context, "main", agent);
+  find("model-runtime", "agentsapi")!.click();
+  expect(control.selectHostEnvironment()).toBe(true);
+  expect(control.agentRuntime).toBeUndefined();
+  expect(control.resolveAgentRuntime()?.id).toBe("openclaw");
 });
 it("retains the explicit API-key account through hosted selection and rejects a late unavailable account preview", async () => {
   const api = modelAccount("api", "API account", "api_key");
@@ -154,15 +165,14 @@ it("retains the explicit API-key account through hosted selection and rejects a 
   await choose(api.authProfileId);
   await vi.waitFor(() => expect(control.accountSelectionReady()).toBe(true));
   expect(control.selectHostedEnvironment("agentsapi")).toBe(true);
-  expect(
-    buildDraftSessionCreateParams({
-      agentId: "main",
-      message: "hello",
-      worktree: false,
-      model: control.modelForSubmission(),
-      agentRuntime: control.agentRuntime,
-    }),
-  ).toMatchObject({ model: `${modelRef}@${api.authProfileId}`, agentRuntime: "agentsapi" });
+  const { state } = createRepositoryFixture();
+  managed.track(state.modelControl);
+  state.modelControl.agentRuntime = control.agentRuntime;
+  vi.spyOn(state.modelControl, "modelForSubmission").mockReturnValue(control.modelForSubmission());
+  expect(buildSelectedSessionCreateParams(state, createSelection)).toMatchObject({
+    model: `${modelRef}@${api.authProfileId}`,
+    agentRuntime: "agentsapi",
+  });
   await choose(subscription.authProfileId);
   expect(control.accountSelectionReady()).toBe(false);
   expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
@@ -183,13 +193,7 @@ it("retains the explicit API-key account through hosted selection and rejects a 
 });
 it("keeps terminal placement when a hosted draft changes to a same-agent catalog target", async () => {
   const folder = "/local/project";
-  const data: NewSessionRouteData = {
-    agentId: "main",
-    requestedAgentId: "main",
-    catalogId: "",
-    catalogLabel: "",
-    startTerminal: false,
-  };
+  const data: NewSessionRouteData = createNewSessionRouteData();
   const fixture = hostedRepository(data);
   const { state, request } = fixture;
   request.mockResolvedValue({
@@ -224,25 +228,24 @@ it("describes Auto using the eligible host runtime while a hosted workspace is s
     methods: ["environments.list", "sessions.create"],
     request: async () => ({
       profiles: [],
-      environments: ["desktop", "laptop"].map((id) => ({
-        id: `node:${id}`,
-        type: "node",
-        status: "available",
-        sessionHost: true,
-        workerSlots: { total: 1, available: 1 },
-      })),
+      environments: ["desktop", "laptop"].map((id) => placementDevice(id)),
     }),
     agents: [{ ...agent, workspace: "/workspace" }],
     modelCatalog: async () =>
       catalog({ agentRuntime: nativeRuntime("remote-runtime", "remote-exec") }),
   });
   managed.track(f.place.modelControl);
-  await settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" });
+  await vi.waitFor(() => expect(f.place.modelControl.hostedEnvironments()).toHaveLength(1));
   f.place.selectHostedEnvironment("agentsapi");
   expect(f.place.hostedEnvironment).toBeDefined();
   await f.gateway.refreshCloudProfiles();
   const element = renderPlace(f);
-  expect(element.textContent).toContain("Chooses the first eligible connected device");
+  document.body.append(element);
+  onTestFinished(() => element.remove());
+  element.querySelector<HTMLButtonElement>("#new-session-where-trigger")!.click();
+  await vi.waitFor(() =>
+    expect(element.textContent).toContain("Chooses the first eligible connected device"),
+  );
   expect(element.textContent).not.toContain("Chooses the least-busy connected device");
   f.place.selectDevice("", true);
   expect(f.place.autoDevice).toBe(true);

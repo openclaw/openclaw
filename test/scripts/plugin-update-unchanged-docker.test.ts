@@ -99,50 +99,49 @@ fi
   };
 }
 
-it.each([false, true])("seeds plugin ownership with initialized state=%s", async (initialized) => {
-  const root = tempDirs.make("openclaw-plugin-update-seed-");
-  const { configPath, env, stateDir } = seedInstallState(root, initialized);
-  const config = JSON.parse(readFileSync(configPath, "utf8")) as {
-    plugins?: Record<string, unknown>;
-  };
-  expect(config).toEqual({ plugins: {} });
-  expect(
-    JSON.parse(
-      execFileSync("node", [PLUGIN_UPDATE_PROBE_SCRIPT, "snapshot"], {
-        encoding: "utf8",
-        env,
-      }),
-    ),
-  ).toMatchObject({ source: "npm", resolvedVersion: "0.9.0" });
+it.each([false, true])(
+  "preserves plugin ownership with initialized state=%s",
+  async (initialized) => {
+    const root = tempDirs.make("openclaw-plugin-update-seed-");
+    const { configPath, env, stateDir } = seedInstallState(root, initialized);
+    const config = JSON.parse(readFileSync(configPath, "utf8")) as {
+      plugins?: Record<string, unknown>;
+    };
+    expect(config).toEqual({ plugins: {} });
+    expect(
+      JSON.parse(
+        execFileSync("node", [PLUGIN_UPDATE_PROBE_SCRIPT, "snapshot"], {
+          encoding: "utf8",
+          env,
+        }),
+      ),
+    ).toMatchObject({ source: "npm", resolvedVersion: "0.9.0" });
 
-  const { readPluginInstallIndex } = await import(PLUGIN_INDEX_MODULE_URL);
-  const persisted = readPluginInstallIndex({ configPath, stateDir });
-  expect(persisted).toMatchObject({
-    installRecords: {
-      "lossless-claw": {
-        source: "npm",
-        installPath: "~/.openclaw/extensions/lossless-claw",
-      },
-    },
-    plugins: [
-      {
-        pluginId: "lossless-claw",
-        installOwner: "lossless-claw",
-        rootDir: path.join(stateDir, "extensions", "lossless-claw"),
-      },
-    ],
-  });
+    const { readPluginInstallIndex } = await import(PLUGIN_INDEX_MODULE_URL);
+    const persisted = readPluginInstallIndex({ configPath, stateDir });
 
-  const database = openOpenClawStateDatabase({ env });
-  closeOpenClawStateDatabaseByPath(database.path);
-  const liveIndex = loadInstalledPluginIndex({ config, env, stateDir });
-  expect(
-    createInstalledPluginOwnershipResolver(liveIndex, env).resolvePackage("lossless-claw"),
-  ).toMatchObject({
-    ok: true,
-    value: { installOwner: "lossless-claw", pluginIds: ["lossless-claw"] },
-  });
-});
+    if (!initialized) {
+      // The frozen-driver probe can seed an unversioned plugin-only catalog, but it
+      // is not a native credential bootstrap that the current runtime may adopt.
+      expect(() => openOpenClawStateDatabase({ env })).toThrow(
+        "Unrecognized native bootstrap database",
+      );
+      expect(readPluginInstallIndex({ configPath, stateDir })).toEqual(persisted);
+      expect(existsSync(path.join(stateDir, "client"))).toBe(false);
+      return;
+    }
+
+    const database = openOpenClawStateDatabase({ env });
+    closeOpenClawStateDatabaseByPath(database.path);
+    const liveIndex = loadInstalledPluginIndex({ config, env, stateDir });
+    expect(
+      createInstalledPluginOwnershipResolver(liveIndex, env).resolvePackage("lossless-claw"),
+    ).toMatchObject({
+      ok: true,
+      value: { installOwner: "lossless-claw", pluginIds: ["lossless-claw"] },
+    });
+  },
+);
 
 it.each([
   [

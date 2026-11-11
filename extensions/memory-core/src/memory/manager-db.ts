@@ -16,16 +16,13 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   openOpenClawAgentSqliteWorkerStoreV2,
   openNodeSqliteDatabase,
+  retireSqliteDatabaseAdmissionForPath,
   runSqliteImmediateTransactionSync,
   tableExists as admittedTableExists,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
-import {
-  MEMORY_INDEX_STATE_ID,
-  memoryDatabaseTableExists as tableExists,
-  readMemoryDatabaseRevision,
-} from "./manager-db-kernel.js";
+import { MEMORY_INDEX_STATE_ID, readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
 import type { MemoryPublicationOperations } from "./manager-publication-task.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
@@ -124,7 +121,7 @@ export async function resetMemoryDatabase(params: {
   try {
     return await withMemoryWorkspaceLock(params.workspaceDir, async () =>
       withMemoryIndexGeneration(params.dbPath, "write", async () => {
-        if (tableExists(db, "main", MEMORY_INDEX_VECTOR_TABLE) && !hasSqliteVecExtension(db)) {
+        if (admittedTableExists(db, MEMORY_INDEX_VECTOR_TABLE) && !hasSqliteVecExtension(db)) {
           const loaded = await loadSqliteVecExtension({
             db,
             extensionPath: params.vectorExtensionPath,
@@ -137,7 +134,7 @@ export async function resetMemoryDatabase(params: {
         }
         return runSqliteImmediateTransactionSync(db, () => {
           const tables = MEMORY_INDEX_DERIVED_TABLES.filter((table) =>
-            tableExists(db, "main", table),
+            admittedTableExists(db, table),
           );
           if (
             !tables.some(
@@ -187,6 +184,8 @@ export async function resetMemoryDatabase(params: {
 
 /** Remove one closed shadow memory database and its journal-mode sidecars. */
 export async function removeMemoryDatabaseFiles(dbPath: string): Promise<void> {
+  // Its consumers have closed; the retained identity descriptor would keep the unlinked file allocated.
+  retireSqliteDatabaseAdmissionForPath(dbPath);
   for (const suffix of MEMORY_DATABASE_FILE_SUFFIXES) {
     await fs.rm(`${dbPath}${suffix}`, { force: true });
   }

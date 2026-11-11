@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { ModelAccountConnectAuthorityError } from "../gateway/model-account-connect-errors.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -26,6 +26,7 @@ import {
   selectStoredGitHubIdentities,
   selectUserProfileRoleAuthority,
 } from "./user-profile-github-identity.js";
+import { ensureOpenClawIdUserProfile } from "./user-profile-openclaw-id.worker.js";
 import {
   createUserProfileWriteOperation,
   linkEmail,
@@ -135,6 +136,11 @@ const userProfileWriteOperations = {
     (input: Parameters<typeof ensureProfileForTailscaleIdentity>[0], owned) =>
       ensureProfileForTailscaleIdentity(input, owned),
   ),
+  "userProfiles.ensureOpenClawId": createUserProfileWriteOperation(
+    "userProfiles.ensureOpenClawId",
+    (input: Parameters<typeof ensureOpenClawIdUserProfile>[0], owned) =>
+      ensureOpenClawIdUserProfile(input, owned),
+  ),
   "userProfiles.syncGitHub": createUserProfileWriteOperation(
     "userProfiles.syncGitHub",
     (input: Parameters<typeof syncGitHubIdentity>[0], owned) => syncGitHubIdentity(input, owned),
@@ -226,7 +232,7 @@ export const userProfileOperations = {
   "userProfiles.directory": ({ limit }: { limit: number }, { open, stateOptions }) => {
     const database = open();
     ensureUserProfilesSchema(stateOptions(), database);
-    return runSqliteDeferredTransactionSync(
+    return runSqliteReadSnapshotSync(
       database.db,
       () => {
         const profiles = executeSqliteQuerySync(

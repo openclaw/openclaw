@@ -4,6 +4,5 @@ export function resolveMemoryCoreNowMs(nowMs?: number): number {
 }
 
 export function resolveMemoryCoreTimestamp(nowMs?: number): string {
-  const timestampMs = resolveMemoryCoreNowMs(nowMs);
-  return new Date(timestampMs).toJSON() ?? new Date().toISOString();
+  return new Date(resolveMemoryCoreNowMs(nowMs)).toISOString();
 }

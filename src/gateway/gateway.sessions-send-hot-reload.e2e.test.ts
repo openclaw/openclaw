@@ -1,26 +1,23 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, onTestFailed } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { resetConfigOverrides } from "../config/runtime-overrides.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { readSessionStoreSummaryReadOnly } from "../config/sessions/session-accessor.sqlite-summary.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { getActiveGatewayRootWorkHolders } from "../process/gateway-work-admission.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
 import {
-  closeProvider,
-  listenProvider,
-  readProviderBody,
-  writeToolCall,
-} from "./gateway-provider-fixture.test-support.js";
-import { createGatewayConfigPath, setupGatewayTempHome } from "./gateway.test-support.js";
+  createGatewayConfigPath,
+  resetGatewayTestState,
+  setupGatewayTempHome,
+} from "./gateway.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
+import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const MODEL_A = "reload-proof/model-a";
 const MODEL_B = "reload-proof/model-b";
@@ -44,27 +41,9 @@ type AgentResult = {
 
 const cleanups: Array<() => Promise<void>> = [];
 
-function resetGatewayState(): void {
-  resetConfigOverrides();
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  clearSessionStoreCacheForTest();
-  resetAgentEventsForTest({ preserveListeners: true });
-}
-
 afterEach(async () => {
-  const errors: unknown[] = [];
-  for (const cleanup of cleanups.splice(0).toReversed()) {
-    try {
-      await cleanup();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  if (errors.length > 0) {
-    throw new AggregateError(errors, "sessions_send reload proof cleanup failed");
-  }
-  resetGatewayState();
+  await runQaGatewayFixture(async () => {}, ...cleanups.splice(0).toReversed());
+  resetGatewayTestState();
 });
 
 function textResponse(response: ServerResponse, text: string): void {
@@ -90,64 +69,56 @@ async function startProvider() {
   const releaseTarget = createDeferred();
   const calls: ModelCall[] = [];
   let targetRunId: string | undefined;
-  const server = createServer((request, response) => {
-    void (async () => {
-      if (request.method === "GET" && request.url === "/v1/models") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify({
-            data: [
-              { id: "model-a", object: "model" },
-              { id: "model-b", object: "model" },
-            ],
-          }),
-        );
-        return;
-      }
-      if (request.method !== "POST" || request.url !== "/v1/responses") {
-        response.writeHead(404).end();
-        return;
-      }
-      const raw = await readProviderBody(request);
-      const body = JSON.parse(raw) as {
-        model?: unknown;
-        tools?: Array<{ type?: string; name?: string }>;
-      };
-      const rawModel = body.model;
-      const modelId = typeof rawModel === "string" ? rawModel : "";
-      if (raw.includes(TARGET_REPLY)) {
-        calls.push({ kind: "reply", model: modelId, raw });
-        textResponse(response, "Requester received the target result.");
-      } else if (raw.includes(INITIAL_PROMPT) && raw.includes("function_call_output")) {
-        calls.push({ kind: "dispatch-complete", model: modelId, raw });
-        const result = readTargetToolResult(raw);
-        targetRunId = typeof result?.runId === "string" ? result.runId : undefined;
-        textResponse(response, DISPATCH_COMPLETE);
-      } else if (raw.includes(TARGET_MESSAGE)) {
-        calls.push({ kind: "target", model: modelId, raw });
-        targetStarted.resolve();
-        await releaseTarget.promise;
-        textResponse(response, TARGET_REPLY);
-      } else if (raw.includes(INITIAL_PROMPT)) {
-        calls.push({ kind: "dispatch", model: modelId, raw });
-        expect(body.tools).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ type: "function", name: "sessions_send" }),
-          ]),
-        );
-        writeToolCall(response, "sessions_send", {
-          agentId: "target",
-          message: TARGET_MESSAGE,
-          timeoutSeconds: 0,
-        });
-      } else {
-        throw new Error(`unexpected model request for ${modelId || "<missing model>"}`);
-      }
-    })().catch((error: unknown) => {
-      response.writeHead(500).end(error instanceof Error ? error.message : String(error));
-    });
+  const server = createTrackedProvider(async (raw, response, request) => {
+    if (request.method === "GET" && request.url === "/v1/models") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          data: ["model-a", "model-b"].map((id) => ({ id, object: "model" })),
+        }),
+      );
+      return;
+    }
+    if (request.method !== "POST" || request.url !== "/v1/responses") {
+      response.writeHead(404).end();
+      return;
+    }
+    const body = JSON.parse(raw) as {
+      model?: unknown;
+      tools?: Array<{ type?: string; name?: string }>;
+    };
+    const rawModel = body.model;
+    const modelId = typeof rawModel === "string" ? rawModel : "";
+    if (raw.includes(TARGET_REPLY)) {
+      calls.push({ kind: "reply", model: modelId, raw });
+      textResponse(response, "Requester received the target result.");
+    } else if (raw.includes(INITIAL_PROMPT) && raw.includes("function_call_output")) {
+      calls.push({ kind: "dispatch-complete", model: modelId, raw });
+      const result = readTargetToolResult(raw);
+      targetRunId = typeof result?.runId === "string" ? result.runId : undefined;
+      textResponse(response, DISPATCH_COMPLETE);
+    } else if (raw.includes(TARGET_MESSAGE)) {
+      calls.push({ kind: "target", model: modelId, raw });
+      targetStarted.resolve();
+      await releaseTarget.promise;
+      textResponse(response, TARGET_REPLY);
+    } else if (raw.includes(INITIAL_PROMPT)) {
+      calls.push({ kind: "dispatch", model: modelId, raw });
+      expect(body.tools).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "function", name: "sessions_send" }),
+        ]),
+      );
+      writeToolCall(response, "sessions_send", {
+        agentId: "target",
+        message: TARGET_MESSAGE,
+        timeoutSeconds: 0,
+      });
+    } else {
+      throw new Error(`unexpected model request for ${modelId || "<missing model>"}`);
+    }
   });
-  const baseUrl = await listenProvider(server);
+  const baseUrl = await server.listen();
   return {
     baseUrl,
     calls,
@@ -156,21 +127,8 @@ async function startProvider() {
     targetStarted: targetStarted.promise,
     close: async () => {
       releaseTarget.resolve();
-      await closeProvider(server);
+      await server.close();
     },
-  };
-}
-
-function modelDefinition(id: string): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    api: "openai-responses" as const,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 4_096,
   };
 }
 
@@ -190,7 +148,7 @@ describe("sessions_send across prepared runtime reload", () => {
           })}\n`,
         );
       });
-      resetGatewayState();
+      resetGatewayTestState();
       const {
         tempHome: home,
         workspaceDir: workspace,
@@ -210,7 +168,9 @@ describe("sessions_send across prepared runtime reload", () => {
         apiKey: "test-token-placeholder",
         api: "openai-responses" as const,
         request: { allowPrivateNetwork: true },
-        models: [modelDefinition("model-a"), modelDefinition("model-b")],
+        models: ["model-a", "model-b"].map(
+          (id) => buildMockOpenAiResponsesProvider(provider.baseUrl, id).config.models[0],
+        ),
       };
       const cfg = {
         agents: {

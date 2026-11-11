@@ -24,10 +24,19 @@ import {
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
-import { isGatewayAuthGrantCurrent, isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
+import {
+  captureGatewayAuthPolicy,
+  isGatewayAuthGrantCurrent,
+  isGatewayAuthPolicyCurrent,
+} from "../../auth-policy.js";
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
+import { errorShapeFromError } from "../../error-shape.js";
 import { createExpectedProfileBinding } from "../../expected-profile.js";
 import { hasCurrentRemoteControlUiIngress } from "../../ingress-attribution.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  recordOpenClawIdTunnelActivity,
+} from "../../openclaw-id/tunnel-principal.js";
 import {
   GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
   hasCurrentGatewayOperatorAccess,
@@ -130,35 +139,46 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     const req = parsed;
     const context = buildRequestContext();
     const sourceContext = context.resolveGatewayContext?.() ?? context;
-    const isCommittedGrantCurrent = () =>
-      isGatewayAuthGrantCurrent(
-        client.authPolicy,
-        sourceContext.getCommittedRuntimeConfig?.() ?? sourceContext.getRuntimeConfig(),
-      );
+    let committedAuthPolicy = client.authPolicy;
+    const isCommittedGrantCurrent = () => {
+      const config =
+        sourceContext.getCommittedRuntimeConfig?.() ?? sourceContext.getRuntimeConfig();
+      if (!isGatewayAuthGrantCurrent(committedAuthPolicy, config)) {
+        return false;
+      }
+      // Keep equivalent issued policies; contextual ingress still rechecks its live grant.
+      if (committedAuthPolicy && !committedAuthPolicy.browserOrigin?.remoteControlUiIngress) {
+        committedAuthPolicy = captureGatewayAuthPolicy(config, committedAuthPolicy);
+      }
+      return true;
+    };
     if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
       return;
     }
-    const diagnostics = createGatewayRpcDiagnostics(
-      req.method,
-      getMethodRegistry,
-      extraHandlers,
-      req.method === "models.list" ||
-        req.method === "sessions.list" ||
-        req.method === "cron.list" ||
-        req.method === "chat.history"
-        ? {
-            clientKind: client.connect.client.id,
-            source: sendResponse === send ? "wire" : "internal",
-            params: req.params,
-          }
-        : undefined,
-    );
+    if (sendResponse === send && client.internal?.openclawIdPrincipal) {
+      recordOpenClawIdTunnelActivity(client.internal.openclawIdPrincipal);
+    }
+    const diagnostics = createGatewayRpcDiagnostics(req.method, getMethodRegistry, extraHandlers, {
+      clientKind: client.connect.client.id,
+      source: sendResponse === send ? "wire" : "internal",
+      params: req.params,
+    });
     logWs("in", "req", { connId, id: req.id, method: req.method });
     const generationState = SharedGatewaySessionGenerationState.fromReader(
       getRequiredSharedGatewaySessionGeneration,
     );
     const remoteIngress = client.remoteControlUiIngress;
     const hasCurrentIngress = () => {
+      const principal = client.internal?.openclawIdPrincipal;
+      if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
+        invalidateGatewayPolicyClient(client, {
+          reason: "openclaw-id-authority-changed",
+          code: 4001,
+          message: "OpenClaw ID membership changed",
+          close: () => close(4001, "OpenClaw ID membership changed"),
+        });
+        return false;
+      }
       if (hasCurrentRemoteControlUiIngress(remoteIngress)) {
         return true;
       }
@@ -170,6 +190,11 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       });
       return false;
     };
+    const reconnectDevice =
+      client.internal?.authenticatedControlUi === true && client.isDeviceTokenAuth === true
+        ? client.internal.operatorDeviceTokenIdentity
+        : undefined;
+    const reconnectProfile = client.authenticatedUserProfile?.profileId;
     const clientAuthority = captureGatewayDeviceRevocation(
       context,
       { deviceId: client.connect.device?.id, role: client.connect.role },
@@ -219,6 +244,25 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                 ? client.sharedGatewaySessionGeneration
                 : undefined,
               authorityOwner: remoteIngress,
+              ...(reconnectDevice && reconnectProfile
+                ? {
+                    reconnect: {
+                      device: reconnectDevice,
+                      profileId: reconnectProfile,
+                      role: client.connect.role,
+                      scopes: JSON.stringify([...new Set(client.connect.scopes ?? [])].toSorted()),
+                      clientId: client.connect.client.id,
+                      clientMode: client.connect.client.mode,
+                      pairedClientId: client.pairedClientId,
+                      transportPolicyGeneration: client.authPolicy?.generation,
+                      verifiedIdentity: client.authPolicy?.verifiedIdentity,
+                      origin: client.browserOrigin?.origin,
+                      requestHost: client.browserOrigin?.requestHost,
+                      isLocalClient: client.browserOrigin?.isLocalClient,
+                      accessOwner: client.internal?.operatorAccessAuthority,
+                    },
+                  }
+                : {}),
             },
             isCurrent: () =>
               hasCurrentIngress() &&
@@ -367,6 +411,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         } finally {
           // ws queues frames in order: send the result before starting its close handshake.
           policyResponse?.finish();
+          if (
+            client.connect.role === "node" &&
+            asOptionalRecord(error?.details)?.code === "PAIRING_CHANGED" &&
+            context.nodeRegistry.get(client.connect.device?.id ?? client.connect.client.id)
+              ?.connId !== client.connId
+          ) {
+            // A failed lookup or same-connection promotion can also reject an RPC.
+            // Retire only a connection that no longer owns the registered node.
+            setCloseCause("node-pairing-changed", { method: req.method });
+            close(4001, "node pairing changed; reconnect");
+          }
         }
       };
 
@@ -523,10 +578,9 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             false,
             undefined,
             staleInstall?.error ??
-              errorShape(
-                ErrorCodes.UNAVAILABLE,
-                formatForLog(err),
-                err instanceof GatewayClientRequestError
+              errorShapeFromError(ErrorCodes.UNAVAILABLE, err, {
+                message: formatForLog(err),
+                ...(err instanceof GatewayClientRequestError
                   ? {
                       retryable: err.retryable,
                       retryAfterMs: err.retryAfterMs,
@@ -534,8 +588,8 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                     }
                   : startTimedOut
                     ? { retryable: true, details: { reason: "request-start-timeout" } }
-                    : undefined,
-              ),
+                    : undefined),
+              }),
           );
         } finally {
           settled.resolve();

@@ -28,6 +28,22 @@ const skillSources = (entries: SkillEntry[], executionEntries: SkillEntry[] = []
   executionEntries,
   runtime: { platform: process.platform, bins: [] },
 });
+const makeConfig = () => ({ plugins: { enabled: false }, skills: { load: { watch: false } } });
+const bridge = () => ({ readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() });
+const prepare = (
+  workspace: string,
+  effectiveWorkspace: string,
+  skillsSnapshot: Parameters<typeof prepareEmbeddedSkills>[0]["attempt"]["skillsSnapshot"],
+  config: ReturnType<typeof makeConfig>,
+) =>
+  prepareEmbeddedSkills({
+    attempt: { config, bootstrapWorkspaceDir: workspace, skillsSnapshot },
+    effectiveWorkspace,
+    sandbox: undefined,
+    sessionAgentId: "main",
+    includeCodeModeSkills: true,
+    applySkillEnvironment: false,
+  });
 
 function requireNamedSkill<T extends { name: string }>(skills: T[], name: string): T {
   const skill = skills.find((entry) => entry.name === name);
@@ -95,7 +111,7 @@ it("isolates equal-root opposite-host caches through final delivered bytes", asy
     return entries;
   };
   const release = registerAgentWorkspaceAccess(workspace, {
-    bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+    bridge: bridge(),
     loadSkills: async () => skillSources([], loadRemoteExecutionEntries()),
     skillResources: {
       readInstructions: (filePath, options) =>
@@ -108,7 +124,7 @@ it("isolates equal-root opposite-host caches through final delivered bytes", asy
         ),
     },
   });
-  const config = { plugins: { enabled: false }, skills: { load: { watch: false } } };
+  const config = makeConfig();
   const params = {
     workspaceDir: workspace,
     executionWorkspaceDir: executionRoot,
@@ -229,7 +245,7 @@ it.each([
             },
           );
           const release = registerAgentWorkspaceAccess(workspace, {
-            bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+            bridge: bridge(),
             loadSkills: async () => skillSources(loadNode()),
             skillResources: {
               readInstructions,
@@ -238,7 +254,7 @@ it.each([
             },
           });
           releases.push(release);
-          const config = { plugins: { enabled: false }, skills: { load: { watch: false } } };
+          const config = makeConfig();
           const { snapshot } = await resolveReusableWorkspaceSkillSnapshot({
             workspaceDir: workspace,
             executionWorkspaceDir: gateway,
@@ -247,14 +263,7 @@ it.each([
             agentId: "main",
             watch: false,
           });
-          const prepared = await prepareEmbeddedSkills({
-            attempt: { config, bootstrapWorkspaceDir: workspace, skillsSnapshot: snapshot },
-            sandbox: undefined,
-            effectiveWorkspace: gateway,
-            sessionAgentId: "main",
-            includeCodeModeSkills: true,
-            applySkillEnvironment: false,
-          });
+          const prepared = await prepare(workspace, gateway, snapshot, config);
           const project = requireNamedSkill(prepared.codeModeSkills, "project-guide");
           expect(project.source.readContent).toBeUndefined();
           expect(await readCodeModeSkill(project)).toContain(
@@ -271,37 +280,23 @@ it.each([
               },
               prepared.skillReadResources,
             ).find((tool) => tool.name === "read")!;
-            expect(
-              getTextContent(
-                await read.execute("gateway-file", {
-                  path: path.join(gateway, "skills/guide/ordinary.txt"),
-                }),
-              ),
-            ).toContain("Gateway ordinary file");
+            const readText = async (file: string) =>
+              getTextContent(await read.execute("read", { path: file }));
+            expect(await readText(path.join(gateway, "skills/guide/ordinary.txt"))).toContain(
+              "Gateway ordinary file",
+            );
             expect(readInstructions).not.toHaveBeenCalled();
-            expect(
-              getTextContent(await read.execute("gateway-skill", { path: project.location })),
-            ).toContain("Gateway project instructions");
+            expect(await readText(project.location)).toContain("Gateway project instructions");
             expect(readInstructions).not.toHaveBeenCalled();
-            expect(
-              getTextContent(await read.execute("workspace-skill", { path: node.location })),
-            ).toContain(user + " node instructions");
+            expect(await readText(node.location)).toContain(user + " node instructions");
             if (!samePath) {
               const collidingGatewayFile = path.join(nodeRoot, "skills/guide/config.json");
               await fs.mkdir(path.dirname(collidingGatewayFile), { recursive: true });
               await fs.writeFile(collidingGatewayFile, '{"owner":"gateway"}');
-              expect(
-                getTextContent(
-                  await read.execute("gateway-collision", { path: collidingGatewayFile }),
-                ),
-              ).toContain('"gateway"');
-              expect(
-                getTextContent(
-                  await read.execute("workspace-skill-physical", {
-                    path: path.join(nodeRoot, "skills/guide/SKILL.md"),
-                  }),
-                ),
-              ).toContain(user + " node instructions");
+              expect(await readText(collidingGatewayFile)).toContain('"gateway"');
+              expect(await readText(path.join(nodeRoot, "skills/guide/SKILL.md"))).toContain(
+                user + " node instructions",
+              );
               const relativeRead = createOpenClawCodingToolsInternal(
                 {
                   config,
@@ -336,7 +331,7 @@ it.each([
             await write(physicalNode, "updated-guide", user + " reconnected instructions");
             bumpSkillsSnapshotVersion({ workspaceDir: physicalNode, reason: "remote-node" });
             const rebound = registerAgentWorkspaceAccess(workspace, {
-              bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+              bridge: bridge(),
               loadSkills: async () => skillSources(loadNode()),
               skillResources: {
                 readInstructions,
@@ -356,18 +351,7 @@ it.each([
               watch: false,
             });
             expect(refreshed.shouldRefresh).toBe(true);
-            const next = await prepareEmbeddedSkills({
-              attempt: {
-                config,
-                bootstrapWorkspaceDir: workspace,
-                skillsSnapshot: refreshed.snapshot,
-              },
-              effectiveWorkspace: gateway,
-              sandbox: undefined,
-              sessionAgentId: "main",
-              includeCodeModeSkills: true,
-              applySkillEnvironment: false,
-            });
+            const next = await prepare(workspace, gateway, refreshed.snapshot, config);
             expect(next.codeModeSkills.some((skill) => skill.name === "node-guide")).toBe(false);
             await expect(
               readCodeModeSkill(requireNamedSkill(next.codeModeSkills, "updated-guide")),

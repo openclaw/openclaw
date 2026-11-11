@@ -28,23 +28,23 @@ function message(
   return { id: "p1", from, body: { content, contentType } };
 }
 
-describe("summarizeParentMessage", () => {
+describe("formatParentContextEvent", () => {
   it.each([
     ["missing message", undefined, undefined],
     ["blank body", message("   ", { user: { displayName: "Alice" } }), undefined],
     [
       "HTML",
       message("<p>Hi <b>there</b></p>", { user: { displayName: "Bob" } }, "html"),
-      { sender: "Bob", text: "Hi there" },
+      "Replying to @Bob: Hi there",
     ],
     [
       "application sender",
       message("heads up", { application: { displayName: "BotApp" } }),
-      { sender: "BotApp", text: "heads up" },
+      "Replying to @BotApp: heads up",
     ],
-    ["missing sender", message("orphan"), { sender: "unknown", text: "orphan" }],
-  ] as const)("summarizes %s", (_label, input, expected) => {
-    expect(parentContext.summarizeParentMessage(input)).toEqual(expected);
+    ["missing sender", message("orphan"), "Replying to @unknown: orphan"],
+  ] as const)("formats %s", (_label, input, expected) => {
+    expect(parentContext.formatParentContextEvent(input)).toEqual(expected);
   });
 
   it("collapses whitespace in text contentType", () => {
@@ -53,18 +53,17 @@ describe("summarizeParentMessage", () => {
       from: { user: { displayName: "Carol" } },
       body: { content: "line one\n  line two\t\ttrailing", contentType: "text" },
     };
-    expect(parentContext.summarizeParentMessage(msg)).toEqual({
-      sender: "Carol",
-      text: "line one line two trailing",
-    });
+    expect(parentContext.formatParentContextEvent(msg)).toEqual(
+      "Replying to @Carol: line one line two trailing",
+    );
   });
 
   it("keeps truncated parent text well-formed when truncating surrogate pairs", () => {
-    const summary = parentContext.summarizeParentMessage(
+    const event = parentContext.formatParentContextEvent(
       message(`${"a".repeat(398)}🦞${"b".repeat(50)}`, { user: { displayName: "Dana" } }),
     );
 
-    expect(summary?.text).toBe(`${"a".repeat(398)}…`);
+    expect(event).toBe(`Replying to @Dana: ${"a".repeat(398)}…`);
   });
 });
 

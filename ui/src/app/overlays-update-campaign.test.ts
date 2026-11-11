@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import { flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
 import { AUTO_UPDATE_SCHEDULE } from "./overlays-update-campaign.test-support.ts";
 import {
@@ -15,6 +16,8 @@ import {
   updateHello,
   updateStatusRequest,
   updateSentinel,
+  methodRequest,
+  requestCalls,
 } from "./overlays-update.test-support.ts";
 
 afterEach(async () => {
@@ -30,7 +33,7 @@ describe("application update campaign overlays", () => {
       origin: { campaignId: AUTO_UPDATE_SCHEDULE.campaign.id },
     });
     const { harness, overlays } = automaticTest(async () => ({ lastRun: run }));
-    await flushMicrotasks();
+    await waitForFast(() => expect(overlays.snapshot.updateRun).toEqual(run));
     harness.emitEvent("update.available", { schedule: automaticSchedule({ state: "applying" }) });
     expect(overlays.snapshot.updateRun).toEqual(run);
     expect(overlays.snapshot.updateRunning).toBe(false);
@@ -55,11 +58,9 @@ describe("application update campaign overlays", () => {
       recordedUpdateAttempt: { timestampMs: 62_000, status: "error", reason: "build-failed" },
     });
     expect(overlays.snapshot.updateSchedule?.campaign).toBeUndefined();
-    const statusRequests = request.mock.calls.filter(([method]) => method === "update.status");
+    const statusRequests = requestCalls(request, "update.status");
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
-      statusRequests.length,
-    );
+    expect(requestCalls(request, "update.status")).toHaveLength(statusRequests.length);
   });
 
   it.each(["disconnect", "dispose"])(
@@ -67,12 +68,10 @@ describe("application update campaign overlays", () => {
     async (boundary) => {
       vi.useFakeTimers();
       const updateStatus = pendingReply({});
-      const request = vi.fn<RequestFn>((method) =>
-        method === "update.status" ? updateStatus.promise : Promise.resolve({}),
-      );
+      const request = methodRequest("update.status", () => updateStatus.promise);
       const { harness, overlays } = automaticTest(request);
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
+      expect(requestCalls(request, "update.status")).toHaveLength(2);
       if (boundary === "disconnect") {
         harness.update({ phase: "reconnecting" });
       } else {
@@ -82,7 +81,7 @@ describe("application update campaign overlays", () => {
       await flushMicrotasks();
       await vi.advanceTimersByTimeAsync(10_000);
 
-      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
+      expect(requestCalls(request, "update.status")).toHaveLength(2);
     },
   );
 
@@ -186,26 +185,22 @@ describe("application update campaign overlays", () => {
   it("polls update.status only for administrators with an active campaign", async () => {
     vi.useFakeTimers();
     let statusReads = 0;
-    const request = vi.fn<RequestFn>((method) =>
-      Promise.resolve(
-        method === "update.status"
-          ? ++statusReads === 1
-            ? { schedule: AUTO_UPDATE_SCHEDULE }
-            : {
-                sentinel: updateSentinel("build-failed"),
-                updateAvailable: {
-                  currentVersion: "1.0.0",
-                  latestVersion: "2.0.0",
-                  channel: "stable",
-                },
-                schedule: {
-                  channel: "stable",
-                  autoEnabled: true,
-                  target: { kind: "package", version: "2.0.0" },
-                },
-              }
-          : {},
-      ),
+    const request = updateStatusRequest(() =>
+      ++statusReads === 1
+        ? { schedule: AUTO_UPDATE_SCHEDULE }
+        : {
+            sentinel: updateSentinel("build-failed"),
+            updateAvailable: {
+              currentVersion: "1.0.0",
+              latestVersion: "2.0.0",
+              channel: "stable",
+            },
+            schedule: {
+              channel: "stable",
+              autoEnabled: true,
+              target: { kind: "package", version: "2.0.0" },
+            },
+          },
     );
     const { harness, overlays, expectState } = gatewayTest(
       request,
@@ -221,7 +216,7 @@ describe("application update campaign overlays", () => {
     harness.update({ sessionKey: "agent:main:active" });
     await vi.advanceTimersByTimeAsync(1_000);
     await flushMicrotasks();
-    expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
+    expect(requestCalls(request, "update.status")).toHaveLength(2);
     expectState({
       updateStatusBanner: { text: expect.stringContaining("build-failed") },
     });
@@ -229,7 +224,7 @@ describe("application update campaign overlays", () => {
 
     await vi.advanceTimersByTimeAsync(10_000);
     await flushMicrotasks();
-    expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
+    expect(requestCalls(request, "update.status")).toHaveLength(2);
 
     harness.update({
       hello: updateHello(
@@ -245,7 +240,7 @@ describe("application update campaign overlays", () => {
     });
     await vi.advanceTimersByTimeAsync(10_000);
     await flushMicrotasks();
-    expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
+    expect(requestCalls(request, "update.status")).toHaveLength(2);
     expectState({
       updateCampaignStatusHydrated: false,
       updateSchedule: { campaign: { id: "campaign-2" } },
@@ -255,9 +250,7 @@ describe("application update campaign overlays", () => {
   it("holds a campaign surface until its first authoritative status arrives", async () => {
     vi.useFakeTimers();
     const updateStatus = deferred<unknown>();
-    const request = vi.fn<RequestFn>((method) =>
-      method === "update.status" ? updateStatus.promise : Promise.resolve({}),
-    );
+    const request = methodRequest("update.status", () => updateStatus.promise);
     const { overlays, expectState } = gatewayTest(
       request,
       updateHello(
@@ -267,7 +260,7 @@ describe("application update campaign overlays", () => {
 
     expect(overlays.snapshot.updateCampaignStatusHydrated).toBe(false);
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
+    expect(requestCalls(request, "update.status")).toHaveLength(2);
     expect(overlays.snapshot.updateCampaignStatusHydrated).toBe(false);
 
     updateStatus.resolve({ sentinel: updateSentinel("build-dirty") });
@@ -280,17 +273,13 @@ describe("application update campaign overlays", () => {
   });
 
   it("holds an active campaign and adopts the returned schedule", async () => {
-    const request = vi.fn<RequestFn>(async (method) =>
-      method === "update.hold"
-        ? {
-            ok: true,
-            schedule: campaign(
-              { state: "waiting-for-idle", holdUntilMs: 3_601_000, forceAtMs: 4_501_000 },
-              { channel: "stable", target: { kind: "package", version: "2.0.0" } },
-            ),
-          }
-        : {},
-    );
+    const request = methodRequest("update.hold", () => ({
+      ok: true,
+      schedule: campaign(
+        { state: "waiting-for-idle", holdUntilMs: 3_601_000, forceAtMs: 4_501_000 },
+        { channel: "stable", target: { kind: "package", version: "2.0.0" } },
+      ),
+    }));
     const { harness, overlays, expectState } = gatewayTest(
       request,
       updateHello(
@@ -313,7 +302,7 @@ describe("application update campaign overlays", () => {
       schedule: { channel: "stable", autoEnabled: true },
     });
     await expect(overlays.holdUpdate()).resolves.toBe(false);
-    expect(request.mock.calls.filter(([method]) => method === "update.hold")).toHaveLength(1);
+    expect(requestCalls(request, "update.hold")).toHaveLength(1);
   });
 
   it.each([
@@ -323,9 +312,7 @@ describe("application update campaign overlays", () => {
     { boundary: "revoked", reply: "error" },
   ])("does not publish a stale hold $reply after $boundary", async ({ boundary, reply }) => {
     const holdReply = pendingReply({});
-    const request = vi.fn<RequestFn>((method) =>
-      method === "update.hold" ? holdReply.promise : Promise.resolve({}),
-    );
+    const request = methodRequest("update.hold", () => holdReply.promise);
     const { harness, overlays, expectState } = automaticTest(request);
     const holding = settleAtCleanup(overlays.holdUpdate());
     if (boundary === "applying") {
@@ -390,6 +377,6 @@ describe("application update campaign overlays", () => {
     await running;
     expect(overlays.snapshot.updateRunning).toBe(true);
     await expect(overlays.holdUpdate()).resolves.toBe(false);
-    expect(request.mock.calls.filter(([method]) => method === "update.hold")).toHaveLength(0);
+    expect(requestCalls(request, "update.hold")).toHaveLength(0);
   });
 });

@@ -20,7 +20,7 @@ import type { PluginDependencySpecMap } from "./status-dependencies.types.js";
 
 export type PluginManifestContractListKey = Exclude<
   keyof PluginManifestContracts,
-  "embeddedExtensionFactories" | "agentToolResultMiddleware" | "trustedToolPolicies" | "tools"
+  "agentToolResultMiddleware" | "trustedToolPolicies" | "tools"
 >;
 
 type PluginManifestRecordStatic = Omit<
@@ -80,6 +80,7 @@ export type PluginManifestRecord = PluginManifestRecordStatic & {
   trustedOfficialInstall?: boolean;
   trust?: PluginTrust;
   skills: string[];
+  agentSkillsDir?: string;
   settingsFiles?: string[];
   hooks: string[];
   origin: PluginOrigin;

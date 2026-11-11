@@ -499,7 +499,9 @@ private fun ChatPage(
         }
       } else {
         visibleMessages.forEach { message ->
-          item(key = message.id ?: "${message.role}:${message.timestamp}:${message.text.hashCode()}") {
+          // Repeated unidentified messages are valid; let the list assign positional keys.
+          // Namespace transcript identities separately from the list's own anchors.
+          item(key = (message.entryId ?: message.id)?.let { "chat-message:$it" }) {
             MessageBubble(
               role = message.chatRole,
               text = message.text,

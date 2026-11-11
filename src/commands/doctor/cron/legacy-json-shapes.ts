@@ -1,4 +1,5 @@
-// File-era cron shapes are read only by Doctor, before canonical SQLite persistence.
+// Temporary #174343 cron upgrade dead-end repair; remove after 2026-11-29 with
+// Doctor compat record doctor-pre-july-retired-state.
 import { createHash } from "node:crypto";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -8,21 +9,16 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
 import { normalizeCronStaggerMs } from "../../../cron/stagger.js";
+import { decodeUtf8Input } from "../../../infra/utf8-input.js";
 import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
 
-function parseCronStateFile(raw: string): {
-  version: 1;
-  jobs: Record<string, unknown>;
-} | null {
+function parseCronStateFile(bytes: Buffer): Record<string, unknown> | null {
   try {
-    const parsed = parseJsonWithJson5Fallback(raw);
+    const parsed = parseJsonWithJson5Fallback(decodeUtf8Input(bytes, "Legacy cron runtime state"));
     if (!isRecord(parsed) || parsed.version !== 1 || !isRecord(parsed.jobs)) {
       return null;
     }
-    return {
-      version: 1,
-      jobs: parsed.jobs,
-    };
+    return parsed.jobs;
   } catch {
     return null;
   }
@@ -123,7 +119,7 @@ export function parseLegacyCronJobs(
   jobs: Array<Record<string, unknown>>;
   warnings: string[];
 } {
-  const parsed = parseJsonWithJson5Fallback(storeBytes.toString("utf8"));
+  const parsed = parseJsonWithJson5Fallback(decodeUtf8Input(storeBytes, "Legacy cron job store"));
   const rows = Array.isArray(parsed) ? parsed : isRecord(parsed) ? parsed.jobs : undefined;
   if (!Array.isArray(rows)) {
     throw new Error("Unrecognized legacy cron job store; expected an array or a jobs array");
@@ -145,7 +141,7 @@ export function parseLegacyCronJobs(
     }
     jobs.push(row);
   }
-  const stateFile = stateBytes ? parseCronStateFile(stateBytes.toString("utf8")) : null;
+  const stateFile = stateBytes ? parseCronStateFile(stateBytes) : null;
   if (stateBytes && !stateFile) {
     warnings.push("Unrecognized legacy cron runtime state remains available in the archive.");
   }
@@ -153,7 +149,7 @@ export function parseLegacyCronJobs(
     !stateFile && jobs.some((job) => isRecord(job.state) && Object.keys(job.state).length > 0);
   for (const job of jobs) {
     if (stateFile) {
-      mergeStateFileEntry(job, stateFile.jobs[String(job.id)]);
+      mergeStateFileEntry(job, stateFile[String(job.id)]);
     } else if (inlineState) {
       ensureJobStateObject(job);
     } else {

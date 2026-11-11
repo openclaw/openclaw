@@ -11,7 +11,6 @@ export type NodeEventContext = Pick<
   | "broadcastVoiceWakeChanged"
   | "addChatRun"
   | "removeChatRun"
-  | "chatAbortControllers"
   | "dedupe"
   | "agentRunSeq"
   | "getHealthCache"
@@ -53,11 +52,14 @@ export type NodeEventHandleResult = {
 };
 
 export type NodeEventHandlerOptions = {
+  /** Publish the decided result before an actor source drains its accepted work. */
+  onResult?: (result: NodeEventHandleResult) => void;
   connId?: string;
   deviceId?: string;
   pairingGeneration?: NodePairingGeneration;
   presenceAllowed?: boolean;
   isConnectionCurrent?: () => boolean | Promise<boolean>;
+  assertSessionEventCurrent?: () => void;
   resolveApnsRegistrationGeneration?: () => string | null | Promise<string | null>;
   assertApnsRegistrationCurrent?: () => void;
 };

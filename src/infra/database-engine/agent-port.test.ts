@@ -18,9 +18,11 @@ it("discovers default, shared auth, explicit session and retained agent stores w
   const externalSession = path.join(root, "custom-session", "sessions.json");
   const retired = path.join(root, "retired", "agent.sqlite");
   const unconfigured = path.join(stateDir, "agents", "unconfigured", "agent");
+  const systemAgent = path.join(stateDir, "agents", "crestodian", "agent");
   const registryPath = path.join(stateDir, "state", "openclaw.sqlite");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: sharedAuth };
   await fs.mkdir(unconfigured, { recursive: true });
+  await fs.mkdir(systemAgent, { recursive: true });
   const bytes = await withDatabaseEngineSelection(
     { effectiveEngines: resolveDatabaseFamilyEngines({}) },
     async () => {
@@ -52,6 +54,7 @@ it("discovers default, shared auth, explicit session and retained agent stores w
     new Set([
       path.join(sharedAuth, "openclaw-agent.sqlite"),
       path.join(unconfigured, "openclaw-agent.sqlite"),
+      path.join(systemAgent, "openclaw-agent.sqlite"),
       path.join(externalAgent, "openclaw-agent.sqlite"),
       path.join(root, "custom-session", "openclaw-agent.sqlite"),
       retired,

@@ -6,7 +6,6 @@ export type SessionTranscriptAccountingOptions = {
   includeByteSize: boolean;
   includeTurnTaint?: boolean;
   includeUsage: boolean;
-  usageEventLimit?: number;
 };
 
 export type SessionTranscriptUsageSnapshot = {

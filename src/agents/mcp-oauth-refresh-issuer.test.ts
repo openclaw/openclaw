@@ -1,5 +1,4 @@
-import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { auth, type FetchLike } from "@modelcontextprotocol/client";
 import { describe, expect, it } from "vitest";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -8,7 +7,7 @@ import {
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { readMcpOAuthStore } from "./mcp-oauth-store.js";
-import { withTempHome as withBaseTempHome } from "./mcp-oauth.test-harness.js";
+import { withMcpOAuthTempHome as withTempHome } from "./mcp-oauth.test-harness.js";
 import { withMcpOAuthProviderForTest } from "./mcp-oauth.test-support.js";
 
 const SERVER_URL = "https://mcp.example.com/mcp";
@@ -96,7 +95,7 @@ function createOAuthNetwork(
 }
 
 async function seedAuthorizedStore(
-  order: "discovery-then-tokens" | "tokens-then-discovery",
+  order?: "discovery-then-tokens" | "tokens-then-discovery",
   expiresIn = 3600,
 ) {
   await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
@@ -115,7 +114,9 @@ async function seedAuthorizedStore(
       await provider.saveTokens(tokens);
     } else {
       await provider.saveTokens(tokens);
-      await provider.saveDiscoveryState?.(discoveryState);
+      if (order) {
+        await provider.saveDiscoveryState?.(discoveryState);
+      }
     }
   });
 }
@@ -137,14 +138,6 @@ function request({ fetchFn }: ReturnType<typeof createOAuthNetwork>) {
 
 function readStore() {
   return readMcpOAuthStore(IDENTITY.storeKey);
-}
-
-function withTempHome<T>(run: (home: string) => T | Promise<T>, prefix: string) {
-  return withBaseTempHome(run, {
-    prefix,
-    skipSessionCleanup: true,
-    env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
-  });
 }
 
 describe("MCP OAuth refresh issuer binding", () => {
@@ -294,15 +287,7 @@ describe("MCP OAuth refresh issuer binding", () => {
 
   it("fails closed for a token-only legacy store with no recoverable issuer", async () => {
     await withTempHome(async () => {
-      await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
-        await provider.saveClientInformation?.({ client_id: "stored-client-id" });
-        await provider.saveTokens({
-          access_token: STORED_ACCESS,
-          refresh_token: STORED_REFRESH,
-          token_type: "Bearer",
-          expires_in: 3600,
-        });
-      });
+      await seedAuthorizedStore();
       expect((await readStore()).discoveryState).toBeUndefined();
       expect((await readStore()).tokensAuthorizationServerUrl).toBeUndefined();
       const network = createOAuthNetwork();

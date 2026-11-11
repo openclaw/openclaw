@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import type { BackupCreateOptions, BackupCreateResult } from "../infra/backup-create.js";
 import {
@@ -174,7 +175,6 @@ export async function createOffsiteBackupArchive(
         retention,
       );
       for (const expired of selected.deleted) {
-        await assertBackupNamespaceOwner(location, namespace, deviceId);
         await location.delete(expired, {
           precondition: () => assertBackupNamespaceOwner(location, namespace, deviceId),
         });
@@ -221,8 +221,14 @@ export async function backupListCommand(runtime: RuntimeEnv, opts: RemoteBackupO
       if (namespaces) {
         runtime.log(
           namespaces.length
-            ? `Available namespaces in ${opts.from}:\n${namespaces.map((entry) => `${entry.namespace}${entry.hostname ? ` (${entry.hostname})` : ""}`).join("\n")}`
-            : `No backup namespaces in ${opts.from}.`,
+            ? terminalText`Available namespaces in ${opts.from}:\n` +
+                namespaces
+                  .map(
+                    (entry) =>
+                      terminalText`${entry.namespace}${entry.hostname ? ` (${entry.hostname})` : ""}`,
+                  )
+                  .join("\n")
+            : terminalText`No backup namespaces in ${opts.from}.`,
         );
       }
       runtime.log(
@@ -230,10 +236,10 @@ export async function backupListCommand(runtime: RuntimeEnv, opts: RemoteBackupO
           ? backups
               .map(
                 (backup) =>
-                  `${backup.key}  ${backup.sizeBytes} bytes (${backup.storedBytes} stored)`,
+                  terminalText`${backup.key}  ${backup.sizeBytes} bytes (${backup.storedBytes} stored)`,
               )
               .join("\n")
-          : `No backups in ${opts.from}/${namespace}.`,
+          : terminalText`No backups in ${opts.from}/${namespace}.`,
       );
     }
     return result;
@@ -272,7 +278,7 @@ async function withDownloadedBackup<T>(
   } finally {
     try {
       if (scratch) {
-        await finishBackupScratch(scratch, (message) => runtime.error(message));
+        await finishBackupScratch(scratch, (message) => runtime.error(terminalText`${message}`));
       }
     } finally {
       await location.close();
@@ -292,10 +298,15 @@ export async function backupRemoteVerifyCommand(
 
 export async function backupRemoteRestoreCommand(
   runtime: RuntimeEnv,
-  opts: RemoteBackupOptions & { archive: string; target?: string },
+  opts: RemoteBackupOptions & { archive: string; target?: string; localCompanion?: boolean },
 ) {
   return await withDownloadedBackup(runtime, opts, async (archive) => {
     const { backupRestoreCommand } = await import("./backup-restore.js");
-    return await backupRestoreCommand(runtime, { archive, target: opts.target, json: opts.json });
+    return await backupRestoreCommand(runtime, {
+      archive,
+      target: opts.target,
+      json: opts.json,
+      localCompanion: opts.localCompanion,
+    });
   });
 }

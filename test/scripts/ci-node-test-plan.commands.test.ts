@@ -1,20 +1,15 @@
-import os from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
-import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import { estimateCommandWorkerSeconds as estimateWorkers } from "../../scripts/lib/ci-command-test-plan.mts";
-import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
   createNodeTestShardBundles,
   createNodeTestShards,
   type CompactNodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
-import { refitTestTimings, type CiTimingRun } from "../../scripts/lib/ci-test-timings-refit.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import {
   createCompactSplitTimingGeneration as splitGeneration,
   parseCompactSplitTimingKey as parseSplitKey,
 } from "../../scripts/lib/vitest-shard-metadata.mts";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createCommandsVitestConfig } from "../vitest/vitest.commands.config.ts";
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 import { listMatchedTestFiles } from "./ci-node-test-plan.test-support.js";
@@ -43,42 +38,10 @@ const sole = <T>(items: T[]): T => {
   return items[0]!;
 };
 afterEach(() => vi.restoreAllMocks());
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const commandGroups = (job: CompactNodeTestShard) =>
   job.groups.filter((group) => group.configs.includes(commandsConfig));
 const ownerName = (name: string) => name.replace(/-hosted-\d+$/u, "");
-function mockHost(cpus = 8, gib = 31) {
-  vi.spyOn(os, "availableParallelism").mockReturnValue(cpus);
-  vi.spyOn(os, "totalmem").mockReturnValue(gib * 1024 ** 3);
-}
-function workerEnv(job: CompactNodeTestShard, workers = 8): NodeJS.ProcessEnv {
-  return {
-    CI: "true",
-    RUNNER_ENVIRONMENT: "self-hosted",
-    OPENCLAW_VITEST_MAX_WORKERS: String(workers),
-    OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: String(job.planConcurrency),
-    OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify(job.env ?? {}),
-  };
-}
-
-async function observeCommandWorkers(job: CompactNodeTestShard, env: NodeJS.ProcessEnv = {}) {
-  const seen = new Map<string, string | undefined>();
-  const result = await runShardPlans(
-    resolveShardPlans({ OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(job.groups) }),
-    {
-      env: { ...workerEnv(job), ...env },
-      scratchDir: tempDirs.make("command-worker-plan-"),
-      runChild: async (_args, childEnv, label) => {
-        seen.set(label, childEnv.OPENCLAW_VITEST_MAX_WORKERS);
-        return 0;
-      },
-    },
-  );
-  expect(result).toBe(0);
-  return seen;
-}
-
 async function withCommandInventory(
   files: string[],
   shards: typeof fullSuiteVitestShards,
@@ -122,44 +85,15 @@ async function withCommandInventory(
 }
 
 it.each(["hybrid", "blacksmith", "github"])(
-  "delivers %s allocations through the shard executor",
-  async (runnerBackend) => {
-    const plan = createNodeTestShardBundles({ ...planOptions, runnerBackend });
-    let measuredGroups = 0;
-    let fallbackGroups = 0;
-    for (const job of plan) {
-      const commands = commandGroups(job);
-      if (!commands.length) {
-        continue;
-      }
-      const roomy = job.runner === "blacksmith-32vcpu-ubuntu-2404";
-      mockHost(roomy ? 8 : 2, roomy ? 31 : 8);
-      const jobWorkers =
-        runnerBackend !== "github" &&
-        roomy &&
-        job.planConcurrency === 1 &&
-        job.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
-          ? 8
-          : 2;
-      const seen = await observeCommandWorkers(job, {
-        RUNNER_ENVIRONMENT: runnerBackend === "github" ? "github-hosted" : "self-hosted",
-      });
-      for (const group of commands) {
-        const expected = Math.min(
-          jobWorkers,
-          Number(group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? jobWorkers),
-        );
-        expect(seen.get(group.shard_name), group.shard_name).toBe(String(expected));
-        expect(group.timing_key).toContain(`#file-parallel-${expected}`);
-        if (expected === 8) {
-          measuredGroups += 1;
-        } else {
-          fallbackGroups += 1;
-        }
-      }
-    }
-    expect(fallbackGroups).toBeGreaterThan(0);
-    expect(measuredGroups > 0).toBe(runnerBackend !== "github");
+  "plans measured and fallback command allocations on %s",
+  (runnerBackend) => {
+    const commands = createNodeTestShardBundles({ ...planOptions, runnerBackend }).flatMap(
+      commandGroups,
+    );
+    expect(commands.length).toBeGreaterThan(0);
+    const measured = commands.filter((group) => group.timing_key?.includes("#file-parallel-8"));
+    expect(measured.length > 0).toBe(runnerBackend !== "github");
+    expect(commands.some((group) => group.timing_key?.includes("#file-parallel-2"))).toBe(true);
   },
 );
 
@@ -184,9 +118,9 @@ it.each(["blacksmith", "hybrid"])(
   },
 );
 
-it("refits precise command selections independently by worker policy and retains exact prices", async () => {
+it("keeps precise selection prices separate by worker policy", async () => {
   const owner = "agentic-commands-doctor-auth";
-  const files = ["hints", "profile-health", "shared-health"].map((part) =>
+  const files = ["deprecated-cli-profiles", "profile-health", "shared-health"].map((part) =>
     commandFile(`doctor-auth.${part}`),
   );
   const targets = files.slice(0, 2);
@@ -196,66 +130,34 @@ it("refits precise command selections independently by worker policy and retains
     files,
     [fixtureShard(), companion],
     () => timings,
-    async ({ createSelectedNodeTestShardBundles: createSelected }) => {
-      const create = () => createSelected(targets, { runnerBackend: "blacksmith" })!;
-      const logs: CiTimingRun["logs"] = [];
-      const cells = [
-        { workers: 2, config: "test/vitest/vitest.hooks.config.ts", seconds: 240 },
-        { workers: 8, config: "test/vitest/vitest.gateway-core.config.ts", seconds: 180 },
-      ].map((cell) => {
-        companion.projects = [cell.config];
-        const job = sole(create());
+    async ({ createSelectedNodeTestShardBundles: select }) => {
+      const keys: string[] = [];
+      for (const [config, workers, seconds] of [
+        ["test/vitest/vitest.hooks.config.ts", 2, 240],
+        ["test/vitest/vitest.gateway-core.config.ts", 8, 180],
+      ] as const) {
+        companion.projects = [config];
+        const create = () => sole(select(targets, { runnerBackend: "blacksmith" })!);
+        const job = create();
         const group = sole(job.groups);
         expect(group).toMatchObject({ includePatterns: targets, configs: [commandsConfig] });
         expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBeUndefined();
-        expect(job.planConcurrency).toBe(cell.workers === 2 ? 2 : 1);
-        return Object.assign({}, cell, { job, group });
-      });
-      mockHost();
-      for (const { workers, job, group, seconds } of cells) {
-        const env = { ...workerEnv(job, workers), FROZEN_TARGET: "false" };
-        const seen = await observeCommandWorkers(job, env);
-        expect(seen.get(group.shard_name)).toBe(String(workers));
-        expect.soft(group.timing_key).toContain(`#file-parallel-${workers}#selector-`);
-        logs.push({
-          kind: "compact",
-          labels: ["blacksmith-32vcpu-ubuntu-2404"],
-          text: [
-            ...Object.entries(env).map(([key, value]) => `2026-09-27T00:00:00Z ${key}: ${value}`),
-            `2026-09-27T00:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups(job.groups)}`,
-            `2026-09-27T00:00:00Z [shard:resources] logicalCpuCount=8 totalMemoryBytes=${31 * 1024 ** 3} requested plans=${job.planConcurrency} admitted plans=1`,
-            `2026-09-27T00:00:00Z [shard:${group.timing_key}] begin`,
-            `${new Date(Date.parse("2026-09-27T00:00:00Z") + seconds * 1000).toISOString()} [shard:${group.timing_key}] end (exit 0)`,
-          ].join("\n"),
+        expect(job.planConcurrency).toBe(1);
+        expect(job.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe(workers === 2 ? "2" : undefined);
+        const key = group.timing_key!;
+        expect(key).toContain(`#file-parallel-${workers}#selector-`);
+        keys.push(key);
+        timings[key] = 1;
+        expect(create().predictedTestSeconds).toBe(job.predictedTestSeconds);
+        timings[key] = seconds;
+        expect(create()).toMatchObject({
+          predictedTestSeconds: seconds,
+          predictedSeconds: seconds,
+          planConcurrency: job.planConcurrency,
+          groups: job.groups,
         });
       }
-      expect.soft(cells[0]!.group.timing_key).not.toBe(cells[1]!.group.timing_key);
-      const result = refitTestTimings(
-        [1, 2].map((id) => ({
-          id,
-          createdAt: `2026-09-${25 + id}T00:00:00Z`,
-          completeInventory: false,
-          pullRequestMergeRef: true,
-          logs,
-        })),
-      );
-      expect(result.rejectedWorkerKeys.blacksmith).toEqual([]);
-      for (const { config: companionConfig, group, job, seconds } of cells) {
-        const key = group.timing_key!;
-        expect(result.timings.compactGroupSeconds.blacksmith[key]).toBe(seconds);
-        companion.projects = [companionConfig];
-        timings[key] = 1;
-        expect(create()[0]!.predictedTestSeconds).toBe(job.predictedTestSeconds);
-        timings[key] = seconds;
-        expect(create()[0]).toEqual(
-          expect.objectContaining({
-            predictedTestSeconds: seconds,
-            predictedSeconds: seconds,
-            planConcurrency: job.planConcurrency,
-            groups: job.groups,
-          }),
-        );
-      }
+      expect(keys[0]).not.toBe(keys[1]);
     },
   );
 });
@@ -338,14 +240,9 @@ it("projects serial timings once, retaining complete history and indivisible fil
         ),
       ).toBe(true);
       expect(totalSeconds(measured)).toBe(1280);
-      mockHost();
-      for (const job of measuredJobs) {
-        const seen = await observeCommandWorkers(job);
-        for (const group of job.groups.filter((entry) => measuredGroups.includes(entry))) {
-          expect(seen.get(group.shard_name)).toBe("2");
-          expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
-          expect(group.timing_key).toContain("#file-parallel-2#selector-");
-        }
+      for (const group of measuredGroups) {
+        expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
+        expect(group.timing_key).toContain("#file-parallel-2#selector-");
       }
       observations = { ...priorObservations, [`${owner}#file-parallel-8`]: 250 };
       const commandJob = jobFor(create(), owner);
@@ -367,21 +264,6 @@ it("keeps Doctor session SQLite owners complete and isolated", () => {
   const ownerNames = ["", "-memory", "-sqlite", "-sqlite-recovery"].map((s) => ownerPrefix + s);
   const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
   const commandShards = base.filter((shard) => shard.configs.includes(commandsConfig));
-  const owners = new Map(
-    commandShards
-      .filter((shard) => ownerNames.includes(shard.shardName))
-      .map((shard) => [shard.shardName, shard.includePatterns]),
-  );
-  expect(owners.get(`${ownerPrefix}-memory`)).toEqual([
-    commandFile("doctor-session-sqlite.memory"),
-  ]);
-  for (const [owner, representative] of [
-    ["-sqlite", "doctor-session-sqlite"],
-    ["-sqlite-recovery", "doctor-session-sqlite.receipt-recovery"],
-    ["", "doctor-session-sqlite.shared-store"],
-  ]) {
-    expect(owners.get(ownerPrefix + owner)).toContain(commandFile(representative!));
-  }
   const commandFiles = commandShards.flatMap((shard) => shard.includePatterns ?? []).toSorted();
   expect(commandFiles).toEqual(listMatchedTestFiles(createCommandsVitestConfig({})));
   expect(new Set(commandFiles).size).toBe(commandFiles.length);

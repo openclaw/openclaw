@@ -12,7 +12,8 @@ export function createActiveSession(messages: AgentMessage[] = []) {
       state: { messages },
       convertToLlm,
     },
-  } as unknown as Pick<AgentSession, "agent">;
+    subscribe: () => () => {},
+  } as unknown as Pick<AgentSession, "agent" | "subscribe">;
   return { activeSession, convertToLlm, reset };
 }
 
@@ -29,3 +30,10 @@ export function createSessionManager(
     ...overrides,
   } as unknown as ReturnType<typeof guardSessionManager>;
 }
+
+export const createBoundaryInputDefaults = () => ({
+  isRawModelRun: false,
+  preparedUserTurnMessage: undefined,
+  sessionManager: createSessionManager(),
+  setActiveSessionSystemPrompt: vi.fn(),
+});

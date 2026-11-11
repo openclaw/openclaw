@@ -2,7 +2,7 @@ import "./update-command-execution.test-support.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import path from "node:path";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
@@ -17,13 +17,14 @@ import { createUpdateCommandExecutionGuards } from "./update-command-execution-g
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { updateExecutorNativeEntrypoints as native } from "./update-command-executor-native-runtime.test-support.js";
 
-const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
+const { bindExecutionGuards, executionParams, inspectOrStopService, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
 const temporary = useAutoCleanupTempDirTracker(afterAll);
 let child: ChildProcess;
 let exited: Promise<unknown>;
 let stderr = "";
+let currentOptions: UpdateCommandOptions | undefined;
 
 async function request(message: object) {
   const reply = once(child, "message");
@@ -78,35 +79,27 @@ afterAll(async () => {
   await exited;
 });
 
+afterEach(async () => {
+  currentOptions?.run?.deadline?.dispose();
+  currentOptions = undefined;
+  await request({ release: true });
+});
+
 async function fixture() {
   const root = temporary.make("update-maintenance-state-");
   const env = { HOME: root, OPENCLAW_STATE_DIR: root };
   const { runId } = createUpdateRun({ trigger: "cli" }, { env });
   await closeOpenClawStateDatabaseAsync();
   const opts: UpdateCommandOptions = { json: true, run: { runId, env } };
-  return { root, env, runId, opts, guard: createUpdateCommandExecutionGuards(opts, root) };
+  currentOptions = opts;
+  const guard = createUpdateCommandExecutionGuards(opts, root);
+  return { root, env, runId, opts, guard };
 }
 
-it("reproduces native recovery refusal and proceeds only after the real foreign owner releases", async () => {
-  const f = await fixture();
-  f.guard.assertCurrent();
-  await request({ acquire: f.env });
-  try {
-    expect(() => f.guard.assertCurrent()).toThrow("undergoing offline maintenance");
-    const wait = vi.spyOn(sleeping, "sleep").mockImplementation(async () => {
-      await request({ release: true });
-    });
-    await f.guard.waitForCurrent();
-    expect(wait).toHaveBeenCalledOnce();
-    f.guard.assertCurrent();
-  } finally {
-    await request({ release: true });
-  }
-});
-
-it.each(["before-stop", "before-checkout", "held-before-checkout"] as const)(
+it.each(["before-stop", "during-stop", "before-checkout", "held-before-checkout"] as const)(
   "defers a held owner %s and waits for a transient owner before checkout",
   async (arrival) => {
+    const duringStop = arrival === "during-stop";
     const f = await fixture();
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -118,41 +111,62 @@ it.each(["before-stop", "before-checkout", "held-before-checkout"] as const)(
       }
     });
     let checkedOut = false;
+    const acquire = async () => {
+      await closeOpenClawStateDatabaseAsync();
+      await request({ acquire: f.env });
+      expect(() => f.guard.assertCurrent()).toThrow("undergoing offline maintenance");
+    };
+    if (duringStop) {
+      mocks.maybeStopService.mockImplementation(async (params) => {
+        if (params.phase === "inspect") {
+          return inspectOrStopService("inspect");
+        }
+        await acquire();
+        const cause = await Promise.resolve()
+          .then(() => f.guard.assertCurrent())
+          .catch((error: unknown) => error);
+        throw new AggregateError([cause], "Update executor was lost during native preparation", {
+          cause,
+        });
+      });
+    }
     mocks.runGitUpdate.mockImplementation(async (options) => {
       await options.validateCandidate("/candidate");
       if (arrival === "before-stop") {
-        await closeOpenClawStateDatabaseAsync();
-        await request({ acquire: f.env });
-        expect(() => f.guard.assertCurrent()).toThrow("undergoing offline maintenance");
+        await acquire();
       }
       await options.beforeGitMutation({});
       if (arrival !== "before-stop") {
-        await closeOpenClawStateDatabaseAsync();
-        await request({ acquire: f.env });
-        expect(() => f.guard.assertCurrent()).toThrow("undergoing offline maintenance");
+        await acquire();
         await options.inspectGitTarget({});
       }
       checkedOut = true;
       return { ...successfulUpdate, mode: "git" };
     });
-    try {
-      const result = await executeMutableUpdate(
-        await bindExecutionGuards({ ...executionParams("git"), root: f.root, opts: f.opts }),
-      );
-      if (arrival !== "before-checkout") {
-        expect(result?.result.reason, result?.failure?.detail).toBe("state-maintenance-busy");
-        expect(result?.failure?.detail).toContain(`sqlite-maintenance process ${child.pid}`);
-        expect(result?.failure?.detail).toContain("retry openclaw update");
-        expect(result?.result.recovery?.serviceRestartSafe).toBe(true);
+    const result = await executeMutableUpdate(
+      await bindExecutionGuards({ ...executionParams("git"), root: f.root, opts: f.opts }),
+    );
+    if (arrival !== "before-checkout") {
+      expect(result?.result, result?.failure?.detail).toMatchObject({
+        reason: duringStop ? "managed-service-stop-failed" : "state-maintenance-busy",
+        recovery: { serviceRestartSafe: true },
+      });
+      expect(result?.failure?.detail).toContain(`sqlite-maintenance process ${child.pid}`);
+      if (duringStop) {
+        expect(result?.result.steps[0]?.failureFacts?.[0]?.message).toContain(
+          `sqlite-maintenance process ${child.pid}`,
+        );
       } else {
-        expect(result?.result.status, result?.failure?.detail).toBe("ok");
+        expect(result?.failure?.detail).toContain("retry openclaw update");
       }
-      expect(wait).toHaveBeenCalled();
-      expect(mocks.serviceStopped).toBe(arrival !== "before-stop");
-      expect(checkedOut).toBe(arrival === "before-checkout");
-    } finally {
-      await request({ release: true });
+    } else {
+      expect(result?.result.status, result?.failure?.detail).toBe("ok");
     }
+    if (!duringStop) {
+      expect(wait).toHaveBeenCalled();
+    }
+    expect(mocks.serviceStopped).toBe(arrival !== "before-stop" && !duringStop);
+    expect(checkedOut).toBe(arrival === "before-checkout");
   },
 );
 
@@ -184,20 +198,15 @@ it.each(["recovery", "revocation", "interruption", "deadline"] as const)(
         await sleep(1, f.opts.run!.deadline!.signal);
       }
     });
-    try {
-      if (change === "deadline") {
-        await expect(guard.waitForCurrent()).rejects.toMatchObject({
-          reason: "state-maintenance-busy",
-          message: expect.stringContaining(`sqlite-maintenance process ${child.pid}`),
-        });
-      } else {
-        await expect(guard.waitForCurrent()).rejects.toBeInstanceOf(
-          change === "recovery" ? UpdateRecoveryRequiredError : UpdateRequesterRevokedError,
-        );
-      }
-    } finally {
-      f.opts.run!.deadline?.dispose();
-      await request({ release: true });
+    if (change === "deadline") {
+      await expect(guard.waitForCurrent()).rejects.toMatchObject({
+        reason: "state-maintenance-busy",
+        message: expect.stringContaining(`sqlite-maintenance process ${child.pid}`),
+      });
+    } else {
+      await expect(guard.waitForCurrent()).rejects.toBeInstanceOf(
+        change === "recovery" ? UpdateRecoveryRequiredError : UpdateRequesterRevokedError,
+      );
     }
   },
 );

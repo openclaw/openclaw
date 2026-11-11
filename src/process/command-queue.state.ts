@@ -1,6 +1,6 @@
 // Capacity policy reads this state without importing the queue runtime.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
+import type { CommandQueueAdmissionOptions, CommandQueueWait } from "./command-queue.types.js";
 import { CommandLane, SUBAGENT_LANE_PREFIX, SWARM_LANE_PREFIX } from "./lanes.js";
 
 export function getDefaultLaneConcurrency(lane: string): number {
@@ -12,21 +12,15 @@ export function getDefaultLaneConcurrency(lane: string): number {
     : 1;
 }
 
-export type CommandLaneTaskMarker = Readonly<{
-  lane: string;
-  taskId: number;
-  generation: number;
-}>;
-
 export type QueuePriority = -1 | 0 | 1;
 
 const PRIORITY_HEAD_START_MS = 15_000;
 
-export type QueueEntry = {
-  queued?: true;
+export type QueueEntry = CommandQueueWait & {
+  startedAt?: number;
   previous?: QueueEntry;
   next?: QueueEntry;
-  task: (marker: CommandLaneTaskMarker) => Promise<unknown>;
+  task: () => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
   /** Monotonic enqueue time; wall-clock corrections must not reorder work. */
@@ -34,16 +28,8 @@ export type QueueEntry = {
   sequence: number;
   priority: QueuePriority;
   warnAfterMs: number;
-  queuedAheadAtEnqueue: number;
-  activeAheadAtEnqueue: number;
-  taskIdentity?: CommandQueueEnqueueOptions["taskIdentity"];
-  sessionTarget?: CommandQueueEnqueueOptions["sessionTarget"];
-  taskTimeoutMs?: number;
-  taskTimeoutProgressAtMs?: () => number | undefined;
-  taskTimeoutSubscribe?: CommandQueueEnqueueOptions["taskTimeoutSubscribe"];
-  taskTimeoutAbortSignal?: AbortSignal;
-  taskTimeoutAbortGraceMs?: number;
-  taskTimeoutReleaseSignal?: AbortSignal;
+  taskIdentity?: CommandQueueAdmissionOptions["taskIdentity"];
+  sessionTarget?: CommandQueueAdmissionOptions["sessionTarget"];
   onWait?: (waitMs: number, queuedAhead: number) => void;
   releaseQueuedAbort?: () => void;
 };
@@ -63,7 +49,7 @@ type LaneQueue = {
 export type LaneState = {
   lane: string;
   queue: LaneQueue;
-  activeTasks: Map<number, CommandQueueEnqueueOptions["sessionTarget"]>;
+  activeTasks: Map<number, QueueEntry>;
   maxConcurrent: number;
   draining: boolean;
   generation: number;
@@ -195,15 +181,16 @@ export function removeLaneQueueEntry(queue: LaneQueue, entry: QueueEntry): boole
  * the same lanes, counters, and draining flag in production builds.
  */
 const COMMAND_QUEUE_STATE_KEY = Symbol.for("openclaw.commandQueueState");
+const queueState = resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
+  lanes: new Map<string, LaneState>(),
+  nextTaskId: 1,
+  nextQueueSequence: 1,
+  laneGroups: new Map<string, LaneGroupState>(),
+  laneGroupByLane: new Map<string, string>(),
+}));
 
 export function getQueueState() {
-  return resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
-    lanes: new Map<string, LaneState>(),
-    nextTaskId: 1,
-    nextQueueSequence: 1,
-    laneGroups: new Map<string, LaneGroupState>(),
-    laneGroupByLane: new Map<string, string>(),
-  }));
+  return queueState;
 }
 
 export function normalizeLane(lane: string): string {

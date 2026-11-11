@@ -1,10 +1,8 @@
-// Msteams tests cover graph group management plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
 import {
-  addParticipantMSTeams,
-  removeParticipantMSTeams,
-  renameGroupMSTeams,
+  addParticipantMSTeams as addParticipant,
+  removeParticipantMSTeams as removeParticipant,
+  renameGroupMSTeams as renameGroup,
 } from "./graph-group-management.js";
 import { createGraphPageGuard } from "./graph-pagination.test-support.js";
 
@@ -42,6 +40,12 @@ vi.mock("./conversation-store-state.js", () => ({
 const TOKEN = "test-graph-token";
 const CHAT_ID = "19:abc@thread.tacv2";
 const CHANNEL_TO = "team-id-1/channel-id-1";
+const CHAT_PATH = `/chats/${encodeURIComponent(CHAT_ID)}`;
+const CHANNEL_PATH = "/teams/team-id-1/channels/channel-id-1";
+const target = { cfg: {}, to: CHAT_ID };
+const missingMember = () => removeParticipant({ ...target, userId: "missing" });
+const graphRequest = (path: string, fields: object = {}) => ({ token: TOKEN, path, ...fields });
+const { fetchGraphJson, mutateGraphJson, deleteGraphRequest } = mockState;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -55,60 +59,48 @@ describe("addParticipantMSTeams", () => {
     { name: "default channel member", to: CHANNEL_TO, role: undefined, roles: [] },
     { name: "channel owner", to: CHANNEL_TO, role: "owner", roles: ["owner"] },
   ])("adds $name with Graph roles and escaped user binding", async ({ to, role, roles }) => {
-    mockState.mutateGraphJson.mockResolvedValue({});
+    mutateGraphJson.mockResolvedValue({});
     const userId = "o'hara@example.com";
 
-    await expect(addParticipantMSTeams({ cfg: {}, to, userId, role })).resolves.toEqual({
+    await expect(addParticipant({ cfg: {}, to, userId, role })).resolves.toEqual({
       added: { userId, chatId: to },
     });
-    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
-      token: TOKEN,
-      path:
-        to === CHAT_ID
-          ? `/chats/${encodeURIComponent(CHAT_ID)}/members`
-          : "/teams/team-id-1/channels/channel-id-1/members",
-      method: "POST",
-      body: {
-        "@odata.type": "#microsoft.graph.aadUserConversationMember",
-        roles,
-        "user@odata.bind": "https://graph.microsoft.com/v1.0/users('o''hara@example.com')",
-      },
-    });
+    expect(mutateGraphJson).toHaveBeenCalledWith(
+      graphRequest(`${to === CHAT_ID ? CHAT_PATH : CHANNEL_PATH}/members`, {
+        method: "POST",
+        body: {
+          "@odata.type": "#microsoft.graph.aadUserConversationMember",
+          roles,
+          "user@odata.bind": "https://graph.microsoft.com/v1.0/users('o''hara@example.com')",
+        },
+      }),
+    );
   });
 
   it("rejects unknown roles", async () => {
     await expect(
-      addParticipantMSTeams({
-        cfg: {},
-        to: CHAT_ID,
-        userId: "user-aad-id-2",
-        role: "admin",
-      }),
+      addParticipant({ ...target, userId: "user-aad-id-2", role: "admin" }),
     ).rejects.toThrow('role must be "member" or "owner"');
-    expect(mockState.mutateGraphJson).not.toHaveBeenCalled();
+    expect(mutateGraphJson).not.toHaveBeenCalled();
   });
 });
 
 describe("removeParticipantMSTeams", () => {
   it("throws when user not found in member list", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({
+    fetchGraphJson.mockResolvedValue({
       value: [
         { id: "membership-1", userId: "user-aad-id-1" },
         { id: "membership-3", userId: "user-aad-id-3" },
       ],
     });
 
-    await expect(
-      removeParticipantMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: CHAT_ID,
-        userId: "user-not-in-list",
-      }),
-    ).rejects.toThrow("User user-not-in-list is not a member of this conversation");
+    await expect(missingMember()).rejects.toThrow(
+      "User missing is not a member of this conversation",
+    );
   });
 
   it("follows member pagination before concluding the user is missing", async () => {
-    mockState.fetchGraphJson
+    fetchGraphJson
       .mockResolvedValueOnce({
         value: [{ id: "membership-1", userId: "user-aad-id-1" }],
         "@odata.nextLink":
@@ -117,65 +109,43 @@ describe("removeParticipantMSTeams", () => {
       .mockResolvedValueOnce({
         value: [{ id: "membership-9", email: " User-AAD-ID-9 " }],
       });
-    mockState.deleteGraphRequest.mockResolvedValue(undefined);
+    deleteGraphRequest.mockResolvedValue(undefined);
 
-    const result = await removeParticipantMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: CHAT_ID,
-      userId: " USER-AAD-ID-9 ",
-    });
+    const result = await removeParticipant({ ...target, userId: " USER-AAD-ID-9 " });
 
     expect(result).toEqual({ removed: { userId: " USER-AAD-ID-9 ", chatId: CHAT_ID } });
-    expect(mockState.fetchGraphJson).toHaveBeenNthCalledWith(1, {
-      token: TOKEN,
-      path: `/chats/${encodeURIComponent(CHAT_ID)}/members`,
-    });
-    expect(mockState.fetchGraphJson).toHaveBeenNthCalledWith(2, {
-      token: TOKEN,
-      path: `/chats/${encodeURIComponent(CHAT_ID)}/members?$skip=2`,
-    });
-    expect(mockState.deleteGraphRequest).toHaveBeenCalledWith({
-      token: TOKEN,
-      path: `/chats/${encodeURIComponent(CHAT_ID)}/members/membership-9`,
-    });
+    expect(fetchGraphJson.mock.calls).toEqual([
+      [graphRequest(`${CHAT_PATH}/members`)],
+      [graphRequest(`${CHAT_PATH}/members?$skip=2`)],
+    ]);
+    expect(deleteGraphRequest).toHaveBeenCalledWith(
+      graphRequest(`${CHAT_PATH}/members/membership-9`),
+    );
   });
 
   it("preserves the exact pagination-limit failure after 100 unmatched pages", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({
+    fetchGraphJson.mockResolvedValue({
       value: [],
       "@odata.nextLink": "https://graph.microsoft.com/v1.0/chats/chat/members?$skip=next",
     });
 
-    await expect(
-      removeParticipantMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: CHAT_ID,
-        userId: "missing",
-      }),
-    ).rejects.toThrow("MS Teams conversation member pagination limit exceeded");
-    expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(100);
-    expect(mockState.deleteGraphRequest).not.toHaveBeenCalled();
+    await expect(missingMember()).rejects.toThrow(
+      "MS Teams conversation member pagination limit exceeded",
+    );
+    expect(fetchGraphJson).toHaveBeenCalledTimes(100);
+    expect(deleteGraphRequest).not.toHaveBeenCalled();
   });
 });
 
 describe("renameGroupMSTeams", () => {
   it.each([
-    { to: CHAT_ID, path: `/chats/${encodeURIComponent(CHAT_ID)}`, body: { topic: "New Name" } },
-    {
-      to: CHANNEL_TO,
-      path: "/teams/team-id-1/channels/channel-id-1",
-      body: { displayName: "New Name" },
-    },
+    { to: CHAT_ID, path: CHAT_PATH, body: { topic: "New Name" } },
+    { to: CHANNEL_TO, path: CHANNEL_PATH, body: { displayName: "New Name" } },
   ])("renames $to with the provider's name field", async ({ to, path, body }) => {
-    mockState.mutateGraphJson.mockResolvedValue(undefined);
-    await expect(renameGroupMSTeams({ cfg: {}, to, name: "New Name" })).resolves.toEqual({
+    mutateGraphJson.mockResolvedValue(undefined);
+    await expect(renameGroup({ cfg: {}, to, name: "New Name" })).resolves.toEqual({
       renamed: { chatId: to, newName: "New Name" },
     });
-    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
-      token: TOKEN,
-      path,
-      method: "PATCH",
-      body,
-    });
+    expect(mutateGraphJson).toHaveBeenCalledWith(graphRequest(path, { method: "PATCH", body }));
   });
 });

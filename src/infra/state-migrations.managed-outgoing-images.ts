@@ -1,5 +1,4 @@
 // Doctor-only import for retired managed outgoing image metadata JSON files.
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
@@ -14,10 +13,8 @@ import {
   type ManagedImageRecordDatabase,
 } from "../gateway/managed-image-record-store.js";
 import { getMediaDir } from "../media/store.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { hasErrnoCode } from "./errno.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -26,11 +23,12 @@ import {
 import type { EngineConnection } from "./sql-connection.js";
 import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 import {
-  legacyMigrationSourceSnapshotsMatch as sourceSnapshotsMatch,
+  assertLegacyMigrationSourceUnchanged,
   readLegacyMigrationSourceSnapshotSync,
   type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
+import { decodeUtf8Input, Utf8InputError } from "./utf8-input.js";
 
 const LEGACY_RECORD_MAX_BYTES = 1024 * 1024;
 const DEFAULT_TRANSIENT_TTL_MS = 15 * 60 * 1000;
@@ -55,12 +53,6 @@ type ParsedLegacyRecord = {
   record: ManagedImageRecord;
   snapshot: LegacySourceSnapshot;
   originalPath: string;
-};
-
-type ClaimedLegacySource = {
-  claimPath: string;
-  sourcePath: string;
-  parsed: ParsedLegacyRecord;
 };
 
 function sourceNameFromDoctorClaim(name: string): string | null {
@@ -88,8 +80,9 @@ export function detectLegacyManagedOutgoingImages(params: {
   if (params.doctorOnlyStateMigrations === true) {
     try {
       hasLegacy = fs.readdirSync(sourceDir).some(isLegacyManagedImageSourceName);
-    } catch {
-      hasLegacy = false;
+    } catch (error) {
+      // Let migration report an unreadable directory instead of declaring it empty.
+      hasLegacy = !hasErrnoCode(error, "ENOENT");
     }
   }
   return { sourceDir, hasLegacy };
@@ -138,7 +131,9 @@ function parseLegacyManagedImageRecord(params: {
   snapshot: LegacySourceSnapshot;
   stateDir: string;
 }): ParsedLegacyRecord {
-  const raw = JSON.parse(params.snapshot.raw) as unknown;
+  const raw = JSON.parse(
+    decodeUtf8Input(params.snapshot.buffer, "Legacy managed image record"),
+  ) as unknown;
   if (!isRecord(raw) || !isRecord(raw.original)) {
     throw new Error("legacy managed image record must be an object");
   }
@@ -229,81 +224,6 @@ function parseLegacyManagedImageRecord(params: {
   };
 }
 
-function restoreClaimedSources(claimed: readonly ClaimedLegacySource[]): string[] {
-  const restoreErrors: string[] = [];
-  for (const entry of claimed.toReversed()) {
-    if (!fs.existsSync(entry.claimPath)) {
-      continue;
-    }
-    if (fs.existsSync(entry.sourcePath)) {
-      restoreErrors.push(`source path already exists: ${entry.sourcePath}`);
-      continue;
-    }
-    try {
-      fs.renameSync(entry.claimPath, entry.sourcePath);
-    } catch (error) {
-      restoreErrors.push(String(error));
-    }
-  }
-  return restoreErrors;
-}
-
-function appendRestoreFailures(error: unknown, restoreErrors: readonly string[]): string {
-  return `${String(error)}${restoreErrors.length > 0 ? `; restore failures: ${restoreErrors.join("; ")}` : ""}`;
-}
-
-function claimLegacySources(params: {
-  records: readonly ParsedLegacyRecord[];
-  beforeClaim?: () => void;
-}): ClaimedLegacySource[] {
-  params.beforeClaim?.();
-  const claimed: ClaimedLegacySource[] = [];
-  try {
-    for (const parsed of params.records) {
-      const sourcePath = parsed.snapshot.sourcePath;
-      const claimPath = `${sourcePath}.doctor-importing-${process.pid}-${randomUUID()}`;
-      fs.renameSync(sourcePath, claimPath);
-      claimed.push({ claimPath, sourcePath, parsed });
-      const claimedSnapshot = readLegacySourceSnapshot(claimPath);
-      if (!sourceSnapshotsMatch(claimedSnapshot, parsed.snapshot)) {
-        throw new Error(
-          `legacy managed image source changed before doctor claimed it: ${sourcePath}`,
-        );
-      }
-    }
-    return claimed;
-  } catch (error) {
-    throw new Error(appendRestoreFailures(error, restoreClaimedSources(claimed)), { cause: error });
-  }
-}
-
-function verifyClaimedSources(claimed: readonly ClaimedLegacySource[]): void {
-  for (const entry of claimed) {
-    const claimedSnapshot = readLegacySourceSnapshot(entry.claimPath);
-    if (!sourceSnapshotsMatch(claimedSnapshot, entry.parsed.snapshot)) {
-      throw new Error(`claimed legacy managed image source changed: ${entry.sourcePath}`);
-    }
-    if (fs.existsSync(entry.sourcePath)) {
-      throw new Error(`legacy managed image source was replaced while doctor imported it`);
-    }
-  }
-}
-
-function removeClaimedSources(params: {
-  claimed: readonly ClaimedLegacySource[];
-  removeSource?: (sourcePath: string) => void;
-}): void {
-  try {
-    for (const entry of params.claimed) {
-      (params.removeSource ?? fs.unlinkSync)(entry.claimPath);
-    }
-  } catch (error) {
-    throw new Error(appendRestoreFailures(error, restoreClaimedSources(params.claimed)), {
-      cause: error,
-    });
-  }
-}
-
 function isExpiredTransient(record: ManagedImageRecord, nowMs: number) {
   const createdAtMs = Date.parse(record.createdAt);
   return record.messageId === null && nowMs - createdAtMs >= DEFAULT_TRANSIENT_TTL_MS;
@@ -319,47 +239,10 @@ function readManagedImageRow(db: EngineConnection, attachmentId: string) {
   );
 }
 
-function rollbackImportedRecords(params: {
-  records: readonly ParsedLegacyRecord[];
-  stateDir: string;
-}): string | null {
-  try {
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const stateDb = getNodeSqliteKysely<ManagedImageRecordDatabase>(db);
-        for (const parsed of params.records) {
-          const row = readManagedImageRow(db, parsed.record.attachmentId);
-          if (
-            !row ||
-            row.cleanup_pending === 1 ||
-            !managedImageRecordsEqual(managedImageRecordFromRow(row), parsed.record)
-          ) {
-            continue;
-          }
-          executeSqliteQuerySync(
-            db,
-            stateDb
-              .deleteFrom("managed_outgoing_image_records")
-              .where("attachment_id", "=", parsed.record.attachmentId),
-          );
-        }
-      },
-      { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
-    );
-    return null;
-  } catch (error) {
-    return String(error);
-  }
-}
-
 /** Import, verify, and remove retired record JSON during explicit Doctor repair. */
 export function migrateLegacyManagedOutgoingImages(params: {
   detected: LegacyStateDetection["managedOutgoingImages"];
   stateDir: string;
-  nowMs?: number;
-  beforeClaim?: () => void;
-  beforeVerify?: () => void;
-  removeSource?: (sourcePath: string) => void;
 }): MigrationMessages {
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -386,20 +269,15 @@ export function migrateLegacyManagedOutgoingImages(params: {
       );
   } catch (error) {
     warnings.push(`Failed reading legacy managed outgoing image state: ${String(error)}`);
-    return { changes, warnings };
+    return {
+      changes,
+      warnings,
+      ...(error instanceof Utf8InputError ? { warningDisposition: "recoverable" as const } : {}),
+    };
   }
 
-  const nowMs = params.nowMs ?? Date.now();
+  const nowMs = Date.now();
   const discardedIds = new Set<string>();
-  const insertedRecords: ParsedLegacyRecord[] = [];
-  let claimed: ClaimedLegacySource[];
-  try {
-    claimed = claimLegacySources({ records: parsedRecords, beforeClaim: params.beforeClaim });
-  } catch (error) {
-    warnings.push(`Failed claiming legacy managed outgoing image state: ${String(error)}`);
-    return { changes, warnings };
-  }
-
   try {
     runOpenClawStateWriteTransaction(
       ({ db }) => {
@@ -424,73 +302,45 @@ export function migrateLegacyManagedOutgoingImages(params: {
               .insertInto("managed_outgoing_image_records")
               .values(managedImageRecordToRow(parsed.record)),
           );
-          insertedRecords.push(parsed);
         }
       },
       { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
     );
   } catch (error) {
-    warnings.push(
-      `Failed migrating legacy managed outgoing image state: ${appendRestoreFailures(error, restoreClaimedSources(claimed))}`,
-    );
+    warnings.push(`Failed migrating legacy managed outgoing image state: ${String(error)}`);
     return { changes, warnings };
   }
 
-  try {
-    params.beforeVerify?.();
-    const database = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
-    });
-    for (const parsed of parsedRecords) {
-      const row = readManagedImageRow(database.db, parsed.record.attachmentId);
-      if (discardedIds.has(parsed.record.attachmentId)) {
-        if (row) {
-          throw new Error(
-            `discarded transient record unexpectedly exists: ${parsed.record.attachmentId}`,
-          );
-        }
-      } else if (!row || !managedImageRecordsEqual(managedImageRecordFromRow(row), parsed.record)) {
-        throw new Error(`managed image verification failed: ${parsed.record.attachmentId}`);
+  // A failed cleanup leaves committed rows and the remaining JSON for an idempotent retry.
+  for (const parsed of parsedRecords) {
+    const sourcePath = parsed.snapshot.sourcePath;
+    try {
+      assertLegacyMigrationSourceUnchanged({
+        sourcePath,
+        snapshot: parsed.snapshot,
+        label: "managed image",
+        maxBytes: LEGACY_RECORD_MAX_BYTES,
+      });
+    } catch (error) {
+      warnings.push(`Failed verifying legacy managed outgoing image migration: ${String(error)}`);
+      return { changes, warnings };
+    }
+    if (discardedIds.has(parsed.record.attachmentId)) {
+      try {
+        fs.rmSync(parsed.originalPath, { force: true });
+      } catch (error) {
+        warnings.push(`Failed deleting expired legacy managed image attachments: ${String(error)}`);
+        return { changes, warnings };
       }
     }
-    verifyClaimedSources(claimed);
-  } catch (error) {
-    const rollbackError = rollbackImportedRecords({
-      records: insertedRecords,
-      stateDir: params.stateDir,
-    });
-    const restoreErrors = restoreClaimedSources(claimed);
-    warnings.push(
-      `Failed verifying legacy managed outgoing image migration: ${appendRestoreFailures(error, restoreErrors)}` +
-        (rollbackError ? `; SQLite rollback failure: ${rollbackError}` : ""),
-    );
-    return { changes, warnings };
-  }
-
-  try {
-    for (const parsed of parsedRecords) {
-      if (!discardedIds.has(parsed.record.attachmentId)) {
-        continue;
-      }
-      fs.rmSync(parsed.originalPath, { force: true });
+    try {
+      fs.unlinkSync(sourcePath);
+    } catch (error) {
+      warnings.push(
+        `Migrated managed outgoing images but could not remove legacy JSON: ${String(error)}`,
+      );
+      return { changes, warnings };
     }
-  } catch (error) {
-    warnings.push(
-      `Failed deleting expired legacy managed image attachments: ${appendRestoreFailures(error, restoreClaimedSources(claimed))}`,
-    );
-    return { changes, warnings };
-  }
-
-  try {
-    removeClaimedSources({
-      claimed,
-      removeSource: params.removeSource,
-    });
-  } catch (error) {
-    warnings.push(
-      `Migrated managed outgoing images but could not remove legacy JSON: ${String(error)}`,
-    );
-    return { changes, warnings };
   }
   try {
     fs.rmdirSync(params.detected.sourceDir);

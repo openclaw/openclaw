@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { createSessionPlacementSettlementClosedAbortError } from "../../agents/run-termination.js";
-import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import type {
+  SessionPlacementAdmissionProvider,
+  SessionPlacementTurnParams,
+} from "../../agents/session-placement-admission.js";
 import type {
   LocalTurnPlacementClaim,
   RequiredSessionPlacementAdmission,
 } from "../../agents/session-placement-admission.types.js";
 import { withSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
+import { withSessionPlacementTurnInput } from "../../agents/session-placement-turn-input.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { assertRequiredWorkerLocalExecution } from "../../config/required-worker-profile.js";
@@ -20,9 +24,9 @@ import { composeSessionSourceAssertion } from "../../config/sessions/session-sou
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "../../sessions/session-controller.lifecycle.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
-import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
-import { WORKER_ADMISSION_DEADLINE_MS } from "../../worker/worker-connection-contract.js";
 import { workerInferencePlacement } from "./inference-placement.js";
 import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type {
@@ -32,6 +36,7 @@ import type {
 } from "./placement-store.js";
 import {
   isCurrentActiveWorkerEnvironment,
+  isExactAttachedEnvironment,
   matchesWorkerPlacementTarget,
 } from "./placement-target.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
@@ -48,10 +53,9 @@ import {
 type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
 
 export type WorkerTurnAdmissionOptions = {
-  environments: Pick<WorkerEnvironmentService, "get">;
+  environments: Pick<WorkerEnvironmentService, "get" | "inspectTurnLease">;
   placements: WorkerSessionPlacementStore;
   reconcileActivePlacement: (environmentId: string) => Promise<void>;
-  isInterruptedTurn?: (placement: WorkerSessionPlacementRecord) => boolean;
   waitForAdmissionNode: (params: {
     placement: ActiveWorkerPlacement;
     signal: AbortSignal;
@@ -60,31 +64,53 @@ export type WorkerTurnAdmissionOptions = {
   withRequiredSession?: RequiredSessionPlacementAdmission;
 };
 
+/** Standalone placement callers reserve the same controller turn as Gateway ingress. */
+export async function admitWorkerTurn(
+  params: {
+    placements: WorkerSessionPlacementStore;
+    claim: LocalTurnPlacementClaim;
+    turn: SessionPlacementTurnParams;
+    runLocal: Parameters<SessionPlacementAdmissionProvider["executeTurn"]>[2];
+    onAdmitted: Parameters<SessionPlacementAdmissionProvider["executeTurn"]>[3];
+    assertCurrent: Parameters<SessionPlacementAdmissionProvider["executeTurn"]>[4];
+  },
+  execute: SessionPlacementAdmissionProvider["executeTurn"],
+) {
+  const { placements, claim, turn, runLocal, onAdmitted, assertCurrent } = params;
+  const current =
+    claim.agentId === undefined || claim.sessionKey === undefined
+      ? await placements.getAsync(claim.sessionId)
+      : undefined;
+  turn.abortSignal?.throwIfAborted();
+  assertCurrent?.();
+  const identity = resolvePlacementIdentity(claim, current);
+  return await withSessionTurn(
+    {
+      ...identity,
+      storePath: turn.sessionTarget?.storePath ?? resolveSessionStorePathForScope(identity),
+      abortSignal: turn.abortSignal,
+    },
+    async (operation, signal) => {
+      const admitted = { ...turn, replyOperation: operation, abortSignal: signal };
+      return await execute(
+        { ...claim, ...identity },
+        admitted,
+        () => {
+          if (!operation) {
+            throw new Error("Worker turn session id is required");
+          }
+          return withSessionPlacementTurnInput(turn, admitted, runLocal);
+        },
+        onAdmitted,
+        assertCurrent,
+      );
+    },
+  );
+}
+
 /** Required policy uses current placement facts at the existing turn-admission boundary. */
 export function createRequiredWorkerTurnAdmission(options: WorkerTurnAdmissionOptions) {
   return {
-    async recoverInterruptedTurn(
-      placement: WorkerSessionPlacementRecord,
-      turn: SessionPlacementTurnParams,
-      assertCurrent: () => void,
-    ): Promise<WorkerSessionPlacementRecord> {
-      if (placement.state !== "active" || !options.isInterruptedTurn?.(placement)) {
-        return placement;
-      }
-      const signal = AbortSignal.timeout(Math.min(WORKER_ADMISSION_DEADLINE_MS, turn.timeoutMs));
-      await options.waitForAdmissionNode({
-        placement,
-        signal: turn.abortSignal ? AbortSignal.any([turn.abortSignal, signal]) : signal,
-        assertCurrent,
-      });
-      await options.reconcileActivePlacement(placement.environmentId);
-      const recovered = await options.placements.getAsync(placement.sessionId);
-      assertCurrent();
-      if (!recovered) {
-        throw new Error("Worker restart recovery lost placement");
-      }
-      return recovered;
-    },
     usesWorkerInference: async (identity: Omit<LocalTurnPlacementClaim, "runId">) => {
       const projection = await options.placements.readProjection([identity.sessionId], {
         current: true,
@@ -513,6 +539,7 @@ export async function executeLocalTurn<T>(params: {
 
 export async function claimWorkerTurn(params: {
   placements: WorkerSessionPlacementStore;
+  environments: WorkerTurnAdmissionOptions["environments"];
   identity: ReturnType<typeof resolvePlacementIdentity>;
   placement: ActiveWorkerPlacement;
   runId: string;
@@ -520,19 +547,45 @@ export async function claimWorkerTurn(params: {
   signal?: AbortSignal;
   assertCurrent?: () => void;
 }): Promise<{ placement: ActiveWorkerPlacement; turnClaim: WorkerSessionTurnClaim } | null> {
-  const claim = () =>
-    params.placements.claimTurn(
+  const claim = async () => {
+    const environment = params.environments.get(params.placement.environmentId);
+    // Recorded loss/build recovery retains its existing admission path. Only a
+    // live attached lease can be qualified by the provider before this claim.
+    const leaseId = isExactAttachedEnvironment(environment, params.placement)
+      ? environment?.leaseId
+      : undefined;
+    const assertCurrent = () => {
+      params.signal?.throwIfAborted();
+      params.assertCurrent?.();
+      const current = params.environments.get(params.placement.environmentId);
+      if (
+        leaseId &&
+        (!isExactAttachedEnvironment(current, params.placement) || current?.leaseId !== leaseId)
+      ) {
+        throw new Error("Cloud worker lease changed before its turn claim");
+      }
+    };
+    assertCurrent();
+    if (leaseId) {
+      await params.environments.inspectTurnLease({
+        environmentId: params.placement.environmentId,
+        ownerEpoch: params.placement.activeOwnerEpoch,
+        leaseId,
+        assertCurrent,
+        signal: params.signal,
+      });
+    }
+    // Requalify after any earlier claim wait, and again at the claim commit.
+    return await params.placements.claimTurn(
       {
         ...params.identity,
         claimId: randomUUID(),
         runId: params.runId,
         owner: placementTurnOwner(params.placement),
       },
-      () => {
-        params.signal?.throwIfAborted();
-        params.assertCurrent?.();
-      },
+      assertCurrent,
     );
+  };
   try {
     return { placement: params.placement, turnClaim: await claim() };
   } catch (error) {
@@ -573,7 +626,7 @@ export async function claimWorkerTurn(params: {
     }
   }
   await params.placements.waitForTurnClaimRelease(params.identity.sessionId, {
-    timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+    timeoutMs: SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
     ...(params.signal ? { signal: params.signal } : {}),
   });
   const refreshed = await params.placements.getAsync(params.identity.sessionId);

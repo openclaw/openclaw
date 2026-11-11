@@ -1,5 +1,4 @@
 import { listMappedModelThinkingLevels } from "@openclaw/model-catalog-core/model-catalog-types";
-// Thinking/reasoning level catalog helpers for auto-reply model controls.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeOptionalLowercaseString,
@@ -230,13 +229,22 @@ function resolveModelThinkingProfile(params: ThinkingProfileParams): ResolvedThi
     ...(candidate?.params ? { params: candidate.params } : {}),
     compat: candidate?.compat,
   };
+  const compat = context.compat;
+  // A row that sets `compat.defaultThinkingLevel` or `compat.thinkingLevels` owns its profile;
+  // provider hooks only cover rows without them.
+  const rowDefaultLevel = compat?.defaultThinkingLevel
+    ? normalizeThinkLevel(compat.defaultThinkingLevel)
+    : undefined;
+  const rowLevels = compat?.thinkingLevels?.flatMap((level) => normalizeThinkLevel(level) ?? []);
+  const rowOwned = rowDefaultLevel !== undefined || (rowLevels?.length ?? 0) > 0;
   const providerProfileParams = {
     provider,
     context,
     ...(candidate ? { catalogEntry: candidate } : {}),
   };
-  const providerProfile =
-    typeof params.providerPolicySource === "object"
+  const providerProfile = rowOwned
+    ? undefined
+    : typeof params.providerPolicySource === "object"
       ? resolveEffectiveThinkingProfile(providerProfileParams, {
           registry: params.providerPolicySource,
         })
@@ -251,7 +259,7 @@ function resolveModelThinkingProfile(params: ThinkingProfileParams): ResolvedThi
   // base set, deliberately bypassing the later compat-driven xhigh upgrade —
   // anthropic-messages does not carry a generic xhigh contract.
   const anthropicMessagesProfile =
-    context.api === "anthropic-messages"
+    !rowOwned && context.api === "anthropic-messages"
       ? resolveClaudeThinkingProfile(context.modelId, context.params, {
           includeNativeMax: true,
         })
@@ -270,16 +278,36 @@ function resolveModelThinkingProfile(params: ThinkingProfileParams): ResolvedThi
   ) {
     return normalizeThinkingProfile(pluginProfile, context.thinkingLevelMap, mappedLevels);
   }
-  if (context.reasoning === false) {
+  if (context.reasoning === false && compat?.thinkingRequired !== true) {
     return {
       levels: [{ id: "off", label: "off", rank: THINKING_LEVEL_RANKS.off }],
       defaultLevel: "off",
     };
   }
 
-  const profile = buildBaseThinkingProfile();
-  appendCatalogAdvancedThinkingLevels(profile, context.compat, context.thinkingLevelMap);
-  return normalizeThinkingProfile(profile, context.thinkingLevelMap, mappedLevels);
+  // An explicit row ladder replaces the one derived from the map and efforts.
+  const profile = rowLevels?.length
+    ? {
+        levels: rowLevels.map((id) => ({ id, label: id, rank: THINKING_LEVEL_RANKS[id] })),
+        defaultLevel: undefined,
+      }
+    : buildBaseThinkingProfile();
+  if (!rowLevels?.length) {
+    appendCatalogAdvancedThinkingLevels(profile, compat, context.thinkingLevelMap);
+  }
+  if (compat?.adaptiveThinking) {
+    appendProfileLevel(profile, "adaptive");
+  }
+  for (const level of profile.levels) {
+    level.label = compat?.thinkingLevelLabels?.[level.id] ?? level.id;
+  }
+  profile.defaultLevel = rowDefaultLevel;
+  // A stated ladder is the whole offer: mapped wire aliases stay usable but hidden.
+  return normalizeThinkingProfile(
+    profile,
+    context.thinkingLevelMap,
+    rowLevels?.length ? [] : mappedLevels,
+  );
 }
 
 /** Ultra is a harness mode, independent of a model's native reasoning controls. */
@@ -315,7 +343,9 @@ export function resolveProviderThinkingLevel(
       ("thinkingFormat" in compat ||
         "supportsReasoningEffort" in compat ||
         "supportedReasoningEfforts" in compat ||
-        "reasoningEffortMap" in compat)
+        "reasoningEffortMap" in compat ||
+        "thinkingLevels" in compat ||
+        "defaultThinkingLevel" in compat)
         ? compat
         : undefined,
   }));

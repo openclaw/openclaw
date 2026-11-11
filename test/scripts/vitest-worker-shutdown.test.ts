@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -8,7 +7,6 @@ import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import type { VitestWorkerManifest } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
-import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -23,7 +21,6 @@ import { createPreparedVitestCliFixture } from "./run-vitest-bounded-fixture.tes
 import {
   createControlledWorkerCompiler,
   createWorkerArtifactTest,
-  preparationClient,
   writeFixture,
 } from "./vitest-worker-artifacts.test-support.js";
 
@@ -73,7 +70,7 @@ const shutdownCases = [
   { route: "ci-shared", phase: "compilation" },
   { route: "ci", phase: "admission" },
   { route: "ci", phase: "disposal" },
-  { route: "ci-disconnect", phase: "disposal" },
+  { route: "ci-disconnect", phase: "admission" },
   { route: "ci", phase: "deletion" },
   { route: "direct", phase: "deletion" },
   { route: "serial", phase: "deletion" },
@@ -206,15 +203,15 @@ cp.spawn=(bin,args,options)=>{
   // CI's intermediate project parent must remain real; replace only the Vitest leaf.
   if(path.basename(args[bootstrap+2])!=='vitest.mjs') {
     generation=args[bootstrap+1];
-    if(phase==='deletion') publish('ci-owner.json',{pid:process.pid});
+    if(phase==='deletion' || phase==='disposal') publish('ci-owner.json',{pid:process.pid});
     const child=spawn(bin,args,options);
-    child.once('close',()=>publish('owner-'+child.pid+'.closed',{pid:child.pid}));
+    child.once('close',()=>{borrowerClosed=true;publish('owner-'+child.pid+'.closed',{pid:child.pid});});
     return child;
   }
   const child=spawn(bin,[${JSON.stringify(borrower)}],options);
   child.once('close',(code,signal)=>{borrowerClosed=true;publish('borrower-closed',{pid:child.pid,code,signal});});
   generation=args[bootstrap+1];
-  const owner=${route === "ci" && phase === "deletion"} ? JSON.parse(fs.readFileSync(path.join(root,'ci-owner.json'),'utf8')).pid : process.pid;
+  const owner=${route === "ci" && (phase === "deletion" || phase === "disposal")} ? JSON.parse(fs.readFileSync(path.join(root,'ci-owner.json'),'utf8')).pid : process.pid;
   publish(process.env.OPENCLAW_VITEST_SHARD_NAME==='ci-held'?'held-owner.json':'owner.json',{owner,borrower:child.pid,generation});
   return child;
 };
@@ -230,7 +227,7 @@ const waitForRelease=()=>new Promise(resolve=>{
       return;
     }
     if(borrowerClosed && !idle) {idle=true;publish('owner-idle',{owner:process.pid});}
-    if(!responsive && fs.existsSync(${JSON.stringify(loopRequest)})) {
+    if(!responsive && fs.existsSync(${JSON.stringify(loopRequest)}) && !(${route === "ci-disconnect"} && process.connected)) {
       responsive=true;publish('loop-responsive',{owner:process.pid});
     }
     if(fs.existsSync(${JSON.stringify(released)})) {
@@ -292,6 +289,7 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
           args,
           preparedScriptWrapperEnv(preparedModules, {
             PATH: process.env.PATH,
+            OPENCLAW_VITEST_RUNTIME: "node",
             HOME: root,
             USERPROFILE: root,
             TMPDIR: root,
@@ -431,7 +429,7 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
             expect(result.stdout).toContain("owner disconnected before group completion");
           }
           expect(result.stdout).toContain(
-            phase === "deletion"
+            phase === "deletion" || phase === "disposal"
               ? "[shard:ci-shutdown] end (exit 0)"
               : `[shard:ci-shutdown] [test] FAILED (exit ${shutdownSignal === "SIGINT" ? 130 : 143})`,
           );
@@ -489,7 +487,7 @@ it("rejects a live borrower when its owner closes during verification", ({
   signal,
 }) =>
   workerArtifacts.fixtureLifetime.run(async () => {
-    const { observeChild } = workerArtifacts.createFixtureCommands();
+    const { startPreparation } = workerArtifacts.createFixtureCommands();
     const controlled = createControlledWorkerCompiler(
       workerArtifacts.fixtureDirectory(),
       process.env,
@@ -497,18 +495,7 @@ it("rejects a live borrower when its owner closes during verification", ({
     );
     const owner = createVitestWorkerRun(controlled.env);
     const directory = owner.descriptor.directory;
-    const runManaged = managedChild.runManagedCommand;
-    const compilerLaunch = vi
-      .spyOn(managedChild, "runManagedCommand")
-      .mockImplementation((options) => {
-        if (
-          options.args?.[0] === path.join(repoRoot, "scripts/lib/vitest-worker-compiler.mts") &&
-          options.args[1] === directory
-        ) {
-          return runManaged({ ...options, args: controlled.args(directory) });
-        }
-        return runManaged(options);
-      });
+    const compilerLaunch = controlled.intercept(directory);
     const manifestFile = path.join(directory, "manifest.json");
     const started = createDeferred();
     const release = createDeferred();
@@ -539,27 +526,7 @@ it("rejects a live borrower when its owner closes during verification", ({
     };
     signal.addEventListener("abort", stop, { once: true });
     try {
-      const child = spawn(process.execPath, ["--input-type=module", "--eval", preparationClient], {
-        detached: process.platform !== "win32",
-        stdio: ["ignore", "ignore", "pipe", "ipc"],
-      });
-      let stderr = "";
-      child.stderr!.on("data", (chunk) => {
-        stderr += String(chunk);
-      });
-      const completion = observeChild(
-        child,
-        owner.borrow(
-          child,
-          createVitestProcessCompletion({
-            child,
-            detached: process.platform !== "win32",
-          }),
-        ),
-      );
-      void workerArtifacts.fixtureLifetime.verifyCleanup(async () => {
-        await completion;
-      });
+      const { child, completion, stderr } = startPreparation(owner, process.env);
       await Promise.race([
         started.promise,
         completion.then(() => {
@@ -579,8 +546,8 @@ it("rejects a live borrower when its owner closes during verification", ({
       expect(child.signalCode).toBeNull();
       expect(fs.existsSync(directory)).toBe(true);
       release.resolve();
-      expect(await completion, stderr).toEqual({ code: 1, signal: null });
-      expect(stderr).toContain("owner is closing");
+      expect(await completion, stderr()).toEqual({ code: 1, signal: null });
+      expect(stderr()).toContain("owner is closing");
       await disposal;
       expect(fs.existsSync(directory)).toBe(false);
     } finally {

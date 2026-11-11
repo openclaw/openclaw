@@ -118,11 +118,7 @@ function normalizeAgentModelScope(value: unknown): unknown {
     normalizeNestedModelField(subagents, "model", normalizeAgentModelSelectionForConfig),
   );
   next = normalizeNestedModelField(next, "compaction", (compaction) =>
-    normalizeNestedModelField(
-      normalizeNestedModelField(compaction, "model", normalizeStringModelRef),
-      "memoryFlush",
-      (memoryFlush) => normalizeNestedModelField(memoryFlush, "model", normalizeStringModelRef),
-    ),
+    normalizeNestedModelField(compaction, "model", normalizeStringModelRef),
   );
   return normalizeNestedModelField(next, "models", (models) =>
     isRecord(models) ? normalizeAgentModelMapForConfig(models) : models,

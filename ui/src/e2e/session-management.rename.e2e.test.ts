@@ -1,11 +1,13 @@
-import path from "node:path";
 import { expect, it } from "vitest";
-import type { MockGatewayRequest, MockGatewayWindow } from "../test-helpers/control-ui-e2e.ts";
+import {
+  pauseVirtualClock,
+  type MockGatewayRequest,
+  type MockGatewayWindow,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
-  captureUiProofEnabled,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
@@ -14,33 +16,109 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+const renameKey = "agent:main:rename-me";
 
 suite.define(() => {
+  it.each([
+    { width: 390, height: 844, mobile: true },
+    { width: 1280, height: 900, mobile: false },
+  ])(
+    "renames from header Actions at $width px and discards Cancel drafts",
+    async ({ mobile, ...viewport }) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport },
+        async ({ page }) => {
+          const original = sessionRow("agent:main:header-rename", "Original name", 1);
+          const gateway = await installMockGateway(page, {
+            methodResponses: { "sessions.list": sessionsListResponse([original]) },
+            sessionKey: original.key,
+          });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, original.key));
+          const header = page.locator(
+            mobile
+              ? ".chat-pane-cache__pane--active .agent-chat__header--mobile"
+              : ".chat-pane-cache__pane--active .chat-pane__header",
+          );
+          const actions = header.locator(".chat-header-session-menu__trigger");
+          const openRename = async () => {
+            await actions.click();
+            await page
+              .getByRole("menuitem", { name: mobile ? "Rename" : "Rename…", exact: true })
+              .click();
+          };
+          await openRename();
+          const dialog = page.getByRole("dialog", { name: "Rename session", exact: true });
+          const inline = header.locator(".chat-pane__session-title-input");
+          await page
+            .locator("openclaw-modal-dialog input, .chat-pane__session-title-input")
+            .waitFor();
+          expect(await dialog.isVisible()).toBe(mobile);
+          const input = mobile ? dialog.getByRole("textbox", { name: "Rename session" }) : inline;
+          await expect.poll(() => input.inputValue()).toBe("Original name");
+          expect(await input.evaluate((element) => element === document.activeElement)).toBe(true);
+          await input.fill("Discarded draft");
+          if (mobile) {
+            await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+          } else {
+            await input.press("Escape");
+          }
+          await input.waitFor({ state: "detached" });
+          expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+          await openRename();
+          expect(await input.inputValue()).toBe("Original name");
+          await input.fill("Renamed from Actions");
+          if (mobile) {
+            await dialog.getByRole("button", { name: "Save", exact: true }).click();
+          } else {
+            await input.press("Enter");
+          }
+          const patch = await waitForPatch(
+            gateway,
+            (params) => params.label === "Renamed from Actions",
+          );
+          expect(patch.params).toMatchObject({
+            key: original.key,
+            expectedSessionId: original.sessionId,
+            label: "Renamed from Actions",
+          });
+          expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
+          await input.waitFor({ state: "detached" });
+          await expect
+            .poll(() =>
+              header
+                .locator(mobile ? ".mobile-header__title-text" : ".chat-pane__session-title-text")
+                .textContent(),
+            )
+            .toContain("Renamed from Actions");
+        },
+      );
+    },
+  );
+
   it.each([false, true])(
     "keeps a duplicate rename in the dialog (concurrent failure: %s)",
-    async (concurrent) => {
-      const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-      const page = await context.newPage();
-      const gateway = await installMockGateway(page, {
-        deferredMethods: ["sessions.patch"],
-        methodResponses: {
-          "sessions.list": sessionsListResponse([
-            sessionRow("agent:main:rename-me", "Rename me", Date.now()),
-            ...(concurrent ? [sessionRow("agent:main:archive-me", "Archive me", Date.now())] : []),
-          ]),
-        },
-        sessionKey: "agent:main:rename-me",
-      });
+    (concurrent) =>
+      suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          deferredMethods: ["sessions.patch"],
+          methodResponses: {
+            "sessions.list": sessionsListResponse([
+              sessionRow(renameKey, "Rename me", Date.now()),
+              ...(concurrent
+                ? [sessionRow("agent:main:archive-me", "Archive me", Date.now())]
+                : []),
+            ]),
+          },
+          sessionKey: renameKey,
+        });
 
-      try {
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rename-me"));
-        const row = page.locator('[data-session-key="agent:main:rename-me"]');
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, renameKey));
+        const row = page.locator(`[data-session-key="${renameKey}"]`);
         await row.waitFor({ state: "visible", timeout: 10_000 });
         await row.hover();
         let pendingArchive: MockGatewayRequest | null = null;
         if (concurrent) {
-          // Personal pins no longer publish shared-session errors. Keep an independent
-          // shared mutation in flight to prove duplicate-rename errors stay in the dialog.
+          // Race a shared archive error against the dialog-owned rename error.
           const archiveRow = page.locator('[data-session-key="agent:main:archive-me"]');
           await archiveRow.hover();
           await archiveRow
@@ -54,11 +132,14 @@ suite.define(() => {
         await row.click({ button: "right" });
         await page.getByRole("menuitem", { name: "Rename…" }).click();
         const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
-        await dialog.getByRole("textbox", { name: "Rename session" }).fill("Rejected rename");
-        await dialog.getByRole("button", { name: "Save" }).click();
+        const field = dialog.getByRole("textbox", { name: "Rename session" });
+        const save = dialog.getByRole("button", { name: "Save" });
+        await field.fill("Rejected rename");
+        await save.click();
         const rename = await gateway.waitForRequest("sessions.patch", {
           after: concurrent ? 1 : 0,
         });
+        await pauseVirtualClock(page);
         if (pendingArchive) {
           await page.evaluate(
             ({ renameId, archiveId }) => {
@@ -66,24 +147,10 @@ suite.define(() => {
               if (!mock) {
                 throw new Error("Mock Gateway is not installed");
               }
-              mock.deliverLatest({
-                type: "res",
-                id: renameId,
-                ok: false,
-                error: {
-                  code: "INVALID_REQUEST",
-                  message: "label already in use: Rejected rename",
-                },
-              });
-              mock.deliverLatest({
-                type: "res",
-                id: archiveId,
-                ok: false,
-                error: {
-                  code: "UNAVAILABLE",
-                  message: "archive rejected",
-                },
-              });
+              const reject = (id: string, code: string, message: string) =>
+                mock.deliverLatest({ type: "res", id, ok: false, error: { code, message } });
+              reject(renameId, "INVALID_REQUEST", "label already in use: Rejected rename");
+              reject(archiveId, "UNAVAILABLE", "archive rejected");
             },
             { renameId: rename.id, archiveId: pendingArchive.id },
           );
@@ -94,34 +161,23 @@ suite.define(() => {
           });
         }
 
-        const error = page.locator("[data-sidebar-session-error]");
+        const toasts = page.locator(".app-toast-lane--top-right .app-toast");
         await expect
-          .poll(() => dialog.getByRole("alert").textContent())
+          .poll(() => dialog.locator(".callout[role=alert]").textContent())
           .toContain("A session with this name already exists.");
         if (concurrent) {
-          await expect.poll(() => error.textContent()).toContain("archive rejected");
+          await expect
+            .poll(() => toasts.filter({ hasText: "archive rejected" }).textContent())
+            .toContain("archive rejected");
         } else {
-          await expect.poll(() => error.count()).toBe(0);
+          await expect.poll(() => toasts.count()).toBe(0);
         }
-        await expect
-          .poll(() => dialog.getByRole("textbox", { name: "Rename session" }).inputValue())
-          .toBe("Rejected rename");
-        await captureUiProof(
-          suite,
-          page,
-          concurrent
-            ? "sidebar-session-duplicate-rename-concurrent.png"
-            : "sidebar-session-duplicate-rename.png",
-          dialog.locator("dialog"),
-          [dialog.getByRole("alert")],
-        );
+        await expect.poll(() => field.inputValue()).toBe("Rejected rename");
 
         await gateway.deferNext("sessions.patch");
-        await dialog.getByRole("textbox", { name: "Rename session" }).fill("Unavailable rename");
-        await dialog.getByRole("button", { name: "Save" }).click();
-        const retry = await gateway.waitForRequest("sessions.patch", {
-          after: concurrent ? 2 : 1,
-        });
+        await field.fill("Unavailable rename");
+        await save.click();
+        const retry = await gateway.waitForRequest("sessions.patch", { after: concurrent ? 2 : 1 });
         await gateway.deliverLatest({
           type: "res",
           id: retry.id,
@@ -129,81 +185,229 @@ suite.define(() => {
           error: { code: "UNAVAILABLE", message: "sidebar rename rejected" },
         });
 
+        const error = toasts.filter({ hasText: "sidebar rename rejected" });
         await error.waitFor({ state: "visible" });
         await expect.poll(() => error.textContent()).toContain("sidebar rename rejected");
-        expect(
-          await error
-            .locator("xpath=ancestor::*[contains(@class, 'sidebar-recent-sessions')]")
-            .count(),
-        ).toBe(0);
-
-        await error.getByRole("button", { name: "Dismiss error" }).click();
-        await expect.poll(() => error.count()).toBe(0);
-      } finally {
-        await context.close();
-      }
-    },
+        await expect
+          .poll(() => dialog.locator(".callout[role=alert]").textContent())
+          .toContain("sidebar rename rejected");
+        expect(await dialog.getByRole("textbox", { name: "Rename session" }).inputValue()).toBe(
+          "Unavailable rename",
+        );
+        await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+        await dialog.waitFor({ state: "detached" });
+        await expect.poll(() => page.locator("[data-sidebar-session-error]").count()).toBe(0);
+      }),
   );
 
-  it("renames a sidebar session through an in-app dialog", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      recordVideo: captureUiProofEnabled
-        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
-        : undefined,
-    });
-    const page = await context.newPage();
-    const proofVideo = page.video();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:rename-me", "Original name", Date.now()),
-        ]),
-        "sessions.patch": {},
-      },
-      sessionKey: "agent:main:rename-me",
-    });
+  it.each(["menu", "current name", "unselected name"] as const)(
+    "renames a sidebar session from %s",
+    (surface) =>
+      suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "sessions.list": sessionsListResponse([
+              sessionRow(renameKey, "Original name", Date.now()),
+              sessionRow("agent:main:starting-session", "Starting session", Date.now() - 1),
+            ]),
+            "sessions.patch": {},
+          },
+          sessionKey: renameKey,
+        });
 
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rename-me"));
-      const row = page.locator('[data-session-key="agent:main:rename-me"]');
-      await row.waitFor({ state: "visible", timeout: 10_000 });
-      await row.hover();
-      await row.click({ button: "right" });
-      await page.getByRole("menuitem", { name: "Rename…" }).click();
+        await page.goto(
+          controlUiSessionUrl(
+            suite.server.baseUrl,
+            surface === "unselected name" ? "agent:main:starting-session" : renameKey,
+          ),
+        );
+        const row = page.locator(`[data-session-key="${renameKey}"]`);
+        await row.waitFor({ state: "visible", timeout: 10_000 });
+        if (surface === "menu") {
+          await row.hover();
+          await row.click({ button: "right" });
+          await page.getByRole("menuitem", { name: "Rename…" }).click();
+        } else {
+          const startingName = surface === "unselected name" ? "Starting session" : "Original name";
+          await expect
+            .poll(() =>
+              page
+                .locator(".chat-pane-cache__pane--active .chat-pane__session-title-text")
+                .textContent(),
+            )
+            .toContain(startingName);
+          // The first click may navigate, but must retain the name's second-click target.
+          await row.locator(".sidebar-recent-session__name").dblclick();
+        }
 
-      await page.getByRole("dialog", { name: "Rename session" }).waitFor({ state: "visible" });
-      const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
-      const name = dialog.getByRole("textbox", { name: "Rename session" });
-      await name.waitFor({ state: "visible" });
-      await expect.poll(() => name.inputValue()).toBe("Original name");
-      await captureUiProof(
-        suite,
-        page,
-        "sidebar-session-rename-dialog.png",
-        dialog.locator("dialog"),
-        [name],
-      );
-      await name.fill("Renamed session");
-      await dialog.getByRole("button", { name: "Save" }).click();
+        const dialog = page.getByRole("dialog", { name: "Rename session", exact: true });
+        const name =
+          surface === "menu"
+            ? dialog.getByRole("textbox", { name: "Rename session" })
+            : row.getByRole("textbox", { name: "Session title" });
+        await name.waitFor({ state: "visible" });
+        await expect.poll(() => name.inputValue()).toBe("Original name");
+        if (surface !== "menu") {
+          expect(
+            await name.evaluate((element: HTMLInputElement) => ({
+              focused: element === document.activeElement,
+              selection: [element.selectionStart, element.selectionEnd],
+              insideLink: Boolean(element.closest("a")),
+            })),
+          ).toEqual({ focused: true, selection: [0, 13], insideLink: false });
+        }
+        if (surface !== "menu") {
+          expect(
+            await name.evaluate((element) =>
+              element.dispatchEvent(
+                new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+              ),
+            ),
+          ).toBe(true);
+          await name.click({ button: "right" });
+          expect(await dialog.count()).toBe(0);
+          await name.fill("Discarded draft");
+          await name.press("Escape");
+          await name.waitFor({ state: "detached" });
+          expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+          await row.locator(".sidebar-recent-session__name").dblclick();
+          await expect.poll(() => name.inputValue()).toBe("Original name");
+        }
+        await name.fill("Renamed session");
+        if (surface === "menu") {
+          await dialog.getByRole("button", { name: "Save" }).click();
+        } else if (surface === "unselected name") {
+          await name.press("Tab");
+        } else {
+          await name.press("Enter");
+        }
 
-      const patch = await waitForPatch(
-        gateway,
-        (params) => params.key === "agent:main:rename-me" && params.label === "Renamed session",
-      );
-      expect(patch.params).toMatchObject({
-        key: "agent:main:rename-me",
-        label: "Renamed session",
+        const patch = await waitForPatch(
+          gateway,
+          (params) => params.key === renameKey && params.label === "Renamed session",
+        );
+        expect(patch.params).toMatchObject({
+          key: renameKey,
+          expectedSessionId: `session:${renameKey}`,
+          label: "Renamed session",
+        });
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
+        await expect
+          .poll(() =>
+            page
+              .locator(".chat-pane-cache__pane--active .chat-pane__session-title-text")
+              .textContent(),
+          )
+          .toContain("Renamed session");
+        await expect.poll(() => row.textContent()).toContain("Renamed session");
+      }),
+  );
+
+  it("retains a rejected inline draft and allows correction without a duplicate write", () =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const original = sessionRow(renameKey, "Original name", 1);
+      const gateway = await installMockGateway(page, {
+        sessionKey: renameKey,
+        sessions: [original],
+        deferredMethods: ["sessions.patch"],
       });
-      await expect.poll(() => row.textContent()).toContain("Renamed session");
-      await captureUiProof(suite, page, "sidebar-session-renamed.png");
-    } finally {
-      await context.close();
-      if (proofVideo) {
-        await proofVideo.saveAs(path.join(suite.artifactDir, "sidebar-session-rename.webm"));
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, renameKey));
+      const row = page.locator(`[data-session-key="${renameKey}"]`);
+      await row.locator(".sidebar-recent-session__name").dblclick();
+      const input = row.locator("input");
+      await input.fill("Planning");
+      await input.press("Enter");
+      const rejected = await waitForPatch(gateway, (params) => params.label === "Planning");
+      expect(rejected.params).toMatchObject({
+        key: renameKey,
+        expectedSessionId: original.sessionId,
+      });
+      await expect.poll(() => input.isEditable()).toBe(false);
+      await input.press("Enter");
+      await input.press("Tab");
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
+      await gateway.rejectDeferred("sessions.patch", {
+        code: "INVALID_REQUEST",
+        message: "label already in use: Planning",
+      });
+      await expect.poll(() => page.getByText(/label already in use/).count()).toBeGreaterThan(0);
+      await expect.poll(() => input.isEditable()).toBe(true);
+      expect(await input.inputValue()).toBe("Planning");
+      await captureUiProof(suite, page, "sidebar-inline-rejected.png");
+      await input.fill("Recovered name");
+      await input.press("Enter");
+      await waitForPatch(gateway, (params) => params.label === "Recovered name");
+      await input.waitFor({ state: "detached" });
+      await expect.poll(() => row.textContent()).toContain("Recovered name");
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
+    }));
+
+  it.each(["scope", "ownership"] as const)("retires an inline draft after losing %s", (cause) =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        sessionKey: renameKey,
+        operatorScopes: ["operator.sessions.read", "operator.sessions.write"],
+        sessions: [sessionRow(renameKey, "Original name", 1, { sharingRole: "owner" })],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, renameKey));
+      const row = page.locator(`[data-session-key="${renameKey}"]`);
+      await row.locator(".sidebar-recent-session__name").dblclick();
+      const input = row.locator("input");
+      await input.fill("Unsent draft");
+      if (cause === "scope") {
+        const connects = (await gateway.getRequests("connect")).length;
+        await gateway.setOperatorScopes(["operator.sessions.read"]);
+        await gateway.closeLatest(1001, "session permission changed");
+        await gateway.waitForRequest("connect", { after: connects });
+      } else {
+        await gateway.emitGatewayEvent("sessions.changed", {
+          ...sessionRow(renameKey, "Original name", 2, {
+            sharingRole: "viewer",
+            visibility: "read-only",
+          }),
+          sessionKey: renameKey,
+          reason: "update",
+        });
       }
-    }
-  });
+      await input.waitFor({ state: "detached" });
+      await expect.poll(() => row.locator("a[href]").count()).toBe(1);
+      expect(await row.textContent()).toContain("Original name");
+      expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+    }),
+  );
+
+  it("keeps navigation and modifier links without enabling read-only rename", () =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page, context }) => {
+      const current = sessionRow("agent:main:current", "Current notes", 2);
+      const viewer = sessionRow("agent:main:viewer", "Shared reference", 1, {
+        sharingRole: "viewer",
+        visibility: "read-only",
+      });
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.sessions.read"],
+        sessionKey: current.key,
+        sessions: [current, viewer],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, current.key));
+      const name = page.locator(`[data-session-key="${viewer.key}"] .sidebar-recent-session__name`);
+      await name.click();
+      const title = page.locator(".chat-pane-cache__pane--active .chat-pane__session-title-text");
+      await expect.poll(() => title.textContent()).toContain("Shared reference");
+      expect(await page.getByRole("dialog", { name: "Rename session", exact: true }).count()).toBe(
+        0,
+      );
+      await name.dblclick();
+      expect(await page.getByRole("dialog", { name: "Rename session", exact: true }).count()).toBe(
+        0,
+      );
+      await expect.poll(() => name.locator("xpath=ancestor::a").count()).toBe(1);
+      expect(await page.locator(".sidebar-recent-session input").count()).toBe(0);
+      const opened = context.waitForEvent("page");
+      await name.click({ modifiers: ["Control"] });
+      const linked = await opened;
+      await linked.waitForURL(/viewer/);
+      await expect.poll(() => title.textContent()).toContain("Shared reference");
+      await linked.close();
+      expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+    }));
 });

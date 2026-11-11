@@ -5,31 +5,30 @@ import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 export const modelsAuthRefreshHandlers: GatewayRequestHandlers = {
-  "models.authRefresh": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(params, validateModelsAuthRefreshParams, "models.authRefresh", respond)
-    ) {
-      return;
-    }
-    const config = context.getRuntimeConfig();
-    const scope = resolveModelAuthAgentScope(
-      config,
-      params.agentId === undefined || params.agentId === ""
-        ? tryResolveAmbientOwnerAgentId(config)
-        : params.agentId,
-    );
-    if (!scope.ok) {
-      respond(false, undefined, scope.error);
-      return;
-    }
-    await respondUnavailableOnThrow(respond, async () => {
-      // Explicit refresh must observe persisted changes that supplied no in-process receipt.
-      clearRuntimeAuthProfileStoreSnapshots();
-      await refreshModelAuthStateAfterMutation(context.getRuntimeConfig, scope.agentId);
-      respond(true, { refreshed: true }, undefined);
-    });
-  },
+  "models.authRefresh": defineValidatedGatewayHandler(
+    "models.authRefresh",
+    validateModelsAuthRefreshParams,
+    async ({ params, respond, context }) => {
+      const config = context.getRuntimeConfig();
+      const scope = resolveModelAuthAgentScope(
+        config,
+        params.agentId === undefined || params.agentId === ""
+          ? tryResolveAmbientOwnerAgentId(config)
+          : params.agentId,
+      );
+      if (!scope.ok) {
+        respond(false, undefined, scope.error);
+        return;
+      }
+      await respondUnavailableOnThrow(respond, async () => {
+        // Explicit refresh must observe persisted changes that supplied no in-process receipt.
+        clearRuntimeAuthProfileStoreSnapshots();
+        await refreshModelAuthStateAfterMutation(context.getRuntimeConfig, scope.agentId);
+        respond(true, { refreshed: true }, undefined);
+      });
+    },
+  ),
 };

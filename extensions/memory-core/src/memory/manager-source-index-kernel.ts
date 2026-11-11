@@ -21,6 +21,7 @@ import {
 } from "./manager-vector-rebuild-state.js";
 
 const SOURCE_WRITE_BATCH_SIZE = 128;
+const SOURCE_HEADER_BATCH_BYTES = 64 * 1024;
 const MAX_VECTOR_POINT_DELETES = 32;
 
 export type MemorySourceIndexReplacement = {
@@ -166,6 +167,30 @@ export class MemorySourceIndexKernel {
     sources: Iterable<{ header: MemorySourceIndexHeader; rows: Iterable<MemorySourceIndexRow> }>,
   ): void {
     let pending: MemoryChunkWrite[] = [];
+    const headers = new Map<string, SourceIndexDatabase["memory_index_sources"]>();
+    let headerBytes = 0;
+    const sizeOfHeader = (row: SourceIndexDatabase["memory_index_sources"]) =>
+      Buffer.byteLength(row.path) + Buffer.byteLength(row.hash) + 64;
+    const flushHeaders = () => {
+      if (headers.size === 0) {
+        return;
+      }
+      executeSqliteQuerySync(
+        this.database,
+        getNodeSqliteKysely<SourceIndexDatabase>(this.database)
+          .insertInto("memory_index_sources")
+          .values([...headers.values()])
+          .onConflict((conflict) =>
+            conflict.columns(["path", "source"]).doUpdateSet((eb) => ({
+              hash: eb.ref("excluded.hash"),
+              mtime: eb.ref("excluded.mtime"),
+              size: eb.ref("excluded.size"),
+            })),
+          ),
+      );
+      headers.clear();
+      headerBytes = 0;
+    };
     const pendingSources = new Set<string>();
     const flush = () => {
       writeMemoryChunks(this.database, pending);
@@ -193,8 +218,32 @@ export class MemorySourceIndexKernel {
         flush();
       }
       this.replaceSourceRows(header, rows, writeRows);
+      const { entry, source } = header;
+      const key = `${source}:${entry.path}`;
+      const row = {
+        path: entry.path,
+        source,
+        hash: entry.hash,
+        mtime: entry.mtimeMs,
+        size: entry.size,
+      };
+      const bytes = sizeOfHeader(row);
+      const previous = headers.get(key);
+      const replacedBytes = previous ? sizeOfHeader(previous) : 0;
+      if (headerBytes - replacedBytes + bytes > SOURCE_HEADER_BATCH_BYTES) {
+        flushHeaders();
+      } else {
+        headerBytes -= replacedBytes;
+      }
+      // PostgreSQL cannot update one conflict key twice in a statement.
+      headers.set(key, row);
+      headerBytes += bytes;
+      if (headers.size === SOURCE_WRITE_BATCH_SIZE || headerBytes >= SOURCE_HEADER_BATCH_BYTES) {
+        flushHeaders();
+      }
     }
     flush();
+    flushHeaders();
   }
 
   private replaceSourceRows(
@@ -290,25 +339,6 @@ export class MemorySourceIndexKernel {
     if (previous?.size) {
       this.deleteIds(entry.path, source, [...previous], "complete-replacement");
     }
-    executeSqliteQuerySync(
-      this.database,
-      db
-        .insertInto("memory_index_sources")
-        .values({
-          path: entry.path,
-          source,
-          hash: entry.hash,
-          mtime: entry.mtimeMs,
-          size: entry.size,
-        })
-        .onConflict((conflict) =>
-          conflict.columns(["path", "source"]).doUpdateSet((eb) => ({
-            hash: eb.ref("excluded.hash"),
-            mtime: eb.ref("excluded.mtime"),
-            size: eb.ref("excluded.size"),
-          })),
-        ),
-    );
     if (!vectorReady && hasEmbeddings) {
       markMemoryVectorRebuildRequired(this.database);
     }
@@ -371,20 +401,24 @@ export class MemorySourceIndexKernel {
       markMemoryVectorRebuildRequired(this.database);
       return;
     }
+    // Planning-read failures belong to the outer transaction, not best-effort cleanup.
+    const sparse =
+      ids ??
+      executeSqliteQuerySync(
+        this.database,
+        getNodeSqliteKysely<SourceIndexDatabase>(this.database)
+          .selectFrom("memory_index_chunks")
+          .select("id")
+          .where("path", "=", pathname)
+          .where("source", "=", source)
+          .limit(MAX_VECTOR_POINT_DELETES + 1),
+      ).rows.map((row) => row.id);
+    if (sparse.length === 0) {
+      return;
+    }
     try {
       // Keep cleanup atomic before recording rebuild debt on a caught failure.
       runSqliteImmediateTransactionSync(this.database, () => {
-        const sparse =
-          ids ??
-          executeSqliteQuerySync(
-            this.database,
-            getNodeSqliteKysely<SourceIndexDatabase>(this.database)
-              .selectFrom("memory_index_chunks")
-              .select("id")
-              .where("path", "=", pathname)
-              .where("source", "=", source)
-              .limit(MAX_VECTOR_POINT_DELETES + 1),
-          ).rows.map((row) => row.id);
         if (
           (ids === undefined || cleanup === "complete-replacement") &&
           sparse.length > MAX_VECTOR_POINT_DELETES

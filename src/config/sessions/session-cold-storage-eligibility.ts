@@ -5,14 +5,8 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-import {
-  hasSessionPendingInputsSchema,
-  hasPendingInputConsumptionColumn,
-} from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { readLegacyCompactionHistory } from "./legacy-compaction-history.js";
-import { hasMainSessionRecoveryClaim } from "./restart-recovery-state.js";
-import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
-import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
+import { parseCanonicalSqliteSessionEntry } from "./session-entry-json.js";
 import type { InternalSessionEntry } from "./types.js";
 
 /** Cold storage preserves logical owners; only activity and explicit cross-generation references protect bytes. */
@@ -20,6 +14,7 @@ export function readSessionColdStorageProtection(
   database: { db: EngineConnection },
   beforeMs: number,
   liveSessionKeys: ReadonlySet<string>,
+  sessionIds?: readonly string[],
 ): Set<string> {
   const db = getNodeSqliteKysely<DB>(database.db);
   const protectedIds = new Set<string>();
@@ -36,20 +31,27 @@ export function readSessionColdStorageProtection(
         "last_activity_at",
         "last_interaction_at",
         "entry_json",
-      ]),
+      ])
+      .$if(sessionIds !== undefined, (query) =>
+        query.where((eb) =>
+          eb.or([
+            eb("has_optional_references", "=", 1),
+            eb("current_session_id", "in", sqliteStringSet(sessionIds!)),
+            eb(
+              "session_key",
+              "in",
+              db
+                .selectFrom("session_windows")
+                .select("session_key")
+                .where("session_id", "in", sqliteStringSet(sessionIds!)),
+            ),
+          ]),
+        ),
+      ),
   )) {
-    const record = parseSqliteSessionEntryRecord(row);
-    const entry: InternalSessionEntry | undefined = record
-      ? projectCanonicalSessionEntryShape(record)
-      : undefined;
-    const recoveryPending =
-      !entry?.mainRestartRecovery?.tombstone &&
-      (entry?.restartRecoveryBeforeAgentReplyState === "admitted" ||
-        entry?.restartRecoveryBeforeAgentReplyState === "pending" ||
-        entry?.restartRecoveryBeforeAgentReplyState === "continue" ||
-        entry?.restartRecoveryDeliveryReceiptState === "terminal-pending" ||
-        hasMainSessionRecoveryClaim(entry));
-    if (!entry || recoveryPending) {
+    const entry: InternalSessionEntry | undefined =
+      parseCanonicalSqliteSessionEntry(row) ?? undefined;
+    if (!entry || entry.resumeAfterRestart) {
       busyKeys.add(row.session_key);
     }
     if (
@@ -86,7 +88,10 @@ export function readSessionColdStorageProtection(
     db
       .selectFrom("session_windows")
       .select("session_id")
-      // Live work, recovery, and unreadable nodes protect every generation of their exact key.
+      .$if(sessionIds !== undefined, (query) =>
+        query.where("session_id", "in", sqliteStringSet(sessionIds!)),
+      )
+      // Live work, a graceful resume marker, and unreadable nodes protect the exact key.
       .where((eb) =>
         eb.or([
           ...(busyKeys.size > 0 ? [eb("session_key", "in", sqliteStringSet([...busyKeys]))] : []),
@@ -97,19 +102,6 @@ export function readSessionColdStorageProtection(
   )) {
     protectedIds.add(row.session_id);
   }
-  if (hasSessionPendingInputsSchema(database.db)) {
-    for (const row of iterateSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("session_pending_inputs")
-        .select("session_id")
-        .where("state", "in", ["queued", "interrupted"])
-        .$if(hasPendingInputConsumptionColumn(database.db), (query) =>
-          query.where("consumed_event_id", "is", null),
-        ),
-    )) {
-      protectedIds.add(row.session_id);
-    }
-  }
+
   return protectedIds;
 }

@@ -2,7 +2,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { normalizeProfileName, resolveProfileStateDir } from "../cli/profile-utils.js";
+import {
+  normalizeProfileName,
+  resolveProfileGatewayPort,
+  resolveProfileStateDir,
+} from "../cli/profile-utils.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
 import {
   resolveHomeRelativePath,
@@ -66,7 +70,7 @@ export function isDefaultStateDir(
 ): boolean {
   const override = env.OPENCLAW_STATE_DIR?.trim();
   if (!override) {
-    return true;
+    return !normalizeProfileName(env.OPENCLAW_PROFILE);
   }
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
   return (
@@ -106,14 +110,12 @@ export function isDefaultInstallIdentity(
   homedir: () => string = resolveSystemAccountHomeDir,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  const accountHome = resolveRequiredHomeDir({}, homedir);
+  const accountHome = normalizePathForComparison(resolveRequiredHomeDir({}, homedir));
   // Native service paths use the process home independently of OPENCLAW_HOME.
   // A canonical runtime override must not hide a relocated service home.
   if (
-    normalizePathForComparison(resolveRequiredOsHomeDir(env, homedir)) !==
-      normalizePathForComparison(accountHome) ||
-    normalizePathForComparison(resolveRequiredHomeDir(env, homedir)) !==
-      normalizePathForComparison(accountHome)
+    normalizePathForComparison(resolveRequiredOsHomeDir(env, homedir)) !== accountHome ||
+    normalizePathForComparison(resolveRequiredHomeDir(env, homedir)) !== accountHome
   ) {
     return false;
   }
@@ -357,8 +359,7 @@ export function resolveGatewayPort(
   cfg?: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): number {
-  const envRaw = env.OPENCLAW_GATEWAY_PORT?.trim();
-  const envPort = parseGatewayPortEnvValue(envRaw);
+  const envPort = parseGatewayPortEnvValue(env.OPENCLAW_GATEWAY_PORT);
   if (envPort !== null) {
     return envPort;
   }
@@ -367,14 +368,5 @@ export function resolveGatewayPort(
     return configPort;
   }
   const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
-  if (!profile) {
-    return DEFAULT_GATEWAY_PORT;
-  }
-  // Keep byte-for-byte aligned with AppProfile.defaultGatewayPort in
-  // apps/macos/Sources/OpenClaw/AppProfile.swift so both surfaces connect to the same Gateway.
-  let hash = 2_166_136_261;
-  for (const byte of Buffer.from(profile, "utf8")) {
-    hash = Math.imul(hash ^ byte, 16_777_619) >>> 0;
-  }
-  return 20_000 + (hash % 40_000);
+  return profile ? resolveProfileGatewayPort(profile) : DEFAULT_GATEWAY_PORT;
 }

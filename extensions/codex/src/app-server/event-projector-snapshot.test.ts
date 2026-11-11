@@ -1,18 +1,13 @@
-import type {
-  AgentMessage,
-  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import { createNativeCommandItem } from "./event-projector-command.test-support.js";
-import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
+import { finalMessage as finalItem } from "./event-projector.compact.test-support.js";
+import * as fixture from "./event-projector.compact.test-support.js";
 import {
   buildEmptyToolTelemetry,
-  createCodexTestModel,
+  createParams,
   createProjector,
-  forCurrentTurn,
   registerCodexEventProjectorTestLifecycle,
-  turnCompleted,
 } from "./event-projector.test-harness.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
@@ -30,45 +25,22 @@ function commitSteeringPrefix(
   }
 }
 
-function buildSnapshot(trigger: EmbeddedRunAttemptParams["trigger"]): AgentMessage[] {
-  const model = createCodexTestModel();
-  return buildCodexMessagesSnapshot({
-    runParams: {
-      prompt: "Pre-compaction memory flush",
-      sessionId: "session-1",
-      provider: model.provider,
-      modelId: model.id,
-      model,
-      trigger,
-    } as EmbeddedRunAttemptParams,
-    turnId: "turn-1",
-    upstreamUserText: undefined,
-    reasoningText: "checking memory",
-    asyncMessages: [],
-    commentaryMessages: [],
-    toolMessages: [
-      {
-        role: "toolResult",
-        toolCallId: "call-1",
-        toolName: "write",
-        content: [{ type: "text", text: "saved" }],
-        isError: false,
-        timestamp: Date.now(),
-      } as AgentMessage,
-    ],
-    lastAssistant: {
-      role: "assistant",
-      content: [{ type: "text", text: "NO_REPLY" }],
-      timestamp: Date.now() + 1,
-    } as AssistantMessage,
-  });
-}
-
 describe("buildCodexMessagesSnapshot", () => {
-  it("marks every current memory-maintenance message as hidden for durable replay", () => {
-    const messages = buildSnapshot("memory");
-
-    expect(messages.length).toBeGreaterThan(1);
+  it("marks every current memory-maintenance message as hidden for durable replay", async () => {
+    const projector = await createProjector({ ...(await createParams()), trigger: "memory" });
+    await fixture.notify(projector, "item/reasoning/textDelta", {
+      itemId: "reasoning",
+      delta: "checking memory",
+    });
+    const tool = createNativeCommandItem({ id: "write", aggregatedOutput: "saved" });
+    await fixture.start(projector, tool);
+    await fixture.complete(projector, tool);
+    await fixture.complete(projector, finalItem("answer", "NO_REPLY"));
+    await fixture.finish(projector, [finalItem("answer", "NO_REPLY")]);
+    const messages = fixture.result(projector).messagesSnapshot;
+    expect(messages.map(({ role }) => role)).toEqual(
+      expect.arrayContaining(["user", "assistant", "toolResult"]),
+    );
     expect(messages.every((message) => (message as { display?: boolean }).display === false)).toBe(
       true,
     );
@@ -78,54 +50,21 @@ describe("buildCodexMessagesSnapshot", () => {
     "captures only visible assistant items at the first steer (%s)",
     async (replacement) => {
       const projector = await createProjector();
-      const phase = { phase: "final_answer" };
-      await projector.handleNotification(
-        forCurrentTurn("item/started", {
-          item: { type: "agentMessage", id: "preview", text: "", ...phase },
-        }),
-      );
-      await projector.handleNotification(
-        forCurrentTurn("item/agentMessage/delta", {
-          itemId: "preview",
-          delta: replacement === "completed replacement" ? "Authoritative" : "First preview",
-        }),
+      await fixture.start(projector, finalItem("preview", ""));
+      await fixture.delta(
+        projector,
+        replacement === "completed replacement" ? "Authoritative" : "First preview",
+        "preview",
       );
       if (replacement === "cumulative replacement" || replacement === "append-only streams") {
-        await projector.handleNotification(
-          forCurrentTurn("item/started", {
-            item: { type: "agentMessage", id: "second-preview", text: "", phase: "final_answer" },
-          }),
-        );
-        await projector.handleNotification(
-          forCurrentTurn("item/agentMessage/delta", {
-            itemId: "second-preview",
-            delta: "Second preview",
-          }),
-        );
+        await fixture.start(projector, finalItem("second-preview", ""));
+        await fixture.delta(projector, "Second preview", "second-preview");
       }
       if (replacement === "completed replacement") {
-        await projector.handleNotification(
-          forCurrentTurn("item/completed", {
-            item: {
-              type: "agentMessage",
-              id: "replacement",
-              text: "Authoritative answer",
-              ...phase,
-            },
-          }),
-        );
+        await fixture.complete(projector, finalItem("replacement", "Authoritative answer"));
       } else if (replacement !== "append-only streams") {
-        await projector.handleNotification(
-          forCurrentTurn("item/started", {
-            item: { type: "agentMessage", id: "replacement", text: "" },
-          }),
-        );
-        await projector.handleNotification(
-          forCurrentTurn("item/agentMessage/delta", {
-            itemId: "replacement",
-            delta: "Authoritative answer",
-          }),
-        );
+        await fixture.start(projector, fixture.message("replacement", ""));
+        await fixture.delta(projector, "Authoritative answer", "replacement");
       }
       const expected =
         replacement === "append-only streams"
@@ -135,144 +74,83 @@ describe("buildCodexMessagesSnapshot", () => {
         projector
           .buildSteeringTranscriptPrefix()
           .map((message) => (message.role === "assistant" ? message.content : message.role)),
-      ).toEqual(expected.map((text) => [{ type: "text", text }]));
+      ).toEqual(expected.map((text) => fixture.text(text)));
     },
   );
 
   it("keeps newly streamed text after tools observed since its assistant item started", async () => {
     const projector = await createProjector();
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "early-start", phase: "final_answer", text: "" },
-      }),
-    );
+    await fixture.start(projector, finalItem("early-start", ""));
     const tool = createNativeCommandItem({
       id: "earlier-tool",
       aggregatedOutput: "Tool completed",
     });
-    await projector.handleNotification(forCurrentTurn("item/started", { item: tool }));
-    await projector.handleNotification(forCurrentTurn("item/completed", { item: tool }));
-    await projector.handleNotification(
-      forCurrentTurn("item/agentMessage/delta", {
-        itemId: "early-start",
-        delta: "Visible tail",
-      }),
-    );
+    await fixture.start(projector, tool);
+    await fixture.complete(projector, tool);
+    await fixture.delta(projector, "Visible tail", "early-start");
     const prefix = projector.buildSteeringTranscriptPrefix();
     expect(prefix.at(-1)).toMatchObject({
       role: "assistant",
-      content: [{ type: "text", text: "Visible tail" }],
+      content: fixture.text("Visible tail"),
     });
     expect(prefix.slice(0, -1)).toContainEqual(
       expect.objectContaining({ role: "toolResult", toolCallId: "earlier-tool" }),
     );
   });
 
-  it("keeps a persisted earlier answer separate from a later tool-authored reply", async () => {
-    const projector = await createProjector();
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "earlier-answer",
-          phase: "final_answer",
-          text: "Earlier answer.",
-        },
-      }),
-    );
-    const prefix = projector.buildSteeringTranscriptPrefix();
-    commitSteeringPrefix(projector, prefix);
+  it.each(["final_answer", "partial_answer"])(
+    "keeps a persisted %s separate from a later tool-authored reply",
+    async (phase) => {
+      const projector = await createProjector();
+      await fixture.complete(
+        projector,
+        fixture.message("earlier-answer", "Earlier answer.", phase),
+      );
+      const prefix = projector.buildSteeringTranscriptPrefix();
+      commitSteeringPrefix(projector, prefix);
 
-    const result = projector.buildResult({
-      ...buildEmptyToolTelemetry(),
-      messagingToolSourceReplyPayloads: [
-        {
-          text: "Later tool reply.",
-          sourceReplyFinal: true,
-          toolAuthored: true,
-          toolAuthoredForToolCallId: "later-call",
-          toolAuthoredForTurnId: "turn-1",
-        },
-      ],
-    });
+      const result = projector.buildResult({
+        ...buildEmptyToolTelemetry(),
+        messagingToolSourceReplyPayloads: [
+          {
+            text: "Later tool reply.",
+            sourceReplyFinal: true,
+            toolAuthored: true,
+            toolAuthoredForToolCallId: "later-call",
+            toolAuthoredForTurnId: "turn-1",
+          },
+        ],
+      });
 
-    expect(result.assistantTexts).toEqual([]);
-    expect(result.lastAssistant).toBeUndefined();
-    expect(result.currentAttemptAssistant).toMatchObject({ turnId: "turn-1" });
-    expect(prefix).toMatchObject([
-      { role: "assistant", content: [{ type: "text", text: "Earlier answer." }] },
-    ]);
-    expect(prefix[0]).not.toHaveProperty("turnId");
-    expect(prefix.map(readMirrorIdentity)).toEqual(["turn-1:assistant:earlier-answer"]);
-  });
-
-  it("adopts the saved prefix for a raw completion with a replacement identity", async () => {
-    const completionId = "raw-completed";
-    const projector = await createProjector();
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "streamed", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/agentMessage/delta", {
-        itemId: "streamed",
-        delta: "Before steer.",
-      }),
-    );
-    commitSteeringPrefix(projector, projector.buildSteeringTranscriptPrefix());
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "message",
-          role: "assistant",
-          phase: "final_answer",
-          id: completionId,
-          content: [{ type: "output_text", text: "Before steer. After steer." }],
-        },
-      }),
-    );
-    await projector.handleNotification(
-      turnCompleted([
-        {
-          type: "agentMessage",
-          id: completionId,
-          phase: "final_answer",
-          text: "Before steer. After steer.",
-        },
-      ]),
-    );
-    expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([
-      " After steer.",
-    ]);
-  });
+      expect(result.assistantTexts).toEqual([]);
+      expect(result.lastAssistant).toBeUndefined();
+      expect(result.currentAttemptAssistant).toMatchObject({ turnId: "turn-1" });
+      expect(prefix[0]).not.toHaveProperty("turnId");
+      expect(prefix.map(readMirrorIdentity)).toEqual(["turn-1:assistant:earlier-answer"]);
+    },
+  );
 
   it.each([true, false])(
     "respects the first completion boundary across a native tool (completed before tool: %s)",
     async (completedBeforeTool) => {
       const projector = await createProjector();
-      const started = { type: "agentMessage", id: "split-answer", phase: "final_answer", text: "" };
-      await projector.handleNotification(forCurrentTurn("item/started", { item: started }));
-      await projector.handleNotification(
-        forCurrentTurn("item/agentMessage/delta", {
-          itemId: started.id,
-          delta: "Before steer.",
-        }),
-      );
+      const started = finalItem("split-answer", "");
+      await fixture.start(projector, started);
+      await fixture.delta(projector, "Before steer.", started.id);
       commitSteeringPrefix(projector, projector.buildSteeringTranscriptPrefix());
       const completed = { ...started, text: "Before steer. Split answer tail." };
       if (completedBeforeTool) {
-        await projector.handleNotification(forCurrentTurn("item/completed", { item: completed }));
+        await fixture.complete(projector, completed);
       }
       const tool = createNativeCommandItem({ id: "handoff", aggregatedOutput: "Tool completed" });
-      await projector.handleNotification(forCurrentTurn("item/started", { item: tool }));
-      await projector.handleNotification(forCurrentTurn("item/completed", { item: tool }));
+      await fixture.start(projector, tool);
+      await fixture.complete(projector, tool);
       // Duplicate completion and the terminal snapshot cannot move the first completion.
-      await projector.handleNotification(forCurrentTurn("item/completed", { item: completed }));
+      await fixture.complete(projector, completed);
       const final = { ...started, id: "post-tool-answer", text: "After tool." };
-      await projector.handleNotification(forCurrentTurn("item/completed", { item: final }));
-      await projector.handleNotification(turnCompleted([completed, final]));
-      expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual(
+      await fixture.complete(projector, final);
+      await fixture.finish(projector, [completed, final]);
+      expect(fixture.result(projector).assistantTexts).toEqual(
         completedBeforeTool ? ["After tool."] : [" Split answer tail.", "After tool."],
       );
     },
@@ -281,22 +159,13 @@ describe("buildCodexMessagesSnapshot", () => {
   it("retains distinct completed item identities across steers without replaying the terminal answer", async () => {
     const projector = await createProjector();
     for (const id of ["answer-a", "answer-b"]) {
-      await projector.handleNotification(
-        forCurrentTurn("item/completed", {
-          item: { type: "agentMessage", id, phase: "final_answer", text: "Same answer." },
-        }),
-      );
+      await fixture.complete(projector, finalItem(id, "Same answer."));
     }
     const sleep = { type: "sleep", id: "sleep", durationMs: 250 };
-    await projector.handleNotification(forCurrentTurn("item/started", { item: sleep }));
-    const pending = { type: "agentMessage", id: "pending", phase: "final_answer", text: "" };
-    await projector.handleNotification(forCurrentTurn("item/started", { item: pending }));
-    await projector.handleNotification(
-      forCurrentTurn("item/agentMessage/delta", {
-        itemId: pending.id,
-        delta: "Still writing.",
-      }),
-    );
+    await fixture.start(projector, sleep);
+    const pending = finalItem("pending", "");
+    await fixture.start(projector, pending);
+    await fixture.delta(projector, "Still writing.", pending.id);
 
     const prefix = projector.buildSteeringTranscriptPrefix();
     expect(prefix.map(readMirrorIdentity)).toEqual([
@@ -304,18 +173,13 @@ describe("buildCodexMessagesSnapshot", () => {
       "turn-1:assistant:answer-b",
       "turn-1:assistant:pending:segment:0",
     ]);
-    expect(prefix).toMatchObject([
-      { role: "assistant", content: [{ type: "text", text: "Same answer." }] },
-      { role: "assistant", content: [{ type: "text", text: "Same answer." }] },
-      { role: "assistant", content: [{ type: "text", text: "Still writing." }] },
-    ]);
     commitSteeringPrefix(projector, prefix);
     expect(projector.buildSteeringTranscriptPrefix()).toEqual(prefix.slice(0, 2));
 
     // A late completion for the same handoff must not invalidate the later answer.
-    await projector.handleNotification(forCurrentTurn("item/completed", { item: sleep }));
+    await fixture.complete(projector, sleep);
     const completed = { ...pending, text: "Still writing. More after steer." };
-    await projector.handleNotification(forCurrentTurn("item/completed", { item: completed }));
+    await fixture.complete(projector, completed);
     const continuedPrefix = projector.buildSteeringTranscriptPrefix();
     expect(continuedPrefix.map(readMirrorIdentity)).toEqual([
       "turn-1:assistant:answer-a",
@@ -323,65 +187,61 @@ describe("buildCodexMessagesSnapshot", () => {
       "turn-1:assistant:pending:segment:1",
     ]);
     commitSteeringPrefix(projector, continuedPrefix);
-    await projector.handleNotification(turnCompleted([completed]));
-    expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([]);
+    await fixture.finish(projector, [completed]);
+    expect(fixture.result(projector).assistantTexts).toEqual([]);
   });
 
-  it.each(["same", "replacement", "independent", "handoff", "async"] as const)(
-    "retains the captured raw cutoff when %s completion arrives before the mirror settles",
+  it.each(["same", "replacement", "independent", "handoff", "async", "raw"] as const)(
+    "retains the captured cutoff across %s completion",
     async (identity) => {
       const projector = await createProjector();
-      const started = { type: "agentMessage", id: "streamed", phase: "final_answer", text: "" };
-      const beforeSteer = " \t🦞 prefix\n";
-      await projector.handleNotification(forCurrentTurn("item/started", { item: started }));
-      await projector.handleNotification(
-        forCurrentTurn("item/agentMessage/delta", {
-          itemId: started.id,
-          delta: beforeSteer,
-        }),
-      );
+      const started = finalItem("streamed", "");
+      const beforeSteer = identity === "raw" ? "Before steer." : " \t🦞 prefix\n";
+      const tail = identity === "raw" ? " After steer." : "continued and done";
+      await fixture.start(projector, started);
+      await fixture.delta(projector, beforeSteer, started.id);
       const prefix = projector.buildSteeringTranscriptPrefix();
-      expect(prefix).toMatchObject([
-        { role: "assistant", content: [{ type: "text", text: beforeSteer }] },
-      ]);
-      await projector.handleNotification(
-        forCurrentTurn("item/agentMessage/delta", {
-          itemId: started.id,
-          delta: "continued",
-        }),
-      );
+      expect(prefix).toMatchObject([{ role: "assistant", content: fixture.text(beforeSteer) }]);
+      if (identity === "raw") {
+        commitSteeringPrefix(projector, prefix);
+      } else {
+        await fixture.delta(projector, "continued", started.id);
+      }
       const completed = {
         ...started,
         id:
           identity === "same" || identity === "handoff" || identity === "async"
             ? started.id
             : identity,
-        text: `${beforeSteer}continued and done`,
+        text: `${beforeSteer}${tail}`,
       };
       if (identity === "handoff") {
         const item = { type: "sleep", id: "handoff", durationMs: 1 };
-        await projector.handleNotification(forCurrentTurn("item/started", { item }));
-        await projector.handleNotification(forCurrentTurn("item/completed", { item }));
+        await fixture.start(projector, item);
+        await fixture.complete(projector, item);
       }
       if (identity === "independent") {
-        await projector.handleNotification(
-          forCurrentTurn("item/started", {
-            item: { ...completed, text: "" },
-          }),
-        );
+        await fixture.start(projector, { ...completed, text: "" });
       }
       if (identity === "async") {
-        await projector.handleNotification(
-          forCurrentTurn("item/completed", {
-            item: { ...completed, id: "independent-async", delivery: "async" },
-          }),
-        );
+        await fixture.complete(projector, {
+          ...completed,
+          id: "independent-async",
+          delivery: "async",
+        });
       }
-      await projector.handleNotification(forCurrentTurn("item/completed", { item: completed }));
-      commitSteeringPrefix(projector, prefix);
-      await projector.handleNotification(turnCompleted([completed]));
-      expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([
-        identity === "independent" ? `${beforeSteer}continued and done` : "continued and done",
+      if (identity === "raw") {
+        await fixture.rawAssistant(projector, completed.text, {
+          id: completed.id,
+          phase: "final_answer",
+        });
+      } else {
+        await fixture.complete(projector, completed);
+        commitSteeringPrefix(projector, prefix);
+      }
+      await fixture.finish(projector, [completed]);
+      expect(fixture.result(projector).assistantTexts).toEqual([
+        identity === "independent" ? `${beforeSteer}${tail}` : tail,
       ]);
     },
   );

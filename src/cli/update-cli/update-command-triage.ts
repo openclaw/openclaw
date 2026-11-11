@@ -12,7 +12,8 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateTriageTarget as TriageTarget } from "../../infra/update-triage.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
-import { classifyUpdateOutcome, isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
+import { classifyUpdateOutcome } from "../../shared/update-outcome-classification.js";
+import { isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
 import { formatInstallationTargetCommand } from "../installation-target-format.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { isTerminalInteractive } from "../terminal-interactivity.js";
@@ -29,6 +30,7 @@ export type UpdateTriageTarget = TriageTarget & { failureResult?: UpdateRunResul
 
 type UpdateFailureTriageOptions = Pick<UpdateCommandOptions, "json" | "yes" | "dryRun" | "run"> & {
   invocationCwd?: string;
+  operatorEnv?: NodeJS.ProcessEnv;
 };
 
 export async function withUpdateFailureTriage(
@@ -68,6 +70,7 @@ export async function prepareUpdateCommandFailureTriage(
       log: opts.json ? defaultRuntime.error : defaultRuntime.log,
     },
     invocationCwd: opts.invocationCwd,
+    operatorEnv: opts.operatorEnv,
   });
   return async (error) => {
     if (error instanceof ExitError) {

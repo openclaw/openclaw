@@ -9,7 +9,6 @@ import {
   isNativeWebSearchAllowedByToolPolicy,
 } from "../../agents/codex-native-web-search-core.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createGoogleThinkingPayloadWrapper } from "../../llm/providers/stream-wrappers/google.js";
 import { createMinimaxThinkingDisabledWrapper } from "../../llm/providers/stream-wrappers/minimax.js";
 import {
   createSiliconFlowThinkingWrapper,
@@ -29,6 +28,7 @@ import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stre
 import type { SimpleStreamOptions } from "../../llm/types.js";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
+  createGoogleThinkingPayloadWrapper,
   createThinkingOnlyFinalTextWrapper,
 } from "../../plugin-sdk/provider-stream-shared.js";
 import {
@@ -138,13 +138,12 @@ export function resolvePreparedExtraParams(params: {
   extraParamsOverride?: Record<string, unknown>;
   thinkingLevel?: ProviderThinkLevel;
   agentId?: string;
-  resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
   resolvedTransport?: AgentRuntimeTransport;
   providerRuntimeHandle?: ProviderRuntimePluginHandle;
   auth?: ProviderPrepareExtraParamsContext["auth"];
 }): Record<string, unknown> {
-  const resolvedExtraParams = params.resolvedExtraParams ?? resolveExtraParams(params);
+  const resolvedExtraParams = resolveExtraParams(params);
   const override = stripRequestScopedExtraParams(
     sanitizeExtraParamsOverride(params.extraParamsOverride),
   );
@@ -243,24 +242,22 @@ function applyDefaultOpenAIGptRuntimeParams(
 }
 
 export function resolveAgentTransportOverride(params: {
-  settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
+  settingsManager: Pick<SettingsManager, "getGlobalSettings">;
   effectiveExtraParams: Record<string, unknown> | undefined;
 }): AgentRuntimeTransport | undefined {
   const globalSettings = params.settingsManager.getGlobalSettings();
-  const projectSettings = params.settingsManager.getProjectSettings();
-  if (Object.hasOwn(globalSettings, "transport") || Object.hasOwn(projectSettings, "transport")) {
+  if (Object.hasOwn(globalSettings, "transport")) {
     return undefined;
   }
   return resolveSupportedTransport(params.effectiveExtraParams?.transport);
 }
 
 export function resolveExplicitSettingsTransport(params: {
-  settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
+  settingsManager: Pick<SettingsManager, "getGlobalSettings">;
   sessionTransport: unknown;
 }): AgentRuntimeTransport | undefined {
   const globalSettings = params.settingsManager.getGlobalSettings();
-  const projectSettings = params.settingsManager.getProjectSettings();
-  if (!Object.hasOwn(globalSettings, "transport") && !Object.hasOwn(projectSettings, "transport")) {
+  if (!Object.hasOwn(globalSettings, "transport")) {
     return undefined;
   }
   return resolveSupportedTransport(params.sessionTransport);
@@ -296,6 +293,11 @@ function createStreamFnWithExtraParams(
   }
 
   const streamParams: CacheRetentionStreamOptions = {};
+  if (extraParams.promptCacheTtl === "30m" || extraParams.promptCacheTtl === "12h") {
+    streamParams.promptCacheTtl = extraParams.promptCacheTtl;
+  } else if (extraParams.promptCacheTtl !== undefined) {
+    log.warn('ignoring invalid promptCacheTtl param; expected "30m" or "12h"');
+  }
   if (typeof extraParams.temperature === "number") {
     streamParams.temperature = extraParams.temperature;
   }
@@ -371,11 +373,13 @@ function createStreamFnWithExtraParams(
       return underlying(callModel, context, options);
     }
     const effectiveCacheRetention = options?.cacheRetention ?? cacheRetention;
+    const promptCacheTtl = options?.promptCacheTtl ?? streamParams.promptCacheTtl;
     return underlying(callModel, context, {
       ...streamParams,
       ...options,
       // Own undefined means no request override; explicit none/short/long still wins.
       ...(effectiveCacheRetention ? { cacheRetention: effectiveCacheRetention } : {}),
+      ...(promptCacheTtl ? { promptCacheTtl } : {}),
     });
   };
 }

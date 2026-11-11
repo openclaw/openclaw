@@ -1,6 +1,7 @@
 import { type AppBridge, McpUiHostContextSchema } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { t } from "../i18n/index.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { collectMcpAppStyleVariables } from "./mcp-app-theme.ts";
 
 registerMcpAppEnglish();
@@ -68,11 +69,11 @@ export function loadMcpAppSandbox(
         resolve();
       }
     };
+    const stop = listen(window, "message", onMessage);
     const cleanup = addCleanup(() => {
       window.clearTimeout(timeout);
-      window.removeEventListener("message", onMessage);
+      stop();
     });
-    window.addEventListener("message", onMessage);
   });
   iframe.src = url;
   return ready;

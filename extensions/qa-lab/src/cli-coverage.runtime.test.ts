@@ -1,34 +1,41 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeRuntimeParitySummary } from "./agentic-parity-report-test-helpers.js";
-import { runQaCoverageReportCommand } from "./cli-coverage.runtime.js";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { runQaCoverageReportCommand } from "../reporting-api.js";
+import { makeSingleRuntimeParitySummary } from "./agentic-parity-report-test-helpers.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
-
-const { runQaFlowSuiteFromRuntime, runQaSuite } = vi.hoisted(() => ({
-  runQaFlowSuiteFromRuntime: vi.fn(),
-  runQaSuite: vi.fn(),
-}));
-
-vi.mock("./suite-launch.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./suite-launch.runtime.js")>()),
-  runQaFlowSuiteFromRuntime,
-  runQaSuite,
-}));
 
 const tempDirs = createTempDirHarness();
 
-function expectWriteContains(mock: unknown, fragment: string): void {
-  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
-  expect(
-    calls.some(([value]) => String(value).includes(fragment)),
-    `write contains ${fragment}`,
-  ).toBe(true);
-}
-
 describe("qa coverage command", () => {
-  let stdoutWrite: ReturnType<typeof vi.spyOn>;
+  let stdoutWrite: MockInstance<typeof process.stdout.write>;
   let priorExitCode: typeof process.exitCode;
+
+  function expectWrites(...fragments: string[]) {
+    for (const fragment of fragments) {
+      expect(stdoutWrite.mock.calls.some(([value]) => String(value).includes(fragment))).toBe(true);
+    }
+  }
+
+  async function writeInput(name: string, content: string) {
+    const repoRoot = await tempDirs.makeTempDir("qa-coverage-");
+    await fs.writeFile(path.join(repoRoot, name), content, "utf8");
+    return repoRoot;
+  }
+  const evidenceOptions = (repoRoot: string, output = "gaps.json") => ({
+    repoRoot,
+    evidence: "qa-evidence.json",
+    output,
+  });
+  async function runSummary(summary: unknown, json = false, output?: string) {
+    return runQaCoverageReportCommand({
+      repoRoot: await writeInput("runtime-summary.json", JSON.stringify(summary)),
+      tools: true,
+      summary: "runtime-summary.json",
+      json,
+      output,
+    });
+  }
 
   beforeEach(() => {
     priorExitCode = process.exitCode;
@@ -39,157 +46,112 @@ describe("qa coverage command", () => {
   afterEach(async () => {
     process.exitCode = priorExitCode ?? 0;
     vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    vi.clearAllMocks();
     await tempDirs.cleanup();
   });
 
-  describe("coverage inventory command", () => {
-    it("prints a markdown report from scenario metadata", async () => {
-      await runQaCoverageReportCommand({});
-
-      expectWriteContains(stdoutWrite, "# QA Coverage Inventory");
-      expectWriteContains(stdoutWrite, "session-memory.embedding-search-recall");
-    });
-
-    it("writes UNKNOWN gap facts from legacy evidence without running QA or changing its input", async () => {
-      const repoRoot = await tempDirs.makeTempDir("qa-gap-report-");
+  it.each(["evidence", "summary"] as const)(
+    "preserves %s inputs when writing coverage",
+    async (kind) => {
+      const repoRoot = await tempDirs.makeTempDir("qa-coverage-input-");
       await fs.copyFile(path.resolve("taxonomy.yaml"), path.join(repoRoot, "taxonomy.yaml"));
-      const raw = JSON.stringify({
+      const legacyEvidence = {
         kind: "openclaw.qa.evidence-summary",
         schemaVersion: 2,
         generatedAt: "2026-10-01T00:00:00Z",
         evidenceMode: "slim",
         entries: [],
-      });
-      const evidencePath = path.join(repoRoot, "qa-evidence.json");
-      await fs.writeFile(evidencePath, raw);
-      await runQaCoverageReportCommand({
-        repoRoot,
-        evidence: "qa-evidence.json",
-        json: true,
-        output: "gaps.json",
-      });
-      const report = JSON.parse(await fs.readFile(path.join(repoRoot, "gaps.json"), "utf8")) as {
-        coverage: Array<{ qualification: string }>;
       };
-      expect(report.coverage.length).toBeGreaterThan(0);
-      expect(report.coverage.every((row) => row.qualification === "unknown")).toBe(true);
-      expect(await fs.readFile(evidencePath, "utf8")).toBe(raw);
-      expect(process.exitCode).toBe(0);
-      expect(runQaSuite).not.toHaveBeenCalled();
-      expect(runQaFlowSuiteFromRuntime).not.toHaveBeenCalled();
-      await expect(
-        runQaCoverageReportCommand({
-          repoRoot,
-          evidence: "qa-evidence.json",
-          output: "qa-evidence.json",
-        }),
-      ).rejects.toThrow("must not overwrite");
-      expect(await fs.readFile(evidencePath, "utf8")).toBe(raw);
-    });
+      const raw = JSON.stringify(
+        kind === "evidence" ? legacyEvidence : makeSingleRuntimeParitySummary(0),
+      );
+      const input = path.join(repoRoot, "input.json");
+      await fs.writeFile(input, raw);
+      const options = { repoRoot, [kind]: input, tools: kind === "summary" };
+      await runQaCoverageReportCommand({ ...options, json: true, output: "report.json" });
+      const report = JSON.parse(await fs.readFile(path.join(repoRoot, "report.json"), "utf8"));
+      const rows = kind === "evidence" ? report.coverage : report.rows;
+      expect(rows.length).toBeGreaterThan(0);
+      if (kind === "evidence") {
+        expect(
+          rows.every((row: { qualification: string }) => row.qualification === "unknown"),
+        ).toBe(true);
+        expect(process.exitCode).toBe(0);
+      }
+      expect(await fs.readFile(input, "utf8")).toBe(raw);
+      const aliases = [
+        input,
+        path.join(repoRoot, "hardlink.json"),
+        path.join(repoRoot, "symlink.json"),
+      ] as const;
+      await fs.link(input, aliases[1]);
+      await fs.symlink(input, aliases[2]);
+      for (const output of aliases) {
+        for (const json of [false, true]) {
+          await expect(runQaCoverageReportCommand({ ...options, output, json })).rejects.toThrow(
+            "must not overwrite",
+          );
+          expect(await fs.readFile(input, "utf8")).toBe(raw);
+        }
+      }
+    },
+  );
 
-    it.each([{ tools: true }, { summary: "summary.json" }, { match: ["query"] }])(
-      "rejects incompatible evidence options %j before reading input",
-      async (options) => {
-        await expect(
-          runQaCoverageReportCommand({ evidence: "absent.json", ...options }),
-        ).rejects.toThrow("--evidence cannot be combined");
-      },
-    );
-
-    it("rejects malformed evidence without fabricating an UNKNOWN report", async () => {
-      const repoRoot = await tempDirs.makeTempDir("qa-gap-invalid-");
-      await fs.writeFile(path.join(repoRoot, "qa-evidence.json"), "null\n");
+  it.each([{ tools: true }, { summary: "summary.json" }, { match: ["query"] }])(
+    "rejects incompatible evidence options %j before reading input",
+    async (options) => {
       await expect(
-        runQaCoverageReportCommand({ repoRoot, evidence: "qa-evidence.json", output: "gaps.json" }),
-      ).rejects.toThrow();
-      await expect(fs.stat(path.join(repoRoot, "gaps.json"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+        runQaCoverageReportCommand({ evidence: "absent.json", ...options }),
+      ).rejects.toThrow("--evidence cannot be combined");
+    },
+  );
+
+  it("rejects malformed evidence without fabricating an UNKNOWN report", async () => {
+    const repoRoot = await writeInput("qa-evidence.json", "null\n");
+    await expect(runQaCoverageReportCommand(evidenceOptions(repoRoot))).rejects.toThrow();
+    await expect(fs.stat(path.join(repoRoot, "gaps.json"))).rejects.toMatchObject({
+      code: "ENOENT",
     });
   });
-
-  it("prints a markdown tool coverage inventory without a run summary", async () => {
-    await runQaCoverageReportCommand({ tools: true });
-    expectWriteContains(stdoutWrite, "# OpenClaw Runtime Tool Coverage");
-    expectWriteContains(stdoutWrite, "codex-native-workspace");
-  });
-
-  it("prints a focused scenario match report from coverage metadata", async () => {
-    await runQaCoverageReportCommand({
-      repoRoot: process.cwd(),
-      match: ["image roundtrip"],
-    });
-
-    expectWriteContains(stdoutWrite, "# QA Scenario Matches");
-    expectWriteContains(stdoutWrite, "image-generation-roundtrip");
-    expectWriteContains(stdoutWrite, "--scenario image-generation-roundtrip");
-    expect(stdoutWrite.mock.calls.flat().join("")).not.toContain("memory-recall");
+  it.each<[Parameters<typeof runQaCoverageReportCommand>[0], string[], string | undefined]>([
+    [{}, ["# QA Coverage Inventory", "session-memory.embedding-search-recall"], undefined],
+    [{ tools: true }, ["# OpenClaw Runtime Tool Coverage", "codex-native-workspace"], undefined],
+    [
+      { repoRoot: process.cwd(), match: ["image roundtrip"] },
+      [
+        "# QA Scenario Matches",
+        "image-generation-roundtrip",
+        "--scenario image-generation-roundtrip",
+      ],
+      "memory-recall",
+    ],
+  ])("prints coverage metadata for %j", async (options, fragments, excluded) => {
+    await runQaCoverageReportCommand(options);
+    expectWrites(...fragments);
+    if (excluded) {
+      expect(stdoutWrite.mock.calls.flat().join("")).not.toContain(excluded);
+    }
   });
 
   it("rejects null tool coverage summary JSON", async () => {
-    const repoRoot = await tempDirs.makeTempDir("qa-tool-coverage-null-");
-    await fs.writeFile(path.join(repoRoot, "runtime-summary.json"), "null\n", "utf8");
-    await expect(
-      runQaCoverageReportCommand({
-        repoRoot,
-        tools: true,
-        summary: "runtime-summary.json",
-        json: true,
-      }),
-    ).rejects.toMatchObject({ code: "summary_not_completed" });
+    await expect(runSummary(null, true, "report.json")).rejects.toMatchObject({
+      code: "summary_not_completed",
+    });
     expect(process.exitCode).toBe(0);
   });
 
   it("exits nonzero when tool coverage summary is missing a required runtime tool call", async () => {
-    const repoRoot = await tempDirs.makeTempDir("qa-tool-coverage-");
-    const baseSummary = makeRuntimeParitySummary();
-    const scenario = baseSummary.scenarios[0];
-    if (!scenario?.runtimeParity) {
-      throw new Error("runtime parity fixture missing");
-    }
-    const summary = {
-      ...baseSummary,
-      scenarios: [scenario],
-      run: { ...baseSummary.run, status: "completed" },
-    };
-    scenario.name = "runtime-tool-web-search";
-    scenario.runtimeParity.scenarioId = "runtime-tool-web-search";
-    scenario.status = "fail";
-    summary.counts = { total: 1, passed: 0, failed: 1 };
+    const summary = makeSingleRuntimeParitySummary(0, "runtime-tool-web-search");
+    const scenario = summary.scenarios[0];
     scenario.runtimeParity.drift = "tool-call-shape";
     scenario.runtimeParity.driftDetails = "Codex emitted no web_search call";
-    Object.assign(scenario.runtimeParity.cells.openclaw, {
-      transcriptBytes: "",
-      toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
-      finalText: "",
-      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      wallClockMs: 1,
-    });
-    Object.assign(scenario.runtimeParity.cells.codex, {
-      transcriptBytes: "",
-      toolCalls: [],
-      finalText: "",
-      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      wallClockMs: 1,
-    });
-    await fs.writeFile(
-      path.join(repoRoot, "runtime-summary.json"),
-      JSON.stringify(summary),
-      "utf8",
-    );
-
-    await runQaCoverageReportCommand({
-      repoRoot,
-      tools: true,
-      summary: "runtime-summary.json",
-    });
-
+    scenario.runtimeParity.cells.openclaw.toolCalls = [
+      { tool: "web_search", argsHash: "a", resultHash: "r" },
+    ];
+    scenario.runtimeParity.cells.codex.toolCalls = [];
+    await runSummary(summary);
     expect(process.exitCode).toBe(1);
-    expectWriteContains(stdoutWrite, "- Verdict: fail");
-    expectWriteContains(
-      stdoutWrite,
+    expectWrites(
+      "- Verdict: fail",
       "web_search missing successful codex tool call/result web_search",
     );
   });

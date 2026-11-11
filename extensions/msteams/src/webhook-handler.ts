@@ -10,7 +10,6 @@ export function createMSTeamsWebhookHandler(
 ) {
   const responses = new Map<ServerResponse, Promise<void>>();
   let closing = false;
-  let closeTask: Promise<void> | undefined;
   return {
     handler: ((req, res) => {
       if (closing) {
@@ -37,27 +36,24 @@ export function createMSTeamsWebhookHandler(
       }
       return response.promise;
     }) satisfies RequestListener,
-    close: () => {
+    close: async () => {
       closing = true;
-      closeTask ??= (async () => {
-        if (responses.size === 0) {
-          return;
+      if (responses.size === 0) {
+        return;
+      }
+      try {
+        // Preserve the private listener's 30-second request window during stop.
+        await withTimeout(
+          Promise.all(responses.values()),
+          MSTEAMS_REQUEST_TIMEOUT_MS,
+          "Microsoft Teams webhook shutdown",
+        );
+      } catch {
+        warn("Microsoft Teams webhook shutdown exceeded 30 seconds; closing active responses");
+        for (const response of responses.keys()) {
+          response.destroy();
         }
-        try {
-          // Preserve the private listener's 30-second request window during stop.
-          await withTimeout(
-            Promise.all(responses.values()),
-            MSTEAMS_REQUEST_TIMEOUT_MS,
-            "Microsoft Teams webhook shutdown",
-          );
-        } catch {
-          warn("Microsoft Teams webhook shutdown exceeded 30 seconds; closing active responses");
-          for (const response of responses.keys()) {
-            response.destroy();
-          }
-        }
-      })();
-      return closeTask;
+      }
     },
   };
 }

@@ -1,6 +1,6 @@
 import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 
-export type MessageReactionAction = (messageId: string, emoji: string, remove: boolean) => void;
+type MessageReactionAction = (messageId: string, emoji: string, remove: boolean) => void;
 export type MessageReactionPlacement = "bottom-start" | "bottom-end";
 
 export function ownReactionEmoji(
@@ -20,6 +20,14 @@ export type MessageReactionOptions = {
   onReact?: MessageReactionAction;
   reactionPlacement?: MessageReactionPlacement;
 };
+
+/** Once a message has reactions, its chip row owns the add-reaction picker. */
+export function hasActionRowReactionPicker(
+  messageId: string | undefined,
+  opts: MessageReactionOptions,
+): messageId is string {
+  return Boolean(messageId && opts.onReact && !opts.messageReactions?.get(messageId)?.length);
+}
 
 /** Pickers under a person's own right-aligned prompt open toward the left. */
 export function messageReactionOptions(

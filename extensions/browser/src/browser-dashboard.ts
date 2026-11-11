@@ -1,3 +1,4 @@
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { SessionEntryCurrentPreparation } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
@@ -412,23 +413,14 @@ async function serializeDashboardOperation(
   const definition = await requireDefinition(request, boundAuthority);
   const operations = runtime.dashboardOperations;
   const key = operationKey(definition);
-  const previous = operations.get(key);
-  const promise = (async () => {
-    // A failed open does not poison queued callers; each gets its own attempt.
-    await previous?.promise.catch(() => undefined);
-    const current = await requireDefinition(definition, boundAuthority);
-    return await execute(current, boundAuthority);
-  })();
-  const pending = { promise };
-  // Publish each admitted successor before awaiting it, so Stop follows the full queue.
-  operations.set(key, pending);
-  try {
-    return await promise;
-  } finally {
-    if (operations.get(key) === pending) {
-      operations.delete(key);
-    }
-  }
+  return await enqueueKeyedTask({
+    tails: operations,
+    key,
+    task: async () => {
+      const current = await requireDefinition(definition, boundAuthority);
+      return await execute(current, boundAuthority);
+    },
+  });
 }
 
 /** Materialize once per board instance; hidden views do not own the target lifetime. */
@@ -438,7 +430,7 @@ export async function requestBrowserDashboard(
 ): Promise<BrowserDashboardResponse> {
   return await serializeDashboardOperation(request, authority, (definition, current) =>
     withBrowserRequestScope(
-      { managedOnly: true, assertCurrent: () => assertDefinitionCurrent(definition, current) },
+      { assertCurrent: () => assertDefinitionCurrent(definition, current) },
       async () => await materialize(definition, request.resume === true, current),
     ),
   );

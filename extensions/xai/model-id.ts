@@ -1,3 +1,5 @@
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+
 // A Grok release id: plain, `-latest`, or a dated snapshot (grok-4.7, grok-5, grok-4.8-0115).
 // Other suffixes (fast, mini, reasoning variants) name models with their own contracts.
 const XAI_GROK_RELEASE_ID = /^grok-(\d+)(?:\.(\d+))?(?:-(?:latest|\d{4}))?$/u;
@@ -55,27 +57,15 @@ export function resolveXaiIdReasoningEfforts(id: string): XaiReasoningEffort[] {
   ];
 }
 
+const XAI_MODEL_ALIASES = new Map<string, string>([
+  ...Object.entries(manifest.modelIdNormalization.providers.xai.aliases),
+  ["grok-code-fast-1", "grok-build-0.1"],
+  ["grok-code-fast", "grok-build-0.1"],
+  ["grok-code-fast-1-0825", "grok-build-0.1"],
+  ["grok-4-fast-reasoning", "grok-4-fast"],
+  ["grok-4-1-fast-reasoning", "grok-4-1-fast"],
+]);
+
 export function normalizeXaiModelId(id: string): string {
-  if (id === "grok-4.3-latest") {
-    return "grok-4.3";
-  }
-  if (id === "grok-4.5-latest") {
-    return "grok-4.5";
-  }
-  if (id === "grok-4.7-latest") {
-    return "grok-4.7";
-  }
-  if (id === "grok-build-latest") {
-    return "grok-4.5";
-  }
-  if (id === "grok-code-fast-1" || id === "grok-code-fast" || id === "grok-code-fast-1-0825") {
-    return "grok-build-0.1";
-  }
-  if (id === "grok-4-fast-reasoning") {
-    return "grok-4-fast";
-  }
-  if (id === "grok-4-1-fast-reasoning") {
-    return "grok-4-1-fast";
-  }
-  return id;
+  return XAI_MODEL_ALIASES.get(id) ?? id;
 }

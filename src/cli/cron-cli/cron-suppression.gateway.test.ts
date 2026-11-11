@@ -27,14 +27,10 @@ import { ExitError } from "../../runtime.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
-const mocks = vi.hoisted(() => ({
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-    exit: vi.fn(),
-  },
+const mocks = await vi.hoisted(async () => ({
+  runtime: vi.mocked(
+    (await import("../../test-utils/plugin-runtime-env.js")).createNonExitingRuntimeEnv(),
+  ),
   callGatewayFromCli: vi.fn(),
 }));
 
@@ -219,7 +215,6 @@ describe("cron CLI delivery suppression readback", () => {
           cronEnabled: true,
           log: createNoopLogger(),
           enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           runIsolatedAgentJob,
           onEvent: (event) => {
             if (event.action === "finished") {

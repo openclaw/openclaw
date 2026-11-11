@@ -1,4 +1,3 @@
-// Covers plugin trust audit findings and remediation hints.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,12 +9,7 @@ import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import {
-  captureEnv,
-  createPathResolutionEnv,
-  deleteTestEnvValue,
-  setTestEnvValue,
-} from "../test-utils/env.js";
+import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 import { collectPluginsTrustFindings } from "./audit-plugins-trust.js";
 
 const mockChannelPlugins = vi.hoisted(() => [
@@ -23,22 +17,11 @@ const mockChannelPlugins = vi.hoisted(() => [
     id: "discord",
     capabilities: {},
     commands: {},
-    config: {
-      listAccountIds: () => [],
-      resolveAccount: () => null,
-    },
+    config: { listAccountIds: () => [], resolveAccount: () => null },
   },
 ]);
-const mockPluginRegistryIds = vi.hoisted(() => [
-  "active-memory",
-  "anthropic",
-  "brave",
-  "discord",
-  "google",
-  "lmstudio",
-  "memory-core",
-  "ollama",
-]);
+const mockPluginRegistryIds = vi.hoisted(() => ["anthropic", "discord", "some-plugin"]);
+const mockPluginTools = vi.hoisted(() => ({ names: ["some_plugin_tool"] as string[] | undefined }));
 
 const readInstalledPackageVersionMock = vi.hoisted(() =>
   vi.fn(async (dir: string): Promise<string | undefined> => {
@@ -52,50 +35,15 @@ const readInstalledPackageVersionMock = vi.hoisted(() =>
   }),
 );
 
-vi.mock("../infra/package-update-utils.js", () => ({
+vi.mock("../infra/package-update-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/package-update-utils.js")>()),
   readInstalledPackageVersion: readInstalledPackageVersionMock,
 }));
 
-vi.mock("../plugins/config-state.js", () => ({
-  normalizePluginId: (id: string) => id,
-  resolveEffectiveEnableState: (params: {
-    config?: {
-      enabled?: boolean;
-      deny?: string[];
-      allow?: string[];
-      entries?: Record<string, { enabled?: boolean }>;
-    };
-    id: string;
-    enabledByDefault?: boolean;
-  }) => {
-    const entry = params.config?.entries?.[params.id];
-    const denied = params.config?.deny?.includes(params.id) === true;
-    const allowed =
-      !params.config?.allow?.length ||
-      params.config.allow.includes(params.id) ||
-      params.config.allow.includes("group:plugins");
-    const enabled =
-      params.config?.enabled !== false &&
-      !denied &&
-      allowed &&
-      entry?.enabled !== false &&
-      (entry?.enabled === true || params.enabledByDefault === true);
-    return {
-      enabled,
-      activated: enabled,
-      reason: enabled ? "enabled" : "disabled",
-    };
-  },
-  normalizePluginsConfig: (
-    config:
-      | {
-          allow?: string[];
-          deny?: string[];
-          enabled?: boolean;
-          entries?: Record<string, { enabled?: boolean }>;
-        }
-      | undefined,
-  ) => ({
+// mock-isolation: Use explicit fixture enablement without loading plugin runtime state.
+vi.mock("../plugins/config-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/config-state.js")>()),
+  normalizePluginsConfig: (config: OpenClawConfig["plugins"]) => ({
     allow: config?.allow ?? [],
     deny: config?.deny ?? [],
     enabled: config?.enabled !== false,
@@ -103,22 +51,19 @@ vi.mock("../plugins/config-state.js", () => ({
   }),
 }));
 
-vi.mock("../plugins/plugin-registry.js", () => ({
+vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-registry.js")>()),
   createPluginRegistryIdNormalizer: () => (id: string) => id,
   loadPluginRegistrySnapshot: () => ({
     diagnostics: [],
-    plugins: mockPluginRegistryIds.map((pluginId) => ({ pluginId })),
+    plugins: mockPluginRegistryIds.map((pluginId) => ({
+      pluginId,
+      contributions:
+        pluginId === "some-plugin" && mockPluginTools.names !== undefined
+          ? { contracts: { tools: mockPluginTools.names } }
+          : undefined,
+    })),
   }),
-}));
-
-vi.mock("../config/commands.js", () => ({
-  resolveNativeSkillsEnabled: ({
-    globalSetting,
-    providerSetting,
-  }: {
-    globalSetting?: boolean | "auto";
-    providerSetting?: boolean | "auto";
-  }) => providerSetting === true || (providerSetting === undefined && globalSetting === true),
 }));
 
 // mock-isolation: Trust findings use fixture channels without loading installed channel runtimes.
@@ -128,28 +73,6 @@ vi.mock("../channels/plugins/read-only.js", () => ({
 
 vi.mock("../channels/read-only-account-inspect.js", () => ({
   inspectReadOnlyChannelAccount: () => null,
-}));
-
-vi.mock("../agents/sandbox/config.js", () => ({
-  resolveSandboxConfigForAgent: () => ({ mode: "off" }),
-}));
-
-vi.mock("../agents/sandbox/tool-policy.js", () => ({
-  resolveSandboxToolPolicyForAgent: () => undefined,
-}));
-
-vi.mock("../agents/tool-policy-match.js", () => ({
-  isToolAllowedByPolicies: (_tool: string, policies: unknown[]) =>
-    policies.every((policy) => policy == null),
-}));
-
-vi.mock("../agents/tool-policy.js", () => ({
-  resolveToolProfilePolicy: (profile: unknown) =>
-    profile === "coding" || profile === "minimal" ? {} : undefined,
-}));
-
-vi.mock("../agents/sandbox-tool-policy.js", () => ({
-  pickSandboxToolPolicy: () => undefined,
 }));
 
 describe("security audit install metadata findings", () => {
@@ -162,9 +85,8 @@ describe("security audit install metadata findings", () => {
     return dir;
   };
 
-  const runInstallMetadataAudit = async (cfg: OpenClawConfig, stateDir: string) => {
-    return await collectPluginsTrustFindings({ cfg, stateDir });
-  };
+  const runInstallMetadataAudit = (cfg: OpenClawConfig, stateDir: string) =>
+    collectPluginsTrustFindings({ cfg, stateDir });
 
   const writeHookInstalls = (
     stateDir: string,
@@ -198,20 +120,7 @@ describe("security audit install metadata findings", () => {
       policyHash: "policy",
       generatedAtMs: Date.now(),
       installRecords: records,
-      plugins: Object.keys(records).map((pluginId) => ({
-        pluginId,
-        manifestPath: path.join(stateDir, "extensions", pluginId, "openclaw.plugin.json"),
-        manifestHash: "manifest",
-        rootDir: path.join(stateDir, "extensions", pluginId),
-        origin: "global" as const,
-        enabled: true,
-        startup: {
-          sidecar: true,
-          memory: false,
-          agentHarnesses: [],
-        },
-        compat: [],
-      })),
+      plugins: [],
       diagnostics: [],
     };
     await writePersistedInstalledPluginIndex(index, { stateDir });
@@ -234,128 +143,49 @@ describe("security audit install metadata findings", () => {
   });
 
   it("evaluates install metadata findings", async () => {
-    const cases: Array<{
-      name: string;
-      run: () => Promise<Awaited<ReturnType<typeof runInstallMetadataAudit>>>;
-      expectedPresent?: readonly string[];
-      expectedAbsent?: readonly string[];
-    }> = [
-      {
-        name: "warns on unpinned npm install specs and missing integrity metadata",
-        run: async () => {
-          const stateDir = await makeTmpDir("unpinned-plugin-index");
-          await writePluginIndexInstallRecords(stateDir, {
-            "voice-call": {
-              source: "npm",
-              spec: "@openclaw/voice-call",
-            },
-          });
-          writeHookInstalls(stateDir, {
-            "test-hooks": { source: "npm", spec: "@openclaw/test-hooks" },
-          });
-          return runInstallMetadataAudit({}, stateDir);
-        },
-        expectedPresent: [
-          "plugins.installs_unpinned_npm_specs",
-          "plugins.installs_missing_integrity",
-          "hooks.installs_unpinned_npm_specs",
-          "hooks.installs_missing_integrity",
-        ],
-      },
-      {
-        name: "does not warn on pinned npm install specs with integrity metadata",
-        run: async () => {
-          const stateDir = await makeTmpDir("pinned-plugin-index");
-          await writePluginIndexInstallRecords(stateDir, {
-            "voice-call": {
-              source: "npm",
-              spec: "@openclaw/voice-call@1.2.3",
-              integrity: "sha512-plugin",
-            },
-          });
-          writeHookInstalls(stateDir, {
-            "test-hooks": {
-              source: "npm",
-              spec: "@openclaw/test-hooks@1.2.3",
-              integrity: "sha512-hook",
-            },
-          });
-          return runInstallMetadataAudit({}, stateDir);
-        },
-        expectedAbsent: [
-          "plugins.installs_unpinned_npm_specs",
-          "plugins.installs_missing_integrity",
-          "hooks.installs_unpinned_npm_specs",
-          "hooks.installs_missing_integrity",
-        ],
-      },
-      {
-        name: "still warns when active npm specs are unpinned even with resolved metadata",
-        run: async () => {
-          const stateDir = await makeTmpDir("unpinned-active-spec-resolved-plugin-index");
-          await writePluginIndexInstallRecords(stateDir, {
-            "voice-call": {
-              source: "npm",
-              spec: "@openclaw/voice-call",
-              resolvedSpec: "@openclaw/voice-call@1.2.3",
-              integrity: "sha512-plugin",
-            },
-          });
-          writeHookInstalls(stateDir, {
-            "test-hooks": {
-              source: "npm",
-              spec: "@openclaw/test-hooks",
-              resolvedSpec: "@openclaw/test-hooks@1.2.3",
-              integrity: "sha512-hook",
-            },
-          });
-          return runInstallMetadataAudit({}, stateDir);
-        },
-        expectedPresent: [
-          "plugins.installs_unpinned_npm_specs",
-          "hooks.installs_unpinned_npm_specs",
-        ],
-        expectedAbsent: ["plugins.installs_missing_integrity", "hooks.installs_missing_integrity"],
-      },
-      {
-        name: "warns when install records drift from installed package versions",
-        run: async () => {
-          const stateDir = await makeTmpDir("drift-plugin-index");
-          await writePluginIndexInstallRecords(stateDir, {
-            "voice-call": {
-              source: "npm",
-              spec: "@openclaw/voice-call@1.2.3",
-              integrity: "sha512-plugin",
-              resolvedVersion: "1.2.3",
-            },
-          });
-          writeHookInstalls(stateDir, {
-            "test-hooks": {
-              source: "npm",
-              spec: "@openclaw/test-hooks@1.2.3",
-              integrity: "sha512-hook",
-              resolvedVersion: "1.2.3",
-            },
-          });
-          return runInstallMetadataAudit({}, stateDir);
-        },
-        expectedPresent: ["plugins.installs_version_drift", "hooks.installs_version_drift"],
-      },
+    type Flags = Partial<Record<"pinned" | "integrity" | "resolved" | "drift", boolean>>;
+    const cases: Array<[string, Flags, string[], string[]]> = [
+      ["unpinned", {}, ["unpinned_npm_specs", "missing_integrity"], []],
+      [
+        "pinned",
+        { pinned: true, integrity: true },
+        [],
+        ["unpinned_npm_specs", "missing_integrity"],
+      ],
+      [
+        "unpinned with resolved metadata",
+        { integrity: true, resolved: true },
+        ["unpinned_npm_specs"],
+        ["missing_integrity"],
+      ],
+      ["version drift", { pinned: true, integrity: true, drift: true }, ["version_drift"], []],
     ];
-
-    for (const testCase of cases) {
-      const findings = await testCase.run();
-      for (const checkId of testCase.expectedPresent ?? []) {
-        expect(
-          findings.some((finding) => finding.checkId === checkId && finding.severity === "warn"),
-          testCase.name,
-        ).toBe(true);
-      }
-      for (const checkId of testCase.expectedAbsent ?? []) {
-        expect(
-          findings.some((finding) => finding.checkId === checkId),
-          testCase.name,
-        ).toBe(false);
+    for (const [name, flags, present, absent] of cases) {
+      const stateDir = await makeTmpDir(name);
+      const record = (packageName: string, integrity: string): HookInstallRecord => ({
+        source: "npm",
+        spec: `@openclaw/${packageName}${flags.pinned ? "@1.2.3" : ""}`,
+        ...(flags.integrity ? { integrity } : {}),
+        ...(flags.resolved ? { resolvedSpec: `@openclaw/${packageName}@1.2.3` } : {}),
+        ...(flags.drift ? { resolvedVersion: "1.2.3" } : {}),
+      });
+      await writePluginIndexInstallRecords(stateDir, {
+        "voice-call": record("voice-call", "sha512-plugin"),
+      });
+      writeHookInstalls(stateDir, { "test-hooks": record("test-hooks", "sha512-hook") });
+      const findings = await runInstallMetadataAudit({}, stateDir);
+      for (const owner of ["plugins", "hooks"]) {
+        for (const suffix of present) {
+          expect(findings, name).toContainEqual(
+            expect.objectContaining({ checkId: `${owner}.installs_${suffix}`, severity: "warn" }),
+          );
+        }
+        for (const suffix of absent) {
+          expect(
+            findings.some(({ checkId }) => checkId === `${owner}.installs_${suffix}`),
+            name,
+          ).toBe(false);
+        }
       }
     }
   });
@@ -410,31 +240,28 @@ describe("security audit install metadata findings", () => {
           pluginPath,
           hookPath,
         ]);
-        expect(findings.map(({ checkId, detail }) => [checkId, detail])).toEqual([
-          [
-            "plugins.installs_unpinned_npm_specs",
-            "Unpinned plugin index install records:\n- voice-call (@openclaw/voice-call)",
-          ],
-          [
-            "plugins.installs_missing_integrity",
-            "Plugin index records missing integrity:\n- voice-call",
-          ],
-          [
-            "plugins.installs_version_drift",
-            "Detected plugin install metadata drift:\n- voice-call (recorded 1.0.0, installed 1.1.0)",
-          ],
-          [
-            "hooks.installs_unpinned_npm_specs",
-            "Unpinned hook install records:\n- test-hooks (@openclaw/test-hooks)",
-          ],
-          [
-            "hooks.installs_missing_integrity",
-            "Hook install records missing integrity:\n- test-hooks",
-          ],
-          [
-            "hooks.installs_version_drift",
-            "Detected hook install metadata drift:\n- test-hooks (recorded 2.0.0, installed 2.1.0)",
-          ],
+        expect(findings.map(({ checkId }) => checkId)).toEqual(
+          ["plugins", "hooks"].flatMap((owner) =>
+            ["unpinned_npm_specs", "missing_integrity", "version_drift"].map(
+              (suffix) => `${owner}.installs_${suffix}`,
+            ),
+          ),
+        );
+        expect(findings.map(({ detail }) => detail)).toEqual([
+          "Unpinned plugin index install records:\n- voice-call (@openclaw/voice-call)",
+          "Plugin index records missing integrity:\n- voice-call",
+          "Detected plugin install metadata drift:\n- voice-call (recorded 1.0.0, installed 1.1.0)",
+          "Unpinned hook install records:\n- test-hooks (@openclaw/test-hooks)",
+          "Hook install records missing integrity:\n- test-hooks",
+          "Detected hook install metadata drift:\n- test-hooks (recorded 2.0.0, installed 2.1.0)",
+        ]);
+        expect(findings.map(({ remediation }) => remediation)).toEqual([
+          "Pin install specs to exact versions (for example, `@scope/pkg@1.2.3`) for higher supply-chain stability.",
+          "Reinstall or update plugins to refresh install metadata with resolved integrity hashes.",
+          "Run `openclaw plugins update --all` (or reinstall affected plugins) to refresh install metadata.",
+          "Pin hook install specs to exact versions (for example, `@scope/pkg@1.2.3`) for higher supply-chain stability.",
+          "Reinstall or update hooks to refresh install metadata with resolved integrity hashes.",
+          "Run `openclaw hooks update --all` (or reinstall affected hooks) to refresh install metadata.",
         ]);
       },
     );
@@ -483,9 +310,7 @@ describe("security audit install metadata findings", () => {
       "old-plugin.disabled.20260502",
       "old-plugin.bak",
     ]) {
-      await fs.mkdir(path.join(stateDir, "extensions", name), {
-        recursive: true,
-      });
+      await fs.mkdir(path.join(stateDir, "extensions", name), { recursive: true });
     }
 
     const findings = await runInstallMetadataAudit({}, stateDir);
@@ -505,123 +330,81 @@ describe("security audit install metadata findings", () => {
 });
 
 describe("security audit extension tool reachability findings", () => {
-  let fixtureRoot = "";
-  let sharedExtensionsStateDir = "";
-  let isolatedHome = "";
-  let homedirSpy: { mockRestore(): void } | undefined;
-  const pathResolutionEnvKeys = [
-    "HOME",
-    "USERPROFILE",
-    "HOMEDRIVE",
-    "HOMEPATH",
-    "OPENCLAW_HOME",
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  ] as const;
-  let pathResolutionEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
-
-  const runSharedExtensionsAudit = async (config: OpenClawConfig) => {
-    return await collectPluginsTrustFindings({
-      cfg: config,
-      stateDir: sharedExtensionsStateDir,
-    });
-  };
-
-  beforeAll(async () => {
-    const osModule = await import("node:os");
-    const vitestModule = await import("vitest");
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-extensions-"));
-    isolatedHome = path.join(fixtureRoot, "home");
-    const isolatedEnv = createPathResolutionEnv(isolatedHome, { OPENCLAW_HOME: isolatedHome });
-    pathResolutionEnvSnapshot = captureEnv([...pathResolutionEnvKeys]);
-    for (const key of pathResolutionEnvKeys) {
-      const value = isolatedEnv[key];
-      if (value === undefined) {
-        deleteTestEnvValue(key);
-      } else {
-        setTestEnvValue(key, value);
-      }
-    }
-    homedirSpy = vitestModule.vi
-      .spyOn(osModule.default ?? osModule, "homedir")
-      .mockReturnValue(isolatedHome);
-    await fs.mkdir(isolatedHome, { recursive: true, mode: 0o700 });
-    sharedExtensionsStateDir = path.join(fixtureRoot, "shared-extensions-state");
-    await fs.mkdir(path.join(sharedExtensionsStateDir, "extensions", "some-plugin"), {
-      recursive: true,
-      mode: 0o700,
-    });
-  });
-
-  afterAll(async () => {
-    homedirSpy?.mockRestore();
-    pathResolutionEnvSnapshot?.restore();
-    if (fixtureRoot) {
-      await fs.rm(fixtureRoot, { recursive: true, force: true });
-    }
-  });
-
   it("evaluates extension tool reachability findings", async () => {
-    const cases = [
-      {
-        name: "flags extensions without plugins.allow",
-        cfg: {} satisfies OpenClawConfig,
-        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
-          expect(
-            findings.some(
-              (finding) =>
-                finding.checkId === "plugins.extensions_no_allowlist" &&
-                finding.severity === "warn",
-            ),
-          ).toBe(true);
-        },
-      },
-      {
-        name: "flags enabled extensions when tool policy can expose plugin tools",
-        cfg: {
-          plugins: { allow: ["some-plugin"] },
-        } satisfies OpenClawConfig,
-        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
-          expect(
-            findings.some(
-              (finding) =>
-                finding.checkId === "plugins.tools_reachable_permissive_policy" &&
-                finding.severity === "warn",
-            ),
-          ).toBe(true);
-        },
-      },
-      {
-        name: "reports canonical agent paths for permissive tool policy",
-        cfg: {
-          plugins: { allow: ["some-plugin"] },
-          agents: { entries: { ops: { tools: { profile: "full" } } } },
-        } satisfies OpenClawConfig,
-        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
-          const finding = findings.find(
-            (entry) => entry.checkId === "plugins.tools_reachable_permissive_policy",
-          );
-          expect(finding?.detail).toContain("- agents.entries.ops");
-        },
-      },
-      {
-        name: "does not flag plugin tool reachability when profile is restrictive",
-        cfg: {
-          plugins: { allow: ["some-plugin"] },
-          tools: { profile: "coding" },
-        } satisfies OpenClawConfig,
-        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
-          expect(
-            findings.some(
-              (finding) => finding.checkId === "plugins.tools_reachable_permissive_policy",
-            ),
-          ).toBe(false);
-        },
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      testCase.assert(await runSharedExtensionsAudit(testCase.cfg));
+    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-extensions-"));
+    const home = path.join(fixtureRoot, "home");
+    const stateDir = path.join(fixtureRoot, "shared-extensions-state");
+    const isolatedEnv = createPathResolutionEnv(home, { OPENCLAW_HOME: home });
+    const scopedEnv = Object.fromEntries(
+      [
+        "HOME",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "OPENCLAW_HOME",
+        "OPENCLAW_STATE_DIR",
+        "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      ].map((key) => [key, isolatedEnv[key]]),
+    );
+    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(home);
+    try {
+      await fs.mkdir(home, { recursive: true, mode: 0o700 });
+      await fs.mkdir(path.join(stateDir, "extensions", "some-plugin"), {
+        recursive: true,
+        mode: 0o700,
+      });
+      await withEnvAsync(scopedEnv, async () => {
+        const reachable = "plugins.tools_reachable_permissive_policy";
+        const declared = ["some_plugin_tool"];
+        const allowed: OpenClawConfig = { plugins: { allow: ["some-plugin"] } };
+        const grouped: OpenClawConfig = {
+          ...allowed,
+          tools: { profile: "coding", alsoAllow: ["group:plugins"] },
+        };
+        const cases: Array<
+          [string, OpenClawConfig, string[] | undefined, string | false, string?]
+        > = [
+          ["no allowlist", {}, declared, "plugins.extensions_no_allowlist"],
+          ["permissive", allowed, declared, reachable],
+          [
+            "agent scope",
+            { ...allowed, agents: { entries: { ops: { tools: { profile: "full" } } } } },
+            declared,
+            reachable,
+            "- agents.entries.ops",
+          ],
+          ["restrictive", { ...allowed, tools: { profile: "coding" } }, declared, false],
+          ["plugin group", grouped, declared, reachable],
+          ["missing contract", grouped, undefined, reachable],
+          ["empty contract", allowed, [], false],
+          [
+            "concrete deny",
+            { ...grouped, tools: { ...grouped.tools, deny: declared } },
+            declared,
+            false,
+          ],
+        ];
+        for (const [name, cfg, tools, checkId, detail] of cases) {
+          mockPluginTools.names = tools;
+          const findings = await collectPluginsTrustFindings({ cfg, stateDir });
+          if (checkId) {
+            expect(findings, name).toContainEqual(
+              expect.objectContaining({ checkId, severity: "warn" }),
+            );
+          } else {
+            expect(
+              findings.some((entry) => entry.checkId === reachable),
+              name,
+            ).toBe(false);
+          }
+          if (detail) {
+            expect(findings.find((entry) => entry.checkId === reachable)?.detail).toContain(detail);
+          }
+        }
+      });
+    } finally {
+      homedirSpy.mockRestore();
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
   });
 });

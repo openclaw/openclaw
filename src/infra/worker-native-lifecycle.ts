@@ -12,10 +12,12 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { captureSqliteWorkerEnvironmentData } from "./bun-sqlite-library.js";
+import { materializeErrorStack } from "./error-graph-internal.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import {
   captureRuntimeWorkerSource,
+  resolveRuntimeWorkerGenerationUrl,
   type RuntimeWorkerGeneration,
 } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
@@ -45,6 +47,8 @@ type NativeRuntime = NativeWorkerRuntime & {
 
 export type RetainedNativeWorkerSource = {
   readonly hasActiveWorkers: boolean;
+  /** File paths of live workers; `undefined` when a worker's code has no path. */
+  activeWorkerPaths(): (string | undefined)[];
   create(
     filename: string | URL,
     options?: WorkerOptions,
@@ -156,14 +160,13 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
       observeWorkerMessage(reply, "from_worker", "lifecycle");
       handles.get(reply.id)?.receive(reply);
     };
+    const readControlMessage = () => receiveMessageOnPort(port1);
     const runtime: NativeRuntime = {
       databaseAdmissionCursor,
       handles,
       service() {
         for (;;) {
-          const next = runWithMainThreadTask("worker:control-decode", () =>
-            receiveMessageOnPort(port1),
-          );
+          const next = runWithMainThreadTask("worker:control-decode", readControlMessage);
           if (!next) {
             break;
           }
@@ -200,7 +203,7 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
           throw runtime.failure;
         }
         const bytes = workerMessagePayloadBytes(message);
-        port1.postMessage(message, [...transfers]);
+        port1.postMessage(message, transfers);
         observeWorkerMessage(message, "to_worker", "lifecycle", bytes ?? null);
       },
       resourceBroker() {
@@ -222,6 +225,7 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
           return Promise.reject(new Error("Native worker execution owners have not joined"));
         }
         runtime.failure ??= new Error("Native worker lifetime owner is closing");
+        materializeErrorStack(runtime.failure);
         terminateOwner();
         return ownerJoined.promise;
       },
@@ -231,6 +235,7 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
         return;
       }
       runtime.failure = toErrorObject(error, "Native worker lifetime owner failed");
+      materializeErrorStack(runtime.failure);
       for (const handle of handles.values()) {
         handle.ownerFailed(runtime.failure);
       }
@@ -251,6 +256,7 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
       // observes Bun's own parent-side join after its close callback returns.
       setImmediate(() => {
         const error = runtime.failure ?? new Error("Native worker lifetime owner exited");
+        materializeErrorStack(error);
         runtime.failure = error;
         source.closing = true;
         for (const handle of handles.values()) {
@@ -275,9 +281,7 @@ export function captureRetainedNativeWorkerSource(options?: {
     options === undefined
       ? captureRuntimeWorkerSource(supervisor)
       : {
-          moduleUrl: options.runtimeGeneration
-            ? options.runtimeGeneration.resolve(supervisor)
-            : supervisor,
+          moduleUrl: resolveRuntimeWorkerGenerationUrl(supervisor, options.runtimeGeneration),
           runtimeGeneration: options.runtimeGeneration,
         };
   const existing = captured.runtimeGeneration
@@ -288,12 +292,16 @@ export function captureRetainedNativeWorkerSource(options?: {
   }
   const source: NativeSource = {
     ...captured,
-    brokerModuleUrl: captured.runtimeGeneration
-      ? captured.runtimeGeneration.resolve(resolveRuntimeProcessEntrypointUrl("spawnBroker"))
-      : resolveRuntimeProcessEntrypointUrl("spawnBroker"),
+    brokerModuleUrl: resolveRuntimeWorkerGenerationUrl(
+      resolveRuntimeProcessEntrypointUrl("spawnBroker"),
+      captured.runtimeGeneration,
+    ),
     closing: false,
     get hasActiveWorkers() {
       return Boolean(source.runtime?.handles.size);
+    },
+    activeWorkerPaths() {
+      return [...(source.runtime?.handles.values() ?? [])].map((worker) => worker.sourcePath);
     },
     async retireIdleBroker() {
       await source.brokerClose;
@@ -308,17 +316,22 @@ export function captureRetainedNativeWorkerSource(options?: {
     },
     close() {
       return (closingOwners ??= Promise.resolve().then(async () => {
-        const results = await Promise.allSettled([...owners.values()].map((close) => close()));
-        const errors = nativeCleanupFailures(results);
-        if (errors.length) {
-          throw new AggregateError(errors, "Native worker execution owner cleanup failed");
+        try {
+          const results = await Promise.allSettled([...owners.values()].map((close) => close()));
+          const errors = nativeCleanupFailures(results);
+          if (errors.length) {
+            throw new AggregateError(errors, "Native worker execution owner cleanup failed");
+          }
+          source.closing = true;
+          await source.runtime?.close();
+          await source.brokerClose;
+          await source.broker?.close();
+          forgetNativeSource(source);
+          owners.clear();
+        } catch (error) {
+          materializeErrorStack(error);
+          throw error;
         }
-        source.closing = true;
-        await source.runtime?.close();
-        await source.brokerClose;
-        await source.broker?.close();
-        forgetNativeSource(source);
-        owners.clear();
       }));
     },
     create(filename, workerOptions, resource, taskPorts) {
@@ -339,7 +352,7 @@ export function captureRetainedNativeWorkerSource(options?: {
     captureResource(moduleUrl, workerDataKey, input, connect) {
       const inContext = AsyncLocalStorage.snapshot();
       return Object.freeze({
-        moduleUrl: String(captured.runtimeGeneration?.resolve(moduleUrl) ?? moduleUrl),
+        moduleUrl: String(resolveRuntimeWorkerGenerationUrl(moduleUrl, captured.runtimeGeneration)),
         workerDataKey,
         input: input === undefined ? undefined : structuredClone(input),
         connect: connect

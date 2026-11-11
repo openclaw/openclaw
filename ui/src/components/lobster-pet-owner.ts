@@ -1,12 +1,12 @@
 import { isLobsterDay } from "../../../src/shared/lobster-day.js";
 import { patchSettings } from "../app/settings.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import * as dex from "./lobster-dex.ts";
 import * as contract from "./lobster-pet-contract.ts";
 import type { LobsterPetDismissMenuPosition } from "./lobster-pet-dismiss-menu.tsx";
 import * as lobsterLook from "./lobster-pet-identity.ts";
 import { LobsterPetInteractions } from "./lobster-pet-interactions.ts";
 import * as plans from "./lobster-pet-plans.ts";
-import type { LobsterPetSceneProps } from "./lobster-pet-scene-view.tsx";
 import {
   LobsterComposerGeometry,
   lobsterTravelDuration,
@@ -36,6 +36,7 @@ export class LobsterPetOwner {
   private anchor: plans.LobsterPetAnchor = "top";
   private readonly geometry = new LobsterComposerGeometry(
     this.host,
+    () => this.host.composerElements?.() ?? null,
     () => this.inputs.residentEnabled && this.twinPlanned,
     () => this.refresh(),
   );
@@ -71,11 +72,34 @@ export class LobsterPetOwner {
       this.passerHops =
         this.passerAnchor === "floor" && plan.hops && this.geometry.scene.passage !== null;
     },
-    onPasserFacing: (facing) => this.watchTraffic(facing),
-    onPasserMidCross: () => this.reactToPasser(),
+    // Scuttle owns facing while walking; other acts can watch passing traffic.
+    onPasserFacing: (facing) => {
+      if (this.presence === "in" && this.act !== "scuttle" && !this.vigil) {
+        this.facing = facing;
+      }
+    },
+    onPasserMidCross: () => {
+      const reaction =
+        this.familiarity.tier === "friend"
+          ? "wave"
+          : this.familiarity.tier === "shy"
+            ? "peek"
+            : null;
+      if (
+        reaction === null ||
+        this.presence !== "in" ||
+        this.act !== null ||
+        this.vigil ||
+        this.inputs.mode !== "idle" ||
+        plans.prefersReducedMotion()
+      ) {
+        return;
+      }
+      this.performAct(reaction);
+    },
     onPasserDone: () => this.scheduleNextAct(),
   });
-  private readonly interactions = new LobsterPetInteractions(this.host, {
+  private readonly interactions = new LobsterPetInteractions({
     soundsEnabled: () => this.inputs.soundsEnabled,
     canHuff: () => this.inputs.mode !== "offline",
     canGaze: () => this.presence === "in" && this.act === null && !this.vigil,
@@ -121,10 +145,11 @@ export class LobsterPetOwner {
   private restartPending = false;
 
   private active = false;
-  private readonly listeners = new Set<() => void>();
+  private stopVisibility?: () => void;
+  private render?: () => void;
 
   constructor(
-    private readonly host: HTMLElement,
+    private readonly host: HTMLElement & Pick<contract.LobsterPetProps, "composerElements">,
     private readonly disableVisits: () => void,
     private inputs: Readonly<contract.LobsterPetProps>,
   ) {}
@@ -135,12 +160,13 @@ export class LobsterPetOwner {
     this.geometry.connect();
     this.traffic.connect();
     this.interactions.connect();
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    this.stopVisibility = listen(document, "visibilitychange", this.handleVisibilityChange);
   }
 
   dispose() {
     this.active = false;
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    this.stopVisibility?.();
+    this.stopVisibility = undefined;
     this.clearActTimers();
     this.restartPending = false;
     this.scheduledVisiting = false;
@@ -153,14 +179,14 @@ export class LobsterPetOwner {
   }
 
   subscribe(listener: () => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this.render = listener;
+    return () => {
+      this.render = undefined;
+    };
   }
 
   private publish() {
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.render?.();
   }
 
   update(props: contract.LobsterPetProps) {
@@ -247,7 +273,19 @@ export class LobsterPetOwner {
         this.traffic.reset(this.inputs.seed);
       }
       if (!this.inputs.visitsEnabled || !this.inputs.residentEnabled) {
-        this.suspendResident();
+        this.clearActTimers();
+        this.timers.clear("visitTimer", "leaveTimer");
+        this.interactions.suspend();
+        this.timers.clear("shellTimer", "vigilTimer");
+        this.shellVisible = false;
+        this.vigil = false;
+        this.outcomePresenceOwner = null;
+        this.dismissMenuPosition = null;
+        this.scheduledVisiting = false;
+        this.presence = "out";
+        this.act = null;
+        this.entering = false;
+        this.restartPending = false;
       } else if (!previous.visitsEnabled || !previous.residentEnabled) {
         this.scheduleVisits();
         this.trackVigil();
@@ -295,6 +333,23 @@ export class LobsterPetOwner {
     this.host.toggleAttribute("data-floor-enabled", this.inputs.floorEnabled);
     this.reconcilePresence();
     this.traffic.update();
+    if (!this.active || !this.restartPending) {
+      return;
+    }
+    this.restartPending = false;
+    this.timers.schedule("enterTimer", plans.LOBSTER_PET_ENTRANCE_MS[this.entrance], () => {
+      this.entering = false;
+      if (
+        !this.greetedThisLoad &&
+        (this.familiarity.tier === "friend" || this.identity?.oldFriend === true) &&
+        this.presence === "in" &&
+        !plans.prefersReducedMotion()
+      ) {
+        this.greetedThisLoad = true;
+        this.performAct("wave");
+      }
+    });
+    this.scheduleNextAct();
   }
 
   // Reconcile in the update pass to avoid chaining post-update state changes.
@@ -303,7 +358,9 @@ export class LobsterPetOwner {
     if (visible && this.presence !== "in") {
       this.timers.clear("leaveTimer");
       if (this.presence === "out") {
-        this.rollPerch();
+        this.anchor = "top";
+        this.spotPct = Math.round(lobsterLook.randomBetween(this.visitRng, 12, 88));
+        this.facing = this.visitRng() < 0.5 ? 1 : -1;
         // Entrance rolls burn once per arrival on their own stream, aligned
         // across scheduled visits and offline summons.
         this.entrance = plans.pickLobsterEntrance(this.entranceRng());
@@ -339,26 +396,6 @@ export class LobsterPetOwner {
         this.presence = "out";
       });
     }
-  }
-
-  afterCommit() {
-    if (!this.active || !this.restartPending) {
-      return;
-    }
-    this.restartPending = false;
-    this.timers.schedule("enterTimer", plans.LOBSTER_PET_ENTRANCE_MS[this.entrance], () => {
-      this.entering = false;
-      if (
-        !this.greetedThisLoad &&
-        (this.familiarity.tier === "friend" || this.identity?.oldFriend === true) &&
-        this.presence === "in" &&
-        !plans.prefersReducedMotion()
-      ) {
-        this.greetedThisLoad = true;
-        this.performAct("wave");
-      }
-    });
-    this.scheduleNextAct();
   }
 
   private readonly handleVisibilityChange = () => {
@@ -419,22 +456,6 @@ export class LobsterPetOwner {
     this.timers.clear("idleTimer", "actEndTimer", "enterTimer");
   }
 
-  private suspendResident() {
-    this.clearActTimers();
-    this.timers.clear("visitTimer", "leaveTimer");
-    this.interactions.suspend();
-    this.timers.clear("shellTimer", "vigilTimer");
-    this.shellVisible = false;
-    this.vigil = false;
-    this.outcomePresenceOwner = null;
-    this.dismissMenuPosition = null;
-    this.scheduledVisiting = false;
-    this.presence = "out";
-    this.act = null;
-    this.entering = false;
-    this.restartPending = false;
-  }
-
   private scheduleVisits() {
     this.timers.clear("visitTimer", "leaveTimer");
     this.scheduledVisiting = false;
@@ -461,53 +482,20 @@ export class LobsterPetOwner {
     }
     this.timers.schedule("visitTimer", delayMs, () => {
       this.scheduledVisiting = true;
-      this.armDeparture(
+      const stayMs =
         lobsterLook.randomBetween(this.visitRng, plans.VISIT_STAY_MS[0], plans.VISIT_STAY_MS[1]) *
-          dex.LOBSTER_FAMILIARITY_TUNING[this.familiarity.tier].stayMul,
-      );
+        dex.LOBSTER_FAMILIARITY_TUNING[this.familiarity.tier].stayMul;
+      this.timers.schedule("visitTimer", stayMs, () => {
+        this.scheduledVisiting = false;
+        const tuning = dex.LOBSTER_FAMILIARITY_TUNING[this.familiarity.tier];
+        const waryMul = this.familiarity.wary ? dex.LOBSTER_FAMILIARITY_TUNING.waryGapMul : 1;
+        this.armArrival(
+          lobsterLook.randomBetween(this.visitRng, plans.VISIT_GAP_MS[0], plans.VISIT_GAP_MS[1]) *
+            tuning.gapMul *
+            waryMul,
+        );
+      });
     });
-  }
-
-  private armDeparture(stayMs: number) {
-    this.timers.schedule("visitTimer", stayMs, () => {
-      this.scheduledVisiting = false;
-      const tuning = dex.LOBSTER_FAMILIARITY_TUNING[this.familiarity.tier];
-      const waryMul = this.familiarity.wary ? dex.LOBSTER_FAMILIARITY_TUNING.waryGapMul : 1;
-      this.armArrival(
-        lobsterLook.randomBetween(this.visitRng, plans.VISIT_GAP_MS[0], plans.VISIT_GAP_MS[1]) *
-          tuning.gapMul *
-          waryMul,
-      );
-    });
-  }
-
-  // Scuttle owns facing while walking; other acts can watch passing traffic.
-  private watchTraffic(facing: 1 | -1) {
-    if (this.presence === "in" && this.act !== "scuttle" && !this.vigil) {
-      this.facing = facing;
-    }
-  }
-
-  private reactToPasser() {
-    const reaction =
-      this.familiarity.tier === "friend" ? "wave" : this.familiarity.tier === "shy" ? "peek" : null;
-    if (
-      reaction === null ||
-      this.presence !== "in" ||
-      this.act !== null ||
-      this.vigil ||
-      this.inputs.mode !== "idle" ||
-      plans.prefersReducedMotion()
-    ) {
-      return;
-    }
-    this.performAct(reaction);
-  }
-
-  private rollPerch() {
-    this.anchor = "top";
-    this.spotPct = Math.round(lobsterLook.randomBetween(this.visitRng, 12, 88));
-    this.facing = this.visitRng() < 0.5 ? 1 : -1;
   }
 
   private scheduleNextAct() {
@@ -577,7 +565,24 @@ export class LobsterPetOwner {
       this.act = null;
       this.travel = null;
       if (act === "molt") {
-        this.completeMolt();
+        this.molted = true;
+        if (this.look) {
+          // The shed shell keeps the true pre-molt size; a max-tier pet sheds a
+          // max-tier shell.
+          this.shellScale = this.look.scale;
+          this.look = {
+            ...this.look,
+            scale: this.look.scale < 2 ? 2 : 2.5,
+          };
+        }
+        this.shellSpotPct = this.spotPct;
+        this.shellAnchor = this.anchor;
+        this.shellVisible = true;
+        this.spotPct = Math.min(100, Math.max(0, this.spotPct + this.facing * 9));
+        this.timers.clear("shellTimer");
+        this.timers.schedule("shellTimer", 60_000, () => {
+          this.shellVisible = false;
+        });
       }
       if (act === "droop") {
         this.performAct("sweep", presenceOwner);
@@ -587,27 +592,6 @@ export class LobsterPetOwner {
       if (this.wantsVisible()) {
         this.scheduleNextAct();
       }
-    });
-  }
-
-  private completeMolt() {
-    this.molted = true;
-    if (this.look) {
-      // The shed shell keeps the true pre-molt size; a max-tier pet sheds a
-      // max-tier shell.
-      this.shellScale = this.look.scale;
-      this.look = {
-        ...this.look,
-        scale: this.look.scale < 2 ? 2 : 2.5,
-      };
-    }
-    this.shellSpotPct = this.spotPct;
-    this.shellAnchor = this.anchor;
-    this.shellVisible = true;
-    this.spotPct = Math.min(100, Math.max(0, this.spotPct + this.facing * 9));
-    this.timers.clear("shellTimer");
-    this.timers.schedule("shellTimer", 60_000, () => {
-      this.shellVisible = false;
     });
   }
 
@@ -633,12 +617,13 @@ export class LobsterPetOwner {
     this.applyMove(this.geometry.planHop(this.anchor, this.spotPct));
   }
 
-  private scene(): LobsterPetSceneProps | null {
+  private scene() {
     const look = this.look;
     if (!look) {
       return null;
     }
     const identity = this.identity;
+    // Extra "· <flavor>" tooltip suffix (elder lore, old-friend returns).
     const flavor = identity?.elder
       ? "old as the tides"
       : identity?.oldFriend
@@ -687,6 +672,7 @@ export class LobsterPetOwner {
       flavor,
       bottle: this.traffic.bottle,
       onPointerDown: this.interactions.handleHoldStart,
+      onSprite: this.interactions.bindSprite,
       onPointerUp: this.interactions.handleHoldEnd,
       onPointerCancel: this.interactions.handleHoldCancel,
       onContextMenu: this.openDismissMenu,

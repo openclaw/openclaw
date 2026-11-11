@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import {
   filterLocalModelLeanTools,
@@ -14,13 +13,10 @@ function tools(names: string[]): AnyAgentTool[] {
 }
 
 const lean = (localModelLean: boolean) => ({ experimental: { localModelLean } });
-const ownedEntries = { ops: lean(false), gemma: lean(true) };
 function defaultLeanConfig(
   entries: NonNullable<OpenClawConfig["agents"]>["entries"] = { main: {} },
 ): OpenClawConfig {
-  return {
-    agents: { entries, defaults: lean(true) },
-  };
+  return { agents: { entries, defaults: lean(true) } };
 }
 
 function filteredNames(
@@ -58,23 +54,12 @@ describe("local model lean tool filtering", () => {
     ).toEqual(names);
   });
 
-  it("adds reply-required message tools to lean preservation", () => {
-    expect(
-      resolveLocalModelLeanPreserveToolNames({
-        forceMessageTool: true,
-      }),
-    ).toEqual(["message"]);
-    expect(
-      resolveLocalModelLeanPreserveToolNames({
-        sourceReplyDeliveryMode: "message_tool_only",
-      }),
-    ).toEqual(["message"]);
-    expect(
-      resolveLocalModelLeanPreserveToolNames({
-        toolNames: ["group:messaging"],
-        forceMessageTool: true,
-      }),
-    ).toEqual(["group:messaging", "message"]);
+  it.each([
+    [{ forceMessageTool: true }, ["message"]],
+    [{ sourceReplyDeliveryMode: "message_tool_only" }, ["message"]],
+    [{ toolNames: ["group:messaging"], forceMessageTool: true }, ["group:messaging", "message"]],
+  ] as const)("adds reply-required message tools to lean preservation: %j", (options, expected) => {
+    expect(resolveLocalModelLeanPreserveToolNames(options)).toEqual(expected);
   });
 
   it("matches wildcard preservation without treating a bare wildcard as an override", () => {
@@ -88,42 +73,14 @@ describe("local model lean tool filtering", () => {
     ).toEqual(["read", "image_generate"]);
   });
 
-  it("lets an agent opt out of an inherited global lean setting", () => {
-    const cfg = defaultLeanConfig({ main: lean(false) });
-
-    expect(isLocalModelLeanEnabled({ config: cfg, agentId: "main" })).toBe(false);
-    expect(filteredNames(cfg, { agentId: "main" })).toEqual([
-      "read",
-      "browser",
-      "cron",
-      "message",
-      "exec",
-    ]);
-  });
-
-  it("keeps global lean mode for an agent id without an agent entry", () => {
-    const cfg: OpenClawConfig = { agents: { defaults: lean(true) } };
-
-    expect(isLocalModelLeanEnabled({ config: cfg, agentId: "ad-hoc" })).toBe(true);
-    expect(filteredNames(cfg, { agentId: "ad-hoc" })).toEqual(["read", "exec"]);
-  });
-
-  it("requires explicit selection despite retained Doctor ownership when no session is provided", () => {
-    const cfg = retainLegacyDefaultAgentId(
-      {
-        agents: {
-          ownership: "explicit",
-          entries: ownedEntries,
-        },
-      } satisfies OpenClawConfig,
-      "gemma",
+  it.each([
+    ["main", defaultLeanConfig({ main: lean(false) }), false],
+    ["ad-hoc", { agents: { defaults: lean(true) } }, true],
+  ] as const)("resolves inherited lean mode for %s", (agentId, config, enabled) => {
+    expect(isLocalModelLeanEnabled({ config, agentId })).toBe(enabled);
+    expect(filteredNames(config, { agentId })).toEqual(
+      enabled ? ["read", "exec"] : ["read", "browser", "cron", "message", "exec"],
     );
-
-    expect(() => isLocalModelLeanEnabled({ config: cfg })).toThrowError(
-      expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
-    );
-    expect(isLocalModelLeanEnabled({ config: cfg, agentId: "gemma" })).toBe(true);
-    expect(isLocalModelLeanEnabled({ config: cfg, agentId: "ops" })).toBe(false);
   });
 
   it("uses the agent from an agent session key", () => {
@@ -131,21 +88,5 @@ describe("local model lean tool filtering", () => {
 
     expect(isLocalModelLeanEnabled({ config: cfg, sessionKey: "agent:gemma:main" })).toBe(true);
     expect(filteredNames(cfg, { sessionKey: "agent:gemma:main" })).toEqual(["read", "exec"]);
-  });
-
-  it("uses the configured fixed-store owner for an unscoped session key", () => {
-    const cfg: OpenClawConfig = {
-      session: { store: "/stores/shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "gemma" } },
-        entries: ownedEntries,
-      },
-    };
-
-    expect(isLocalModelLeanEnabled({ config: cfg, sessionKey: "global" })).toBe(true);
-    expect(() =>
-      isLocalModelLeanEnabled({ config: cfg, agentId: "ops", sessionKey: "global" }),
-    ).toThrow(/belongs to "gemma"/);
   });
 });

@@ -1,5 +1,4 @@
-import { ReadBuffer } from "@modelcontextprotocol/sdk/shared/stdio.js";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import { ReadBuffer, type JSONRPCMessage } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createMcpStdioClient, type McpStdioClient } from "./mcp-stdio-client.js";
@@ -91,6 +90,7 @@ afterEach(async () => {
 
 describe("createMcpStdioClient", () => {
   it("keeps the connection when one stdout chunk contains multiple bounded messages", async () => {
+    vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(0.25);
     const { client, child, stdout, requested } = createFixture();
     const pending = client.request("tools/call", {}, { timeoutMs: 1000 });
     const id = await requested;
@@ -100,7 +100,6 @@ describe("createMcpStdioClient", () => {
       { jsonrpc: "2.0", method: "notifications/message", params: { data: "n".repeat(700) } },
       { jsonrpc: "2.0", id, result },
     );
-
     await expect(pending).resolves.toEqual(result);
     expect(client.isAvailable()).toBe(true);
     expect(child.kill).not.toHaveBeenCalled();
@@ -155,6 +154,29 @@ describe("createMcpStdioClient", () => {
       message: "unavailable: proxy write failed",
       cause: failure,
     });
+    expectRetired(fixture);
+  });
+
+  it.each([
+    {
+      name: "keeps complete characters at the 32KiB tail boundary",
+      output: Buffer.from("你".repeat(20000)),
+      expected: /^unavailable: proxy exited \(1\): 你+$/,
+    },
+    {
+      name: "preserves malformed bytes when stderr was not truncated",
+      output: Buffer.from([0x80, 0x61]),
+      expected: /^unavailable: proxy exited \(1\): �a$/,
+    },
+  ])("$name", async ({ output, expected }) => {
+    const fixture = createFixture();
+    const { client, root, stderr, requested } = fixture;
+    const pending = client.request("tools/call", {}, { timeoutMs: 1000 });
+    const rejected = expect(pending).rejects.toThrow(expected);
+    await requested;
+    stderr.write(output);
+    root.resolve({ code: 1, signal: null });
+    await rejected;
     expectRetired(fixture);
   });
 });

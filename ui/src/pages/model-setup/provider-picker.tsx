@@ -51,14 +51,11 @@ export function ManualProviderPicker(
 ) {
   const id = createUniqueId();
   let menu: MenuHandle;
-  const providerMethod = createMemo(() =>
-    props.provider ? manualProviderMethod(props.provider) : undefined,
-  );
-  const triggerLabel = createMemo(() =>
+  const providerMethod = () => (props.provider ? manualProviderMethod(props.provider) : undefined);
+  const triggerLabel = () =>
     props.provider
       ? [manualProviderName(props.provider), providerMethod()].filter(Boolean).join(", ")
-      : t("modelSetup.manual.selectProvider"),
-  );
+      : t("modelSetup.manual.selectProvider");
   const items = createMemo(() =>
     props.result.manualProviders
       .toSorted((a, b) => manualProviderName(a).localeCompare(manualProviderName(b)))

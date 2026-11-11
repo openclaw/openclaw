@@ -4,6 +4,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { recordLegacyMigrationReceipt } from "../infra/state-migrations.receipts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
   AGENT_DELETION_RECOVERY_SOURCE_KEY as SOURCE_KEY,
   AGENT_DELETION_RECONSTRUCTION_DESCRIPTION as DESCRIPTION,
@@ -99,7 +100,12 @@ export function recordAgentDeletionRecoveryHolds(
   });
   const key = (entry: HeldAgentDatabase) => JSON.stringify([entry.agentId, entry.path]);
   const entries = new Map<string, HeldAgentDatabase>();
-  for (const entry of [...(previous?.held ?? []), ...held.map(encode)]) {
+  // System agents cannot be deleted. Existing invalid holds still need Doctor's
+  // ownership verification and backup before they can be resolved.
+  for (const entry of [
+    ...(previous?.held ?? []),
+    ...held.filter((target) => !isReservedSystemAgentId(target.agentId)).map(encode),
+  ]) {
     entries.set(key(entry), entry);
   }
   const missing = new Map<string, HeldAgentDatabase>();

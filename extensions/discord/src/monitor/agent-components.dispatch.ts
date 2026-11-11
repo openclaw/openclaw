@@ -20,7 +20,6 @@ import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import { resolveAgentComponentRoute } from "./agent-components-context.js";
-import { resolveComponentCommandAuthorized } from "./agent-components-guild-auth.js";
 import type {
   AgentComponentContext,
   AgentComponentInteraction,
@@ -29,8 +28,8 @@ import type {
 } from "./agent-components.types.js";
 import {
   normalizeDiscordAllowList,
-  resolveDiscordChannelConfigWithFallback,
-  resolveDiscordGuildEntry,
+  type DiscordChannelConfigResolved,
+  type resolveDiscordGuildEntry,
 } from "./allow-list.js";
 import { formatDiscordUserTag } from "./format.js";
 import { buildDiscordInboundAccessContext } from "./inbound-context.js";
@@ -42,11 +41,9 @@ const loadReplyRuntime = createLazyRuntimeModule(() => import("openclaw/plugin-s
 
 const loadTypingRuntime = createLazyRuntimeModule(() => import("./typing.js"));
 
-function buildDiscordComponentConversationLabel(params: {
-  interactionCtx: ComponentInteractionContext;
-  interaction: AgentComponentInteraction;
-  channelCtx: DiscordChannelContext;
-}) {
+function buildDiscordComponentConversationLabel(
+  params: Parameters<typeof dispatchDiscordComponentEvent>[0],
+) {
   if (params.interactionCtx.isDirectMessage) {
     return buildDirectLabel(params.interactionCtx.user);
   }
@@ -66,12 +63,15 @@ export async function dispatchDiscordComponentEvent(params: {
   interactionCtx: ComponentInteractionContext;
   channelCtx: DiscordChannelContext;
   guildInfo: ReturnType<typeof resolveDiscordGuildEntry>;
+  channelConfig: DiscordChannelConfigResolved | null;
+  commandAuthorized: boolean;
   eventText: string;
   commandSource?: "native";
   replyToId?: string;
   routeOverrides?: { sessionKey?: string; agentId?: string; accountId?: string };
 }): Promise<void> {
   const { ctx, interaction, interactionCtx, channelCtx, guildInfo, eventText } = params;
+  const { channelConfig, commandAuthorized } = params;
   const route = resolveAgentComponentRoute({
     ctx,
     ...interactionCtx,
@@ -93,16 +93,6 @@ export async function dispatchDiscordComponentEvent(params: {
     !interactionCtx.isDirectMessage && channelCtx.displayChannelSlug
       ? `#${channelCtx.displayChannelSlug}`
       : undefined;
-  const channelConfig = resolveDiscordChannelConfigWithFallback({
-    guildInfo,
-    channelId: interactionCtx.channelId,
-    channelName: channelCtx.channelName,
-    channelSlug: channelCtx.channelSlug,
-    parentId: channelCtx.parentId,
-    parentName: channelCtx.parentName,
-    parentSlug: channelCtx.parentSlug,
-    scope: channelCtx.isThread ? "thread" : "channel",
-  });
   const allowNameMatching = isDangerousNameMatchingEnabled(ctx.discordConfig);
   const { ownerAllowFrom, groupSystemPrompt, toolPolicy } = buildDiscordInboundAccessContext({
     cfg: ctx.cfg,
@@ -127,13 +117,6 @@ export async function dispatchDiscordComponentEvent(params: {
         },
       })
     : null;
-  const commandAuthorized = await resolveComponentCommandAuthorized({
-    ctx,
-    interactionCtx,
-    channelConfig,
-    guildInfo,
-    allowNameMatching,
-  });
   const storePath = resolveStorePath(ctx.cfg.session?.store, { agentId });
   const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
   const previousTimestamp = await readSessionUpdatedAtAsync({

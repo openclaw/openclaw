@@ -34,7 +34,7 @@ export type PlacementSessionIdentityProbe = {
 /** Memory evidence is read once after durable discovery, without opening or acquiring an owner. */
 export async function readPlacementSessionIdentityEvidence(
   cfg: OpenClawConfig,
-  input: readonly PlacementSessionIdentityProbe[],
+  probes: readonly PlacementSessionIdentityProbe[],
   signal?: AbortSignal,
 ): Promise<SessionIdentityEvidenceResult[]> {
   signal?.throwIfAborted();
@@ -45,7 +45,6 @@ export async function readPlacementSessionIdentityEvidence(
       : process.env,
   );
   const env = { ...capturedEnv, OPENCLAW_STATE_DIR: resolveStateDir(capturedEnv) };
-  const probes = input.map((probe) => ({ ...probe }));
   const results: SessionIdentityEvidenceResult[] = probes.map(() => ({ status: "absent" }));
   const incognito = probes.flatMap((probe, index) =>
     isIncognitoSessionKey(probe.sessionKey) ? [{ probe, index }] : [],
@@ -152,14 +151,12 @@ export async function readPlacementSessionIdentityEvidence(
     await inventoryRead.withRead(
       async (inventory, assertDiscoveryCurrent) => {
         const agents = new Map(inventory.agents.map((agent) => [agent.agentId, agent]));
-        const groups = new Map<
-          string,
-          {
-            database: { agentId: string; path: string };
-            identities: SessionIdentityEvidenceIdentity[];
-            indexes: number[];
-          }
-        >();
+        type IdentityRead = {
+          database: Readonly<{ agentId: string; path: string }>;
+          identities: SessionIdentityEvidenceIdentity[];
+          indexes: number[];
+        };
+        const groups = new Map<string, IdentityRead>();
         for (const { probe, index } of disk) {
           const observed = agents.get(normalizeAgentId(probe.agentId));
           if (!observed || !observed.result.available) {
@@ -171,7 +168,11 @@ export async function readPlacementSessionIdentityEvidence(
           }
           for (const { database } of observed.reads) {
             const key = JSON.stringify(database);
-            const group = groups.get(key) ?? { database, identities: [], indexes: [] };
+            const group: IdentityRead = groups.get(key) ?? {
+              database,
+              identities: [],
+              indexes: [],
+            };
             group.identities.push({
               sessionId: probe.sessionId,
               sessionKey: normalizeStoreSessionKey(probe.sessionKey),

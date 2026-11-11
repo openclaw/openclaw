@@ -5,21 +5,17 @@ const SAME_ORIGIN_MEDIA_ROUTE_MARKERS = [
   "/media/inbound/",
 ];
 
-function isSameOriginMediaRoute(value: string): boolean {
-  return (
-    value.startsWith("/") &&
-    SAME_ORIGIN_MEDIA_ROUTE_MARKERS.some((marker) => value.includes(marker))
-  );
-}
-
 /** Returns the final filename after decoding one URL path-segment layer. */
-function getMediaFileName(value: string): string | undefined {
+function getMediaFileName(value: string, decodeInbound = false): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) {
     return undefined;
   }
   const url =
-    /^https?:\/\//i.test(trimmed) || isSameOriginMediaRoute(trimmed)
+    /^https?:\/\//i.test(trimmed) ||
+    (decodeInbound && trimmed.startsWith(MANAGED_INBOUND_MEDIA_PREFIX)) ||
+    (trimmed.startsWith("/") &&
+      SAME_ORIGIN_MEDIA_ROUTE_MARKERS.some((marker) => trimmed.includes(marker)))
       ? URL.parse(trimmed, "https://openclaw.invalid")
       : null;
   if (!url) {
@@ -84,6 +80,24 @@ export function isSvgImageMediaPath(path: string, mediaType: unknown): boolean {
   return normalizedMediaType === "image/svg+xml" || getMediaFileExtension(path) === "svg";
 }
 
+export function isTextAttachment(rawMimeType: string, filename: string): boolean {
+  const mimeType = rawMimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  if (mimeType.startsWith("text/")) {
+    return true;
+  }
+  if (
+    /^application\/(?:(?:[\w.-]+\+)?(?:json|xml)|javascript|x-javascript|yaml|x-yaml)$/.test(
+      mimeType,
+    )
+  ) {
+    return true;
+  }
+  return (
+    (!mimeType || mimeType === "application/octet-stream") &&
+    /\.(?:txt|md|markdown|html?|log|csv|tsv|json|jsonl|xml|yaml|yml)$/i.test(filename)
+  );
+}
+
 export function isAudioTranscriptMediaPath(path: string, mediaType: unknown): boolean {
   if (normalizeMediaType(mediaType).startsWith("audio/")) {
     return true;
@@ -111,7 +125,7 @@ const MANAGED_INBOUND_UUID_SUFFIX_PATTERN =
 export function labelForMediaPath(mediaPath: string): string {
   const trimmed = mediaPath.trim();
   if (trimmed.startsWith(MANAGED_INBOUND_MEDIA_PREFIX)) {
-    const basename = trimmed.split("/").pop()?.trim() || trimmed;
+    const basename = getMediaFileName(trimmed, true)?.trim() || trimmed;
     return basename.replace(MANAGED_INBOUND_UUID_SUFFIX_PATTERN, "") || basename;
   }
   const parsed = /^https?:\/\//i.test(trimmed) ? URL.parse(trimmed) : null;

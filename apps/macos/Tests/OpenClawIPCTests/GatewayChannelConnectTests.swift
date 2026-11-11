@@ -465,6 +465,8 @@ struct GatewayChannelConnectTests {
             } else {
                 await channel.clearConnectFailureBackoff()
                 await channel._test_setConnectFailureBackoffWaitHandler {
+                    // An admitted delay can start after readiness has already cancelled it.
+                    try Task.checkCancellation()
                     Issue.record("Startup retry waited on stale connect-failure backoff")
                     throw CancellationError()
                 }

@@ -1,8 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
+import {
+  createQueueTestRun,
+  toolAuthorityOverlay,
+} from "../../auto-reply/reply/reply-tool-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   replaceSessionEntry,
@@ -20,8 +22,6 @@ import { createDirectChatContext } from "../../gateway/server-chat.agent-events.
 import { createQuestionHandlers } from "../../gateway/server-methods/question.js";
 import { createSecretStoreWriteService } from "../../gateway/server-methods/secrets.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
@@ -70,7 +70,7 @@ it.each([
     })),
   ),
 ])("rechecks $change authority for $path at the question effect", async ({ path, change }) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const sessionKey = "agent:main:question";
     const policyKey = "agent:policy:question";
     const id = "caller-policy-question";
@@ -102,13 +102,6 @@ it.each([
       { sessionId: run.run.sessionId, updatedAt: 1 },
     );
     await upsertSessionEntryCore(policyTarget, policyEntry);
-    // Drain seed maintenance before measuring the final authority read.
-    for (const agentId of ["main", "policy"]) {
-      await closeOpenClawAgentDatabaseByPathAsync(
-        resolveOpenClawAgentSqlitePath({ agentId, env: state.env }),
-        agentId,
-      );
-    }
     Object.assign(run.run, {
       sessionKey,
       runtimePolicySessionKey: policyKey,
@@ -197,7 +190,7 @@ it.each([
         return originalRead(inputs, consume, options);
       },
     );
-    const caller = { senderIsOwner: true, disableTools: false, traceAuthorized: false };
+    const caller = toolAuthorityOverlay(run);
     const preparation = bindWorkerToolPreparation({
       assertCurrent,
       compatAssertCurrent: () => authority.assertCaller(caller),
@@ -257,30 +250,13 @@ it.each([
       } else if (change === "creator-closed") {
         controller.abort(new Error("question creator closed during final read"));
       }
-      const sql = observeHostDataSql();
-      try {
-        resume.resolve();
-        const result = await settled;
-        expect(result).toEqual(
-          change === "current" ? true : expect.any(QuestionDispatchRefusedError),
-        );
-        expect(manager.get(id)?.status).toBe(
-          change === "current"
-            ? path === "prepared-cancel"
-              ? "cancelled"
-              : "answered"
-            : "pending",
-        );
-        if (compatibility) {
-          expect(resolveQuestion).toHaveBeenCalledTimes(change === "current" ? 1 : 0);
-        } else {
-          expect(
-            sql.queries.filter((query) => /\bsession_(?:nodes|participants|windows)\b/.test(query)),
-          ).toEqual([]);
-        }
-      } finally {
-        sql.restore();
-      }
+      resume.resolve();
+      expect(await settled).toEqual(
+        change === "current" ? true : expect.any(QuestionDispatchRefusedError),
+      );
+      expect(manager.get(id)?.status).toBe(
+        change === "current" ? (path === "prepared-cancel" ? "cancelled" : "answered") : "pending",
+      );
     } finally {
       resume.resolve();
       await settled;

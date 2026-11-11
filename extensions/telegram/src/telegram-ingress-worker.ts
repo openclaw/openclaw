@@ -1,6 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createCpuTrackedWorker,
+  createPluginRuntimeProcessEntrypoint,
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
@@ -71,7 +73,7 @@ export type TelegramIngressWorkerOptions = {
 };
 
 type TelegramIngressWorkerHandle = {
-  onMessage(listener: (message: TelegramIngressWorkerMessage) => void): () => void;
+  onMessage?: (message: TelegramIngressWorkerMessage) => void;
   ackSpooledUpdate?(
     requestId: string,
     result: Extract<TelegramIngressWorkerCommand, { type: "spool-ack" }>["result"],
@@ -85,16 +87,9 @@ export type TelegramIngressWorkerFactory = (
 ) => TelegramIngressWorkerHandle;
 
 export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (options) => {
-  const listeners = new Set<(message: TelegramIngressWorkerMessage) => void>();
-  const workerUrl = resolveRuntimeWorkerUrl({
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "telegram-ingress-worker.runtime",
-    distWorkerPath: "telegram-ingress-worker.runtime.js",
-    package: {
-      name: "@openclaw/telegram",
-      distWorkerPath: "src/telegram-ingress-worker.runtime.js",
-    },
-  });
+  const workerUrl = resolveRuntimeWorkerUrl(
+    createPluginRuntimeProcessEntrypoint("telegramIngress", import.meta.url),
+  );
   const worker = createCpuTrackedWorker(workerUrl, {
     execArgv: resolveRuntimeWorkerArgv(workerUrl).slice(0, -1),
     workerData: { ...options, runtime: TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER },
@@ -109,19 +104,15 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
       reject(new Error(`Telegram ingress worker exited with code ${code}`));
     });
   });
-  worker.on("message", (message: TelegramIngressWorkerMessage) => {
-    for (const listener of listeners) {
-      listener(message);
-    }
-  });
+  // Keep the constructing plugin's runtime even if another scope assigns onMessage.
+  worker.on(
+    "message",
+    AsyncLocalStorage.bind((message: TelegramIngressWorkerMessage) => {
+      handle.onMessage?.(message);
+    }),
+  );
 
-  return {
-    onMessage(listener) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
+  const handle: TelegramIngressWorkerHandle = {
     ackSpooledUpdate(requestId, result) {
       try {
         worker.postMessage(
@@ -152,4 +143,5 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
       return taskPromise;
     },
   };
+  return handle;
 };

@@ -3,7 +3,7 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
@@ -58,7 +58,7 @@ export function bindSqliteWorkerBackend(
         if (command.input.scope.storePath !== context.databasePath) {
           throw new Error("Worker transcript target changed its database owner");
         }
-        const plan = runSqliteDeferredTransactionSync(context.database, () =>
+        const plan = runSqliteReadSnapshotSync(context.database, () =>
           prepareTranscriptCommit(input),
         );
         prepared = { input, plan };

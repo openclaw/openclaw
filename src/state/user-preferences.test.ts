@@ -135,10 +135,7 @@ describe("user preferences", () => {
     const tooMany = Object.fromEntries(
       Array.from({ length: 33 }, (_, index) => [`key-${index}`, index]),
     );
-    expect(set(tooMany)).toMatchObject({
-      ok: false,
-      error: { code: "invalid-entry-count" },
-    });
+    expect(set(tooMany)).toMatchObject({ ok: false, error: { code: "invalid-entry-count" } });
     expect(set({ valid: true, oversized: "🦞".repeat(1_025) })).toMatchObject({
       ok: false,
       error: { code: "value-too-large", key: "oversized" },
@@ -155,6 +152,7 @@ describe("user preferences", () => {
       error: { code: "profile-key-limit", limit: 128, currentCount: 128 },
     });
     expect(set({ "key-0": null })).toEqual(success);
+    expect(set({}, { "key-0": null })).toEqual(success);
     expect(set({ "key-128": true })).toEqual(success);
     expect(get(["key-0", "key-128"])).toEqual({ "key-128": true });
   });
@@ -164,7 +162,8 @@ describe("user preferences", () => {
     const original = { retained: { nested: { a: 1, b: 2 }, list: [1, 2] }, removed: true };
     expect(set(original).ok).toBe(true);
     const { db } = openOpenClawStateDatabase(options);
-    const before = db.prepare("SELECT * FROM user_preferences ORDER BY pref_key").all();
+    const rows = () => db.prepare("SELECT * FROM user_preferences ORDER BY pref_key").all();
+    const before = rows();
     db.exec(`CREATE TRIGGER reject_any_insert BEFORE INSERT ON user_preferences
       BEGIN SELECT RAISE(FAIL, 'unexpected preference insert'); END;
       CREATE TRIGGER reject_any_delete BEFORE DELETE ON user_preferences
@@ -176,23 +175,17 @@ describe("user preferences", () => {
           { retained: { nested: { b: 2, a: 1 }, list: [2, 1] } },
         ),
       ).toEqual(conflict);
-      expect(db.prepare("SELECT * FROM user_preferences ORDER BY pref_key").all()).toEqual(before);
+      expect(rows()).toEqual(before);
     } finally {
       db.exec("DROP TRIGGER reject_any_insert; DROP TRIGGER reject_any_delete;");
     }
     expect(
       set(
         { removed: null, inserted: true },
-        {
-          retained: { list: [1, 2], nested: { b: 2, a: 1 } },
-          inserted: null,
-        },
+        { retained: { list: [1, 2], nested: { b: 2, a: 1 } }, inserted: null },
       ),
     ).toEqual(success);
-    expect(get()).toEqual({
-      retained: original.retained,
-      inserted: true,
-    });
+    expect(get()).toEqual({ retained: original.retained, inserted: true });
     expect(set({}, { inserted: null })).toEqual(conflict);
     expect(set({}, { removed: null })).toEqual(success);
   });

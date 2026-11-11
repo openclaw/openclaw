@@ -77,6 +77,23 @@ async function setupMemoryFile(originalContent: string, readOnlyParent = false):
   return memoryPath;
 }
 
+const original = "# Long-Term Memory\n\n- existing entry that must survive\n";
+function commit(
+  filePath: string,
+  content: string | null,
+  options: Partial<Parameters<typeof commitMemoryContent>[0]> = {},
+) {
+  return commitMemoryContent({
+    filePath,
+    tempPrefix: `${path.basename(filePath)}.test`,
+    expectedHash: hashMemoryContent(original),
+    expectedContent: original,
+    allowInPlaceFallback: true,
+    content,
+    ...options,
+  });
+}
+
 it.each(["missing/MEMORY.md", ...(process.platform === "win32" ? [] : ["missing/../MEMORY.md"])])(
   "rejects a memory target whose missing suffix is %s",
   async (suffix) => {
@@ -110,129 +127,49 @@ it.runIf(Boolean(process.versions.bun) && process.platform !== "win32")(
 it.runIf(process.platform !== "win32" && readOnlyParentRejectsWrites)(
   "uses the checked in-place fallback when the parent rejects a sibling temp file",
   async () => {
-    const original = "# Long-Term Memory\n\n- existing entry\n";
     const memoryPath = await setupMemoryFile(original, true);
     const replacement = `${original}- replacement entry\n`;
-
-    await commitMemoryContent({
-      filePath: memoryPath,
-      tempPrefix: `${path.basename(memoryPath)}.test`,
-      expectedHash: hashMemoryContent(original),
-      expectedContent: original,
-      allowInPlaceFallback: true,
-      content: replacement,
-    });
-
+    await commit(memoryPath, replacement);
     expect(await fs.readFile(memoryPath, "utf-8")).toBe(replacement);
   },
 );
 
-it.each([
-  { label: "atomic replacement", readOnlyParent: false },
-  ...(readOnlyParentRejectsWrites ? [{ label: "in-place fallback", readOnlyParent: true }] : []),
-])("rejects a changed preimage before $label", async ({ readOnlyParent }) => {
-  const original = "# Long-Term Memory\n\n- original entry\n";
-  const externalEdit = `${original}- external edit\n`;
-  const memoryPath = await setupMemoryFile(externalEdit, readOnlyParent);
-
-  await expect(
-    commitMemoryContent({
-      filePath: memoryPath,
-      tempPrefix: `${path.basename(memoryPath)}.test`,
-      expectedHash: hashMemoryContent(original),
-      expectedContent: original,
-      allowInPlaceFallback: true,
-      content: `${original}- replacement entry\n`,
-    }),
-  ).rejects.toBeInstanceOf(MemoryWriteConflictError);
-
-  expect(await fs.readFile(memoryPath, "utf-8")).toBe(externalEdit);
-});
-
-it("rejects a changed preimage before removing a memory file", async () => {
-  const original = "# Long-Term Memory\n\n- original entry\n";
-  const externalEdit = `${original}- external edit\n`;
-  const memoryPath = await setupMemoryFile(externalEdit);
-
-  await expect(
-    commitMemoryContent({
-      filePath: memoryPath,
-      tempPrefix: `${path.basename(memoryPath)}.test`,
-      expectedContent: original,
-      content: null,
-    }),
-  ).rejects.toBeInstanceOf(MemoryWriteConflictError);
-
-  expect(await fs.readFile(memoryPath, "utf-8")).toBe(externalEdit);
-});
+it.each([[false, false], ...(readOnlyParentRejectsWrites ? [[true, false]] : []), [false, true]])(
+  "rejects changed preimages (read-only=%s, removal=%s)",
+  async (readOnlyParent, removal) => {
+    const externalEdit = `${original}- external edit\n`;
+    const memoryPath = await setupMemoryFile(externalEdit, readOnlyParent);
+    await expect(
+      commit(memoryPath, removal ? null : `${original}- replacement entry\n`),
+    ).rejects.toBeInstanceOf(MemoryWriteConflictError);
+    expect(await fs.readFile(memoryPath, "utf-8")).toBe(externalEdit);
+  },
+);
 
 it.runIf(process.platform !== "win32" && readOnlyParentRejectsWrites)(
   "completes the restore across short writes before truncating",
   async () => {
-    const original = "# Long-Term Memory\n\n- existing entry that must survive\n";
     const memoryPath = await setupMemoryFile(original, true);
     const promoted = `# Long-Term Memory\n\n## 2026-08-19\n${"- promoted entry\n".repeat(200)}`;
     openState.failInPlaceWriteAfterBytes = 1024;
     openState.shortFirstRestoreWrite = true;
 
-    await expect(
-      commitMemoryContent({
-        filePath: memoryPath,
-        tempPrefix: `${path.basename(memoryPath)}.promotion`,
-        expectedHash: hashMemoryContent(original),
-        expectedContent: original,
-        allowInPlaceFallback: true,
-        content: promoted,
-      }),
-    ).rejects.toMatchObject({ code: "EFBIG" });
+    await expect(commit(memoryPath, promoted)).rejects.toMatchObject({ code: "EFBIG" });
 
     expect(await fs.readFile(memoryPath, "utf-8")).toBe(original);
   },
 );
 
-it("refuses to rewrite a memory file that is not valid UTF-8", async () => {
-  const malformed = Buffer.concat([
-    Buffer.from("# Long-Term Memory\n\n- note: a", "utf-8"),
-    Buffer.from([0xff]),
-    Buffer.from("b\n", "utf-8"),
-  ]);
-  const memoryPath = await setupMemoryFile("placeholder");
+it.each([false, true])("preserves malformed UTF-8 (read-only parent: %s)", async (readOnly) => {
+  const malformed = Buffer.from([0x61, 0xff, 0x62]);
+  const memoryPath = await setupMemoryFile("placeholder", readOnly);
   await fs.writeFile(memoryPath, malformed);
   const lossy = malformed.toString("utf-8");
 
   await expect(
-    commitMemoryContent({
-      filePath: memoryPath,
-      tempPrefix: `${path.basename(memoryPath)}.promotion`,
+    commit(memoryPath, `${lossy}- promoted entry\n`, {
       expectedHash: hashMemoryContent(lossy),
       expectedContent: lossy,
-      allowInPlaceFallback: true,
-      content: `${lossy}- promoted entry\n`,
-    }),
-  ).rejects.toThrow("not valid UTF-8");
-
-  // The refusal must leave the file byte-for-byte unchanged, U+FFFD included nowhere.
-  expect(await fs.readFile(memoryPath)).toEqual(malformed);
-});
-
-it("preserves malformed memory when the parent directory is read-only", async () => {
-  const malformed = Buffer.concat([
-    Buffer.from("# Long-Term Memory\n\n- note: a", "utf-8"),
-    Buffer.from([0xff]),
-    Buffer.from("b\n", "utf-8"),
-  ]);
-  const memoryPath = await setupMemoryFile("placeholder", true);
-  await fs.writeFile(memoryPath, malformed);
-  const lossy = malformed.toString("utf-8");
-
-  await expect(
-    commitMemoryContent({
-      filePath: memoryPath,
-      tempPrefix: `${path.basename(memoryPath)}.promotion`,
-      expectedHash: hashMemoryContent(lossy),
-      expectedContent: lossy,
-      allowInPlaceFallback: true,
-      content: `${lossy}- promoted entry\n`,
     }),
   ).rejects.toThrow("not valid UTF-8");
 
@@ -240,24 +177,18 @@ it("preserves malformed memory when the parent directory is read-only", async ()
 });
 
 it("merges valid non-ASCII memory including a literal replacement character", async () => {
-  // A validator that rejects every decoded U+FFFD must fail this test: the
-  // original bytes contain an intentional replacement character that has to
-  // survive the merge byte-for-byte.
-  const original = "# Long-Term Memory\n\n- note: 中文 🦀 \uFFFD tail\n";
-  const memoryPath = await setupMemoryFile(original);
+  // An intentional U+FFFD is valid UTF-8 and must survive byte-for-byte.
+  const unicode = "# Long-Term Memory\n\n- note: 中文 🦀 \uFFFD tail\n";
+  const memoryPath = await setupMemoryFile(unicode);
 
   await commitMemoryContent({
     filePath: memoryPath,
     tempPrefix: `${path.basename(memoryPath)}.promotion`,
-    expectedHash: hashMemoryContent(original),
-    content: `${original}- promoted entry\n`,
+    expectedHash: hashMemoryContent(unicode),
+    content: `${unicode}- promoted entry\n`,
   });
 
-  const written = await fs.readFile(memoryPath);
-  expect(
-    written.subarray(0, Buffer.byteLength(original)).equals(Buffer.from(original, "utf-8")),
-  ).toBe(true);
-  expect(written.toString("utf-8")).toContain("- promoted entry");
+  expect(await fs.readFile(memoryPath)).toEqual(Buffer.from(`${unicode}- promoted entry\n`));
 });
 
 it("still creates a missing memory file (first promotion)", async () => {

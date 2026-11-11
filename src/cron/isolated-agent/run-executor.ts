@@ -4,6 +4,7 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
 import type { VerboseLevel } from "../../auto-reply/thinking.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import {
   LiveSessionModelSwitchError,
   logWarn,
@@ -17,6 +18,19 @@ import type { CronCompletedPromptRun, CronExecutionResult } from "./run.types.js
 
 /** Executes an isolated cron prompt, including live model-switch retries. */
 export async function executeCronRun(params: CronRunExecutionParams): Promise<CronExecutionResult> {
+  return await withSessionTurn(
+    {
+      sessionKey: params.runSessionKey,
+      sessionId: params.cronSession.sessionEntry.sessionId,
+      agentId: params.agentId,
+      storePath: params.cronSession.storePath,
+      abortSignal: params.abortSignal,
+    },
+    (_operation, signal) => executeCronRunOwned({ ...params, abortSignal: signal }),
+  );
+}
+
+async function executeCronRunOwned(params: CronRunExecutionParams): Promise<CronExecutionResult> {
   const resolvedVerboseLevel: VerboseLevel =
     normalizeVerboseLevel(params.cronSession.sessionEntry.verboseLevel) ??
     normalizeVerboseLevel(params.agentVerboseDefault) ??

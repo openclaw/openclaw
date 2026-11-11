@@ -110,7 +110,6 @@ async function runSlackMessageScenario(
       matchText: run.matchText,
       observedMessages: environment.observedMessages,
       observationScenarioId: scenario.id,
-      observationScenarioTitle: scenario.title,
       sentTs: sent.ts,
       sutIdentity: environment.sutIdentity,
     };
@@ -211,11 +210,8 @@ export async function runSlackScenario(
     }
     recordSlackObservedMessage({
       channelId: environment.channelId,
-      matchedScenario: true,
       message,
       observedMessages: environment.observedMessages,
-      scenarioId: scenario.id,
-      scenarioTitle: scenario.title,
     });
     return { details: result.details };
   }
@@ -223,7 +219,6 @@ export async function runSlackScenario(
     const params = {
       channelId: environment.channelId,
       context: environment.context,
-      observedMessages: environment.observedMessages,
       scenario,
       sutAccountId: environment.sutAccountId,
     };
@@ -239,7 +234,6 @@ export async function runSlackScenario(
     const label = run.kind === "approval" ? run.approvalKind : `Codex ${run.appServerMethod}`;
     return {
       details: `${label} approval resolved ${run.decision} in ${approval.rttMs}ms`,
-      artifacts: { approval: approval.artifact },
       ...buildLiveTransportRttResult(approval, "approval-request-to-resolution"),
     };
   }

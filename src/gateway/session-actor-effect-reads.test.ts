@@ -1,17 +1,25 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { SessionActorAuthority } from "../config/sessions/session-actor-contract.js";
-import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
-import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { getRuntimeConfig } from "../config/io.js";
 import {
-  captureSessionEntryMetadataRead,
-  captureSessionEntrySourceAssertion,
-} from "../config/sessions/session-entry-source-authority.js";
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
+  authority,
+  memoryOwnerFixture,
+} from "../config/sessions/session-actor-memory-family.test-support.js";
+import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveApprovalRequestChannelAccountId } from "../infra/approval-request-account-binding.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import * as checkoutDiff from "../sessions/session-diff.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withControlUiSessionPrSource } from "./control-ui-session-pr-source.js";
 import { prepareGitHubPublicationSession } from "./github-publication-availability.js";
-import { withSessionFileRoot } from "./server-methods/sessions-files.js";
+import { withSessionFileRoot } from "./server-methods/session-files-root.js";
+import { sessionsDiffHandlers } from "./server-methods/sessions-diff.js";
+import type { RespondFn } from "./server-methods/types.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -26,57 +34,38 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
   }),
 }));
 
-const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 const sessionKey = "agent:main:dashboard:incognito-effects";
-const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
 afterEach(() => {
-  for (const owner of owners.splice(0)) {
-    owner.close();
-  }
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
+const acquireMemory = memoryOwnerFixture({
+  agentId: "main",
+  path: resolveIncognitoOpenClawAgentSqlitePath({
+    agentId: "main",
+    env: { OPENCLAW_STATE_DIR: "/synthetic" },
+  }),
 });
 
 async function fixture() {
-  const owner = createMemorySessionActorOwner({
-    agentId: "main",
-    path: resolveIncognitoOpenClawAgentSqlitePath({
-      agentId: "main",
-      env: { OPENCLAW_STATE_DIR: "/synthetic" },
-    }),
-  });
-  owners.push(owner);
-  const actor = await owner.acquire(
-    { database: owner.identity, sessionKey },
-    { assertCurrent() {}, assertReadable() {} },
-  );
-  if (!actor.storage) {
-    throw new Error("Memory actor has no storage capability");
-  }
-  const store = actor.storage;
-  expect(
-    await store.mutate(
-      {
-        type: "session.entry.create",
-        input: {
-          entry: {
-            sessionId: "private-effects",
-            updatedAt: 1,
-            lifecycleRevision: "original",
-            spawnedCwd: "/synthetic/workspace",
-          },
-        },
-      },
-      authority,
-    ),
-  ).toMatchObject({ kind: "committed" });
-  const binding = { actor, authority, agentId: owner.agentId, path: owner.path };
-  const patch = async (value: Partial<SessionEntry>) => {
-    expect(
-      await store.mutate(
-        { type: "session.entry.patch", input: { operation: { kind: "fields", patch: value } } },
-        authority,
-      ),
-    ).toMatchObject({ kind: "committed" });
+  const { owner, actor, store } = await acquireMemory(sessionKey);
+  const mutate = async (operation: Parameters<typeof store.mutate>[0]) => {
+    expect(await store.mutate(operation, authority)).toMatchObject({ kind: "committed" });
   };
+  await mutate({
+    type: "session.entry.create",
+    input: {
+      entry: {
+        sessionId: "private-effects",
+        updatedAt: 1,
+        lifecycleRevision: "original",
+        spawnedCwd: "/synthetic/workspace",
+      },
+    },
+  });
+  const binding = { actor, authority, agentId: owner.agentId, path: owner.path };
+  const patch = (value: Partial<SessionEntry>) =>
+    mutate({ type: "session.entry.patch", input: { operation: { kind: "fields", patch: value } } });
   return { owner, actor, binding, patch };
 }
 
@@ -109,33 +98,6 @@ it("routes approvals from the memory actor's latest committed channel account", 
   });
 });
 
-it("checks current metadata at the effect without sending memory predicates to SQLite", async () => {
-  const { binding, patch } = await fixture();
-  await runWithSessionActorStorage(binding, async () => {
-    const scope = { sessionKey, agentId: binding.agentId, storePath: binding.path };
-    const metadata = captureSessionEntryMetadataRead(scope, () =>
-      binding.authority.assertCurrent(),
-    );
-    const assertion = captureSessionEntrySourceAssertion({
-      scope,
-      expected: metadata?.readCurrent(),
-      fields: ["sessionId", "lifecycleRevision", "spawnedCwd"],
-      assertCurrent() {},
-      refuse() {
-        throw new Error("Workspace authority changed");
-      },
-    });
-    const prepared = await assertion.prepareSessionSource();
-    expect(prepared.checks).toEqual([]);
-    await patch({ label: "Unrelated bookkeeping" });
-    expect(() => prepared.assertCurrent()).not.toThrow();
-    await patch({ spawnedCwd: "/synthetic/replacement" });
-    expect(() => prepared.assertCurrent()).toThrow("Workspace authority changed");
-    using publicationSession = await prepareGitHubPublicationSession(sessionKey);
-    expect(publicationSession.readCurrent().entry?.spawnedCwd).toBe("/synthetic/replacement");
-  });
-});
-
 it("keeps file planning detached and refuses disclosure after its workspace changes", async () => {
   const { binding, patch } = await fixture();
   await expect(
@@ -144,6 +106,8 @@ it("keeps file planning detached and refuses disclosure after its workspace chan
         expect(loaded.root).toBe("/synthetic/workspace");
         await patch({ spawnedCwd: "/synthetic/replacement" });
         expect(loaded.root).toBe("/synthetic/workspace");
+        using publication = await prepareGitHubPublicationSession(sessionKey);
+        expect(publication.readCurrent().entry?.spawnedCwd).toBe("/synthetic/replacement");
         assertCurrent();
       }),
     ),
@@ -158,4 +122,41 @@ it("revokes a retained PR publication source when its session actor closes", asy
   expect(() => assertCurrent()).not.toThrow();
   owner.closeSession(sessionKey);
   expect(() => assertCurrent()).toThrow();
+});
+
+it("returns a retryable diff response when runtime configuration removes its sandbox mount", async () => {
+  const { binding } = await fixture();
+  const cfg: OpenClawConfig = {
+    agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } },
+  };
+  setRuntimeConfigSnapshot(cfg);
+  vi.spyOn(checkoutDiff, "loadCheckoutDiff").mockImplementationOnce(async () => {
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "none" } } },
+    });
+    return { sessionKey, files: [], additions: 0, deletions: 0 };
+  });
+  const respond = vi.fn<RespondFn>();
+  await runWithSessionActorStorage(binding, () =>
+    sessionsDiffHandlers["sessions.diff"]!({
+      req: { type: "req", id: "diff", method: "sessions.diff", params: { sessionKey } },
+      params: { sessionKey },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      // SAFETY: This memory-only read uses only runtime configuration and request diagnostics.
+      context: { getRuntimeConfig, logGateway: createSubsystemLogger("test/memory-diff") } as never,
+    }),
+  );
+  expect(respond.mock.calls).toEqual([
+    [
+      false,
+      undefined,
+      {
+        code: "UNAVAILABLE",
+        message: "Session workspace changed during file access. Retry the diff.",
+        retryable: true,
+      },
+    ],
+  ]);
 });

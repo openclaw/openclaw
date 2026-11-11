@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -6,6 +6,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { createCronTool } from "./cron-tool.js";
 import type { GatewayToolCaller } from "./cron-tool.types.js";
+import * as gatewayModule from "./gateway.js";
 
 it("infers cron creation delivery from the selected global session owner", async () => {
   await withOpenClawTestState({ label: "cron-creation-delivery-owner" }, async (state) => {
@@ -36,10 +37,15 @@ it("infers cron creation delivery from the selected global session owner", async
     const callGatewayTool = vi
       .fn<(...args: Parameters<GatewayToolCaller>) => Promise<never>>()
       .mockRejectedValue(gatewayBoundary);
-    const tool = createCronTool(
-      { agentSessionKey: "global", agentId: "ops", currentDeliveryContext: {} },
-      { callGatewayTool },
-    );
+    const gatewaySpy = vi
+      .spyOn(gatewayModule, "callGatewayTool")
+      .mockImplementation(callGatewayTool);
+    onTestFinished(() => gatewaySpy.mockRestore());
+    const tool = createCronTool({
+      agentSessionKey: "global",
+      agentId: "ops",
+      currentDeliveryContext: {},
+    });
 
     await expect(
       tool.execute("create-global-job", {

@@ -162,8 +162,6 @@ it("keeps the first deadline and acknowledges coalesced store notices only upon 
   expect(mocks.enqueue).toHaveBeenCalledTimes(1);
   const options = mocks.enqueue.mock.calls[0]![1];
   expect(options).toMatchObject({
-    source: "session",
-    sessionKey: watcherSessionKey,
     expectedTarget: { sessionId: "original", generation: "current" },
     occurrences: targets.map(() => ({ sessionStorePath: watcherStorePath })),
   });

@@ -136,6 +136,11 @@ id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
 | `mentionPatterns`            | `[]`                | Mention patterns for this account in group channels. See [Group mention gating](#group-mention-gating).               |
 | `groups`                     | `{}`                | Per-channel group policy overrides keyed by ClickClack channel ID. See [Group mention gating](#group-mention-gating). |
 
+The realtime WebSocket sends standard ping frames. When the server stops
+answering them, OpenClaw drops the connection, reconnects after `reconnectMs`,
+and reads the events it missed from the server backlog. A quiet channel alone
+never triggers a reconnect.
+
 ### Keep an auth-gated public hostname
 
 Use `apiBaseUrl` when ClickClack and the OpenClaw gateway run on the same host

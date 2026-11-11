@@ -53,6 +53,35 @@ import { validatePluginSchemaValue } from "./schema-validator.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 
+export type PreparedPluginConfig = {
+  input: string | undefined;
+  validation?: ReturnType<typeof validatePluginConfig>;
+};
+
+export function prepareRuntimePluginConfig(params: {
+  candidate: PluginCandidate;
+  manifestRecord: PluginManifestRecord;
+  context: PluginLoadCacheContext;
+  preparedConfig: PreparedPluginConfig;
+}) {
+  const { candidate, manifestRecord, context, preparedConfig } = params;
+  if (!preparedConfig.validation) {
+    const policyId = normalizePluginPolicyId(manifestRecord.id);
+    preparedConfig.validation = validatePluginConfig({
+      origin: candidate.origin,
+      schema: manifestRecord.configSchema,
+      cacheKey: manifestRecord.schemaCacheKey,
+      value: context.normalized.entries[policyId]?.config,
+      sourceValue: manifestRecord.configContracts?.secretInputs
+        ? context.activationSource.plugins.entries[policyId]?.config
+        : undefined,
+    });
+    // Snapshot before plugin code can mutate the settings passed through its API.
+    preparedConfig.input = JSON.stringify(preparedConfig.validation);
+  }
+  return preparedConfig.validation;
+}
+
 export function detailPluginStartupTrace(
   startupTrace: PluginLoadOptions["startupTrace"] | undefined,
   pluginId: string,
@@ -169,8 +198,9 @@ export function createPluginCandidatesFromManifestRegistry(
 }
 
 export class PluginLoadFailureError extends Error {
-  readonly pluginIds: string[];
   readonly registry: PluginRegistry;
+  /** Every failure is a plugin held back until Doctor runs its pending state migration. */
+  readonly onlyPendingStateMigrations: boolean;
 
   constructor(registry: PluginRegistry, failedPlugins: readonly PluginRecord[]) {
     const summary = failedPlugins
@@ -178,8 +208,13 @@ export class PluginLoadFailureError extends Error {
       .join("; ");
     super(`plugin load failed: ${summary}`);
     this.name = "PluginLoadFailureError";
-    this.pluginIds = failedPlugins.map((entry) => entry.id);
     this.registry = registry;
+    this.onlyPendingStateMigrations = failedPlugins.every((entry) =>
+      registry.diagnostics.some(
+        (diagnostic) =>
+          diagnostic.pluginId === entry.id && diagnostic.code === "plugin-state-migration",
+      ),
+    );
   }
 }
 
@@ -282,6 +317,8 @@ function createManifestPluginRecord(params: {
     activationState: params.activationState,
     channelIds: manifestRecord.channels,
     providerIds: manifestRecord.providers,
+    declaredContextEngineIds: manifestRecord.contextEngineIds,
+    turnHandover: manifestRecord.reload?.turnHandover === true,
     configSchema: Boolean(manifestRecord.configSchema),
   });
   if (!params.shouldLoadModules) {

@@ -4,6 +4,7 @@ import type {
   CliBackendPlugin,
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -77,6 +78,30 @@ function projectClaudeNativeToolAuthority(nativeTools: readonly string[]): reado
         .map(([, capability]) => capability),
     ),
   ];
+}
+
+// Agent and Workflow descendants inherit the parent's tool list, so they confer no
+// capability of their own. WebSearch runs on Anthropic's servers and confers web_search,
+// which core keeps only while the turn's OpenClaw policy offers it. Order is canonical:
+// equivalent selections launch one argv.
+const CLAUDE_MANAGED_NATIVE_TOOLS = ["Agent", "Workflow", "WebSearch"] as const;
+
+/** Operator selection under `plugins.entries.anthropic.config.managedNativeTools`. */
+function resolveClaudeManagedNativeTools(
+  ctx: Parameters<NonNullable<CliBackendPlugin["resolveManagedNativeTools"]>>[0],
+): readonly string[] {
+  const pluginConfig = ctx.config?.plugins?.entries?.anthropic?.config;
+  const selection = isRecord(pluginConfig) ? pluginConfig.managedNativeTools : undefined;
+  if (!isRecord(selection)) {
+    return [];
+  }
+  const agents = isRecord(selection.agents) ? selection.agents : undefined;
+  const selected = Object.hasOwn(agents ?? {}, ctx.agentId)
+    ? agents?.[ctx.agentId]
+    : selection.default;
+  return Array.isArray(selected)
+    ? CLAUDE_MANAGED_NATIVE_TOOLS.filter((name) => selected.includes(name))
+    : [];
 }
 
 function createClaudeCliAuthInput(params: {
@@ -186,6 +211,8 @@ export function buildAnthropicCliBackend(
     transformSystemPrompt: ({ systemPrompt, openClawMcpToolNames }) =>
       appendClaudeCliToolNamingGuidance(systemPrompt, openClawMcpToolNames),
     projectNativeToolAuthority: projectClaudeNativeToolAuthority,
+    resolveManagedNativeTools: resolveClaudeManagedNativeTools,
+    nativeToolSearch: "ToolSearch",
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
     manualCompaction: {
@@ -282,9 +309,18 @@ export function buildAnthropicCliBackend(
           // the conversation prefix after workspace edits or commits. OpenClaw
           // supplies workspace instructions; Git state can be read with tools.
           CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
+          ...(context.toolAvailability
+            ? {
+                ENABLE_TOOL_SEARCH:
+                  context.toolAvailability.discovery?.includes("ToolSearch") ||
+                  context.toolAvailability.native.includes("ToolSearch")
+                    ? "true"
+                    : "false",
+              }
+            : {}),
           ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
           ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
-          ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
+          ...resolveClaudeCliThinkingEnv(context.thinkingLevel),
           ...authInput?.env,
         };
         return {

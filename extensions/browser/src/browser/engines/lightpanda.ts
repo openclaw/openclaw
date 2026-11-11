@@ -66,7 +66,6 @@ export const lightpandaEngine: BrowserEngineAdapter = {
       usesChromeMcp: false,
       usesPersistentPlaywright: true,
       supportsPerTabWs: false,
-      supportsJsonTabEndpoints: false,
       supportsReset: false,
       supportsManagedTabLimit: false,
       supportsBatchActions: false,
@@ -80,10 +79,7 @@ export const lightpandaEngine: BrowserEngineAdapter = {
       supportsVisualActions: false,
       supportsUploads: false,
       supportsDialogs: false,
-      supportsStorage: false,
-      supportsScreencast: false,
       supportsConsole: false,
-      supportsMultipleTabs: false,
       supportsNativeSnapshots: false,
       requiresCompleteTargetEnumeration: false,
     };

@@ -1,11 +1,6 @@
-import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-  WORKER_RPC_SET_VERSION,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { expect, it, vi } from "vitest";
+import { WORKER_RPC_SET_VERSION } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
 import { StaleWorkerBuildError } from "./admission.js";
@@ -17,40 +12,33 @@ import {
   workspaceTransfer,
 } from "./node-worker-tunnel.test-support.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
+import { WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createProviderReplayDispatch } from "./provider-replay.test-support.js";
 import { createWorkerEnvironmentService } from "./service.js";
 import { BUNDLE_ARTIFACT, createProvider } from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
-import { executeTurn } from "./worker-turn-launcher-flow.test-support.js";
+import { executeTurn, installLauncherTest } from "./worker-turn-launcher-flow.test-support.js";
 import {
   ENVIRONMENT_ID,
   SESSION_ID,
   SESSION_KEY,
-  cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   database,
   placements,
   root,
-  setupWorkerTurnLauncherTest,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
-afterAll(closeStateDatabaseForTest);
-
-beforeEach(setupWorkerTurnLauncherTest);
-afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
+installLauncherTest();
 
 it("settles a stale-build turn when a lost shared node rejects its stop acknowledgement", async () => {
   const store = await createWorkerEnvironmentStore({ database });
   let installation = {
     ...BUNDLE_ARTIFACT,
-    protocolFeatures: [
-      WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-      WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-    ],
+    protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
   };
   const nodeTransport = transport();
   let rejectStop = true;
@@ -70,7 +58,11 @@ it("settles a stale-build turn when a lost shared node rejects its stop acknowle
     validateWorkerTurn: (claim) => placements.validateTurnClaim(claim),
     workspaceTransfer: workspaceTransfer({ closeAll: vi.fn(async () => {}) }),
   });
-  const inspect = vi.fn(async () => ({ status: "destroyed" as const }));
+  // This regression discovers loss after stale-build rejection, not during fresh admission.
+  let leaseLost = false;
+  const inspect = vi.fn(async () =>
+    leaseLost ? { status: "destroyed" as const } : { status: "active" as const, sharedHost: true },
+  );
   const provider = createProvider({ supportedExecutionModes: ["worker-turn"], inspect });
   const warn = vi.fn();
   const environments = createWorkerEnvironmentService({
@@ -91,7 +83,6 @@ it("settles a stale-build turn when a lost shared node rejects its stop acknowle
       placements,
       environments,
       workspaceOperations,
-      runRecoveryBarrier: async ({ run }) => await run({ kind: "local", path: root }),
       runReclaimBarrier: async ({ begin, reclaim }) =>
         await reclaim({ kind: "local", path: root }, await begin()),
       ...createWorkerWorkspaceRecoveryFixture({
@@ -164,7 +155,19 @@ it("settles a stale-build turn when a lost shared node rejects its stop acknowle
       },
     );
     installation = { ...installation, bundleHash: "d".repeat(64) };
-    const startTunnel = vi.spyOn(environments, "startTunnel");
+    const start = environments.startTunnel.bind(environments);
+    const startTunnel = vi
+      .spyOn(environments, "startTunnel")
+      .mockImplementation(async (...args) => {
+        try {
+          return await start(...args);
+        } catch (error) {
+          if (error instanceof StaleWorkerBuildError) {
+            leaseLost = true;
+          }
+          throw error;
+        }
+      });
     const launcher = createWorkerSessionTurnPlacementProvider({
       placements,
       environments,
@@ -176,14 +179,16 @@ it("settles a stale-build turn when a lost shared node rejects its stop acknowle
 
     expect(startTunnel).toHaveBeenCalledOnce();
     await expect(startTunnel.mock.results[0]?.value).rejects.toBeInstanceOf(StaleWorkerBuildError);
-    expect(inspect).toHaveBeenCalledOnce();
+    expect(inspect).toHaveBeenCalledTimes(2);
     expect(stopRequests).toHaveBeenCalled();
     expect(store.getCredential(ENVIRONMENT_ID)).toBeUndefined();
     expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });
     expect(failure).toBeInstanceOf(Error);
     expect(warn).toHaveBeenCalledWith(
-      `Worker environment reconcile failed (${ENVIRONMENT_ID}, ${provider.id})`,
+      expect.stringContaining(
+        `Worker environment reconcile failed (${ENVIRONMENT_ID}, ${provider.id})`,
+      ),
     );
   } finally {
     rejectStop = false;

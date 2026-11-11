@@ -3,6 +3,7 @@ import type {
   AudioTranscriptionResult,
 } from "openclaw/plugin-sdk/media-understanding";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { setDeepgramQueryParam } from "./audio-query.js";
 
 export const DEFAULT_DEEPGRAM_AUDIO_BASE_URL = "https://api.deepgram.com/v1";
 export const DEFAULT_DEEPGRAM_AUDIO_MODEL = "nova-3";
@@ -80,7 +81,7 @@ export async function transcribeDeepgramAudio(
       if (value === undefined) {
         continue;
       }
-      url.searchParams.set(key, String(value));
+      setDeepgramQueryParam(url.searchParams, key, value);
     }
   }
 

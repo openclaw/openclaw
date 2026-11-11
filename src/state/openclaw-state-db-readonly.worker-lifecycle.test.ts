@@ -82,6 +82,11 @@ vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => ({
     };
   },
 }));
+vi.mock("./openclaw-state-db-readonly-reuse.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-state-db-readonly-reuse.js")>()),
+  // These borrowed handles are fakes; image sharing has its own work-count tests.
+  canReadWarmNativeSourceIndependently: () => false,
+}));
 vi.mock("../infra/sqlite-readonly-location-cleanup.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-readonly-location-cleanup.js")>()),
   // Preparation is mocked; this fixture has no private directory to retain.
@@ -289,10 +294,12 @@ it("retries transport stop and settles the already-selected query", async () => 
   const observed = settle(preserveArtifacts(read));
   await started.promise;
   await expect(closePath(options.path)).rejects.toBe(failure);
+  expect(mock.closePreparation).not.toHaveBeenCalled();
   expect(mock.cleanup).not.toHaveBeenCalled();
   await expect(closePath(options.path)).resolves.toBe(false);
   expect(mock.close).toHaveBeenCalledTimes(2);
   expect(mock.cleanup).toHaveBeenCalledTimes(1);
+  expect(mock.closePreparation).toHaveBeenCalledOnce();
   expect(await observed).toEqual({
     value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
   });

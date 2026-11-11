@@ -20,25 +20,16 @@ type TlonHistoryEntry = {
   author: string;
   content: string;
   timestamp: number;
-  id?: string;
 };
 
 function createHistoryEntryFromMemo(params: {
   memo?: Record<string, unknown> | null;
-  seal?: Record<string, unknown> | null;
-  fallbackId?: unknown;
 }): TlonHistoryEntry {
-  const { memo, seal, fallbackId } = params;
+  const { memo } = params;
   return {
     author: typeof memo?.author === "string" ? memo.author : "unknown",
     content: extractMessageText(memo?.content || []),
     timestamp: typeof memo?.sent === "number" ? memo.sent : Date.now(),
-    id:
-      typeof seal?.id === "string"
-        ? seal.id
-        : typeof fallbackId === "string"
-          ? fallbackId
-          : undefined,
   };
 }
 
@@ -47,11 +38,10 @@ const MAX_CACHED_MESSAGES = 100;
 async function fetchChannelHistory(
   api: { scry: (path: string) => Promise<unknown> },
   channelNest: string,
-  count = 50,
   runtime?: RuntimeEnv,
 ): Promise<TlonHistoryEntry[]> {
   try {
-    const scryPath = `/channels/v4/${channelNest}/posts/newest/${count}/outline.json`;
+    const scryPath = `/channels/v4/${channelNest}/posts/newest/50/outline.json`;
     runtime?.log?.(`[tlon] Fetching history: ${scryPath}`);
 
     const data: unknown = await api.scry(scryPath);
@@ -70,9 +60,8 @@ async function fetchChannelHistory(
         const replyPost = asRecord(itemRecord?.["r-post"]);
         const replyPostSet = asRecord(replyPost?.set);
         const essay = asRecord(itemRecord?.essay) ?? asRecord(replyPostSet?.essay);
-        const seal = asRecord(itemRecord?.seal) ?? asRecord(replyPostSet?.seal);
 
-        return createHistoryEntryFromMemo({ memo: essay, seal });
+        return createHistoryEntryFromMemo({ memo: essay });
       })
       .filter((msg) => msg.content);
 
@@ -101,19 +90,16 @@ export function createChannelHistoryCache() {
     async getChannelHistory(
       api: { scry: (path: string) => Promise<unknown> },
       channelNest: string,
-      count = 50,
       runtime?: RuntimeEnv,
     ): Promise<TlonHistoryEntry[]> {
       const cache = messageCache.get(channelNest) ?? [];
-      if (cache.length >= count) {
+      if (cache.length >= 50) {
         runtime?.log?.(`[tlon] Using cached messages (${cache.length} available)`);
-        return cache.slice(0, count);
+        return cache.slice(0, 50);
       }
 
-      runtime?.log?.(
-        `[tlon] Cache has ${cache.length} messages, need ${count}, fetching from scry...`,
-      );
-      return await fetchChannelHistory(api, channelNest, count, runtime);
+      runtime?.log?.(`[tlon] Cache has ${cache.length} messages, need 50, fetching from scry...`);
+      return await fetchChannelHistory(api, channelNest, runtime);
     },
   };
 }
@@ -144,7 +130,6 @@ export async function fetchThreadHistory(
   api: { scry: (path: string) => Promise<unknown> },
   channelNest: string,
   parentId: string,
-  count = 50,
   runtime?: RuntimeEnv,
 ): Promise<TlonHistoryEntry[]> {
   try {
@@ -154,7 +139,7 @@ export async function fetchThreadHistory(
       `[tlon] Thread history - parentId: ${parentId} -> formatted: ${formattedParentId}`,
     );
 
-    const scryPath = `/channels/v4/${channelNest}/posts/post/id/${formattedParentId}/replies/newest/${count}.json`;
+    const scryPath = `/channels/v4/${channelNest}/posts/post/id/${formattedParentId}/replies/newest/20.json`;
     runtime?.log?.(`[tlon] Fetching thread history: ${scryPath}`);
 
     const data: unknown = await api.scry(scryPath);
@@ -185,9 +170,8 @@ export async function fetchThreadHistory(
         const replyRecord = asRecord(itemRecord?.["r-reply"]);
         const replySet = asRecord(replyRecord?.set);
         const memo = asRecord(itemRecord?.memo) ?? asRecord(replySet?.memo) ?? itemRecord;
-        const seal = asRecord(itemRecord?.seal) ?? asRecord(replySet?.seal);
 
-        return createHistoryEntryFromMemo({ memo, seal, fallbackId: itemRecord?.id });
+        return createHistoryEntryFromMemo({ memo });
       })
       .filter((msg) => msg.content);
 
@@ -211,8 +195,7 @@ export async function fetchThreadHistory(
           .map((reply: unknown) => {
             const replyRecord = asRecord(reply);
             const memo = asRecord(replyRecord?.memo);
-            const seal = asRecord(replyRecord?.seal);
-            return createHistoryEntryFromMemo({ memo, seal });
+            return createHistoryEntryFromMemo({ memo });
           })
           .filter((msg: TlonHistoryEntry) => msg.content);
 

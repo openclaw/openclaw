@@ -6,7 +6,7 @@ import {
   appendSessionTranscriptMessageByIdentity,
   readSessionTranscriptEvents,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
@@ -14,25 +14,50 @@ import {
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
   createResumeHarness,
+  createStartedThreadHarness as createFreshThreadHarness,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
+  threadStartResult,
 } from "./run-attempt-test-harness.js";
 import {
   createContextEngine,
   createStartedThreadHarness,
+  writeCodexAppServerBinding,
 } from "./run-attempt.context-engine.test-support.js";
-import { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
+async function mediaParams(name: string) {
+  const sessionId = `session-${name}`;
+  const workspaceDir = path.join(tempDir, name);
+  await fs.mkdir(workspaceDir, { recursive: true });
+  const params = createParams(`agent:main:${sessionId}`, workspaceDir);
+  await attachSqliteSessionTarget(params, path.join(tempDir, `${name}.sqlite`), sessionId);
+  const target = {
+    agentId: "main",
+    sessionId,
+    sessionKey: params.sessionKey!,
+    storePath: params.sessionTarget!.storePath!,
+  };
+  return {
+    params,
+    target,
+    async append<T extends { timestamp: number }>(this: void, message: T) {
+      await appendSessionTranscriptMessageByIdentity({
+        ...target,
+        message,
+        now: message.timestamp,
+      });
+      return message;
+    },
+  };
+}
+
 describe("Codex attachment continuity", () => {
   it("rejects real restored-document overage before native effects instead of clipping it", async () => {
-    const sessionId = "session-selected-document";
-    const workspaceDir = path.join(tempDir, "selected-document");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    const params = createParams(`agent:main:${sessionId}`, workspaceDir);
+    const { params, append } = await mediaParams("selected-document");
     params.authoredContextTokenCap = 8_192;
     params.contextTokenBudget = 8_192;
     params.contextWindowInfo = {
@@ -41,17 +66,6 @@ describe("Codex attachment continuity", () => {
       source: "agentContextTokens",
     };
     params.model = { ...params.model, maxTokens: 256 };
-    await attachSqliteSessionTarget(
-      params,
-      path.join(tempDir, "selected-document.sqlite"),
-      sessionId,
-    );
-    const target = {
-      agentId: "main",
-      sessionId,
-      sessionKey: params.sessionKey!,
-      storePath: params.sessionTarget!.storePath!,
-    };
     const saved = await saveMediaBuffer(
       Buffer.from(`SAVED_DOCUMENT_PREFIX\n${"d".repeat(100_000)}\nSAVED_DOCUMENT_TAIL`),
       "text/plain",
@@ -60,7 +74,7 @@ describe("Codex attachment continuity", () => {
       "oversized.txt",
     );
     const timestamp = Date.now();
-    const sourceMessage = {
+    const sourceMessage = await append({
       role: "user" as const,
       content: "",
       timestamp,
@@ -75,11 +89,6 @@ describe("Codex attachment continuity", () => {
           },
         ],
       },
-    };
-    await appendSessionTranscriptMessageByIdentity({
-      ...target,
-      message: sourceMessage,
-      now: timestamp,
     });
     params.contextEngine = createContextEngine({
       assemble: async ({ messages }) => ({
@@ -209,126 +218,217 @@ describe("Codex attachment continuity", () => {
       closeHost();
     }
   });
-  it.each(["current", "closed"] as const)(
-    "restores real image bytes with exact source ownership (%s)",
-    async (mode) => {
-      const sessionId = "session-continuity-images";
-      const sessionFile = `agent:main:${sessionId}`;
-      const storePath = path.join(tempDir, "image-continuity.sqlite");
-      const workspaceDir = path.join(tempDir, "image-workspace");
-      await fs.mkdir(workspaceDir, { recursive: true });
-      const params = createParams(sessionFile, workspaceDir);
-      params.model = { ...params.model, input: ["text", "image"] };
-      await attachSqliteSessionTarget(params, storePath, sessionId);
-      const target = { agentId: "main", sessionId, sessionKey: params.sessionKey!, storePath };
-      const cutoff = Date.now();
-      await writeCodexAppServerBinding(sessionFile, {
-        threadId: "thread-existing",
-        cwd: workspaceDir,
-        model: params.modelId,
-        modelProvider: "openai",
-        historyCoveredThrough: new Date(cutoff).toISOString(),
-        dynamicToolsFingerprint: "[]",
-        webSearchThreadConfigFingerprint: JSON.stringify({
-          "features.standalone_web_search": false,
-          web_search: "disabled",
-        }),
+  it.each([
+    "current",
+    "closed",
+    "telegram-current",
+    "telegram-current-omitted",
+    "telegram-current-omitted-mixed",
+    "telegram-engine",
+    "telegram-history",
+    "telegram-path",
+    "telegram-sticker",
+    "telegram-mixed",
+    "telegram-missing",
+  ] as const)("restores real image bytes with exact source ownership (%s)", async (mode) => {
+    const { params, target, append } = await mediaParams("continuity-images");
+    params.model = { ...params.model, input: ["text", "image"] };
+    const telegram = mode.startsWith("telegram-");
+    if (telegram) {
+      params.messageChannel = "telegram";
+    }
+    if (mode === "telegram-engine") {
+      params.contextEngine = createContextEngine({
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 42 }),
       });
-      const blue = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
-      const green = createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 });
-      const image = {
-        type: "image" as const,
-        mimeType: "image/png",
-        data: blue.toString("base64"),
-      };
-      const saved = await saveMediaBuffer(blue, "image/png", "inbound", undefined, "blue.png");
-      const historical = {
+    }
+    const currentPixelsOmitted = mode.startsWith("telegram-current-omitted");
+    const hasCurrentImage =
+      !currentPixelsOmitted &&
+      mode !== "closed" &&
+      mode !== "telegram-history" &&
+      mode !== "telegram-missing";
+    const hasCurrentPhoto = hasCurrentImage || currentPixelsOmitted;
+    const cutoff = Date.now();
+    await writeCodexAppServerBinding(params.sessionFile, {
+      threadId: "thread-existing",
+      cwd: params.workspaceDir,
+      model: params.modelId,
+      modelProvider: "openai",
+      historyCoveredThrough: new Date(cutoff).toISOString(),
+      dynamicToolsFingerprint: "[]",
+    });
+    const blue = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    const green = createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 });
+    const red = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    const saved = await saveMediaBuffer(blue, "image/png", "inbound", undefined, "blue.png");
+    const historical = await append({
+      role: "user" as const,
+      timestamp: cutoff + 1,
+      idempotencyKey: "historical-image:user",
+      content: "Read this image.",
+      __openclaw: {
+        media: [
+          mode === "telegram-path"
+            ? { path: saved.path }
+            : {
+                url: `media://inbound/${saved.id}`,
+                contentType: "image/png",
+                fileName: "blue.png",
+                ...(mode === "telegram-sticker" ? { kind: "sticker" } : {}),
+              },
+          ...(mode === "telegram-mixed"
+            ? [
+                {
+                  url: `media://inbound/${(await saveMediaBuffer(Buffer.from("retained document"), "text/plain", "inbound", undefined, "note.txt")).id}`,
+                  contentType: "text/plain",
+                  fileName: "note.txt",
+                },
+              ]
+            : []),
+        ],
+        mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
+      },
+    });
+    const album = [green, red].map((png) => ({
+      type: "image" as const,
+      mimeType: "image/png",
+      data: png.toString("base64"),
+    }));
+    params.prompt = hasCurrentPhoto ? "Read this image." : "Can you hear me?";
+    if (mode === "telegram-history" || mode === "telegram-missing") {
+      await append({
         role: "user" as const,
-        timestamp: cutoff + 1,
-        idempotencyKey: "historical-image:user",
-        content: "Read this image.",
-        __openclaw: {
-          media: [
-            { url: `media://inbound/${saved.id}`, contentType: "image/png", fileName: "blue.png" },
-          ],
-          mediaImageLayout: {
-            slots: [{ kind: "offloaded", factIndex: 0 }],
-          },
+        timestamp: cutoff + 2,
+        idempotencyKey: "latest-album:user",
+        content:
+          mode === "telegram-history"
+            ? [{ type: "text" as const, text: "Latest album caption." }, ...album]
+            : "Latest unavailable photo.",
+        __openclaw:
+          mode === "telegram-missing"
+            ? { media: [{ url: "media://inbound/missing.png", contentType: "image/png" }] }
+            : {},
+      });
+      await append({ role: "user" as const, content: "Text after album.", timestamp: cutoff + 3 });
+    }
+    if (hasCurrentPhoto) {
+      const currentImages = currentPixelsOmitted ? [] : telegram ? album : album.slice(0, 1);
+      params.images = currentImages;
+      const current = await append({
+        role: "user" as const,
+        timestamp: cutoff + 2,
+        idempotencyKey: "current-image:user",
+        content: [{ type: "text" as const, text: params.prompt }, ...currentImages],
+        ...(currentPixelsOmitted
+          ? {
+              __openclaw: {
+                media: [
+                  {
+                    url: `media://inbound/${(await saveMediaBuffer(green, "image/png", "inbound", undefined, "current.png")).id}`,
+                    contentType: "image/png",
+                    hydrationSuppressed: true,
+                  },
+                  ...(mode === "telegram-current-omitted-mixed"
+                    ? [
+                        {
+                          url: `media://inbound/${(await saveMediaBuffer(Buffer.from("current document"), "text/plain", "inbound", undefined, "current.txt")).id}`,
+                          contentType: "text/plain",
+                        },
+                      ]
+                    : []),
+                ],
+              },
+            }
+          : {}),
+      });
+      // Model an already committed current source with no read fence, so both
+      // rows enter projection and only exact current-source identity removes it.
+      params.userTurnTranscriptRecorder = {
+        // Deferred media resolution can leave the original input snapshot text-only.
+        message: mode === "telegram-current-omitted" ? { ...current, __openclaw: {} } : current,
+        resolveMessage: async () => current,
+        getAdmissionReceipt: () => undefined,
+        markRuntimePersistencePending: () => {},
+        markRuntimePersisted: () => {},
+        markBlocked: () => {},
+        hasPersisted: () => true,
+        isBlocked: () => false,
+        hasRuntimePersistencePending: () => false,
+        waitForRuntimePersistence: async () => {},
+        persistApproved: async () => undefined,
+        persistBlocked: async () => undefined,
+        persistFallback: async () => undefined,
+      };
+    }
+    const abort = new AbortController();
+    params.abortSignal = abort.signal;
+    const started = createDeferred<void>();
+    params.onAgentEvent = (event) => {
+      if (event.stream === "lifecycle" && event.data.phase === "start") {
+        started.resolve();
+      }
+    };
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    if (mode === "closed") {
+      const prepare = params.hostCapabilities.prepareContextMedia!;
+      params.hostCapabilities = {
+        ...params.hostCapabilities,
+        prepareContextMedia: async (request) => {
+          const prepared = await prepare(request);
+          expect(prepared.images).toHaveLength(1);
+          closeHost();
+          return prepared;
         },
       };
-      await appendSessionTranscriptMessageByIdentity({
-        ...target,
-        message: historical,
-        now: cutoff + 1,
-      });
-      params.prompt = mode === "current" ? "Read this image." : "Can you hear me?";
-      if (mode === "current") {
-        const currentImage = { ...image, data: green.toString("base64") };
-        params.images = [currentImage];
-        const current = {
-          role: "user" as const,
-          timestamp: cutoff + 2,
-          idempotencyKey: "current-image:user",
-          content: [{ type: "text" as const, text: params.prompt }, currentImage],
-        };
-        await appendSessionTranscriptMessageByIdentity({
-          ...target,
-          message: current,
-          now: cutoff + 2,
-        });
-        // Model an already committed current source with no read fence, so both
-        // rows enter projection and only exact current-source identity removes it.
-        params.userTurnTranscriptRecorder = {
-          message: current,
-          resolveMessage: async () => current,
-          getAdmissionReceipt: () => undefined,
-          markRuntimePersistencePending: () => {},
-          markRuntimePersisted: () => {},
-          markBlocked: () => {},
-          hasPersisted: () => true,
-          isBlocked: () => false,
-          hasRuntimePersistencePending: () => false,
-          waitForRuntimePersistence: async () => {},
-          persistApproved: async () => undefined,
-          persistBlocked: async () => undefined,
-          persistFallback: async () => undefined,
-        };
-      }
-      const abort = new AbortController();
-      params.abortSignal = abort.signal;
-      const started = createDeferred<void>();
-      params.onAgentEvent = (event) => {
-        if (event.stream === "lifecycle" && event.data.phase === "start") {
-          started.resolve();
-        }
-      };
-      const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    }
+    vi.useFakeTimers();
+    const threadId = mode === "telegram-engine" ? "thread-new" : "thread-existing";
+    const harness =
+      mode === "telegram-engine"
+        ? createFreshThreadHarness(async (method) =>
+            method === "thread/start"
+              ? threadStartResult(threadId, { cwd: params.workspaceDir })
+              : undefined,
+          )
+        : createResumeHarness();
+    const run = runCodexAppServerAttempt(params);
+    try {
       if (mode === "closed") {
-        const prepare = params.hostCapabilities.prepareContextMedia!;
-        params.hostCapabilities = {
-          ...params.hostCapabilities,
-          prepareContextMedia: async (request) => {
-            const prepared = await prepare(request);
-            expect(prepared.images).toHaveLength(1);
-            closeHost();
-            return prepared;
-          },
-        };
-      }
-      vi.useFakeTimers();
-      const harness = createResumeHarness();
-      const run = runCodexAppServerAttempt(params);
-      try {
-        if (mode === "closed") {
-          await expect(run).rejects.toThrow(/active|closed|authority/i);
-          expect(harness.requests.filter((request) => request.method === "turn/start")).toEqual([]);
+        await expect(run).rejects.toThrow(/active|closed|authority/i);
+        expect(harness.requests.filter((request) => request.method === "turn/start")).toEqual([]);
+      } else {
+        await Promise.race([started.promise, run]);
+        await harness.completeTurn({ threadId, turnId: "turn-1" });
+        expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+        const request = harness.requests.find((entry) => entry.method === "turn/start");
+        const input = asOptionalRecord(request?.params)?.input;
+        expect(Array.isArray(input)).toBe(true);
+        if (telegram) {
+          const parts = Array.isArray(input) ? input.map(asOptionalRecord) : [];
+          expect(parts.filter((part) => part?.type === "image")).toEqual([
+            ...(mode === "telegram-mixed"
+              ? [{ type: "image", url: `data:image/png;base64,${blue.toString("base64")}` }]
+              : []),
+            ...(mode === "telegram-missing" || currentPixelsOmitted
+              ? []
+              : [green, red].map((png) => ({
+                  type: "image",
+                  url: `data:image/png;base64,${png.toString("base64")}`,
+                }))),
+          ]);
+          const text = parts.map((part) => readStringValue(part?.text) ?? "").join("\n");
+          expect(text).toContain("Read this image.");
+          expect(text).toContain(saved.id);
+          expect(text).toContain("Current user request:");
+          if (mode === "telegram-history") {
+            expect(text).toContain("Latest album caption.");
+            expect(text).toContain("Text after album.");
+          }
+          if (mode === "telegram-mixed") {
+            expect(text).toContain("retained document");
+          }
         } else {
-          await started.promise;
-          await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
-          expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
-          const request = harness.requests.find((entry) => entry.method === "turn/start");
-          const input = asOptionalRecord(request?.params)?.input;
-          expect(Array.isArray(input)).toBe(true);
           expect(input).toEqual([
             expect.objectContaining({
               type: "text",
@@ -342,21 +442,19 @@ describe("Codex attachment continuity", () => {
               ),
               text_elements: [],
             },
-            ...(mode === "current"
-              ? [{ type: "image", url: `data:image/png;base64,${green.toString("base64")}` }]
-              : []),
+            { type: "image", url: `data:image/png;base64,${green.toString("base64")}` },
           ]);
         }
-        const rows = (await readSessionTranscriptEvents(target)).flatMap((event) => {
-          const message = asOptionalRecord(asOptionalRecord(event)?.message);
-          return message?.idempotencyKey === historical.idempotencyKey ? [message] : [];
-        });
-        expect(rows).toEqual([historical]);
-      } finally {
-        abort.abort("test cleanup");
-        await run.catch(() => undefined);
-        closeHost();
       }
-    },
-  );
+      const rows = (await readSessionTranscriptEvents(target)).flatMap((event) => {
+        const message = asOptionalRecord(asOptionalRecord(event)?.message);
+        return message?.idempotencyKey === historical.idempotencyKey ? [message] : [];
+      });
+      expect(rows).toEqual([historical]);
+    } finally {
+      abort.abort("test cleanup");
+      await run.catch(() => undefined);
+      closeHost();
+    }
+  });
 });

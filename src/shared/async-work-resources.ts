@@ -8,6 +8,36 @@ type AsyncWorkResources = {
   releaseBeforeResultWhenIdle?: true;
 };
 
+// The retained release callback must not capture the foreground producer or result.
+function createContextualCancellationRelay(signal: AbortSignal) {
+  const controller = new AbortController();
+  const context = AsyncLocalStorage.snapshot();
+  const abort = () => context(() => controller.abort(signal.reason));
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) {
+    abort();
+  }
+  return {
+    signal: controller.signal,
+    release: () => signal.removeEventListener("abort", abort),
+  };
+}
+
+/** Preserves cancellation context until cooperating work ends, without delaying its result. */
+export async function runWithTrackedCancellation<T>(
+  signal: AbortSignal,
+  run: (signal: AbortSignal) => T | Promise<T>,
+): Promise<T> {
+  if (!getAsyncWorkSignal()) {
+    return await run(signal);
+  }
+  return await runWithAsyncWorkResources(async (onAcquired) => {
+    const relay = createContextualCancellationRelay(signal);
+    onAcquired({ release: relay.release });
+    return run(relay.signal);
+  });
+}
+
 /** Returns the logical result while retaining resources through owned cleanup. */
 export async function runWithAsyncWorkResources<T>(
   run: (

@@ -42,6 +42,13 @@ function firstPatchConfigCall(): PatchConfigCall {
   return call;
 }
 
+const makeImageResolutionParams = (tempRoot: string) => ({
+  env: { mock: { baseUrl: "http://127.0.0.1:9999" }, gateway: { tempRoot } } as never,
+  promptSnippet: "prompt snippet",
+  startedAtMs: Date.now(),
+  timeoutMs: 2_000,
+});
+
 afterEach(cleanup);
 
 describe("qa suite runtime agent media helpers", () => {
@@ -88,17 +95,9 @@ describe("qa suite runtime agent media helpers", () => {
       },
     ]);
 
-    await expect(
-      resolveGeneratedImagePath({
-        env: {
-          mock: { baseUrl: "http://127.0.0.1:9999" },
-          gateway: { tempRoot },
-        } as never,
-        promptSnippet: "prompt snippet",
-        startedAtMs: Date.now(),
-        timeoutMs: 2_000,
-      }),
-    ).resolves.toBe(mediaPath);
+    await expect(resolveGeneratedImagePath(makeImageResolutionParams(tempRoot))).resolves.toBe(
+      mediaPath,
+    );
     expect(fetchJsonMock).toHaveBeenCalledOnce();
     expect(fetchJsonMock).toHaveBeenCalledWith(expect.any(String), expect.any(Number));
     expect(fetchJsonMock.mock.calls[0]?.[1]).toBeLessThanOrEqual(2_000);
@@ -127,17 +126,9 @@ describe("qa suite runtime agent media helpers", () => {
         },
       ]);
 
-      await expect(
-        resolveGeneratedImagePath({
-          env: {
-            mock: { baseUrl: "http://127.0.0.1:9999" },
-            gateway: { tempRoot },
-          } as never,
-          promptSnippet: "prompt snippet",
-          startedAtMs: Date.now(),
-          timeoutMs: 2_000,
-        }),
-      ).resolves.toBe(freshMediaPath);
+      await expect(resolveGeneratedImagePath(makeImageResolutionParams(tempRoot))).resolves.toBe(
+        freshMediaPath,
+      );
     },
   );
 
@@ -149,17 +140,9 @@ describe("qa suite runtime agent media helpers", () => {
     const mediaPath = path.join(mediaDir, "generated.png");
     await fs.writeFile(mediaPath, "png", "utf8");
 
-    await expect(
-      resolveGeneratedImagePath({
-        env: {
-          mock: { baseUrl: "http://127.0.0.1:9999" },
-          gateway: { tempRoot },
-        } as never,
-        promptSnippet: "prompt snippet",
-        startedAtMs: Date.now(),
-        timeoutMs: 2_000,
-      }),
-    ).resolves.toBe(mediaPath);
+    await expect(resolveGeneratedImagePath(makeImageResolutionParams(tempRoot))).resolves.toBe(
+      mediaPath,
+    );
   });
   it("preserves plugins already allowed by the gateway when configuring media", async () => {
     readConfigSnapshotMock.mockResolvedValue({

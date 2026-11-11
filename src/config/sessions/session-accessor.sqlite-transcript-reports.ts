@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
@@ -12,9 +13,14 @@ import type { SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
-import { getCliHistoryWriter } from "./cli-history-boundary.js";
+import {
+  answerCliHistoryOwnerProbe,
+  cliHistoryWriterFacts,
+  getCliHistoryWriter,
+} from "./cli-history-boundary.js";
 import type {
   SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
@@ -43,10 +49,8 @@ import type {
 } from "./session-accessor.sqlite-transcript-reports.types.js";
 import type { TranscriptReportWorkerTarget } from "./session-accessor.sqlite-transcript-reports.worker.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { withMemoryReportWorker } from "./session-actor-transcript-reports.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
 import type { SessionEntryCurrentCheck } from "./session-entry-current.types.js";
@@ -107,7 +111,11 @@ async function withReportWorker<T>(
     publish: (
       result: Pick<
         TranscriptReportCommit,
-        "projectionNeedsReconcile" | "cliHistoryChanged" | "sessionEntryChanged" | "entry"
+        | "projectionNeedsReconcile"
+        | "cliHistoryChanged"
+        | "sessionEntryChanged"
+        | "entry"
+        | "fullEntry"
       >,
     ) => void,
   ) => Promise<Result<T, TranscriptAppendRefusal>>,
@@ -211,16 +219,7 @@ async function withReportWorker<T>(
       assertTargetCurrent();
       const execution = captureOpenClawAgentDatabaseExecution(
         options,
-        identity.key.startsWith("file:")
-          ? {
-              expectedIdentity: {
-                kind: "file",
-                physicalIdentity: identity.key.slice("file:".length),
-                nativeLocation: identity.canonicalPath,
-                birthtime: identity.birthtime,
-              },
-            }
-          : { expectedCreationIdentity: identity },
+        toAgentExecutionConstraints(identity),
       );
       const cliWriter =
         kind === "append"
@@ -235,15 +234,8 @@ async function withReportWorker<T>(
       const target: TranscriptReportWorkerTarget = {
         resolved: workerResolved,
         sessionEntryCurrentSource: sessionEntryCurrent?.source,
-        ...(cliWriter
-          ? {
-              cliWriter: {
-                runId: cliWriter.runId,
-                authFingerprint: cliWriter.authFingerprint,
-                lifecycleRevision: cliWriter.lifecycleRevision,
-              },
-            }
-          : {}),
+        // Account facts only: the worker asks the host to confirm the owner on each commit.
+        ...(cliWriter ? { cliWriter: cliHistoryWriterFacts(cliWriter) } : {}),
         fence: {
           expectedLifecycleRevision: fenced.expectedLifecycleRevision,
           expectedWriterRunId: fenced.expectedWriterRunId,
@@ -267,10 +259,18 @@ async function withReportWorker<T>(
                     runtimeProcessEntrypoints.sessionTranscriptReports,
                   ),
                   input: target,
-                  assertAdmission: (request) =>
-                    request.stage === "transaction" || request.stage === "commit"
-                      ? assertSessionEntryCurrentAdmission(request, sessionEntryCurrent)
-                      : request,
+                  assertAdmission: (request) => {
+                    const admitted =
+                      request.stage === "transaction" || request.stage === "commit"
+                        ? assertSessionEntryCurrentAdmission(request, sessionEntryCurrent)
+                        : request;
+                    // The worker's coverage check, answered by the host right before the grant.
+                    answerCliHistoryOwnerProbe(
+                      isRecord(admitted.facts) ? admitted.facts.publication : undefined,
+                      cliWriter,
+                    );
+                    return admitted;
+                  },
                 },
               );
             return settleReportOperation(
@@ -285,6 +285,7 @@ async function withReportWorker<T>(
                           databaseIdentity,
                           sessionKey: resolved.sessionKey,
                           entry: publication.entry,
+                          fullEntry: publication.fullEntry,
                         });
                       }
                       if (publication.projectionNeedsReconcile) {

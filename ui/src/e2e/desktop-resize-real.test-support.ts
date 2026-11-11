@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import net, { type Socket } from "node:net";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createServer, type ViteDevServer } from "vite";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { desktopProofTestReport } from "../../../scripts/lib/desktop-resize-proof.mts";
 import { hashWorkerCredential } from "../../../src/gateway/worker-environments/credential.js";
@@ -15,9 +16,58 @@ import {
 import { createWorkerEnvironmentStore } from "../../../src/gateway/worker-environments/store.js";
 import type { WorkerDesktopEndpoint, WorkerSshEndpoint } from "../../../src/plugins/types.js";
 import { runCommandWithTimeout } from "../../../src/process/exec.js";
-import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
+import {
+  acquireTestPortBlock,
+  reserveTestPortListener,
+} from "../../../src/test-utils/port-claims.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import type { DesktopClient } from "../components/desktop/desktop-client.ts";
+
+export async function createDesktopResizeProxy() {
+  // Keep the Gateway, its lazy sandbox (+1), and proxy distinct through startup.
+  const claim = await acquireTestPortBlock({ offsets: [0, 1, 2] });
+  const gatewayPort = claim.port;
+  const proxyPort = gatewayPort + 2;
+  let proxy: ViteDevServer | undefined;
+  const close = () =>
+    runQaGatewayFixture(
+      async () => proxy?.close(),
+      () => claim.release(),
+    );
+  try {
+    proxy = await createServer({
+      configFile: false,
+      envFile: false,
+      appType: "custom",
+      logLevel: "error",
+      // All requests go to the built Gateway; this proxy has no local dependency graph.
+      optimizeDeps: { noDiscovery: true },
+      server: {
+        host: "127.0.0.1",
+        port: proxyPort,
+        strictPort: true,
+        watch: null,
+        proxy: {
+          "/": {
+            target: `http://127.0.0.1:${gatewayPort}`,
+            ws: true,
+            headers: {
+              "x-forwarded-for": "192.0.2.10",
+              "x-forwarded-proto": "http",
+              "x-forwarded-user": "resize-operator@example.test",
+            },
+          },
+        },
+      },
+    });
+    await proxy.listen();
+    return { gatewayPort, baseUrl: `http://127.0.0.1:${proxyPort}/`, close };
+  } catch (error) {
+    return await runQaGatewayFixture(async (): Promise<never> => {
+      throw error;
+    }, close);
+  }
+}
 
 type ViewerResizeFailure = NonNullable<
   ReturnType<typeof desktopProofTestReport>["files"][number]["assertions"][number]["viewerResize"]

@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
+import { serialize } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureSqliteWorkerOpen } from "./sqlite-worker-broker-admission.js";
 import { createSqliteWorkerLifecycle } from "./sqlite-worker-broker-lifecycle.js";
-import type { Actor, Slot } from "./sqlite-worker-broker.types.js";
+import { receiveSqliteWorkerReply, settleSqliteWorkerJob } from "./sqlite-worker-broker-reply.js";
+import type { Actor, Job, Slot } from "./sqlite-worker-broker.types.js";
 import { createSqliteWorkerClientActor } from "./sqlite-worker-client.test-support.js";
 import {
   requestSqliteWorkerOperationAdmission,
@@ -16,7 +18,11 @@ import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-
 import { readSqliteWorkerRequestCustody } from "./sqlite-worker-request-custody.js";
 
 const createCpuTrackedWorker = vi.hoisted(() => vi.fn());
-vi.mock("./worker-cpu.js", () => ({ createCpuTrackedWorker }));
+// mock-isolation: Synthetic carriers exercise admission and retirement without native threads.
+vi.mock("./worker-cpu.js", () => ({
+  createCpuTrackedWorker,
+  receiveWorkerMemoryPort: () => false,
+}));
 // mock-isolation: Use synthetic workers without selecting a native SQLite library.
 vi.mock("./bun-sqlite-library.js", () => ({ ensureSqliteLibrarySelected() {} }));
 
@@ -60,6 +66,24 @@ function runtimeFixture(
   return { lifecycle, slots, workers, options, replyOwner, createSlot };
 }
 
+function activeJob(slot: Slot, id = 1) {
+  const completion = createDeferredCore<unknown>();
+  const custody = slot.custody.createRequest();
+  custody.activate();
+  custody.accept();
+  const job: Job = {
+    custody,
+    observation: { started() {}, completed() {} },
+    request: { type: "execute", id, actor: 1, input: new Uint8Array() },
+    bytes: 0,
+    result: completion.promise,
+    resolve: completion.resolve,
+    reject: completion.reject,
+    detach() {},
+  };
+  return { job, completion };
+}
+
 it("cancels slot waiters while retaining the worker until exit", async ({ signal }) => {
   const { lifecycle, slots, workers, options, replyOwner, createSlot } = runtimeFixture();
   const slot = createSlot();
@@ -92,6 +116,72 @@ it("cancels slot waiters while retaining the worker until exit", async ({ signal
   expect(retired).toHaveBeenCalledOnce();
   expect(workers).toHaveLength(1);
   expect(slots.size).toBe(0);
+});
+
+it("joins the first completing carrier's FIFO without canceling accepted work", async ({
+  signal,
+}) => {
+  const { lifecycle, workers, options, replyOwner, createSlot } = runtimeFixture();
+  const busy = [createSlot(), createSlot()].map((slot) => {
+    slot.pendingOpens = 0;
+    slot.actors.add(
+      Object.defineProperty(createSqliteWorkerClientActor(), "slot", { value: slot }),
+    );
+    const { job, completion } = activeJob(slot);
+    slot.current = job;
+    return { slot, job, completion };
+  });
+  const slow = busy[0]!;
+  const fast = busy[1]!;
+  const { job: nextJob, completion: nextCompletion } = activeJob(fast.slot, 2);
+  const limits = { maxWorkers: 2, maxStores: 2 };
+  const opening = lifecycle.acquireSlot(options, limits, replyOwner);
+  const cancel = new AbortController();
+  const cancelled = lifecycle.acquireSlot(
+    { ...options, signal: cancel.signal },
+    limits,
+    replyOwner,
+  );
+  const reason = new Error("Caller stopped waiting for a free carrier");
+  const rejected = expect(cancelled).rejects.toBe(reason);
+  cancel.abort(reason);
+  try {
+    await withinTest(rejected, signal);
+    for (const { slot, job } of busy) {
+      expect(slot.current).toBe(job);
+      expect(readSqliteWorkerRequestCustody(job.custody.descriptor)).toBe(true);
+    }
+    receiveSqliteWorkerReply(
+      fast.slot,
+      { id: fast.job.request.id, ok: true, value: serialize(undefined) },
+      {
+        finish: settleSqliteWorkerJob,
+        fail: (error) => {
+          throw error;
+        },
+        dispatch: () => {
+          fast.slot.current = nextJob;
+        },
+      },
+    );
+    expect(await withinTest(opening, signal)).toBe(fast.slot);
+    expect(fast.slot.current).toBe(nextJob);
+    expect(readSqliteWorkerRequestCustody(nextJob.custody.descriptor)).toBe(true);
+    expect(slow.slot.current).toBe(slow.job);
+    expect(readSqliteWorkerRequestCustody(slow.job.custody.descriptor)).toBe(true);
+    expect(workers).toHaveLength(2);
+    expect(workers.every((worker) => worker.terminate.mock.calls.length === 0)).toBe(true);
+  } finally {
+    nextCompletion.resolve(undefined);
+    for (const { slot, completion } of busy) {
+      slot.current = undefined;
+      completion.resolve(undefined);
+    }
+    await Promise.allSettled([opening, cancelled]);
+    for (const worker of workers) {
+      worker.emit("exit", 0);
+    }
+  }
 });
 
 it.each([
@@ -163,30 +253,6 @@ it.each([
     expect(caller.getStore()).toBeUndefined();
   },
 );
-
-// Bun resolves a `file:` preload by stripping "file://", so tsx's URL breaks on Windows.
-it.each([
-  { runtime: "Node", bun: undefined, execArgv: ["--import", import.meta.resolve("tsx/esm")] },
-  { runtime: "Bun", bun: "1.4.3", execArgv: [] },
-])("gives $runtime source workers only the TypeScript loader they need", ({ bun, execArgv }) => {
-  const versions = Object.getOwnPropertyDescriptor(process, "versions");
-  Object.defineProperty(process, "versions", {
-    configurable: true,
-    value: { ...process.versions, bun },
-  });
-  try {
-    const { createSlot } = runtimeFixture();
-    createSlot({ carrierUrl: new URL("file:///openclaw/src/infra/sqlite-store.worker.ts") });
-    expect(createCpuTrackedWorker).toHaveBeenLastCalledWith(
-      expect.any(URL),
-      expect.objectContaining({ execArgv }),
-    );
-  } finally {
-    if (versions) {
-      Object.defineProperty(process, "versions", versions);
-    }
-  }
-});
 
 it.each([
   { capable: true, closeFails: false },

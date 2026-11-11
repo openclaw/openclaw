@@ -129,9 +129,6 @@ export async function listSecretStoreEntries(
     },
     { context, current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "secrets.metadata")) {
-    throw new Error("Unexpected secret store metadata result.");
-  }
   // Returned values reach the host redaction owner before any caller can consume them.
   const entries = (reply?.rows ?? []).map(toMetadata);
   context.admission.assertCurrent();
@@ -142,13 +139,11 @@ export async function listSecretStoreEntries(
 /** Atomically returns and hard-deletes one exact fresh, non-egress GitHub setup handoff. */
 export async function consumeGitHubSetupHandoff(params: {
   name: string;
-  nowMs?: number;
-  database?: OpenClawStateDatabaseOptions;
 }): Promise<string | undefined> {
-  const context = captureOpenClawStateWorkerContext(params.database);
+  const context = captureOpenClawStateWorkerContext();
   const value = await executeOpenClawStateWorker(context, {
     type: "githubSetup.consume",
-    input: { name: params.name, now: params.nowMs ?? Date.now() },
+    input: { name: params.name, now: Date.now() },
   });
   if (value !== undefined) {
     registerSecretValueForRedaction(value);
@@ -172,9 +167,6 @@ export async function readSelectedSecretStoreEntries(params: {
     { type: "secrets.selected", input: { names } },
     { context, preferIndependentWarmRead: true },
   );
-  if (reply && (!reply.ok || reply.type !== "secrets.selected")) {
-    throw new Error("Unexpected selected secret store result.");
-  }
   context.admission.assertCurrent();
   params.assertCurrent?.();
   return (reply?.rows ?? []).map((row) => {
@@ -206,9 +198,6 @@ export async function readSecretStoreExecEnvironment(params: {
     { type: "secrets.execEnvironment", input: { excludeNames: params.excludeNames ?? [] } },
     { context, preferIndependentWarmRead: true },
   );
-  if (reply && (!reply.ok || reply.type !== "secrets.execEnvironment")) {
-    throw new Error("Unexpected secret store exec environment result.");
-  }
   const rows = reply?.rows ?? [];
   // Worker isolates cannot register with the host's redaction or sentinel owners.
   for (const row of rows) {
@@ -265,9 +254,6 @@ export async function readSecretStoreValue(params: {
       { type: "secrets.value", input: { name } },
       { context, preferIndependentWarmRead: true },
     );
-    if (reply && (!reply.ok || reply.type !== "secrets.value")) {
-      throw new Error("Unexpected secret store value result.");
-    }
     const row = reply?.row;
     if (row?.kind === "secret") {
       registerSecretValueForRedaction(row.value);

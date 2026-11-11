@@ -1,103 +1,64 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { updateStatusCommand } from "./status.js";
-
-const mocks = vi.hoisted(() => ({
+const mocks = {
   check: vi.fn(),
   run: vi.fn(),
   writeJson: vi.fn(),
   log: vi.fn(),
-}));
-vi.mock("../../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../runtime.js")>()),
-  defaultRuntime: mocks,
-}));
-vi.mock("./shared.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./shared.js")>()),
-  resolveUpdateRoot: async () => "/fixture/openclaw",
-}));
-vi.mock("../../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/config.js")>()),
-  readSourceConfigBestEffort: async () => ({ gateway: { mode: "remote" } }),
-}));
-vi.mock("../../commands/node-runtime-diagnostics.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../commands/node-runtime-diagnostics.js")>()),
-  collectNodeRuntimeFindings: async () => [],
-}));
-vi.mock("../../config/validation-core.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/validation-core.js")>()),
-  validateConfigObjectRaw: () => ({ ok: true }),
-}));
-vi.mock("../../infra/gateway-boot-lifecycle.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/gateway-boot-lifecycle.js")>()),
-  readGatewayLastInstallationReplacementAsync: async () => undefined,
-}));
-vi.mock("../../infra/package-update-activation.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/package-update-activation.js")>()),
-  readPackageActivationReceipt: () => undefined,
-}));
-vi.mock("../../state/openclaw-state-db-readonly.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/openclaw-state-db-readonly.js")>()),
+};
+const overrides = {
+  "../../runtime.js": { defaultRuntime: mocks },
+  "./shared.js": { resolveUpdateRoot: async () => "/fixture/openclaw" },
+  "./update-command-database-engine.js": {
+    withUpdateDatabaseEngine: async (_env: NodeJS.ProcessEnv, run: () => Promise<unknown>) => run(),
+  },
+  "../../config/config.js": {
+    readSourceConfigBestEffort: async () => ({ gateway: { mode: "remote" } }),
+  },
+  "../../commands/node-runtime-diagnostics.js": { collectNodeRuntimeFindings: async () => [] },
+  "../../config/validation-core.js": { validateConfigObjectRaw: () => ({ ok: true }) },
+  "../../infra/gateway-boot-lifecycle.js": {
+    readGatewayLastInstallationReplacementAsync: async () => undefined,
+  },
+  "../../infra/package-update-activation.js": { readPackageActivationReceipt: () => undefined },
+  "../../infra/update-check.js": {
+    checkUpdateStatus: mocks.check,
+    formatGitInstallLabel: () => undefined,
+  },
+  "../../infra/update-run-status.js": { readUpdateRunStatus: mocks.run },
+  "../../infra/update-recovery-backup-status.js": { inspectUpdateRecoveryBackups: async () => [] },
+  "../../infra/deferred-plugin-migrations.js": {
+    readDeferredPluginMigrationsAsync: async () => [],
+    formatDeferredPluginMigration: () => "",
+  },
+  "../../commands/doctor-session-sqlite-warnings.js": {
+    readSessionSqliteMigrationWarnings: () => [],
+  },
+  "../../gateway/call.js": { callGateway: async () => ({}) },
+  "../../infra/device-identity-async.js": { loadDeviceIdentityIfPresentAsync: async () => null },
+  "../../infra/device-identity.js": { loadDeviceIdentityIfPresent: () => null },
+  "../../infra/channels-status-issues.js": { collectChannelStatusIssues: () => [] },
+};
+for (const [module, exports] of Object.entries(overrides)) {
+  vi.doMock(module, async (original) => Object.assign({}, await original(), exports));
+}
+vi.doMock("../../state/openclaw-state-db-readonly.js", async (original) => ({
+  ...(await original<typeof import("../../state/openclaw-state-db-readonly.js")>()),
   ...(await import("../../state/artifact-preserving-state-reads.js")),
 }));
-vi.mock("../../infra/update-check.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/update-check.js")>()),
-  checkUpdateStatus: mocks.check,
-  formatGitInstallLabel: () => undefined,
-  compareSemverStrings: () => 0,
-}));
-vi.mock("../../infra/update-run-status.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/update-run-status.js")>()),
-  readUpdateRunStatus: mocks.run,
-}));
-vi.mock("../../infra/update-recovery-backup-status.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/update-recovery-backup-status.js")>()),
-  inspectUpdateRecoveryBackups: async () => [],
-}));
-vi.mock("../../infra/deferred-plugin-migrations.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/deferred-plugin-migrations.js")>()),
-  readDeferredPluginMigrationsAsync: async () => [],
-  formatDeferredPluginMigration: () => "",
-}));
-vi.mock("../../commands/doctor-session-sqlite-warnings.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../commands/doctor-session-sqlite-warnings.js")>()),
-  readSessionSqliteMigrationWarnings: () => [],
-}));
-vi.mock("../../gateway/call.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../gateway/call.js")>()),
-  callGateway: async () => ({}),
-}));
-vi.mock("../../infra/device-identity-async.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/device-identity-async.js")>()),
-  loadDeviceIdentityIfPresentAsync: async () => null,
-}));
-vi.mock("../../infra/device-identity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/device-identity.js")>()),
-  loadDeviceIdentityIfPresent: () => null,
-}));
-vi.mock("../../infra/channels-status-issues.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/channels-status-issues.js")>()),
-  collectChannelStatusIssues: () => [],
-}));
-
+const { updateStatusCommand } = await import("./status.js");
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
 });
+const lastRun = { runId: "completed-run", status: "succeeded" };
+const delayed = <T>(value: T, ms: number) =>
+  new Promise<T>((resolve) => {
+    setTimeout(() => resolve(value), ms);
+  });
 
 it("keeps history available when a short update-check timeout expires first", async () => {
-  const lastRun = { runId: "completed-run", status: "succeeded" };
-  mocks.check.mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        setTimeout(() => resolve({ installKind: "unknown" }), 1000);
-      }),
-  );
-  mocks.run.mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        setTimeout(() => resolve({ lastRun }), 2000);
-      }),
-  );
+  mocks.check.mockImplementation(() => delayed({ installKind: "unknown" }, 1000));
+  mocks.run.mockImplementation(() => delayed({ lastRun }, 2000));
   vi.useFakeTimers();
   const pending = updateStatusCommand({ json: true, timeout: "1" });
   await vi.advanceTimersByTimeAsync(2001);
@@ -106,6 +67,27 @@ it("keeps history available when a short update-check timeout expires first", as
   expect(mocks.writeJson.mock.lastCall?.[0]).toMatchObject({ lastRun });
   expect(mocks.writeJson.mock.lastCall?.[0]).not.toHaveProperty("runStatusError");
 });
+
+it.each(["2147483", "2147484", "9007199254740"])(
+  "retains available inspection results with a %s-second allowance",
+  async (timeout) => {
+    const update = {
+      root: "/fixture/openclaw",
+      installKind: "package",
+      packageManager: "npm",
+      registry: { latestVersion: "2026.11.9" },
+    };
+    mocks.check.mockImplementation(() => delayed(update, 100));
+    mocks.run.mockResolvedValue({ lastRun });
+    vi.useFakeTimers();
+    const pending = updateStatusCommand({ json: true, timeout });
+    await vi.advanceTimersByTimeAsync(250);
+    await pending;
+    expect(mocks.writeJson).toHaveBeenCalledOnce();
+    expect(mocks.writeJson.mock.lastCall?.[0]).toMatchObject({ update, lastRun });
+    expect(mocks.writeJson.mock.lastCall?.[0]).not.toHaveProperty("inspectionErrors");
+  },
+);
 
 it.each(["installation", "update history"])(
   "returns partial JSON at the overall deadline when %s never settles",
@@ -117,7 +99,6 @@ it.each(["installation", "update history"])(
       registry: { latestVersion: "2026.9.8" },
     };
     mocks.check.mockResolvedValue(update);
-    const lastRun = { runId: "completed-run", status: "succeeded" };
     mocks.run.mockResolvedValue({ lastRun });
     (section === "installation" ? mocks.check : mocks.run).mockReturnValue(new Promise(() => {}));
     vi.useFakeTimers();

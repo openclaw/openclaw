@@ -4,6 +4,7 @@ import {
   hasGatewayClientCap,
   normalizeGatewayClientName,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
 type IndexedClient = {
@@ -14,7 +15,8 @@ type IndexedClient = {
 export class GatewayClientRegistry extends Set<GatewayWsClient> {
   readonly #byConnectionId = new Map<string, IndexedClient>();
   readonly #unscopedSessionEventConnIds = new Set<string>();
-  readonly #subscribers = new Set<() => void>();
+  onChange?: () => void;
+  readonly #changeListeners = new Set<() => void>();
   #nextOrder = 0;
   readonly #onRemove?: (client: GatewayWsClient) => void;
   readonly #activeRequests = new Map<GatewayWsClient, number>();
@@ -65,7 +67,8 @@ export class GatewayClientRegistry extends Set<GatewayWsClient> {
         this.#unscopedSessionEventConnIds.add(client.connId);
       }
       super.add(client);
-      this.#publish();
+      this.onChange?.();
+      notifyListeners(this.#changeListeners, undefined);
     }
     return this;
   }
@@ -79,7 +82,8 @@ export class GatewayClientRegistry extends Set<GatewayWsClient> {
       this.#byConnectionId.delete(client.connId);
       this.#unscopedSessionEventConnIds.delete(client.connId);
     }
-    this.#publish();
+    this.onChange?.();
+    notifyListeners(this.#changeListeners, undefined);
     return true;
   }
 
@@ -93,18 +97,13 @@ export class GatewayClientRegistry extends Set<GatewayWsClient> {
     super.clear();
     this.#byConnectionId.clear();
     this.#unscopedSessionEventConnIds.clear();
-    this.#publish();
+    this.onChange?.();
+    notifyListeners(this.#changeListeners, undefined);
   }
 
-  subscribe(listener: () => void): () => void {
-    this.#subscribers.add(listener);
-    return () => this.#subscribers.delete(listener);
-  }
-
-  #publish(): void {
-    for (const listener of this.#subscribers) {
-      listener();
-    }
+  /** Observes committed connection additions/removals without replacing another owner. */
+  subscribeChanges(listener: () => void): () => void {
+    return registerListener(this.#changeListeners, listener);
   }
 
   getByConnectionId(connId: string): GatewayWsClient | undefined {

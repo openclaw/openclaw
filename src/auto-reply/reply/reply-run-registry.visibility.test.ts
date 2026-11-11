@@ -7,6 +7,18 @@ import {
   QuestionDispatchUnsupportedError,
 } from "../../agents/harness/gateway-question-dispatch.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import type {
+  ReplyBackendHandle,
+  ReplyBackendMessageInjectionV2,
+  ReplyBackendQueueMessageOptions,
+  ReplyMessageInjectionOptions,
+} from "../../sessions/session-controller.contracts.js";
+import {
+  beginReplyMessageInjectionTarget,
+  finalizeReplyMessageInjectionAttempt,
+} from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   MessageInjectionAcceptedUnconfirmedError,
@@ -14,24 +26,12 @@ import {
   MessageInjectionTargetUnavailableError,
   MessageInjectionWithdrawnError,
 } from "./message-injection-authority.js";
-import type {
-  ReplyBackendHandle,
-  ReplyBackendMessageInjectionV2,
-  ReplyBackendQueueMessageOptions,
-  ReplyMessageInjectionOptions,
-} from "./reply-run-registry.contracts.js";
-import {
-  beginReplyMessageInjectionTarget,
-  finalizeReplyMessageInjectionAttempt,
-  replyRunRegistry,
-} from "./reply-run-registry.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
-import { testing } from "./reply-run-registry.test-support.js";
 
 const hiddenRunId = "hidden-question-run";
 afterEach(() => {
   clearAgentRunContext(hiddenRunId);
-  testing.resetReplyRunRegistry();
+  testing.resetSessionControllerForTest();
 });
 
 type Operation = ReturnType<typeof createTestReplyOperation>;
@@ -92,7 +92,7 @@ async function inboundOutcome(operation: Operation, options: ReplyMessageInjecti
   return (await inbound(operation, options)).outcome;
 }
 function inbound(operation: Operation, options: ReplyMessageInjectionOptions = {}) {
-  const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key);
+  const target = captureCurrentReplyMessageInjectionTarget(operation.key);
   expect(target).toBeDefined();
   return beginReplyMessageInjectionTarget(target!, "Green", {
     isInboundUserMessage: true,
@@ -153,10 +153,10 @@ it("leaves new human input for a visible followup instead of a hidden coordinati
     toolAuthorityFingerprint: "same-owner",
     messageInjection: { isAvailable: () => true, queueMessage },
   });
-  const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key);
+  const target = captureCurrentReplyMessageInjectionTarget(operation.key);
   expect(target).toBeDefined();
   hideRun();
-  expect(replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)).toMatchObject({
+  expect(captureCurrentReplyMessageInjectionTarget(operation.key)).toMatchObject({
     runId: hiddenRunId,
   });
   const attempt = await beginReplyMessageInjectionTarget(target!, "What is the status?", {
@@ -378,7 +378,7 @@ it.each(["result", "exception"] as const)(
         queueMessage,
       },
     });
-    const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
+    const target = captureCurrentReplyMessageInjectionTarget(operation.key)!;
     const attempt = await beginReplyMessageInjectionTarget(target, "Queued guidance", {
       onQueueAccepted,
     });
@@ -411,7 +411,7 @@ it.each([false, true])(
       },
       operation,
     );
-    const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
+    const target = captureCurrentReplyMessageInjectionTarget(operation.key)!;
     const attempt = await beginReplyMessageInjectionTarget(target, "Confirmed guidance");
     await expect(attempt.outcome).resolves.toEqual({ status: "accepted" });
     if (replaced) {

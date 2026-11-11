@@ -7,7 +7,6 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import type { OpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { stateDirGatewayFixtureEntrypoint } from "../cli/cli-entrypoint.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { toAgentRequestSessionKey } from "../routing/session-key.js";
 
@@ -36,7 +35,7 @@ export function buildMinimalGatewayHelloOkPayload(params?: {
   connId?: string;
   methods?: string[];
   snapshot?: Record<string, unknown>;
-  auth?: { role: string; scopes: string[]; deviceToken?: string };
+  auth?: { role: string; scopes: string[]; deviceToken?: string; recoveryScope?: string };
   policy?: Record<"maxPayload" | "maxBufferedBytes" | "tickIntervalMs", number>;
 }) {
   return {
@@ -112,6 +111,9 @@ export async function startMinimalRealGateway(options: {
     cancellation.signal.throwIfAborted();
     const { createOpenClawTestInstance } =
       await import("../../test/helpers/openclaw-test-instance.js");
+    // Protocol-only helpers do not need the compiled real-Gateway fixture.
+    const { stateDirGatewayFixtureEntrypoint } =
+      await import("../cli/cli-entrypoint.test-support.js");
     const entrypoint = resolveRuntimeWorkerUrl(stateDirGatewayFixtureEntrypoint);
     const gateway = await createOpenClawTestInstance({
       name: "minimal-real-gateway",
@@ -199,7 +201,7 @@ export async function startMinimalRealGateway(options: {
           const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
           cancellation.signal.throwIfAborted();
           return loadOrCreateDeviceIdentity({
-            path: gateway.state.statePath(`device-${label}.sqlite`),
+            path: gateway.state.statePath(`device-${label}`, "client", "credentials.sqlite"),
           });
         }),
       connectBootstrap: (mismatched = false) =>
@@ -218,7 +220,9 @@ export async function startMinimalRealGateway(options: {
             scopes: [],
             client: { id: "node-host", version: "test", platform: "test", mode: "node" },
             deviceIdentityPath: gateway.state.statePath(
-              `device-${mismatched ? "bad" : "ok"}.sqlite`,
+              `device-${mismatched ? "bad" : "ok"}`,
+              "client",
+              "credentials.sqlite",
             ),
             timeoutMs: 2_000,
           });

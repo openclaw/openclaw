@@ -10,6 +10,7 @@ import type { SessionTranscriptAuthority } from "./session-transcript-authority.
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import { transcriptEventContextEligibility } from "./session-transcript-projection-append.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+import { freezeTranscriptSnapshot } from "./transcript-snapshot.js";
 import { isCanonicalSessionTranscriptEntry } from "./transcript-tree.js";
 
 type Bounded = Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>;
@@ -218,7 +219,7 @@ function readContextWindow(
     snapshot.opaqueParents.set(snapshot.activeLeafEntryId, null);
   }
   delete snapshot.completeActivePath;
-  return result;
+  return Object.freeze({ ...result, snapshot: freezeTranscriptSnapshot(snapshot) });
 }
 
 function boundedTail(events: SessionActorTranscriptRow[], coveredAfterSeq: number) {
@@ -272,7 +273,10 @@ export function rewriteSessionActorTranscriptReplica(
   const next: SessionActorTranscriptReplica = {
     version: postimage.transcript.version,
     sessionId: previous.sessionId,
-    anchors: previous.anchors,
+    anchors: previous.anchors?.map((anchor) => ({
+      ...anchor,
+      generation: postimage.transcript.version.generation ?? anchor.generation,
+    })),
     tail: boundedTail(patch(previous.tail.events), previous.tail.coveredAfterSeq),
   };
   if (previous.context?.rows) {
@@ -343,8 +347,7 @@ export function seedSessionActorTranscriptContext(
   if (!prepared.residentRows && current.context) {
     return { ...current, anchors };
   }
-  // Own one detached window; row views share it, and worker/cohort facts stay with the read.
-  const snapshot = structuredClone(prepared.snapshot);
+  const snapshot = freezeTranscriptSnapshot(prepared.snapshot);
   const rows = prepared.residentRows?.map((row, index) => ({
     ...row,
     event: snapshot.events[index],
@@ -382,7 +385,7 @@ export function seedSessionActorTranscriptContext(
         ? { limits: { ...limits }, window }
         : {
             limits: { ...limits },
-            exact: { kind: "bounded", snapshot },
+            exact: Object.freeze({ kind: "bounded", snapshot }),
             admission: admission && { ...admission },
           },
   };
@@ -393,12 +396,24 @@ export function advanceSessionActorTranscriptReplica(
   outcome: Extract<SessionActorOutcome<unknown>, { kind: "committed" }>,
 ): SessionActorTranscriptReplica {
   const { transcript, postimage } = outcome.receipt;
-  const unchanged = sameSessionActorTranscriptVersion(transcript.before, transcript.after);
+  const rewrite = transcript.append?.modelPromptProjection;
+  const before = rewrite?.after ?? transcript.before;
+  const projected = rewrite
+    ? rewriteSessionActorTranscriptReplica(previous, {
+        before: rewrite.before,
+        postimage: {
+          ...postimage,
+          transcript: { ...postimage.transcript, version: rewrite.after },
+        },
+        rows: rewrite.rows,
+      })
+    : previous;
+  const unchanged = sameSessionActorTranscriptVersion(before, transcript.after);
   const retained =
-    previous &&
-    previous.sessionId === postimage.entry?.sessionId &&
-    sameSessionActorTranscriptVersion(previous.version, transcript.before)
-      ? previous
+    projected &&
+    projected.sessionId === postimage.entry?.sessionId &&
+    sameSessionActorTranscriptVersion(projected.version, before)
+      ? projected
       : undefined;
   const appendedAnchors = transcript.appendedMessages.flatMap((message) => message.anchor ?? []);
   if (unchanged && retained) {
@@ -411,7 +426,7 @@ export function advanceSessionActorTranscriptReplica(
     retained &&
     appended &&
     !transcript.projectionNeedsReconcile &&
-    transcript.before.generation === transcript.after.generation;
+    before.generation === transcript.after.generation;
   const events = [...(contiguous ? retained.tail.events : []), ...(appended ?? [])];
   const coveredAfterSeq = contiguous
     ? retained.tail.coveredAfterSeq
@@ -482,7 +497,7 @@ export function readSessionActorTranscriptContext(
     if (JSON.stringify(context.admission) !== JSON.stringify(admission)) {
       return undefined;
     }
-    return structuredClone(context.exact);
+    return context.exact;
   }
   const events = admission
     ? context.rows.filter((row) => row.rawSeq < admission.rawSeq)
@@ -495,5 +510,5 @@ export function readSessionActorTranscriptContext(
     result.snapshot.activeLeafEntryId = admission.effectiveParentId;
     delete result.snapshot.completeActivePath;
   }
-  return result;
+  return Object.freeze({ ...result, snapshot: freezeTranscriptSnapshot(result.snapshot) });
 }

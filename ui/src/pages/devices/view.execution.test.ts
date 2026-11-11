@@ -1,8 +1,7 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ExecApprovalsSnapshot, ExecSecurity } from "../../lib/nodes/page-operations.ts";
-import { createDevicesViewProps } from "../../test-helpers/devices-fixtures.ts";
+import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../../lib/nodes/page-operations.ts";
 import {
   renderDevicesContainer,
   renderDevicesInto,
@@ -13,87 +12,199 @@ import type { DevicesProps } from "./view.types.ts";
 
 afterEach(() => document.body.replaceChildren());
 
-describe("devices exec approvals rendering", () => {
-  it("renders owner-reported defaults for fresh approval state", () => {
-    const container = renderDevicesContainer({
-      execApprovalsSnapshot: {
-        path: "/tmp/exec-approvals.json",
-        exists: false,
-        hash: "missing:empty",
-        file: { version: 1, agents: {} },
-        resolvedDefaults: {
-          security: "full",
-          ask: "off",
-          askFallback: "deny",
-          autoAllowSkills: false,
-        },
-      },
-    });
-    const section = getSection(container, "Exec approvals");
+function approvalSnapshot(
+  exists = true,
+  agents: ExecApprovalsFile["agents"] = {},
+): ExecApprovalsSnapshot {
+  return {
+    path: "/tmp/exec-approvals.json",
+    exists,
+    hash: exists ? "sha256:current" : "missing:empty",
+    file: { version: 1, agents },
+    resolvedDefaults: { security: "full", ask: "off", askFallback: "deny", autoAllowSkills: false },
+  };
+}
 
-    expect(section.textContent).toContain(
-      "Allowlist and approval policy for exec host=gateway/node.",
-    );
-    expect(
-      getSettingsRow(section, "Security").querySelector<HTMLSelectElement>("select")?.value,
-    ).toBe("full");
-    expect(getSettingsRow(section, "Ask").querySelector<HTMLSelectElement>("select")?.value).toBe(
-      "off",
-    );
+function rowSelect(section: Element, title: string) {
+  return expectDefined(getSettingsRow(section, title).querySelector("select"), `${title} select`);
+}
+
+const approvalSection = (container: Element) => getSection(container, "Command approvals");
+const scopeRow = (section: Element, name: string) =>
+  expectDefined(
+    Array.from(section.querySelectorAll(".device-entry")).find(
+      (row) => row.querySelector("summary .settings-row__title")?.textContent === name,
+    ),
+    `${name} policy`,
+  );
+const summaryParts = (row: Element) =>
+  Array.from(row.querySelectorAll("summary .device-entry__part"), (part) => part.textContent);
+const policySelect = (container: Element, title: string) =>
+  rowSelect(approvalSection(container), title);
+
+function selectValue(select: HTMLSelectElement, value: string, bubbles = false) {
+  select.value = value;
+  select.dispatchEvent(new Event("change", { bubbles }));
+}
+
+const approvalNode = (nodeId: string) => ({
+  nodeId,
+  commands: ["system.execApprovals.get", "system.execApprovals.set"],
+});
+const agentsConfig = (entries: Record<string, unknown>, agentId = "main") => ({
+  agents: { defaults: { systemAgent: { agentId } }, entries },
+});
+
+describe("devices execution settings", () => {
+  it("renders owner-reported defaults for fresh approval state", () => {
+    const container = renderDevicesContainer({ execApprovalsSnapshot: approvalSnapshot(false) });
+    expect(policySelect(container, "Security").value).toBe("full");
+    expect(policySelect(container, "Ask").value).toBe("off");
   });
 
-  it("preserves authored wildcard and agent overrides above owner defaults", () => {
+  it("lists every scope with what it changes and preserves wildcard and agent overrides", () => {
     const container = renderDevicesContainer({
-      execApprovalsSnapshot: {
-        path: "/tmp/exec-approvals.json",
-        exists: false,
-        hash: "missing:empty",
-        file: {
-          version: 1,
-          agents: {
-            "*": { security: "allowlist", ask: "always" },
-            main: { ask: "on-miss" },
-          },
-        },
-        resolvedDefaults: {
-          security: "full",
-          ask: "off",
-          askFallback: "deny",
-          autoAllowSkills: false,
-        },
-      },
-      execApprovalsSelectedAgent: "main",
+      configForm: agentsConfig({ main: { name: "Main" }, research: { name: "Research" } }),
+      execApprovalsSnapshot: approvalSnapshot(false, {
+        "*": { security: "allowlist", ask: "always" },
+        main: { ask: "on-miss" },
+        retired: { security: "full" },
+      }),
     });
-    const section = getSection(container, "Exec approvals");
-    const security = getSettingsRow(section, "Security").querySelector<HTMLSelectElement>("select");
-    const ask = getSettingsRow(section, "Ask").querySelector<HTMLSelectElement>("select");
-    const fallback = getSettingsRow(section, "Ask fallback").querySelector<HTMLSelectElement>(
-      "select",
+    const section = approvalSection(container);
+    const scopes = Array.from(
+      section.querySelectorAll(".device-entry"),
+      (row) => row.querySelector("summary .settings-row__title")?.textContent,
     );
+    expect(scopes).toEqual(["Defaults", "Main", "*", "Research", "retired"]);
+    const main = scopeRow(section, "Main");
+    expect(rowSelect(main, "Security").selectedOptions[0]?.textContent?.trim()).toBe(
+      "Use default (Allowlist)",
+    );
+    expect(rowSelect(main, "Ask fallback").selectedOptions[0]?.textContent?.trim()).toBe(
+      "Use default (Deny)",
+    );
+    expect(rowSelect(main, "Ask").value).toBe("on-miss");
+    expect(getSettingsRow(main, "Security").querySelector(".settings-row__desc")).toBeNull();
+    expect(getSettingsRow(main, "Ask").querySelector(".settings-row__desc")).toBeNull();
+    expect(summaryParts(scopeRow(section, "Defaults"))).toEqual(["Security: Full", "Ask: Off"]);
+    expect(summaryParts(main)).toEqual(["Default agent", "Ask: On miss"]);
+    expect(summaryParts(scopeRow(section, "Research"))).toEqual(["Uses defaults"]);
+    expect(summaryParts(scopeRow(section, "retired"))).toEqual(["Security: Full"]);
+  });
 
-    expect(security?.selectedOptions[0]?.textContent?.trim()).toBe("Use default (allowlist)");
-    expect(ask?.value).toBe("on-miss");
-    expect(fallback?.selectedOptions[0]?.textContent?.trim()).toBe("Use default (deny)");
-    expect(section.textContent).not.toContain("Using default");
-    expect(getSettingsRow(section, "Security").querySelector(".settings-row__desc")).toBeNull();
+  it("shows an id only when it differs from the name, in both sections", () => {
+    const container = renderDevicesContainer({
+      nodes: [{ nodeId: "worker-node", commands: ["system.run"] }],
+      configForm: agentsConfig({ OPS: { name: "ops" }, triage: { name: "Night triage" } }, "OPS"),
+      execApprovalsSnapshot: approvalSnapshot(),
+    });
+    for (const title of ["ops", "Night triage (triage)"]) {
+      expect(getSettingsRow(approvalSection(container), title)).toBeInstanceOf(Element);
+      expect(getSettingsRow(getSection(container, "Device binding"), title)).toBeInstanceOf(
+        Element,
+      );
+    }
+  });
+
+  it.each([
+    ["deny", true],
+    ["allowlist", false],
+    ["full", false],
+  ] as const)("dims an allowlist under %s only when Deny stops every command", (security, dim) => {
+    const container = renderDevicesContainer({
+      configForm: agentsConfig({ main: {} }),
+      execApprovalsSnapshot: approvalSnapshot(true, {
+        main: { security, allowlist: [{ pattern: "/usr/bin/git*" }] },
+      }),
+    });
+    const list = scopeRow(approvalSection(container), "main").querySelector(".device-allowlist");
+    expect(list?.classList.contains("device-allowlist--inactive")).toBe(dim);
+  });
+
+  it("offers Save only for a draft and reports a rejected save beside it", () => {
+    const onSaveExecApprovals = vi.fn();
+    const props = { execApprovalsSnapshot: approvalSnapshot(), onSaveExecApprovals };
+    const clean = renderDevicesContainer(props);
+    expect(approvalSection(clean).querySelector(".device-policy__save")).toBeNull();
+
+    const draft = renderDevicesContainer({
+      ...props,
+      execApprovalsDirty: true,
+      execApprovalsError: "Policy changed; reload before saving.",
+    });
+    const row = expectDefined(
+      approvalSection(draft).querySelector(".device-policy__save"),
+      "save row",
+    );
+    expect(row.textContent).toContain("You have unsaved changes");
+    expect(row.querySelector('[role="alert"]')?.textContent).toContain("Policy changed");
+    row.querySelector("button")?.click();
+    expect(onSaveExecApprovals).toHaveBeenCalledOnce();
+  });
+
+  it("shows a failed load in place with a retry", () => {
+    const onLoadExecApprovals = vi.fn();
+    const container = renderDevicesContainer({
+      execApprovalsError: "Gateway unavailable",
+      onLoadExecApprovals,
+    });
+    const section = approvalSection(container);
+    expect(section.querySelector('[role="alert"]')?.textContent).toContain(
+      "Couldn’t load approvals. Try again.",
+    );
+    expect(section.textContent).toContain("Gateway unavailable");
+    expect(container.querySelector(".callout.danger")).toBeNull();
+    Array.from(section.querySelectorAll("button"))
+      .find((button) => button.textContent === "Retry")
+      ?.click();
+    expect(onLoadExecApprovals).toHaveBeenCalledOnce();
+  });
+
+  it("edits an allowlist where the patterns read", () => {
+    const onExecApprovalsPatch = vi.fn();
+    const onExecApprovalsRemove = vi.fn();
+    const container = renderDevicesContainer({
+      configForm: agentsConfig({ main: {} }),
+      execApprovalsSnapshot: approvalSnapshot(true, {
+        main: {
+          allowlist: [
+            { pattern: "/usr/bin/git*", lastUsedAt: Date.now(), lastUsedCommand: "git status" },
+            { pattern: "/opt/tool" },
+          ],
+        },
+      }),
+      onExecApprovalsPatch,
+      onExecApprovalsRemove,
+    });
+    const main = scopeRow(approvalSection(container), "main");
+    expect(summaryParts(main)).toEqual(["Default agent", "2 patterns"]);
+    const inputs = main.querySelectorAll<HTMLTextAreaElement>(".device-allowlist__input");
+    expect(Array.from(inputs, (input) => input.value)).toEqual(["/usr/bin/git*", "/opt/tool"]);
+    expect(main.querySelector(".device-allowlist")?.textContent).not.toContain("/usr/bin/git*");
+    expect(main.querySelector(".device-allowlist")?.textContent).toContain("git status");
+    inputs[1]!.value = "/opt/tools/*";
+    inputs[1]!.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onExecApprovalsPatch).toHaveBeenCalledWith(
+      ["agents", "main", "allowlist", 1, "pattern"],
+      "/opt/tools/*",
+    );
+    main.querySelectorAll<HTMLButtonElement>('button[aria-label="Remove"]')[0]?.click();
+    expect(onExecApprovalsRemove).toHaveBeenCalledWith(["agents", "main", "allowlist", 0]);
   });
 
   it("keeps the selected node until its owner accepts a target change", () => {
     const onExecApprovalsTargetChange = vi.fn();
     const props = {
-      nodes: ["first", "second"].map((nodeId) => ({
-        nodeId,
-        commands: ["system.execApprovals.get", "system.execApprovals.set"],
-      })),
+      nodes: ["first", "second"].map(approvalNode),
       execApprovalsTarget: "node" as const,
       execApprovalsTargetNodeId: "first",
       execApprovalsDirty: true,
       onExecApprovalsTargetChange,
     };
     const container = renderDevicesContainer(props);
-    const select = container.querySelector<HTMLSelectElement>('select[aria-label="Node"]')!;
-    select.value = "second";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="Device"]')!;
+    selectValue(select, "second", true);
 
     expect(onExecApprovalsTargetChange).toHaveBeenCalledWith("node", "second");
     expect(select.value).toBe("first");
@@ -104,58 +215,12 @@ describe("devices exec approvals rendering", () => {
     expect(select.value).toBe("second");
   });
 
-  it("renders defaults, configured agents, and approval-only agents in the avatar picker", async () => {
-    const onExecApprovalsSelectAgent = vi.fn();
-    const container = renderDevicesContainer({
-      configForm: {
-        agents: {
-          defaults: { systemAgent: { agentId: "main" } },
-          entries: {
-            main: { name: "Main" },
-            research: { name: "Research" },
-          },
-        },
-      },
-      execApprovalsForm: {
-        version: 1,
-        defaults: { security: "deny" },
-        agents: { retired: { security: "full" } },
-      },
-      execApprovalsSelectedAgent: "research",
-      onExecApprovalsSelectAgent,
-    });
-    const section = getSection(container, "Exec approvals");
-    const picker = section.querySelector<
-      HTMLElement & {
-        options: Array<{ value: string; badge?: string }>;
-        onSelect: (value: string) => void;
-        updateComplete: Promise<boolean>;
-      }
-    >("openclaw-agent-select");
-    await picker?.updateComplete;
-
-    expect(picker?.options.map((option) => option.value)).toEqual([
-      "__defaults__",
-      "main",
-      "research",
-      "retired",
-    ]);
-    expect(picker?.options.find((option) => option.value === "main")?.badge).toBe("Default");
-    picker?.onSelect("retired");
-    expect(onExecApprovalsSelectAgent).toHaveBeenCalledWith("retired");
-  });
-
   it("renders host-native Windows policies as read-only", () => {
     const container = renderDevicesContainer({
-      nodes: [
-        {
-          nodeId: "windows-node",
-          displayName: "Windows node",
-          commands: ["system.execApprovals.get", "system.execApprovals.set"],
-        },
-      ],
+      nodes: [{ ...approvalNode("windows-node"), displayName: "Windows node" }],
       execApprovalsTarget: "node",
       execApprovalsTargetNodeId: "windows-node",
+      execApprovalsDirty: true,
       execApprovalsSnapshot: {
         enabled: true,
         hash: "sha256:current",
@@ -163,125 +228,71 @@ describe("devices exec approvals rendering", () => {
         rules: [{ pattern: "hostname", action: "allow" }],
       },
     });
-    const section = getSection(container, "Exec approvals");
+    const section = approvalSection(container);
 
-    expect(section.textContent).toContain("Host-native policy");
-    expect(section.textContent).toContain("Read-only here");
-    expect(section.textContent).toContain("hostname");
-    expect(section.textContent).toContain("deny");
-    expect(section.querySelector("button")?.hasAttribute("disabled")).toBe(true);
+    for (const text of ["Device-managed policy", "Read-only here", "hostname", "deny"]) {
+      expect(section.textContent).toContain(text);
+    }
+    expect(section.querySelector("button")).toBeNull();
   });
 
-  it("shows the selected agent's stored policy after the user edited another agent", () => {
-    const snapshot: ExecApprovalsSnapshot = {
-      path: "/tmp/exec-approvals.json",
-      exists: true,
-      hash: "sha256:current",
-      file: { version: 1, agents: {} },
-      resolvedDefaults: {
-        security: "full",
-        ask: "off",
-        askFallback: "deny",
-        autoAllowSkills: false,
-      },
-    };
-    const renderScope = (
-      container: HTMLElement,
-      agents: Record<string, { security: ExecSecurity }>,
-      selected: string,
-    ) => {
-      renderDevicesInto(
-        container,
-        createDevicesViewProps({
-          execApprovalsSnapshot: snapshot,
-          execApprovalsForm: { version: 1, agents },
-          execApprovalsSelectedAgent: selected,
-        }),
-      );
-      return expectDefined(
-        getSettingsRow(
-          getSection(container, "Exec approvals"),
-          "Security",
-        ).querySelector<HTMLSelectElement>("select"),
-        "security select",
+  it("keeps each agent on its stored policy after another agent is edited", () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const render = (security: "allowlist" | "full") => {
+      renderDevicesInto(container, {
+        execApprovalsSnapshot: approvalSnapshot(),
+        execApprovalsForm: {
+          agents: { alpha: { security }, beta: { security: "deny" } },
+        },
+      });
+      const section = approvalSection(container);
+      return [scopeRow(section, "alpha"), scopeRow(section, "beta")].map(
+        (row) => rowSelect(row, "Security").value,
       );
     };
-    const pick = (select: HTMLSelectElement, value: string) => {
-      select.value = value;
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    };
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    // Picking an option marks it dirty, so the browser ignores later `selected`
-    // attribute changes. The controlled value restores the stored policy when
-    // switching scopes even after the operator changed native selection.
-    let security = renderScope(
-      container,
-      { alpha: { security: "allowlist" }, beta: { security: "deny" } },
-      "alpha",
-    );
-    expect(security.value).toBe("allowlist");
-    pick(security, "deny");
-    security = renderScope(
-      container,
-      { alpha: { security: "deny" }, beta: { security: "deny" } },
-      "alpha",
-    );
-    pick(security, "full");
-    security = renderScope(
-      container,
-      { alpha: { security: "full" }, beta: { security: "deny" } },
-      "alpha",
-    );
-    expect(security.value).toBe("full");
-
-    security = renderScope(
-      container,
-      { alpha: { security: "full" }, beta: { security: "deny" } },
-      "beta",
-    );
-    expect(security.value).toBe("deny");
+    expect(render("allowlist")).toEqual(["allowlist", "deny"]);
+    expect(render("full")).toEqual(["full", "deny"]);
   });
-});
 
-describe("devices agent bindings", () => {
+  it("collapses bindings to one line when no node can run them", () => {
+    const container = renderDevicesContainer({
+      nodes: [],
+      configForm: agentsConfig({ main: {}, research: {} }),
+    });
+    const section = getSection(container, "Device binding");
+    expect(section.querySelector("select")).toBeNull();
+    expect(section.textContent).toContain("No devices can run commands yet.");
+  });
+
+  it("offers no Save for bindings and names what an agent inherits", () => {
+    const container = renderDevicesContainer({
+      nodes: [{ nodeId: "worker-node", displayName: "Worker", commands: ["system.run"] }],
+      configForm: { ...agentsConfig({ main: {} }), tools: { exec: { node: "worker-node" } } },
+    });
+    const section = getSection(container, "Device binding");
+    expect(section.querySelector("button")).toBeNull();
+    expect(rowSelect(section, "main").selectedOptions[0]?.textContent?.trim()).toBe(
+      "Use default (worker-node)",
+    );
+  });
+
   it("reports node bindings and translates each unbound sentinel", () => {
     const onBindDefault = vi.fn();
     const onBindAgent = vi.fn();
     const container = renderDevicesContainer({
-      nodes: [
-        {
-          nodeId: "worker-node",
-          displayName: "Worker node",
-          commands: ["system.run"],
-        },
-      ],
-      configForm: {
-        agents: {
-          defaults: { systemAgent: { agentId: "MAIN" } },
-          entries: {
-            MAIN: {},
-            research: {},
-          },
-        },
-      },
+      nodes: [{ nodeId: "worker-node", displayName: "Worker node", commands: ["system.run"] }],
+      configForm: agentsConfig({ MAIN: {}, research: {} }, "MAIN"),
       onBindDefault,
       onBindAgent,
     });
-    const bindingSection = getSection(container, "Exec node binding");
-    const selects = bindingSection.querySelectorAll<HTMLSelectElement>("select.settings-select");
-
-    const [defaultBinding, mainBinding] = selects;
-    defaultBinding!.value = "worker-node";
-    defaultBinding!.dispatchEvent(new Event("change"));
-    defaultBinding!.value = "";
-    defaultBinding!.dispatchEvent(new Event("change"));
-    mainBinding!.value = "worker-node";
-    mainBinding!.dispatchEvent(new Event("change"));
-    mainBinding!.value = "__default__";
-    mainBinding!.dispatchEvent(new Event("change"));
-
+    const section = getSection(container, "Device binding");
+    const bind = (title: string, sentinel: string) => {
+      const select = rowSelect(section, title);
+      selectValue(select, "worker-node");
+      selectValue(select, sentinel);
+    };
+    bind("Default binding", "");
+    bind("MAIN", "__default__");
     expect(onBindDefault.mock.calls).toEqual([["worker-node"], [null]]);
     expect(onBindAgent.mock.calls).toEqual([
       ["MAIN", "worker-node"],
@@ -289,88 +300,49 @@ describe("devices agent bindings", () => {
     ]);
   });
 
-  it.each([
-    {
-      name: "ineligible exact IDs ahead of names",
-      refs: ["default-node", "agent-node"],
-      ineligibleExact: true,
-      unavailable: true,
-    },
-    {
-      name: "ambiguous names across the full inventory",
-      refs: ["Default worker", "Research worker"],
-      competitors: true,
-      unavailable: true,
-    },
-  ])("preserves $name across node loss and recovery", (scenario) => {
-    const [defaultRef, agentRef] = scenario.refs;
-    const onBindDefault = vi.fn();
-    const onBindAgent = vi.fn();
-    const configForm = {
-      tools: { exec: { node: defaultRef } },
-      agents: {
-        defaults: { systemAgent: { agentId: "main" } },
-        entries: {
-          main: {},
-          research: { name: "Research", tools: { exec: { node: agentRef } } },
-        },
-      },
-    };
-    const savedConfig = structuredClone(configForm);
-    const nodes = [
-      { nodeId: "default-node", displayName: "Default worker", remoteIp: "192.0.2.10" },
-      { nodeId: "agent-node", displayName: "Research worker", remoteIp: "192.0.2.20" },
-    ].map((node) =>
-      Object.assign(node, {
-        commands: ["system.run"],
-      }),
-    );
-    const container = document.createElement("div");
-    document.body.append(container);
-    const renderBindings = (inventory: DevicesProps["nodes"], unavailable: boolean) => {
-      renderDevicesInto(
-        container,
-        createDevicesViewProps({ nodes: inventory, configForm, onBindDefault, onBindAgent }),
-      );
-      const section = getSection(container, "Exec node binding");
-      ["Default binding", "Research (research)"].forEach((title, index) => {
-        const select = expectDefined(
-          getSettingsRow(section, title).querySelector<HTMLSelectElement>("select"),
-          "node binding",
-        );
-        const option = expectDefined(select.selectedOptions[0], "selected node binding option");
-        const ref = scenario.refs[index];
-        const node = expectDefined(nodes[index], "bound node");
-        expect(select.value).toBe(ref);
-        expect(option.disabled).toBe(unavailable);
-        expect(option.textContent?.replace(/\s+/gu, " ").trim()).toBe(
-          unavailable ? `${ref} (Unavailable)` : `${node.displayName} · ${node.nodeId}`,
-        );
-      });
-      expect(configForm).toEqual(savedConfig);
-      expect(onBindDefault).not.toHaveBeenCalled();
-      expect(onBindAgent).not.toHaveBeenCalled();
-    };
-    const competitors = scenario.competitors
-      ? nodes.map((node) => ({
-          ...node,
-          nodeId: `${node.nodeId}-competitor`,
-          commands: [],
-          connected: false,
-        }))
-      : [];
-    const initialNodes = scenario.ineligibleExact
-      ? [
-          ...nodes.map((node) => ({ ...node, commands: [] })),
-          ...nodes.map((node) => ({
+  it.each(["worker-node", "Worker"])(
+    "preserves binding %s across node loss and recovery",
+    (ref) => {
+      const node = { nodeId: "worker-node", displayName: "Worker", commands: ["system.run"] };
+      const ineligibleExact = ref === node.nodeId;
+      const onBindDefault = vi.fn();
+      const onBindAgent = vi.fn();
+      const configForm = {
+        tools: { exec: { node: ref } },
+        ...agentsConfig({ research: { tools: { exec: { node: ref } } } }),
+      };
+      const savedConfig = structuredClone(configForm);
+      const container = document.body.appendChild(document.createElement("div"));
+      const renderBindings = (inventory: DevicesProps["nodes"], unavailable: boolean) => {
+        renderDevicesInto(container, { nodes: inventory, configForm, onBindDefault, onBindAgent });
+        const section = getSection(container, "Device binding");
+        for (const title of ["Default binding", "research"]) {
+          const select = rowSelect(section, title);
+          expect(select).toHaveProperty("value", ref);
+          expect(select.selectedOptions[0]).toMatchObject({
+            value: ref,
+            disabled: unavailable,
+            textContent: unavailable ? `${ref} (Unavailable)` : "Worker · worker-node",
+          });
+        }
+        expect(configForm).toEqual(savedConfig);
+        expect([onBindDefault.mock.calls, onBindAgent.mock.calls]).toEqual([[], []]);
+      };
+      renderBindings(
+        [
+          { ...node, commands: ineligibleExact ? [] : node.commands },
+          {
             ...node,
-            nodeId: `${node.nodeId}-other`,
-            displayName: node.nodeId,
-          })),
-        ]
-      : [...nodes, ...competitors];
-    renderBindings(initialNodes, scenario.unavailable ?? false);
-    renderBindings([{ ...expectDefined(nodes[0], "default bound node"), commands: [] }], true);
-    renderBindings(nodes, false);
-  });
+            nodeId: "other",
+            displayName: ref,
+            commands: ineligibleExact ? node.commands : [],
+            connected: false,
+          },
+        ],
+        true,
+      );
+      renderBindings([{ ...node, commands: [] }], true);
+      renderBindings([node], false);
+    },
+  );
 });

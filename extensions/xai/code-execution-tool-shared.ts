@@ -1,6 +1,13 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 
+const CodeExecutionParameters = Type.Object({
+  task: Type.String({
+    description:
+      "The full analysis task for xAI's remote Python sandbox. Include any data to analyze directly in the task.",
+  }),
+});
+
 export function buildMissingCodeExecutionApiKeyPayload() {
   return {
     error: "missing_xai_api_key",
@@ -18,12 +25,7 @@ export function createCodeExecutionToolDefinition(
     name: "code_execution",
     description:
       "Run sandboxed Python analysis with xAI. Use for calculations, tabulation, summaries, and chart-style analysis without local machine access.",
-    parameters: Type.Object({
-      task: Type.String({
-        description:
-          "The full analysis task for xAI's remote Python sandbox. Include any data to analyze directly in the task.",
-      }),
-    }),
+    parameters: CodeExecutionParameters,
     execute,
   };
 }

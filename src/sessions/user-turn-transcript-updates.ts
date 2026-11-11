@@ -14,6 +14,7 @@ import {
 } from "./user-turn-transcript.metadata.js";
 import type {
   PersistedUserTurnMessage,
+  PreparedModelPromptProjection,
   UserTurnTranscriptAdmissionReceipt,
 } from "./user-turn-transcript.types.js";
 
@@ -50,7 +51,7 @@ export async function confirmPersistedSteerTargetRunId(params: {
   return { admission, message: rewritten.message };
 }
 
-export async function capturePersistedModelPromptProjection(params: {
+type ModelPromptProjectionParams = {
   admission: UserTurnTranscriptAdmissionReceipt;
   message: PersistedUserTurnMessage;
   text: string;
@@ -60,33 +61,49 @@ export async function capturePersistedModelPromptProjection(params: {
     admission: UserTurnTranscriptAdmissionReceipt,
     message: PersistedUserTurnMessage,
   ) => void;
-}): Promise<PersistedUserTurnMessage> {
-  params.assertCurrent();
+};
+
+export function preparePersistedModelPromptProjection(
+  params: ModelPromptProjectionParams,
+): PreparedModelPromptProjection | undefined {
   if (readModelPromptProjection(params.message) !== undefined) {
     prepareModelPromptProjection(params.message, params.text);
-    return params.message;
+    return undefined;
   }
   params.assertWritable();
+  return {
+    intent: { anchor: params.admission, text: params.text },
+    async onCommitted(rewritten) {
+      if (!rewritten || !isUserMessage(rewritten.message)) {
+        throw new Error("Model prompt projection lost its canonical user turn");
+      }
+      const admission = { ...params.admission, generation: rewritten.generation };
+      params.onCommitted(admission, rewritten.message);
+      if (!rewritten.unchanged) {
+        await publishTranscriptUpdate(admission, {
+          message: rewritten.message,
+          messageId: admission.entryId,
+          messageSeq: admission.activeMessagePosition + 1,
+        });
+      }
+      return rewritten.message;
+    },
+  };
+}
+
+export async function capturePersistedModelPromptProjection(
+  params: ModelPromptProjectionParams,
+): Promise<PersistedUserTurnMessage> {
+  const prepared = preparePersistedModelPromptProjection(params);
+  if (!prepared) {
+    return params.message;
+  }
   const rewritten = await capturePreparedTranscriptModelPromptProjection(
-    params.admission,
-    params.text,
+    prepared.intent.anchor,
+    prepared.intent.text,
     params.assertWritable,
   );
+  const message = await prepared.onCommitted(rewritten);
   params.assertCurrent();
-  if (!rewritten) {
-    throw new Error("Model prompt projection lost its canonical user turn");
-  }
-  if (rewritten.unchanged) {
-    params.onCommitted(params.admission, rewritten.message);
-    return rewritten.message;
-  }
-  const admission = { ...params.admission, generation: rewritten.generation };
-  params.onCommitted(admission, rewritten.message);
-  await publishTranscriptUpdate(admission, {
-    message: rewritten.message,
-    messageId: admission.entryId,
-    messageSeq: admission.activeMessagePosition + 1,
-  });
-  params.assertCurrent();
-  return rewritten.message;
+  return message;
 }

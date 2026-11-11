@@ -40,13 +40,15 @@ const serviceFile = z
   .refine((file) => path.isAbsolute(file) && !/[\0\r\n]/.test(file) && isRegularFile(file));
 const restoreServiceCliSchema = z.strictObject({
   executable: z.string(),
-  entrypoint: serviceFile.refine(
-    (entry) =>
-      path.basename(entry) === "openclaw.mjs" ||
-      buildGatewayInstallEntrypointCandidates(path.dirname(path.dirname(entry))).includes(
-        path.normalize(entry),
-      ),
-  ),
+  entrypoint: serviceFile
+    .refine(
+      (entry) =>
+        path.basename(entry) === "openclaw.mjs" ||
+        buildGatewayInstallEntrypointCandidates(path.dirname(path.dirname(entry))).includes(
+          path.normalize(entry),
+        ),
+    )
+    .nullable(),
   sqliteLibrary: serviceFile.nullable(),
 });
 
@@ -66,8 +68,13 @@ export async function resolveRestoreServiceCli(
     if (expectedRuntimePin === undefined) {
       throw new Error("requires --expected-runtime-pin.");
     }
-    if (runtime !== "node" && runtime !== "bun") {
-      throw new Error('requires an explicit --runtime ("node" or "bun").');
+    if (runtime !== "node" && runtime !== "bun" && runtime !== "standalone") {
+      throw new Error('requires an explicit --runtime ("node", "bun", or "standalone").');
+    }
+    if ((runtime === "standalone") !== (serviceCli.entrypoint === null)) {
+      throw new Error(
+        "standalone recovery requires a null entrypoint; Node and Bun require an entry script.",
+      );
     }
     if (wrapper !== undefined || installEnv[OPENCLAW_WRAPPER_ENV_KEY]?.trim()) {
       throw new Error("cannot be combined with a wrapper.");

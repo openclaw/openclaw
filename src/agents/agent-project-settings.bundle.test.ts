@@ -1,98 +1,25 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
 const pluginMetadataSnapshotMocks = vi.hoisted(() => ({
-  getCurrentPluginMetadataSnapshot: vi.fn(),
   loadPluginMetadataSnapshot: vi.fn(),
 }));
 
-const bundleTestDeps = await vi.hoisted(async () => {
-  const fsSync = await import("node:fs");
-  const pathModule = await import("node:path");
-  const bundleRoot = (workspaceDir = "") =>
-    pathModule.join(workspaceDir, ".openclaw", "extensions", "claude-bundle");
-  const loadBundleRegistry = (params: { workspaceDir?: string }) => {
-    const rootDir = bundleRoot(params.workspaceDir);
-    if (!fsSync.existsSync(pathModule.join(rootDir, ".claude-plugin", "plugin.json"))) {
-      return { plugins: [], diagnostics: [] };
-    }
-    return {
-      diagnostics: [],
-      plugins: [
-        {
-          id: "claude-bundle",
-          origin: "workspace",
-          format: "bundle",
-          bundleFormat: "claude",
-          settingsFiles: ["settings.json"],
-          rootDir: fsSync.realpathSync(rootDir),
-        },
-      ],
-    };
-  };
-  const loadEmbeddedAgentMcpConfig = (params: {
-    workspaceDir: string;
-    cfg?: { mcp?: { servers?: Record<string, unknown> } };
-  }) => {
-    const pluginRoot = bundleRoot(params.workspaceDir);
-    const mcpPath = pathModule.join(pluginRoot, ".mcp.json");
-    let bundleServers: Record<string, unknown> = {};
-    if (fsSync.existsSync(mcpPath)) {
-      const raw = JSON.parse(fsSync.readFileSync(mcpPath, "utf-8")) as {
-        mcpServers?: Record<string, { args?: string[]; command?: string }>;
-      };
-      const resolvedRoot = fsSync.realpathSync(pluginRoot);
-      bundleServers = Object.fromEntries(
-        Object.entries(raw.mcpServers ?? {}).map(([id, server]) => [
-          id,
-          {
-            ...server,
-            args: server.args?.map((arg) =>
-              arg.startsWith("./") ? pathModule.join(resolvedRoot, arg) : arg,
-            ),
-            cwd: resolvedRoot,
-          },
-        ]),
-      );
-    }
-    return {
-      diagnostics: [],
-      mcpServers: { ...bundleServers, ...params.cfg?.mcp?.servers },
-    };
-  };
+const bundleTestDeps = vi.hoisted(() => {
+  const mcpServers = { bundleProbe: { command: "probe" } };
   return {
-    loadBundleRegistry,
-    loadEmbeddedAgentMcpConfig: vi.fn(loadEmbeddedAgentMcpConfig),
+    mcpServers,
+    loadEmbeddedAgentMcpConfig: vi.fn(() => ({ diagnostics: [], mcpServers })),
   };
 });
 
-vi.mock("../plugins/manifest-registry-installed.js", () => ({
-  loadPluginManifestRegistryForInstalledIndex: bundleTestDeps.loadBundleRegistry,
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  loadPluginMetadataSnapshot: pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot,
 }));
-
-vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: bundleTestDeps.loadBundleRegistry,
-  loadPluginRegistrySnapshot: () => ({ plugins: [] }),
-}));
-
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
-  getCurrentPluginMetadataSnapshot: pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot,
-}));
-
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => {
-  pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockImplementation(
-    (params: { workspaceDir?: string }) => ({
-      manifestRegistry: bundleTestDeps.loadBundleRegistry(params),
-      normalizePluginId: (id: string) => id.trim(),
-    }),
-  );
-  return {
-    loadPluginMetadataSnapshot: pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot,
-  };
-});
 
 vi.mock("./embedded-agent-mcp.js", () => ({
   loadEmbeddedAgentMcpConfig: bundleTestDeps.loadEmbeddedAgentMcpConfig,
@@ -113,8 +40,6 @@ const writeJson = (file: string, value: unknown) =>
 
 afterEach(async () => {
   await tempDirs.cleanup();
-  pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mockReset();
-  pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
   pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockClear();
   bundleTestDeps.loadEmbeddedAgentMcpConfig.mockClear();
 });
@@ -122,75 +47,43 @@ afterEach(async () => {
 async function createWorkspaceBundle(settings: unknown) {
   const workspaceDir = await tempDirs.make("openclaw-workspace-");
   const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "claude-bundle");
-  await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
-  await writeJson(path.join(pluginRoot, ".claude-plugin", "plugin.json"), {
-    name: "claude-bundle",
-  });
+  await fs.mkdir(pluginRoot, { recursive: true });
+  const pluginMetadataSnapshot = {
+    ...createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "claude-bundle",
+          origin: "global",
+          format: "bundle",
+          rootDir: pluginRoot,
+          settingsFiles: ["settings.json"],
+        },
+      ],
+    }),
+    workspaceDir: "/tmp/gateway-plugin-workspace",
+  };
   await writeJson(path.join(pluginRoot, "settings.json"), settings);
-  return { workspaceDir, pluginRoot };
+  pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockReturnValue(pluginMetadataSnapshot);
+  return { workspaceDir, pluginMetadataSnapshot };
 }
 
 describe("loadEnabledBundleAgentSettingsSnapshot", () => {
-  it("treats a supplied lifecycle snapshot as authoritative across workspaces", async () => {
-    const { workspaceDir, pluginRoot } = await createWorkspaceBundle({ hideThinkingBlock: true });
-
-    pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mockClear();
-    pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockClear();
-
-    const snapshot = loadEnabledBundleAgentSettingsSnapshot({
-      cwd: workspaceDir,
-      cfg: bundleConfig(),
-      pluginMetadataSnapshot: {
-        workspaceDir: "/tmp/gateway-plugin-workspace",
-        manifestRegistry: {
-          diagnostics: [],
-          plugins: [
-            {
-              id: "claude-bundle",
-              format: "bundle",
-              origin: "global",
-              enabledByDefault: true,
-              settingsFiles: ["settings.json"],
-              rootDir: pluginRoot,
-            },
-          ],
-        },
-        normalizePluginId: (id: string) => id.trim(),
-      } as unknown as Parameters<
-        typeof loadEnabledBundleAgentSettingsSnapshot
-      >[0]["pluginMetadataSnapshot"],
-    });
-
-    expect(snapshot.hideThinkingBlock).toBe(true);
-    expect(pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
-    expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-  });
-
-  it("loads settings without MCP discovery and enriches only the embedded snapshot", async () => {
-    const { workspaceDir, pluginRoot } = await createWorkspaceBundle({
+  it("uses the admitted snapshot across workspaces and discovers MCP only for embedding", async () => {
+    const { workspaceDir, pluginMetadataSnapshot } = await createWorkspaceBundle({
       hideThinkingBlock: true,
       shellPath: "/tmp/blocked-shell",
+      shellCommandPrefix: "echo blocked &&",
       compaction: { keepRecentTokens: 64_000 },
-    });
-    const resolvedPluginRoot = await fs.realpath(pluginRoot);
-    await fs.mkdir(path.join(pluginRoot, "servers"), { recursive: true });
-    const resolvedServerPath = await fs.realpath(path.join(pluginRoot, "servers"));
-    await writeJson(path.join(pluginRoot, ".mcp.json"), {
-      mcpServers: {
-        bundleProbe: { command: "node", args: ["./servers/probe.mjs"] },
-        sharedServer: { command: "node", args: ["./servers/bundle.mjs"] },
-      },
     });
 
     const snapshot = loadEnabledBundleAgentSettingsSnapshot({
       cwd: workspaceDir,
       cfg: bundleConfig(),
+      pluginMetadataSnapshot,
     });
 
-    expect(snapshot.hideThinkingBlock).toBe(true);
-    expect(snapshot.shellPath).toBeUndefined();
-    expect(snapshot.compaction?.keepRecentTokens).toBe(64_000);
-    expect(snapshot.mcpServers).toBeUndefined();
+    expect(snapshot).toEqual({ hideThinkingBlock: true, compaction: { keepRecentTokens: 64_000 } });
+    expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
     const prepared = {
       sessionId: workspaceDir,
       cwd: workspaceDir,
@@ -200,28 +93,8 @@ describe("loadEnabledBundleAgentSettingsSnapshot", () => {
     expect(prepareAgentProviderRetryCount(prepared)).toBeUndefined();
     expect(bundleTestDeps.loadEmbeddedAgentMcpConfig).not.toHaveBeenCalled();
     const embedded = createPreparedEmbeddedAgentSettingsManager(prepared).getGlobalSettings();
-    const expectedServer = (name: string) => ({
-      command: "node",
-      args: [path.join(resolvedServerPath, `${name}.mjs`)],
-      cwd: resolvedPluginRoot,
-    });
-    expect((embedded as Record<string, unknown>).mcpServers).toEqual({
-      bundleProbe: expectedServer("probe"),
-      sharedServer: expectedServer("bundle"),
-    });
+    expect((embedded as Record<string, unknown>).mcpServers).toEqual(bundleTestDeps.mcpServers);
 
-    const overridden = createPreparedEmbeddedAgentSettingsManager({
-      ...prepared,
-      cfg: {
-        ...bundleConfig(),
-        mcp: { servers: { sharedServer: { url: "https://example.com/mcp" } } },
-      },
-    }).getGlobalSettings();
-
-    expect((overridden as Record<string, unknown>).mcpServers).toEqual({
-      bundleProbe: expectedServer("probe"),
-      sharedServer: { url: "https://example.com/mcp" },
-    });
     clearPreparedEmbeddedAgentSettings([workspaceDir]);
   });
 

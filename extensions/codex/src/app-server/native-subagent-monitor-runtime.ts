@@ -6,7 +6,10 @@ import {
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { defineCodexBuildState } from "../build-state.js";
-import { interruptCodexTurnAndWaitBestEffort } from "./attempt-client-cleanup.js";
+import {
+  interruptCodexTurnAndWaitBestEffort,
+  terminateCodexBackgroundTerminals,
+} from "./attempt-client-cleanup.js";
 import {
   claimCodexAppServerLiveThread,
   hasCodexAppServerLiveThread,
@@ -15,12 +18,18 @@ import {
 } from "./client-runtime.js";
 import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
+import {
+  getCodexNativeProcessClient,
+  type CodexNativeProcessAuthority,
+} from "./native-process-authority.js";
 import type {
   MonitorOptions,
   NativeDescendantCancellation,
   NativeDescendantCancellationResult,
   NativeSubagentMonitorClient,
   NativeSubagentMonitorRuntime,
+  NativeSubagentsReadRequest,
+  NativeSubagentsSnapshot,
   NativeModelToolInputRequest,
   NativeModelSourceCapture,
   NativeModelSourceRequest,
@@ -29,6 +38,7 @@ import type {
 import type { NativeParentRegistration } from "./native-subagent-parent-owner.js";
 
 type NativeMonitor = {
+  readNativeSubagents(request: NativeSubagentsReadRequest): NativeSubagentsSnapshot;
   withDescendantCancellation<T>(
     params: NativeDescendantCancellation,
     run: (cancel: () => Promise<NativeDescendantCancellationResult>) => Promise<T>,
@@ -77,10 +87,12 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
     runtime,
     retainClient,
     retainParentThread,
+    nativeProcessAuthority,
     ...registration
   }: NativeParentRegistration &
     Pick<MonitorOptions, "retainClient" | "retainParentThread"> & {
       client: CodexAppServerClient;
+      nativeProcessAuthority?: CodexNativeProcessAuthority;
       runtime?: NativeSubagentMonitorRuntime;
     }): Promise<ParentRegistrationHandle> {
     let monitor = monitors.get(client);
@@ -102,9 +114,7 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
         }
         await entry.ownership.release(threadId);
         clearReleaseRetry(entry);
-        if (childThreadOwnership.get(threadId) === entry) {
-          childThreadOwnership.delete(threadId);
-        }
+        childThreadOwnership.delete(threadId);
       };
       const scheduleReleaseRetry = (threadId: string, entry: ChildThreadOwnership) => {
         if (childThreadOwnership.get(threadId) !== entry || entry.releaseRetryTimer !== undefined) {
@@ -236,12 +246,34 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
       });
       monitors.set(client, monitor);
     }
-    return monitor.registerParent(registration);
+    return monitor.registerParent({
+      ...registration,
+      cancelChildProcesses: async (childThreadId, childTurnId, assertCurrent) => {
+        assertCurrent();
+        if (nativeProcessAuthority?.requiresProcessAdmission) {
+          await getCodexNativeProcessClient(client).cancelTurn(childThreadId, childTurnId);
+        } else {
+          await terminateCodexBackgroundTerminals(
+            client,
+            childThreadId,
+            false,
+            undefined,
+            assertCurrent,
+          );
+        }
+      },
+    });
   }
 
   return {
     Monitor,
     register: registerMonitor,
+    readNativeSubagents: ({
+      client,
+      ...request
+    }: NativeSubagentsReadRequest & {
+      client: CodexAppServerClient;
+    }) => monitors.get(client)?.readNativeSubagents(request),
     captureModelSource: ({
       client,
       ...request

@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Generated, InferResult } from "kysely";
+import { sql, type Generated, type InferResult } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -8,8 +8,12 @@ import {
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import {
+  createSessionTranscriptActiveFactsInserter,
+  transcriptDependencyFactsProjectableSql,
+} from "./session-transcript-active-facts.js";
 import {
   createSessionTranscriptFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction,
@@ -26,7 +30,12 @@ import {
 } from "./session-transcript-projection-append.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { projectTranscriptNavigationFields } from "./transcript-navigation-fields.js";
-import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
+import {
+  transcriptEventDependencyNavigationSql,
+  transcriptEventJsonSql,
+  transcriptEventNavigationSql,
+  transcriptPredicateSql,
+} from "./transcript-payload.js";
 import {
   isCanonicalSessionTranscriptEntry,
   scanSessionTranscriptTree,
@@ -58,7 +67,7 @@ export type PreparedSessionTranscriptProjectionMetadata = {
 
 export type PreparedSessionTranscriptProjection = PreparedSessionTranscriptProjectionMetadata & {
   activeRows: NonNullable<PreparedSessionTranscriptProjectionAppend["activeRow"]>[];
-  ftsRows: TranscriptIndexEntry[];
+  ftsRows: Iterable<TranscriptIndexEntry>;
 };
 
 type ProjectionDeleteChunkResult = {
@@ -69,6 +78,9 @@ type SessionTranscriptProjectionRow = {
   event_json: string;
   seq: number;
   created_at: number;
+  serialized_bytes?: number;
+  dependency_navigation_json?: string | null;
+  navigation_type?: string | null;
 };
 
 type SessionTranscriptProjectionSource = {
@@ -92,22 +104,33 @@ function getProjectionKysely(db: EngineConnection) {
   return getNodeSqliteKysely<TranscriptProjectionDatabase>(db);
 }
 
-/** Older same-version writers can leave a current watermark over unclassified rows. */
-export function hasUnclassifiedSessionTranscriptEvents(
-  db: EngineConnection,
-  sessionId: string,
-): boolean {
-  return (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      getProjectionKysely(db)
-        .selectFrom("session_transcript_active_events")
-        .select("session_id")
-        .where("session_id", "=", sessionId)
-        .where("context_eligible", "is", null)
-        .limit(1),
-    ) !== undefined
-  );
+function projectionFactsColumns(db: EngineConnection) {
+  return [
+    /* kysely-allow-raw: the projection retains the exact stored byte count and JSONL separator. */ sql<number>`${transcriptEventReadBytesSql()} + 1`.as(
+      "serialized_bytes",
+    ),
+    // Eligibility is resolved by the existing JS branch owner. Capture the larger
+    // candidate set here, during its existing payload read, then narrow it below.
+    /* kysely-allow-raw: malformed and deep legacy rows retain their prior read-time projection. */ sql<
+      string | null
+    >`CASE WHEN ${transcriptDependencyFactsProjectableSql(db, "transcript_events")}
+      THEN ${transcriptEventDependencyNavigationSql(db, sql.lit(0), "transcript_events")} ELSE NULL END`.as(
+      "dependency_navigation_json",
+    ),
+    transcriptPredicateSql(db, "navigation_type").as("navigation_type"),
+  ];
+}
+
+function projectionRowFacts(row: SessionTranscriptProjectionRow, contextEligible: 0 | 1) {
+  return row.serialized_bytes === undefined || row.dependency_navigation_json == null
+    ? undefined
+    : {
+        serializedBytes: row.serialized_bytes,
+        dependencyNavigationJson:
+          row.navigation_type === "message" && contextEligible !== 0
+            ? "{}"
+            : row.dependency_navigation_json,
+      };
 }
 
 function readCanonicalEventId(event: unknown): string | null {
@@ -123,7 +146,7 @@ export function visitSessionTranscriptProjection(
   sessionId: string,
   visitor: {
     activeRow: (row: PreparedSessionTranscriptProjection["activeRows"][number]) => void;
-    ftsRow: (row: TranscriptIndexEntry) => void;
+    ftsRow: (row: TranscriptIndexEntry, eventSeq: number) => void;
   },
 ): PreparedSessionTranscriptProjectionMetadata | undefined {
   const source = readProjectionSource(db, sessionId);
@@ -157,6 +180,7 @@ function readProjectionSource(
   const query = kysely
     .selectFrom("transcript_events")
     .select([transcriptEventJsonSql(db).as("event_json"), "seq", "created_at"])
+    .select(projectionFactsColumns(db))
     .where("session_id", "=", sessionId);
   const read = prepareSqliteQuerySync<number, InferResult<typeof query>[number]>(db, (parameter) =>
     query.where(
@@ -223,15 +247,17 @@ function visitProjectionSource(
     const event: unknown = JSON.parse(row.event_json);
     const indexed = extractTranscriptIndexEntry(event, row.created_at);
     if (indexed) {
-      visitor.ftsRow(indexed);
+      visitor.ftsRow(indexed, row.seq);
     }
     if (!shouldProjectActiveEvent(event)) {
       continue;
     }
     const projectsMessage = hasTranscriptMessage(event);
+    const contextEligible = transcriptEventContextEligibility(event);
     visitor.activeRow({
       activePosition: activeEventCount++,
-      contextEligible: transcriptEventContextEligibility(event),
+      contextEligible,
+      facts: projectionRowFacts(row, contextEligible),
       eventSeq: row.seq,
       messagePosition: projectsMessage ? activeMessageCount++ : null,
     });
@@ -252,12 +278,33 @@ export function prepareProjectionSource(
   source: SessionTranscriptProjectionSource,
 ): PreparedSessionTranscriptProjection | undefined {
   const activeRows: PreparedSessionTranscriptProjection["activeRows"] = [];
-  const ftsRows: TranscriptIndexEntry[] = [];
+  const ftsEventSeqs: number[] = [];
   const metadata = visitProjectionSource(source, {
     activeRow: (row) => activeRows.push(row),
-    ftsRow: (row) => ftsRows.push(row),
+    ftsRow: (_row, seq) => ftsEventSeqs.push(seq),
   });
-  return metadata ? { ...metadata, activeRows, ftsRows } : undefined;
+  if (!metadata) {
+    return undefined;
+  }
+  return {
+    ...metadata,
+    activeRows,
+    // Keep only source positions through planning. Each point read finishes before
+    // yielding, so backpressure retains neither decoded history nor a WAL snapshot.
+    // A rewrite during streaming is rejected by the existing final source guard;
+    // incomplete derived rows remain dirty and are rebuilt on the next attempt.
+    ftsRows: (function* () {
+      for (const seq of ftsEventSeqs) {
+        const row = source.row(seq);
+        if (row) {
+          const indexed = extractTranscriptIndexEntry(JSON.parse(row.event_json), row.created_at);
+          if (indexed) {
+            yield indexed;
+          }
+        }
+      }
+    })(),
+  };
 }
 
 /** Reads and resolves one projection on a worker-owned SQLite snapshot. */
@@ -265,7 +312,7 @@ export function prepareSessionTranscriptProjection(
   db: EngineConnection,
   sessionId: string,
 ): PreparedSessionTranscriptProjection | undefined {
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     db,
     () => {
       const source = readProjectionSource(db, sessionId);
@@ -432,7 +479,7 @@ export function appendPreparedSessionTranscriptProjectionChunkInTransaction(
   db: EngineConnection,
   params: {
     activeRows?: PreparedSessionTranscriptProjection["activeRows"];
-    ftsRows?: PreparedSessionTranscriptProjection["ftsRows"];
+    ftsRows?: TranscriptIndexEntry[];
     sessionId: string;
   },
 ): void {
@@ -443,7 +490,7 @@ function insertPreparedSessionTranscriptProjectionRows(
   db: EngineConnection,
   params: {
     activeRows?: PreparedSessionTranscriptProjection["activeRows"];
-    ftsRows?: PreparedSessionTranscriptProjection["ftsRows"];
+    ftsRows?: TranscriptIndexEntry[];
     sessionId: string;
   },
 ): void {
@@ -462,6 +509,9 @@ function insertPreparedSessionTranscriptProjectionRows(
       ),
     );
   }
+  if (params.activeRows && params.activeRows.length > 0) {
+    createSessionTranscriptActiveFactsInserter(db, params.sessionId)(params.activeRows);
+  }
   if (params.ftsRows && params.ftsRows.length > 0) {
     const insertFts = createSessionTranscriptFtsInserter(db, params.sessionId);
     insertFts(params.ftsRows);
@@ -472,7 +522,7 @@ function prepareProjectionTailCatchUp(
   db: EngineConnection,
   plan: PreparedSessionTranscriptProjectionMetadata,
   snapshot: TranscriptProjectionSourceSnapshot,
-): PreparedSessionTranscriptProjection | undefined {
+) {
   const latestSeq = snapshot.latestSeq;
   if (
     plan.sourceHasInvalidLeafControl ||
@@ -486,13 +536,14 @@ function prepareProjectionTailCatchUp(
     getProjectionKysely(db)
       .selectFrom("transcript_events")
       .select([transcriptEventJsonSql(db).as("event_json"), "seq", "created_at"])
+      .select(projectionFactsColumns(db))
       .where("session_id", "=", plan.sessionId)
       .where("seq", ">", plan.sourceIndexedSeq)
       .where("seq", "<=", latestSeq)
       .orderBy("seq", "asc"),
   ).rows;
   const activeRows: PreparedSessionTranscriptProjection["activeRows"] = [];
-  const ftsRows: PreparedSessionTranscriptProjection["ftsRows"] = [];
+  const ftsRows: TranscriptIndexEntry[] = [];
   let cursor: SessionTranscriptProjectionCursor = {
     activeEventCount: plan.activeEventCount,
     activeMessageCount: plan.activeMessageCount,
@@ -516,6 +567,7 @@ function prepareProjectionTailCatchUp(
     }
     cursor = append.cursor;
     if (append.activeRow) {
+      append.activeRow.facts = projectionRowFacts(row, append.activeRow.contextEligible);
       activeRows.push(append.activeRow);
     }
     if (append.ftsRow) {

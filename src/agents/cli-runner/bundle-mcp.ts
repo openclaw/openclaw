@@ -16,6 +16,7 @@ import { extractMcpServerMap } from "../../plugins/bundle-mcp.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.types.js";
 import type { CliBackendConfig, CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
+import { mapNestedStrings } from "../../shared/map-nested-strings.js";
 import { acquireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
 import { releaseSessionMcpRuntime } from "../agent-bundle-mcp-manager-cleanup.js";
 import { isRecord } from "../bundle-mcp-adapter.js";
@@ -140,11 +141,19 @@ function canonicalizeSystemAgentTurnStateForResume(
 function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMcpConfig {
   // The OpenClaw loopback MCP port changes across runs. Replace it before
   // hashing so resume compatibility tracks config shape, not ephemeral ports.
+  // ToolSearch deferral only flips Claude's upfront-loading hint for the same
+  // tools, and the prompt hash carries discovery, so keep stored bindings' value.
   const canonical = mapMcpServers(config, (server, name) => {
     const canonicalServer = canonicalizeSystemAgentTurnStateForResume(server);
-    return name === "openclaw" && typeof canonicalServer.url === "string"
-      ? { ...canonicalServer, url: normalizeOpenClawLoopbackUrl(canonicalServer.url) }
-      : canonicalServer;
+    if (name !== "openclaw") {
+      return canonicalServer;
+    }
+    const { url, alwaysLoad } = canonicalServer;
+    return {
+      ...canonicalServer,
+      ...(typeof url === "string" ? { url: normalizeOpenClawLoopbackUrl(url) } : {}),
+      ...(alwaysLoad === undefined ? {} : { alwaysLoad: true }),
+    };
   });
   return {
     mcpServers: sortJsonValue(canonical.mcpServers) as BundleMcpConfig["mcpServers"],
@@ -210,20 +219,11 @@ function resolveOpenClawMcpEnvTemplates(value: unknown, env?: Record<string, str
   if (!env) {
     return value;
   }
-  if (typeof value === "string") {
-    return value.replace(OPENCLAW_MCP_ENV_TEMPLATE_PATTERN, (match, name: string) => {
+  return mapNestedStrings(value, (text) =>
+    text.replace(OPENCLAW_MCP_ENV_TEMPLATE_PATTERN, (match, name: string) => {
       const replacement = env[name];
       return Object.hasOwn(env, name) && replacement !== undefined ? replacement : match;
-    });
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => resolveOpenClawMcpEnvTemplates(entry, env));
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, resolveOpenClawMcpEnvTemplates(entry, env)]),
+    }),
   );
 }
 
@@ -441,7 +441,7 @@ export async function prepareCliBundleMcpConfig(params: {
     });
   const resolvedBearerConfig = await resolveBearerConfig(mergedConfig);
 
-  const preparedDataDirs = prepareOwnedBundleMcpDataDirs({
+  const preparedDataDirs = await prepareOwnedBundleMcpDataDirs({
     config: applyMcpServerOverrides(resolvedBearerConfig.config, params.toolOverrides?.mcpServers),
     prepareDataDirsByServer,
   });

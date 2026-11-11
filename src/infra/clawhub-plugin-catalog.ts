@@ -95,7 +95,7 @@ export type ClawHubPluginVersionCategories = {
 
 type ClawHubReadOptions = Pick<
   ClawHubRequestParams,
-  "baseUrl" | "token" | "skipAuth" | "timeoutMs" | "fetchImpl"
+  "baseUrl" | "token" | "skipAuth" | "timeoutMs"
 >;
 
 const BARE_ICON_KEY = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
@@ -257,34 +257,6 @@ function parsePluginCategories(value: unknown): ClawHubPluginCategory[] {
   return categories.toSorted((left, right) => left.order - right.order);
 }
 
-function parseCatalogList(value: unknown, baseUrl?: string) {
-  if (!isRecord(value) || !Array.isArray(value.items)) {
-    throw new Error("Malformed ClawHub plugin catalog response: expected items to be an array.");
-  }
-  const nextCursor = readClawHubStringField(value, "nextCursor", "plugin catalog response");
-  return {
-    items: value.items.map((item, index) =>
-      parseCatalogPackage(item, `plugin catalog item ${index}`, baseUrl),
-    ),
-    ...(nextCursor ? { nextCursor } : {}),
-    ...(value.categories !== undefined ? { categories: parsePluginCategories(value) } : {}),
-  };
-}
-
-function parseCatalogSearch(value: unknown, baseUrl?: string) {
-  if (!isRecord(value) || !Array.isArray(value.results)) {
-    throw new Error("Malformed ClawHub plugin search response: expected results to be an array.");
-  }
-  return {
-    items: value.results.map((result, index) => {
-      if (!isRecord(result)) {
-        throw new Error(`Malformed ClawHub plugin search result ${index}: expected an object.`);
-      }
-      return parseCatalogPackage(result.package, `plugin search result ${index}`, baseUrl);
-    }),
-  };
-}
-
 function readOptionalRecord(
   source: Record<string, unknown>,
   field: string,
@@ -413,8 +385,8 @@ export async function fetchClawHubPluginCatalog(
   const shared = {
     baseUrl: params.baseUrl,
     token: params.token,
+    skipAuth: params.skipAuth,
     timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   };
   if (query) {
     const searchSource = isClawHubTelemetryDisabled() ? undefined : params.searchSource;
@@ -431,17 +403,33 @@ export async function fetchClawHubPluginCatalog(
         limit: params.limit ? String(params.limit) : undefined,
       },
     });
-    return parseCatalogSearch(value, params.baseUrl);
+    const baseUrl = params.baseUrl;
+    if (!isRecord(value) || !Array.isArray(value.results)) {
+      throw new Error("Malformed ClawHub plugin search response: expected results to be an array.");
+    }
+    return {
+      items: value.results.map((result, index) => {
+        if (!isRecord(result)) {
+          throw new Error(`Malformed ClawHub plugin search result ${index}: expected an object.`);
+        }
+        return parseCatalogPackage(result.package, `plugin search result ${index}`, baseUrl);
+      }),
+    };
   }
+  const curatedCategory = (params.intent ?? "all") === "all" && Boolean(params.category);
   const value = await fetchClawHubJson<unknown>({
     ...shared,
+    // Curated discovery shares the public CDN snapshot, just like the overview.
+    skipAuth:
+      params.skipAuth ??
+      (curatedCategory && !params.token && isDefaultClawHubBaseUrl(params.baseUrl)),
     path: "/api/v1/plugins",
     search: {
       category: params.category,
       cursor: params.cursor,
       featured: params.intent === "featured" ? "true" : undefined,
       isOfficial: params.officialOnly || params.intent === "official" ? "true" : undefined,
-      curated: (params.intent ?? "all") === "all" && params.category ? "true" : undefined,
+      curated: curatedCategory ? "true" : undefined,
       sort:
         params.intent === "featured"
           ? undefined
@@ -451,7 +439,18 @@ export async function fetchClawHubPluginCatalog(
       limit: params.limit ? String(params.limit) : undefined,
     },
   });
-  return parseCatalogList(value, params.baseUrl);
+  const baseUrl = params.baseUrl;
+  if (!isRecord(value) || !Array.isArray(value.items)) {
+    throw new Error("Malformed ClawHub plugin catalog response: expected items to be an array.");
+  }
+  const nextCursor = readClawHubStringField(value, "nextCursor", "plugin catalog response");
+  return {
+    items: value.items.map((item, index) =>
+      parseCatalogPackage(item, `plugin catalog item ${index}`, baseUrl),
+    ),
+    ...(nextCursor ? { nextCursor } : {}),
+    ...(value.categories !== undefined ? { categories: parsePluginCategories(value) } : {}),
+  };
 }
 
 export async function fetchClawHubPluginOverview(

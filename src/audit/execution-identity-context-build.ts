@@ -8,8 +8,6 @@ import type { ExecutionIdentityAdmissionEnvelope } from "./execution-identity-ad
 import { sortUniqueExecutionIdentityEntries } from "./execution-identity-ordering.js";
 import { executionIdentitySpawnAdmission } from "./execution-identity-spawn-admission.js";
 
-const EXECUTION_IDENTITY_CONTEXT_MAX_BYTES = 16 * 1024;
-
 export function ensureBoundedExecutionIdentityRef(
   value: string,
   label: string,
@@ -155,6 +153,23 @@ export function buildExecutionIdentityContext(
     createdAt: fixed.createdAt,
     trustDomain: { kind: "gateway-cell", domainRef, state: "present" },
     invoker,
+    ...(envelope.representedSubject
+      ? {
+          representedSubject: {
+            state: "present",
+            principal: {
+              kind: "person",
+              domainRef,
+              principalRef: hmacRef(
+                db,
+                "principal",
+                `${domainRef}:person`,
+                envelope.representedSubject.rawPrincipalRef,
+              ),
+            },
+          },
+        }
+      : {}),
     ingress: {
       kind: envelope.ingress.kind,
       boundary: ensureBoundedExecutionIdentityRef(envelope.ingress.boundary, "ingress boundary"),
@@ -187,10 +202,6 @@ export function buildExecutionIdentityContext(
   };
   if (!validateExecutionIdentityContextV1(context)) {
     throw new Error("prepared execution identity context violates the V1 contract");
-  }
-  const encoded = JSON.stringify(context);
-  if (Buffer.byteLength(encoded, "utf8") > EXECUTION_IDENTITY_CONTEXT_MAX_BYTES) {
-    throw new Error("prepared execution identity context exceeds 16 KiB");
   }
   return freezeExecutionIdentityContext(context);
 }

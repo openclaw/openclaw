@@ -1,6 +1,12 @@
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 
-type SessionDiffPreferences = { split: boolean; wrap: boolean };
+export type SessionDiffMode = "auto" | "unified" | "split";
+type SessionDiffPreferences = {
+  split: boolean;
+  wrap: boolean;
+  mode?: SessionDiffMode;
+  wordDiffs?: boolean;
+};
 const PREFERENCES_KEY = "openclaw.control.sessionDiff.v1";
 
 export function loadSessionDiffPreferences(): SessionDiffPreferences {
@@ -11,9 +17,30 @@ export function loadSessionDiffPreferences(): SessionDiffPreferences {
         typeof parsed === "object" && parsed !== null && "split" in parsed && parsed.split === true,
       wrap:
         typeof parsed === "object" && parsed !== null && "wrap" in parsed && parsed.wrap === true,
+      mode:
+        typeof parsed === "object" &&
+        parsed !== null &&
+        "mode" in parsed &&
+        (parsed.mode === "split" || parsed.mode === "unified")
+          ? parsed.mode
+          : typeof parsed === "object" &&
+              parsed !== null &&
+              !("mode" in parsed) &&
+              "split" in parsed &&
+              typeof parsed.split === "boolean"
+            ? parsed.split
+              ? "split"
+              : "unified"
+            : "auto",
+      wordDiffs: !(
+        typeof parsed === "object" &&
+        parsed !== null &&
+        "wordDiffs" in parsed &&
+        parsed.wordDiffs === false
+      ),
     };
   } catch {
-    return { split: false, wrap: false };
+    return { split: false, wrap: false, mode: "auto", wordDiffs: true };
   }
 }
 

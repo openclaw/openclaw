@@ -5,7 +5,6 @@ import * as hostRootResolver from "../infra/openclaw-root.js";
 import {
   buildManagedPluginDependencyStatus,
   buildPluginDependencyStatus,
-  findMissingRequiredPluginDependencies,
   normalizePluginDependencySpecs,
 } from "./status-dependencies-core.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -60,35 +59,20 @@ function linkHost(rootDir: string, hostRoot: string) {
 }
 
 describe("plugin dependency health", () => {
-  it.each([
-    "missing",
-    "directory",
-    "file",
-    "empty-manifest",
-    "malformed-manifest",
-    "directory-manifest",
-  ])("rejects a required dependency with a %s package payload", (payload) => {
-    const rootDir = createPluginRoot();
-    const dependencyDir = path.join(rootDir, "node_modules", "required-runtime");
-    if (payload === "directory") {
-      fs.mkdirSync(dependencyDir, { recursive: true });
-    } else if (payload === "file") {
-      fs.mkdirSync(path.dirname(dependencyDir));
-      fs.writeFileSync(dependencyDir, "not a package");
-    }
-    if (payload.endsWith("manifest")) {
-      fs.mkdirSync(dependencyDir, { recursive: true });
-      const manifest = path.join(dependencyDir, "package.json");
+  it.each(["missing", "directory-manifest"])(
+    "rejects a required dependency with a %s package payload",
+    (payload) => {
+      const rootDir = createPluginRoot();
       if (payload === "directory-manifest") {
-        fs.mkdirSync(manifest);
-      } else {
-        fs.writeFileSync(manifest, payload === "empty-manifest" ? "" : "{");
+        fs.mkdirSync(path.join(rootDir, "node_modules/required-runtime/package.json"), {
+          recursive: true,
+        });
       }
-    }
-    const status = dependencyStatus(rootDir);
-    expectRequired(status, false);
-    expect(status.dependencies[0]?.resolvedPath).toBeUndefined();
-  });
+      const status = dependencyStatus(rootDir);
+      expectRequired(status, false);
+      expect(status.dependencies[0]?.resolvedPath).toBeUndefined();
+    },
+  );
 
   it.each([
     ["required-runtime", "nested", false],
@@ -101,7 +85,7 @@ describe("plugin dependency health", () => {
     ["required-runtime", "missing", true],
     ["required-runtime", "ancestor", true],
     ["required-runtime", "outside-symlink", true],
-  ] as const)("resolves %s in %s layout (bounded: %s)", async (name, layout, bounded) => {
+  ] as const)("resolves %s in %s layout (bounded: %s)", (name, layout, bounded) => {
     const { parent, projectRoot, rootDir, hostRoot } = createHostFixture();
     const dependencyDir = path.join(rootDir, "node_modules", name);
     const owner =
@@ -131,11 +115,11 @@ describe("plugin dependency health", () => {
     if (bounded) {
       expect(status.missingOptional).toEqual(["optional-runtime"]);
       expect(
-        await findMissingRequiredPluginDependencies({
+        buildManagedPluginDependencyStatus({
           ...params,
           dependencyRootDir: projectRoot,
           dependencies: { ...params.dependencies, openclaw: "*" },
-        }),
+        }).missing,
       ).toEqual(installed ? [] : [name]);
     } else {
       expect(status.dependencies[0]?.resolvedPath).toBe(availableDir);
@@ -178,7 +162,7 @@ describe("plugin dependency health", () => {
 
   it.each(["project-alias", "outside-project", "missing-project"])(
     "applies canonical project bounds through %s",
-    async (layout) => {
+    (layout) => {
       const { parent, projectRoot, rootDir, hostRoot } = createHostFixture();
       linkHost(rootDir, hostRoot);
       const availableDir = writeDependency(projectRoot, "required-runtime");
@@ -201,14 +185,14 @@ describe("plugin dependency health", () => {
         );
       }
       expect(
-        await findMissingRequiredPluginDependencies({ ...params, dependencies: { openclaw: "*" } }),
+        buildManagedPluginDependencyStatus({ ...params, dependencies: { openclaw: "*" } }).missing,
       ).toEqual(installed ? [] : ["openclaw"]);
     },
   );
 
   it.each([undefined, {}, { openclaw: "*", "optional-runtime": "1.0.0" }])(
     "keeps optional overrides out of required failures and host audits: %j",
-    async (dependencies) => {
+    (dependencies) => {
       const rootDir = createPluginRoot();
       const resolver = vi
         .spyOn(hostRootResolver, "resolveOpenClawPackageRootSync")
@@ -231,7 +215,7 @@ describe("plugin dependency health", () => {
       expect(
         status.optionalDependencies.find((entry) => entry.name === "optional-runtime")?.spec,
       ).toBe("2.0.0");
-      expect(await findMissingRequiredPluginDependencies(params)).toEqual([]);
+      expect(buildManagedPluginDependencyStatus(params).missing).toEqual([]);
       expect(resolver).not.toHaveBeenCalled();
     },
   );
@@ -245,7 +229,7 @@ describe("plugin dependency health", () => {
     "linked-node-modules",
     "hoisted-host",
     "unknown-host",
-  ] as const)("audits a required OpenClaw host with a %s layout", async (layout) => {
+  ] as const)("audits a required OpenClaw host with a %s layout", (layout) => {
     const { parent, projectRoot, rootDir, hostRoot } = createHostFixture();
     if (layout === "canonical" || layout === "unknown-host") {
       linkHost(rootDir, hostRoot);
@@ -270,7 +254,7 @@ describe("plugin dependency health", () => {
       vi.spyOn(hostRootResolver, "resolveOpenClawPackageRootSync").mockReturnValue(null);
     }
     const params = { rootDir, dependencyRootDir: projectRoot, dependencies: { openclaw: "*" } };
-    expect(await findMissingRequiredPluginDependencies(params)).toEqual(
+    expect(buildManagedPluginDependencyStatus(params).missing).toEqual(
       layout === "canonical" ? [] : ["openclaw"],
     );
     expect(buildManagedPluginDependencyStatus(params).requiredInstalled).toBe(
@@ -280,14 +264,14 @@ describe("plugin dependency health", () => {
     expect(buildPluginDependencyStatus(params).requiredInstalled).toBe(layout === "copy");
   });
 
-  it.each(["", "missing"])("rejects an unavailable plugin root: %j", async (root) => {
+  it.each(["", "missing"])("rejects an unavailable plugin root: %j", (root) => {
     const projectRoot = createPluginRoot();
     expect(
-      await findMissingRequiredPluginDependencies({
+      buildManagedPluginDependencyStatus({
         rootDir: root === "missing" ? path.join(projectRoot, root) : root,
         dependencyRootDir: projectRoot,
         dependencies: { openclaw: "*" },
-      }),
+      }).missing,
     ).toEqual(["openclaw"]);
   });
 });

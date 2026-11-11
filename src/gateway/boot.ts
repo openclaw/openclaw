@@ -33,12 +33,6 @@ function generateBootSessionId(): string {
 const log = createSubsystemLogger("gateway/boot");
 const BOOT_FILENAME = "BOOT.md";
 
-/** Result of attempting to run a workspace BOOT.md check. */
-type BootRunResult =
-  | { status: "skipped"; reason: "missing" | "empty" }
-  | { status: "ran" }
-  | { status: "failed"; reason: string };
-
 function buildBootPrompt(content: string) {
   const safeContent = escapeInternalRuntimeContextDelimiters(content);
   const runtimeContextFragments: RuntimeContextFragment[] = [
@@ -94,12 +88,17 @@ async function loadBootFile(
   return content ? { status: "ok", content } : { status: "empty" };
 }
 
+/** Result of attempting to run a workspace BOOT.md check. */
 export async function runBootOnce(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
   workspaceDir: string;
   agentId?: string;
-}): Promise<BootRunResult> {
+}): Promise<
+  | { status: "skipped"; reason: "missing" | "empty" }
+  | { status: "ran" }
+  | { status: "failed"; reason: string }
+> {
   const bootRuntime: RuntimeEnv = {
     log: () => {},
     error: (message) => log.error(String(message)),
@@ -146,7 +145,6 @@ export async function runBootOnce(params: {
           ownedSessionId = nextSessionId;
         },
       },
-      { boundary: "gateway.boot" },
       bootRuntime,
       params.deps,
     );

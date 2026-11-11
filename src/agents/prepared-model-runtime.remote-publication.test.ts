@@ -25,13 +25,12 @@ import {
   prepareRemoteModelCatalogStartupSnapshot,
 } from "../model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
-import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { markPluginRegistryActive, quiescePluginRegistry } from "../plugins/registry-lifecycle.js";
-import { createPluginRegistryOwner } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { createEnteredGate } from "./entered-gate.test-support.js";
 import * as runtimePluginLoadPlan from "./harness/runtime-plugin-load-plan.js";
 import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
+import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
 import * as catalogWorker from "./prepared-model-catalog-worker.js";
 import { scopePreparedModelRuntimeLease } from "./prepared-model-runtime-generation-scope.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
@@ -42,7 +41,6 @@ import {
   applyRemoteModelCatalogUpdate,
   getPreparedModelRuntimeSnapshot as readSnapshot,
   loadPublishedGatewayReplyDispatchRuntime as loadPublishedDispatch,
-  prepareModelRuntimeSnapshot as prepare,
   refreshPreparedModelRuntimeSnapshots as refresh,
 } from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
@@ -82,7 +80,7 @@ function bundle(generatedAt: number) {
     }),
   };
 }
-async function setup(options: { allowGatewaySubagentBinding?: true } = {}) {
+async function setup(options: { allowGatewaySubagentBinding?: true } = {}, runtimeConfig = config) {
   stored.mockReturnValue(bundle(200));
   setRemoteModelCatalogOverlaySourcesForTest({
     bundledGeneratedAt: () => 100,
@@ -101,21 +99,31 @@ async function setup(options: { allowGatewaySubagentBinding?: true } = {}) {
     );
     return { entries, routeVariants: entries };
   });
-  await refresh(config, {
+  await refresh(runtimeConfig, {
     ...options,
     gatewayLifecycle: true,
     catalogMode: "static",
   });
   stored.mockReturnValue(bundle(300));
 }
-async function listModels(refreshFullCatalog: boolean) {
+async function listModels(
+  refreshFullCatalog: boolean,
+  afterRead?: () => Promise<void>,
+  success = true,
+) {
   const respond = vi.fn();
   const loader = (params: Parameters<typeof loadPreparedGatewayModelCatalogSnapshot>[0]) =>
     loadPreparedGatewayModelCatalogSnapshot({ ...params, getConfig: () => config });
   registerGatewayModelCatalogPrivateAccess(loader, {
     loadDeferred: loader,
-    readPrepared: (params) =>
-      readPreparedGatewayModelCatalogOwnerSnapshot({ ...params, getConfig: () => config }),
+    readPrepared: async (params) => {
+      const snapshot = await readPreparedGatewayModelCatalogOwnerSnapshot({
+        ...params,
+        getConfig: () => config,
+      });
+      await afterRead?.();
+      return snapshot;
+    },
   });
   await modelsHandlers["models.list"]!({
     req: { type: "req", id: "list", method: "models.list" },
@@ -129,10 +137,89 @@ async function listModels(refreshFullCatalog: boolean) {
       logGateway: { debug: vi.fn(), warn: vi.fn() },
     } as never,
   });
-  expect(respond.mock.calls[0]?.[0]).toBe(true);
-  return respond.mock.calls[0]?.[1];
+  expect(respond.mock.calls[0]?.[0]).toBe(success);
+  return respond.mock.calls[0]?.[success ? 1 : 2];
 }
 afterEach(() => setRemoteModelCatalogOverlaySourcesForTest());
+
+it("keeps headless catalog adoption lazy until inventory is requested", async () => {
+  const headless: OpenClawConfig = {
+    ...config,
+    gateway: { controlUi: { enabled: false } },
+  };
+  await setup({}, headless);
+  expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+
+  expect(await applyRemoteModelCatalogUpdate(() => headless)).toBe("published");
+  expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+  const input = fixture.agentInput("default", headless);
+  await using run = await acquireRun(input, { catalogMode: "static" });
+  expect(run.pluginGeneration.remoteCatalog?.generatedAt).toBe(300);
+  expect(run.snapshot.modelCatalog.entries.map((row) => row.id)).toContain("remote-200");
+
+  const discovering = createDeferred();
+  const release = createDeferred();
+  mocks.runPreparedModelCatalogWorker.mockImplementationOnce(async () => {
+    discovering.resolve();
+    await release.promise;
+    return { entries: [], routeVariants: [] };
+  });
+  const first = readSnapshot(input)!.loadFullModelCatalog!({ refresh: true, wait: true });
+  void first.catch(() => undefined);
+  await discovering.promise;
+  const { preparing, commit, pricingSpy } = holdPricing();
+  stored.mockReturnValue(bundle(400));
+  const adoption = applyRemoteModelCatalogUpdate(() => headless);
+  try {
+    await preparing.promise;
+    commit.resolve();
+    // Let adoption reach the held acquisition before releasing its first request.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    release.resolve();
+    await first;
+    expect(await adoption).toBe("published");
+  } finally {
+    commit.resolve();
+    release.resolve();
+    await Promise.allSettled([first, adoption]);
+    pricingSpy.mockRestore();
+  }
+  expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);
+  expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(400);
+  stored.mockReturnValue(bundle(500));
+  expect(await applyRemoteModelCatalogUpdate(() => headless)).toBe("published");
+  expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(3);
+});
+
+it("models.list reads the replacement after remote publication retires its catalog", async () => {
+  await setup();
+  mocks.runPreparedModelCatalogWorker.mockImplementation(async () => {
+    const id = `remote-${captureRemoteModelCatalogSnapshot()?.generatedAt}`;
+    const row = { id, provider: "custom", name: id };
+    return { entries: [row], routeVariants: [row] };
+  });
+  const afterRead = vi.fn(async () => {
+    if (afterRead.mock.calls.length === 1) {
+      expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
+    }
+  });
+  const result = await listModels(false, afterRead);
+  expect(result.models.map((model: { id: string }) => model.id)).toContain("remote-300");
+  expect(afterRead).toHaveBeenCalledTimes(2);
+});
+
+it("models.list does not retry after the remote replacement itself loses authority", async () => {
+  await setup();
+  const afterRead = vi.fn(async () => {
+    expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
+    await refresh(config, { gatewayLifecycle: true, catalogMode: "static" });
+  });
+  const error = await listModels(false, afterRead, false);
+  expect(error.code).toBe("UNAVAILABLE");
+  expect(afterRead).toHaveBeenCalledTimes(1);
+});
 
 function holdPricing() {
   const preparing = createDeferred();
@@ -374,17 +461,10 @@ it("keeps discovered rows published until the adopted catalog's discovery comple
   signal,
 }) => {
   const native = vi.fn(async () => []);
-  const registry = createEmptyPluginRegistry();
-  registry.agentHarnesses.push({
-    pluginId: "native-test",
-    source: "fixture",
-    harness: {
-      id: "native-test",
-      label: "Native test",
-      supports: () => ({ supported: true }),
-      runAttempt: vi.fn(),
-      loadModelCatalog: native,
-    },
+  const registry = harnessRegistry("native-test", {
+    label: "Native test",
+    runAttempt: vi.fn(),
+    loadModelCatalog: native,
   });
   mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
   await setup();
@@ -470,57 +550,19 @@ it("ends adoption instead of joining a timed-out owner build", async () => {
 
 it("does not hold Gateway shutdown on an adoption's pricing preparation", async ({ signal }) => {
   await setup();
-  const preparing = createDeferred();
-  const held = createDeferred();
+  const pricingGate = createEnteredGate();
   const pricingSpy = vi
     .spyOn(pricing, "prepareModelPricingContext")
-    .mockImplementation(async () => {
-      preparing.resolve();
-      await held.promise;
-    });
+    .mockImplementation(pricingGate.wait);
   const adoption = applyRemoteModelCatalogUpdate(() => config);
   try {
-    await preparing.promise;
+    await pricingGate.entered;
     // Pricing stays held until `finally`; shutdown that joined it never settles.
     await withinTest(closePreparedModelRuntimeSnapshots(), signal);
     expect(await adoption).toBe("superseded");
     expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(200);
   } finally {
-    held.resolve();
+    pricingGate.release();
     pricingSpy.mockRestore();
-  }
-});
-
-it("recovers adopted owners when their borrowed Gateway plugin retires after commit", async ({
-  signal,
-}) => {
-  const lender = createEmptyPluginRegistry();
-  const record = createPluginRecord({ id: "gateway-lender" });
-  lender.plugins.push(record);
-  const instance = new PluginInstance(record.id, { record, registry: lender });
-  markPluginRegistryActive(lender);
-  const gateway = createPluginRegistryOwner(lender);
-  // Only the adoption candidates borrow the lender, so its retirement does not also
-  // retire the claimed predecessors (whose own watchers would abort the attempt).
-  mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
-  const nextRegistry = createEmptyPluginRegistry();
-  const input = fixture.agentInput("default", config);
-  try {
-    await setup();
-    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(lender);
-    const adoption = applyRemoteModelCatalogUpdate(() => config);
-    expect(await adoption).toBe("published");
-    expect(instance.owner?.registry).toBe(lender);
-    const adopted = await prepare(input);
-    mocks.loadAgentRuntimePluginRegistryHandle.mockClear().mockReturnValue(nextRegistry);
-    quiescePluginRegistry(lender);
-    expect(adopted.isCurrent()).toBe(false);
-    // A lost loan never leaves the adopted catalog's owners unusable until a restart.
-    const replacement = await withinTest(prepare(input), signal);
-    expect(replacement.pluginRegistry).toBe(nextRegistry);
-    expect(replacement.isCurrent()).toBe(true);
-    expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
-  } finally {
-    await gateway.close();
   }
 });

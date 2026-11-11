@@ -29,10 +29,7 @@ const chromiumEngine: BrowserEngineAdapter = {
       supportsVisualActions: true,
       supportsUploads: true,
       supportsDialogs: true,
-      supportsStorage: true,
-      supportsScreencast: profile.driver !== "existing-session",
       supportsConsole: true,
-      supportsMultipleTabs: true,
       supportsNativeSnapshots: true,
       requiresCompleteTargetEnumeration: profile.driver === "extension",
       mode: usesChromeMcp
@@ -52,7 +49,6 @@ const chromiumEngine: BrowserEngineAdapter = {
       usesChromeMcp,
       usesPersistentPlaywright: usesExtension || isRemote,
       supportsPerTabWs: localManaged,
-      supportsJsonTabEndpoints: localManaged,
       supportsReset: localManaged,
       supportsManagedTabLimit: localManaged,
     };
@@ -75,5 +71,5 @@ export function resolveBrowserEngine(id: BrowserEngineId = "chromium"): BrowserE
 
 /** The same registered implementations drive status discovery and execution. */
 export function listBrowserEngines(): BrowserEngineDescriptor[] {
-  return Object.values(engines).map(({ descriptor }) => Object.assign({}, descriptor));
+  return Object.values(engines).map(({ descriptor }) => descriptor);
 }

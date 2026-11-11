@@ -55,8 +55,21 @@ function assertParent(run, plan, repository) {
 
 function completedJob(jobs, name, attempt) {
   const matches = jobs.filter((job) => job.name === name && Number(job.run_attempt) === attempt);
-  const observed = matches.length
-    ? composeReleaseAttemptJobs([{ jobs: matches, runAttempt: attempt }], {
+  const completed = matches.filter(
+    (job) => job.status === "completed" && job.conclusion !== "skipped",
+  );
+  // Cancellation still needs the authenticated executed row when an unsealable
+  // attempt contains GitHub's runnerless queued ghost copies. Keep rejecting
+  // any runner-assigned ambiguity.
+  const observable =
+    completed.length === 1
+      ? matches.filter(
+          (job) =>
+            job === completed[0] || job.status !== "queued" || job.runner_id || job.runner_name,
+        )
+      : matches;
+  const observed = observable.length
+    ? composeReleaseAttemptJobs([{ jobs: observable, runAttempt: attempt }], {
         plannedRunAttempt: attempt,
         effectiveRunAttempt: attempt,
       }).jobs
@@ -66,9 +79,8 @@ function completedJob(jobs, name, attempt) {
       `${name} attempt ${attempt}: dispatch observation unavailable; repeat cancellation after it settles`,
     );
   }
-  // The evidence owner rejects real ambiguity but drops runnerless rerun copies.
   // Keep the original executed row for its authenticated log ID and upload steps.
-  return matches.find((job) => job.status === "completed" && job.conclusion !== "skipped");
+  return completed[0];
 }
 
 /** Cancel only producer-authenticated descendants; a fresh observation makes repetition resumable. */
@@ -86,7 +98,11 @@ export async function cancelReleaseTree(runId, client, options = {}) {
   assertParent(parent, plan, repository);
   const parentIdentity = identity(parent);
   const jobs = await client.getParentJobs(runId);
-  const sealer = completedJob(jobs, "Seal release execution plan", plan.parentRunAttempt);
+  const sealer = completedJob(
+    jobs,
+    "Seal release execution plan",
+    plan.sealParentRunAttempt ?? plan.parentRunAttempt,
+  );
   const uploads =
     sealer.steps?.filter((step) => step.name === "Upload immutable release execution plan") ?? [];
   const created = Date.parse(retained.artifact.created_at);

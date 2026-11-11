@@ -58,7 +58,8 @@ export function isBotMentioned(
 
   const normalizedBotShip = normalizeShip(botShipName);
   const escapedShip = escapeRegExp(normalizedBotShip);
-  const mentionPattern = new RegExp(`(^|\\s)${escapedShip}(?=\\s|$)`, "i");
+  // Bold, italic and strike render as *, ** and ~~ around the ship.
+  const mentionPattern = new RegExp(`(^|[\\s*~])${escapedShip}(?=$|[\\s*~,.!?;:])`, "i");
   if (mentionPattern.test(messageText)) {
     return true;
   }
@@ -172,7 +173,12 @@ export function isGroupInviteAllowed(
   }).allowed;
 }
 
-function renderInlineItem(item: unknown, topLevel = false): string {
+// Inline styles can nest arbitrarily deeply in remote content. Stop rendering past
+// this depth and degrade to truncated plain text rather than recursing until the
+// call stack overflows; legitimate inline markup never approaches this bound.
+const MAX_INLINE_DEPTH = 100;
+
+function renderInlineItem(item: unknown, topLevel = false, depth = 0, omitCode = false): string {
   if (typeof item === "string") {
     return item;
   }
@@ -198,7 +204,7 @@ function renderInlineItem(item: unknown, topLevel = false): string {
   }
   const code = readStringField(record, "inline-code") || readStringField(record, "code");
   if (code) {
-    return `\`${code}\``;
+    return omitCode ? " " : `\`${code}\``;
   }
   const link = asNullableRecord(record.link);
   const linkHref = link ? readStringField(link, "href") : undefined;
@@ -206,26 +212,35 @@ function renderInlineItem(item: unknown, topLevel = false): string {
     const linkContent = readStringField(link, "content");
     return topLevel ? linkHref : linkContent || linkHref;
   }
-  if (Array.isArray(record.bold)) {
-    return `**${extractInlineText(record.bold)}**`;
+  const bold = Array.isArray(record.bold) ? record.bold : undefined;
+  const italics = Array.isArray(record.italics) ? record.italics : undefined;
+  const strike = Array.isArray(record.strike) ? record.strike : undefined;
+  const blockquote = topLevel && Array.isArray(record.blockquote) ? record.blockquote : undefined;
+  const nested = bold ?? italics ?? strike ?? blockquote;
+  if (!nested) {
+    return "";
   }
-  if (Array.isArray(record.italics)) {
-    return `*${extractInlineText(record.italics)}*`;
+  if (depth >= MAX_INLINE_DEPTH) {
+    return "";
   }
-  if (Array.isArray(record.strike)) {
-    return `~~${extractInlineText(record.strike)}~~`;
+  const inner = extractInlineText(nested, depth + 1, omitCode);
+  if (bold) {
+    return `**${inner}**`;
   }
-  if (topLevel && Array.isArray(record.blockquote)) {
-    return `> ${extractInlineText(record.blockquote)}`;
+  if (italics) {
+    return `*${inner}*`;
   }
-  return "";
+  if (strike) {
+    return `~~${inner}~~`;
+  }
+  return `> ${inner}`;
 }
 
-function extractInlineText(items: readonly unknown[]): string {
-  return items.map((item) => renderInlineItem(item)).join("");
+function extractInlineText(items: readonly unknown[], depth: number, omitCode: boolean): string {
+  return items.map((item) => renderInlineItem(item, false, depth, omitCode)).join("");
 }
 
-export function extractMessageText(content: unknown): string {
+export function extractMessageText(content: unknown, omitCode = false): string {
   if (!Array.isArray(content)) {
     return "";
   }
@@ -238,7 +253,7 @@ export function extractMessageText(content: unknown): string {
       }
 
       if (Array.isArray(verseRecord.inline)) {
-        return verseRecord.inline.map((item) => renderInlineItem(item, true)).join("");
+        return verseRecord.inline.map((item) => renderInlineItem(item, true, 0, omitCode)).join("");
       }
 
       const block = asNullableRecord(verseRecord.block);
@@ -255,7 +270,7 @@ export function extractMessageText(content: unknown): string {
         }
 
         const codeBlock = asNullableRecord(block.code);
-        if (codeBlock) {
+        if (codeBlock && !omitCode) {
           const lang = readStringField(codeBlock, "lang") ?? "";
           const code = readStringField(codeBlock, "code") ?? "";
           let fenceLength = 3;

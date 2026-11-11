@@ -600,6 +600,14 @@ describe("execution decision facts", () => {
     recordExecutionDecisionFactInDatabase(
       {
         ...receipt(receiptIdSecret),
+        representedSubject: {
+          state: "present",
+          principal: {
+            kind: "person",
+            domainRef: "recorded-domain",
+            principalRef: "recorded-person",
+          },
+        },
         action: {
           family: "tool",
           operation: "policy",
@@ -656,6 +664,14 @@ describe("execution decision facts", () => {
       }),
       expect.objectContaining({
         selectorId: "decision-fact:1",
+        representedSubject: {
+          state: "present",
+          principal: {
+            kind: "person",
+            domainRef: "recorded-domain",
+            principalRef: "recorded-person",
+          },
+        },
         action: { family: "decision", operation: "record" },
         decision: { outcome: "unknown", reasonCode: "decision_fact_display_unverified" },
         enforcement: {
@@ -767,6 +783,35 @@ describe("execution decision facts", () => {
         .db.prepare("SELECT COUNT(*) AS count FROM execution_decision_facts")
         .get(),
     ).toEqual({ count: 1 });
+  });
+
+  it("prunes oldest overflow across timestamp ties within the remaining expiry budget", () => {
+    const database = databaseOptions();
+    seedExecutionContext(database);
+    const opened = openOpenClawStateDatabase(database);
+    const add = (id: string, now: number, limits?: { maxRows: number; pruneBatchRows: number }) =>
+      recordExecutionDecisionFactInDatabase(receipt(id, now), {
+        ...database,
+        database: opened,
+        now,
+        limits,
+      });
+    add("expired-a", 0);
+    add("expired-b", 0);
+    for (const id of ["b", "c", "d", "e"]) {
+      add(id, RETENTION_MS - 100);
+    }
+    const retained = () =>
+      opened.db
+        .prepare("SELECT receipt_id FROM execution_decision_facts ORDER BY occurred_at, receipt_id")
+        .all();
+    const limits = { maxRows: 2, pruneBatchRows: 3 };
+    add("new", RETENTION_MS + 1, limits);
+    expect(retained()).toEqual(["c", "d", "e", "new"].map((receipt_id) => ({ receipt_id })));
+    add("newer", RETENTION_MS + 2, limits);
+    expect(retained()).toEqual([{ receipt_id: "new" }, { receipt_id: "newer" }]);
+    add("last", RETENTION_MS + 3, { maxRows: 0, pruneBatchRows: 3 });
+    expect(retained()).toEqual([]);
   });
 
   it("turns corrupt retained payloads into bounded unknown receipts", () => {

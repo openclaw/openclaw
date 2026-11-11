@@ -1,9 +1,10 @@
-import { readFile } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readRegularFile } from "openclaw/plugin-sdk/file-access-runtime";
 import { MAX_TCP_PORT } from "openclaw/plugin-sdk/number-runtime";
 import {
   isRecord,
@@ -15,7 +16,6 @@ import { parseCliInteger, writeCliJson, writeCliLine } from "./cli-command-io.js
 import {
   callVoiceCallGateway,
   initiateVoiceCall,
-  isUnknownMethod,
   pollContinueGateway,
   resolveContinueTimeout,
   resolveOperationTimeout,
@@ -38,6 +38,7 @@ import {
   getTailscaleSelfInfo,
   setupTailscaleExposureRoutes,
 } from "./webhook/tailscale.js";
+const briefFileDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 async function readCliBrief(options: {
   brief?: string;
@@ -46,9 +47,21 @@ async function readCliBrief(options: {
   if (options.brief && options.briefFile) {
     throw new Error("Use either --brief or --brief-file");
   }
-  const raw = options.briefFile
-    ? await readFile(resolveUserPath(options.briefFile), "utf8")
-    : options.brief;
+  let raw = options.brief;
+  if (options.briefFile) {
+    const { buffer } = await readRegularFile({
+      filePath: await realpath(resolveUserPath(options.briefFile)),
+    });
+    // Replacement decoding would silently change the task sent to the call owner.
+    try {
+      raw = briefFileDecoder.decode(buffer);
+    } catch (error) {
+      throw new Error(
+        `Brief file must be valid UTF-8: ${options.briefFile}. Re-save it as UTF-8 and retry.`,
+        { cause: error },
+      );
+    }
+  }
   if (raw === undefined) {
     return undefined;
   }
@@ -140,35 +153,61 @@ function writeSetupStatus(status: ReturnType<typeof buildSetupStatus>): void {
 
 async function runWithStandaloneRuntime(
   createRuntime: () => Promise<VoiceCallRuntime>,
-  run: (ensureRuntime: () => Promise<VoiceCallRuntime>) => Promise<void>,
+  run: (ensureRuntime: () => Promise<VoiceCallRuntime>, signal?: AbortSignal) => Promise<void>,
+  interruptGateway = false,
 ): Promise<void> {
   let runtime: Promise<VoiceCallRuntime> | undefined;
   const interrupted = createDeferred();
+  const cancellation = new AbortController();
   let exitSignal: "SIGINT" | "SIGTERM" | undefined;
   const interrupt = (signal: "SIGINT" | "SIGTERM") => {
     exitSignal ??= signal;
     process.exitCode = exitSignal === "SIGINT" ? 130 : 143;
+    cancellation.abort();
     interrupted.resolve();
   };
   const onSigint = () => interrupt("SIGINT");
   const onSigterm = () => interrupt("SIGTERM");
+  const listen = () => {
+    process.on("SIGINT", onSigint);
+    process.on("SIGTERM", onSigterm);
+  };
   try {
-    await run(async () => {
-      if (!runtime) {
-        process.on("SIGINT", onSigint);
-        process.on("SIGTERM", onSigterm);
-        runtime = createRuntime();
-      }
-      const active = await runtime;
-      if (exitSignal) {
-        throw new Error(`Voice call command interrupted by ${exitSignal}`);
-      }
-      return active;
-    });
+    if (interruptGateway) {
+      listen();
+    }
+    await run(
+      async () => {
+        if (!runtime) {
+          if (!interruptGateway) {
+            listen();
+          }
+          runtime = createRuntime();
+        }
+        const active = await runtime;
+        if (exitSignal) {
+          if (interruptGateway) {
+            cancellation.signal.throwIfAborted();
+          }
+          throw new Error(`Voice call command interrupted by ${exitSignal}`);
+        }
+        return active;
+      },
+      interruptGateway ? cancellation.signal : undefined,
+    );
     // A standalone webhook continues serving after the call ID is printed.
     // Retain its command owner so scheduler teardown cannot run at action return.
     if (runtime) {
       await interrupted.promise;
+    }
+  } catch (error) {
+    if (
+      !interruptGateway ||
+      !cancellation.signal.aborted ||
+      !(error instanceof Error) ||
+      error.name !== "AbortError"
+    ) {
+      throw error;
     }
   } finally {
     try {
@@ -346,25 +385,25 @@ export function registerVoiceCallCli(params: {
     .action((options: { callId: string; message: string }) => {
       const gatewayParams = { callId: options.callId, message: options.message };
       const continueTimeoutMs = resolveContinueTimeout(config);
-      return managerAction({
-        gatewayCall: async () => {
-          try {
-            return await callVoiceCallGateway("voicecall.continue.start", gatewayParams, {
-              timeoutMs: resolveOperationTimeout(config),
-            });
-          } catch (err) {
-            if (!isUnknownMethod(err, "voicecall.continue.start")) {
-              throw err;
-            }
-            return callVoiceCallGateway("voicecall.continue", gatewayParams, {
-              timeoutMs: continueTimeoutMs,
-            });
-          }
-        },
-        resolveGatewayPayload: (payload) => pollContinueGateway(payload, continueTimeoutMs),
-        managerFallback: (manager) => manager.continueCall(options.callId, options.message),
-        failureLabel: "continue",
-      });
+      return runWithStandaloneRuntime(
+        createRuntime,
+        (ensureRuntime, signal) =>
+          runGatewayManagerCommand({
+            config,
+            ensureRuntime,
+            signal,
+            // Let the admitted speech operation settle; only local observation is cancelled.
+            gatewayCall: () =>
+              callVoiceCallGateway("voicecall.continue.start", gatewayParams, {
+                timeoutMs: resolveOperationTimeout(config),
+              }),
+            resolveGatewayPayload: (payload) =>
+              pollContinueGateway(payload, continueTimeoutMs, signal),
+            managerFallback: (manager) => manager.continueCall(options.callId, options.message),
+            failureLabel: "continue",
+          }),
+        true,
+      );
     });
 
   root
@@ -489,12 +528,11 @@ export function registerVoiceCallCli(params: {
     .action(
       async (options: { mode?: string; port?: string; path?: string; servePath?: string }) => {
         const mode = resolveMode(options.mode ?? "funnel");
-        const servePort = parseCliInteger(
-          options.port ?? String(config.serve.port ?? 3334),
-          "--port",
-          { min: 1, max: MAX_TCP_PORT },
-        );
-        const servePath = options.servePath ?? config.serve.path ?? "/voice/webhook";
+        const servePort = parseCliInteger(options.port ?? String(config.serve.port), "--port", {
+          min: 1,
+          max: MAX_TCP_PORT,
+        });
+        const servePath = options.servePath ?? config.serve.path;
         const tsPath = options.path ?? config.tailscale?.path ?? servePath;
         const streamExposurePaths = resolveVoiceCallStreamExposurePaths(config, {
           publicWebhookPath: tsPath,

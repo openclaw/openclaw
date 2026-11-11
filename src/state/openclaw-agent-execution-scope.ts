@@ -33,6 +33,21 @@ export type AgentDatabaseExecutionCaptureConstraints = {
   requestedPath?: string;
 };
 
+export function toAgentExecutionConstraints(
+  identity: DatabasePathIdentity,
+): AgentDatabaseExecutionCaptureConstraints {
+  return identity.key.startsWith("file:")
+    ? {
+        expectedIdentity: {
+          kind: "file",
+          physicalIdentity: identity.key.slice("file:".length),
+          nativeLocation: identity.canonicalPath,
+          birthtime: identity.birthtime,
+        },
+      }
+    : { expectedCreationIdentity: identity };
+}
+
 export type AgentDatabaseExecutionPreparedTarget = {
   agentId: string;
   pathname: string;

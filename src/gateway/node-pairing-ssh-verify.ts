@@ -14,11 +14,7 @@ import {
   isEligibleFreshNodePairingRequest,
   type FreshNodePairingEligibilityParams,
 } from "./node-pairing-auto-approve.js";
-import {
-  runNodeIdentityProbe,
-  type NodeIdentityProbeParams,
-  type NodeIdentityProbeResult,
-} from "./node-pairing-ssh-verify.runtime.js";
+import { runNodeIdentityProbe } from "./node-pairing-ssh-verify.runtime.js";
 
 // Object form of the sshVerify config, derived from the config field so this
 // module adds no new public config export to the plugin-SDK surface.
@@ -40,8 +36,6 @@ type NodePairingSshVerifyPlan = {
 type NodePairingSshVerifyOutcome =
   | { ok: true; user: string; host: string }
   | { ok: false; reason: "probe-failed" | "identity-unreadable" | "identity-mismatch" };
-
-type NodeIdentityProbe = (params: NodeIdentityProbeParams) => Promise<NodeIdentityProbeResult>;
 
 const DEFAULT_TIMEOUT_MS = 7_000;
 const FAILURE_COOLDOWN_MS = 60_000;
@@ -198,10 +192,8 @@ export function startNodePairingSshVerify(params: {
   plan: NodePairingSshVerifyPlan;
   expectedDeviceId: string;
   expectedPublicKey: string;
-  probe?: NodeIdentityProbe;
-  nowMs?: number;
 }): { done: Promise<NodePairingSshVerifyOutcome>; alreadyInFlight: boolean } | null {
-  const nowMs = params.nowMs ?? Date.now();
+  const nowMs = Date.now();
   pruneCooldowns(nowMs);
   const key = probeKey(params.plan, params.expectedDeviceId, params.expectedPublicKey);
   const inFlight = inFlightByKey.get(key);
@@ -215,9 +207,8 @@ export function startNodePairingSshVerify(params: {
     return null;
   }
 
-  const probe = params.probe ?? runNodeIdentityProbe;
   const done = (async (): Promise<NodePairingSshVerifyOutcome> => {
-    const result = await probe({
+    const result = await runNodeIdentityProbe({
       user: params.plan.policy.user,
       host: params.plan.host,
       identity: params.plan.policy.identity,

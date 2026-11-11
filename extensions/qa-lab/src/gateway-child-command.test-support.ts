@@ -1,31 +1,17 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { createQaGatewayChild } from "./gateway-child.js";
 import type { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-export function makeQaRuntimeEnvParams(baseEnv?: NodeJS.ProcessEnv) {
-  return {
-    configPath: "/tmp/openclaw-qa/openclaw.json",
-    gatewayToken: "qa-token",
-    homeDir: "/tmp/openclaw-qa/home",
-    stateDir: "/tmp/openclaw-qa/state",
-    tempRoot: "/tmp/openclaw-qa",
-    xdgConfigHome: "/tmp/openclaw-qa/xdg-config",
-    xdgDataHome: "/tmp/openclaw-qa/xdg-data",
-    xdgCacheHome: "/tmp/openclaw-qa/xdg-cache",
-    bundledPluginsDir: "/tmp/openclaw-qa/bundled-plugins",
-    stagedBundledPluginsRoot: "/repo/.artifacts/qa-runtime/openclaw-qa-suite-test",
-    compatibilityHostVersion: "2026.4.8",
-    developmentSourceRoot: "/repo/openclaw",
-    baseEnv,
-  };
-}
+// Auth bootstrap drains piped input; capture-only Gateways must not wait on their lifeline.
+const drainAuthStdin =
+  'if (process.env.OPENCLAW_CLI === "1" && process.argv.includes("paste-api-key")) process.stdin.resume();';
 
 export function buildGatewayEnvironmentCaptureScript(observedEnvPath: string): string {
   return [
     'const fs = require("node:fs");',
-    'if (process.env.OPENCLAW_CLI === "1") process.stdin.resume();',
+    drainAuthStdin,
     "const env = {",
     "SAFE_VALUE: process.env.SAFE_VALUE,",
     "OPENCLAW_LIVE_SETUP_TOKEN_VALUE: process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE,",
@@ -41,6 +27,23 @@ export function buildGatewayEnvironmentCaptureScript(observedEnvPath: string): s
     "};",
     `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, JSON.stringify(env));`,
   ].join("\n");
+}
+
+export async function writeRepoCliSourceRootCaptureFixture(
+  repoRoot: string,
+  observedEnvPath: string,
+): Promise<void> {
+  const runnerPath = path.join(repoRoot, "scripts", "run-node.mjs");
+  await mkdir(path.dirname(runnerPath), { recursive: true });
+  await writeFile(
+    runnerPath,
+    [
+      'import fs from "node:fs";',
+      drainAuthStdin,
+      `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, process.env.OPENCLAW_DEV_SOURCE_ROOT ?? "");`,
+    ].join("\n"),
+    "utf8",
+  );
 }
 
 export async function writePackagedGatewayFixture(root: string): Promise<string> {

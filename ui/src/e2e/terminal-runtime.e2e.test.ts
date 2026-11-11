@@ -85,7 +85,9 @@ suite.define(() => {
           terminalEnabled: true,
           featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
           methodResponses: {
-            "terminal.list": { sessions: [] },
+            "terminal.list": {
+              sessions: [{ ...terminalSession("copy-terminal"), attached: true, createdAtMs: 1 }],
+            },
             "terminal.input": { ok: true },
             "terminal.resize": { ok: true },
             "terminal.attach": {
@@ -107,6 +109,7 @@ suite.define(() => {
         const panel = page
           .locator("openclaw-terminal-panel")
           .filter({ has: page.locator(".tp-host") });
+        await panel.locator(".tp-session.is-current").click();
         const canvas = panel.locator("canvas");
         await canvas.waitFor();
         await gateway.waitForRequest("terminal.open");
@@ -254,6 +257,8 @@ suite.define(() => {
           data: output,
         });
         await panel.locator(".tabstrip-tab.is-live").waitFor();
+        // Font completion refits the terminal before the drag samples its cell geometry.
+        await page.evaluate(() => document.fonts.ready.then(() => undefined));
         await pauseVirtualClock(page);
         await drag();
         expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("hello");

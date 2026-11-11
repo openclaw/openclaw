@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { makeEmptyPluginMetadataOwners } from "../plugins/current-plugin-metadata.test-support.js";
-
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toMatchObject(expected);
-}
+import { makeEmptyPluginMetadataOwners } from "../plugins/plugin-metadata-empty.test-support.js";
 
 const providerEndpointPlugins = vi.hoisted(() => [
   {
@@ -146,6 +142,24 @@ function requestCapabilities(input: Parameters<typeof resolveProviderRequestCapa
   return resolveProviderRequestCapabilities({ capability: "llm", transport: "stream", ...input });
 }
 
+function expectPolicy(
+  input: Parameters<typeof requestPolicy>[0],
+  expected: Record<string, unknown>,
+) {
+  expect(requestPolicy(input)).toMatchObject(expected);
+}
+
+function reloadSnapshot(endpointClass: string, family: string) {
+  return {
+    owners: {
+      providerEndpoints: [
+        { endpointClass, hosts: ["reload.example.com"], hostSuffixes: [], baseUrls: [] },
+      ],
+      providerRequests: new Map([["reload", { family }]]),
+    },
+  };
+}
+
 describe("provider attribution", () => {
   afterEach(() => {
     providerMetadataState.defaultDiscoveryCompatible = true;
@@ -156,19 +170,7 @@ describe("provider attribution", () => {
   });
 
   it("uses provider facts from the replacement plugin snapshot after reload", () => {
-    providerMetadataState.snapshot = {
-      owners: {
-        providerEndpoints: [
-          {
-            endpointClass: "openai-public",
-            hosts: ["reload.example.com"],
-            hostSuffixes: [],
-            baseUrls: [],
-          },
-        ],
-        providerRequests: new Map([["reload", { family: "before-reload" }]]),
-      },
-    };
+    providerMetadataState.snapshot = reloadSnapshot("openai-public", "before-reload");
     expect(resolveProviderEndpoint("https://reload.example.com").endpointClass).toBe(
       "openai-public",
     );
@@ -176,19 +178,7 @@ describe("provider attribution", () => {
       "before-reload",
     );
 
-    providerMetadataState.snapshot = {
-      owners: {
-        providerEndpoints: [
-          {
-            endpointClass: "anthropic-public",
-            hosts: ["reload.example.com"],
-            hostSuffixes: [],
-            baseUrls: [],
-          },
-        ],
-        providerRequests: new Map([["reload", { family: "after-reload" }]]),
-      },
-    };
+    providerMetadataState.snapshot = reloadSnapshot("anthropic-public", "after-reload");
 
     expect(resolveProviderEndpoint("https://reload.example.com").endpointClass).toBe(
       "anthropic-public",
@@ -270,43 +260,30 @@ describe("provider attribution", () => {
         baseUrl,
       });
 
-      expectRecordFields(nativeGo, {
+      expect(nativeGo).toMatchObject({
         endpointClass,
         attributionProvider: provider,
         allowsHiddenAttribution: false,
       });
-      expect(nativeGo.attributionHeaders).toEqual({
-        "User-Agent": "openclaw/2026.3.22",
-      });
+      expect(nativeGo.attributionHeaders).toEqual({ "User-Agent": "openclaw/2026.3.22" });
 
       expect(
-        resolveProviderRequestPolicy({
+        requestPolicy({
           provider,
           api: "openai-completions",
           baseUrl: "https://proxy.example.com/v1",
-          transport: "stream",
-          capability: "llm",
         }).attributionHeaders,
       ).toBeUndefined();
-      expectRecordFields(
-        resolveProviderRequestPolicy({
-          provider,
-          api: "openai-completions",
-          baseUrl: otherUrl,
-          transport: "stream",
-          capability: "llm",
-        }),
-        {
-          attributionProvider: undefined,
-          attributionHeaders: undefined,
-        },
+      expectPolicy(
+        { provider, api: "openai-completions", baseUrl: otherUrl },
+        { attributionProvider: undefined, attributionHeaders: undefined },
       );
     },
   );
 
   it("authorizes hidden xAI attribution on api.x.ai and the default xAI route", () => {
     const native = requestPolicy({ provider: "xai", baseUrl: "https://api.x.ai/v1" });
-    expectRecordFields(native, {
+    expect(native).toMatchObject({
       endpointClass: "xai-native",
       attributionProvider: "xai",
       allowsHiddenAttribution: true,
@@ -317,22 +294,11 @@ describe("provider attribution", () => {
       "User-Agent": "openclaw/2026.3.22",
     });
 
-    expectRecordFields(
-      requestPolicy({
-        provider: "xai",
-      }),
-      {
-        endpointClass: "default",
-        attributionProvider: "xai",
-      },
-    );
+    expectPolicy({ provider: "xai" }, { endpointClass: "default", attributionProvider: "xai" });
 
     // Custom proxy baseUrl should withhold xAI attribution.
-    expectRecordFields(
-      requestPolicy({
-        provider: "xai",
-        baseUrl: "https://proxy.example.com/v1",
-      }),
+    expectPolicy(
+      { provider: "xai", baseUrl: "https://proxy.example.com/v1" },
       {
         endpointClass: "custom",
         attributionProvider: undefined,
@@ -342,34 +308,27 @@ describe("provider attribution", () => {
   });
 
   it("classifies native Mistral hosts centrally", () => {
-    expectRecordFields(resolveProviderEndpoint("https://api.mistral.ai/v1"), {
+    expect(resolveProviderEndpoint("https://api.mistral.ai/v1")).toMatchObject({
       endpointClass: "mistral-public",
       hostname: "api.mistral.ai",
     });
 
-    expectRecordFields(
+    expect(
       requestCapabilities({
         provider: "mistral",
         api: "openai-completions",
         baseUrl: "https://api.mistral.ai/v1",
       }),
-      {
-        endpointClass: "mistral-public",
-        isKnownNativeEndpoint: true,
-        knownProviderFamily: "mistral",
-      },
-    );
+    ).toMatchObject({
+      endpointClass: "mistral-public",
+      isKnownNativeEndpoint: true,
+      knownProviderFamily: "mistral",
+    });
   });
 
-  it("gates documented OpenRouter attribution to OpenRouter endpoints for any provider id", () => {
-    expectRecordFields(
-      resolveProviderRequestPolicy({
-        provider: "openrouter",
-        api: "openai-responses",
-        baseUrl: "https://openrouter.ai/api/v1",
-        transport: "stream",
-        capability: "llm",
-      }),
+  it("classifies OpenRouter as an explicitly proxied attribution endpoint", () => {
+    expectPolicy(
+      { provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1" },
       {
         endpointClass: "openrouter",
         usesExplicitProxyLikeEndpoint: true,
@@ -377,72 +336,50 @@ describe("provider attribution", () => {
         allowsHiddenAttribution: false,
       },
     );
-
-    expect(
-      resolveProviderRequestPolicy({
-        provider: "or",
-        api: "openai-completions",
-        baseUrl: "https://openrouter.ai/api/v1",
-        transport: "stream",
-        capability: "llm",
-      }).attributionHeaders,
-    ).toEqual({
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories": "personal-agent,cli-agent",
-    });
-
-    expect(
-      resolveProviderRequestPolicy({
-        provider: "openrouter",
-        baseUrl: "https://proxy.example.com/v1",
-        transport: "stream",
-        capability: "llm",
-      }).attributionHeaders,
-    ).toBeUndefined();
   });
 
-  it("gates documented Vercel AI Gateway attribution to its endpoint for any provider id", () => {
-    expect(
-      resolveProviderRequestPolicy({
+  it.each<{
+    input: Parameters<typeof requestPolicy>[0];
+    headers?: Record<string, string>;
+  }>([
+    {
+      input: { provider: "or", api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1" },
+      headers: {
+        "HTTP-Referer": "https://openclaw.ai",
+        "X-OpenRouter-Title": "OpenClaw",
+        "X-OpenRouter-Categories": "personal-agent,cli-agent",
+      },
+    },
+    { input: { provider: "openrouter", baseUrl: "https://proxy.example.com/v1" } },
+    {
+      input: {
         provider: "my-gateway",
         api: "anthropic-messages",
         baseUrl: "https://ai-gateway.vercel.sh",
-        transport: "stream",
-        capability: "llm",
-      }).attributionHeaders,
-    ).toEqual({
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-Title": "OpenClaw",
-    });
-
-    expect(
-      resolveProviderRequestPolicy({
+      },
+      headers: { "HTTP-Referer": "https://openclaw.ai", "X-Title": "OpenClaw" },
+    },
+    {
+      input: {
         provider: "vercel-ai-gateway",
         api: "anthropic-messages",
         baseUrl: "https://proxy.example.com",
-        transport: "stream",
-        capability: "llm",
-      }).attributionHeaders,
-    ).toBeUndefined();
-  });
-
-  it("gates documented Perplexity attribution to the direct Perplexity API", () => {
-    expect(
-      resolveProviderRequestPolicy(
-        { provider: "perplexity", transport: "http", capability: "other" },
-        { OPENCLAW_VERSION: "2026.3.22" },
-      ).attributionHeaders,
-    ).toEqual({ "X-Pplx-Integration": "openclaw/2026.3.22" });
-
-    expect(
-      resolveProviderRequestPolicy({
+      },
+    },
+    {
+      input: { provider: "perplexity", transport: "http", capability: "other" },
+      headers: { "X-Pplx-Integration": "openclaw/2026.3.22" },
+    },
+    {
+      input: {
         provider: "perplexity",
-        baseUrl: "https://proxy.example.com/v1",
         transport: "http",
         capability: "other",
-      }).attributionHeaders,
-    ).toBeUndefined();
+        baseUrl: "https://proxy.example.com/v1",
+      },
+    },
+  ])("gates documented attribution for $input.provider at $input.baseUrl", ({ input, headers }) => {
+    expect(requestPolicy(input).attributionHeaders).toEqual(headers);
   });
 
   it("classifies Google Gemini and Vertex endpoints separately from custom hosts", () => {
@@ -461,7 +398,7 @@ describe("provider attribution", () => {
       ["proxy.example.com", "custom", undefined, "/google"],
     ];
     for (const [hostname, endpointClass, googleVertexRegion, path = ""] of cases) {
-      expectRecordFields(resolveProviderEndpoint("https://" + hostname + path), {
+      expect(resolveProviderEndpoint("https://" + hostname + path)).toMatchObject({
         endpointClass,
         hostname,
         ...(googleVertexRegion ? { googleVertexRegion } : {}),
@@ -477,7 +414,7 @@ describe("provider attribution", () => {
       ["attacker.example/?target=api.openai.com", "attacker.example"],
       ["openrouter.ai.attacker.example", "openrouter.ai.attacker.example"],
     ]) {
-      expectRecordFields(resolveProviderEndpoint(url), { endpointClass: "custom", hostname });
+      expect(resolveProviderEndpoint(url)).toMatchObject({ endpointClass: "custom", hostname });
     }
   });
 
@@ -493,47 +430,44 @@ describe("provider attribution", () => {
       const input = { provider, api, baseUrl };
       const expected = { endpointClass, allowsAnthropicServiceTier };
       expect(resolveProviderFastModeRequestCapabilities(input)).toEqual(expected);
-      expectRecordFields(resolveProviderRequestCapabilities(input), expected);
+      expect(resolveProviderRequestCapabilities(input)).toMatchObject(expected);
     },
   );
 
   it("respects compat.supportsPromptCacheKey override on prompt cache stripping", () => {
-    expectRecordFields(
+    expect(
       requestCapabilities({
         provider: "custom-proxy",
         api: "openai-responses",
         baseUrl: "https://proxy.example.com/v1",
         compat: { supportsPromptCacheKey: true },
       }),
-      {
-        endpointClass: "custom",
-        shouldStripResponsesPromptCache: false,
-      },
-    );
+    ).toMatchObject({
+      endpointClass: "custom",
+      shouldStripResponsesPromptCache: false,
+    });
 
-    expectRecordFields(
+    expect(
       requestCapabilities({
         provider: "openai",
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
         compat: { supportsPromptCacheKey: false },
       }),
-      {
-        endpointClass: "openai-public",
-        shouldStripResponsesPromptCache: true,
-      },
-    );
+    ).toMatchObject({
+      endpointClass: "openai-public",
+      shouldStripResponsesPromptCache: true,
+    });
 
-    expectRecordFields(
+    expect(
       requestCapabilities({
         provider: "custom-proxy",
         api: "openai-responses",
         baseUrl: "https://proxy.example.com/v1",
       }),
-      {
-        shouldStripResponsesPromptCache: true,
-      },
-    );
+    ).toMatchObject({
+      shouldStripResponsesPromptCache: true,
+    });
   });
 
   it("resolves a provider capability matrix for representative native and proxied routes", () => {
@@ -629,7 +563,7 @@ describe("provider attribution", () => {
     ];
 
     for (const testCase of cases) {
-      expectRecordFields(requestCapabilities(testCase.input), testCase.expected);
+      expect(requestCapabilities(testCase.input)).toMatchObject(testCase.expected);
     }
   });
 });

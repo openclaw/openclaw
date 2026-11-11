@@ -1,5 +1,6 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
+import type { CodexAppServerStartOptions } from "./config.js";
 import type { CodexDesktopGeneration } from "./desktop-generation-owner.js";
 import { prepareCodexInferenceThreadConfig } from "./inference-routing.js";
 import {
@@ -7,8 +8,18 @@ import {
   readCodexAppServerClientDesktopGeneration,
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
-import { createClientHarness } from "./test-support.js";
+import { createClientHarness, stubCodexInferenceTransportEnv } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
+
+const desktopCommand = "/Applications/ChatGPT.app/Contents/Resources/codex";
+const startOptions = {
+  transport: "stdio" as const,
+  homeScope: "agent" as const,
+  command: desktopCommand,
+  commandSource: "managed" as const,
+  args: ["app-server"],
+  headers: {},
+};
 
 /** Registers startup qualification under the suite's shared auth and generation fixtures. */
 export function registerSharedClientInferenceTests(
@@ -18,69 +29,32 @@ export function registerSharedClientInferenceTests(
     userAgent: string,
   ) => Promise<void>,
 ): void {
-  it.each([
-    {
-      label: "managed Desktop",
-      command: "/Applications/ChatGPT.app/Contents/Resources/codex",
-      commandSource: "managed",
-      transport: "stdio",
-      args: ["app-server"],
-      ownsInference: true,
-    },
-    {
-      label: "generation-bound package",
-      command: "/cache/openclaw/codex",
-      commandSource: "managed",
-      transport: "stdio",
-      args: ["app-server"],
-      ownsInference: true,
-    },
-    {
-      label: "explicit Desktop override",
-      command: "/Applications/ChatGPT.app/Contents/Resources/codex",
-      commandSource: "config",
-      transport: "stdio",
-      args: ["app-server"],
-      ownsInference: false,
-    },
-    {
-      label: "managed Desktop proxy",
-      command: "/Applications/ChatGPT.app/Contents/Resources/codex",
-      commandSource: "managed",
-      transport: "stdio",
-      args: ["app-server", "proxy", "--url", "ws://127.0.0.1:39175"],
-      ownsInference: false,
-    },
-    {
-      label: "external Desktop socket",
-      command: "/Applications/ChatGPT.app/Contents/Resources/codex",
-      commandSource: "managed",
-      transport: "websocket",
-      args: [],
-      ownsInference: false,
-    },
-  ] as const)("preserves inference ownership for $label", async (entry) => {
-    // Native profile compatibility is covered separately; this probes physical startup ownership.
-    for (const key of [
-      "CODEX_CA_CERTIFICATE",
-      "SSL_CERT_FILE",
-      "REQUEST_METHOD",
-      "HTTP_PROXY",
-      "HTTPS_PROXY",
-      "ALL_PROXY",
-      "NO_PROXY",
-      "http_proxy",
-      "https_proxy",
-      "all_proxy",
-      "no_proxy",
-    ]) {
-      vi.stubEnv(key, undefined);
-    }
+  it.each<[string, Partial<CodexAppServerStartOptions>, boolean]>([
+    ["managed Desktop", {}, true],
+    ["generation-bound package", { command: "/cache/openclaw/codex" }, true],
+    ["explicit Desktop override", { commandSource: "config" }, false],
+    [
+      "managed Desktop proxy",
+      { args: ["app-server", "proxy", "--url", "ws://127.0.0.1:39175"] },
+      false,
+    ],
+    [
+      "external Desktop socket",
+      { transport: "websocket", args: [], url: "ws://127.0.0.1:39175" },
+      false,
+    ],
+  ])("preserves inference ownership for %s", async (_label, overrides, ownsInference) => {
+    stubCodexInferenceTransportEnv();
     onTestFinished(() => {
       vi.unstubAllEnvs();
     });
     const generation = { epoch: 1, fingerprint: "desktop-inference" };
-    configureNativeStart(generation, entry.command);
+    const options = {
+      ...startOptions,
+      ...overrides,
+      args: [...(overrides.args ?? startOptions.args)],
+    };
+    configureNativeStart(generation, options.command);
     const harness = createClientHarness({
       onWrite(line, send) {
         const request = JSON.parse(line) as { id: number; method: string };
@@ -96,15 +70,7 @@ export function registerSharedClientInferenceTests(
       config: {},
       pluginConfig: { computerUse: { enabled: true, autoInstall: false } },
       agentDir: "/tmp/openclaw-agent",
-      startOptions: {
-        transport: entry.transport,
-        homeScope: "agent",
-        command: entry.command,
-        commandSource: entry.commandSource,
-        args: [...entry.args],
-        headers: {},
-        ...(entry.transport === "websocket" ? { url: "ws://127.0.0.1:39175" } : {}),
-      },
+      startOptions: options,
     });
     onTestFinished(async () => {
       await client.closeAndWait();
@@ -117,18 +83,17 @@ export function registerSharedClientInferenceTests(
       effectiveConfig: { config: {}, origins: {} },
       assertCurrent: () => {},
     });
-    if (!entry.ownsInference) {
+    if (!ownsInference) {
       expect(prepared).toBeUndefined();
       return;
     }
     expect(readCodexAppServerClientDesktopGeneration(client)).toEqual(generation);
-    expect(prepared).toBeDefined();
     if (!prepared) {
       throw new Error("Owned native startup did not prepare its inference route");
     }
     expect(prepared.config).toEqual({ openai_base_url: prepared.route.baseUrl });
     // Physical process shutdown must revoke the confidential context, not just stop discovery.
-    const registration = prepared.route.context.register({
+    const registration = await prepared.route.context.register({
       threadId: "parent",
       text: "private workspace instructions",
       signal: new AbortController().signal,
@@ -153,7 +118,7 @@ export function registerSharedClientInferenceTests(
 
   it("generation-binds an explicit desktop client while Computer Use is disabled", async () => {
     const generation = { epoch: 1, fingerprint: "desktop-x" };
-    configureNativeStart(generation, "/Applications/ChatGPT.app/Contents/Resources/codex");
+    configureNativeStart(generation, desktopCommand);
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
 
@@ -161,14 +126,7 @@ export function registerSharedClientInferenceTests(
       config: {},
       pluginConfig: { computerUse: { enabled: false } },
       agentDir: "/tmp/openclaw-agent",
-      startOptions: {
-        transport: "stdio",
-        homeScope: "agent",
-        command: "/Applications/ChatGPT.app/Contents/Resources/codex",
-        commandSource: "config",
-        args: ["app-server"],
-        headers: {},
-      },
+      startOptions: { ...startOptions, commandSource: "config" },
     });
     await sendInitializeResult(harness, "openclaw/0.149.0 (macOS; test)");
     const client = await clientPromise;

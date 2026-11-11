@@ -1,7 +1,8 @@
 import type { JSX } from "@solidjs/web";
+import { onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
@@ -17,13 +18,7 @@ export function renderPluginDetailBreadcrumb(props: {
       <a
         class="plugins-settings-breadcrumb__parent"
         href={props.backHref}
-        onClick={(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          props.onBack();
-        }}
+        onClick={(event: MouseEvent) => handleNavigationClick(event, () => props.onBack())}
       >
         {props.backLabel}
       </a>
@@ -38,6 +33,7 @@ export function renderPluginDetailBreadcrumb(props: {
 }
 
 export function renderPluginDetailShell(props: {
+  registerRemovalHeading?: (heading: HTMLHeadingElement) => () => void;
   id: string;
   name: string;
   summary?: string;
@@ -49,8 +45,11 @@ export function renderPluginDetailShell(props: {
   icon?: JSX.Element;
   readme?: JSX.Element;
   sidebar?: JSX.Element;
+  recommendations?: JSX.Element;
   panel: JSX.Element;
 }): JSX.Element {
+  let heading!: HTMLHeadingElement;
+  onSettled(() => props.registerRemovalHeading?.(heading));
   const titleId = () => `${props.id}-title`;
   return (
     <section
@@ -65,10 +64,14 @@ export function renderPluginDetailShell(props: {
           </div>
         ) : undefined}
         <div class="plugin-catalog-detail__heading">
-          <div class="plugin-catalog-detail__title-row">
-            <h1 id={titleId()}>{props.name}</h1>
+          <div class="plugin-catalog-detail__name">
+            <div class="plugin-catalog-detail__title-row">
+              <h1 id={titleId()} ref={(element) => (heading = element)}>
+                {props.name}
+              </h1>
+            </div>
+            {props.identity}
           </div>
-          {props.identity}
           {props.summary ? (
             <p class="plugin-catalog-detail__summary">{props.summary}</p>
           ) : undefined}
@@ -77,10 +80,13 @@ export function renderPluginDetailShell(props: {
       </div>
       <div class="plugin-catalog-detail__content">
         <div class="plugin-catalog-detail__main">
+          {props.recommendations}
           <section class="plugin-catalog-detail__panel">{props.panel}</section>
           {props.readme ? (
             <section class="plugin-catalog-detail__readme-section">
-              <h2>{t("pluginsPage.detailTabs.readme")}</h2>
+              <h2 class="settings-section__heading oc-settings-section-title">
+                {t("pluginsPage.detailTabs.readme")}
+              </h2>
               {props.readme}
             </section>
           ) : undefined}

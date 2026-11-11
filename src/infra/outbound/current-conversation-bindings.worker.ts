@@ -15,7 +15,7 @@ import {
   readCurrentConversationBindingListsInDatabase,
   pruneCurrentConversationBindingListInTransaction,
   readCurrentConversationBindingResolutionInDatabase,
-  readCurrentConversationBindingSelectionInDatabase,
+  inspectCurrentConversationBindingRecordsInDatabase,
   updateCurrentConversationBindingRecordInDatabase,
 } from "./current-conversation-bindings.kernel.js";
 import { withCurrentConversationBindingWorkerReceipt } from "./current-conversation-bindings.publication.js";
@@ -50,7 +50,7 @@ function touchCurrentConversationBindingInDatabase(
   const conversation = input.conversation;
   return updateCurrentConversationBindingRecordInDatabase(db, conversation, (current) => {
     if (current?.bindingId !== input.bindingId) {
-      return current;
+      return current ? undefined : null;
     }
     if (!input.accountPolicy) {
       return { ...current, metadata: { ...current.metadata, lastActivityAt: input.at } };
@@ -112,7 +112,7 @@ export const conversationBindingOperations = {
   ): ReadonlyArray<SessionBindingRecord | null> =>
     // Worker-local reads cannot inherit the host's retained discovery snapshot.
     withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => readCurrentConversationBindingSelectionInDatabase(db, input),
+      ({ db }) => inspectCurrentConversationBindingRecordsInDatabase(db, input),
       stateOptions(),
     ) ?? input.map(() => null),
   "conversationBindings.listBySessions": (

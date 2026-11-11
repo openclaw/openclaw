@@ -4,18 +4,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { formatDatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics-format.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   createDiagnosticStores,
-  admittedStatusOutput,
+  diagnosticOutput,
+  inspectDiagnosticStores as inspect,
   diagnosticConfig,
   diagnosticPaths,
   matrixRoot,
   retainedAgentRoot,
-  normalizeDiagnosticOutput,
 } from "./doctor-database-diagnostics.test-support.js";
-import { inspectDoctorDatabaseEngines } from "./doctor-database-engine-inspection.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
@@ -27,43 +25,8 @@ describe("Doctor per-store output", () => {
       path.join(root, file),
     );
     const before = files.map((file) => fs.readFileSync(file));
-    const inspection = await inspectDoctorDatabaseEngines({
-      config: diagnosticConfig(),
-      stateDir: root,
-      env: { OPENCLAW_STATE_DIR: root, HOME: path.join(root, "home") },
-    });
-    const stores = inspection.stores!;
-    expect(stores.map((store) => store.family)).toEqual([
-      "state",
-      "state",
-      "state",
-      "agent",
-      "agent",
-      "workboard",
-      "logbook",
-      "team-reports",
-      "quarantine",
-      "managed-update",
-      "package-activation",
-      "credentials",
-    ]);
-    const present = stores.filter((row) => row.path && files.includes(row.path));
-    expect(present).toHaveLength(files.length);
-    for (const store of present) {
-      expect(store).toMatchObject({ observed: "sqlite", mismatch: false, connectivity: "local" });
-      expect(store.schema.pending).toBe(0);
-      expect(store.issues).toEqual([]);
-    }
-    expect(
-      normalizeDiagnosticOutput(
-        {
-          text: stores.map(formatDatabaseStoreDiagnostic),
-          json: stores,
-          status: await admittedStatusOutput(root, diagnosticConfig(), descriptors),
-        },
-        root,
-      ),
-    ).toMatchSnapshot();
+    const stores = await inspect(root);
+    expect(await diagnosticOutput(root, diagnosticConfig(), descriptors, stores)).toMatchSnapshot();
     expect(files.map((file) => fs.readFileSync(file))).toEqual(before);
   });
 
@@ -83,29 +46,8 @@ describe("Doctor per-store output", () => {
     }
     const config = diagnosticConfig();
     config.database = { engine: "postgres" };
-    const inspection = await inspectDoctorDatabaseEngines({
-      config,
-      stateDir: root,
-      env: { OPENCLAW_STATE_DIR: root, HOME: path.join(root, "home") },
-    });
-    const matrix = inspection.stores!.find((store) => store.path === file)!;
-    expect(matrix).toMatchObject({
-      observed: "sqlite",
-      mismatch: true,
-      legacyMigrations: { state: "pending" },
-    });
-    expect(matrix.nextSteps.join(" ")).toContain("database port");
-    expect(matrix.nextSteps.join(" ")).toContain("doctor --fix");
-    expect(
-      normalizeDiagnosticOutput(
-        {
-          text: formatDatabaseStoreDiagnostic(matrix),
-          json: matrix,
-          status: await admittedStatusOutput(root, config, descriptors),
-        },
-        root,
-      ),
-    ).toMatchSnapshot();
+    const matrix = (await inspect(root, config)).find((store) => store.path === file)!;
+    expect(await diagnosticOutput(root, config, descriptors, matrix)).toMatchSnapshot();
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
@@ -120,13 +62,9 @@ describe("Doctor per-store output", () => {
         for (const directory of deniedDirectories) {
           fs.chmodSync(directory, 0);
         }
-        const inspection = await inspectDoctorDatabaseEngines({
-          config: diagnosticConfig(),
-          stateDir: root,
-          env: { OPENCLAW_STATE_DIR: root, HOME: path.join(root, "home") },
-        });
+        const stores = await inspect(root);
         for (const deniedPath of [stateFile, matrixDirectory]) {
-          const store = inspection.stores!.find((entry) => entry.path === deniedPath);
+          const store = stores.find((entry) => entry.path === deniedPath);
           expect(store).toMatchObject({
             family: "state",
             observed: "unknown",
@@ -149,18 +87,14 @@ describe("Doctor per-store output", () => {
     const root = tempDirs.make("doctor-store-missing-agent-");
     await createDiagnosticStores(root);
     const agentDir = path.join(root, "agents/missing/agent");
-    const inspection = await inspectDoctorDatabaseEngines({
-      config: {
-        ...diagnosticConfig(),
-        agents: { entries: { main: {}, missing: { agentDir } } },
-      },
-      stateDir: root,
-      env: { OPENCLAW_STATE_DIR: root, HOME: path.join(root, "home") },
+    const stores = await inspect(root, {
+      ...diagnosticConfig(),
+      agents: { entries: { main: {}, missing: { agentDir } } },
     });
     expect(
-      inspection.stores!.find((store) => store.path === path.join(root, diagnosticPaths.agent)),
+      stores.find((store) => store.path === path.join(root, diagnosticPaths.agent)),
     ).toMatchObject({ family: "agent", observed: "sqlite" });
-    const missing = inspection.stores!.find(
+    const missing = stores.find(
       (store) => store.path === path.join(agentDir, "openclaw-agent.sqlite"),
     );
     expect(missing).toMatchObject({

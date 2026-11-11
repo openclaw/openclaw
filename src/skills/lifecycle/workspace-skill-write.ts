@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolveRootPathSync } from "@openclaw/fs-safe/advanced";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
 
 const ALLOWED_SUPPORT_FILE_ROOTS = new Set(
@@ -158,11 +159,7 @@ async function restorePreparedWorkspaceFiles(
       }
       const targetRoot = await root(file.rootDir);
       if (file.previousContent === null) {
-        await targetRoot.remove(file.relativePath).catch((error: unknown) => {
-          if ((error as { code?: string })?.code !== "ENOENT") {
-            throw error;
-          }
-        });
+        await targetRoot.remove(file.relativePath).catch(ignoreMissingPath);
       } else {
         await targetRoot.write(file.relativePath, file.previousContent, {
           encoding: "utf8",
@@ -209,15 +206,15 @@ export function assertInsideSkillsRoot(
   const resolvedRoot = path.resolve(skillsRoot);
   const resolvedTarget = path.resolve(targetPath);
   if (resolvedTarget !== resolvedRoot && !isPathInside(resolvedRoot, resolvedTarget)) {
-    throw new Error(`${label} must stay inside the Skill Workshop directory.`);
+    throw new Error(`${label} must stay inside the skills root.`);
   }
   try {
     resolveRootPathSync({
       rootPath: resolvedRoot,
       absolutePath: resolvedTarget,
-      boundaryLabel: "Skill Workshop directory",
+      boundaryLabel: "skills root",
     });
   } catch (cause) {
-    throw new Error(`${label} must stay inside the Skill Workshop directory.`, { cause });
+    throw new Error(`${label} must stay inside the skills root.`, { cause });
   }
 }

@@ -1,9 +1,7 @@
-// @vitest-environment node
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  createRealtimeTalkConversationState,
-  updateRealtimeTalkConversation,
-} from "./conversation.ts";
+// @vitest-environment node
+import { createRealtimeTalkConversationState } from "./conversation-state.ts";
+import { updateRealtimeTalkConversation } from "./conversation.ts";
 
 describe("realtime Talk conversation", () => {
   let state = createRealtimeTalkConversationState();
@@ -31,6 +29,28 @@ describe("realtime Talk conversation", () => {
       isStreaming: false,
     });
   });
+  it("keeps each caption at the history position where it started", () => {
+    update("user", "Hello", false, { afterMessageId: "m-1" });
+    update("assistant", "Hi", false, { itemId: "a", afterMessageId: "m-1" });
+    update("user", "Hello there", true, { afterMessageId: "m-2" });
+    update("assistant", "Hi again", true, { itemId: "a", afterMessageId: "m-2" });
+    update("user", "Next", true, { afterMessageId: "m-2" });
+    expect(state.entries.map(({ text, afterMessageId }) => [text, afterMessageId])).toEqual([
+      ["Hello there", "m-1"],
+      ["Hi again", "m-1"],
+      ["Next", "m-2"],
+    ]);
+  });
+
+  it("keeps delayed speech beside the caption the provider orders after it", () => {
+    update("assistant", "Answer", true, { itemId: "a", order: 2, afterMessageId: "m-1" });
+    update("user", "Question", true, { itemId: "q", order: 1, afterMessageId: "m-2" });
+    expect(state.entries.map(({ text, afterMessageId }) => [text, afterMessageId])).toEqual([
+      ["Question", "m-1"],
+      ["Answer", "m-1"],
+    ]);
+  });
+
   it("keeps a corrected snapshot before the answer without adding another user entry", () => {
     update("user", "How", false, { textMode: "snapshot" });
     update("assistant", "Earth is", false);
@@ -42,32 +62,16 @@ describe("realtime Talk conversation", () => {
     ]);
   });
 
-  it("inserts spacing between adjacent transcript fragments", () => {
-    update("user", "Turn off", false, { nowMs: 1 });
-    update("user", "the lights", false, { nowMs: 2 });
+  it.each([
+    ["Turn off", "the lights", "Turn off the lights"],
+    ["Meet in Istanbul", "Istanbul tomorrow", "Meet in Istanbul tomorrow"],
+    ["Meet in İstanbul", "İstanbul tomorrow", "Meet in İstanbul tomorrow"],
+    ["Ready.", "What next?", "Ready. What next?"],
+  ])("joins user fragments %s and %s", (first, next, text) => {
+    update("user", first, false, { nowMs: 1 });
+    update("user", next, false, { nowMs: 2 });
 
-    expect(state.entries).toMatchObject([
-      { role: "user", text: "Turn off the lights", isStreaming: true },
-    ]);
-  });
-
-  it("inserts spacing after punctuation-ended user transcript fragments", () => {
-    state = updateRealtimeTalkConversation(state, {
-      role: "user",
-      text: "Ready.",
-      final: false,
-      nowMs: 1,
-    });
-    state = updateRealtimeTalkConversation(state, {
-      role: "user",
-      text: "What next?",
-      final: false,
-      nowMs: 2,
-    });
-
-    expect(state.entries).toMatchObject([
-      { role: "user", text: "Ready. What next?", isStreaming: true },
-    ]);
+    expect(state.entries).toMatchObject([{ role: "user", text, isStreaming: true }]);
   });
 
   it("keeps per-character assistant deltas verbatim across punctuation boundaries", () => {

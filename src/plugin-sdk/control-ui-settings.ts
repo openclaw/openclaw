@@ -76,6 +76,13 @@ export type ControlUiSettingsView = {
 export type ControlUiChannelSettingsSnapshot = {
   readonly channelId: string;
   readonly status: unknown;
+  readonly defaultAccountId?: string;
+  readonly login?: {
+    readonly message: string | null;
+    readonly qrDataUrl: string | null;
+    readonly connected: boolean | null;
+    readonly busy: boolean;
+  };
   readonly accounts: readonly ChannelsStatusResult["channelAccounts"][string][number][];
   readonly connected: boolean;
   readonly canAdmin: boolean;
@@ -102,6 +109,21 @@ export type ControlUiChannelSettingsContext = {
     data: Record<string, unknown> | null;
     errorMessage: string;
   }>;
+  /** Shared login owner, available only for the declaring channel's existing login flow. */
+  login?: {
+    start: (force: boolean) => Promise<void>;
+    wait: () => Promise<void>;
+    /** Capture the current account before an awaited operator decision. */
+    captureLogout: () => { readonly accountId: string; logout: () => Promise<void> } | null;
+  };
+  confirm?: (options: {
+    title: string;
+    message: string;
+    confirmLabel: string;
+    danger?: boolean;
+  }) => Promise<boolean>;
+  formatPhoneNumber?: (value: string) => string;
+  formatDuration?: (milliseconds: number) => string;
   mountConfig: (container: HTMLElement) => () => void;
   refresh: (probe: boolean) => Promise<void>;
   formatRelativeTimestamp: (timestamp: number | null | undefined) => string;

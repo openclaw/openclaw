@@ -59,7 +59,7 @@ Local image and video references are supported via data URIs.
 </Warning>
 
 <Note>
-  Picking a Runway model id from the wrong column produces an explicit error before the API request leaves OpenClaw. The provider validates `model` against the mode's allowlist (`TEXT_ONLY_MODELS`, `IMAGE_MODELS`, `VIDEO_MODELS`) in `extensions/runway/video-generation-provider.ts`.
+  Picking a Runway model id from the wrong column produces an explicit error before the API request leaves OpenClaw. The provider validates `model` against the mode's allowlist (`TEXT_ONLY_MODELS`, `IMAGE_MODELS`, `VIDEO_MODELS`) in `extensions/runway/index.ts`.
 </Note>
 
 ## Configuration
@@ -79,6 +79,12 @@ Local image and video references are supported via data URIs.
 ```
 
 ## Advanced configuration
+
+Task submission and polling honor `models.providers.runway.request`, including
+custom headers, proxy settings, and private-network policy. Polling enforces
+private-network restrictions even without a proxy override. Generated video
+downloads do not inherit task credentials or private-network trust. Their URLs
+and redirects are checked for private-network targets before connecting.
 
 <AccordionGroup>
   <Accordion title="Environment variable aliases">

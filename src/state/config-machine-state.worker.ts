@@ -11,16 +11,18 @@ export const machineStateOperations = {
     input: { candidateKey: Uint8Array },
     context: WorkerWriteOperationContext,
   ) =>
-    context.write(({ db }) => loadOrCreateConfigRevisionKeyInDatabase(db, input.candidateKey), {
-      operationLabel: "gateway.config-revision-key.load",
-    }),
+    loadOrCreateConfigRevisionKeyInDatabase(
+      context.open(),
+      input.candidateKey,
+      context.stateOptions(),
+    ),
   "machineState.write": (
     input: { key: string; value: unknown },
     context: WorkerWriteOperationContext,
-  ) =>
-    context.write(
+  ) => {
+    const key = normalizeConfigMachineStateKey(input.key);
+    return context.write(
       ({ db }) => {
-        const key = normalizeConfigMachineStateKey(input.key);
         if (key !== "authProfiles.store") {
           return writeConfigMachineStateInDatabase(db, key, input.value);
         }
@@ -33,8 +35,12 @@ export const machineStateOperations = {
         });
         return result;
       },
-      { operationLabel: "config-machine-state.write" },
-    ),
+      {
+        operationLabel: "config-machine-state.write",
+        singleStatement: key === "authProfiles.store" ? undefined : true,
+      },
+    );
+  },
 };
 
 export type MachineStateWorkerOperations = WorkerOperations<typeof machineStateOperations>;

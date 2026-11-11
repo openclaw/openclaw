@@ -1,12 +1,13 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, vi } from "vitest";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import type { SessionsReclaimParams } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
+import type {
+  SessionsDispatchParams,
+  SessionsMoveParams,
+  SessionsReclaimParams,
+} from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { AgentHarness } from "../../agents/harness/types.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -14,7 +15,6 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { findCanonicalStoreMatch } from "../session-utils-store-selection.js";
 import * as sessionStoreWorker from "../session-utils-store-worker.js";
@@ -22,7 +22,9 @@ import * as sessionStore from "../session-utils-store.js";
 import type { GatewaySessionStoreTargetWithStore } from "../session-utils-store.types.js";
 import { releaseGatewaySessionStoreFixture } from "../test/server-sessions-resources.test-helpers.js";
 import { bindDeviceWorkerAvailability } from "../worker-environments/device-provider.js";
+import { createNodeWorkerBundleTestNode } from "../worker-environments/node-worker-bundle.test-support.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
+import { localPlacement } from "../worker-environments/placement-suite.test-support.js";
 import type { GatewayRequestContext, RespondFn, SessionMutationAuthorization } from "./types.js";
 
 const dispatchTestMocks = vi.hoisted(() => ({
@@ -42,9 +44,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 afterEach(() => clearRuntimeConfigSnapshot());
 
-export function getDispatchTestMocks() {
-  return dispatchTestMocks;
-}
+export const getDispatchTestMocks = () => dispatchTestMocks;
 
 beforeEach(() => {
   const readFixtureEntry: typeof sessionStore.loadGatewaySessionEntryReadOnlyAsync = async (
@@ -81,17 +81,16 @@ beforeEach(() => {
   );
 });
 
-vi.mock("../../process/exec.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../process/exec.js")>("../../process/exec.js");
+vi.mock("../../process/exec.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../process/exec.js")>();
   return {
     ...actual,
     runCommandWithTimeout: dispatchTestMocks.runCommandWithTimeout,
   };
 });
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+vi.mock("../session-utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../session-utils.js")>();
   return {
     ...actual,
     resolveGatewaySessionStoreTargetInWorker: async (
@@ -124,12 +123,11 @@ vi.mock("../session-utils.js", async () => {
 
 import { sessionDispatchHandlers } from "./sessions-dispatch.js";
 
-export function getSessionDispatchHandler() {
-  return expectDefined(
+export const getSessionDispatchHandler = () =>
+  expectDefined(
     sessionDispatchHandlers["sessions.dispatch"],
     'sessionDispatchHandlers["sessions.dispatch"] test invariant',
   );
-}
 
 export const dispatchTestSessionKey = "agent:main:cloud-test";
 export const dispatchTestSessionId = "session-cloud-test";
@@ -139,10 +137,8 @@ export function makeReclaimedPlacement(): Extract<
   { state: "reclaimed" }
 > {
   return {
-    sessionId: dispatchTestSessionId,
-    agentId: "main",
+    ...localPlacement(dispatchTestSessionId),
     sessionKey: dispatchTestSessionKey,
-    executionMode: "worker-turn",
     state: "reclaimed",
     environmentId: "environment-previous",
     generation: 4,
@@ -152,11 +148,6 @@ export function makeReclaimedPlacement(): Extract<
     workerBundleHash: "c".repeat(64),
     lastTranscriptAckCursor: 3,
     lastLiveEventAckCursor: 2,
-    recoveryError: null,
-    terminalReason: null,
-    terminalAtMs: null,
-    turnClaim: null,
-    createdAtMs: 1,
     updatedAtMs: 2,
     stateChangedAtMs: 2,
   };
@@ -167,7 +158,6 @@ export function makeFailedPlacement(): Extract<WorkerSessionPlacementRecord, { s
     ...makeReclaimedPlacement(),
     state: "failed",
     recoveryError: "gateway restarted during worker dispatch",
-    turnClaim: null,
   };
 }
 
@@ -187,15 +177,15 @@ type DispatchSessionEntry = Pick<
 >;
 
 export function makeSessionTarget(entry?: DispatchSessionEntry) {
-  // Pin an anthropic model by default: the effective-runtime fallback consults
-  // the process-global harness registry, so the default openai model resolves
-  // to "codex" whenever a sibling test in the shard registered that harness.
-  const pinnedEntry = entry
-    ? { providerOverride: "anthropic", modelOverride: "claude-test", ...entry }
-    : undefined;
-  const store: Record<string, DispatchSessionEntry> = pinnedEntry
-    ? { [dispatchTestSessionKey]: pinnedEntry }
-    : {};
+  // Avoid inheriting a Codex harness registered by a sibling test.
+  const store: Record<string, DispatchSessionEntry> = {};
+  if (entry) {
+    store[dispatchTestSessionKey] = {
+      providerOverride: "anthropic",
+      modelOverride: "claude-test",
+      ...entry,
+    };
+  }
   return {
     agentId: "main",
     storePath: "/tmp/openclaw-agent.sqlite",
@@ -219,13 +209,11 @@ export function makeDispatchTestContext(
     bindDeviceWorkerAvailability(workerEnvironmentService, async (deviceId) => {
       const observed = overrides.nodeRegistry?.get?.(deviceId);
       const node: NodeWorkerSupervisorNodeProof = {
+        ...createNodeWorkerBundleTestNode(),
         nodeId: deviceId,
         connId: observed?.connId ?? `conn-${deviceId}`,
         pairingIdentity: observed?.pairingIdentity ?? `identity-${deviceId}`,
         pairingGeneration: observed?.pairingGeneration ?? `generation-${deviceId}`,
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
-        protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
         workerHost: {
           enabled: true,
           capacity: { total: 2, available: 2 },
@@ -253,8 +241,7 @@ export function makeDispatchTestContext(
         if (placement.state !== "active" && placement.state !== "draining") {
           return undefined;
         }
-        const environmentId =
-          typeof placement.environmentId === "string" ? placement.environmentId : "";
+        const environmentId = placement.environmentId ?? "";
         const service = workerEnvironmentService as {
           get?: (environmentId: string) => { nodeDeviceId?: string } | undefined;
         };
@@ -279,58 +266,19 @@ export function makeDispatchTestContext(
 
 export async function invokeSessionDispatch(
   context: GatewayRequestContext,
-  target: {
-    profileId?: string;
-    machineClass?: string;
-    os?: string;
-    deviceId?: string;
-    autoDevice?: true;
-  } = {
-    profileId: "test",
-  },
+  target: Omit<SessionsDispatchParams, "key" | "agentId"> = { profileId: "test" },
   sessionMutationAuthorization?: SessionMutationAuthorization,
   signal?: AbortSignal,
 ) {
-  const respond = vi.fn() as unknown as RespondFn;
-  await getSessionDispatchHandler()({
-    signal,
-    req: { id: "dispatch-request" } as never,
-    params: { key: dispatchTestSessionKey, ...target },
-    respond,
-    context,
-    client: null,
-    isWebchatConnect: () => false,
-    sessionMutationAuthorization,
-  });
-  return respond;
+  return invokeSessionMethod("dispatch", context, target, sessionMutationAuthorization, signal);
 }
 
 export async function invokeSessionMove(
   context: GatewayRequestContext,
-  params: {
-    expected: { generation: number; environmentId: string; ownerEpoch: number };
-    abandonSource?: true;
-    target:
-      | { kind: "gateway" }
-      | { kind: "profile"; profileId: string; machineClass?: string; os?: string }
-      | { kind: "device"; deviceId: string };
-  },
+  params: Omit<SessionsMoveParams, "key" | "agentId">,
   sessionMutationAuthorization?: SessionMutationAuthorization,
 ) {
-  const respond = vi.fn() as unknown as RespondFn;
-  await expectDefined(
-    sessionDispatchHandlers["sessions.move"],
-    'sessionDispatchHandlers["sessions.move"] test invariant',
-  )({
-    req: { id: "move-request" } as never,
-    params: { key: dispatchTestSessionKey, ...params },
-    respond,
-    context,
-    client: null,
-    isWebchatConnect: () => false,
-    sessionMutationAuthorization,
-  });
-  return respond;
+  return invokeSessionMethod("move", context, params, sessionMutationAuthorization);
 }
 
 export async function invokeSessionReclaim(
@@ -338,12 +286,23 @@ export async function invokeSessionReclaim(
   sessionMutationAuthorization?: SessionMutationAuthorization,
   params: Omit<SessionsReclaimParams, "key"> = {},
 ) {
-  const respond = vi.fn() as unknown as RespondFn;
+  return invokeSessionMethod("reclaim", context, params, sessionMutationAuthorization);
+}
+
+async function invokeSessionMethod(
+  method: "dispatch" | "move" | "reclaim",
+  context: GatewayRequestContext,
+  params: Record<string, unknown>,
+  sessionMutationAuthorization?: SessionMutationAuthorization,
+  signal?: AbortSignal,
+) {
+  const respond = vi.fn<RespondFn>();
   await expectDefined(
-    sessionDispatchHandlers["sessions.reclaim"],
-    'sessionDispatchHandlers["sessions.reclaim"] test invariant',
+    sessionDispatchHandlers[`sessions.${method}`],
+    `sessionDispatchHandlers["sessions.${method}"] test invariant`,
   )({
-    req: { id: "reclaim-request" } as never,
+    signal,
+    req: { id: `${method}-request` } as never,
     params: { key: dispatchTestSessionKey, ...params },
     respond,
     context,
@@ -352,4 +311,23 @@ export async function invokeSessionReclaim(
     sessionMutationAuthorization,
   });
   return respond;
+}
+
+export function createCodexDeviceHarness(): AgentHarness {
+  return {
+    id: "codex",
+    label: "Codex",
+    autoSelection: { providerIds: ["codex", "openai"] },
+    cloudPlacement: {
+      mode: "remote-exec",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+    },
+    supports: () => ({ supported: true, priority: 10 }),
+    async runAttempt() {
+      throw new Error("not used");
+    },
+  };
 }

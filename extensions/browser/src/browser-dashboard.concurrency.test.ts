@@ -51,8 +51,29 @@ import {
 const sessionKey = "agent:main:browser-dashboard-proof";
 const request = { sessionKey, agentId: "main", name: "service" };
 
+function barrier() {
+  const entered = createDeferred<void>();
+  const released = createDeferred<void>();
+  return {
+    entered: entered.promise,
+    released: released.promise,
+    release: released.resolve,
+    block: () => {
+      entered.resolve();
+      return released.promise;
+    },
+  };
+}
+
 describe("Browser dashboard operation ordering", () => {
   const fixture = useBrowserDashboardTestHarness(browser, sessionKey);
+  const trackTab = (targetId: string) =>
+    trackSessionBrowserTab({
+      sessionKey,
+      targetId,
+      profile: "openclaw",
+      ownership: durableOwnership(targetId),
+    });
 
   it.each([
     { identity: "known", order: "close-first" },
@@ -64,12 +85,10 @@ describe("Browser dashboard operation ordering", () => {
   ] as const)(
     "orders $identity Playwright close and dashboard retention when $order",
     async ({ identity, order }) => {
-      const paused = createDeferred<void>();
-      const resume = createDeferred<void>();
+      const registration = barrier();
       const mutationPrepared = createDeferred<void>();
       const closeRequested = createDeferred<void>();
-      const targetOpened = createDeferred<void>();
-      const finishOpen = createDeferred<void>();
+      const targetOpen = barrier();
       const finishClose = createDeferred<void>();
       let remainingReads = identity === "known" ? 1 : 2;
       let closeStarted = false;
@@ -79,8 +98,7 @@ describe("Browser dashboard operation ordering", () => {
         entries: async () => {
           const entries = await store.entries();
           if (order === "close-first" && closeStarted && --remainingReads === 0) {
-            paused.resolve();
-            await resume.promise;
+            await registration.block();
           }
           return entries;
         },
@@ -89,7 +107,7 @@ describe("Browser dashboard operation ordering", () => {
           mutationPrepared.resolve();
           if (holdMutation) {
             holdMutation = false;
-            await resume.promise;
+            await registration.released;
           }
           return result;
         },
@@ -107,12 +125,10 @@ describe("Browser dashboard operation ordering", () => {
         browser.open.mockImplementationOnce(async () => {
           const tab = fixture.openedTab();
           if (order === "close-first") {
-            targetOpened.resolve();
-            await finishOpen.promise;
+            await targetOpen.block();
           } else {
             fixture.readBoard.mockImplementationOnce(async () => {
-              paused.resolve();
-              await resume.promise;
+              await registration.block();
               return structuredClone({ sessionKey, widgets: fixture.widgets });
             });
           }
@@ -132,15 +148,15 @@ describe("Browser dashboard operation ordering", () => {
       });
       try {
         if (order === "close-first") {
-          await targetOpened.promise;
+          await targetOpen.entered;
           expect(fixture.tabs.map((tab) => tab.targetId)).toEqual(["target-1"]);
           closeStarted = true;
           closing = closePage();
-          await paused.promise;
-          finishOpen.resolve();
+          await registration.entered;
+          targetOpen.release();
         }
         if (order === "preparation-first") {
-          await paused.promise;
+          await registration.entered;
           closing = closePage();
           await closeRequested.promise;
         } else {
@@ -150,16 +166,11 @@ describe("Browser dashboard operation ordering", () => {
           closing = closePage();
           await closeRequested.promise;
         }
-        await trackSessionBrowserTab({
-          sessionKey,
-          targetId: "ordinary-tab",
-          profile: "openclaw",
-          ownership: durableOwnership("ordinary-tab"),
-        });
+        await trackTab("ordinary-tab");
         expect(opened).toBe(false);
         expect(await readBrowserDashboardTabs()).toEqual([]);
         if (order === "close-first") {
-          resume.resolve();
+          registration.release();
           await expect(opening).rejects.toThrow("close was dispatched during registration");
           expect(opened).toBe(false);
           expect(close).toHaveBeenCalledOnce();
@@ -169,7 +180,7 @@ describe("Browser dashboard operation ordering", () => {
           expect(await readBrowserDashboardTabs()).toEqual([]);
         } else {
           expect(close).not.toHaveBeenCalled();
-          resume.resolve();
+          registration.release();
           await opening;
           finishClose.resolve();
           await expect(closing).rejects.toThrow(/dashboard|retained/);
@@ -179,8 +190,8 @@ describe("Browser dashboard operation ordering", () => {
           expect((await readBrowserDashboardTabs())[0]?.nativeTargetId).toBe("target-1");
         }
       } finally {
-        resume.resolve();
-        finishOpen.resolve();
+        registration.release();
+        targetOpen.release();
         finishClose.resolve();
         await Promise.allSettled([closing, opening]);
         observer.mockRestore();
@@ -207,12 +218,7 @@ describe("Browser dashboard operation ordering", () => {
         await stopBrowserDashboard(request);
       }
       fixture.widgets = [];
-      const reading = createDeferred<void>();
-      const finish = createDeferred<void>();
-      const pauseRead = async () => {
-        reading.resolve();
-        await finish.promise;
-      };
+      const reading = barrier();
       let remainingReads = phase === "intents" ? 2 : 1;
       const storeRead =
         phase !== "board"
@@ -220,7 +226,7 @@ describe("Browser dashboard operation ordering", () => {
               ...store,
               entries: async () => {
                 if (--remainingReads === 0) {
-                  await pauseRead();
+                  await reading.block();
                 }
                 return await store.entries();
               },
@@ -228,7 +234,7 @@ describe("Browser dashboard operation ordering", () => {
           : undefined;
       if (phase === "board") {
         fixture.readBoard.mockImplementationOnce(async () => {
-          await pauseRead();
+          await reading.block();
           return { sessionKey, widgets: [] };
         });
       }
@@ -253,20 +259,15 @@ describe("Browser dashboard operation ordering", () => {
               })
             : reconcileBrowserDashboards(currency);
       try {
-        await reading.promise;
+        await reading.entered;
         if (changed === "runtime") {
           await fixture.installRuntime();
         } else {
           current = false;
         }
-        await trackSessionBrowserTab({
-          sessionKey,
-          targetId: "successor-tab",
-          profile: "openclaw",
-          ownership: durableOwnership("successor-tab"),
-        });
+        await trackTab("successor-tab");
         const retained = await getBrowserSessionTabStore().entries();
-        finish.resolve();
+        reading.release();
         if (changed === "runtime") {
           await expect(cleanup).rejects.toThrow("Browser session tab store owner changed");
         } else {
@@ -281,7 +282,7 @@ describe("Browser dashboard operation ordering", () => {
         ).resolves.toBe(state === "active tab" ? 2 : 1);
         expect(await getBrowserSessionTabStore().entries()).toEqual([]);
       } finally {
-        finish.resolve();
+        reading.release();
         storeRead?.mockRestore();
         await Promise.allSettled([cleanup]);
       }
@@ -291,13 +292,9 @@ describe("Browser dashboard operation ordering", () => {
   it("retires a claimed dashboard tab after the cleanup caller changes", async () => {
     await requestBrowserDashboard(request);
     fixture.widgets = [];
-    const entered = createDeferred<void>();
-    const finish = createDeferred<void>();
+    const closing = barrier();
     let current = true;
-    const closeTab = vi.fn(async () => {
-      entered.resolve();
-      await finish.promise;
-    });
+    const closeTab = vi.fn(async () => await closing.block());
     const cleanup = closeTrackedBrowserTabsForSessions({
       sessionKeys: [sessionKey],
       isCurrent: () => current,
@@ -305,14 +302,14 @@ describe("Browser dashboard operation ordering", () => {
       closeTab,
     });
     try {
-      await Promise.race([entered.promise, cleanup]);
+      await Promise.race([closing.entered, cleanup]);
       expect(closeTab).toHaveBeenCalledOnce();
       current = false;
-      finish.resolve();
+      closing.release();
       await expect(cleanup).resolves.toBe(1);
       expect(await getBrowserSessionTabStore().entries()).toEqual([]);
     } finally {
-      finish.resolve();
+      closing.release();
       await cleanup;
     }
   });
@@ -320,23 +317,20 @@ describe("Browser dashboard operation ordering", () => {
   it.each(["definition updated", "stop after resume", "stop after normal open"] as const)(
     "keeps shared materialization failures scoped when %s",
     async (failure) => {
-      const started = createDeferred<void>();
-      const finish = createDeferred<void>();
+      const openingGate = barrier();
       const followerRead = createDeferred<void>();
-      const stopping = failure.startsWith("stop ");
       const cancelInitiator = failure === "stop after resume";
       browser.open.mockImplementation(async () => {
         await setImmediate();
         return fixture.openedTab();
       });
       browser.open.mockImplementationOnce(async () => {
-        started.resolve();
-        await finish.promise;
+        await openingGate.block();
         return fixture.openedTab();
       });
       const initiator = new AbortController();
       const opening = requestBrowserDashboard(request, { signal: initiator.signal });
-      await started.promise;
+      await openingGate.entered;
       if (failure === "definition updated") {
         fixture.widgets[0]!.props.url = "http://updated.example/";
         fixture.widgets[0]!.revision += 1;
@@ -349,11 +343,11 @@ describe("Browser dashboard operation ordering", () => {
       const settled = Promise.allSettled([opening, waiting]);
       await followerRead.promise;
       await setImmediate();
-      const stopCall = stopping ? stopBrowserDashboard(request) : undefined;
+      const stopCall = failure.startsWith("stop ") ? stopBrowserDashboard(request) : undefined;
       if (cancelInitiator) {
         initiator.abort(new Error("initiator cancelled"));
       }
-      finish.resolve();
+      openingGate.release();
       const results = await settled;
       if (stopCall) {
         expect((await stopCall).paused).toBe(true);
@@ -390,16 +384,14 @@ describe("Browser dashboard operation ordering", () => {
   );
 
   it("resolves the current definition after a failed queued open", async () => {
-    const started = createDeferred<void>();
-    const finish = createDeferred<void>();
+    const openingGate = barrier();
     const backendError = new Error("Chrome startup failed");
     browser.open.mockImplementationOnce(async () => {
-      started.resolve();
-      await finish.promise;
+      await openingGate.block();
       throw backendError;
     });
     const opening = requestBrowserDashboard(request);
-    await started.promise;
+    await openingGate.entered;
     const originalUrl = fixture.widgets[0]!.props.url;
     const updatedUrl = "http://updated.example/";
     fixture.widgets[0]!.props.url = updatedUrl;
@@ -413,7 +405,7 @@ describe("Browser dashboard operation ordering", () => {
       }
       return structuredClone({ sessionKey, widgets: fixture.widgets });
     });
-    finish.resolve();
+    openingGate.release();
     const results = await settled;
     expect(results[0]).toEqual({ status: "rejected", reason: backendError });
     expect(results.slice(1)).toMatchObject([

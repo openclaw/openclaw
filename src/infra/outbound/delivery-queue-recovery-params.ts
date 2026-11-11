@@ -5,13 +5,14 @@ import {
 } from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayOperatorAccessDeniedError } from "../../gateway/operator-access-policy.js";
-import { parseCommandOwnerReference } from "../../state/user-channel-identities.js";
+import { parseCommandOwnerReference } from "../../state/user-channel-authorization-reference.js";
 import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
-import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
+import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { preparePluginNoticeOwnerCheck } from "./delivery-completion.js";
 import { projectQueuedDeliveryOptions } from "./delivery-queue-projection.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
 import { preparedOutboundPayloads } from "./prepared-batch.js";
@@ -27,6 +28,12 @@ export async function buildRecoveryDeliverParams(
     entry.deliveryCompletion?.kind === "conversation" ? entry.deliveryCompletion : undefined;
   const pendingFinal =
     entry.deliveryCompletion?.kind === "pending-final" ? entry.deliveryCompletion : undefined;
+  const pluginNotice =
+    entry.deliveryCompletion?.kind === "plugin-notice" ? entry.deliveryCompletion : undefined;
+  // The initial owner check precedes awaited recovery preparation; recheck the plugin at I/O.
+  const assertPluginOwner = pluginNotice
+    ? await preparePluginNoticeOwnerCheck(pluginNotice.pluginId)
+    : undefined;
   let owner: Awaited<ReturnType<typeof prepareCommandOwnerAuthority>> | undefined;
   const rejection = (error: unknown) =>
     new PlatformMessageNotDispatchedError(
@@ -68,6 +75,14 @@ export async function buildRecoveryDeliverParams(
       throw rejection(error);
     }
     assertSessionWriterDeliveryAuthorized(writer.authority);
+    try {
+      assertPluginOwner?.();
+    } catch (error) {
+      throw new PlatformMessageNotDispatchedError("Posting plugin is no longer active", {
+        cause: error,
+        retryable: false,
+      });
+    }
   };
   return {
     release: writer.release,
@@ -97,7 +112,7 @@ export async function buildRecoveryDeliverParams(
         }
       : {}),
     // Recovery retains completion settlement and reconstructs its original authority at I/O.
-    ...(pendingFinal
+    ...(pendingFinal || pluginNotice
       ? {
           onDirectAdapterHandoff: async () => assertCurrent(),
           assertDirectAdapterHandoff: assertCurrent,
@@ -111,5 +126,5 @@ export async function buildRecoveryDeliverParams(
     skipQueue: true, // Prevent re-enqueueing during recovery.
     deferredDeliveryAdmissionPassed: true,
     deferCommitHooks: true,
-  } satisfies DeliverOutboundPayloadsParams & { release: () => void };
+  } satisfies InternalDeliverOutboundPayloadsParams & { release: () => void };
 }

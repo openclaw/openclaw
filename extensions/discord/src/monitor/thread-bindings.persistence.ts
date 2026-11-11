@@ -1,3 +1,4 @@
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -38,26 +39,11 @@ export function runThreadBindingAccountOperation<T>(
   if (managers.length === 0) {
     return operation();
   }
-  const tails = THREAD_BINDINGS_STATE.accountOperationTails;
-  const predecessors = managers.map((manager) => tails.get(manager) ?? Promise.resolve());
-  const result = Promise.all(predecessors).then(operation);
-  const settled = result.then(
-    () => {},
-    () => {},
-  );
-  // Reserve every account before yielding; shared persistence is acquired only afterward.
-  for (const manager of managers) {
-    tails.set(manager, settled);
-  }
-  // Idle accounts must not retain the completed caller's async context.
-  void settled.then(() => {
-    for (const manager of managers) {
-      if (tails.get(manager) === settled) {
-        tails.delete(manager);
-      }
-    }
+  return enqueueKeyedTask({
+    tails: THREAD_BINDINGS_STATE.accountOperationTails,
+    keys: managers,
+    task: operation,
   });
-  return result;
 }
 
 export function drainThreadBindingAccountOperations(manager: ThreadBindingManager): Promise<void> {

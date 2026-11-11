@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, request, type IncomingMessage, type Server } from "node:http";
@@ -6,7 +5,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { WorkerTaskPool } from "../infra/worker-task-pool.js";
+import type { ControlUiFileRead } from "./control-ui-file.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import type { ControlUiRootState } from "./server-control-ui-root.js";
 
@@ -57,6 +59,7 @@ describe.each([
   let server: Server | undefined;
   let assetUrl: string;
   let baseUrl: string;
+  let rootState: ControlUiRootState;
 
   beforeAll(async () => {
     const root = tempDirs.make("openclaw-ui-conditional-");
@@ -71,15 +74,20 @@ describe.each([
     await write("assets/app-fixture.js", assetBody, modifiedAt);
     await write("assets/app-fixture.js.gz", gzipSync(assetBody));
     await write("assets/app-fixture.js.br", brotliCompressSync(assetBody));
+    await write("assets/selected.js", assetBody);
+    await write("assets/selected.js.gz", gzipSync(assetBody));
+    await write("assets/selected.js.br", brotliCompressSync(assetBody));
     await write("assets/cold.js", assetBody);
     for (const publicAsset of ["themes/absolutely.css", "sw.js"]) {
       await write(publicAsset, assetBody, modifiedAt);
     }
+    await write("sw.js.gz", gzipSync(assetBody));
+    await write("sw.js.br", brotliCompressSync(assetBody));
     await write(
       "index.html",
       `<html data-openclaw-control-ui-build-id="source-build"><head><script>const fragment = 'href="unfinished';</script><script src="./assets/app-fixture.js"></script><link href="./assets/app.css"><link rel="icon" href="./favicon.svg"><link rel="icon" href="${basePath}/favicon-32.png"></head></html>`,
     );
-    const rootState: ControlUiRootState = {
+    rootState = {
       kind,
       path: root,
       realPath: root,
@@ -99,17 +107,75 @@ describe.each([
         res.end(error instanceof Error ? error.message : String(error));
       });
     });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Expected a TCP listener for the static asset fixture");
-    }
-    baseUrl = `http://127.0.0.1:${address.port}${basePath}`;
+    baseUrl = `${await httpFixtures.listenLoopback(server)}${basePath}`;
     assetUrl = `${baseUrl}/assets/app-fixture.js`;
   });
 
   if (kind === "bundled" && basePath === "") {
+    it("keeps public content immutable across builds and revalidates changed versions", async () => {
+      if (rootState.kind !== "bundled") {
+        throw new Error("Expected bundled test root");
+      }
+      const firstHash = "a".repeat(64);
+      const secondHash = "b".repeat(64);
+      const asset = `${baseUrl}/themes/absolutely.css`;
+      try {
+        for (const buildId of [
+          `build-a-${firstHash}`,
+          `build-b-${firstHash}`,
+          `build-c-${secondHash}`,
+        ]) {
+          rootState.publicAssetBuildId = buildId;
+          const version = buildId === `build-c-${secondHash}` ? secondHash : firstHash;
+          const document = await requestAsset(baseUrl, "GET");
+          expect(document.body.toString()).toContain(
+            `data-openclaw-control-ui-build-id="${buildId}"`,
+          );
+          expect(document.body.toString()).toContain(`href="/favicon.svg?v=${version}"`);
+          for (const currentVersion of [version, buildId]) {
+            const current = await requestAsset(`${asset}?v=${currentVersion}`, "GET");
+            expect(current.body).toEqual(assetBody);
+            expect(current.response.headers["cache-control"]).toBe(
+              "public, max-age=31536000, immutable",
+            );
+          }
+        }
+        for (const version of [firstHash, `build-a-${firstHash}`, `build-b-${firstHash}`]) {
+          const stale = await requestAsset(`${asset}?v=${version}`, "GET");
+          expect(stale.response.headers["cache-control"]).toBe("no-cache");
+        }
+      } finally {
+        rootState.publicAssetBuildId = "fixture-build";
+      }
+    });
+
+    it("reads only negotiated bodies while alternating cold encoding preferences", async () => {
+      const read = vi.spyOn(WorkerTaskPool.prototype, "run");
+      for (const [accept, encoding, bodyReads] of [
+        ["br, gzip", "br", 1],
+        ["gzip, br;q=0.5", "gzip", 2],
+        ["identity", "identity", 3],
+        ["br, gzip", "br", 3],
+      ] as const) {
+        const { response, body } = await requestAsset(`${baseUrl}/assets/selected.js`, "GET", {
+          "Accept-Encoding": accept,
+        });
+        expect(response.headers["content-encoding"]).toBe(
+          encoding === "identity" ? undefined : encoding,
+        );
+        expect(
+          encoding === "br"
+            ? brotliDecompressSync(body)
+            : encoding === "gzip"
+              ? gunzipSync(body)
+              : body,
+        ).toEqual(assetBody);
+        expect(
+          read.mock.calls.filter(([input]) => (input as ControlUiFileRead).readBody),
+        ).toHaveLength(bodyReads);
+      }
+    });
+
     it("serves warm representations and admits cold files without main-thread filesystem work", async () => {
       await requestAsset(assetUrl, "GET");
       const operations = [
@@ -156,6 +222,53 @@ describe.each([
   });
 
   describe.each(["GET", "HEAD"] as const)("%s", (method) => {
+    it.each(["gzip", "br"] as const)(
+      "negotiates bundled worker %s while retaining revalidation",
+      async (encoding) => {
+        const headers = { "Accept-Encoding": encoding };
+        const { response, body } = await requestAsset(
+          `${baseUrl}/sw.js?v=fixture-build`,
+          method,
+          headers,
+        );
+        const encoded = kind === "bundled";
+        expect(response.statusCode).toBe(200);
+        expect(response.headers).toMatchObject({
+          "cache-control": "no-cache",
+          "last-modified": lastModified,
+          vary: "Accept-Encoding",
+        });
+        expect(response.headers["content-encoding"]).toBe(encoded ? encoding : undefined);
+        const expected = encoded
+          ? (encoding === "br" ? brotliCompressSync : gzipSync)(assetBody)
+          : assetBody;
+        expect(response.headers["content-length"]).toBe(String(expected.byteLength));
+        expect(body).toEqual(method === "HEAD" ? Buffer.alloc(0) : expected);
+        const unchanged = await requestAsset(`${baseUrl}/sw.js?v=fixture-build`, method, {
+          ...headers,
+          "If-Modified-Since": lastModified,
+        });
+        expect(unchanged.response.statusCode).toBe(304);
+        expect(unchanged.response.headers["cache-control"]).toBe("no-cache");
+        expect(unchanged.body.byteLength).toBe(0);
+      },
+    );
+
+    it.each(["gzip", "br", ""])(
+      "serves the original without sidecars (Accept-Encoding: %s)",
+      async (encoding) => {
+        const { response, body } = await requestAsset(
+          `${baseUrl}/assets/cold.js`,
+          method,
+          encoding ? { "Accept-Encoding": encoding } : {},
+        );
+        expect(response.statusCode).toBe(200);
+        expect(response.headers["content-encoding"]).toBeUndefined();
+        expect(response.headers["content-length"]).toBe(String(assetBody.byteLength));
+        expect(body).toEqual(method === "GET" ? assetBody : Buffer.alloc(0));
+      },
+    );
+
     it.each(["themes/absolutely.css", "sw.js"])(
       "versions public %s only for the active bundled build",
       async (asset) => {

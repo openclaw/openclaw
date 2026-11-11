@@ -20,8 +20,14 @@ import {
 import {
   completeDeliveryQueueEntryInDatabase,
   countFailedDeliveryQueueEntriesInDatabase,
+  prepareDeliveryQueueTerminalEntry,
+  pruneExpiredDeliveryQueueTombstonesInDatabase,
+  terminalizePendingDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite.kernel.js";
-import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
+import {
+  loadDeliveryQueueEntry,
+  seedDeliveryQueueEntry,
+} from "./delivery-queue-sqlite.test-support.js";
 import { executeDeliveryQueueOperation } from "./delivery-queue-worker-store.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
@@ -156,5 +162,121 @@ describe("delivery queue health publication", () => {
     fs.rmSync(stateDir, { recursive: true });
     fs.mkdirSync(stateDir);
     expect(await countFailedDeliveryQueueEntries(stateDir)).toEqual([]);
+  });
+
+  it("skips empty tombstone sweeps until a producer commits a terminal row", async () => {
+    await pruneExpiredDeliveryQueueTombstones(stateDir);
+    await writeConfigMachineStateAsync("config.lastTouchedAt", "changed", {
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    const requests = vi.spyOn(Worker.prototype, "postMessage");
+    try {
+      await pruneExpiredDeliveryQueueTombstones(stateDir);
+      await pruneExpiredDeliveryQueueTombstones(stateDir);
+      expect(requests).not.toHaveBeenCalled();
+
+      seedDeliveryQueueEntry({
+        queueName: QUEUE,
+        entry: { id: "expired-ordinary", enqueuedAt: Date.now() - 31 * 86_400_000, retryCount: 0 },
+        status: "completed",
+        stateDir,
+      });
+      await pruneExpiredDeliveryQueueTombstones(stateDir);
+      expect(loadDeliveryQueueEntry(QUEUE, "expired-ordinary", stateDir, "all")).toBeNull();
+
+      await pruneExpiredDeliveryQueueTombstones(stateDir);
+      requests.mockClear();
+      await pruneExpiredDeliveryQueueTombstones(stateDir);
+      expect(requests).not.toHaveBeenCalled();
+    } finally {
+      requests.mockRestore();
+    }
+  });
+
+  it("expires a newly terminalized bounded receipt only after its exact deadline", () => {
+    const database = openTestDatabase();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const completionRetention = { idPrefix: "expiry-", maxAgeMs: 60_000, maxEntries: 10 };
+    const entry = {
+      id: "expiry-bounded",
+      enqueuedAt: Date.now(),
+      retryCount: 0,
+      completionRetention,
+    };
+    try {
+      pruneExpiredDeliveryQueueTombstonesInDatabase(database);
+      seedDeliveryQueueEntry({ queueName: QUEUE, entry, stateDir });
+      expect(
+        terminalizePendingDeliveryQueueEntryInDatabase(
+          database,
+          prepareDeliveryQueueTerminalEntry({ queueName: QUEUE, id: entry.id, entry }),
+        ),
+      ).toEqual({ status: "terminalized", retained: true });
+      pruneExpiredDeliveryQueueTombstonesInDatabase(database);
+      const observer = observeParentSqlite();
+      try {
+        now.mockReturnValue(1_060_000);
+        pruneExpiredDeliveryQueueTombstonesInDatabase(database);
+        expect(observer.counts).toEqual(emptySqliteCounts());
+      } finally {
+        observer.restore();
+      }
+      expect(loadDeliveryQueueEntry(QUEUE, entry.id, stateDir, "all")).not.toBeNull();
+      now.mockReturnValue(1_060_001);
+      pruneExpiredDeliveryQueueTombstonesInDatabase(database);
+      expect(loadDeliveryQueueEntry(QUEUE, entry.id, stateDir, "all")).toBeNull();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("does not retain a rolled-back empty expiry over a committed tombstone", () => {
+    const database = openTestDatabase();
+    const entry = {
+      id: "expiry-rollback",
+      enqueuedAt: Date.now() - 31 * 86_400_000,
+      retryCount: 0,
+    };
+    seedDeliveryQueueEntry({ queueName: QUEUE, entry, status: "completed", stateDir });
+    expect(() =>
+      runSqliteImmediateTransactionSync(database.db, () => {
+        pruneExpiredDeliveryQueueTombstonesInDatabase(database);
+        pruneExpiredDeliveryQueueTombstonesInDatabase(database);
+        throw new Error("rollback expiry");
+      }),
+    ).toThrow("rollback expiry");
+
+    pruneExpiredDeliveryQueueTombstonesInDatabase(database);
+
+    expect(loadDeliveryQueueEntry(QUEUE, entry.id, stateDir, "all")).toBeNull();
+  });
+
+  it("keeps very long bounded retention exact without summing timestamps in JavaScript", () => {
+    const database = openTestDatabase();
+    const completionRetention = {
+      idPrefix: "expiry-",
+      maxAgeMs: Number.MAX_SAFE_INTEGER,
+      maxEntries: 10,
+    };
+    for (const [id, enqueuedAt] of [
+      ["future", Date.now()],
+      ["past", 1],
+    ] as const) {
+      seedDeliveryQueueEntry({
+        queueName: QUEUE,
+        entry: {
+          id: `expiry-huge-${id}`,
+          enqueuedAt,
+          retryCount: 0,
+          recoveryState: "completed_bounded",
+          completionRetention,
+        },
+        status: "completed",
+        stateDir,
+      });
+    }
+    pruneExpiredDeliveryQueueTombstonesInDatabase(database);
+    expect(loadDeliveryQueueEntry(QUEUE, "expiry-huge-future", stateDir, "all")).not.toBeNull();
+    expect(loadDeliveryQueueEntry(QUEUE, "expiry-huge-past", stateDir, "all")).not.toBeNull();
   });
 });

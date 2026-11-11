@@ -1,7 +1,11 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { constants } from "node:sqlite";
 import { afterEach, expect, it, vi, describe } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
@@ -32,6 +36,7 @@ import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import type { SessionMaintenanceMetadataResult } from "./session-accessor.sqlite-lifecycle-types.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { runSessionEntryWorkerMutation } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   measureSessionSchemaProbes,
@@ -44,6 +49,7 @@ import {
   readCanonicalSessionMainKey,
   setCanonicalSqliteSessionMainKey,
 } from "./session-canonical-key.js";
+import { readExpiredCronRunEntriesInWorker } from "./session-entry-read-maintenance.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
@@ -60,9 +66,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
   };
   const writer = openOpenClawAgentDatabase(options);
   const reader = openOpenClawAgentDatabaseReadOnly(options);
-  if (!reader.found) {
-    throw new Error("Session probe reader is missing");
-  }
+  assert(reader.found, "Session probe reader is missing");
   const broker = new SqliteWorkerBroker();
   try {
     const worker = await broker.open<SessionProbeOperations>({
@@ -73,9 +77,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
       databasePath: writer.path,
       input: undefined,
     });
-    if (!worker) {
-      throw new Error("Session probe worker is unavailable");
-    }
+    assert(worker, "Session probe worker is unavailable");
     const lookupDatabase = openOpenClawAgentDatabase({
       ...options,
       path: path.join(path.dirname(writer.path), "lookup-traffic.sqlite"),
@@ -111,9 +113,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
     setCanonicalSqliteSessionMainKey(writer, "main");
     writeSessionEntry(writer, "agent:main:probe", { sessionId: "probe", updatedAt: 1 });
     const borrowed = withOpenClawAgentDatabaseReadOnly(measureSessionSchemaProbes, options);
-    if (!borrowed.found) {
-      throw new Error("Session probe borrowed reader is missing");
-    }
+    assert(borrowed.found, "Session probe borrowed reader is missing");
     const results = {
       writer: measureSessionSchemaProbes(writer),
       readOnly: measureSessionSchemaProbes(reader.database),
@@ -347,6 +347,7 @@ it.each<{
     read();
     const materialized: string[] = [];
     let hotPayloadBytes = 0;
+    let hotPayloadRows = 0;
     const nativeDb = requireNativeSqliteDatabase(database.db);
     const prepare = nativeDb.prepare.bind(nativeDb);
     vi.spyOn(nativeDb, "prepare").mockImplementation((sql) => {
@@ -354,6 +355,7 @@ it.each<{
       const observe = (row: Record<string, unknown>) => {
         if (typeof row.entry_json === "string") {
           hotPayloadBytes += Buffer.byteLength(row.entry_json);
+          hotPayloadRows++;
         }
         if (typeof row.skills_snapshot_json === "string") {
           materialized.push(String(row.session_key));
@@ -399,10 +401,12 @@ it.each<{
       expect(entry.skillsSnapshot).toEqual(saved);
     }
     expect(entries.map(({ sessionKey }) => sessionKey)).toEqual(fullKeys);
-    if (scope.cronRetention?.limit === 1) {
-      // One page can read its hot payload twice, but must not hydrate its bloated siblings.
+    if (scope.cronRetention?.limit === 1 || scope.expiredCronRuns) {
+      // Expiry validates both own cron identities, then captures only selected full snapshots.
+      const hotRowBudget = (scope.expiredCronRuns ? 2 : fullKeys.length) + fullKeys.length;
+      expect(hotPayloadRows).toBeLessThanOrEqual(hotRowBudget);
       expect(hotPayloadBytes).toBeLessThan(
-        3 * Buffer.byteLength(JSON.stringify(usageFamilySessionIds)),
+        (hotRowBudget + 1) * Buffer.byteLength(JSON.stringify(usageFamilySessionIds)) + 1,
       );
     }
   },
@@ -438,25 +442,93 @@ function fixture(list: typeof listSessionEntriesReadOnly) {
   return { database, hidden, options, read };
 }
 
-it("retains unsplit snapshots on selected cron rows", () => {
-  const { database, options, read } = fixture(listSessionEntriesReadOnly);
-  const sessionKey = "agent:main:cron:job:run:legacy";
-  const entry = { sessionId: "legacy", updatedAt: 1 };
+it("reads cron participants only after expiry selection and includes committed changes", () => {
+  const { database, options } = fixture(listSessionEntriesReadOnly);
+  const sessionKey = "agent:main:cron:job:run:selected";
+  const scope = {
+    agentId: options.agentId,
+    storePath: options.path,
+    env: options.env,
+    sessionKey,
+  };
+  const entry = {
+    sessionId: "selected",
+    updatedAt: 2,
+    skillsSnapshot: { prompt: "retained deletion candidate", skills: [] },
+  };
   runOpenClawAgentWriteTransaction((db) => writeSessionEntry(db, sessionKey, entry), options);
-  read();
-  const retained = { ...entry, skillsSnapshot: { prompt: "retained raw prompt", skills: [] } };
-  database.db
-    .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-    .run(JSON.stringify(retained), sessionKey);
-  expect(
+  recordSessionParticipant(scope, { identity: { type: "agent", id: "before" }, promptedAt: 1 });
+  const readExpired = () =>
     listSessionEntriesReadOnly({
-      agentId: "main",
-      storePath: options.path,
-      env: options.env,
+      ...scope,
       expiredCronRuns: { agentId: "main", updatedBefore: 2 },
-    }),
-  ).toEqual([{ sessionKey, entry: retained }]);
+    });
+  const statements = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["participants"],
+    (sql) => (/^select\b.*\bfrom "session_participants"/isu.test(sql) ? "participants" : null),
+  );
+  try {
+    expect(readExpired()).toEqual([]);
+    expect(statements.counts.participants).toBe(0);
+  } finally {
+    statements.restore();
+  }
+  runOpenClawAgentWriteTransaction(
+    (db) => writeSessionEntry(db, sessionKey, { ...entry, updatedAt: 1 }),
+    options,
+  );
+  recordSessionParticipant(scope, { identity: { type: "agent", id: "after" }, promptedAt: 2 });
+  expect(readExpired()).toEqual([
+    {
+      sessionKey,
+      entry: {
+        ...entry,
+        updatedAt: 1,
+        delivery: { kind: "none" },
+        participants: [
+          { identity: { type: "agent", id: "before" } },
+          { identity: { type: "agent", id: "after" } },
+        ],
+        participantCount: 2,
+      },
+    },
+  ]);
 });
+
+it.each([
+  { identity: "valid", changes: {}, nextCronRunUpdatedAt: 1 },
+  { identity: "session mismatch", changes: { sessionId: "other" }, nextCronRunUpdatedAt: null },
+  { identity: "timestamp mismatch", changes: { updatedAt: 0 }, nextCronRunUpdatedAt: null },
+])(
+  "retains unsplit snapshots only for valid cron identities: $identity",
+  async ({ changes, nextCronRunUpdatedAt }) => {
+    const { database, options, read } = fixture(listSessionEntriesReadOnly);
+    const sessionKey = "agent:main:cron:job:run:legacy";
+    const entry = { sessionId: "legacy", updatedAt: 1 };
+    runOpenClawAgentWriteTransaction((db) => writeSessionEntry(db, sessionKey, entry), options);
+    read();
+    const retained = {
+      ...entry,
+      ...changes,
+      skillsSnapshot: { prompt: "retained raw prompt", skills: [] },
+    };
+    database.db
+      .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+      .run(JSON.stringify(retained), sessionKey);
+    expect(
+      await readExpiredCronRunEntriesInWorker({
+        agentId: "main",
+        storePath: options.path,
+        env: options.env,
+        updatedBefore: 2,
+      }),
+    ).toEqual({
+      entries: nextCronRunUpdatedAt === null ? [] : [{ sessionKey, entry: retained }],
+      nextCronRunUpdatedAt,
+    });
+  },
+);
 
 describe.each([
   { mode: "readonly", list: listSessionEntriesReadOnly },
@@ -503,26 +575,36 @@ it("retains unrelated canonical-key errors for an empty selection", () => {
   expect(() => read([])).toThrow("non-canonical persisted row");
 });
 
-it("validates unrelated warm delivery aliases before selecting listing keys", () => {
-  const { database, options, read } = fixture(listSessionEntriesReadOnly);
-  const canonicalKey = "agent:main:matrix:channel:!MixedCase:example.org";
-  const legacyKey = canonicalKey.toLowerCase();
-  runOpenClawAgentWriteTransaction((db) => {
-    writeSessionEntry(db, legacyKey, { sessionId: legacyKey, updatedAt: 1 });
-  }, options);
-  read();
-  const entry = {
-    sessionId: legacyKey,
-    updatedAt: 1,
-    delivery: normalizeSessionDeliveryState({
-      context: { channel: "matrix", to: "!MixedCase:example.org" },
-    }),
-  };
-  database.db
-    .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-    .run(JSON.stringify(entry), legacyKey);
-  markCanonicalSessionValidationPending(database, [legacyKey]);
-  expect(() => read(["agent:main:a"])).toThrow(
-    `non-canonical persisted row resolves to session key ${canonicalKey}`,
-  );
-});
+it.each(["selected", "expired"] as const)(
+  "validates unrelated warm delivery aliases before %s listing",
+  (selection) => {
+    const { database, options, read } = fixture(listSessionEntriesReadOnly);
+    const canonicalKey = "agent:main:matrix:channel:!MixedCase:example.org";
+    const legacyKey = canonicalKey.toLowerCase();
+    runOpenClawAgentWriteTransaction((db) => {
+      writeSessionEntry(db, legacyKey, { sessionId: legacyKey, updatedAt: 1 });
+    }, options);
+    read();
+    const entry = {
+      sessionId: legacyKey,
+      updatedAt: 1,
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "matrix", to: "!MixedCase:example.org" },
+      }),
+    };
+    database.db
+      .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+      .run(JSON.stringify(entry), legacyKey);
+    markCanonicalSessionValidationPending(database, [legacyKey]);
+    expect(() =>
+      selection === "selected"
+        ? read(["agent:main:a"])
+        : listSessionEntriesReadOnly({
+            agentId: "main",
+            storePath: options.path,
+            env: options.env,
+            expiredCronRuns: { agentId: "main", updatedBefore: 0 },
+          }),
+    ).toThrow(`non-canonical persisted row resolves to session key ${canonicalKey}`);
+  },
+);

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   normalizeMatrixQaObservedEvent,
   type MatrixQaObservedEvent,
@@ -7,216 +7,132 @@ import {
 
 const roomId = "!room:matrix-qa.test";
 const sender = "@sut:matrix-qa.test";
+const driver = "@driver:matrix-qa.test";
+const timestamp = 1_700_000_000_000;
+const approval = {
+  allowedDecisions: ["allow-once", "deny"],
+  state: "pending",
+  type: "approval.request",
+  version: 1,
+};
+const plugin = {
+  id: "plugin:approval-1",
+  kind: "plugin" as const,
+  agentId: "qa",
+  pluginId: "qa-plugin",
+  severity: "medium",
+  toolName: "qa_tool",
+};
 
-function message(content: Record<string, unknown>, envelope: Partial<MatrixQaRoomEvent> = {}) {
-  return { event_id: "$event", sender, type: "m.room.message", ...envelope, content };
-}
-
-function expectEvent(
+function expectNormalized(
   content: Record<string, unknown>,
   expected: Partial<MatrixQaObservedEvent>,
   envelope: Partial<MatrixQaRoomEvent> = {},
 ) {
-  expect(normalizeMatrixQaObservedEvent(roomId, message(content, envelope))).toEqual({
-    eventId: "$event",
+  const event = { event_id: "$event", sender, type: "m.room.message", ...envelope, content };
+  expect(normalizeMatrixQaObservedEvent(roomId, event)).toEqual({
+    eventId: event.event_id,
     kind: "message",
     roomId,
-    sender,
-    type: "m.room.message",
+    sender: event.sender,
+    type: event.type,
     ...expected,
   });
 }
 
-describe("matrix observed event normalization", () => {
-  it("normalizes message events with thread metadata", () => {
-    expectEvent(
-      {
-        body: "hello",
-        msgtype: "m.text",
-        "m.mentions": { user_ids: [sender] },
-        "m.relates_to": {
-          rel_type: "m.thread",
-          event_id: "$root",
-          is_falling_back: true,
-          "m.in_reply_to": { event_id: "$driver" },
-        },
-      },
-      {
-        originServerTs: 1_700_000_000_000,
-        body: "hello",
-        msgtype: "m.text",
-        relatesTo: {
-          relType: "m.thread",
-          eventId: "$root",
-          inReplyToId: "$driver",
-          isFallingBack: true,
-        },
-        mentions: { userIds: [sender] },
-      },
-      { origin_server_ts: 1_700_000_000_000 },
-    );
-  });
-
-  it.each([
+it.each<[string, ...Parameters<typeof expectNormalized>]>([
+  [
+    "threaded message",
     {
-      name: "preview edit",
-      newContent: { body: "preview", "org.matrix.msc4357.live": {} },
-      outerContent: {},
-      live: true,
-    },
-    {
-      name: "final edit",
-      newContent: { body: "final" },
-      outerContent: { "org.matrix.msc4357.live": {} },
-      live: undefined,
-    },
-  ])("preserves the live marker only on $name", ({ newContent, outerContent, live }) => {
-    const event = normalizeMatrixQaObservedEvent(roomId, {
-      event_id: "$event",
-      type: "m.room.message",
-      content: {
-        body: "preview",
-        msgtype: "m.text",
-        ...outerContent,
-        "m.relates_to": { rel_type: "m.replace", event_id: "$draft" },
-        "m.new_content": newContent,
-      },
-    });
-    expect(event?.live).toBe(live);
-  });
-
-  it("normalizes Matrix reaction events with target metadata", () => {
-    expectEvent(
-      {
-        "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: "👍" },
-      },
-      {
-        eventId: "$reaction",
-        kind: "reaction",
-        sender: "@driver:matrix-qa.test",
-        type: "m.reaction",
-        originServerTs: 1_700_000_000_000,
-        relatesTo: { eventId: "$msg", relType: "m.annotation" },
-        reaction: { eventId: "$msg", key: "👍" },
-      },
-      {
-        event_id: "$reaction",
-        sender: "@driver:matrix-qa.test",
-        type: "m.reaction",
-        origin_server_ts: 1_700_000_000_000,
-      },
-    );
-  });
-
-  const approval = {
-    allowedDecisions: ["allow-once", "deny"],
-    state: "pending",
-    type: "approval.request",
-    version: 1,
-  };
-  it.each([
-    {
-      name: "command presence without a preview of raw approval text",
-      eventId: "$approval",
-      body: "React here: ✅ Allow once, ❌ Deny",
-      metadata: { id: "approval-1", kind: "exec", commandText: "printf " + "A".repeat(300) },
-      summary: { id: "approval-1", kind: "exec", hasCommandText: true },
-    },
-    {
-      name: "plugin approval metadata fields",
-      eventId: "$plugin-approval",
-      body: "Plugin approval required",
-      metadata: {
-        id: "plugin:approval-1",
-        kind: "plugin",
-        agentId: "qa",
-        pluginId: "qa-plugin",
-        severity: "medium",
-        toolName: "qa_tool",
-      },
-      summary: {
-        id: "plugin:approval-1",
-        kind: "plugin",
-        agentId: "qa",
-        pluginId: "qa-plugin",
-        severity: "medium",
-        toolName: "qa_tool",
-      },
-    },
-  ] as const)("summarizes $name", ({ eventId, body, metadata, summary }) => {
-    expectEvent(
-      {
-        body,
-        msgtype: "m.text",
-        "com.openclaw.approval": { ...structuredClone(approval), ...metadata },
-      },
-      { eventId, body, msgtype: "m.text", approval: { ...approval, ...summary } },
-      { event_id: eventId },
-    );
-  });
-
-  it.each([
-    {
-      name: "explicit filename and caption",
-      content: {
-        body: "Protocol note: generated the QA lighthouse image successfully.",
-        filename: "qa-lighthouse.png",
-      },
-      attachment: {
-        kind: "image",
-        caption: "Protocol note: generated the QA lighthouse image successfully.",
-        filename: "qa-lighthouse.png",
+      body: "hello",
+      msgtype: "m.text",
+      "m.mentions": { user_ids: [sender] },
+      "m.relates_to": {
+        rel_type: "m.thread",
+        event_id: "$root",
+        is_falling_back: true,
+        "m.in_reply_to": { event_id: "$driver" },
       },
     },
     {
-      name: "filename-like body",
-      content: { body: "qa-lighthouse.png" },
-      attachment: { kind: "image", filename: "qa-lighthouse.png" },
+      originServerTs: timestamp,
+      body: "hello",
+      msgtype: "m.text",
+      mentions: { userIds: [sender] },
+      relatesTo: {
+        relType: "m.thread",
+        eventId: "$root",
+        inReplyToId: "$driver",
+        isFallingBack: true,
+      },
     },
-  ] as const)("normalizes image messages with $name", ({ content, attachment }) => {
-    expectEvent(
-      { ...content, msgtype: "m.image" },
-      { eventId: "$image", body: content.body, msgtype: "m.image", attachment },
-      { event_id: "$image" },
-    );
-  });
+    { origin_server_ts: timestamp },
+  ],
+  [
+    "reaction",
+    { "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: "👍" } },
+    {
+      kind: "reaction",
+      originServerTs: timestamp,
+      relatesTo: { eventId: "$msg", relType: "m.annotation" },
+      reaction: { eventId: "$msg", key: "👍" },
+    },
+    { type: "m.reaction", sender: driver, origin_server_ts: timestamp },
+  ],
+  [
+    "membership",
+    { membership: "leave" },
+    { kind: "membership", stateKey: sender, membership: "leave" },
+    { type: "m.room.member", sender: driver, state_key: sender },
+  ],
+  [
+    "redaction",
+    {},
+    { kind: "redaction", redactsEventId: "$reaction" },
+    { type: "m.room.redaction", sender: driver, redacts: "$reaction" },
+  ],
+])("normalizes %s", (_name, ...args) => expectNormalized(...args));
 
-  it("normalizes membership events with explicit membership kind", () => {
-    expectEvent(
-      { membership: "leave" },
-      {
-        eventId: "$membership",
-        kind: "membership",
-        sender: "@driver:matrix-qa.test",
-        stateKey: sender,
-        type: "m.room.member",
-        membership: "leave",
-      },
-      {
-        event_id: "$membership",
-        sender: "@driver:matrix-qa.test",
-        state_key: sender,
-        type: "m.room.member",
-      },
-    );
-  });
+it.each([
+  ["Image caption", "qa-lighthouse.png", { caption: "Image caption" }],
+  ["qa-lighthouse.png", undefined, {}],
+] as const)("normalizes image body %s", (body, filename, caption) => {
+  expectNormalized(
+    { body, filename, msgtype: "m.image" },
+    {
+      body,
+      msgtype: "m.image",
+      attachment: { kind: "image", filename: "qa-lighthouse.png", ...caption },
+    },
+  );
+});
 
-  it("classifies Matrix redactions without needing raw event inspection", () => {
-    expectEvent(
-      {},
-      {
-        eventId: "$redaction",
-        kind: "redaction",
-        sender: "@driver:matrix-qa.test",
-        type: "m.room.redaction",
-        redactsEventId: "$reaction",
-      },
-      {
-        event_id: "$redaction",
-        redacts: "$reaction",
-        sender: "@driver:matrix-qa.test",
-        type: "m.room.redaction",
-      },
-    );
+it.each([
+  [
+    { id: "approval-1", kind: "exec", commandText: "printf " + "A".repeat(300) },
+    { id: "approval-1", kind: "exec", hasCommandText: true },
+  ],
+  [plugin, plugin],
+] as const)("normalizes approval metadata without command text: %j", (metadata, expected) => {
+  expectNormalized(
+    { "com.openclaw.approval": { ...approval, ...metadata } },
+    { approval: { ...approval, ...expected } },
+  );
+});
+
+it.each([
+  ["preview edit", { body: "preview", "org.matrix.msc4357.live": {} }, {}, true],
+  ["final edit", { body: "final" }, { "org.matrix.msc4357.live": {} }, undefined],
+] as const)("preserves the live marker only on %s", (_name, newContent, outerContent, live) => {
+  const event = normalizeMatrixQaObservedEvent(roomId, {
+    event_id: "$event",
+    type: "m.room.message",
+    content: {
+      body: "preview",
+      ...outerContent,
+      "m.relates_to": { rel_type: "m.replace", event_id: "$draft" },
+      "m.new_content": newContent,
+    },
   });
+  expect(event?.live).toBe(live);
 });

@@ -1,6 +1,7 @@
 /** Repairs interrupted and finalized cron runs while the service starts. */
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveCronCompletionStatus } from "../completion-status.js";
+import { STARTUP_INTERRUPTED_ERROR } from "../execution-error-constants.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
@@ -12,8 +13,6 @@ import {
   applyTriggerNoFireResult,
 } from "./timer-outcomes.js";
 import { applyTriggerRunResult } from "./timer-trigger.js";
-
-export const STARTUP_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
 
 function resolveOneShotReplacementAtMs(job: CronJob, runningAtMs: number): number | undefined {
   if (job.schedule.kind !== "at" || !job.enabled) {
@@ -33,11 +32,14 @@ export function markInterruptedStartupRun(params: {
   job: CronJob;
   runningAtMs: number;
   preservedOccurrenceAtMs?: number;
+  restartRetryAtMs?: number;
   nowMs: number;
 }): InterruptedStartupRun {
   const { job, runningAtMs, nowMs } = params;
   const replacementAtMs =
-    params.preservedOccurrenceAtMs ?? resolveOneShotReplacementAtMs(job, runningAtMs);
+    params.preservedOccurrenceAtMs ??
+    resolveOneShotReplacementAtMs(job, runningAtMs) ??
+    params.restartRetryAtMs;
   // An interrupted run remains visible, but is not a failure of the job itself.
   params.state.deps.log.warn(
     { jobId: job.id, runningAtMs },
@@ -61,7 +63,8 @@ export function markInterruptedStartupRun(params: {
   job.state.lastFailureNotificationDeliveryStatus = "not-requested";
   job.state.lastFailureNotificationDeliveryError = undefined;
   job.state.nextRunAtMs = replacementAtMs;
-  job.state.startupCatchupAtMs = undefined;
+  job.state.startupCatchupAtMs =
+    params.restartRetryAtMs === replacementAtMs ? replacementAtMs : undefined;
   job.updatedAtMs = nowMs;
 
   // An uncertain started one-shot is never replayed; a distinct replacement keeps its slot.
@@ -151,6 +154,7 @@ export function restoreFinalizedStartupRun(params: {
     job,
     {
       ...entry,
+      errorReason: entry.errorReason,
       completionStatus,
       // Recovery uses the finished run's fact, never the job's possibly edited route.
       deliveryState: {

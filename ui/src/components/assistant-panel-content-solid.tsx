@@ -1,4 +1,4 @@
-import { createEffect, createMemo, onSettled, untrack } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
@@ -14,7 +14,7 @@ import {
 } from "../pages/custodian/custodian-session-store.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import "../pages/custodian/custodian-surface.tsx";
-import "./home-session.runtime.ts";
+import { HomeSession } from "./home-session-solid.tsx";
 import "../styles/assistant-panel-content.css";
 
 type Props = {
@@ -28,11 +28,27 @@ type Props = {
   pageSessionKey: string;
   pageAgentId: string;
   store?: CustodianSessionStore;
+  onStore?: (store: CustodianSessionStore) => void;
 };
-export type OpenClawAssistantPanelContent = SolidBridgeElement<Props>;
+function ActiveCustodian(props: {
+  store: CustodianSessionStore;
+  variant: CustodianSessionStore["activeVariant"];
+}) {
+  onSettled(() => {
+    void props.store.refreshTranscriptIfIdle();
+  });
+  return (
+    <openclaw-custodian-surface
+      prop:store={props.store}
+      prop:onboarding={props.variant === "onboarding"}
+      prop:newAgentIntent={props.variant === "new-agent"}
+    />
+  );
+}
+
 export const AssistantPanelContent = defineSolidBridge<Props>(
   "openclaw-assistant-panel-content",
-  (props, element): SolidJSX.Element => {
+  (props): SolidJSX.Element => {
     const store = () => props.store ?? custodianSessionStore;
     const projection = createMemo(() =>
       projectSource(
@@ -53,19 +69,7 @@ export const AssistantPanelContent = defineSolidBridge<Props>(
         },
       ),
     );
-    onSettled(() => {
-      element.dispatchEvent(
-        new CustomEvent("assistant-custodian-store", { detail: untrack(store), bubbles: true }),
-      );
-    });
-    createEffect(
-      () => props.active && props.destination === "custodian",
-      (visible) => {
-        if (visible) {
-          void untrack(store).refreshTranscriptIfIdle();
-        }
-      },
-    );
+    onSettled(() => props.onStore?.(store()));
     const variant = () => projection().read().store.activeVariant;
     const workContext = createMemo(() => {
       const current = projection().read().context;
@@ -79,17 +83,13 @@ export const AssistantPanelContent = defineSolidBridge<Props>(
       <>
         {props.active &&
           (props.destination !== "custodian" ? (
-            <openclaw-home-session
-              prop:sessionKey={props.sessionKey}
-              prop:agentId={props.agentId}
-              prop:workContext={workContext()}
+            <HomeSession
+              sessionKey={props.sessionKey}
+              agentId={props.agentId}
+              workContext={workContext()}
             />
           ) : (
-            <openclaw-custodian-surface
-              prop:store={store()}
-              prop:onboarding={variant() === "onboarding"}
-              prop:newAgentIntent={variant() === "new-agent"}
-            />
+            <ActiveCustodian store={store()} variant={variant()} />
           ))}
       </>
     );
@@ -106,13 +106,14 @@ export const AssistantPanelContent = defineSolidBridge<Props>(
       pageSessionKey: { default: "" },
       pageAgentId: { default: "" },
       store: { default: undefined, attribute: false },
+      onStore: { default: undefined, attribute: false },
     },
   },
 );
 
 declare global {
   interface HTMLElementTagNameMap {
-    "openclaw-assistant-panel-content": OpenClawAssistantPanelContent;
+    "openclaw-assistant-panel-content": SolidBridgeElement<Props>;
   }
 }
 
@@ -128,18 +129,12 @@ declare module "@solidjs/web" {
         "prop:sessionContext"?: Props["sessionContext"];
         "prop:context"?: Props["context"];
         "prop:store"?: Props["store"];
-        "onAssistant-custodian-store"?: EventHandlerUnion<
-          OpenClawAssistantPanelContent,
-          CustomEvent<CustodianSessionStore>
-        >;
-      };
-      "openclaw-home-session": AssistantElementAttributes<"openclaw-home-session"> & {
-        "prop:workContext"?: ChatWorkContext;
+        "prop:onStore"?: Props["onStore"];
       };
       "openclaw-custodian-surface": AssistantElementAttributes<"openclaw-custodian-surface"> & {
         "prop:store"?: HTMLElementTagNameMap["openclaw-custodian-surface"]["store"];
         "prop:historyContent"?: HTMLElementTagNameMap["openclaw-custodian-surface"]["historyContent"];
-        "prop:onRetryChannelOnboarding"?: HTMLElementTagNameMap["openclaw-custodian-surface"]["onRetryChannelOnboarding"];
+        "prop:channelOnboardingContent"?: HTMLElementTagNameMap["openclaw-custodian-surface"]["channelOnboardingContent"];
       };
     }
   }

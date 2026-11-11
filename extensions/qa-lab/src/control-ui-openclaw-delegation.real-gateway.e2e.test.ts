@@ -353,17 +353,15 @@ fullAccessSuite.define(() => {
           const proofDir = fullAccessSuite.artifactDir;
           const gateway = fullAccessRuntime.gateway;
           if (fullAccessGatewayUsed) {
-            // Retain provisioned credentials, but retire the previous run authority before reset.
-            await gateway.restartAfterStateMutation(async () => {
-              await gateway.runCli([
-                "config",
-                "set",
-                "logging.level",
-                '"debug"',
-                "--strict-json",
-                "--expect-current-json",
-                '"info"',
-              ]);
+            // The previous turn finished; reset only its persisted logging change.
+            const current = await gateway.call("config.get", {});
+            if (!isRecord(current) || typeof current.hash !== "string") {
+              throw new Error("Gateway did not return a config revision");
+            }
+            expect(loggingLevel(current.config)).toBe("info");
+            await gateway.call("config.patch", {
+              raw: JSON.stringify({ logging: { level: "debug" } }),
+              baseHash: current.hash,
             });
           }
           fullAccessGatewayUsed = true;

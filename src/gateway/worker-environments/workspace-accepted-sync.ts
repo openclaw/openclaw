@@ -148,12 +148,8 @@ export function createAcceptedWorkspacePublisher(params: {
           throw workspaceSyncError(settled);
         }
         return parseAcceptedWorkspaceSettlement(settled.stdout);
-      } catch (observationFailure) {
-        throw new AcceptedWorkspacePublicationIndeterminateError(
-          operation,
-          publicationFailure,
-          observationFailure,
-        );
+      } catch {
+        throw new AcceptedWorkspacePublicationIndeterminateError(operation, publicationFailure);
       }
     };
     const requirePublicationCommand = async (
@@ -182,12 +178,8 @@ export function createAcceptedWorkspacePublisher(params: {
       if (outcome !== "applied") {
         throw commitFailure;
       }
-      await requirePublicationCommand("commit", async (observationFailure) => {
-        throw new AcceptedWorkspacePublicationIndeterminateError(
-          "commit",
-          commitFailure,
-          observationFailure,
-        );
+      await requirePublicationCommand("commit", async () => {
+        throw new AcceptedWorkspacePublicationIndeterminateError("commit", commitFailure);
       });
     };
     let transactionBegun = false;

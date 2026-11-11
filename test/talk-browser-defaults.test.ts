@@ -126,38 +126,20 @@ beforeEach(() => {
 
 describe("OpenAI browser Talk catalog defaults", () => {
   it.each([
-    {
-      label: "unpinned browser",
-      model: undefined,
-      camera: false,
-      expected: "gpt-live-1",
-    },
-    { label: "explicit GA", model: "gpt-realtime-2.1", camera: true, expected: "gpt-realtime-2.1" },
-    {
-      label: "Live launch over configured GA",
-      model: "gpt-realtime-2.1",
-      launchModel: "gpt-live-1",
-      camera: false,
-      expected: "gpt-live-1",
-    },
-    {
-      label: "GA launch through a provider alias",
-      model: "gpt-live-1",
-      launchModel: "gpt-realtime-2.1",
-      launchProvider: " OPENAI-VOICE ",
-      camera: true,
-      expected: "gpt-realtime-2.1",
-    },
-    {
-      label: "audio-only browser",
-      model: undefined,
-      camera: false,
-      expected: "gpt-live-1",
-      audioOnly: true,
-    },
-  ])(
-    "preserves $label from discovery through session creation",
-    async ({ model, launchModel, launchProvider, camera, expected, audioOnly }) => {
+    ["unpinned browser", undefined, undefined, false, "gpt-live-1", false],
+    ["explicit GA", "gpt-realtime-2.1", undefined, true, "gpt-realtime-2.1", false],
+    [
+      "configured GA through a provider alias",
+      "gpt-realtime-2.1",
+      " OPENAI-VOICE ",
+      true,
+      "gpt-realtime-2.1",
+      false,
+    ],
+    ["audio-only browser", undefined, undefined, false, "gpt-live-1", true],
+  ] as const)(
+    "preserves %s from discovery through session creation",
+    async (_label, model, providerId, camera, expected, audioOnly) => {
       await withOpenClawTestState({ prefix: "talk-browser-defaults-" }, async (state) => {
         const cfg: OpenClawConfig = {
           agents: {
@@ -166,7 +148,7 @@ describe("OpenAI browser Talk catalog defaults", () => {
           talk: {
             agentId: "main",
             realtime: {
-              provider: "openai",
+              provider: providerId ?? "openai",
               ...(model ? { model } : {}),
               providers: { openai: { apiKey: "test-platform-key" } },
             },
@@ -304,13 +286,11 @@ describe("OpenAI browser Talk catalog defaults", () => {
           { request } as GatewayBrowserClient,
           "agent:main:main",
           audioOnly ? {} : { onVideoCapability },
-          launchModel ? { provider: launchProvider ?? "openai", model: launchModel } : {},
         );
         try {
           await session.start();
           expect(mocks.createSession).toHaveBeenCalledWith({
             sessionKey: "agent:main:main",
-            ...(launchModel ? { provider: launchProvider ?? "openai", model: launchModel } : {}),
             capabilities: camera
               ? ["voice-transcript", "voice-selection", "camera-frame"]
               : ["voice-transcript", "voice-selection"],

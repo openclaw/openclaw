@@ -135,7 +135,6 @@ it.skipIf(!isLiveTestEnabled() || process.env.OPENCLAW_LIVE_AGENTS_API !== "1")(
             workspace: instance.state.workspaceDir,
             model: { primary: "openai/" + model },
             models: { ["openai/" + model]: { agentRuntime: { id: "agentsapi" } } },
-            heartbeat: { every: "0m" },
             thinkingDefault: "low",
             timeoutSeconds: 240,
             skills: [],

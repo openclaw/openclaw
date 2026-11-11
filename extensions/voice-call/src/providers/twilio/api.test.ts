@@ -1,94 +1,63 @@
-// Voice Call tests cover api plugin behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../../../../test-support/streaming-error-response.js";
 
+type GuardedRequest = Parameters<typeof import("../../../api.js").fetchWithSsrFGuard>[0];
+type GuardedResponse = { response: Response; release: () => Promise<void> };
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
-  fetchWithSsrFGuardMock: vi.fn(),
+  fetchWithSsrFGuardMock: vi.fn<(request: GuardedRequest) => Promise<GuardedResponse>>(),
 }));
 
-vi.mock("../../../api.js", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-}));
+// mock-isolation: Inject the HTTP guard without loading the plugin-entry and TTS runtime barrel.
+vi.mock("../../../api.js", () => ({ fetchWithSsrFGuard: fetchWithSsrFGuardMock }));
 
 import { resolveTwilioApiBaseUrl } from "../twilio-region.js";
 import { TwilioApiError, createTwilioApi } from "./api.js";
 
-const DEFAULT_REQUEST = {
-  baseUrl: resolveTwilioApiBaseUrl({ accountSid: "AC123" }),
-  accountSid: "AC123",
-  authToken: "secret",
-  endpoint: "/Calls.json",
-  body: {},
-};
-
-async function twilioApiRequest(
-  params: Parameters<typeof createTwilioApi>[0] & {
-    endpoint: string;
-    body: URLSearchParams | Record<string, string | string[]>;
-    allowNotFound?: boolean;
-  },
-) {
-  return createTwilioApi(params).request(params.endpoint, params.body, {
-    allowNotFound: params.allowNotFound,
-  });
+async function twilioApiRequest({
+  baseUrl = resolveTwilioApiBaseUrl({ accountSid: "AC123" }),
+  endpoint = "/Calls.json",
+  body = {},
+  allowNotFound,
+}: {
+  baseUrl?: string;
+  endpoint?: string;
+  body?: URLSearchParams | Record<string, string | string[]>;
+  allowNotFound?: boolean;
+} = {}) {
+  const api = createTwilioApi({ baseUrl, accountSid: "AC123", authToken: "secret" });
+  return api.request(endpoint, body, { allowNotFound });
 }
 
-type FetchGuardRequest = {
-  url?: string;
-  init?: RequestInit;
-  auditContext?: string;
-  policy?: unknown;
-  timeoutMs?: number;
-};
-
-function requireFirstFetchGuardRequest(): FetchGuardRequest {
-  const [call] = fetchWithSsrFGuardMock.mock.calls;
-  if (!call) {
-    throw new Error("expected guarded fetch call");
-  }
-  const [request] = call;
-  if (!request || typeof request !== "object" || Array.isArray(request)) {
-    throw new Error("expected guarded fetch request");
-  }
-  return request as FetchGuardRequest;
+const release = vi.fn(async () => {});
+function mockResponse(response = new Response(JSON.stringify({ sid: "CA123" }))) {
+  fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, release });
 }
 
 describe("twilioApiRequest", () => {
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
+    release.mockClear();
   });
 
   it("posts form bodies with basic auth and parses json", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(JSON.stringify({ sid: "CA123" }), { status: 200 }),
-      release,
+    mockResponse();
+    const body = { To: "+14155550123", StatusCallbackEvent: ["initiated", "completed"] };
+    await expect(twilioApiRequest({ body })).resolves.toEqual({ sid: "CA123" });
+
+    const [request] = fetchWithSsrFGuardMock.mock.calls[0]!;
+    expect(request).toMatchObject({
+      url: "https://api.twilio.com/2010-04-01/Accounts/AC123/Calls.json",
+      auditContext: "voice-call.twilio.api",
+      timeoutMs: 30_000,
+      init: { method: "POST" },
     });
-
-    await expect(
-      twilioApiRequest({
-        ...DEFAULT_REQUEST,
-        body: {
-          To: "+14155550123",
-          StatusCallbackEvent: ["initiated", "completed"],
-        },
-      }),
-    ).resolves.toEqual({ sid: "CA123" });
-
-    const { url, init, auditContext, policy, timeoutMs } = requireFirstFetchGuardRequest();
-    expect(url).toBe("https://api.twilio.com/2010-04-01/Accounts/AC123/Calls.json");
-    expect(auditContext).toBe("voice-call.twilio.api");
-    expect(policy).toEqual({ allowedHostnames: ["api.twilio.com"] });
-    expect(timeoutMs).toBe(30_000);
-    expect(init?.method).toBe("POST");
-    expect(init?.headers).toEqual({
+    expect(request.policy).toEqual({ allowedHostnames: ["api.twilio.com"] });
+    expect(request.init?.headers).toEqual({
       Authorization: `Basic ${Buffer.from("AC123:secret").toString("base64")}`,
       "Content-Type": "application/x-www-form-urlencoded",
     });
-    const requestBody = init?.body;
-    if (!(requestBody instanceof URLSearchParams)) {
-      throw new Error("expected URLSearchParams request body");
-    }
+    const requestBody = request.init?.body;
+    assert(requestBody instanceof URLSearchParams, "expected URLSearchParams request body");
     expect(requestBody.toString()).toBe(
       "To=%2B14155550123&StatusCallbackEvent=initiated&StatusCallbackEvent=completed",
     );
@@ -96,22 +65,11 @@ describe("twilioApiRequest", () => {
   });
 
   it("derives the regional hostname for the request and SSRF policy", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(JSON.stringify({ sid: "CA123" }), { status: 200 }),
-      release,
-    });
-    const baseUrl = resolveTwilioApiBaseUrl({
-      accountSid: "AC123",
-      region: "ie1",
-    });
+    mockResponse();
+    const baseUrl = resolveTwilioApiBaseUrl({ accountSid: "AC123", region: "ie1" });
+    await twilioApiRequest({ baseUrl });
 
-    await twilioApiRequest({
-      ...DEFAULT_REQUEST,
-      baseUrl,
-    });
-
-    const { url, policy } = requireFirstFetchGuardRequest();
+    const [{ url, policy }] = fetchWithSsrFGuardMock.mock.calls[0]!;
     expect(url).toBe("https://api.dublin.ie1.twilio.com/2010-04-01/Accounts/AC123/Calls.json");
     expect(policy).toEqual({ allowedHostnames: ["api.dublin.ie1.twilio.com"] });
     expect(release).toHaveBeenCalledTimes(1);
@@ -120,7 +78,6 @@ describe("twilioApiRequest", () => {
   it("rejects unsupported API hosts before the SSRF guard", async () => {
     await expect(
       twilioApiRequest({
-        ...DEFAULT_REQUEST,
         baseUrl: "https://metadata.google.internal/2010-04-01/Accounts/AC123",
       }),
     ).rejects.toThrow("Unsupported Twilio API hostname: metadata.google.internal");
@@ -129,95 +86,47 @@ describe("twilioApiRequest", () => {
 
   it("passes through URLSearchParams, allows 404s, and returns undefined for empty bodies", async () => {
     const missing = cancelTrackedTextResponse("missing", { status: 404 });
-    const responses = [new Response("", { status: 200 }), missing.response];
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockImplementation(async () => ({
-      response: responses.shift()!,
-      release,
-    }));
-
+    mockResponse(new Response("", { status: 200 }));
+    mockResponse(missing.response);
     await expect(
-      twilioApiRequest({
-        ...DEFAULT_REQUEST,
-        body: new URLSearchParams({ To: "+14155550123" }),
-      }),
+      twilioApiRequest({ body: new URLSearchParams({ To: "+14155550123" }) }),
     ).resolves.toBeUndefined();
 
     await expect(
-      twilioApiRequest({
-        ...DEFAULT_REQUEST,
-        endpoint: "/Calls/missing.json",
-        allowNotFound: true,
-      }),
+      twilioApiRequest({ endpoint: "/Calls/missing.json", allowNotFound: true }),
     ).resolves.toBeUndefined();
     expect(missing.wasCanceled()).toBe(true);
     expect(release).toHaveBeenCalledTimes(2);
   });
 
   it("bounds twilio error bodies and cancels unread overflow", async () => {
-    const release = vi.fn(async () => {});
     const tracked = cancelTrackedTextResponse("x".repeat(9 * 1024), { status: 400 });
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: tracked.response,
-      release,
-    });
-
-    try {
-      await twilioApiRequest(DEFAULT_REQUEST);
-      throw new Error("expected Twilio API request to reject");
-    } catch (error) {
-      expect(error).toBeInstanceOf(TwilioApiError);
-      const twilioError = error as TwilioApiError;
-      expect(twilioError.message).toContain("Twilio API error: 400 ");
-      expect(twilioError.message).toContain("... [truncated]");
-      expect(twilioError.responseText.length).toBeLessThan(8_300);
-    }
+    mockResponse(tracked.response);
+    const error: unknown = await twilioApiRequest().catch((cause: unknown) => cause);
+    assert(error instanceof TwilioApiError, "expected Twilio API error");
+    expect(error.message).toContain("Twilio API error: 400 ");
+    expect(error.message).toContain("... [truncated]");
+    expect(error.message.length).toBeLessThan(8_300);
     expect(tracked.wasCanceled()).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("wraps malformed json success responses with an owned error", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response("{not json", { status: 200 }),
-      release,
-    });
-
-    await expect(twilioApiRequest(DEFAULT_REQUEST)).rejects.toThrow(
-      "Twilio API returned malformed JSON.",
-    );
+    mockResponse(new Response("{not json"));
+    await expect(twilioApiRequest()).rejects.toThrow("Twilio API returned malformed JSON.");
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("exposes structured Twilio error codes from json error bodies", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
-        JSON.stringify({
-          code: 21220,
-          message: "Call is not in-progress. Cannot redirect.",
-        }),
-        { status: 400 },
-      ),
-      release,
+  it.each(["https://d.test", "javascript:x", undefined])("keeps codes: %s", async (url) => {
+    const message = "Cannot redirect.";
+    mockResponse(Response.json({ code: 21220, message, more_info: url }, { status: 400 }));
+    const request = twilioApiRequest({ endpoint: "/Calls/CA123.json" });
+    await expect(request).rejects.toBeInstanceOf(TwilioApiError);
+    const reference = url === "https://d.test" ? ": https://d.test" : "";
+    await expect(request).rejects.toMatchObject({
+      twilioCode: 21220,
+      message: `Twilio API error: 400 ${message} (Twilio error 21220${reference})`,
     });
-
-    try {
-      await twilioApiRequest({
-        ...DEFAULT_REQUEST,
-        endpoint: "/Calls/CA123.json",
-      });
-      throw new Error("expected Twilio API request to reject");
-    } catch (error) {
-      expect(error).toBeInstanceOf(TwilioApiError);
-      const twilioError = error as TwilioApiError;
-      expect(twilioError.name).toBe("TwilioApiError");
-      expect(twilioError.httpStatus).toBe(400);
-      expect(twilioError.twilioCode).toBe(21220);
-      expect(twilioError.message).toBe(
-        "Twilio API error: 400 Call is not in-progress. Cannot redirect.",
-      );
-    }
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

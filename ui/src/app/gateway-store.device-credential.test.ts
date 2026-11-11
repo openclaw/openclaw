@@ -2,7 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { goalOperationScopePrefix } from "../lib/chat/goal-operation-storage.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
-import { loadDeviceAuthToken, storeDeviceAuthToken } from "../lib/nodes/index.ts";
+import {
+  loadDeviceAuthToken,
+  loadOrCreateDeviceIdentity,
+  storeDeviceAuthToken,
+} from "../lib/nodes/index.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   createGatewayStoreTestStore as createStore,
   stubGatewayStoreTestGlobals,
@@ -57,7 +62,7 @@ describe("createApplicationGateway stored device credential", () => {
           password: "gate-password",
         });
         expect(gateway.connection.gatewayUrl).toBe(OTHER_GATEWAY);
-        expect(current().opts.token).toBe("page-shared-token");
+        expect(current().testOptions.token).toBe("page-shared-token");
       }
       const gatewayUrl = gateway.connection.gatewayUrl;
       const otherUrl = running ? firstUrl : OTHER_GATEWAY;
@@ -99,12 +104,49 @@ describe("createApplicationGateway stored device credential", () => {
       expect(gateway.hasStoredDeviceToken?.()).toBe(false);
       expect(clients.length).toBe(clientsBefore + Number(running));
       if (running) {
-        expect(current().opts.token).toBeUndefined();
-        expect(current().opts.bootstrapToken).toBeUndefined();
-        expect(current().opts.password).toBeUndefined();
+        expect(current().testOptions.token).toBeUndefined();
+        expect(current().testOptions.bootstrapToken).toBeUndefined();
+        expect(current().testOptions.password).toBeUndefined();
         expect(gateway.connection.token).toBe("");
       }
       gateway.stop();
+    },
+  );
+
+  it.each([
+    ["no stored identity", null],
+    ["unparsable", "{not json"],
+    ["malformed", JSON.stringify({ version: 1 })],
+    ["incomplete, with an id", JSON.stringify({ version: 1, deviceId: "stale-device" })],
+  ])(
+    "finds and forgets a credential kept only for this page when storage rejects writes (%s)",
+    async (_, storedIdentity) => {
+      const storage = createStorageMock();
+      if (storedIdentity !== null) {
+        storage.setItem(IDENTITY_KEY, storedIdentity);
+      }
+      storage.setItem = () => {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      };
+      vi.stubGlobal("localStorage", storage);
+      const identity = await loadOrCreateDeviceIdentity();
+      const { gateway } = createStore();
+      const pageCredential = {
+        deviceId: identity.deviceId,
+        gatewayUrl: gateway.connection.gatewayUrl,
+        role: "operator",
+      };
+      storeDeviceAuthToken({
+        ...pageCredential,
+        token: "page-only-token",
+        scopes: ["operator.read"],
+      });
+      expect(loadDeviceAuthToken(pageCredential)?.token).toBe("page-only-token");
+
+      expect(gateway.hasStoredDeviceToken?.()).toBe(true);
+      expect(gateway.forgetDeviceToken?.()).toBe(true);
+      expect(loadDeviceAuthToken(pageCredential)).toBeNull();
+      expect(gateway.hasStoredDeviceToken?.()).toBe(false);
     },
   );
 

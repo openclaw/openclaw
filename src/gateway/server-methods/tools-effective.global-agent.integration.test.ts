@@ -21,7 +21,7 @@ describe("tools.effective global agent integration", () => {
     getRuntimeConfig = configModule.getRuntimeConfig;
   }
 
-  async function requestTools(id: string, sessionKey = "global") {
+  async function requestTools(sessionKey = "global") {
     const respond = vi.fn();
     await expectDefined(
       toolsEffectiveHandlers["tools.effective"],
@@ -31,10 +31,16 @@ describe("tools.effective global agent integration", () => {
       respond: respond as never,
       context: { getRuntimeConfig } as never,
       client: null,
-      req: { type: "req", id, method: "tools.effective" },
+      req: { type: "req", id: "tools-effective", method: "tools.effective" },
       isWebchatConnect: () => false,
     });
     return respond;
+  }
+
+  function expectInventory(modelProvider: string, modelId: string) {
+    expect(inventoryMocks.resolveEffectiveToolInventory).toHaveBeenLastCalledWith(
+      expect.objectContaining({ agentId: "work", sessionKey: "global", modelProvider, modelId }),
+    );
   }
 
   async function seedStores(global = true) {
@@ -76,19 +82,13 @@ describe("tools.effective global agent integration", () => {
   it("resolves tools.effective for global session scoped to a non-default agent store", async () => {
     await writeGlobalStore("main", "main-model");
     await writeGlobalStore("work", "work-model", true);
-    const respond = await requestTools("req-tools-effective-global");
-
-    const call = respond.mock.calls[0] as [boolean, { agentId?: string }?, unknown?] | undefined;
-    expect(call?.[0]).toBe(true);
-    expect(call?.[1]?.agentId).toBe("work");
-    expect(inventoryMocks.resolveEffectiveToolInventory).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "work",
-        sessionKey: "global",
-        modelProvider: "openai",
-        modelId: "work-model",
-      }),
-    );
+    const respond = await requestTools();
+    expect(respond.mock.calls[0]).toEqual([
+      true,
+      expect.objectContaining({ agentId: "work" }),
+      undefined,
+    ]);
+    expectInventory("openai", "work-model");
   });
 
   it("uses the hot-reloaded agent default instead of stale runtime identity", async () => {
@@ -96,28 +96,15 @@ describe("tools.effective global agent integration", () => {
     await reloadConfig();
     await writeGlobalStore("work", "stale-model");
 
-    const before = await requestTools("req-tools-effective-before-reload");
+    const before = await requestTools();
     expect(before.mock.calls[0]?.[0]).toBe(true);
-    expect(inventoryMocks.resolveEffectiveToolInventory).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        modelProvider: "openai",
-        modelId: "stale-model",
-      }),
-    );
+    expectInventory("openai", "stale-model");
 
     testState.agentConfig = { model: { primary: "anthropic/current-model" } };
     await reloadConfig();
-    const after = await requestTools("req-tools-effective-after-reload");
+    const after = await requestTools();
     expect(after.mock.calls[0]?.[0]).toBe(true);
-
-    expect(inventoryMocks.resolveEffectiveToolInventory).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        agentId: "work",
-        sessionKey: "global",
-        modelProvider: "anthropic",
-        modelId: "current-model",
-      }),
-    );
+    expectInventory("anthropic", "current-model");
   });
 
   // The global agent override must not override ownership of a non-global key.
@@ -134,13 +121,12 @@ describe("tools.effective global agent integration", () => {
       },
     });
 
-    const respond = await requestTools("req-tools-effective-mismatch", "agent:main:abc");
-
-    const call = respond.mock.calls[0] as
-      | [boolean, unknown?, { code: number; message: string }?]
-      | undefined;
-    expect(call?.[0]).toBe(false);
-    expect(call?.[2]?.message).toBe('agent "work" does not match session key agent "main"');
+    const respond = await requestTools("agent:main:abc");
+    expect(respond.mock.calls[0]).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ message: 'agent "work" does not match session key agent "main"' }),
+    ]);
     expect(inventoryMocks.resolveEffectiveToolInventory).not.toHaveBeenCalled();
   });
 });

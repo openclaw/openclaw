@@ -1,24 +1,27 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
+import { hasKnownPricing } from "../../model-catalog/pricing.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { providerOwnsDynamicModelPreparation } from "../../plugins/provider-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveDefaultAgentDir } from "../agent-scope.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
+import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
 import { modelKey, type ModelRef } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { buildSuppressedBuiltInModelError } from "../model-suppression.js";
+import { readCapturedPreparedModelRuntimeCatalog } from "../prepared-model-runtime.capture.js";
 import {
   getPreparedModelRuntimeSnapshot,
   loadPreparedModelRuntimeSnapshot,
   type PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.js";
-import { AuthStorage } from "../sessions/auth-storage.js";
-import { ModelRegistry } from "../sessions/model-registry.js";
+import { AuthStorage } from "../sessions/auth-storage.core.js";
+import { ModelRegistry } from "../sessions/model-registry.core.js";
 import { mergeModelMediaInput } from "./model.compat.js";
-import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import { resolveConfiguredProviderConfig } from "./model.configured-overrides.js";
 import { type ProviderRuntimeHooks, resolveRuntimeHooks } from "./model.provider-hooks.js";
 import {
@@ -58,6 +61,25 @@ type AsyncModelResolutionOptions = {
   /** Resolve local provider facts without starting asynchronous catalog discovery. */
   deferProviderDynamicModelPreparation?: boolean;
 };
+
+/**
+ * Discovery hooks give models their bundled rows do not price yet (a newly released Claude
+ * model, for example) zero-rate placeholders. Each call bills at its own model's resolved
+ * price, so the transport records the API-rate cost instead of $0. Authored prices, publisher
+ * zeros and private endpoints resolve unchanged.
+ */
+function withResolvedPricing(model: Model, cfg: OpenClawConfig | undefined, agentDir: string) {
+  if (hasKnownPricing(model.cost)) {
+    return model;
+  }
+  const cost = resolveModelCostConfig({
+    provider: model.provider,
+    model: model.id,
+    config: cfg,
+    agentDir,
+  });
+  return cost && hasKnownPricing(cost) ? { ...model, cost } : model;
+}
 
 /** Creates isolated model/auth stores for harnesses that own model discovery themselves. */
 export function createEmptyAgentDiscoveryStores(): {
@@ -145,10 +167,16 @@ export async function resolveModelAsync(
         ? stores.modelRegistry.fork(authStorage)
         : stores.modelRegistry;
     }
-    const declared = preparedModelRuntime?.modelCatalog.entries.find(
-      (entry) => entry.provider === normalizedRef.provider && entry.id === normalizedRef.model,
-    );
-    if (declared?.inference?.chat === false) {
+    const matchesSelectedModel = (entry: { provider: string; id: string }) =>
+      entry.provider === normalizedRef.provider && entry.id === normalizedRef.model;
+    const declared = preparedModelRuntime?.modelCatalog.entries.find(matchesSelectedModel);
+    // An admitted grant replaces static support only for its own physical route.
+    const captured =
+      preparedModelRuntime &&
+      readCapturedPreparedModelRuntimeCatalog(preparedModelRuntime)?.entries.find(
+        (entry) => matchesSelectedModel(entry) && modelTransportRoutesMatch(entry, declared ?? {}),
+      );
+    if ((captured?.inference?.chat ?? declared?.inference?.chat) === false) {
       return {
         error: `Model ${normalizedRef.provider}/${normalizedRef.model} does not support chat inference`,
         authStorage,
@@ -211,7 +239,12 @@ export async function resolveModelAsync(
           : undefined;
       options?.assertCurrent?.();
       if (suppressedRuntimeModel) {
-        return { model: suppressedRuntimeModel, logicalRef, authStorage, modelRegistry };
+        return {
+          model: withResolvedPricing(suppressedRuntimeModel, cfg, resolvedAgentDir),
+          logicalRef,
+          authStorage,
+          modelRegistry,
+        };
       }
       return {
         error: explicitModel.error ?? buildUnknownModelError(registryParams),
@@ -293,7 +326,7 @@ export async function resolveModelAsync(
     if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
       model = await resolveStaticCatalogFallbackModel();
       options?.assertCurrent?.();
-      model ??= buildConfiguredFallbackModel({
+      model ??= normalizeConfiguredProviderModel({
         ...registryParams,
         providerMetadataOwners: preparedMetadataSnapshot?.owners,
       });
@@ -308,7 +341,12 @@ export async function resolveModelAsync(
       }
     }
     if (model) {
-      return { model, logicalRef, authStorage, modelRegistry };
+      return {
+        model: withResolvedPricing(model, cfg, resolvedAgentDir),
+        logicalRef,
+        authStorage,
+        modelRegistry,
+      };
     }
     return {
       error: buildUnknownModelError(registryParams),

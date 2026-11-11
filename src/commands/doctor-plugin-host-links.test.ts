@@ -1,14 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolvePluginNpmGenerationProjectDir } from "../plugins/install-paths.js";
 import * as installRecordsOwner from "../plugins/installed-plugin-index-records.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
-import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
 import {
   listPluginOpenClawHostLinkIssues,
   maybeRepairPluginOpenClawHostLinks,
@@ -19,95 +18,56 @@ import {
   pluginRegistryIssueToHealthFinding,
   pluginRegistryIssueToRepairEffect,
 } from "./doctor-plugin-registry.js";
+import { hermeticEnv } from "./doctor-plugin-registry.test-support.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: vi.fn(),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function writeJson(dir: string, value: unknown, name = "package.json") {
+  fs.writeFileSync(path.join(dir, name), JSON.stringify(value));
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.mocked(note).mockReset();
 });
 
-function createRegisteredExtensionPlugin(params: {
-  stateDir: string;
+function makePlugin({
+  stateDir = tempDirs.make("openclaw-doctor-plugin-host-links-"),
+  pluginId = "email",
+  packageDir = path.join(stateDir, "extensions", pluginId),
+}: {
+  stateDir?: string;
   pluginId?: string;
   packageDir?: string;
-}) {
-  const pluginId = params.pluginId ?? "email";
-  const packageDir = params.packageDir ?? path.join(params.stateDir, "extensions", pluginId);
+} = {}) {
   const staleHostDir = path.join(packageDir, "node_modules", "openclaw");
   fs.mkdirSync(staleHostDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(packageDir, "package.json"),
-    JSON.stringify({
-      name: `@clawemail/${pluginId}`,
-      version: "2026.7.1",
-      peerDependencies: { openclaw: ">=2026.7.1" },
-      openclaw: { extensions: ["./index.js"] },
-    }),
-  );
-  fs.writeFileSync(path.join(packageDir, "index.js"), "export default {};\n");
-  fs.writeFileSync(
-    path.join(packageDir, "openclaw.plugin.json"),
-    JSON.stringify({ id: pluginId, configSchema: { type: "object" } }),
-  );
-  fs.writeFileSync(
-    path.join(staleHostDir, "package.json"),
-    JSON.stringify({
-      name: "openclaw",
-      version: "2026.7.1-beta.2",
-    }),
-  );
-  return { packageDir, staleHostDir };
-}
-
-function createRegistryInstallRecord(
-  source: "npm" | "clawhub" | "archive",
-  pluginId: string,
-  packageDir: string,
-): PluginInstallRecord {
-  if (source === "archive") {
-    return {
-      source,
-      sourcePath: path.join(path.dirname(packageDir), `${pluginId}-original.tgz`),
-      installPath: packageDir,
-      version: "2026.7.1",
-    };
-  }
-  const packageName = `@clawemail/${pluginId}`;
-  return {
-    source,
-    spec: `${packageName}@2026.7.1`,
-    installPath: packageDir,
+  writeJson(packageDir, {
+    name: `@clawemail/${pluginId}`,
     version: "2026.7.1",
-    resolvedName: packageName,
-    resolvedVersion: "2026.7.1",
-    resolvedSpec: `${packageName}@2026.7.1`,
-  };
+    peerDependencies: { openclaw: ">=2026.7.1" },
+    openclaw: { extensions: ["./index.js"] },
+  });
+  fs.writeFileSync(path.join(packageDir, "index.js"), "export default {};\n");
+  writeJson(packageDir, { id: pluginId, configSchema: { type: "object" } }, "openclaw.plugin.json");
+  writeJson(staleHostDir, { name: "openclaw", version: "2026.7.1-beta.2" });
+  return { stateDir, packageDir, staleHostDir };
 }
 
 async function writeInstallRecords(
   stateDir: string,
   installRecords: Record<string, PluginInstallRecord>,
 ): Promise<void> {
-  await seedInstalledPluginIndex(installRecords, {
-    stateDir,
-    candidates: [],
-  });
+  await seedInstalledPluginIndex(installRecords, { stateDir, candidates: [] });
 }
 
-function createDoctorParams(stateDir: string, shouldRepair: boolean) {
+function doctorParams(stateDir: string, shouldRepair: boolean) {
   return {
     stateDir,
-    env: {
-      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_VERSION: "2026.4.25",
-      VITEST: "true",
-    },
+    env: hermeticEnv({ OPENCLAW_STATE_DIR: stateDir }),
     config: {},
     prompter: { shouldRepair },
   };
@@ -121,24 +81,19 @@ it("audits and repairs only the selected managed npm generations", async () => {
   for (const pluginId of ["first", "second"]) {
     const packageName = `@fixture/${pluginId}`;
     for (let generation = 0; generation <= 20; generation++) {
-      const flatPackage = writeManagedNpmPlugin({
-        stateDir,
-        packageName,
-        pluginId,
-        version: "1.0.0",
-      });
-      const flatRoot = path.dirname(path.dirname(path.dirname(flatPackage)));
       const root = resolvePluginNpmGenerationProjectDir({
         npmDir: path.join(stateDir, "npm"),
         packageName,
         generationKey: String(generation),
       });
-      fs.renameSync(flatRoot, root);
       const packageDir = path.join(root, "node_modules", ...packageName.split("/"));
-      const manifestPath = path.join(packageDir, "package.json");
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-      manifest.peerDependencies = { openclaw: "*" };
-      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+      fs.mkdirSync(packageDir, { recursive: true });
+      writeJson(root, { private: true, dependencies: { [packageName]: "1.0.0" } });
+      writeJson(packageDir, {
+        name: packageName,
+        version: "1.0.0",
+        peerDependencies: { openclaw: "*" },
+      });
       if (generation === 0) {
         records[pluginId] = { source: "npm", installPath: packageDir, resolvedName: packageName };
         activePackages.push(packageDir);
@@ -150,11 +105,9 @@ it("audits and repairs only the selected managed npm generations", async () => {
   await writeInstallRecords(stateDir, records);
   const reads = vi.spyOn(fs.promises, "readdir");
   const syncReads = vi.spyOn(fs, "readdirSync");
-  const params = createDoctorParams(stateDir, false);
-  const started = performance.now();
+  const params = doctorParams(stateDir, false);
   const audit = await listPluginOpenClawHostLinkIssues(params);
   await maybeRepairPluginOpenClawHostLinks({ ...params, prompter: { shouldRepair: true } });
-  console.info(`host-link audit + repair: ${(performance.now() - started).toFixed(1)} ms`);
 
   expect(
     syncReads.mock.calls.some(([dir]) => String(dir) === path.join(stateDir, "npm", "projects")),
@@ -198,163 +151,72 @@ it("warns and falls back for unreadable records without swallowing invalid recor
   expect(warning).toHaveBeenCalledOnce();
 });
 
-describe("registered host links", () => {
-  const source = "clawhub";
-  it("relinks a cloned plugin without changing the source host link or package", async () => {
-    const sourceState = tempDirs.make("openclaw-source-plugin-host-");
-    const clonedState = tempDirs.make("openclaw-cloned-plugin-host-");
-    const { packageDir, staleHostDir } = createRegisteredExtensionPlugin({
-      stateDir: sourceState,
-    });
-    const oldHost = path.join(sourceState, "old-host");
-    fs.renameSync(staleHostDir, oldHost);
-    fs.symlinkSync(oldHost, staleHostDir, "junction");
-    const sourceManifest = fs.readFileSync(path.join(packageDir, "package.json"));
-    const hostManifest = fs.readFileSync(path.join(oldHost, "package.json"));
-    const clonedPackage = path.join(clonedState, "extensions", "email");
-    fs.cpSync(packageDir, clonedPackage, { recursive: true, verbatimSymlinks: true });
-    await writeInstallRecords(clonedState, {
-      email: createRegistryInstallRecord(source, "email", clonedPackage),
-    });
-
-    await maybeRepairPluginRegistryState(createDoctorParams(clonedState, true));
-
-    expect(fs.realpathSync(path.join(clonedPackage, "node_modules", "openclaw"))).toBe(
-      fs.realpathSync(process.cwd()),
-    );
-    expect(fs.readlinkSync(staleHostDir)).toBe(oldHost);
-    expect(fs.readFileSync(path.join(packageDir, "package.json"))).toEqual(sourceManifest);
-    expect(fs.readFileSync(path.join(oldHost, "package.json"))).toEqual(hostManifest);
+it("relinks a cloned plugin without changing the source host link or package", async () => {
+  const { stateDir: sourceState, packageDir, staleHostDir } = makePlugin();
+  const clonedState = tempDirs.make("openclaw-cloned-plugin-host-");
+  const oldHost = path.join(sourceState, "old-host");
+  fs.renameSync(staleHostDir, oldHost);
+  fs.symlinkSync(oldHost, staleHostDir, "junction");
+  const sourceManifest = fs.readFileSync(path.join(packageDir, "package.json"));
+  const hostManifest = fs.readFileSync(path.join(oldHost, "package.json"));
+  const clonedPackage = path.join(clonedState, "extensions", "email");
+  fs.cpSync(packageDir, clonedPackage, { recursive: true, verbatimSymlinks: true });
+  await writeInstallRecords(clonedState, {
+    email: { source: "clawhub", installPath: clonedPackage },
   });
 
-  it("reports a stale registered extensions-root host without changing it in read-only doctor", async () => {
-    const stateDir = tempDirs.make("openclaw-doctor-plugin-host-links-");
-    const { packageDir, staleHostDir } = createRegisteredExtensionPlugin({ stateDir });
-    await writeInstallRecords(stateDir, {
-      email: createRegistryInstallRecord("npm", "email", packageDir),
-    });
+  await maybeRepairPluginRegistryState(doctorParams(clonedState, true));
 
-    const params = createDoctorParams(stateDir, false);
-    const issues = await detectPluginRegistryHealthIssues(params);
-    await maybeRepairPluginRegistryState(params);
-
-    const issue = expectDefined(
-      issues.find((entry) => entry.kind === "registered-npm-openclaw-host-link"),
-      "registered host-link issue",
-    );
-    expect(issue).toMatchObject({ packageDir, packageName: "email" });
-    expect(pluginRegistryIssueToHealthFinding(issue)).toMatchObject({
-      checkId: "core/doctor/plugin-registry",
-      path: packageDir,
-      target: "email",
-    });
-    expect(pluginRegistryIssueToRepairEffect(issue)).toEqual({
-      kind: "package",
-      action: "would-relink-registered-npm-openclaw-host",
-      target: packageDir,
-      dryRunSafe: false,
-    });
-    expect(fs.lstatSync(staleHostDir).isDirectory()).toBe(true);
-    expect(vi.mocked(note).mock.calls.join("\n")).toContain("email");
-  });
-
-  it("does not repair a registered install recorded outside the operator-owned plugin roots", async () => {
-    const stateDir = tempDirs.make("openclaw-doctor-plugin-host-links-");
-    const { packageDir, staleHostDir } = createRegisteredExtensionPlugin({
-      stateDir,
-      packageDir: path.join(stateDir, "external-owner", "email"),
-    });
-    await writeInstallRecords(stateDir, {
-      email: createRegistryInstallRecord(source, "email", packageDir),
-    });
-
-    await maybeRepairPluginRegistryState(createDoctorParams(stateDir, true));
-
-    expect(fs.lstatSync(staleHostDir).isDirectory()).toBe(true);
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "does not follow a registered extensions-root package symlink outside its owner root",
-    async () => {
-      const stateDir = tempDirs.make("openclaw-doctor-plugin-host-links-");
-      const outsideDir = path.join(stateDir, "external-owner", "email");
-      const { staleHostDir } = createRegisteredExtensionPlugin({
-        stateDir,
-        packageDir: outsideDir,
-      });
-      const packageDir = path.join(stateDir, "extensions", "email");
-      fs.mkdirSync(path.dirname(packageDir), { recursive: true });
-      fs.symlinkSync(outsideDir, packageDir, "dir");
-      await writeInstallRecords(stateDir, {
-        email: createRegistryInstallRecord(source, "email", packageDir),
-      });
-
-      await maybeRepairPluginRegistryState(createDoctorParams(stateDir, true));
-
-      expect(fs.lstatSync(staleHostDir).isDirectory()).toBe(true);
-    },
+  expect(fs.realpathSync(path.join(clonedPackage, "node_modules", "openclaw"))).toBe(
+    fs.realpathSync(process.cwd()),
   );
-
-  it.runIf(process.platform !== "win32")(
-    "does not mutate a developer-owned sibling through a registered in-root package alias",
-    async () => {
-      const stateDir = tempDirs.make("openclaw-doctor-plugin-host-links-");
-      const developerPackageDir = path.join(stateDir, "extensions", "local-project");
-      const developerPlugin = createRegisteredExtensionPlugin({
-        stateDir,
-        packageDir: developerPackageDir,
-      });
-      const packageDir = path.join(stateDir, "extensions", "email");
-      fs.symlinkSync(developerPackageDir, packageDir, "dir");
-      await writeInstallRecords(stateDir, {
-        email: createRegistryInstallRecord(source, "email", packageDir),
-      });
-
-      await maybeRepairPluginRegistryState(createDoctorParams(stateDir, true));
-
-      expect(fs.lstatSync(developerPlugin.staleHostDir).isDirectory()).toBe(true);
-    },
-  );
-
-  it("reports a malformed registered package and still repairs its valid sibling", async () => {
-    const stateDir = tempDirs.make("openclaw-doctor-plugin-host-links-");
-    const broken = createRegisteredExtensionPlugin({ stateDir, pluginId: "broken" });
-    const email = createRegisteredExtensionPlugin({ stateDir });
-    fs.writeFileSync(path.join(broken.packageDir, "package.json"), "{", "utf8");
-    await writeInstallRecords(stateDir, {
-      broken: createRegistryInstallRecord(source, "broken", broken.packageDir),
-      email: createRegistryInstallRecord(source, "email", email.packageDir),
-    });
-
-    const issues = await detectPluginRegistryHealthIssues(createDoctorParams(stateDir, false));
-    await maybeRepairPluginRegistryState(createDoctorParams(stateDir, true));
-
-    expect(issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "registered-npm-package-unreadable",
-          packageDir: broken.packageDir,
-        }),
-        expect.objectContaining({
-          kind: "registered-npm-openclaw-host-link",
-          packageDir: email.packageDir,
-        }),
-      ]),
-    );
-    expect(fs.lstatSync(broken.staleHostDir).isDirectory()).toBe(true);
-    expect(fs.lstatSync(email.staleHostDir).isSymbolicLink()).toBe(true);
-    expect(vi.mocked(note).mock.calls.join("\n")).toContain("Could not inspect registered");
-  });
+  expect(fs.readlinkSync(staleHostDir)).toBe(oldHost);
+  expect(fs.readFileSync(path.join(packageDir, "package.json"))).toEqual(sourceManifest);
+  expect(fs.readFileSync(path.join(oldHost, "package.json"))).toEqual(hostManifest);
 });
 
-it("does not repair a developer-controlled path install under the extensions root", async () => {
+it("reports a stale registered extensions-root host without changing it in read-only doctor", async () => {
+  const { stateDir, packageDir, staleHostDir } = makePlugin();
+  await writeInstallRecords(stateDir, { email: { source: "npm", installPath: packageDir } });
+
+  const params = doctorParams(stateDir, false);
+  const issues = await detectPluginRegistryHealthIssues(params);
+  await maybeRepairPluginRegistryState(params);
+
+  const issue = expectDefined(
+    issues.find((entry) => entry.kind === "registered-npm-openclaw-host-link"),
+    "registered host-link issue",
+  );
+  expect(issue).toMatchObject({ packageDir, packageName: "email" });
+  expect(pluginRegistryIssueToHealthFinding(issue)).toMatchObject({
+    checkId: "core/doctor/plugin-registry",
+    path: packageDir,
+    target: "email",
+  });
+  expect(pluginRegistryIssueToRepairEffect(issue)).toEqual({
+    kind: "package",
+    action: "would-relink-registered-npm-openclaw-host",
+    target: packageDir,
+    dryRunSafe: false,
+  });
+  expect(fs.lstatSync(staleHostDir).isDirectory()).toBe(true);
+  expect(vi.mocked(note).mock.calls.join("\n")).toContain("email");
+});
+
+it.each([
+  ["an external registry-owned install", "external-owner/email", "clawhub"],
+  ["a developer-controlled path install", "extensions/email", "path"],
+] as const)("does not repair %s", async (_name, relativePath, source) => {
   const stateDir = tempDirs.make("openclaw-doctor-plugin-host-links-");
-  const { packageDir, staleHostDir } = createRegisteredExtensionPlugin({ stateDir });
+  const { packageDir, staleHostDir } = makePlugin({
+    stateDir,
+    packageDir: path.join(stateDir, relativePath),
+  });
   await writeInstallRecords(stateDir, {
-    email: { source: "path", installPath: packageDir },
+    email: { source, installPath: packageDir },
   });
 
-  await maybeRepairPluginRegistryState(createDoctorParams(stateDir, true));
+  await maybeRepairPluginRegistryState(doctorParams(stateDir, true));
 
   expect(fs.lstatSync(staleHostDir).isDirectory()).toBe(true);
   expect(JSON.parse(fs.readFileSync(path.join(staleHostDir, "package.json"), "utf8"))).toEqual({
@@ -363,22 +225,62 @@ it("does not repair a developer-controlled path install under the extensions roo
   });
 });
 
+it.runIf(process.platform !== "win32").each([
+  ["outside its owner root", "external-owner/email"],
+  ["to a developer-owned sibling", "extensions/local-project"],
+])("does not follow a registered package alias %s", async (_name, target) => {
+  const stateDir = tempDirs.make("openclaw-doctor-plugin-host-links-");
+  const targetDir = path.join(stateDir, target);
+  const { staleHostDir } = makePlugin({ stateDir, packageDir: targetDir });
+  const packageDir = path.join(stateDir, "extensions", "email");
+  fs.mkdirSync(path.dirname(packageDir), { recursive: true });
+  fs.symlinkSync(targetDir, packageDir, "dir");
+  await writeInstallRecords(stateDir, { email: { source: "clawhub", installPath: packageDir } });
+
+  await maybeRepairPluginRegistryState(doctorParams(stateDir, true));
+
+  expect(fs.lstatSync(staleHostDir).isDirectory()).toBe(true);
+});
+
+it("reports a malformed registered package and still repairs its valid sibling", async () => {
+  const broken = makePlugin({ pluginId: "broken" });
+  const { stateDir } = broken;
+  const email = makePlugin({ stateDir });
+  fs.writeFileSync(path.join(broken.packageDir, "package.json"), "{", "utf8");
+  await writeInstallRecords(stateDir, {
+    broken: { source: "clawhub", installPath: broken.packageDir },
+    email: { source: "clawhub", installPath: email.packageDir },
+  });
+
+  const issues = await detectPluginRegistryHealthIssues(doctorParams(stateDir, false));
+  await maybeRepairPluginRegistryState(doctorParams(stateDir, true));
+
+  for (const [kind, packageDir] of [
+    ["registered-npm-package-unreadable", broken.packageDir],
+    ["registered-npm-openclaw-host-link", email.packageDir],
+  ]) {
+    expect(issues).toContainEqual(expect.objectContaining({ kind, packageDir }));
+  }
+  expect(fs.lstatSync(broken.staleHostDir).isDirectory()).toBe(true);
+  expect(fs.lstatSync(email.staleHostDir).isSymbolicLink()).toBe(true);
+  expect(vi.mocked(note).mock.calls.join("\n")).toContain("Could not inspect registered");
+});
 it("repairs an archive plugin's dangling host link without its original archive", async () => {
-  const stateDir = tempDirs.make("openclaw-doctor-archive-host-link-");
-  const { packageDir, staleHostDir } = createRegisteredExtensionPlugin({ stateDir });
+  const { stateDir, packageDir, staleHostDir } = makePlugin();
   const removedHost = path.join(stateDir, "removed-host");
   fs.rmSync(staleHostDir, { recursive: true });
   fs.symlinkSync(removedHost, staleHostDir, "junction");
-  const record = createRegistryInstallRecord("archive", "email", packageDir);
-  const archivePath = expectDefined(record.sourcePath, "archive source path");
-  await writeInstallRecords(stateDir, { email: record });
+  const archivePath = path.join(path.dirname(packageDir), "email-original.tgz");
+  await writeInstallRecords(stateDir, {
+    email: { source: "archive", installPath: packageDir, sourcePath: archivePath },
+  });
   const packageBytes = fs.readFileSync(path.join(packageDir, "package.json"));
 
   expect(fs.existsSync(archivePath)).toBe(false);
   expect(fs.existsSync(staleHostDir)).toBe(false);
   expect(fs.lstatSync(staleHostDir).isSymbolicLink()).toBe(true);
 
-  await maybeRepairPluginRegistryState(createDoctorParams(stateDir, true));
+  await maybeRepairPluginRegistryState(doctorParams(stateDir, true));
 
   expect(fs.realpathSync(staleHostDir)).toBe(fs.realpathSync(process.cwd()));
   expect(fs.readFileSync(path.join(packageDir, "package.json"))).toEqual(packageBytes);

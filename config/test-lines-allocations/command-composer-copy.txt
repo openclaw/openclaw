@@ -1,0 +1,2 @@
+# Existing command failure regression and expanded composer-copy assertions.
+47

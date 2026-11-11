@@ -1,3 +1,4 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
@@ -13,12 +14,13 @@ import {
   type SessionMethodAccessRequest,
 } from "../lib/session-method-access.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
-import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
+import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
-import type { ContextualSidebar } from "./sidebar-context-state.ts";
+import { selectSidebarContext, type ContextualSidebar } from "./sidebar-context-state.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 export type AppSidebarProps = {
@@ -33,6 +35,9 @@ export type AppSidebarProps = {
   connectionRecovery: boolean;
   connectionFlagVisible: boolean;
   connectionFlagAllowed: boolean;
+  footerControlsOverlap:
+    | ((bounds: Pick<DOMRectReadOnly, "left" | "right" | "top" | "bottom">) => boolean)
+    | undefined;
   storedOutboxes: SidebarOutboxSummary | undefined;
   terminalAvailable: boolean;
   catalogOpenTarget: CatalogOpenTarget;
@@ -40,6 +45,7 @@ export type AppSidebarProps = {
   sessionKey: string;
   sidebarEntries: readonly string[];
   navigationVisible: boolean;
+  connectionPending?: boolean;
   navigationView: "pages" | "sessions" | "online";
   navigationCollapsed: boolean;
   sidebarAgentsMode: "chip" | "roster";
@@ -52,13 +58,13 @@ export type AppSidebarProps = {
   onOpenPalette: (() => void) | undefined;
   onRetryConnect: (() => void) | undefined;
   onToggleSidebar: (() => void) | undefined;
+  onExitSettings: (() => void) | undefined;
   onOpenNewSession: ((agentId: string, target?: NewSessionTarget) => void) | undefined;
   onUpdateSidebarEntries: ((entries: string[]) => void) | undefined;
   onPairMobile: (() => void) | undefined;
   onNavigate:
     | ((routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void)
     | undefined;
-  onPreloadRoute: ((routeId: NavigationRouteId) => Promise<void>) | undefined;
 };
 
 export const appSidebarProperties = {
@@ -73,6 +79,7 @@ export const appSidebarProperties = {
   connectionRecovery: { default: false, attribute: false },
   connectionFlagVisible: { default: false, attribute: false },
   connectionFlagAllowed: { default: false, attribute: false },
+  footerControlsOverlap: { default: undefined, attribute: false },
   storedOutboxes: { default: undefined, attribute: false },
   terminalAvailable: { default: false, attribute: false },
   catalogOpenTarget: { default: "viewer", attribute: false },
@@ -80,6 +87,7 @@ export const appSidebarProperties = {
   sessionKey: { default: "", attribute: false },
   sidebarEntries: { default: DEFAULT_SIDEBAR_ENTRIES, attribute: false },
   navigationVisible: { default: true, attribute: false },
+  connectionPending: { default: false, attribute: false },
   navigationView: { default: "sessions", attribute: false },
   navigationCollapsed: { default: false, type: Boolean },
   sidebarAgentsMode: { default: "chip", attribute: false },
@@ -92,11 +100,11 @@ export const appSidebarProperties = {
   onOpenPalette: { default: undefined, attribute: false },
   onRetryConnect: { default: undefined, attribute: false },
   onToggleSidebar: { default: undefined, attribute: false },
+  onExitSettings: { default: undefined, attribute: false },
   onOpenNewSession: { default: undefined, attribute: false },
   onUpdateSidebarEntries: { default: undefined, attribute: false },
   onPairMobile: { default: undefined, attribute: false },
   onNavigate: { default: undefined, attribute: false },
-  onPreloadRoute: { default: undefined, attribute: false },
 } satisfies {
   [Key in keyof AppSidebarProps]: {
     default: AppSidebarProps[Key];
@@ -118,6 +126,7 @@ export abstract class AppSidebarBase {
   declare connectionRecovery: AppSidebarProps["connectionRecovery"];
   declare connectionFlagVisible: AppSidebarProps["connectionFlagVisible"];
   declare connectionFlagAllowed: AppSidebarProps["connectionFlagAllowed"];
+  declare footerControlsOverlap: AppSidebarProps["footerControlsOverlap"];
   declare storedOutboxes: AppSidebarProps["storedOutboxes"];
   declare terminalAvailable: AppSidebarProps["terminalAvailable"];
   declare catalogOpenTarget: AppSidebarProps["catalogOpenTarget"];
@@ -125,6 +134,7 @@ export abstract class AppSidebarBase {
   declare sessionKey: AppSidebarProps["sessionKey"];
   declare sidebarEntries: AppSidebarProps["sidebarEntries"];
   declare navigationVisible: AppSidebarProps["navigationVisible"];
+  declare connectionPending: AppSidebarProps["connectionPending"];
   declare navigationView: AppSidebarProps["navigationView"];
   declare navigationCollapsed: AppSidebarProps["navigationCollapsed"];
   declare sidebarAgentsMode: AppSidebarProps["sidebarAgentsMode"];
@@ -137,65 +147,53 @@ export abstract class AppSidebarBase {
   declare onOpenPalette: AppSidebarProps["onOpenPalette"];
   declare onRetryConnect: AppSidebarProps["onRetryConnect"];
   declare onToggleSidebar: AppSidebarProps["onToggleSidebar"];
+  declare onExitSettings: AppSidebarProps["onExitSettings"];
   declare onOpenNewSession: AppSidebarProps["onOpenNewSession"];
   declare onUpdateSidebarEntries: AppSidebarProps["onUpdateSidebarEntries"];
   declare onPairMobile: AppSidebarProps["onPairMobile"];
   declare onNavigate: AppSidebarProps["onNavigate"];
-  declare onPreloadRoute: AppSidebarProps["onPreloadRoute"];
-  declare readonly ownerDocument: HTMLElement["ownerDocument"];
-  declare readonly classList: HTMLElement["classList"];
-  declare readonly querySelector: HTMLElement["querySelector"];
-  declare readonly querySelectorAll: HTMLElement["querySelectorAll"];
-  declare readonly addEventListener: HTMLElement["addEventListener"];
-  declare readonly removeEventListener: HTMLElement["removeEventListener"];
-  declare readonly contains: HTMLElement["contains"];
+  get ownerDocument(): Document {
+    return this.hostElement.ownerDocument;
+  }
 
-  private readonly listeners = new Set<() => void>();
+  readonly navigationViewElements = new Map<AppSidebarProps["navigationView"], HTMLElement>();
+
+  activeNavigationViewElement(): HTMLElement | undefined {
+    if (!this.navigationVisible || this.navigationCollapsed) {
+      return undefined;
+    }
+    const element = this.navigationViewElements.get(this.navigationView);
+    return element?.isConnected ? element : undefined;
+  }
+
+  private readonly listeners = createChangeListeners();
   private attached = false;
   private complete: Promise<boolean> = Promise.resolve(true);
   private finishUpdate: ((value: boolean) => void) | undefined;
-  readContextualSidebar: () => ContextualSidebar | undefined = () => undefined;
   get contextualSidebar(): ContextualSidebar | undefined {
-    return this.isConnected ? this.readContextualSidebar() : undefined;
+    return this.isConnected && this.router
+      ? selectSidebarContext(this.router.getState())
+      : undefined;
   }
 
   sidebarSnapshot: SidebarSnapshotModel | null = null;
   sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;
 
   constructor(
-    private props: AppSidebarProps,
     protected context: ApplicationContext,
-    readonly hostElement: HTMLElement,
+    readonly hostElement: HTMLElement & AppSidebarProps,
   ) {
     for (const key of Object.keys(appSidebarProperties)) {
       Object.defineProperty(this, key, {
-        get: () =>
-          key === "sidebarAgentsMode"
-            ? (this.sidebarSnapshot?.mode ?? Reflect.get(this.props, key))
-            : Reflect.get(this.props, key),
+        get: () => Reflect.get(hostElement, key),
         set: (value: unknown) => {
           Reflect.set(hostElement, key, value);
         },
       });
     }
-    for (const key of [
-      "ownerDocument",
-      "classList",
-      "querySelector",
-      "querySelectorAll",
-      "addEventListener",
-      "removeEventListener",
-      "contains",
-    ] as const) {
-      const value = hostElement[key];
-      Object.defineProperty(this, key, {
-        value: typeof value === "function" ? value.bind(hostElement) : value,
-      });
-    }
   }
 
-  bindInputs(props: AppSidebarProps, context: ApplicationContext): void {
-    this.props = props;
+  bindContext(context: ApplicationContext): void {
     this.context = context;
     this.invalidate();
   }
@@ -221,19 +219,14 @@ export abstract class AppSidebarBase {
     // The bridge delays disposal across moves; detached hosts cannot admit new work.
     return this.attached && this.hostElement.isConnected;
   }
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
   invalidate(): void {
     if (!this.finishUpdate) {
       this.complete = new Promise((resolve) => {
         this.finishUpdate = resolve;
       });
     }
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.publish();
   }
   get updateComplete(): Promise<boolean> {
     return this.complete;
@@ -271,35 +264,35 @@ export abstract class AppSidebarBase {
   }
 
   abstract readonly sessionOwnerFilter: SessionOwnerFilter;
+  abstract readonly sessionData: Pick<SessionDataOwner, "sessionsResult">;
+  abstract readonly sessionsStatusFilter: SidebarSessionStatusFilter;
 
   setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) => {
     this.sessionOwnerFilter.set(ownerId, involvingMe);
+    if (this.sidebarSnapshot) {
+      // Keep the cached rows, but let explicit intent select the replacement query.
+      const selected = this.sessionOwnerFilter.read();
+      this.sidebarSnapshot.ownerId = selected.ownerId;
+      this.sidebarSnapshot.involvingMe = selected.involvingMe;
+    }
   };
 
   pluginNavigation() {
-    return this.context?.plugins?.registrations("navigation") ?? [];
+    return this.context.plugins.registrations("navigation");
   }
 
   pendingSessionCreate() {
-    const pending = this.context?.chatSubmissions?.readCreate();
+    const pending = this.context.chatSubmissions.readCreate();
     return this.activeRouteId === "chat" && !pending?.creation.admitted ? pending : undefined;
   }
 
   public getRouteSessionKey(): string {
     // A provisional row owns only presentation, never the saved Gateway selection.
-    return (
-      this.pendingSessionCreate()?.creation.sessionKey ||
-      this.sessionKey.trim() ||
-      this.context?.gateway.snapshot.sessionKey.trim() ||
-      ""
-    );
+    return this.pendingSessionCreate()?.creation.sessionKey || this.sessionKey.trim();
   }
 
   protected setApplicationSession(sessionKey: string, fallbackAgentId?: string): void {
     const context = this.context;
-    if (!context) {
-      return;
-    }
     selectApplicationSession({
       selection: context.agentSelection,
       gateway: context.gateway,
@@ -309,42 +302,27 @@ export abstract class AppSidebarBase {
   }
 
   prepareSessionNavigation(sessionKey: string, pathname: string): void {
-    if (this.context) {
-      prepareSessionNavigationHandoff(this.context.gateway, pathname, sessionKey);
-    }
-  }
-
-  protected bindLiteralSession(
-    sessionKey: string,
-    fallbackAgentId: string,
-    options: ApplicationNavigationOptions,
-  ): void {
-    if (!new URLSearchParams(options.search ?? "").has(SESSION_NAVIGATION_KEY_PARAM)) {
-      this.setApplicationSession(sessionKey, fallbackAgentId);
-    }
+    prepareSessionNavigationHandoff(this.context.gateway, pathname, sessionKey);
   }
 
   protected sessionMainKey(): string {
     return resolveUiConfiguredMainKey({
-      agentsList: this.context?.agents.state.agentsList,
-      hello: this.context?.gateway.snapshot.hello,
+      agentsList: this.context.agents.state.agentsList,
+      hello: this.context.gateway.snapshot.hello,
     });
   }
 
   readNewSessionAccess(): SessionMethodAccess {
-    return readSessionMethodAccess(
-      this.connected && !this.sidebarSnapshot ? this.context?.gateway.snapshot : null,
-      {
-        method: "sessions.create",
-        params: {},
-        sessionScope: true,
-      },
-    );
+    return this.readSessionMutationAccess({
+      method: "sessions.create",
+      params: {},
+      sessionScope: true,
+    });
   }
 
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess {
     return readSessionMethodAccess(
-      this.connected && !this.sidebarSnapshot ? this.context?.gateway.snapshot : null,
+      this.connected && !this.sidebarSnapshot ? this.context.gateway.snapshot : null,
       request,
     );
   }

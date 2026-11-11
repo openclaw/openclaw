@@ -8,7 +8,7 @@ import type {
   WorkerOperationHandlers,
 } from "../../state/worker-operation-registry.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
-import { readWorkerPlacementMovesReadOnly } from "./placement-move-intent.js";
+import { readWorkerPlacementMovesReadOnly } from "./placement-move-row-codec.js";
 import { createPlacementPendingFailureOps } from "./placement-pending-failure.js";
 import {
   advanceCursor,
@@ -68,11 +68,6 @@ function operation<
       type === "placementTurns.claim" ||
       type === "placementTurns.release" ||
       type === "placementTurns.releaseIfOwned";
-    const localTurn =
-      simpleTurn &&
-      "claim" in input &&
-      input.claim.owner.kind === "local" &&
-      input.claim.owner.environmentId === undefined;
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
         const sessionId =
@@ -89,8 +84,7 @@ function operation<
         const source = guardedWorkspaceWrite ? input.sessionEntryCurrentSource : undefined;
         const admit = (stage: "transaction" | "commit", facts: unknown) =>
           requestSessionEntryCurrentAdmission(source, { stage, facts }, { lookup: "logical" });
-        // The conditional local DML is the whole effect; admit before autocommit.
-        admit(localTurn ? "commit" : "transaction", {
+        admit("transaction", {
           placement: simpleTurn ? undefined : find(db, sessionId),
           placementMove: move(),
         });
@@ -104,19 +98,15 @@ function operation<
           },
           input,
         );
-        if (!localTurn && !(simpleTurn && receipt.placement?.state === "local")) {
-          receipt.workspaceResult =
-            listPendingWorkerWorkspaceResultsInDatabase(db, sessionId)[0] ?? null;
-        }
+        receipt.workspaceResult =
+          listPendingWorkerWorkspaceResultsInDatabase(db, sessionId)[0] ?? null;
         receipt.placementMove = move();
-        if (!localTurn) {
-          admit("commit", receipt);
-        }
+        admit("commit", receipt);
         deferSqliteWorkerCommitReceipt(db, receipt);
         return receipt;
       },
       { database },
-      { operationLabel: type, ...(localTurn ? { singleStatement: true } : {}) },
+      { operationLabel: type },
     );
   };
 }

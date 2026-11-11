@@ -1,107 +1,30 @@
-import http from "node:http";
 import net from "node:net";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it, vi } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
+import { expect, it, vi } from "vitest";
 import { mockIpv4OnlyLocalhostLookup } from "../../test/helpers/loopback-dns.js";
-import { hasErrnoCode } from "../infra/errno.js";
-import { invokeNodeWorkerPortalStream } from "./portal-stream-command.js";
+import { NODE_WORKER_PORTAL_STREAM_COMMAND } from "../infra/node-commands.js";
+import * as logger from "../logger.js";
+import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
+import { createPortalSupervisor } from "./node-worker-supervisor.test-support.js";
+import {
+  listen,
+  portOf,
+  streamParams,
+  TICKET,
+  useStreamFixture,
+} from "./stream-command.test-support.js";
 
-const TICKET = "a".repeat(48);
-const cleanups: Array<() => Promise<void>> = [];
-function portOf(server: net.Server) {
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected test address");
-  }
-  return address.port;
-}
-function closeServer(server: net.Server, peers: Iterable<{ destroy(): void }> = []) {
-  cleanups.push(
-    () =>
-      new Promise<void>((resolve) => {
-        for (const peer of peers) {
-          peer.destroy();
-        }
-        server.close(() => resolve());
-      }),
-  );
-}
-
-/** Resolves false when the host has no IPv6 (some containers) instead of hanging. */
-async function listenUnlessIpv6Unavailable(
-  server: net.Server,
-  options: net.ListenOptions,
-): Promise<boolean> {
-  return await new Promise<boolean>((resolve, reject) => {
-    const onError = (error: Error) =>
-      hasErrnoCode(error, "EAFNOSUPPORT") || hasErrnoCode(error, "EADDRNOTAVAIL")
-        ? resolve(false)
-        : reject(error);
-    server.once("error", onError);
-    server.listen(options, () => {
-      server.off("error", onError);
-      resolve(true);
-    });
-  });
-}
-
-async function listenGateway(contextPath = "") {
-  const peer: {
-    socket?: WebSocket;
-    headers: Array<string | undefined>;
-    frames: Buffer[];
-    closed: boolean;
-  } = {
-    headers: [],
-    frames: [],
-    closed: false,
-  };
-  const server = http.createServer();
-  // Reserve both families so this HTTP peer cannot take the IPv6 target's
-  // numeric port on IPv4 and win localhost connection selection. Without IPv6
-  // there is no IPv6 target to protect.
-  if (!(await listenUnlessIpv6Unavailable(server, { port: 0, host: "::", ipv6Only: false }))) {
-    await listenUnlessIpv6Unavailable(server, { port: 0, host: "127.0.0.1" });
-  }
-  // Attach after listening: ws re-emits server listen errors on the WebSocketServer.
-  const wss = new WebSocketServer({
-    server,
-    path: `${contextPath.replace(/\/$/u, "")}/node-portal/attach`,
-  });
-  wss.on("connection", (ws, request) => {
-    peer.socket = ws;
-    peer.headers = ["cf-access-client-id", "cf-access-client-secret"].map((name) =>
-      request.headers[name]?.toString(),
-    );
-    ws.on("message", (data, binary) => {
-      expect(binary).toBe(true);
-      if (!Buffer.isBuffer(data)) {
-        throw new Error("expected binary portal stream frame");
-      }
-      peer.frames.push(data);
-    });
-    ws.once("close", () => {
-      peer.closed = true;
-    });
-  });
-  const port = portOf(server);
-  cleanups.push(
-    async () =>
-      await new Promise<void>((resolve) => {
-        for (const client of wss.clients) {
-          client.terminate();
-        }
-        wss.close(() => server.close(() => resolve()));
-      }),
-  );
-  return { peer, gatewayUrl: `ws://127.0.0.1:${port}${contextPath}` };
-}
+const { cleanups, closeServer, gateway } = useStreamFixture();
+const portalSupervisor = createPortalSupervisor();
 function invokePortal(
   port: number,
-  options: Partial<Parameters<typeof invokeNodeWorkerPortalStream>[0]> = {},
+  options: Partial<
+    Omit<Parameters<typeof invokeNodeWorkerSupervisorCommand>[0], "command" | "supervisor">
+  > = {},
 ) {
-  return invokeNodeWorkerPortalStream({
+  return invokeNodeWorkerSupervisorCommand({
+    command: NODE_WORKER_PORTAL_STREAM_COMMAND,
+    supervisor: portalSupervisor,
     paramsJSON: portalCommand(port),
     gatewayUrl: "ws://127.0.0.1:1",
     signal: new AbortController().signal,
@@ -110,17 +33,8 @@ function invokePortal(
 }
 
 function portalCommand(port: number, override: object = {}) {
-  return JSON.stringify({
-    ticket: TICKET,
-    attachPath: `/node-portal/attach?ticket=${TICKET}`,
-    port,
-    ...override,
-  });
+  return streamParams("portal", { port, ...override });
 }
-
-afterEach(async () => {
-  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
-});
 
 it.each([
   ["missing ticket", { ticket: undefined }],
@@ -134,7 +48,12 @@ it.each([
     invokePortal(8080, {
       paramsJSON: portalCommand(8080, override),
     }),
-  ).rejects.toThrow("INVALID_REQUEST");
+  ).resolves.toMatchObject({
+    handled: true,
+    ok: false,
+    code: "INVALID_REQUEST",
+    message: "INVALID_REQUEST: invalid node worker portal stream request",
+  });
 });
 
 it.for([
@@ -156,12 +75,12 @@ it.for([
         socket.write(Buffer.concat([Buffer.from("echo:"), Buffer.from(chunk)])),
       );
     });
-    if (!(await listenUnlessIpv6Unavailable(local, { port: 0, host }))) {
+    if (!(await listen(local, { port: 0, host }))) {
       skip("IPv6 loopback is unavailable on this host");
     }
     closeServer(local, peers);
 
-    const { peer, gatewayUrl } = await listenGateway(contextPath);
+    const { peer, gatewayUrl } = await gateway("portal", contextPath);
     const controller = new AbortController();
     const running = invokePortal(portOf(local), {
       gatewayUrl,
@@ -185,16 +104,16 @@ it.for([
 
     controller.abort();
 
-    await expect(running).resolves.toBeUndefined();
+    await expect(running).resolves.toEqual({ handled: true, ok: true, payload: null });
     await vi.waitFor(() => expect(peer.closed).toBe(true));
     await vi.waitFor(() => expect(peers.size).toBe(0));
   },
 );
 
 it("closes an attached Gateway socket without a readiness frame when loopback refuses", async () => {
-  const { peer, gatewayUrl } = await listenGateway();
+  const { peer, gatewayUrl } = await gateway("portal");
   const reservedTarget = net.createServer();
-  await listenUnlessIpv6Unavailable(reservedTarget, { port: 0, host: "127.0.0.1" });
+  await listen(reservedTarget);
   const targetPort = portOf(reservedTarget);
   closeServer(reservedTarget);
   let refusedTargets = 0;
@@ -220,16 +139,22 @@ it("closes an attached Gateway socket without a readiness frame when loopback re
     return Reflect.apply(originalConnect, this, args);
   });
 
+  const warning = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
   try {
-    await expect(invokePortal(targetPort, { gatewayUrl })).rejects.toMatchObject({
-      code: "ECONNREFUSED",
+    await expect(invokePortal(targetPort, { gatewayUrl })).resolves.toEqual({
+      handled: true,
+      ok: false,
+      code: "UNAVAILABLE",
+      message: "node worker supervisor command failed",
     });
 
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("ECONNREFUSED"));
     expect(refusedTargets).toBe(1);
     expect(peer.socket).toBeDefined();
     await vi.waitFor(() => expect(peer.closed).toBe(true));
     expect(peer.frames).toEqual([]);
   } finally {
     connect.mockRestore();
+    warning.mockRestore();
   }
 });

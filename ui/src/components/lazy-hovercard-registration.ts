@@ -11,13 +11,16 @@ export class LazyHovercardBootstrap<TElement extends HTMLElement> {
     private readonly params: {
       tag: string;
       load: () => Promise<CustomElementConstructor>;
-      onDefined?: () => void;
     },
   ) {}
 
   install(activate: (event: Event, trigger: HovercardBootstrapTrigger) => Promise<void>): void {
     if (!customElements.get(this.params.tag)) {
-      this.stopListeners = installHovercardBootstrapListeners(activate);
+      const stop = [
+        listen(document, "pointerover", (event) => void activate(event, "pointer"), true),
+        listen(document, "focusin", (event) => void activate(event, "focus"), true),
+      ];
+      this.stopListeners = () => stop.forEach((remove) => remove());
     }
   }
 
@@ -43,18 +46,7 @@ export class LazyHovercardBootstrap<TElement extends HTMLElement> {
     });
     this.stopListeners?.();
     this.stopListeners = null;
-    this.params.onDefined?.();
   }
-}
-
-function installHovercardBootstrapListeners(
-  activate: (event: Event, trigger: HovercardBootstrapTrigger) => Promise<void>,
-): () => void {
-  const stop = [
-    listen(document, "pointerover", (event) => void activate(event, "pointer"), true),
-    listen(document, "focusin", (event) => void activate(event, "focus"), true),
-  ];
-  return () => stop.forEach((remove) => remove());
 }
 
 export function hovercardBootstrapIntentActive(

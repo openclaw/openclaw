@@ -47,7 +47,9 @@ struct DeviceIdentityStateRootState {
 
     mutating func configure(_ url: URL) -> Bool {
         let normalized = url.standardizedFileURL
-        if let configured = self.url { return configured == normalized }
+        if let configured = self.url {
+            return configured == normalized
+        }
         guard !self.used else { return false }
         self.url = normalized
         return true
@@ -105,7 +107,7 @@ enum DeviceIdentityPaths {
         if let scopedStateDirURL {
             return scopedStateDirURL
         }
-        if let configured = self.configuredState.withLock({ $0.resolve() }) {
+        if let configured = configuredState.withLock({ $0.resolve() }) {
             return configured
         }
         if let raw = getenv("OPENCLAW_STATE_DIR") {
@@ -216,6 +218,10 @@ public enum DeviceIdentityStore {
             userInfo: [NSLocalizedDescriptionKey: message])
     }
 
+    public static var stateDirectoryURL: URL {
+        DeviceIdentityPaths.stateDirURL()
+    }
+
     @discardableResult
     public static func configureStateDirectory(_ url: URL) -> Bool {
         DeviceIdentityPaths.configureStateDirURL(url)
@@ -264,8 +270,26 @@ public enum DeviceIdentityStore {
     {
         let stateDirURL = DeviceIdentityPaths.stateDirURL()
         do {
+            if DeviceCredentialAccess.isRemote {
+                let candidate = self.generateMaterial()
+                var create = ClientCredentialOperation(kind: .identityCreate)
+                create.identity = .init(
+                    key: profile.rawValue,
+                    deviceID: candidate.identity.deviceId,
+                    publicKeyPEM: candidate.publicKeyPEM,
+                    privateKeyPEM: candidate.privateKeyPEM,
+                    createdAtMs: candidate.identity.createdAtMs,
+                    updatedAtMs: candidate.identity.createdAtMs)
+                guard let row = try DeviceCredentialAccess.execute(root: stateDirURL, operation: create).identity else {
+                    throw self.storageError("The credential owner did not persist an identity")
+                }
+                return try self.material(
+                    deviceId: row.deviceID,
+                    publicKeyPEM: row.publicKeyPEM,
+                    privateKeyPEM: row.privateKeyPEM,
+                    createdAtMs: row.createdAtMs).identity
+            }
             return try DeviceIdentitySQLiteStore.loadOrCreate(
-                databaseURL: self.databaseURL(stateDirURL: stateDirURL),
                 destinationStateDirURL: stateDirURL,
                 profile: profile,
                 legacySources: DeviceIdentityPaths.legacyIdentitySources(profile: profile))
@@ -328,7 +352,7 @@ public enum DeviceIdentityStore {
                   let publicKeyData = Data(base64Encoded: decoded.publicKey),
                   let privateKeyData = Data(base64Encoded: decoded.privateKey),
                   publicKeyData.count == 32, privateKeyData.count == 32,
-                  self.keyPairMatches(publicKeyData: publicKeyData, privateKeyData: privateKeyData)
+                  keyPairMatches(publicKeyData: publicKeyData, privateKeyData: privateKeyData)
             else {
                 throw DeviceIdentityStore
                     .storageError("Legacy raw device identity has invalid key material or deviceId")
@@ -451,12 +475,6 @@ public enum DeviceIdentityStore {
             return String(base64[start..<end])
         }
         return "\(fence)BEGIN \(label)\(fence)\n\(lines.joined(separator: "\n"))\n\(fence)END \(label)\(fence)\n"
-    }
-
-    private static func databaseURL(stateDirURL: URL) -> URL {
-        stateDirURL
-            .appendingPathComponent("state", isDirectory: true)
-            .appendingPathComponent("openclaw.sqlite", isDirectory: false)
     }
 }
 

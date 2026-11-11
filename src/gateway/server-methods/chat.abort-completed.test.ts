@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { removeChatAbortControllerEntry } from "../chat-abort.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import * as sessionUtils from "../session-utils.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import {
@@ -28,7 +28,7 @@ it.each(["completed", "replaced"] as const)(
     const context = createChatAbortContext({ getRuntimeConfig });
     const original = createActiveRun(sessionKey, { sessionId, agentId: "main" });
     const successor = createActiveRun(sessionKey, { sessionId, agentId: "main" });
-    context.chatAbortControllers.set("run", original);
+    rpcSourceTesting.set("run", original);
     const entered = createDeferred();
     const resume = createDeferred();
     const read = sessionUtils.loadGatewaySessionEntryReadOnlyInWorker;
@@ -57,11 +57,9 @@ it.each(["completed", "replaced"] as const)(
         stopping,
         "Stop settled before metadata read",
       );
-      expect(removeChatAbortControllerEntry(context.chatAbortControllers, "run", original)).toBe(
-        true,
-      );
+      expect(rpcSourceTesting.deleteExpected("run", original)).toBe(true);
       if (disposition === "replaced") {
-        context.chatAbortControllers.set("run", successor);
+        rpcSourceTesting.set("run", successor);
       }
       resume.resolve();
       const error = await stopping;
@@ -72,8 +70,8 @@ it.each(["completed", "replaced"] as const)(
         expect(error).toMatchObject({ message: "Run changed before cancellation; retry Stop." });
         expect(respond).not.toHaveBeenCalled();
       }
-      expect(original.controller.signal.aborted).toBe(false);
-      expect(successor.controller.signal.aborted).toBe(false);
+      expect(original.input.abortSignal.aborted).toBe(false);
+      expect(successor.input.abortSignal.aborted).toBe(false);
       expect(context.broadcast).not.toHaveBeenCalled();
       expect(context.nodeSendToSession).not.toHaveBeenCalled();
     } finally {

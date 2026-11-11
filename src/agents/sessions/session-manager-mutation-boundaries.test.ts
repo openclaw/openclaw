@@ -17,10 +17,10 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { rewriteTranscriptEntriesInSessionManager } from "../embedded-agent-runner/transcript-rewrite.js";
 import { assistantText, sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
+import { cleanupTrackedSessionState } from "./session-state-cleanup.test-support.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -52,10 +52,7 @@ function rewriteUser(manager: SessionManager, entryId: string, text: string, tim
 
 afterEach(async () => {
   // Reconcile workers can otherwise retain the shared state lock into later tests.
-  for (const stateDir of tempDirs.dirs) {
-    await cleanupSessionStateForTest({ stateDir });
-  }
-  tempDirs.cleanup();
+  await cleanupTrackedSessionState(tempDirs.dirs, tempDirs.cleanup);
 });
 
 it("keeps deprecated sync rewrite publication ahead of synchronous commit observers", async () => {

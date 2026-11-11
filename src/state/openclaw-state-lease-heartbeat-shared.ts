@@ -1,6 +1,7 @@
 import type { MessagePort } from "node:worker_threads";
 import type { DatabaseEngineSelection } from "../infra/database-engine/context.js";
 import type { StateLeaseProcessOwner } from "../infra/state-lease-process-owner.js";
+import type { StateLeaseLoss } from "../shared/state-lease-loss.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
 
@@ -11,8 +12,6 @@ export const LEASE_CONTENTION_RETRY_TIMEOUT_MS = 2_000;
 
 export const leaseHeartbeatState = {
   status: 0,
-  request: 1,
-  ack: 2,
   expiresAt: 3,
   lastRenewedAt: 4,
   startupPhase: 5,
@@ -22,6 +21,22 @@ export const leaseHeartbeatState = {
   closed: 2n,
   lost: 3n,
 } as const;
+
+export function createLeaseHeartbeatState(): BigInt64Array<SharedArrayBuffer> {
+  return new BigInt64Array(
+    new SharedArrayBuffer((leaseHeartbeatState.ownerFence + 1) * BigInt64Array.BYTES_PER_ELEMENT),
+  );
+}
+
+// A heartbeat may not have started yet; retain the last confirmed acquisition expiry.
+export function readLeaseHeartbeatExpiry(
+  observation: BigInt64Array<SharedArrayBuffer> | undefined,
+  confirmedExpiresAt: number | undefined,
+): number | undefined {
+  return observation && confirmedExpiresAt !== undefined
+    ? Math.max(confirmedExpiresAt, Number(Atomics.load(observation, leaseHeartbeatState.expiresAt)))
+    : confirmedExpiresAt;
+}
 
 // Startup observations never grant readiness or lease authority.
 export const leaseHeartbeatStartupPhase = {
@@ -44,11 +59,15 @@ export type LeaseHeartbeatRenewalFailure = {
 export type LeaseHeartbeatLoss = {
   path: "automatic-renewal" | "activation" | "explicit-verify" | "explicit-renew";
   outcome: "no-current-owned-unexpired-row" | "operation-error";
+  leaseLoss?: StateLeaseLoss;
 };
 
 export type LeaseHeartbeatWorkerData = {
+  postgresPool?: import("../infra/postgres-sync/pool-state.js").PostgresPoolEndpoints;
   databaseEngineSelection?: DatabaseEngineSelection;
   databaseAdmissionPort: MessagePort;
+  /** First loss is queued before shared liveness changes, including while the parent is blocked. */
+  lossPort: MessagePort;
   path: string;
   expectedIdentity: string;
   /** The actor's startup operations settle before this worker begins renewal. */
@@ -59,10 +78,8 @@ export type LeaseHeartbeatWorkerData = {
   heartbeatMs: number;
   processOwner?: { identity: StateLeaseProcessOwner; env: NodeJS.ProcessEnv };
   shared: SharedArrayBuffer;
-  /** Odd while native renewal is in flight; progress is never lease authority. */
+  /** Odd while a native renewal must settle before worker termination. */
   renewalProgress: SharedArrayBuffer;
-  /** Latest completed asynchronous request; completion is never lease authority. */
-  completedRequest: SharedArrayBuffer;
 };
 
 export type LeaseHeartbeatRequest = {
@@ -70,11 +87,10 @@ export type LeaseHeartbeatRequest = {
   operation: "verify" | "renew";
 };
 
-export type LeaseHeartbeatParentMessage = LeaseHeartbeatRequest | { startup: "activate" } | null;
+export type LeaseHeartbeatParentMessage = LeaseHeartbeatRequest | { startup: "activate" };
 
 export type LeaseHeartbeatReply =
   | LeaseHeartbeatRenewalFailure
-  | { loss: LeaseHeartbeatLoss }
   | { startup: "prepared" }
   | { id: number; ok: true; expiresAt: number }
   | { id: number; ok: false; message: string; payload?: OpenClawStateWorkerErrorPayload };

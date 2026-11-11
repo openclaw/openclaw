@@ -198,6 +198,9 @@ function collectTopLevelPublicSurfaceEntriesFromFiles(relativeFiles) {
 }
 
 function collectTrackedBundledPluginFiles(cwd) {
+  if (!fs.existsSync(path.join(cwd, ".git"))) {
+    return null;
+  }
   const result = spawnSync("git", ["ls-files", "-z", "--", BUNDLED_PLUGIN_ROOT_DIR], {
     cwd,
     encoding: "utf8",

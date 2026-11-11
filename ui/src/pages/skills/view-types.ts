@@ -1,6 +1,37 @@
 import type { JSX } from "@solidjs/web";
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
-import type { SkillsState } from "../../lib/skills/index.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type {
+  ClawHubSkillDetail,
+  ClawHubSkillSecurityVerdict,
+  loadClawHubDetail,
+  SkillsState,
+} from "../../lib/skills/index.ts";
+
+export type SkillsRouteData = {
+  gateway: ApplicationContext["gateway"];
+  gatewaySnapshot: ApplicationGatewaySnapshot;
+  agents: ApplicationContext["agents"];
+  selectedAgentId: string | null;
+  selectionIntentRevision: number;
+  /** An admitted prefetch adopted by the mounted Skills request owner. */
+  reportRead?: Promise<SkillStatusReport | undefined>;
+  error: string | null;
+  clawhubRef?: string;
+};
+
+export type SkillsPageProps = { routeData?: SkillsRouteData; surface?: "discovery" | "settings" };
+
+export type ClawHubDetailReceipt = {
+  client: GatewayBrowserClient | null;
+  epoch: number;
+  agentId: string | null;
+  agentRevision: number;
+  ref: string;
+  completion: ReturnType<typeof loadClawHubDetail>;
+};
 
 export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
 export type SkillDetailTab = "overview" | "card";
@@ -15,10 +46,19 @@ export type SkillsPresentation = {
 
 export type SkillsProps = {
   state: SkillsState & SkillsPresentation;
+  mutationSkills: SkillStatusEntry[];
+  saving: boolean;
+  toggleSavingSkillKey?: string;
+  toggleDisabled?: boolean;
+  readClawHubDetail: () => ClawHubSkillDetail | null;
+  readClawHubVerdicts: () => Record<string, ClawHubSkillSecurityVerdict>;
+  readClawHubSearch: () => boolean;
+  clawhubSearchEpoch: number;
   surface?: "discovery" | "settings";
   libraryEntries?: SkillLibraryEntry[];
   onLibraryOpen?: (skillId: string) => void;
   library?: JSX.Element;
+  pageMenu?: () => JSX.Element;
   showInventory?: boolean;
   canUpdate: boolean;
   canInstall: boolean;
