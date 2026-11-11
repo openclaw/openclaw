@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { AsyncWorkScope, createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, expect, it, type MockInstance, vi } from "vitest";
 import type * as Store from "./manager/store.js";
@@ -79,24 +79,25 @@ it.skipIf(process.platform === "win32").each(["latency", "tail"])(
   },
 );
 
-it.each(["replace", "SIGINT", "SIGTERM"] as const)(
+it.each(["replace", "SIGINT", "SIGTERM", "abort"] as const)(
   "settles a pending JSONL record on %s",
   async (mode) => {
     const listeners = [process.listeners("SIGINT"), process.listeners("SIGTERM")];
     fs.writeFileSync(file, '{"seq":0}\n{"retired":');
     const replacement = `${JSON.stringify({ seq: 1, text: "fresh".repeat(64) })}\n`;
+    const work = new AsyncWorkScope();
     sleepMock.mockImplementationOnce(async (_ms, _value, options?: { signal?: AbortSignal }) => {
       if (mode === "replace") {
         fs.renameSync(await workspace.write("replacement.jsonl", replacement), file);
       } else {
-        process.emit(mode);
+        void (mode === "abort" ? work.beginClose() : process.emit(mode));
         process.emit(mode === "SIGINT" ? "SIGTERM" : "SIGINT");
         options?.signal?.throwIfAborted();
       }
     });
-    const result = await command("tail", "--since", "1").catch((error: unknown) => error);
+    const result = await work.run(() => command("tail", "--since", "1")).catch((e: unknown) => e);
     expect(result).toEqual(mode === "replace" ? stopped : expect.any(Command));
-    expect(process.exitCode).toBe(mode === "replace" ? undefined : mode === "SIGINT" ? 130 : 143);
+    expect(process.exitCode).toBe(mode === "SIGINT" ? 130 : mode === "SIGTERM" ? 143 : undefined);
     expect(text()).toBe(`{"seq":0}\n${mode === "replace" ? replacement : ""}`);
     expect([process.listeners("SIGINT"), process.listeners("SIGTERM")]).toEqual(listeners);
   },
