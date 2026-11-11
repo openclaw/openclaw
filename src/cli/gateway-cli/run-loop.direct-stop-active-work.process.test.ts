@@ -144,9 +144,7 @@ posixIt.for(["SIGTERM", "SIGUSR2", "historical-SIGTERM"] as const)(
     const tracked = fixtures.ownChild(child);
     if (stopSignal === "SIGUSR2") {
       child.once("spawn", () => trace(`spawn: pid=${child.pid}`));
-      child.once("close", (code, exitSignal) =>
-        trace(`child-close: code=${code} signal=${exitSignal}`),
-      );
+      child.once("close", (code, signal) => trace(`child-close: code=${code} signal=${signal}`));
       for (const name of ["stdout", "stderr"] as const) {
         createInterface({ input: child[name] }).on("line", (line) => trace(`${name}: ${line}`));
       }
