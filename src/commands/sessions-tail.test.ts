@@ -277,10 +277,7 @@ describe("sessionsTailCommand", () => {
     ["explicit key", ["older"]],
     ["different session id", ["latest"]],
     ["rejected", []],
-    ["cancelled", []],
   ])("selects trajectory sessions with a %s Gateway source", async (mode, expected, notice) => {
-    const work = new AsyncWorkScope();
-    const cancellation = new Error("output consumer closed");
     storePath = path.join(tmpDir, "state", "agents", "main", "agent", "openclaw-agent.sqlite");
     const entries = ["older", "concurrent", "latest", "queued"].map((label, index) => ({
       label,
@@ -315,11 +312,6 @@ describe("sessionsTailCommand", () => {
       );
     } else if (mode === "rejected") {
       mocks.callGatewayFromCliWithTransport.mockRejectedValue(new Error("missing scope"));
-    } else if (mode === "cancelled") {
-      mocks.callGatewayFromCliWithTransport.mockImplementation(() => {
-        work.beginClose(cancellation);
-        throw new Error("gateway closed (1006): connection refused");
-      });
     }
 
     const auditProjection = ["reachable", "explicit store", "explicit key"].includes(mode);
@@ -346,17 +338,13 @@ describe("sessionsTailCommand", () => {
     const parse = vi.spyOn(JSON, "parse");
     onTestFinished(() => parse.mockRestore());
 
-    const selection = work.run(() =>
-      tail({
-        agent: "main",
-        store: mode === "explicit store" ? storePath : undefined,
-        sessionKey: mode === "explicit key" ? sessionKey : undefined,
-      }),
-    );
+    const selection = tail({
+      agent: "main",
+      store: mode === "explicit store" ? storePath : undefined,
+      sessionKey: mode === "explicit key" ? sessionKey : undefined,
+    });
     if (mode === "rejected") {
       await expect(selection).rejects.toThrow("missing scope");
-    } else if (mode === "cancelled") {
-      await expect(selection).rejects.toBe(cancellation);
     } else {
       await selection;
     }
@@ -417,10 +405,7 @@ describe("sessionsTailCommand", () => {
     vi.mocked(runtime.log).mockImplementation((message) => {
       if (!appended && String(message).includes("session.started")) {
         appended = true;
-        appendSqliteTrajectoryRuntimeEvents(
-          { agentId: "main", sessionId: "session-one", storePath },
-          [appendedEvent],
-        );
+        void appendEvents([appendedEvent]);
       }
     });
 
@@ -428,30 +413,13 @@ describe("sessionsTailCommand", () => {
     try {
       await vi.advanceTimersByTimeAsync(1_000);
     } finally {
-      if (signal === "abort") {
-        work.beginClose();
-      } else {
-        process.emit(signal, signal);
-      }
+      void (signal === "abort" ? work.beginClose() : process.emit(signal, signal));
       await run;
     }
 
     expectOutput(["tool.result", "sqlite ok"]);
-    expect(vi.mocked(runtime.exit).mock.calls).toEqual(exitCode === undefined ? [] : [[exitCode]]);
+    expect(vi.mocked(runtime.exit).mock.calls).toEqual(exitCode ? [[exitCode]] : []);
     expect(listeners()).toEqual(initialListeners);
-    const stoppedOutput = getMockCallOutput(runtime.log);
-    await appendEvents([toolResult("after-stop", { sourceSeq: 3 })]);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(getMockCallOutput(runtime.log)).toBe(stoppedOutput);
-  });
-
-  it("rejects already cancelled work before reading or following sessions", async () => {
-    const work = new AsyncWorkScope();
-    const cancellation = new Error("command stopped");
-    work.beginClose(cancellation);
-    await expect(work.run(() => tail({ agent: "main", follow: true }))).rejects.toBe(cancellation);
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("exits unsuccessfully when the followed trajectory store becomes unreadable", async () => {

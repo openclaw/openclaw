@@ -146,7 +146,6 @@ async function selectSessionsToTail(
   selections: TailSelection[],
   opts: SessionsTailOptions,
   runtime: RuntimeEnv,
-  signal?: AbortSignal,
 ): Promise<TailSelection[]> {
   if (opts.sessionKey || selections.length === 0) {
     return selections.filter((selection) => selection.key === opts.sessionKey);
@@ -159,7 +158,6 @@ async function selectSessionsToTail(
   } else {
     try {
       const cfg = await captureRuntimeConfigAsyncReader()();
-      signal?.throwIfAborted();
       const { sessions } = await callGatewayFromCliWithTransport<{
         sessions: Pick<GatewaySessionRow, "key" | "sessionId" | "hasActiveRun" | "status">[];
       }>(
@@ -172,7 +170,7 @@ async function selectSessionsToTail(
           includeGlobal: true,
           includeUnknown: true,
         },
-        { progress: false, signal },
+        { progress: false },
       );
       const running = new Map(
         sessions
@@ -193,7 +191,6 @@ async function selectSessionsToTail(
         return active;
       }
     } catch (error) {
-      signal?.throwIfAborted();
       if (!isGatewayRpcUnavailableError(error)) {
         throw error;
       }
@@ -277,8 +274,6 @@ export async function sessionsTailCommand(
   opts: SessionsTailOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const signal = getAsyncWorkSignal();
-  signal?.throwIfAborted();
   const tailCount =
     opts.tail === undefined ? DEFAULT_TAIL_COUNT : parseStrictNonNegativeInteger(opts.tail);
   if (tailCount == null) {
@@ -294,7 +289,6 @@ export async function sessionsTailCommand(
   }
 
   const cfg = await captureRuntimeConfigAsyncReader()();
-  signal?.throwIfAborted();
   const targets = resolveCommandSessionStoreTargets({
     cfg,
     opts: {
@@ -321,9 +315,7 @@ export async function sessionsTailCommand(
     selections,
     { ...opts, sessionKey: requestedKey },
     runtime,
-    signal,
   );
-  signal?.throwIfAborted();
   if (selected.length === 0) {
     if (requestedKey) {
       runtime.error(
@@ -349,7 +341,7 @@ export async function sessionsTailCommand(
   }
 
   if (opts.follow) {
-    const outcome = await followSelections(followStates, runtime, signal);
+    const outcome = await followSelections(followStates, runtime, getAsyncWorkSignal());
     if (outcome !== "ABORTED") {
       runtime.exit(outcome === "ERROR" ? 1 : outcome === "SIGINT" ? 130 : 143);
     }
