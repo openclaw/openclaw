@@ -1,2 +1,0 @@
-# Extend existing chat/new-session production-UI proof with whole-row icon geometry at desktop and mobile widths.
-32
