@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => {
       async () => ({ text: "generic image ok", model: "vision" }),
     ),
     convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
+    convertImageToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
     resolveImageCompressionModelPolicy: vi.fn(
       async (): Promise<ImageCompressionModelPolicy> => ({}),
     ),
@@ -72,7 +73,11 @@ vi.mock("../media/media-services.js", async () => {
   const actual = await vi.importActual<typeof import("../media/media-services.js")>(
     "../media/media-services.js",
   );
-  return { ...actual, convertHeicToJpeg: mocks.convertHeicToJpeg };
+  return {
+    ...actual,
+    convertHeicToJpeg: mocks.convertHeicToJpeg,
+    convertImageToJpeg: mocks.convertImageToJpeg,
+  };
 });
 
 function requireRunCapabilityRequest(): unknown {
@@ -109,6 +114,8 @@ describe("media-understanding runtime", () => {
     mocks.describeImageWithModel.mockResolvedValue({ text: "generic image ok", model: "vision" });
     mocks.convertHeicToJpeg.mockReset();
     mocks.convertHeicToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
+    mocks.convertImageToJpeg.mockReset();
+    mocks.convertImageToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
     mocks.resolveImageCompressionModelPolicy.mockReset().mockResolvedValue({});
     mocks.runCapability.mockReset();
     mocks.cleanup.mockReset();
@@ -302,6 +309,13 @@ describe("media-understanding runtime", () => {
       name: "HEIF sequence",
       mime: "image/heif-sequence",
       bytes: Buffer.from("00000018667479706d736631000000000000000000000000", "hex"),
+      convertedBy: "heic" as const,
+    },
+    {
+      name: "AVIF photo",
+      mime: "image/avif",
+      bytes: Buffer.from("0000000c667479706176696600000000", "hex"),
+      convertedBy: "image" as const,
     },
   ])(
     "normalizes local $name explicit image descriptions before provider execution",
@@ -322,7 +336,9 @@ describe("media-understanding runtime", () => {
         agentDir: undefined,
       });
 
-      expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(testCase.bytes);
+      expect(
+        mocks[testCase.convertedBy === "image" ? "convertImageToJpeg" : "convertHeicToJpeg"],
+      ).toHaveBeenCalledWith(testCase.bytes);
       expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
         expect.objectContaining({
           buffer: Buffer.from("jpeg-normalized"),

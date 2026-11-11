@@ -4,6 +4,7 @@ import { makeStallingStream } from "../infra/http-body.test-support.js";
 
 const fetchWithSsrFGuardMock = vi.fn();
 const convertHeicToJpegMock = vi.fn();
+const convertImageToJpegMock = vi.fn();
 const detectMimeMock = vi.fn();
 const extractPdfContentMock = vi.fn();
 
@@ -11,8 +12,10 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
 }));
 
+// mock-isolation: Conversion must stay synthetic; fetch-guard tests never invoke host codecs.
 vi.mock("./media-services.js", () => ({
   convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
+  convertImageToJpeg: (...args: unknown[]) => convertImageToJpegMock(...args),
 }));
 
 vi.mock("@openclaw/media-core/mime", async () => {
@@ -145,6 +148,7 @@ describe("HEIC input image normalization", () => {
       detectedMime: "image/heic",
       allowedMimes: ["image/heic", "image/jpeg"],
       converted: true,
+      convertedVia: "heic" as const,
       expectedMime: "image/jpeg",
     },
     {
@@ -154,6 +158,7 @@ describe("HEIC input image normalization", () => {
       detectedMime: "image/heic-sequence",
       allowedMimes: ["image/heic", "image/jpeg"],
       converted: true,
+      convertedVia: "heic" as const,
       expectedMime: "image/jpeg",
     },
     {
@@ -163,6 +168,17 @@ describe("HEIC input image normalization", () => {
       detectedMime: "image/heif-sequence",
       allowedMimes: ["image/heif", "image/jpeg"],
       converted: true,
+      convertedVia: "heic" as const,
+      expectedMime: "image/jpeg",
+    },
+    {
+      name: "converts URL AVIF images to JPEG before returning them",
+      kind: "url",
+      mediaType: "image/avif",
+      detectedMime: "image/avif",
+      allowedMimes: ["image/avif", "image/jpeg"],
+      converted: true,
+      convertedVia: "image" as const,
       expectedMime: "image/jpeg",
     },
     {
@@ -172,6 +188,7 @@ describe("HEIC input image normalization", () => {
       detectedMime: "image/jpeg",
       allowedMimes: ["image/png", "image/jpeg"],
       converted: false,
+      convertedVia: "heic" as const,
       expectedMime: "image/jpeg",
     },
     {
@@ -181,6 +198,17 @@ describe("HEIC input image normalization", () => {
       detectedMime: "image/jpeg",
       allowedMimes: ["image/heic", "image/jpeg"],
       converted: false,
+      convertedVia: "heic" as const,
+      expectedMime: "image/jpeg",
+    },
+    {
+      name: "prefers sniffed JPEG when declared AVIF bytes are actually JPEG",
+      kind: "base64",
+      mediaType: "image/avif",
+      detectedMime: "image/jpeg",
+      allowedMimes: ["image/avif", "image/jpeg"],
+      converted: false,
+      convertedVia: "heic" as const,
       expectedMime: "image/jpeg",
     },
     {
@@ -190,11 +218,20 @@ describe("HEIC input image normalization", () => {
       detectedMime: "image/webp",
       allowedMimes: ["image/png", "image/webp"],
       converted: false,
+      convertedVia: "heic" as const,
       expectedMime: "image/webp",
     },
   ] as const)(
     "$name",
-    async ({ kind, mediaType, detectedMime, allowedMimes, converted, expectedMime }) => {
+    async ({
+      kind,
+      mediaType,
+      detectedMime,
+      allowedMimes,
+      converted,
+      convertedVia,
+      expectedMime,
+    }) => {
       const bytes = Buffer.from("source-image");
       const jpeg = Buffer.from("jpeg-normalized");
       const source =
@@ -208,7 +245,10 @@ describe("HEIC input image normalization", () => {
       });
       detectMimeMock.mockResolvedValueOnce(detectedMime);
       if (converted) {
-        convertHeicToJpegMock.mockResolvedValueOnce(jpeg);
+        (convertedVia === "image"
+          ? convertImageToJpegMock
+          : convertHeicToJpegMock
+        ).mockResolvedValueOnce(jpeg);
       }
 
       await expect(
@@ -222,7 +262,12 @@ describe("HEIC input image normalization", () => {
         mimeType: expectedMime,
       });
       expect(detectMimeMock).toHaveBeenCalledTimes(1);
-      expect(convertHeicToJpegMock).toHaveBeenCalledTimes(converted ? 1 : 0);
+      expect(convertHeicToJpegMock).toHaveBeenCalledTimes(
+        converted && convertedVia === "heic" ? 1 : 0,
+      );
+      expect(convertImageToJpegMock).toHaveBeenCalledTimes(
+        converted && convertedVia === "image" ? 1 : 0,
+      );
       if (release) {
         expect(release).toHaveBeenCalledTimes(1);
       }

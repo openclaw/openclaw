@@ -1,0 +1,4 @@
+161
+# AVIF inbound-image normalization regressions: shared-converter routing at the provider boundary,
+# image-description recognition by MIME and by .avif filename, decoder-unavailable recovery
+# guidance, and the fetch-guard allowlist rows. Exact measured net test LF growth; no spare credit.
