@@ -261,17 +261,19 @@ export async function retainPolicyAllowedManagedNativeTools(
           policy: { ...policy, inheritedToolPolicy: policy.sessionInheritedToolPolicy },
         }
       : resolved;
-  const refused = conferred
-    .filter(
-      ([, capabilities]) =>
-        !capabilities.every(
-          (capability) =>
-            (capability !== "web_search" || nativeWebSearchEnabled) &&
-            isConversationToolAllowed(profile, capability),
-        ),
-    )
-    .map(([name]) => name);
-  const native = availability.native.filter((name) => !refused.includes(name));
+  const refused = new Set(
+    conferred
+      .filter(
+        ([, capabilities]) =>
+          !capabilities.every(
+            (capability) =>
+              (capability !== "web_search" || nativeWebSearchEnabled) &&
+              isConversationToolAllowed(profile, capability),
+          ),
+      )
+      .map(([name]) => name),
+  );
+  const native = availability.native.filter((name) => !refused.has(name));
   return { ...params, cliToolAvailability: { ...availability, native } };
 }
 
