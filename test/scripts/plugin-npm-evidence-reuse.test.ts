@@ -171,7 +171,11 @@ function fixture(pageHeavy = false, sameSha = false) {
         : Promise.resolve(f.client.getRun(run[1]!)).then(done);
     }
     if (route.includes("/artifacts?")) {
-      return done({ total_count: 2, artifacts: [artifacts.get(91), artifacts.get(92)] });
+      const runId = Number(/^actions\/runs\/(\d+)/u.exec(route)![1]);
+      const listed = [...artifacts.values()].filter(
+        (metadata) => metadata.workflow_run.id === runId,
+      );
+      return done({ total_count: listed.length, artifacts: listed });
     }
     const jobs = /^actions\/runs\/(\d+)\/(?:attempts\/(\d+)\/)?jobs\?/u.exec(route);
     if (jobs) {
@@ -565,6 +569,23 @@ it.each([
   expect(() => createReleaseEvidenceReplay(binding, f.payload)).toThrow(/differs/);
 });
 
+it("does not trust a caller-forged prepared projection in the public helper", async () => {
+  const { params } = fixture();
+  const immutableReads = Object.assign(createReleaseEvidenceReplay(params), {
+    authenticatedPreparedEvidence: {
+      artifact: params.artifact,
+      workflowSha: params.artifact.workflowSha,
+    },
+  });
+  await expect(
+    authenticatePreparedNpmArtifact({
+      ...params,
+      fullReleaseValidationRunAttempt: 2,
+      immutableReads,
+    }),
+  ).rejects.toThrow();
+});
+
 it("replays raw responses through semantic validators, not just their content hashes", async () => {
   const { params } = fixture();
   const writer = createReleaseEvidenceReplay(params);
@@ -755,6 +776,16 @@ async function cliPackageFixture() {
     packageArchives.set(9001, manifestZip);
     packageArchives.set(9002, packageZip);
     source.archives.set(9001, manifestZip);
+    source.artifacts.set(9002, {
+      id: 9002,
+      name: entry.artifact.artifactName,
+      digest: entry.artifact.artifactDigest,
+      size_in_bytes: packageZip.length,
+      expired: false,
+      expires_at: "2099-01-01T00:00:00Z",
+      created_at: "2026-08-28T12:01:02.000Z",
+      workflow_run: { id: 101, head_sha: source.params.sourceSha, head_branch: source.f.branch },
+    });
     source.artifacts.set(9001, {
       id: 9001,
       name: source.params.artifact.artifactName,

@@ -343,6 +343,13 @@ export async function createNpmCliProcessFixture(
     head_repository: { full_name: f.repository },
   };
   json("actions/runs/5001/attempts/1", packageRun);
+  const packageArtifacts = [...artifacts.values()].filter(
+    (entry) => entry.workflow_run.id === 5001,
+  );
+  json("actions/runs/5001/artifacts?per_page=100&page=1", {
+    total_count: packageArtifacts.length,
+    artifacts: packageArtifacts,
+  });
   const carrierRun = {
     ...packageRun,
     id: 800,
@@ -473,8 +480,8 @@ export async function createNpmCliProcessFixture(
     bytes,
     save,
     run,
-    authorize: (invocation: string, replay = true) =>
-      run(invocation, ["authorize", "--package", JSON.stringify(packages[0])], replay),
+    authorize: (invocation: string, replay = true, index = 0) =>
+      run(invocation, ["authorize", "--package", JSON.stringify(packages[index])], replay),
     // Match the workflow: load takes its roster selection from the CLI option,
     // while the environment selection binds the adoption/evidence request.
     preview: (invocation = "preview") =>

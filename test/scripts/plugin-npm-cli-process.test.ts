@@ -56,7 +56,6 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
   const packageProducerRoute = "actions/runs/5001/attempts/1";
   // Each retained child validates its pinned dispatch origin outside replay.
   const childOriginRoute = "actions/runs/" + f.f.runId + "/attempts/1";
-  const childOriginReads = Object.keys(f.recovery.recovery.children).length;
   const replayRoutes = new Set(carrier.entries.map(([route]: [string, unknown]) => route));
   const categoryCounts = (name: string) => {
     const categories = { live: 0, immutable: 0, carrier: 0, selectedPackage: 0 };
@@ -164,14 +163,14 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
     expect(categoriesByProcess[name]!.immutable, name + " reacquired immutable evidence").toBe(0);
     const calls = requests(name);
     expect(calls, name + " total GitHub requests").toHaveLength(
-      name.startsWith("consume") ? 87 : 84,
+      name.startsWith("consume") ? 39 : 36,
     );
     // One owner refreshes original qualification; retain the later effect-boundary checks.
     for (const [route, count] of [
-      ["actions/runs/910", 2],
-      ["actions/artifacts/70", 3],
-      ["collaborators/release-operator/permission", 2],
-      ["actions/artifacts/6400", 2],
+      ["actions/runs/910", 1],
+      ["actions/artifacts/70", 2],
+      ["collaborators/release-operator/permission", 1],
+      ["actions/artifacts/6400", 1],
     ] as const) {
       expect(
         calls.filter((row) => row.route === route),
@@ -187,7 +186,7 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
     expect(
       calls.filter((row) => row.route === childOriginRoute),
       name + " live child origins",
-    ).toHaveLength(childOriginReads);
+    ).toHaveLength(0);
     expect(calls.filter((row) => row.route === carrierJobsRoute)).toHaveLength(1);
     expect(calls.filter((row) => row.route === packageProducerRoute)).toHaveLength(
       name.startsWith("consume") ? 1 : 0,
@@ -210,16 +209,18 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
       calls.filter((row) => /actions\/runs\/600[12]\/attempts\/1\/jobs/u.test(row.route ?? "")),
     ).toHaveLength(0);
     for (const route of [
-      "actions/artifacts/6201",
-      "actions/artifacts/6301",
-      "actions/artifacts/91",
+      "actions/runs/6001/artifacts?per_page=100&page=1",
+      "actions/runs/6002/artifacts?per_page=100&page=1",
+      "actions/runs/9900/artifacts?per_page=100&page=1",
       "actions/artifacts/70",
       "actions/runs/40",
       "actions/runs/6001",
       "actions/runs/6002",
       "actions/runs/9900",
       "actions/runs/910",
-      "actions/runs/5001/artifacts?per_page=100&page=1",
+      name.startsWith("consume")
+        ? "actions/runs/5001/artifacts?per_page=100&page=1"
+        : "actions/artifacts/9001",
       "collaborators/release-operator/permission",
     ]) {
       const refreshed = calls.some((row) => row.route === route);
@@ -257,9 +258,43 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
     expect(result.status, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("authenticated current operation");
   }
+  // A batched inventory must be complete across pages, not just contain the
+  // first visible matching artifact. Put a required retained payload on page 2.
+  const inventoryRoute = "actions/runs/6001/artifacts?page=1&per_page=100";
+  const inventory = f.responses[inventoryRoute]!;
+  const originalArtifacts = JSON.parse(inventory.data).artifacts;
+  const paginatedArtifacts = [
+    ...Array.from({ length: 100 }, (_, index) => ({ ...originalArtifacts[0], id: 20000 + index })),
+    ...originalArtifacts,
+  ];
+  f.json(inventoryRoute, {
+    total_count: paginatedArtifacts.length,
+    artifacts: paginatedArtifacts.slice(0, 100),
+  });
+  const secondPageRoute = "actions/runs/6001/artifacts?page=2&per_page=100";
+  f.json(secondPageRoute, {
+    total_count: paginatedArtifacts.length,
+    artifacts: paginatedArtifacts.slice(100),
+  });
+  f.save();
+  success(f.authorize("paginated-inventory"));
+  expect(
+    f
+      .records()
+      .some(
+        (row) =>
+          row.invocation === "paginated-inventory" &&
+          row.route === "actions/runs/6001/artifacts?per_page=100&page=2",
+      ),
+  ).toBe(true);
+  f.json(secondPageRoute, { total_count: paginatedArtifacts.length, artifacts: [] });
+  reject("incomplete-inventory", /enumeration|incomplete/iu, true);
+  f.responses[inventoryRoute] = inventory;
+  delete f.responses[secondPageRoute];
   // Keep the authentic carrier fixed while current remote state changes.
   for (const [route, changed, pattern] of [
     ["actions/artifacts/6201", { expired: true }, /expired|artifact/iu],
+    ["actions/artifacts/6301", { digest: "sha256:" + "f".repeat(64) }, /changed|artifact/iu],
     ["actions/runs/6002", { run_attempt: 2 }, /attempt|identity/iu],
     ["actions/runs/9900", { run_attempt: 2 }, /attempt|changed|aggregate artifact is missing/iu],
     ["actions/runs/800", { run_attempt: 3 }, /current trusted publication attempt/iu],
@@ -311,7 +346,7 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
   }
   // Change the recovery attempt during the final asynchronous archive sweep,
   // after its run was refreshed. The final synchronous authority must read again.
-  const lastMetadataRoute = "actions/artifacts/9001";
+  const lastMetadataRoute = "actions/runs/5001/artifacts?page=1&per_page=100";
   const lastMetadata = f.responses[lastMetadataRoute]!;
   const recoveryRun = f.responses["actions/runs/9900"]!;
   f.responses[selectedRoute] = {
@@ -355,22 +390,30 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
 }, 240_000);
 
 it("retains the ordinary CLI final authority after sharing acquisition reads", async () => {
-  const f = await createNpmCliProcessFixture(
-    tempDirs.make("npm-cli-ordinary-"),
-    "@openclaw/alpha",
-    false,
-  );
+  const f = await createNpmCliProcessFixture(tempDirs.make("npm-cli-ordinary-"), "", false);
   expect(f.preview().status).toBe(0);
   f.sealCarrier();
   expect(f.consume("consume", 0).status).toBe(0);
   expect(f.authorize("authorize").status).toBe(0);
+  // Different packages share the exact authenticated graph, not package bytes.
+  const beta = f.consume("consume-beta", 1);
+  expect(beta.status, beta.stderr).toBe(0);
+  expect(readFileSync(beta.output, "utf8")).toContain("package_name=@openclaw/beta\n");
+  const betaAuthorization = f.authorize("authorize-beta", true, 1);
+  expect(betaAuthorization.status, betaAuthorization.stderr).toBe(0);
   const counts = Object.fromEntries(
-    ["preview", "consume", "authorize"].map((phase) => [
+    ["preview", "consume", "authorize", "consume-beta", "authorize-beta"].map((phase) => [
       phase,
       f.records().filter((row) => row.kind === "request" && row.invocation === phase).length,
     ]),
   );
-  expect(counts).toEqual({ preview: 52, consume: 41, authorize: 38 });
+  expect(counts).toEqual({
+    preview: 51,
+    consume: 25,
+    authorize: 22,
+    "consume-beta": 25,
+    "authorize-beta": 22,
+  });
   console.log(JSON.stringify({ scenario: "ordinary-cli", requestsByProcess: counts }));
   const selectedRoute = "actions/artifacts/9002/zip";
   f.responses[selectedRoute] = {

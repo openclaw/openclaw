@@ -43,6 +43,14 @@ function response(route, transport) {
     writeFileSync(process.env.NPM_CLI_RESPONSES, JSON.stringify(responses));
     record({ kind: "external-change", route });
   }
+  if (/^actions\/runs\/[0-9]+\/artifacts$/u.test(path)) {
+    const page = JSON.parse(value.data);
+    page.artifacts = page.artifacts.map((artifact) => {
+      const current = responses["actions/artifacts/" + artifact.id];
+      return current ? JSON.parse(current.data) : artifact;
+    });
+    return Buffer.from(JSON.stringify(page));
+  }
   return Buffer.from(value.data, value.encoding);
 }
 
