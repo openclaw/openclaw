@@ -14,6 +14,8 @@ import { runConfigSet as runConfigSetCommand } from "../../cli/config-cli.js";
 import * as configModule from "../../config/config.js";
 import { createSnapshot } from "../../config/mutate.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { GatewayConfigSchema } from "../../config/zod-schema.gateway.js";
+import { OpenClawSchemaShape } from "../../config/zod-schema.root-shape.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -74,6 +76,31 @@ afterEach(() => {
 });
 
 describe("Full Access delegated chat", () => {
+  it("keeps reviewed whole-object settings closed", () => {
+    const ui = OpenClawSchemaShape.ui.unwrap();
+    const prefs = ui.shape.prefs.unwrap();
+    const environment = GatewayConfigSchema.unwrap()
+      .shape.controlUi.unwrap()
+      .shape.environment.unwrap();
+    expect(Object.keys(ui.shape).toSorted()).toEqual(["prefs", "seamColor"]);
+    expect(Object.keys(prefs.shape).toSorted()).toEqual([
+      "accent",
+      "chatFollowUpMode",
+      "chatPersistCommentary",
+      "chatSendShortcut",
+      "chatShowThinking",
+      "chatShowToolCalls",
+      "locale",
+      "sidebarEntries",
+      "theme",
+      "themeMode",
+    ]);
+    expect(Object.keys(environment.shape).toSorted()).toEqual(["color", "label"]);
+    expect(ui.safeParse({ unexpected: true }).success).toBe(false);
+    expect(prefs.safeParse({ unexpected: true }).success).toBe(false);
+    expect(environment.safeParse({ unexpected: true }).success).toBe(false);
+  });
+
   const verifiedConfig: OpenClawConfig = {
     agents: { defaults: { model: "openai/gpt-5.5@openai:verified" } },
     auth: { profiles: { "openai:verified": { provider: "openai", mode: "api_key" } } },
@@ -237,6 +264,9 @@ describe("Full Access delegated chat", () => {
     'config set logging.level {"$include":"/tmp/level.json"}',
     "config set messages.responsePrefix ${SECRET}",
     "config set-ref messages.ackReaction file /tmp/secret",
+    'config set ui {"prefs":{"themeMode":"dark","$include":"/tmp/prefs.json"}}',
+    'config set agents.defaults {"thinkingDefault":"high"}',
+    'config set gateway.controlUi {"environment":{"label":"Local","color":"teal"}}',
   ])("asks before a Full Access delegated write: %s", async (message) => {
     const fixture = await createDelegatedChatFixture(createTestGatewayScheduler());
     const call = fixture.callChat(message, { fullPermission: true });
@@ -260,9 +290,14 @@ describe("Full Access delegated chat", () => {
     }
   });
 
-  it("automatically applies a harmless message setting with Full Access", async () => {
+  it.each([
+    "config set messages.ackReaction eyes",
+    'config set ui {"prefs":{"themeMode":"dark","chatShowToolCalls":true}}',
+    'config set gateway.controlUi.environment {"label":"Local","color":"teal"}',
+    "config set agents.defaults.thinkingDefault high",
+  ])("automatically applies a reviewed setting with Full Access: %s", async (message) => {
     const fixture = await createDelegatedChatFixture(createTestGatewayScheduler());
-    const call = fixture.callChat("config set messages.ackReaction eyes", {
+    const call = fixture.callChat(message, {
       fullPermission: true,
     });
     try {

@@ -51,6 +51,14 @@ const AUTO_APPLY_CONFIG_PATHS = new Set(
     "ui.prefs.chatSendShortcut",
     "ui.prefs.chatFollowUpMode",
     "ui.prefs.sidebarEntries",
+    "gateway.controlUi.environment.label",
+    "gateway.controlUi.environment.color",
+    "agents.defaults.thinkingDefault",
+    "agents.defaults.fastModeDefault",
+    "agents.defaults.blockStreamingDefault",
+    "agents.defaults.blockStreamingBreak",
+    "agents.defaults.typingMode",
+    "agents.defaults.typingIntervalSeconds",
     "messages.visibleReplies",
     "messages.responsePrefix",
     "messages.ackReaction",
@@ -61,13 +69,37 @@ const AUTO_APPLY_CONFIG_PATHS = new Set(
   ].map((path) => JSON.stringify(path.split("."))),
 );
 
-function isAutoApplyConfigValue(value: unknown): boolean {
+// Whole-object writes are limited to containers whose present schema is entirely reviewed above.
+const AUTO_APPLY_CONFIG_PARENTS = new Set(
+  ["ui", "ui.prefs", "gateway.controlUi.environment"].map((path) =>
+    JSON.stringify(path.split(".")),
+  ),
+);
+
+function isAutoApplyConfigValue(value: unknown, path: string[]): boolean {
   if (typeof value === "string") {
     return !value.includes("${");
   }
-  return Array.isArray(value)
-    ? value.every(isAutoApplyConfigValue)
-    : value === null || typeof value !== "object";
+  if (Array.isArray(value)) {
+    return value.every((entry) => isAutoApplyConfigValue(entry, path));
+  }
+  if (value === null || typeof value !== "object") {
+    return true;
+  }
+  if (
+    !AUTO_APPLY_CONFIG_PARENTS.has(JSON.stringify(path)) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) {
+    return false;
+  }
+  return Object.entries(value).every(([key, entry]) => {
+    const childPath = [...path, key];
+    const childKey = JSON.stringify(childPath);
+    return (
+      (AUTO_APPLY_CONFIG_PATHS.has(childKey) || AUTO_APPLY_CONFIG_PARENTS.has(childKey)) &&
+      isAutoApplyConfigValue(entry, childPath)
+    );
+  });
 }
 
 function canAutoApplyDelegatedOperation(operation: SystemAgentOperation): boolean {
@@ -75,12 +107,14 @@ function canAutoApplyDelegatedOperation(operation: SystemAgentOperation): boolea
     return false;
   }
   try {
-    if (!AUTO_APPLY_CONFIG_PATHS.has(JSON.stringify(parseConfigSetPath(operation.path)))) {
+    const path = parseConfigSetPath(operation.path);
+    const key = JSON.stringify(path);
+    if (!AUTO_APPLY_CONFIG_PATHS.has(key) && !AUTO_APPLY_CONFIG_PARENTS.has(key)) {
       return false;
     }
     return operation.kind === "config-unset"
       ? true
-      : isAutoApplyConfigValue(parseConfigSetValue(operation.value, false));
+      : isAutoApplyConfigValue(parseConfigSetValue(operation.value, false), path);
   } catch {
     return false;
   }

@@ -47,7 +47,7 @@ it.each([
               {
                 message: needsApproval
                   ? "config set mcp.servers.demo.command node"
-                  : "config set messages.ackReaction eyes",
+                  : 'config set ui {"prefs":{"themeMode":"dark","chatShowToolCalls":true}}',
               },
               current,
             );
@@ -104,7 +104,7 @@ it.each([
             sessionKey: `agent:main:delegation-entry-${scenario}`,
             message: needsApproval
               ? "DELEGATED_CONFIG_ENTRY: Add a local MCP server command."
-              : "DELEGATED_CONFIG_ENTRY: Set the acknowledgement reaction to eyes.",
+              : "DELEGATED_CONFIG_ENTRY: Set the UI theme and tool-call display.",
             idempotencyKey: `delegation-entry-${scenario}`,
           },
           { expectFinal: false },
@@ -114,7 +114,8 @@ it.each([
             vi.waitFor(
               async () => {
                 const config = JSON.parse(await readFile(instance.configPath, "utf8"));
-                expect(config.messages?.ackReaction).toBe("eyes");
+                expect(config.ui?.prefs?.themeMode).toBe("dark");
+                expect(config.ui?.prefs?.chatShowToolCalls).toBe(true);
               },
               { timeout: 45_000 },
             ),
