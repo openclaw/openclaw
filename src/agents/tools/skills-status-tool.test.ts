@@ -40,6 +40,22 @@ it("resolves the session's own agent for an explicit session key", () => {
   ).toEqual({ sessionKey: "agent:research:x", agentId: "research" });
 });
 
+it("preserves an unqualified session alias for the canonical owner resolution", () => {
+  expect(resolveSkillsStatusParams({ sessionKey: "main" }, { agentId: "work" })).toEqual({
+    sessionKey: "main",
+  });
+  expect(resolveSkillsStatusParams({ sessionKey: "main", agentId: "work" }, {})).toEqual({
+    sessionKey: "main",
+    agentId: "work",
+  });
+});
+
+it("refuses a malformed agent session key instead of inventing a default", () => {
+  expect(() => resolveSkillsStatusParams({ sessionKey: "agent:" }, { agentId: "work" })).toThrow(
+    "Malformed agent session key",
+  );
+});
+
 it("does not inherit the active session for an explicit agent-only query", () => {
   expect(
     resolveSkillsStatusParams(

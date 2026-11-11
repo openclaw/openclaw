@@ -2,7 +2,10 @@ import {
   SkillsStatusParamsSchema,
   type SkillsStatusParams,
 } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  classifySessionKeyShape,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import type { SkillStatusReport } from "../../skills/discovery/status.types.js";
 import { bindActiveOperatorTurnAuthority } from "../cron-creator-authority-context.js";
 import { jsonResult, type AnyAgentTool } from "./common.js";
@@ -22,10 +25,17 @@ export function resolveSkillsStatusParams(
   context: { agentId?: string; sessionKey?: string },
 ): SkillsStatusParams {
   if (params.sessionKey !== undefined) {
-    const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+    const shape = classifySessionKeyShape(params.sessionKey);
+    // Only a key that carries an agent prefix can be resolved here; unqualified aliases
+    // ("main") stay untouched so the Gateway owner applies its configured default.
+    const inferredAgentId =
+      shape === "agent" || shape === "malformed_agent"
+        ? resolveAgentIdFromSessionKey(params.sessionKey)
+        : undefined;
+    const agentId = params.agentId ?? inferredAgentId;
     return {
       sessionKey: params.sessionKey,
-      agentId,
+      ...(agentId ? { agentId } : {}),
       ...(params.refresh !== undefined ? { refresh: params.refresh } : {}),
     };
   }
