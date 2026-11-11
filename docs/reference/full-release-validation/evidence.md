@@ -56,6 +56,15 @@ approval, content, and readback checks. Known enclosing evidence is budgeted bef
 fanout, but later job/attempt growth can still exceed the unchanged final artifact
 limit and fail sealing; evidence is not truncated to fit.
 
+## ClawHub recovery custody
+
+Recovery records a validated successor attempt in its existing result artifact
+before waiting for publication. A timeout or failed observation preserves
+incomplete evidence; it does not mean the accepted attempt disappeared or permit
+replacement publication. The original sealed manifest remains unchanged. This
+branch does not provide parent-requested recovery or a parent successor roster;
+use the recovery CLI result artifact for accepted-attempt custody.
+
 ## Workflow files
 
 - `.github/workflows/full-release-validation.yml`

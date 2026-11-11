@@ -317,6 +317,23 @@ async function waitForPublicationState(
   }
 }
 
+/**
+ * @typedef {{name: string, version: string, recoveredFromAttemptId: string, attemptId: string, publicationStatus: string}} ClawHubRecoveryRecord
+ * @typedef {{schemaVersion: number, complete: boolean, recovered: ClawHubRecoveryRecord[]}} ClawHubRecoveryResult
+ */
+
+/**
+ * @param {object} options
+ * @param {unknown} options.manifest
+ * @param {string} options.reason
+ * @param {string} [options.registry]
+ * @param {string} options.token
+ * @param {typeof fetch} [options.fetchImpl]
+ * @param {(milliseconds: number) => Promise<void>} [options.wait]
+ * @param {number} [options.timeoutMilliseconds]
+ * @param {(message: string) => void} [options.report]
+ * @param {(result: ClawHubRecoveryResult) => void | Promise<void>} [options.onProgress]
+ */
 export async function executeClawHubRecoveryManifest({
   manifest: rawManifest,
   reason,
@@ -329,6 +346,7 @@ export async function executeClawHubRecoveryManifest({
     }),
   timeoutMilliseconds = 30 * 60 * 1000,
   report = console.error,
+  onProgress,
 }) {
   const manifest = validateClawHubRecoveryManifest(rawManifest);
   const trimmedReason = reason?.trim();
@@ -341,7 +359,10 @@ export async function executeClawHubRecoveryManifest({
       `ClawHub package was not staged and has no recoverable attempt: ${unavailable.name}.`,
     );
   }
-  const recovered = [];
+  /** @type {ClawHubRecoveryResult} */
+  const result = { schemaVersion: 1, complete: false, recovered: [] };
+  const { recovered } = result;
+  await onProgress?.(result);
   for (const entry of manifest.packages) {
     const deadline = Date.now() + timeoutMilliseconds;
     let lastMessage;
@@ -424,6 +445,16 @@ export async function executeClawHubRecoveryManifest({
       name: entry.name,
       version: entry.version,
     });
+    const record = {
+      name: entry.name,
+      version: entry.version,
+      recoveredFromAttemptId: entry.attemptId,
+      attemptId: started.attemptId,
+      publicationStatus: started.publicationStatus,
+    };
+    recovered.push(record);
+    // Retain accepted custody before polling: a timeout is not a failed submission.
+    await onProgress?.(result);
     if (["blocked", "failed", "expired"].includes(started.publicationStatus)) {
       throw new Error(`ClawHub recovery ${started.publicationStatus}: ${entry.name}.`);
     }
@@ -433,19 +464,16 @@ export async function executeClawHubRecoveryManifest({
         recoverLegacyUnpublished: false,
         staleAttemptId: entry.attemptId,
       });
+      record.publicationStatus = state.state;
+      await onProgress?.(result);
       if (state.state !== "published") {
         throw new Error(`ClawHub recovery ${state.state}: ${entry.name}.`);
       }
     }
-    recovered.push({
-      name: entry.name,
-      version: entry.version,
-      recoveredFromAttemptId: entry.attemptId,
-      attemptId: started.attemptId,
-      publicationStatus: "published",
-    });
   }
-  return { schemaVersion: 1, complete: true, recovered };
+  result.complete = true;
+  await onProgress?.(result);
+  return result;
 }
 
 async function main() {
@@ -511,16 +539,23 @@ async function main() {
       JSON.parse(readFileSync(values.manifest, "utf8")),
       JSON.parse(readFileSync(values["run-json"], "utf8")),
     );
+    let outputCreated = false;
     const result = await executeClawHubRecoveryManifest({
       manifest,
       reason: values.reason,
       registry: values.registry,
       token: process.env.CLAWHUB_TOKEN,
+      onProgress: values.output
+        ? (progress) => {
+            mkdirSync(dirname(values.output), { recursive: true });
+            writeFileSync(values.output, `${JSON.stringify(progress, null, 2)}\n`, {
+              flag: outputCreated ? "w" : "wx",
+            });
+            outputCreated = true;
+          }
+        : undefined,
     });
-    if (values.output) {
-      mkdirSync(dirname(values.output), { recursive: true });
-      writeFileSync(values.output, `${JSON.stringify(result, null, 2)}\n`, { flag: "wx" });
-    } else {
+    if (!values.output) {
       console.log(JSON.stringify(result));
     }
     return;
