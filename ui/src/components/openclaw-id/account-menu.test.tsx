@@ -13,7 +13,7 @@ import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { showConfirmDialog } from "../confirm-dialog.ts";
-import type { MenuItem } from "../solid/menu.tsx";
+import { Menu, type MenuEntry, type MenuItem } from "../solid/menu.tsx";
 import {
   openClawIdMenuEntries,
   openClawIdMenuIdentity,
@@ -46,10 +46,12 @@ function status(overrides: Partial<OpenClawIdStatusResult> = {}): OpenClawIdStat
 // Read the exact rendered content in the same owned scope as the sidebar memo.
 function menu(current: OpenClawIdStatusResult | null, publication?: OpenClawIdPublication) {
   return createRoot((dispose) => {
-    const entries = [
+    const flatten = (items: readonly MenuEntry[]): MenuEntry[] =>
+      items.flatMap((item) => (item.kind === "group" ? flatten(item.items) : [item]));
+    const entries = flatten([
       ...openClawIdMenuEntries(current, publication),
       ...openClawIdSignOutEntries(current),
-    ];
+    ]);
     const rows = entries.filter((entry): entry is MenuItem => !("kind" in entry));
     const text = entries
       .map((entry) => ("content" in entry ? (entry.content as HTMLElement)?.textContent : ""))
@@ -93,7 +95,18 @@ async function signIn(current: OpenClawIdStatusResult) {
 }
 
 describe("approved OpenClaw ID account menu", () => {
-  beforeEach(() => vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true));
+  beforeEach(() => {
+    vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true);
+    // jsdom has no Web Animations; the production-browser suite owns motion proof.
+    const matchMedia = window.matchMedia;
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => {
+      const media = matchMedia(query);
+      Object.defineProperty(media, "matches", {
+        value: query === "(prefers-reduced-motion: reduce)",
+      });
+      return media;
+    });
+  });
 
   afterEach(() => {
     cleanupSolid();
@@ -259,18 +272,46 @@ describe("approved OpenClaw ID account menu", () => {
     expect(menu(current).labels).toEqual(["Sign in with OpenClaw ID"]);
     const entries = menu(current);
     expect(entries.text.trim()).toBe("");
-    expect(entries.rows[0]?.icon).toBeUndefined();
     expect(entries.rows[0]?.render).toBeTypeOf("function");
     expect(menu(current).text).not.toMatch(/People|\bAccess\b|Make reachable|Regenerate|Unlink/);
   });
 
-  it("does not allow loopback sign-in over an untrusted connection", () => {
-    expect(
-      menu(status({ channel: null, owner: false, connection: { kind: "none" } })).rows[0]?.disabled,
-    ).toBe(true);
+  it.each([
+    [status(), null],
+    [
+      status({ channel: null, owner: false, connection: { kind: "none" } }),
+      "Sign in on the computer that runs this claw.",
+    ],
+    [
+      status({ services: { issuerUrl: null, discoveryUrl: null, loaderDomain: null } }),
+      "OpenClaw ID is not set up for this claw. Ask the person who manages it to finish setup.",
+    ],
+  ])("renders the sign-in card with its availability reason", async (current, reason) => {
+    const onSelect = vi.fn();
+    const { container } = mountSolid(() => (
+      <Menu
+        id="account-sign-in"
+        label="Account"
+        open
+        items={openClawIdMenuEntries(current)}
+        onSelect={onSelect}
+      />
+    ));
+    const card = () =>
+      container.querySelector<HTMLButtonElement>('[data-value="openclaw-id:sign-in"]');
+    await waitForSolid(() => expect(card()).not.toBeNull());
+    expect(card()?.classList.contains("sidebar-openclaw-id__card")).toBe(true);
+    expect(card()?.getAttribute("aria-label")).toBe("Sign in with OpenClaw ID");
+    expect(card()?.disabled).toBe(Boolean(reason));
+    if (reason) {
+      expect(card()?.textContent).toContain(reason);
+      expect(card()?.getAttribute("aria-description")).toBe(reason);
+    }
+    card()!.click();
+    await waitForSolid(() => expect(onSelect).toHaveBeenCalledTimes(reason ? 0 : 1));
   });
 
-  it("remote owner shows verified account, encrypted device, count, and no local actions", () => {
+  it("remote owner shows verified account, encrypted device and no local actions", () => {
     const current = status({
       channel: "tunnel",
       link: linked,
@@ -291,7 +332,7 @@ describe("approved OpenClaw ID account menu", () => {
     expect(menu(current).text).not.toMatch(
       /reachable|crabd|People|\bAccess\b|Sign in|Regenerate|never-display/,
     );
-    expect((menu(current).rows[0]?.details as HTMLElement | undefined)?.textContent).toBe("2");
+    expect(menu(current).rows[0]?.details).toBeUndefined();
   });
 
   it.each(["viewer", "operator"] as const)(
@@ -376,9 +417,7 @@ describe("approved OpenClaw ID account menu", () => {
         "Your devices",
         "Sign out of OpenClaw ID",
       ]);
-      expect(menu(current).text).toContain(
-        `Remote access onstudio-e61zr.crabd.xyz${relayOnline ? "Online" : "Offline"}`,
-      );
+      expect(menu(current).text).toContain(`Remote access on${relayOnline ? "Online" : "Offline"}`);
       expect(menu(current).text).not.toMatch(/People|\bAccess\b|Regenerate|Turn off remote|Unlink/);
     },
   );
@@ -419,19 +458,6 @@ describe("approved OpenClaw ID account menu", () => {
     flush();
     expect(showConfirmDialog).toHaveBeenCalledOnce();
     expect(menu(current).labels).toContain("Sign out of OpenClaw ID");
-  });
-
-  it("copies the canonical HTTPS remote link", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-    selectOpenClawIdMenuValue("openclaw-id:copy-link", {
-      status: status({ link: linked }),
-      client: null,
-      basePath: "",
-    });
-    await vi.waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith("https://studio-e61zr.crabd.xyz"),
-    );
   });
 
   it("warns about unusable or superseded keys on this computer, each with its fix", async () => {
