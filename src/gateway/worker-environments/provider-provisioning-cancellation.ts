@@ -1,6 +1,37 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import {
+  getGatewayRestartDrainSignal,
+  isGatewayWorkAdmissionClosed,
+  onGatewaySuspendAdmissionChange,
+} from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { WorkerEnvironmentReconcileInterruptedError } from "./environment-errors.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
+
+export function createWorkerReconcileCancellation(ownerSignal: AbortSignal) {
+  const controller = new AbortController();
+  const interrupt = () =>
+    controller.abort(
+      new WorkerEnvironmentReconcileInterruptedError("Worker reconciliation paused"),
+    );
+  const lifetime = AbortSignal.any([ownerSignal, getGatewayRestartDrainSignal()]);
+  lifetime.addEventListener("abort", interrupt, { once: true });
+  const unsubscribeSuspend = onGatewaySuspendAdmissionChange((phase) => {
+    if (phase !== "accepting") {
+      interrupt();
+    }
+  });
+  if (lifetime.aborted || isGatewayWorkAdmissionClosed()) {
+    interrupt();
+  }
+  return {
+    signal: controller.signal,
+    [Symbol.dispose]() {
+      lifetime.removeEventListener("abort", interrupt);
+      unsubscribeSuspend();
+    },
+  };
+}
 
 export function createWorkerProvisionCancellation(
   store: WorkerEnvironmentStore,
@@ -43,7 +74,9 @@ export function createWorkerProvisionCancellation(
     }
   };
   const requestStop = () => {
-    stopIntent ??= persistStop();
+    if (!(signal.reason instanceof WorkerEnvironmentReconcileInterruptedError)) {
+      stopIntent ??= persistStop();
+    }
   };
   signal.addEventListener("abort", requestStop, { once: true });
   if (signal.aborted) {
@@ -60,6 +93,9 @@ export function createWorkerProvisionCancellation(
   };
   const settleStopIntent = async () => {
     await stopIntent;
+    if (signal.reason instanceof WorkerEnvironmentReconcileInterruptedError) {
+      throw signal.reason;
+    }
     if (intentError !== undefined) {
       throw intentError;
     }

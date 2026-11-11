@@ -1,6 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
+import {
+  copyAuthProfileAuthorizationInheritance,
+  copyAuthProfileAuthorizationIntent,
+} from "./authorization-lifetime.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { normalizeAuthProfileSecretRefs } from "./credential-normalize.js";
@@ -14,10 +18,7 @@ import {
   type PersistedAuthProfileStores,
 } from "./ownership.js";
 import { buildPersistedAuthProfileSecretsStore } from "./persisted.js";
-import {
-  removePersonalAuthProfileReferences,
-  setRuntimeExternalCliProfileIds,
-} from "./runtime-external-profile-references.js";
+import { removePersonalAuthProfileReferences } from "./runtime-external-profile-references.js";
 import { pruneAuthProfileStoreReferences } from "./runtime-snapshot-owner.js";
 import { getRuntimeAuthProfileStoreSnapshotAtDatabasePath } from "./runtime-snapshots.js";
 import type { AuthProfileStore, AuthProfileStoreOwner } from "./types.js";
@@ -45,7 +46,9 @@ export function buildLocalAuthProfileStoreForSave(params: {
 }): AuthProfileStore {
   const localStore = cloneAuthProfileStore(removePersonalAuthProfileReferences(params.store));
   for (const [profileId, credential] of Object.entries(localStore.profiles)) {
-    localStore.profiles[profileId] = normalizeAuthProfileSecretRefs(credential);
+    const normalized = normalizeAuthProfileSecretRefs(credential);
+    copyAuthProfileAuthorizationIntent(credential, normalized);
+    localStore.profiles[profileId] = normalized;
   }
   const { listRuntimeExternalAuthProfiles } = params;
   let externalProfiles: RuntimeExternalOAuthProfile[] | undefined;
@@ -104,6 +107,7 @@ export function buildLocalAuthProfileStoreForSave(params: {
       });
     }),
   );
+  copyAuthProfileAuthorizationInheritance(params.store.profiles, localStore.profiles);
   const keptProfileIds = new Set(Object.keys(localStore.profiles));
   const keptOrderProfileIds = new Set(keptProfileIds);
   for (const profileId of normalizeUniqueStringEntries(params.options?.preserveStateProfileIds)) {
@@ -132,7 +136,6 @@ export function buildLocalAuthProfileStoreForSave(params: {
   if (params.options?.filterExternalAuthProfiles !== false) {
     localStore.runtimeExternalProfileIds = undefined;
     localStore.runtimeExternalProfileIdsAuthoritative = undefined;
-    setRuntimeExternalCliProfileIds(localStore, []);
   }
   return localStore;
 }

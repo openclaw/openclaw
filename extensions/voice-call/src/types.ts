@@ -139,7 +139,6 @@ export type InitiateCallInput = {
   from: string;
   to: string;
   webhookUrl: string;
-  clientState?: Record<string, string>;
   /** Inline TwiML to execute without fetching webhook TwiML. */
   inlineTwiml?: string;
   /** TwiML to serve once before normal webhook-driven call handling resumes. */
@@ -188,6 +187,8 @@ export type PlayTtsInput = CallControlInput & {
   locale?: string;
   /** Keep collecting speech after playback when the provider owns the listening XML. */
   listenAfterPlayback?: boolean;
+  /** Correlate speech gathered after playback with an explicit conversation turn. */
+  turnToken?: string;
 };
 
 export type SendDtmfInput = CallControlInput & {

@@ -9,14 +9,21 @@ import {
 
 type ConversationBindings = NonNullable<ChannelPlugin["conversationBindings"]>;
 
-export const telegramThreadBindingLifecycle: Pick<
+function withOptionalAccountId<T extends { accountId?: string | null }>(params: T) {
+  return { ...params, accountId: params.accountId ?? undefined };
+}
+
+export const telegramThreadBindingSupport: Pick<
   ConversationBindings,
+  | "prepareFork"
   | "createManager"
   | "setIdleTimeoutBySessionKey"
   | "setMaxAgeBySessionKey"
   | "setIdleTimeoutBySessionKeyAsync"
   | "setMaxAgeBySessionKeyAsync"
 > = {
+  prepareFork: async (params) =>
+    (await import("./conversation-fork.js")).prepareTelegramConversationFork(params),
   createManager: ({ cfg, accountId }) =>
     createTelegramThreadBindingManager({
       cfg,
@@ -24,24 +31,13 @@ export const telegramThreadBindingLifecycle: Pick<
       persist: false,
       enableSweeper: false,
     }),
+  // Released synchronous runtime setters dispatch here through 2026-12-31.
   setIdleTimeoutBySessionKey: (params) =>
-    setTelegramThreadBindingIdleTimeoutBySessionKey({
-      ...params,
-      accountId: params.accountId ?? undefined,
-    }),
+    setTelegramThreadBindingIdleTimeoutBySessionKey(withOptionalAccountId(params)),
   setMaxAgeBySessionKey: (params) =>
-    setTelegramThreadBindingMaxAgeBySessionKey({
-      ...params,
-      accountId: params.accountId ?? undefined,
-    }),
+    setTelegramThreadBindingMaxAgeBySessionKey(withOptionalAccountId(params)),
   setIdleTimeoutBySessionKeyAsync: (params) =>
-    setTelegramThreadBindingIdleTimeoutBySessionKeyAsync({
-      ...params,
-      accountId: params.accountId ?? undefined,
-    }),
+    setTelegramThreadBindingIdleTimeoutBySessionKeyAsync(withOptionalAccountId(params)),
   setMaxAgeBySessionKeyAsync: (params) =>
-    setTelegramThreadBindingMaxAgeBySessionKeyAsync({
-      ...params,
-      accountId: params.accountId ?? undefined,
-    }),
+    setTelegramThreadBindingMaxAgeBySessionKeyAsync(withOptionalAccountId(params)),
 };

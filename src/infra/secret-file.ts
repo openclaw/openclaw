@@ -1,4 +1,3 @@
-// Exposes private secret file helpers with fs-safe defaults.
 import path from "node:path";
 import { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe";
 import {
@@ -21,7 +20,10 @@ export {
   type SecretFileReadOptions,
 } from "@openclaw/fs-safe/secret";
 
-type SecretFileWriteParams = Parameters<typeof writeSecretFileAtomicImpl>[0];
+// Private secret writes reject directory preservation and keep numeric mode enforcement.
+type SecretFileWriteParams = Omit<Parameters<typeof writeSecretFileAtomicImpl>[0], "dirMode"> & {
+  dirMode?: number;
+};
 
 // fs-safe 0.8 no longer repairs existing directory modes; OpenClaw keeps its
 // documented behavior of tightening its own secret directories before writing.

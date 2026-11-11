@@ -1,0 +1,2 @@
+# Doctor startup and nested-check EROFS diagnostics preserve failure identity.
+69

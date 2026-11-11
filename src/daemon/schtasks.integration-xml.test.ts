@@ -3,7 +3,6 @@ import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import { escapeXml } from "../shared/xml.js";
 import {
   assertUnattendedLeastPrivilegeTask,
-  disableScheduledTaskXmlForFixture,
   normalizeScheduledTaskXmlEnabledForFixture,
   TASK_LOGON_S4U,
   TASK_RUNLEVEL_LEAST_PRIVILEGE,
@@ -25,27 +24,6 @@ function exportedTaskXml(settings: string[] = [], newline = "\r\n") {
 }
 
 describe("installed Scheduled Task XML fixtures", () => {
-  it.each([undefined, "true"])(
-    "disables task and on-demand launch when exported settings are %s",
-    (value) => {
-      const xml = exportedTaskXml(
-        value === undefined
-          ? []
-          : [`<Enabled>${value}</Enabled>`, `<AllowStartOnDemand>${value}</AllowStartOnDemand>`],
-      );
-      const disabled = disableScheduledTaskXmlForFixture(xml);
-      const settings = disabled.match(/<Settings>([\s\S]*?)<\/Settings>/u)?.[1];
-      expect(settings).toContain("<Enabled>false</Enabled>");
-      expect(settings).toContain("<AllowStartOnDemand>false</AllowStartOnDemand>");
-      expect(settings?.match(/<Enabled>/gu)).toHaveLength(1);
-      expect(settings?.match(/<AllowStartOnDemand>/gu)).toHaveLength(1);
-      expect(disabled).toContain("<LogonTrigger><Enabled>true</Enabled></LogonTrigger>");
-      expect(disabled).toContain("<LogonType>InteractiveToken</LogonType>");
-      expect(disabled).toContain("<Command>C:\\fixture\\gateway.cmd</Command>");
-      expect(disabled).toContain("<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>");
-    },
-  );
-
   it.each(["\r\r\n"])(
     "compares enabled exports with %j line endings without ignoring other settings",
     (newline) => {

@@ -5,7 +5,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
+import { toAcpRuntimeErrorText, type AcpRuntimeErrorCode } from "../../../acp/runtime/errors.js";
 import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
@@ -217,10 +217,13 @@ export function parseSpawnInput(
   };
 }
 
-export function parseSteerInput(tokens: string[]): Result<ParsedSteerInput, string> {
-  const normalizedTokens = tokens.map(normalizeAcpOptionToken);
+/** Removes `--session` options and keeps the rest of the instruction verbatim. */
+export function parseSteerInput(text: string): Result<ParsedSteerInput, string> {
+  const matches = Array.from(text.matchAll(/\S+/g));
+  const normalizedTokens = matches.map((match) => normalizeAcpOptionToken(match[0]));
   let sessionToken: string | undefined;
-  const instructionTokens: string[] = [];
+  let instruction = "";
+  let copiedTo = 0;
 
   for (let i = 0; i < normalizedTokens.length;) {
     const sessionOption = readOptionValue({
@@ -236,15 +239,16 @@ export function parseSteerInput(tokens: string[]): Result<ParsedSteerInput, stri
         };
       }
       sessionToken = normalizeOptionalString(sessionOption.value.value);
+      instruction += text.slice(copiedTo, matches[i]?.index);
       i = sessionOption.value.nextIndex;
+      // The option and the whitespace after it go, so removing it leaves one separator.
+      copiedTo = matches[i]?.index ?? text.length;
       continue;
     }
-
-    instructionTokens.push(tokens[i] ?? "");
     i += 1;
   }
 
-  const instruction = instructionTokens.join(" ").trim();
+  instruction = `${instruction}${text.slice(copiedTo)}`.trim();
   if (!instruction) {
     return {
       ok: false,
@@ -336,7 +340,7 @@ export function formatRuntimeOptionsText(options: AcpSessionRuntimeOptions): str
     options.thinking ? `thinking=${options.thinking}` : null,
     options.cwd ? `cwd=${options.cwd}` : null,
     options.permissionProfile ? `permissionProfile=${options.permissionProfile}` : null,
-    typeof options.timeoutSeconds === "number" ? `timeoutSeconds=${options.timeoutSeconds}` : null,
+    options.timeoutSeconds !== undefined ? `timeoutSeconds=${options.timeoutSeconds}` : null,
     extras ? `extras={${extras}}` : null,
   ].filter(Boolean);
   return parts.join(", ") || "(none)";
@@ -369,12 +373,14 @@ export async function withAcpCommandErrorBoundary(params: {
   try {
     return await params.run();
   } catch (error) {
-    return commandReply(
-      toAcpRuntimeErrorText({
-        error,
-        fallbackCode: "ACP_TURN_FAILED",
-        fallbackMessage: params.fallbackMessage,
-      }),
-    );
+    return acpCommandErrorReply(error, params.fallbackMessage);
   }
+}
+
+export function acpCommandErrorReply(
+  error: unknown,
+  fallbackMessage: string,
+  fallbackCode: AcpRuntimeErrorCode = "ACP_TURN_FAILED",
+): CommandHandlerResult {
+  return commandReply(toAcpRuntimeErrorText({ error, fallbackCode, fallbackMessage }));
 }

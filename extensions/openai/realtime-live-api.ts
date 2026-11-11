@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
+import { resolveOpenAIRealtimeRequestHeaders } from "./realtime-provider-shared.js";
 
 export const OPENAI_LIVE_SESSIONS_URL = "https://api.openai.com/v1/live/sessions";
 const LIVE_RESPONSE_MAX_BYTES = 512 * 1024;
@@ -28,13 +29,7 @@ export async function createOpenAILiveCall(
   const response = await (params.fetchImpl ?? fetch)(OPENAI_LIVE_SESSIONS_URL, {
     method: "POST",
     headers: {
-      ...runtime.resolveProviderRequestHeaders({
-        provider: "openai",
-        baseUrl: OPENAI_LIVE_SESSIONS_URL,
-        capability: "audio",
-        transport: "http",
-        defaultHeaders: {},
-      }),
+      ...resolveOpenAIRealtimeRequestHeaders(runtime, OPENAI_LIVE_SESSIONS_URL),
       Authorization: `Bearer ${params.apiKey}`,
       "Content-Type": "application/json",
     },
@@ -86,13 +81,7 @@ export async function hangupOpenAILiveCall(
   const response = await (params.fetchImpl ?? fetch)(url, {
     method: "POST",
     headers: {
-      ...runtime.resolveProviderRequestHeaders({
-        provider: "openai",
-        baseUrl: url,
-        capability: "audio",
-        transport: "http",
-        defaultHeaders: {},
-      }),
+      ...resolveOpenAIRealtimeRequestHeaders(runtime, url),
       Authorization: `Bearer ${params.apiKey}`,
     },
     signal: params.signal,

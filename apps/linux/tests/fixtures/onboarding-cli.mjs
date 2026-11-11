@@ -2,18 +2,28 @@
 // implements only the CLI/service boundary; no host service is installed.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
 const args = process.argv.slice(2);
 const installed = "fixture-runtime-installed.json";
+const baseline = "fixture-runtime-baseline.json";
 const expectedPin = { revision: "fixture-absent", definition: null };
 const prefix = path.join(homedir(), ".openclaw");
 const port = 18789;
 const reply = (value) => console.log(JSON.stringify(value));
 
-if (args[0] === "gateway" && args[1] === "install") {
+if (args[0] === "setup") {
+  assert.deepEqual(args, ["setup", "--baseline", "--json"]);
+  const configPath = path.join(prefix, "openclaw.json");
+  if (!existsSync(configPath)) {
+    writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local" } }));
+  }
+  writeFileSync(baseline, JSON.stringify({ configPath }));
+  reply({ ok: true, configPath });
+} else if (args[0] === "gateway" && args[1] === "install") {
+  assert.ok(existsSync(baseline), "baseline setup must initialize the profile before service installation");
   assert.equal(existsSync(installed), false, "fresh setup must install exactly once");
   assert.deepEqual(args, [
     "gateway", "install", "--force", "--json", "--runtime", "bun", "--runtime-path",
@@ -22,22 +32,33 @@ if (args[0] === "gateway" && args[1] === "install") {
   assert.ok(process.execPath.startsWith(path.join(prefix, "tools/desktop-runtime/")));
   const manifest = JSON.parse(readFileSync(path.join(path.dirname(process.execPath), "../manifest.json")));
   assert.equal(spawnSync(process.execPath, ["--revision"], { encoding: "utf8" }).stdout.trim(), manifest.revision);
-  writeFileSync(installed, JSON.stringify({ bun: process.execPath }));
+  appendFileSync("fixture-runtime-install-attempts", "install\n");
+  const failure = path.join(homedir(), "fixture-install-failure");
+  if (existsSync(failure)) {
+    console.error(readFileSync(failure, "utf8"));
+    process.exit(1);
+  }
+  writeFileSync(installed, JSON.stringify({ bun: process.execPath, entry: process.argv[1] }));
   reply({ ok: true });
 } else if (args[0] === "gateway" && args[1] === "status" && args.includes("--deep")) {
   assert.deepEqual(args.slice(0, 4), ["gateway", "status", "--deep", "--json"]);
   assert.ok(args.length === 4 || (args.length === 5 && args[4] === "--no-probe"));
   const active = existsSync(installed);
+  const initialized = existsSync(baseline);
   const bun = active ? JSON.parse(readFileSync(installed)).bun : null;
   reply({
     service: {
-      loaded: active, targetRole: "target", definitionMutation: "writable",
-      launcherOverridden: false, revision: active ? "fixture-bundled" : "fixture-absent",
+      loaded: active, targetRole: "target",
+      ...(initialized ? {
+        definitionMutation: "writable", revision: active ? "fixture-bundled" : "fixture-absent",
+      } : {}),
+      launcherOverridden: false,
       command: active ? { programArguments: [bun, process.argv[1], "gateway"] } : null,
       runtime: active ? { status: "running", pid: 4100 } : null,
       runtimeIntent: active
         ? { status: "known", revision: "fixture-bundled", definition: "fixture-service", pin: { runtime: "bun", path: bun } }
-        : { status: "known", ...expectedPin },
+        : initialized ? { status: "known", ...expectedPin }
+          : { status: "migrationPending", nextStep: "run openclaw doctor" },
     },
     config: { daemon: { path: path.join(prefix, "openclaw.json") } },
     gateway: { port }, rpc: { ok: active },

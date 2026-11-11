@@ -13,14 +13,22 @@ import {
 import { readSessionChangedEvent } from "../sessions/reconcile.ts";
 import type { UiSessionDefaultsHost } from "../sessions/session-key.ts";
 
-export type ChatMetadataResult = CommandsListResult & { revision?: string };
+export type ChatMetadataResult = CommandsListResult & {
+  revision?: string;
+  requiredWorkerInferenceProfileId?: string;
+};
 export type ChatMetadataResponse =
   | (Partial<ChatMetadataResult> &
       Partial<Pick<ModelCatalogResult, "models" | "accountSelection" | "modelSelectionPolicy">>)
   | { revision: string; unchanged: true };
 
 export type ChatMetadataUpdate =
-  | { type: "invalidated"; scope: "session" | "full"; refreshSessionFacts: boolean }
+  | {
+      type: "invalidated";
+      scope: "session" | "full";
+      refreshSessionFacts: boolean;
+      retireCatalog?: boolean;
+    }
   | { type: "loading" }
   | { type: "result"; result: ChatMetadataResult }
   | { type: "error"; error: unknown };
@@ -68,6 +76,8 @@ export type ChatMetadataEntry = {
 
 export type ChatMetadataInvalidation = {
   sessionOnly?: boolean;
+  refreshSessionFacts?: boolean;
+  retireCatalog?: boolean;
   matchesCatalog?: (scope: ChatMetadataParams) => boolean;
   commandsChanged?: boolean;
   delayMs?: number;
@@ -90,15 +100,30 @@ export function invalidateChatMetadataStore(
   scope?: ChatMetadataParams,
   sessionDefaults?: UiSessionDefaultsHost,
   catalogInvalidation: ModelCatalogInvalidation | "preserve" = "refresh",
-  commandsChanged = true,
+  {
+    commandsChanged = true,
+    refreshSessionFacts,
+  }: Pick<ChatMetadataInvalidation, "commandsChanged" | "refreshSessionFacts"> = {},
 ): void {
   // Catalog readers share this lifecycle; retire their copies before metadata listeners reload.
+  let matchesCatalog: ChatMetadataInvalidation["matchesCatalog"];
   if (catalogInvalidation === "clear") {
     clearModelCatalogCache(client, { requireSnapshot: true });
+  } else if (catalogInvalidation === "pending") {
+    matchesCatalog = invalidateModelCatalogCache(
+      client,
+      { ...scope, pendingOnly: true },
+      sessionDefaults,
+    );
   } else if (catalogInvalidation === "refresh") {
     invalidateModelCatalogCache(client, scope, sessionDefaults);
   }
-  chatMetadataCache.get(client)?.invalidate(scope, sessionDefaults, { commandsChanged });
+  chatMetadataCache.get(client)?.invalidate(scope, sessionDefaults, {
+    commandsChanged,
+    refreshSessionFacts,
+    matchesCatalog: commandsChanged ? undefined : matchesCatalog,
+    retireCatalog: catalogInvalidation === "clear",
+  });
 }
 
 export function invalidateChatMetadataForSessionEvent(
@@ -108,12 +133,16 @@ export function invalidateChatMetadataForSessionEvent(
 ): void {
   const source = asNullableRecord(payload);
   const changed = readSessionChangedEvent(source);
+  // Deletion publishes its exact key first. The following broad notice refreshes
+  // roster membership and ancestors, not model choices in unrelated chats.
+  if (!changed && source?.reason === "delete") {
+    return;
+  }
   const session = asNullableRecord(source?.session);
   const agent = session?.agentId ?? source?.agentId;
   const agentId = typeof agent === "string" ? agent : undefined;
   const scope = changed ? { agentId, sessionKey: changed.key } : undefined;
   const sessionModelRevision =
-    source?.catalogChanged !== true &&
     source?.phase !== "reset" &&
     source?.reason !== "reset" &&
     source?.reason !== "delete" &&

@@ -5,7 +5,6 @@ import {
 } from "../../cron/service/list-page-validation.js";
 
 const CRON_SELF_LIST_MAX_PAGES = 50;
-const CRON_SELF_LIST_MAX_SNAPSHOT_RESTARTS = 3;
 
 function filterDeliveryPreviewsByJobId(previews: unknown, jobId: string): unknown {
   if (!isRecord(previews)) {
@@ -39,44 +38,18 @@ export async function listCronSelfJob(params: {
   pageSize: number;
   requestPage: (params: { limit: number; offset: number }) => Promise<unknown>;
 }): Promise<unknown> {
-  for (let restart = 0; restart <= CRON_SELF_LIST_MAX_SNAPSHOT_RESTARTS; restart += 1) {
-    let offset = 0;
-    let snapshotRevision: string | undefined;
-    let total: number | undefined;
-    let snapshotChanged = false;
-
-    for (let pageNumber = 0; pageNumber < CRON_SELF_LIST_MAX_PAGES; pageNumber += 1) {
-      const page = readCanonicalCronListPage(
-        await params.requestPage({ limit: params.pageSize, offset }),
-        params.pageSize,
-      );
-      if (
-        (snapshotRevision !== undefined && page.snapshotRevision !== snapshotRevision) ||
-        (total !== undefined && page.total !== total)
-      ) {
-        // The current job can move into an already-read offset page. Discard
-        // the attempt instead of fabricating an empty self view.
-        snapshotChanged = true;
-        break;
-      }
-      snapshotRevision ??= page.snapshotRevision;
-      total ??= page.total;
-      const nextOffset = resolveCronListPageNextOffset(page, offset);
-      if (
-        page.jobs.some((job) => isRecord(job) && job.id === params.jobId) ||
-        nextOffset === null
-      ) {
-        return filterCronListResultToJobId(page, params.jobId);
-      }
-      offset = nextOffset;
+  let offset = 0;
+  // Concurrent inventory edits are best effort; a repeated list reads their new positions.
+  for (let pageNumber = 0; pageNumber < CRON_SELF_LIST_MAX_PAGES; pageNumber += 1) {
+    const page = readCanonicalCronListPage(
+      await params.requestPage({ limit: params.pageSize, offset }),
+      params.pageSize,
+    );
+    const nextOffset = resolveCronListPageNextOffset(page, offset);
+    if (page.jobs.some((job) => isRecord(job) && job.id === params.jobId) || nextOffset === null) {
+      return filterCronListResultToJobId(page, params.jobId);
     }
-
-    if (!snapshotChanged) {
-      throw new Error(
-        "cron.list pagination exceeded maximum pages while reading current automation",
-      );
-    }
+    offset = nextOffset;
   }
-
-  throw new Error("cron.list inventory changed repeatedly while reading current automation");
+  throw new Error("cron.list pagination exceeded maximum pages while reading current automation");
 }

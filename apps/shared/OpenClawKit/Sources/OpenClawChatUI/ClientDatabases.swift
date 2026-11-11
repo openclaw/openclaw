@@ -440,6 +440,7 @@ extension OpenClawClientDatabases {
         self.registerClientStateMigrationsV1ThroughV5(&migrator)
         self.registerClientStateMigrationsV6ThroughV8(&migrator)
         self.registerWatchMessageJournalMigration(&migrator)
+        self.registerOutboxQueueModeMigration(&migrator)
         try migrator.migrate(queue)
         return queue
     }

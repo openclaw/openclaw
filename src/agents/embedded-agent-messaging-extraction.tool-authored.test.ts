@@ -38,6 +38,54 @@ describe("tool-authored source replies", () => {
   });
 
   it.each([
+    { message: "Internal diagnostic" },
+    { mediaUrl: "/tmp/internal-report.pdf" },
+    { mediaUrls: ["/tmp/internal-report.pdf"] },
+  ])("does not restore withdrawn reply content from top-level details: %j", (details) => {
+    expect(
+      extractToolAuthoredSourceReplyPayload({ details: { ...details, sourceReply: {} } }),
+    ).toBeUndefined();
+  });
+
+  it("keeps a media-only reply separate from unrelated result and delivery metadata", () => {
+    expect(
+      extractToolAuthoredSourceReplyPayload({
+        details: {
+          message: "Internal diagnostic",
+          mediaUrl: "/tmp/internal-report.pdf",
+          audioAsVoice: true,
+          idempotencyKey: "internal-operation",
+          sourceReplyTranscriptOwner: true,
+          sourceReply: { mediaUrls: ["/tmp/public-report.pdf"] },
+        },
+      }),
+    ).toEqual({ mediaUrls: ["/tmp/public-report.pdf"] });
+  });
+
+  it("preserves top-level fallbacks for already-sent internal message mirrors", () => {
+    expect(
+      extractMessagingToolSourceReplyPayload({
+        details: {
+          sourceReplySink: "internal-ui",
+          deliveryStatus: "sent",
+          message: "Delivered report",
+          mediaUrl: "/tmp/report.pdf",
+          audioAsVoice: true,
+          idempotencyKey: "delivered-message",
+          sourceReplyTranscriptOwner: true,
+          sourceReply: {},
+        },
+      }),
+    ).toEqual({
+      text: "Delivered report",
+      mediaUrl: "/tmp/report.pdf",
+      audioAsVoice: true,
+      idempotencyKey: "delivered-message",
+      transcriptOwner: true,
+    });
+  });
+
+  it.each([
     { label: "no sourceReply", details: { ok: true, final_answer: "text only" } },
     { label: "empty sourceReply", details: { sourceReply: {} } },
     { label: "whitespace text", details: { sourceReply: { text: "   " } } },

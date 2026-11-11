@@ -8,7 +8,7 @@ import { createViewContext } from "./test/host.ts";
 
 const page = vi.hoisted(() => ({ evaluations: 0, mount: vi.fn() }));
 // mock-isolation: Count page evaluation without importing the page through the mock itself.
-vi.mock("./pages/workboard/workboard-page.ts", () => {
+vi.mock("./pages/workboard/workboard-page.tsx", () => {
   page.evaluations += 1;
   return { createWorkboardPage: () => page.mount };
 });

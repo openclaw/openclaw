@@ -1,8 +1,6 @@
 import { onTestFinished, vi } from "vitest";
-import type {
-  createOpenClawCodingToolsInternal,
-  createOpenClawCodingToolsInternalAsync,
-} from "../../../agents/agent-tools.js";
+import type { createOpenClawCodingToolsInternalAsync } from "../../../agents/agent-tools.async.js";
+import type { createOpenClawCodingToolsInternal } from "../../../agents/agent-tools.js";
 
 type ToolsFactory = typeof createOpenClawCodingToolsInternal;
 let createTools: typeof createOpenClawCodingToolsInternalAsync | undefined;
@@ -13,7 +11,7 @@ export async function setHostToolFactoryForTest(
   params: { runId: string },
   factory: ToolsFactory,
 ): Promise<void> {
-  const agentTools = await import("../../../agents/agent-tools.js");
+  const agentTools = await import("../../../agents/agent-tools.async.js");
   const actual = (createTools ??= agentTools.createOpenClawCodingToolsInternalAsync);
   factories.set(params.runId, factory);
   const spy = vi

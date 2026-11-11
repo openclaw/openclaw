@@ -26,8 +26,9 @@
   required workflow fix; record the invalidating event and do not widen
   automatically to `rerun_group=all`.
 - Classify one failed surface, make one fix when needed, and retry the narrowest
-  failed group once. Then reassess whether to ship, explicitly waive, or block
-  instead of creating another verification loop.
+  failed group once. Then reassess whether successful FRV permits shipping, a
+  reviewed [tooling-code waiver](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers)
+  needs validation, or the failure blocks. Do not create another blind retry loop.
 - Release-check recovery uses one concrete group. The removed `release-checks`
   aggregate handle must never be substituted with `all`.
 - Controller recovery uses `qa-parity` or `qa-live`; `qa` is reserved for a

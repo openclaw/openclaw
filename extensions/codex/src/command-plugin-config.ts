@@ -178,7 +178,7 @@ export function matchesConfiguredPluginIdentity(
     ? parseCodexPluginMarketplaceId(entry.pluginName)
     : undefined;
   return (
-    typeof entry.marketplaceName === "string" &&
+    entry.marketplaceName !== undefined &&
     marketplaceNamesRepresentSameCatalog(entry.marketplaceName, requested.marketplaceName) &&
     (entry.pluginName === requested.pluginName ||
       entry.pluginName === target ||

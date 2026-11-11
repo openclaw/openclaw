@@ -1,5 +1,8 @@
 {
   "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../.."
+  },
   "include": ["../../src/**/*", "../../ui/**/*", "../../packages/**/*"],
   "exclude": ["../../node_modules", "../../dist", "../../dist-runtime"]
 }

@@ -64,9 +64,7 @@ describe.skipIf(process.platform === "win32")("children after a Homebrew Node up
         OPENCLAW_CHILD_OOM_SCORE_ADJ: "1",
       };
       const log = await import("../supervisor/supervisor-log.runtime.js");
-      const warning = vi
-        .spyOn(log, "warnProcessSupervisorSpawnFailure")
-        .mockImplementation(() => {});
+      const warning = vi.spyOn(log, "warnProcessSupervisorFailure").mockImplementation(() => {});
       const supervisor = createProcessSupervisor();
       try {
         for (let attempt = 0; attempt < 2; attempt++) {
@@ -76,7 +74,7 @@ describe.skipIf(process.platform === "win32")("children after a Homebrew Node up
               argv: [removedNode, "-e", "process.exit(0)"],
               env,
             }),
-          ).rejects.toThrow("Gateway runtime is stale after Node upgrade:");
+          ).rejects.toThrow("The Node.js runtime this Gateway started with");
         }
         expect(warning).toHaveBeenCalledTimes(1);
         expect(warning).toHaveBeenCalledWith(expect.stringContaining("Restart the Gateway."));
@@ -89,7 +87,7 @@ describe.skipIf(process.platform === "win32")("children after a Homebrew Node up
   it("keeps the broker on the exact runtime and reports why it cannot start", async () => {
     const host = createSpawnBrokerHost({ nativeResources: true });
     try {
-      await expect(host.ready()).rejects.toThrow("Gateway runtime is stale after Node upgrade:");
+      await expect(host.ready()).rejects.toThrow("The Node.js runtime this Gateway started with");
     } finally {
       await host.close();
     }

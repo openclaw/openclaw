@@ -92,10 +92,16 @@ export async function ensureAbsoluteDirectory(
   const absolutePath = path.resolve(dirPath);
   const scopeLabel = options?.scopeLabel ?? "directory";
   const existingAncestor = await findExistingAncestor(absolutePath);
-  if (!existingAncestor) {
-    return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
+  if (existingAncestor && existingAncestor !== absolutePath) {
+    const result = await ensureDirectoryWithinRoot({
+      rootDir: existingAncestor,
+      requestedPath: path.relative(existingAncestor, absolutePath),
+      scopeLabel,
+      mode: options?.mode,
+    });
+    return result.ok ? result : { ok: false, error: new Error(result.error) };
   }
-  if (existingAncestor === absolutePath) {
+  if (existingAncestor) {
     try {
       const stat = await fs.lstat(absolutePath);
       if (!stat.isSymbolicLink() && stat.isDirectory()) {
@@ -104,18 +110,8 @@ export async function ensureAbsoluteDirectory(
     } catch {
       // Fall through to the uniform invalid-path result below.
     }
-    return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
   }
-  const result = await ensureDirectoryWithinRoot({
-    rootDir: existingAncestor,
-    requestedPath: path.relative(existingAncestor, absolutePath),
-    scopeLabel,
-    mode: options?.mode,
-  });
-  if (result.ok) {
-    return result;
-  }
-  return { ok: false, error: new Error(result.error) };
+  return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
 }
 
 export async function writeExternalFileWithinRoot(

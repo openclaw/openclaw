@@ -33,7 +33,10 @@ import {
 } from "./thread-lifecycle-errors.js";
 import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
-import { buildDeveloperInstructions } from "./thread-prompt.js";
+import {
+  buildDeveloperInstructions,
+  resolveCodexOpenClawBaseInstructions,
+} from "./thread-prompt.js";
 import {
   attestCodexRestrictedToolSurfaceMcpServersDisabled,
   buildCodexRuntimeThreadConfigForRun,
@@ -72,7 +75,7 @@ type PendingSupervisionMaterializationParams = Omit<
   normalizeBindingModelProvider: (
     authProfileId: string | undefined,
     modelProvider: string | undefined,
-  ) => string | undefined;
+  ) => Promise<string | undefined>;
   bindingPatch: Partial<Omit<CodexAppServerThreadBinding, "threadId" | "pendingSupervisionBranch">>;
 };
 
@@ -98,7 +101,7 @@ export async function materializePendingSupervisionBranch(
           throw new CodexAppServerUnsafeSubscriptionError(
             kind === "probe"
               ? "Codex model test fork may have materialized without a response"
-              : "Canonical Codex branch may have started without a response",
+              : "Supervised Codex branch may have started without a response",
             { cause: error },
           );
         }
@@ -169,7 +172,7 @@ export async function materializePendingSupervisionBranch(
       });
     } catch (error) {
       try {
-        const current = params.bindingStore.read(params.bindingIdentity);
+        const current = await params.bindingStore.readAsync(params.bindingIdentity);
         if (matchesPendingSupervisionState(current, pending)) {
           cleanupExpected = pending;
         } else if (matchesPendingSupervisionState(current, expected)) {
@@ -242,11 +245,18 @@ export async function materializePendingSupervisionBranch(
     }
 
     const nativeAttempt = { ...params.attempt, modelId: nativeModel };
-    const startParams = buildThreadStartParams(nativeAttempt, {
+    const nativeStartOptions = {
       ...params,
       model: nativeModel,
       modelProvider: nativeModelProvider,
-    });
+      nativeModelProvider,
+    };
+    const startParams = await buildThreadStartParams(nativeAttempt, nativeStartOptions);
+    // Rendered from the probed native model, which the pre-startup estimate could not know.
+    const openClawBaseInstructions = resolveCodexOpenClawBaseInstructions(
+      nativeAttempt,
+      nativeStartOptions,
+    );
     assertExactSupervisionModelSelection(startParams, {
       model: nativeModel,
       modelProvider: nativeModelProvider,
@@ -259,7 +269,7 @@ export async function materializePendingSupervisionBranch(
       threadId: readSupervisionResponseThreadId(rawStartResponse),
       sourceThreadId: pending.sourceThreadId,
       otherThreadId: probeThreadId,
-      role: "canonical branch",
+      role: "supervised branch",
     });
     await trackPendingSupervisionArtifacts([finalThreadId]);
     params.throwIfAborted();
@@ -313,7 +323,7 @@ export async function materializePendingSupervisionBranch(
     }
 
     const historyCoveredThrough = new Date().toISOString();
-    const bindingModelProvider = params.normalizeBindingModelProvider(
+    const bindingModelProvider = await params.normalizeBindingModelProvider(
       params.attempt.authProfileId,
       nativeModelProvider,
     );
@@ -338,11 +348,11 @@ export async function materializePendingSupervisionBranch(
     } catch (error) {
       let current: CodexAppServerThreadBinding | undefined;
       try {
-        current = params.bindingStore.read(params.bindingIdentity);
+        current = await params.bindingStore.readAsync(params.bindingIdentity);
       } catch (readError) {
         provisionalCleanupSafe = false;
         throw new CodexAppServerUnsafeSubscriptionError(
-          `Canonical Codex branch binding could not be verified: ${finalThreadId}`,
+          `Supervised Codex branch binding could not be verified: ${finalThreadId}`,
           { cause: new AggregateError([error, readError]) },
         );
       }
@@ -361,7 +371,7 @@ export async function materializePendingSupervisionBranch(
         if (!matchesPendingSupervisionState(current, pending)) {
           provisionalCleanupSafe = false;
           throw new CodexAppServerUnsafeSubscriptionError(
-            `Canonical Codex branch binding changed while commit was uncertain: ${finalThreadId}`,
+            `Supervised Codex branch binding changed while commit was uncertain: ${finalThreadId}`,
             { cause: error },
           );
         }
@@ -393,6 +403,7 @@ export async function materializePendingSupervisionBranch(
       model: nativeModel,
       modelProvider: bindingModelProvider,
       historyCoveredThrough,
+      preparedOpenClawBaseInstructions: openClawBaseInstructions,
       lifecycle: { action: "forked" },
     };
   } catch (error) {
@@ -467,6 +478,7 @@ function buildPendingSupervisionProbeForkParams(
       params.developerInstructions ??
       buildDeveloperInstructions(params.attempt, {
         dynamicTools: params.dynamicTools,
+        nativeCodeModeEnabled: params.nativeCodeModeEnabled !== false,
         nativeCodeModeOnlyEnabled: runtimeConfig["features.code_mode_only"] === true,
       }),
     ephemeral: true,

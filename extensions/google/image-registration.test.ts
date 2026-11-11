@@ -11,13 +11,13 @@ const runtime = vi.hoisted(() => {
   return {
     moduleLoads: 0,
     generateImage,
-    buildProvider: vi.fn(() => ({ generateImage })),
   };
 });
 
+// mock-isolation: Keep the provider unloaded to prove registration's lazy import boundary.
 vi.mock("./image-generation-provider.js", () => {
   runtime.moduleLoads += 1;
-  return { buildGoogleImageGenerationProvider: runtime.buildProvider };
+  return { googleImageGenerationProvider: { generateImage: runtime.generateImage } };
 });
 
 function registerImageProvider() {
@@ -72,7 +72,6 @@ it("registers independent image metadata without loading the runtime and delegat
   second.capabilities.geometry?.resolutions?.push("4K");
   expect(JSON.stringify(metadata)).toBe(JSON.stringify(expectedMetadata));
   expect(runtime.moduleLoads).toBe(0);
-  expect(runtime.buildProvider).not.toHaveBeenCalled();
 
   const request: ImageGenerationRequest = {
     provider: "google",
@@ -92,7 +91,6 @@ it("registers independent image metadata without loading the runtime and delegat
     await Promise.all([provider.generateImage(request), second.generateImage(secondRequest)]),
   ).toEqual([result, result]);
   expect(runtime.moduleLoads).toBe(1);
-  expect(runtime.buildProvider).toHaveBeenCalledOnce();
   expect(runtime.generateImage).toHaveBeenNthCalledWith(1, request);
   expect(runtime.generateImage).toHaveBeenNthCalledWith(2, secondRequest);
 });

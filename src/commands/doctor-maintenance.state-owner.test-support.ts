@@ -43,6 +43,9 @@ export function mockDoctorServicePlatform(platform: NodeJS.Platform): void {
   vi.spyOn(gatewayLockPayload, "classifyGatewayLockProcessNamespace").mockImplementation(
     onHost(actualPayload.classifyGatewayLockProcessNamespace),
   );
+  vi.spyOn(gatewayLockPayload, "classifyGatewayOwnerProcessNamespace").mockImplementation(
+    onHost(actualPayload.classifyGatewayOwnerProcessNamespace),
+  );
   vi.spyOn(gatewayStateOwner, "resolveGatewayStateOwnerPath").mockImplementation(
     onHost(actual.resolveGatewayStateOwnerPath),
   );

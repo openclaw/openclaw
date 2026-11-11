@@ -9,7 +9,7 @@ queries:
 paths:
   - src/cli/gateway-cli/run-loop.ts
   - src/infra/gateway-lock.ts
-  - src/infra/jsonl-socket.ts
+  - src/infra/exec-host.ts
   - src/infra/net
   - src/infra/push-apns-http2.ts
   - src/infra/ssh-tunnel.ts

@@ -30,9 +30,9 @@ Runtime behavior:
 - On models that support function tools, Voice Call exposes the built-in `openclaw_end_call` realtime tool. It takes no arguments or call ID; the active voice bridge binds it to the current call.
 - Voice Call exposes the shared `openclaw_agent_consult` realtime tool by default. GPT-Live uses native delegation to the same call-owned agent consult instead. The realtime model can delegate when the caller asks for deeper reasoning, current information, or normal OpenClaw tools.
 - `realtime.consultPolicy` optionally adds guidance for when the realtime model should call `openclaw_agent_consult`.
-- `realtime.idleHangupMs` optionally ends an active call after neither side has produced speech for the configured positive number of milliseconds. The timer pauses while an agent consult is running and is disabled when unset.
+- `realtime.idleHangupMs` ends an active call after neither side has produced speech for the configured positive number of milliseconds. The timer pauses while an agent consult is running. When unset, outbound calls use 30 seconds and inbound calls have no speech-idle timeout.
 - On hosts with the shared context resolver, Voice Call always tells the realtime model that it speaks for an OpenClaw agent that may have other sessions and work. `realtime.agentContext.enabled` is default-off and controls the additional configured identity and profile-file context. Supported older hosts retain the [legacy context behavior](/plugins/voice-call/realtime-and-streaming#agent-voice-context).
-- `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns authorized snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true. The active memory plugin authorizes session-transcript hits; plugins without that capability fail closed for session hits while ordinary memory hits remain available.
+- `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns authorized snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true. The active memory plugin authorizes session-transcript hits; plugins without that capability cannot return session hits while ordinary memory hits remain available.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
 - `inboundPolicy` must not be `"disabled"` when `realtime.enabled` is true; `validateProviderConfig` rejects that combination.
 - Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, `per-call` for isolated calls, or `main` for the configured agent's main session).
@@ -47,11 +47,20 @@ flight. Once an active-call helper accepts a hang-up, cancelling the consult
 does not interrupt that control action. The helper still checks that its bound
 call is active before acting.
 
+Caller transcripts during carrier playback and its 400 ms echo tail require
+detected caller speech or a provider barge-in. This prevents unconfirmed echo
+from becoming a new host caller turn. During opening-greeting playback, caller
+audio and transcripts are withheld and provider barge-in cannot clear the greeting.
+Normal interruption resumes after the greeting response ends and carrier playback
+drains. Before greeting audio starts and on later turns, audio reaches the realtime
+provider, which owns its own speech detection and responses.
+
 ### GPT-Live
 
 Voice Call uses the same Gateway-owned GPT-Live bridge as Discord and Talk.
 Select `gpt-live-1-codex` with `cove` to use the ChatGPT OAuth route; it tries
-the routed agent's OpenClaw ChatGPT profile first, then the configured Platform
+the routed agent's OpenClaw ChatGPT profile (an OAuth sign-in or a pasted
+ChatGPT access token) first, then the configured Platform
 key, API-key profile, and `OPENAI_API_KEY`. Select `gpt-live-1` with `marin` for
 the public Platform API route. Leaving the model unset preserves Voice Call's
 provider default.
@@ -103,7 +112,8 @@ too.
 
 Outbound `initiate_call`, `voicecall.initiate`, and the CLI accept an optional
 `brief`. It applies only to that call and reaches both the voice model and its
-agent consult. The opening `message` stays the first verbatim spoken line.
+agent consult. Supply `brief.task` for the ongoing errand; the opening `message`
+stays the first verbatim spoken line.
 
 Every brief field is optional:
 
@@ -118,6 +128,11 @@ Every brief field is optional:
 | `voicemailMessage`   | Exact message to leave when voicemail is detected.                                 |
 | `successCriteria`    | What counts as completing the task.                                                |
 | `maxDurationSeconds` | Positive integer override, capped by plugin `maxDurationSeconds`.                  |
+
+For realtime transcription, a recognized two-letter language code such as `cs`
+also supplies the input-language hint. Regional tags such as `cs-CZ` use their
+base language. Free-form descriptions remain voice instructions only; they are
+not sent as transcription language codes.
 
 The encoded brief is limited to 8,000 characters. See the plugin README for
 individual field limits and a plumber booking example. Treat both the brief
@@ -189,6 +204,11 @@ Notify calls wait for detection before playing their opening message to a human
 or their voicemail message to a machine. `onMachine: "hang-up"` ends machine calls immediately.
 The mock provider can simulate detection; other carriers are unchanged.
 
+If detected-call cleanup fails, OpenClaw logs a warning with the affected call ID.
+The failure can come from carrier hangup or local finalization after hangup succeeds.
+Inspect that call's status and logs before retrying; an active local record does not
+necessarily mean the carrier call is still connected.
+
 ### Hangup detection
 
 Realtime calls normally end when the carrier sends a stream stop event or closes
@@ -198,9 +218,10 @@ OpenClaw treats 30 seconds without inbound media as a disconnect, waits a
 
 Set `realtime.idleHangupMs` to end a connected call after that much speech
 silence. Caller speech, caller transcripts, assistant transcript/audio, and an
-in-flight agent consult reset or pause this timer. Unset leaves this behavior
-disabled. Hold music is not speech, so choose a value that fits the expected
-hold time.
+in-flight agent consult reset or pause this timer. When unset, outbound calls
+end after 30 seconds of speech inactivity, including silent pickups and silence
+after voicemail greetings. Inbound calls have no default speech-idle timeout.
+Hold music is not speech, so choose a value that fits the expected hold time.
 
 If the realtime provider ends its session first, OpenClaw also ends the carrier
 call, including when the provider reports a normal close. This prevents a silent
@@ -240,6 +261,19 @@ with GPT-Live:
 | `auto`        | Keep the default prompt and let the provider decide when to call the consult tool.              |
 | `substantive` | Answer simple conversational glue directly and consult before facts, memory, tools, or context. |
 | `always`      | Consult before every substantive answer.                                                        |
+
+Only one native consult runs at a time per call. Replaying the same provider
+invocation within the active voice session shares its pending result. A new
+invocation receives a busy error with `started: false` and `retryable: true`,
+even when its arguments match. The realtime model should wait for the active
+consult's result before retrying, rather than polling while it runs. A native
+request also receives busy while an unrelated host-forced consult runs; only a
+matching forced question (after trimming whitespace) can share that result.
+Similar wording alone does not identify the same request.
+
+An overlapping invocation cannot replace the pending consult's caller context.
+Completing the active consult consumes only the speech it used; rejected caller
+speech remains available for retry within the existing transcript window.
 
 When a host tool run reports cancellation, the realtime model receives a
 cancelled result and the phone call stays open. Timeouts and other tool failures
@@ -389,6 +423,7 @@ Runtime behavior:
 - Bundled realtime transcription providers: Deepgram (`deepgram`), ElevenLabs (`elevenlabs`), Mistral (`mistral`), OpenAI (`openai`), and xAI (`xai`), registered by their provider plugins.
 - Provider-owned raw config lives under `streaming.providers.<providerId>`.
 - After Twilio sends an accepted stream `start` message, Voice Call registers the stream immediately, queues inbound media through the transcription provider while the provider connects, and starts the initial greeting only after realtime transcription is ready.
+- Frames with non-string audio payloads, playback-mark names, or start identifiers and tokens are discarded before dispatch. Valid base64 and base64url audio continue normally on the same stream.
 - If `streaming.provider` points at an unregistered provider, or none is registered, Voice Call logs a warning and skips media streaming instead of failing the whole plugin.
 
 ### Streaming provider examples

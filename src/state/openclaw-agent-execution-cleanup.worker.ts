@@ -21,11 +21,15 @@ export function executeAgentDatabaseCleanupCommand(
       ) {
         throw new Error("Retired agent cleanup cannot adopt a replacement shared database");
       }
-      releaseExitedOpenClawAgentDatabaseLeaseInDatabase(current.db, command.input, () =>
-        requestSqliteWorkerOperationAdmission({
-          stage: "prepare",
-          facts: "agent-integrity-invalidated",
-        }),
+      releaseExitedOpenClawAgentDatabaseLeaseInDatabase(
+        current.db,
+        command.input,
+        command.input.outcome,
+        () =>
+          requestSqliteWorkerOperationAdmission({
+            stage: "prepare",
+            facts: "agent-integrity-invalidated",
+          }),
       );
     },
     { database, path: database.path, env },

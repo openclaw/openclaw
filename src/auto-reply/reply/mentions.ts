@@ -58,7 +58,7 @@ function escapeJoinerTolerantLiteral(literal: string): string {
   // stripping runs on the raw text that still carries them. A literal has to
   // accept both forms or an identity built only from a ZWJ sequence can be
   // stripped but never matched.
-  if (Array.from(literal).every((character) => JOINER_ONLY.test(character))) {
+  if (!literal || JOINER_ONLY.test(literal)) {
     // Nothing survives normalization. Emitting the optional joiner class alone
     // would match the empty string, i.e. every message.
     return "";
@@ -72,8 +72,6 @@ type NameUnit =
   | { kind: "token"; literal: string }
   | { kind: "separator"; literal: string }
   | { kind: "decoration"; literal: string; spellings: string[]; spaced: boolean };
-type DecorationUnit = Extract<NameUnit, { kind: "decoration" }>;
-type SeparatorUnit = Extract<NameUnit, { kind: "separator" }>;
 
 function isEmojiPresentationGrapheme(grapheme: string): boolean {
   const characters = Array.from(grapheme);
@@ -136,7 +134,7 @@ function parseNameUnits(name: string): NameUnit[] {
 }
 
 // Preserve literal separators with flexible whitespace and optional raw-text joiners.
-function encodeSeparator(unit: SeparatorUnit): string {
+function encodeSeparator(unit: Extract<NameUnit, { kind: "separator" }>): string {
   return unit.literal
     .split(/(\s+|[\u200C\u200D]+)/u)
     .filter(Boolean)
@@ -164,7 +162,7 @@ function encodeEdgeDecorationLiteral(unit: NameUnit | undefined): string {
 }
 
 // Accept only the name's decoration, once, so stripping preserves unrelated punctuation.
-function encodeInteriorDecoration(unit: DecorationUnit): string {
+function encodeInteriorDecoration(unit: Extract<NameUnit, { kind: "decoration" }>): string {
   const spelled = unit.spellings.join(DECORATION_SPACING);
   if (!spelled) {
     // Joiners vanish during matching; whitespace survives and remains required
@@ -281,13 +279,10 @@ function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: strin
     return { patterns: [], unicode: false };
   }
   const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
-  const agentGroupChat = agentConfig?.groupChat;
-  if (agentGroupChat && Object.hasOwn(agentGroupChat, "mentionPatterns")) {
-    return { patterns: agentGroupChat.mentionPatterns ?? [], unicode: false };
-  }
-  const globalGroupChat = cfg.messages?.groupChat;
-  if (globalGroupChat && Object.hasOwn(globalGroupChat, "mentionPatterns")) {
-    return { patterns: globalGroupChat.mentionPatterns ?? [], unicode: false };
+  for (const groupChat of [agentConfig?.groupChat, cfg.messages?.groupChat]) {
+    if (groupChat && Object.hasOwn(groupChat, "mentionPatterns")) {
+      return { patterns: groupChat.mentionPatterns ?? [], unicode: false };
+    }
   }
   const derived = deriveMentionPatterns(agentConfig?.identity);
   return { patterns: derived, unicode: derived.length > 0 };
@@ -402,5 +397,8 @@ export function stripMentions(
     });
   }
   result = result.replace(/@[0-9+]{5,}/g, " ");
-  return result.replace(/\s+/g, " ").trim();
+  // A slash command keeps its text as in a direct message: /btw, /loop and other commands take
+  // multiline arguments, and collapsing whitespace would join their lines and drop indentation.
+  const stripped = result.trim();
+  return stripped.startsWith("/") ? stripped : stripped.replace(/\s+/g, " ");
 }

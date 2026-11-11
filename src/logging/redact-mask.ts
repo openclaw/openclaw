@@ -16,12 +16,7 @@ export function maskToken(token: string): string {
   return `${start}…${end}`;
 }
 
-export function splitSecretValueForMask(token: string): {
-  maskable: string;
-  suffix: string;
-  maskStart: number;
-  maskEnd: number;
-} {
+export function splitSecretValueForMask(token: string) {
   const openingQuote = token[0] ?? "";
   const contentStart = SECRET_VALUE_QUOTE_CHARS.has(openingQuote) ? 1 : 0;
   if (contentStart) {
@@ -60,7 +55,7 @@ export function splitFormAwareCredentialValue(token: string): { secret: string; 
     : { secret: token.slice(0, pairBoundary), suffix: token.slice(pairBoundary) };
 }
 
-export function maskSecretValue(token: string, options?: { hinted?: boolean }): string {
+export function maskSecretValue(token: string): string {
   const { maskable, suffix } = splitSecretValueForMask(token);
-  return `${options?.hinted ? maskToken(maskable) : "***"}${suffix}`;
+  return `${maskToken(maskable)}${suffix}`;
 }

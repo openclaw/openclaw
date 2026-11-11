@@ -1,8 +1,9 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
+import { readProviderField } from "./inference-provider-config.js";
 import {
-  releaseLeasedSharedCodexAppServerClient,
+  releaseCodexProbeClient,
   type CodexAppServerClientOptions,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
@@ -15,9 +16,7 @@ function resolveOverriddenProviderWebSearchSupport(
   if (!provider) {
     return undefined;
   }
-  // The capability RPC describes the configured provider, not a thread
-  // override. OpenAI's hosted support is known; other overrides stay managed.
-  return provider === "openai" ? "supported" : "unsupported";
+  return provider === "openai" ? "supported" : undefined;
 }
 
 export async function resolveCodexProviderWebSearchSupportForClient(params: {
@@ -33,19 +32,33 @@ export async function resolveCodexProviderWebSearchSupportForClient(params: {
   }
   try {
     const options = { timeoutMs: params.timeoutMs, signal: params.signal };
-    if (params.expectedNativeModelProvider) {
+    const expectedProvider =
+      params.modelProviderOverride?.trim() || params.expectedNativeModelProvider;
+    let standalone = false;
+    if (expectedProvider) {
       // The capability RPC describes the configured provider, not a persisted thread.
       const configured = await params.client.request(
         "config/read",
         { includeLayers: false },
         options,
       );
-      if ((configured.config.model_provider ?? "openai") !== params.expectedNativeModelProvider) {
+      if ((configured.config.model_provider ?? "openai") !== expectedProvider) {
         return "unknown";
+      }
+      if (expectedProvider !== "openai") {
+        standalone =
+          readProviderField(
+            configured.config,
+            expectedProvider,
+            "supports_standalone_web_search",
+          ) === true;
+        if (!standalone) {
+          return "unsupported";
+        }
       }
     }
     const response = await params.client.request("modelProvider/capabilities/read", {}, options);
-    return response.webSearch ? "supported" : "unsupported";
+    return response.webSearch ? (standalone ? "standalone" : "supported") : "unsupported";
   } catch {
     return "unknown";
   }
@@ -53,6 +66,7 @@ export async function resolveCodexProviderWebSearchSupportForClient(params: {
 
 export async function resolveCodexProviderWebSearchSupport(params: {
   clientFactory: CodexAppServerClientFactory;
+  callerOwnedClient?: boolean;
   appServer: CodexAppServerRuntimeOptions;
   authProfileId: string | null | undefined;
   preparedAuth?: CodexAppServerClientOptions["preparedAuth"];
@@ -90,7 +104,7 @@ export async function resolveCodexProviderWebSearchSupport(params: {
     return "unknown";
   } finally {
     if (client) {
-      releaseLeasedSharedCodexAppServerClient(client);
+      await releaseCodexProbeClient(client, params.clientFactory, params.callerOwnedClient);
     }
   }
 }

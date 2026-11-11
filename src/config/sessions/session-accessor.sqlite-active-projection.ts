@@ -19,15 +19,24 @@ import { startSessionTranscriptIndexReconcile } from "./session-transcript-recon
 export function withCurrentProjectionSnapshot<T>(
   scope: SessionTranscriptReadScope,
   read: (projection: CurrentTranscriptProjection) => T,
-  options: { readOnly?: boolean; resolvedScope?: ResolvedTranscriptReadScope } = {},
+  options: {
+    readOnly?: boolean;
+    resolvedScope?: ResolvedTranscriptReadScope;
+    transaction?: CurrentTranscriptProjection["database"];
+  } = {},
 ): T {
   const resolved = options.resolvedScope ?? resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = toDatabaseOptions(resolved);
   const readSnapshot = (database: CurrentTranscriptProjection["database"]) =>
     readCurrentProjectionSnapshot(database, resolved, read);
-  const result = options.readOnly
-    ? withOpenClawAgentDatabaseReadOnly(readSnapshot, databaseOptions, { snapshot: true })
-    : { found: true as const, value: readSnapshot(openOpenClawAgentDatabase(databaseOptions)) };
+  if (options.transaction && !options.transaction.db.isTransaction) {
+    throw new Error("Transcript projection lost its borrowed transaction");
+  }
+  const result = options.transaction
+    ? { found: true as const, value: readSnapshot(options.transaction) }
+    : options.readOnly
+      ? withOpenClawAgentDatabaseReadOnly(readSnapshot, databaseOptions, { snapshot: true })
+      : { found: true as const, value: readSnapshot(openOpenClawAgentDatabase(databaseOptions)) };
   if (!result.found) {
     throw new SessionTranscriptStorageUnavailableError(result.reason);
   }
@@ -36,7 +45,7 @@ export function withCurrentProjectionSnapshot<T>(
   }
   // Only the writer lifecycle may rebuild after this stack unwinds. Read-only catalogs
   // report unavailable and leave reconciliation to the source Gateway.
-  if (!options.readOnly) {
+  if (!options.readOnly && !options.transaction) {
     startSessionTranscriptIndexReconcile({
       ...databaseOptions,
       preferredSessionId: resolved.sessionId,

@@ -355,20 +355,27 @@ describe("nostr-profile-http", () => {
       expect(ctx.updateConfigProfile).toHaveBeenCalled();
     });
 
-    it("rejects profile mutation from non-loopback remote address", async () => {
+    it.each([
+      [
+        "rejects profile mutation from non-loopback remote address",
+        { remoteAddress: "198.51.100.10" },
+      ],
+      [
+        "rejects cross-origin profile mutation attempts",
+        { headers: { origin: "https://evil.example" } },
+      ],
+      [
+        "rejects profile mutation with cross-site sec-fetch-site header",
+        { headers: { "sec-fetch-site": "cross-site" } },
+      ],
+      [
+        "rejects profile mutation when forwarded client ip is non-loopback",
+        { headers: { "x-forwarded-for": "203.0.113.99, 127.0.0.1" } },
+      ],
+    ] as const)("%s", async (_name, req) => {
       const { res, run } = createProfileHttpHarness("PUT", "/api/channels/nostr/default/profile", {
         body: { name: "attacker" },
-        req: { remoteAddress: "198.51.100.10" },
-      });
-
-      await run();
-      expect(res["_getStatusCode"]()).toBe(403);
-    });
-
-    it("rejects cross-origin profile mutation attempts", async () => {
-      const { res, run } = createProfileHttpHarness("PUT", "/api/channels/nostr/default/profile", {
-        body: { name: "attacker" },
-        req: { headers: { origin: "https://evil.example" } },
+        req,
       });
 
       await run();
@@ -397,39 +404,12 @@ describe("nostr-profile-http", () => {
       expect(res["_getStatusCode"]()).toBe(expectedStatusCode);
     });
 
-    it("rejects profile mutation with cross-site sec-fetch-site header", async () => {
-      const { res, run } = createProfileHttpHarness("PUT", "/api/channels/nostr/default/profile", {
-        body: { name: "attacker" },
-        req: { headers: { "sec-fetch-site": "cross-site" } },
-      });
-
-      await run();
-      expect(res["_getStatusCode"]()).toBe(403);
-    });
-
-    it("rejects profile mutation when forwarded client ip is non-loopback", async () => {
-      const { res, run } = createProfileHttpHarness("PUT", "/api/channels/nostr/default/profile", {
-        body: { name: "attacker" },
-        req: { headers: { "x-forwarded-for": "203.0.113.99, 127.0.0.1" } },
-      });
-
-      await run();
-      expect(res["_getStatusCode"]()).toBe(403);
-    });
-
-    it("rejects profile mutation when gateway caller is missing operator.admin", async () => {
+    it.each([
+      ["rejects profile mutation when gateway caller is missing operator.admin", ["operator.read"]],
+      ["rejects profile mutation when gateway scope context is missing", undefined],
+    ] as const)("%s", async (_name, scopes) => {
       await expectAdminScopeRejected({
-        scopes: ["operator.read"],
-        method: "PUT",
-        url: "/api/channels/nostr/default/profile",
-        body: { name: "attacker" },
-        expectOperationNotCalled: () => expect(publishNostrProfile).not.toHaveBeenCalled(),
-      });
-    });
-
-    it("rejects profile mutation when gateway scope context is missing", async () => {
-      await expectAdminScopeRejected({
-        scopes: undefined,
+        scopes,
         method: "PUT",
         url: "/api/channels/nostr/default/profile",
         body: { name: "attacker" },
@@ -537,13 +517,26 @@ describe("nostr-profile-http", () => {
       expect(data.saved).toBe(false); // autoMerge not requested
     });
 
-    it("rejects import mutation from non-loopback remote address", async () => {
+    it.each([
+      [
+        "rejects import mutation from non-loopback remote address",
+        { remoteAddress: "203.0.113.10" },
+      ],
+      [
+        "rejects cross-origin import mutation attempts",
+        { headers: { origin: "https://evil.example" } },
+      ],
+      [
+        "rejects import mutation when x-real-ip is non-loopback",
+        { headers: { "x-real-ip": "198.51.100.55" } },
+      ],
+    ] as const)("%s", async (_name, req) => {
       const { res, run } = createProfileHttpHarness(
         "POST",
         "/api/channels/nostr/default/profile/import",
         {
           body: {},
-          req: { remoteAddress: "203.0.113.10" },
+          req,
         },
       );
 
@@ -551,47 +544,12 @@ describe("nostr-profile-http", () => {
       expect(res["_getStatusCode"]()).toBe(403);
     });
 
-    it("rejects cross-origin import mutation attempts", async () => {
-      const { res, run } = createProfileHttpHarness(
-        "POST",
-        "/api/channels/nostr/default/profile/import",
-        {
-          body: {},
-          req: { headers: { origin: "https://evil.example" } },
-        },
-      );
-
-      await run();
-      expect(res["_getStatusCode"]()).toBe(403);
-    });
-
-    it("rejects import mutation when x-real-ip is non-loopback", async () => {
-      const { res, run } = createProfileHttpHarness(
-        "POST",
-        "/api/channels/nostr/default/profile/import",
-        {
-          body: {},
-          req: { headers: { "x-real-ip": "198.51.100.55" } },
-        },
-      );
-
-      await run();
-      expect(res["_getStatusCode"]()).toBe(403);
-    });
-
-    it("rejects profile import when gateway caller is missing operator.admin", async () => {
+    it.each([
+      ["rejects profile import when gateway caller is missing operator.admin", ["operator.read"]],
+      ["rejects profile import when gateway scope context is missing", undefined],
+    ] as const)("%s", async (_name, scopes) => {
       await expectAdminScopeRejected({
-        scopes: ["operator.read"],
-        method: "POST",
-        url: "/api/channels/nostr/default/profile/import",
-        body: { autoMerge: true },
-        expectOperationNotCalled: () => expect(importProfileFromRelays).not.toHaveBeenCalled(),
-      });
-    });
-
-    it("rejects profile import when gateway scope context is missing", async () => {
-      await expectAdminScopeRejected({
-        scopes: undefined,
+        scopes,
         method: "POST",
         url: "/api/channels/nostr/default/profile/import",
         body: { autoMerge: true },

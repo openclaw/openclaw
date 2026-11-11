@@ -2,6 +2,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import { throwAgentRunRestartAbortReason } from "../../agents/run-termination.js";
+import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { prepareSessionPendingInputDedupeRecovery } from "../../config/sessions/session-accessor.pending-inputs.js";
@@ -12,22 +14,19 @@ import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { resolveCommandTurnContext } from "../command-turn-context.js";
 import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import { isActiveRunSafeCommandTurn } from "../commands-registry.js";
+import { waitForReplyDispatcherSettlement } from "../dispatch-dispatcher.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
 import { resolveSessionStoreLookup } from "./dispatch-from-config.context.js";
 import type { PluginBindingTranscriptOwner } from "./dispatch-from-config.events.js";
-import {
-  resolveTurnModelOverride,
-  resolveVisibleRepliesPolicy,
-} from "./dispatch-from-config.harness-defaults.js";
+import { resolveVisibleRepliesPolicy } from "./dispatch-from-config.harness-defaults.js";
 import type { PrepareDispatchDeliveryReadyState } from "./dispatch-from-config.prepare-delivery.js";
 import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
+import { InboundDedupePendingError } from "./inbound-dedupe-error.js";
 import { claimInboundDedupe } from "./inbound-dedupe.js";
 import { emitMessageReceivedHooks as emitSharedMessageReceivedHooks } from "./message-received-hooks.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
-import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
 import { resolveDispatchConversationBinding } from "./session-conversation-binding.js";
 import {
   resolveReplyMessageToolAvailability,
@@ -47,7 +46,7 @@ import {
 } from "./source-turn-id.js";
 import {
   isReplyOperationStalledBeforeOutput,
-  STALLED_TURN_NOTICE_TEXT,
+  resolveStalledTurnNoticeText,
 } from "./stalled-turn-recovery.js";
 
 export async function prepareDispatchOperationContext(state: PrepareDispatchDeliveryReadyState) {
@@ -177,19 +176,24 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   });
   const chatType = normalizeChatType(ctx.ChatType);
   state.replyOperationRunState.replyCompletion = resolveReplyCompletion(
-    resolveSourceReplyExpectation({ ctx, cfg, isHeartbeat: params.replyOptions?.isHeartbeat }),
+    resolveSourceReplyExpectation({
+      ctx,
+      cfg,
+      scheduledAutomation: params.replyOptions?.scheduledAutomation !== undefined,
+    }),
     "empty",
   );
-  const { configuredVisibleReplies, harnessDefaultVisibleReplies } = resolveVisibleRepliesPolicy({
-    cfg,
-    chatType,
-    ctx,
-    entry: sessionStoreEntry.entry,
-    sessionAgentId,
-    sessionKey: acpDispatchSessionKey,
-    sessionStore: sessionStoreEntry.store,
-    turnModelOverride: resolveTurnModelOverride(params.replyOptions),
-  });
+  const { configuredVisibleReplies, harnessDefaultVisibleReplies } =
+    await resolveVisibleRepliesPolicy({
+      cfg,
+      chatType,
+      ctx,
+      entry: sessionStoreEntry.entry,
+      sessionAgentId,
+      sessionKey: acpDispatchSessionKey,
+      sessionStore: sessionStoreEntry.store,
+      turnModelOverride: params.replyOptions?.modelOverride,
+    });
   const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
   const prefersMessageToolDelivery =
     params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
@@ -217,30 +221,35 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     senderUsername: normalizeOptionalString(ctx.SenderUsername),
     senderE164: normalizeOptionalString(ctx.SenderE164),
   });
-  const messageToolAvailable = resolveReplyMessageToolAvailability({
-    cfg,
-    sessionAgentId,
-    sessionKey: acpDispatchSessionKey,
-    groupPolicy,
-    prefersMessageToolDelivery,
-  });
+  const messageToolAvailable = await withPreparedSessionCapabilityRead(() =>
+    resolveReplyMessageToolAvailability({
+      cfg,
+      sessionAgentId,
+      sessionKey: acpDispatchSessionKey,
+      groupPolicy,
+      prefersMessageToolDelivery,
+    }),
+  );
   // The stable mode's tool-only downgrade must be sender-independent, or a
   // sender-scoped message denial hashes a different binding policy than the
   // sender-less synthetic turns on the same session. Only tool-only candidates
   // can downgrade, so skip the second policy pass otherwise.
   const sessionStableMessageToolAvailable =
     effectiveVisibleReplies === "message_tool"
-      ? resolveStableMessageToolAvailability({
-          cfg,
-          ctx,
-          sessionEntry: sessionStoreEntry.entry,
-          sessionAgentId,
-          sessionKey: acpDispatchSessionKey,
-        })
+      ? await withPreparedSessionCapabilityRead(() =>
+          resolveStableMessageToolAvailability({
+            cfg,
+            ctx,
+            sessionEntry: sessionStoreEntry.entry,
+            sessionAgentId,
+            sessionKey: acpDispatchSessionKey,
+          }),
+        )
       : undefined;
   const sourceReplyPolicyParams = {
     cfg,
     ctx,
+    scheduledAutomation: params.replyOptions?.scheduledAutomation !== undefined,
     strictMessageToolOnly: ctx.InboundEventKind === "room_event" && !isInternalWebchatTurn,
     sendPolicy,
     suppressAcpChildUserDelivery: state.suppressAcpChildUserDelivery,
@@ -248,7 +257,6 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     shouldSuppressTyping: state.shouldSuppressTyping,
     messageToolAvailable,
     sessionStableMessageToolAvailable,
-    isHeartbeat: params.replyOptions?.isHeartbeat,
     requested: params.replyOptions?.sourceReplyDeliveryMode,
   } as const;
   let sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
@@ -336,12 +344,6 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       : undefined);
   // Compute once before hooks. The prepared agent turn reuses this exact route-scoped id.
   setChannelSourceTurnId(ctx, durableSourceTurnId);
-  if (isDuplicateRestartRecoverySource(sessionStoreEntry.entry, durableSourceTurnId)) {
-    // Process-local inbound dedupe cannot see provider redelivery after restart.
-    // Drop durable duplicates before any plugin dispatch hook can repeat effects.
-    return skipDuplicate();
-  }
-
   const sourceRunId = normalizeOptionalString(ctx.MessageSid);
   const recorder = params.replyOptions?.userTurnTranscriptRecorder;
   let reclaimPendingInput: (() => boolean) | undefined;
@@ -373,20 +375,48 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     reclaimPendingInput && recorder?.withPendingInputCurrent
       ? await recorder.withPendingInputCurrent(claimInput)
       : claimInput();
+  const lifecycle = params.replyOptions?.turnAdoptionLifecycle;
+  // Recovery can arrive before the retired source finishes cleanup.
+  if (inboundDedupeClaim.status === "inflight" && lifecycle?.admission === "exclusive") {
+    throw new InboundDedupePendingError();
+  }
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
     return skipDuplicate();
   }
-  const commitInboundDedupeIfClaimed = () => inboundDedupeClaim.commit?.();
+  const commitInboundDedupeIfClaimed = () => {
+    const admission = state.replyOperationRunState.admission;
+    // Queued admission is pending; its source still owns the input receipt.
+    if (
+      lifecycle?.admission === "exclusive" &&
+      admission?.status === "accepted" &&
+      admission.mode === "followup" &&
+      !state.turnAdoptionState?.adopted &&
+      !state.inboundDedupeReplayUnsafe
+    ) {
+      return;
+    }
+    inboundDedupeClaim.commit?.();
+  };
   const releaseInboundDedupeIfClaimed = () => inboundDedupeClaim.release?.();
-  const lifecycle = params.replyOptions?.turnAdoptionLifecycle;
   if (lifecycle && inboundDedupeClaim.status === "claimed") {
+    const onAdopted = lifecycle.onAdopted;
+    lifecycle.onAdopted = async () => {
+      await onAdopted();
+      inboundDedupeClaim.commit();
+    };
+    const onSettled = lifecycle.onSettled;
+    lifecycle.onSettled = () => {
+      // Abandonment released its exact owner; only consumption can still commit.
+      inboundDedupeClaim.commit();
+      return onSettled?.();
+    };
     const onAbandoned = lifecycle.onAbandoned;
     lifecycle.onAbandoned = () => {
       // Release before ingress retries, including abandonment before commit.
       if (!state.inboundDedupeReplayUnsafe && !state.turnAdoptionState?.adopted) {
         inboundDedupeClaim.release();
       }
-      onAbandoned?.();
+      return onAbandoned?.();
     };
   }
   const finishReplyOperationBusyDispatch = (opts?: {
@@ -394,7 +424,9 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     recordAgentDispatchCompleted?: boolean;
     sessionMetadataChanges?: DispatchFromConfigResult["sessionMetadataChanges"];
   }): DispatchFromConfigResult => {
-    void state.releasePreDispatchLifecycleAdmission(() => waitForReplyDispatcherIdle(dispatcher));
+    void state.releasePreDispatchLifecycleAdmission(() =>
+      waitForReplyDispatcherSettlement(dispatcher),
+    );
     if (opts?.recordAgentDispatchCompleted) {
       recordAgentDispatchCompleted("completed", { reason: "reply-operation-active" });
     }
@@ -421,7 +453,10 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     const queuedFinal =
       isReplyOperationStalledBeforeOutput(operation) &&
       state.replyOperationRunState.continueStalledTurn?.() !== true
-        ? dispatcher.sendFinalReply({ text: STALLED_TURN_NOTICE_TEXT, isError: true })
+        ? dispatcher.sendFinalReply({
+            text: resolveStalledTurnNoticeText(operation),
+            isError: true,
+          })
         : false;
     if (
       state.turnAdoptionState &&
@@ -435,6 +470,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     recordProcessed("skipped", { reason: "reply_operation_aborted" });
     markIdle("message_completed");
     state.completeDispatchReplyOperation();
+    throwAgentRunRestartAbortReason(operation?.abortSignal.reason);
     return attachSourceReplyDeliveryMode({
       ...baseDispatchResult(queuedFinal),
       ...(state.turnLedger.hasObservedDelivery() ? { observedReplyDelivery: true } : {}),

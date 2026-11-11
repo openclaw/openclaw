@@ -4,16 +4,18 @@ import {
   normalizeNativeHookToolName,
   readNativeHookRelayApprovalMode,
 } from "./native-hook-relay-codec.js";
+import type {
+  ActiveNativeHookRelayRegistration,
+  NativeHookRelayRegistration,
+} from "./native-hook-relay-contexts.js";
 import {
   MAX_NATIVE_HOOK_RELAY_INVOCATIONS,
   nativeHookRelayState,
 } from "./native-hook-relay-state.js";
 import type {
-  ActiveNativeHookRelayRegistration,
   NativeHookRelayEvent,
   NativeHookRelayInvocation,
   NativeHookRelayProcessResponse,
-  NativeHookRelayRegistration,
   NativeHookRelayTransportFailureCause,
 } from "./native-hook-relay-types.js";
 

@@ -4,8 +4,21 @@ import OpenClawKit
 import SwiftUI
 
 extension OnboardingView {
-    @ViewBuilder
     func pageView(for pageIndex: Int, contentHeight: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            if let initialError, pageIndex == initialPage.rawValue {
+                Text(initialError)
+                    .foregroundStyle(.red)
+                    .font(.callout)
+                    .padding(.horizontal, 28)
+                    .accessibilityIdentifier("onboarding-recovery-error")
+            }
+            self.pageContent(for: pageIndex, contentHeight: contentHeight)
+        }
+    }
+
+    @ViewBuilder
+    private func pageContent(for pageIndex: Int, contentHeight: CGFloat) -> some View {
         switch pageIndex {
         case 0:
             self.welcomePage()
@@ -18,7 +31,7 @@ extension OnboardingView {
         case 9:
             self.readyPage()
         default:
-            EmptyView()
+            self.welcomePage()
         }
     }
 
@@ -144,11 +157,14 @@ extension OnboardingView {
                 Spacer(minLength: 0)
             }
             if self.selectedConnectionMode == .unconfigured {
-                Text("OK — OpenClaw won’t start anything yet. Pick Local or Remote later in the Connection window.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .multilineTextAlignment(.center)
+                Text("""
+                OK — OpenClaw won’t start anything yet; a Gateway installed outside the app keeps running. \
+                Pick Local or Remote later in the Connection window.
+                """)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .multilineTextAlignment(.center)
             }
         }
         .disabled(self.installingCLI)

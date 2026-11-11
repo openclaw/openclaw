@@ -1,6 +1,6 @@
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { uploadBatchJsonlFile } from "./batch-upload.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
 import { postJson } from "./post-json.js";
@@ -16,23 +16,11 @@ type RequestRecord = {
   contentType: string | undefined;
   path: string;
 };
+const caught = (operation: Promise<unknown>) => operation.catch((cause: unknown) => cause);
 
-async function listenOnLoopback(server: Server): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-}
-
-async function closeServer(server: Server): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
-
-function createMemoryRemoteServer(records: RequestRecord[]): Server {
-  return createServer((request, response) => {
+async function fixture() {
+  const records: RequestRecord[] = [];
+  const server = createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk: Buffer) => {
       chunks.push(chunk);
@@ -74,6 +62,34 @@ function createMemoryRemoteServer(records: RequestRecord[]): Server {
       response.end(body);
     });
   });
+  onTestFinished(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  );
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return { records, baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
+}
+function expectRedacted(error: unknown, message: string, secrets = [API_KEY, UNIQUE_NEEDLE]) {
+  expect(error).toMatchObject({ message: expect.stringContaining(message) });
+  expect(error).toBeInstanceOf(Error);
+  for (const secret of secrets) {
+    expect((error as Error).message).not.toContain(secret);
+  }
+}
+
+function fetchVectors(baseUrl: string, path: string, key = API_KEY) {
+  return fetchRemoteEmbeddingVectors({
+    url: `${baseUrl}${path}`,
+    headers: { Authorization: `bearer ${key}`, "Content-Type": "application/json" },
+    ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl),
+    body: { model: "proof", input: ["one"] },
+    errorPrefix: "embedding fetch failed",
+  });
 }
 
 describe("memory remote error redaction", { concurrent: false }, () => {
@@ -86,79 +102,28 @@ describe("memory remote error redaction", { concurrent: false }, () => {
     vi.unstubAllEnvs();
   });
 
-  it("redacts lower-case bearer credentials through the real remote embedding fetch path", async () => {
-    const records: RequestRecord[] = [];
-    const server = createMemoryRemoteServer(records);
-    const baseUrl = await listenOnLoopback(server);
-    const headers = {
-      Authorization: `bearer ${API_KEY}`,
-      "Content-Type": "application/json",
-    };
-
-    try {
-      const error = await fetchRemoteEmbeddingVectors({
-        url: `${baseUrl}/v1/embeddings/error`,
-        headers,
-        ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl),
-        body: { model: "proof", input: ["one"] },
-        errorPrefix: "embedding fetch failed",
-      }).catch((cause: unknown) => cause);
-
-      expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toContain("embedding fetch failed (401)");
-      expect((error as Error).message).toContain("Authorization: ***");
-      expect((error as Error).message).not.toContain(API_KEY);
-      expect((error as Error).message).not.toContain(UNIQUE_NEEDLE);
-
-      await expect(
-        fetchRemoteEmbeddingVectors({
-          url: `${baseUrl}/v1/embeddings/ok`,
-          headers,
-          ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl),
-          body: { model: "proof", input: ["one"] },
-          errorPrefix: "embedding fetch failed",
-        }),
-      ).resolves.toEqual([[0.25, 0.5]]);
-      expect(records.map((record) => record.authorization)).toEqual([
-        `bearer ${API_KEY}`,
-        `bearer ${API_KEY}`,
-      ]);
-    } finally {
-      await closeServer(server);
+  it.each([
+    [API_KEY, "error", "Authorization: ***"],
+    [SHORT_API_KEY, "quoted-error", '{"Authorization":"***"}'],
+  ])("redacts bearer credentials from %s embedding errors", async (key, route, redacted) => {
+    const { records, baseUrl } = await fixture();
+    const error = await caught(fetchVectors(baseUrl, `/v1/embeddings/${route}`, key));
+    expectRedacted(error, redacted, key === API_KEY ? [API_KEY, UNIQUE_NEEDLE] : [SHORT_API_KEY]);
+    if (key === API_KEY) {
+      expect(error).toMatchObject({
+        message: expect.stringContaining(
+          "embedding fetch failed (model: proof, batch size: 1) (401)",
+        ),
+      });
+      await expect(fetchVectors(baseUrl, "/v1/embeddings/ok")).resolves.toEqual([[0.25, 0.5]]);
     }
-  });
-
-  it("redacts quoted short bearer credentials through the real JSON error path", async () => {
-    const records: RequestRecord[] = [];
-    const server = createMemoryRemoteServer(records);
-    const baseUrl = await listenOnLoopback(server);
-    const headers = {
-      Authorization: `bearer ${SHORT_API_KEY}`,
-      "Content-Type": "application/json",
-    };
-
-    try {
-      const error = await fetchRemoteEmbeddingVectors({
-        url: `${baseUrl}/v1/embeddings/quoted-error`,
-        headers,
-        ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl),
-        body: { model: "proof", input: ["one"] },
-        errorPrefix: "embedding fetch failed",
-      }).catch((cause: unknown) => cause);
-
-      expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toContain('{"Authorization":"***"}');
-      expect((error as Error).message).not.toContain(SHORT_API_KEY);
-      expect(records.map((record) => record.authorization)).toEqual([`bearer ${SHORT_API_KEY}`]);
-    } finally {
-      await closeServer(server);
-    }
+    expect(records.map((record) => record.authorization)).toEqual(
+      Array.from({ length: key === API_KEY ? 2 : 1 }, () => `bearer ${key}`),
+    );
   });
 
   it("preserves status metadata and harmless provider diagnostics", async () => {
-    const records: RequestRecord[] = [];
-    const server = createMemoryRemoteServer(records);
-    const baseUrl = await listenOnLoopback(server);
+    const { baseUrl } = await fixture();
     const request = (path: string) =>
       postJson({
         url: `${baseUrl}${path}`,
@@ -169,74 +134,46 @@ describe("memory remote error redaction", { concurrent: false }, () => {
         parse: (payload) => payload,
       });
 
-    try {
-      const secretError = await request("/v1/post/error").catch((cause: unknown) => cause);
-      expect(secretError).toBeInstanceOf(Error);
-      expect((secretError as { status?: unknown }).status).toBe(401);
-      expect((secretError as Error).message).not.toContain(API_KEY);
-      expect((secretError as Error).message).not.toContain(UNIQUE_NEEDLE);
+    const secretError = await caught(request("/v1/post/error"));
+    expect(secretError).toMatchObject({ status: 401 });
+    expectRedacted(secretError, "post failed (401)");
 
-      const benignError = await request("/v1/post/benign").catch((cause: unknown) => cause);
-      expect(benignError).toBeInstanceOf(Error);
-      expect((benignError as { status?: unknown }).status).toBe(400);
-      expect((benignError as Error).message).toBe("post failed (400): harmless diagnostic");
-    } finally {
-      await closeServer(server);
-    }
+    const benignError = await caught(request("/v1/post/benign"));
+    expect(benignError).toBeInstanceOf(Error);
+    expect(benignError).toMatchObject({
+      status: 400,
+      message: "post failed (400): harmless diagnostic",
+    });
   });
 
   it("redacts lower-case bearer credentials from batch errors without changing success", async () => {
-    const records: RequestRecord[] = [];
-    const server = createMemoryRemoteServer(records);
-    const baseUrl = await listenOnLoopback(server);
-    const client = (path: string) => ({
-      baseUrl: `${baseUrl}${path}`,
-      headers: { Authorization: `bearer ${API_KEY}` },
-      ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl),
-    });
-
-    try {
-      const error = await uploadBatchJsonlFile({
-        client: client("/error"),
-        requests: [{ input: "one" }],
-        errorPrefix: "file upload failed",
-      }).catch((cause: unknown) => cause);
-      expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toContain("file upload failed: 401");
-      expect((error as Error).message).not.toContain(API_KEY);
-      expect((error as Error).message).not.toContain(UNIQUE_NEEDLE);
-
-      const shortError = await uploadBatchJsonlFile({
+    const { records, baseUrl } = await fixture();
+    const upload = (path: string, key = API_KEY) =>
+      uploadBatchJsonlFile({
         client: {
-          baseUrl: `${baseUrl}/quoted-error`,
-          headers: { Authorization: `bearer ${SHORT_API_KEY}` },
+          baseUrl: `${baseUrl}${path}`,
+          headers: { Authorization: `bearer ${key}` },
           ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl),
         },
         requests: [{ input: "one" }],
         errorPrefix: "file upload failed",
-      }).catch((cause: unknown) => cause);
-      expect(shortError).toBeInstanceOf(Error);
-      expect((shortError as Error).message).toContain('{"Authorization":"***"}');
-      expect((shortError as Error).message).not.toContain(SHORT_API_KEY);
+      });
 
-      await expect(
-        uploadBatchJsonlFile({
-          client: client("/ok"),
-          requests: [{ input: "one" }],
-          errorPrefix: "file upload failed",
-        }),
-      ).resolves.toBe("file_control");
-      const batchRecords = records.filter((record) => record.path.endsWith("/files"));
-      expect(batchRecords[0]?.contentType).toMatch(/^multipart\/form-data; boundary=/u);
-      expect(batchRecords[0]?.body).toContain('name="purpose"');
-      expect(batchRecords[0]?.body).toContain("batch");
-      expect(batchRecords.map((record) => record.authorization)).toEqual([
-        `bearer ${API_KEY}`,
-        `bearer ${SHORT_API_KEY}`,
-        `bearer ${API_KEY}`,
-      ]);
-    } finally {
-      await closeServer(server);
-    }
+    const error = await caught(upload("/error"));
+    expectRedacted(error, "file upload failed: 401");
+
+    const shortError = await caught(upload("/quoted-error", SHORT_API_KEY));
+    expectRedacted(shortError, '{"Authorization":"***"}', [SHORT_API_KEY]);
+
+    await expect(upload("/ok")).resolves.toBe("file_control");
+    const batchRecords = records.filter((record) => record.path.endsWith("/files"));
+    expect(batchRecords[0]?.contentType).toMatch(/^multipart\/form-data; boundary=/u);
+    expect(batchRecords[0]?.body).toContain('name="purpose"');
+    expect(batchRecords[0]?.body).toContain("batch");
+    expect(batchRecords.map((record) => record.authorization)).toEqual([
+      `bearer ${API_KEY}`,
+      `bearer ${SHORT_API_KEY}`,
+      `bearer ${API_KEY}`,
+    ]);
   });
 });

@@ -14,11 +14,8 @@ let fixtureImport: Promise<unknown> | undefined;
 
 afterEach(async () => {
   try {
-    // A timed-out import still runs. Join it before resetting the mock registry;
-    // collectGatewayFixture fences the canceled test before it can inject faults.
+    // Join timed-out imports before draining owners or resetting their mocked hooks.
     await fixtureImport;
-    // A red fixture cleanup can skip the remaining owner hook. Drain it only
-    // after recording the failure, so this regression cannot leak its HOME.
     await drainFixtureCleanup?.();
   } finally {
     drainFixtureCleanup = undefined;
@@ -37,8 +34,7 @@ async function collectGatewayFixture(suite: FixtureSuite, signal: AbortSignal) {
   vi.resetModules();
   const setupHooks: FixtureHook[] = [];
   const cleanupHooks: FixtureHook[] = [];
-  const close = vi.fn(async () => {});
-  const harness = { close };
+  const harness = { close: vi.fn(async () => {}) };
   const start = vi.fn(async () => harness);
   const vitest = await vi.importActual<typeof import("vitest")>("vitest");
   vi.doMock("vitest", () => ({
@@ -68,11 +64,7 @@ async function collectGatewayFixture(suite: FixtureSuite, signal: AbortSignal) {
   drainFixtureCleanup = async () => {
     const errors: unknown[] = [];
     while (cleanupHooks.length) {
-      try {
-        await cleanup();
-      } catch (error) {
-        errors.push(error);
-      }
+      await cleanup().catch((error: unknown) => errors.push(error));
     }
     if (errors.length) {
       throw new AggregateError(errors, "Gateway fixture recovery cleanup failed");
@@ -83,7 +75,7 @@ async function collectGatewayFixture(suite: FixtureSuite, signal: AbortSignal) {
   await fixtureImport;
   signal.throwIfAborted();
   return {
-    close,
+    close: harness.close,
     harness,
     start,
     cleanup,
@@ -133,28 +125,21 @@ test.for(fixtureSuites)(
       expect(fixture.start).toHaveBeenCalledOnce();
       const home = process.env.HOME!;
       let cleanupSettled = false;
-      // Drive the schedule after a beforeAll timeout: its async body is still
-      // running when Vitest enters afterAll. No wall-clock timeout is needed.
-      cleanup = fixture.cleanup().then(
-        () => {
+      const retainedState = () => [cleanupSettled, process.env.HOME, existsSync(home)];
+      // Enter teardown while startup is pending, as after a beforeAll timeout.
+      cleanup = fixture
+        .cleanup()
+        .catch((error: unknown) => error)
+        .finally(() => {
           cleanupSettled = true;
-        },
-        (error: unknown) => {
-          cleanupSettled = true;
-          return error;
-        },
-      );
+        });
       await setImmediate();
-      expect.soft(cleanupSettled).toBe(false);
-      expect.soft(process.env.HOME === home).toBe(true);
-      expect.soft(existsSync(home)).toBe(true);
+      expect.soft(retainedState()).toEqual([false, home, true]);
       releaseStartup.resolve(fixture.harness);
       await setup;
       await setImmediate();
       expect.soft(fixture.close).toHaveBeenCalledOnce();
-      expect.soft(cleanupSettled).toBe(false);
-      expect.soft(process.env.HOME === home).toBe(true);
-      expect.soft(existsSync(home)).toBe(true);
+      expect.soft(retainedState()).toEqual([false, home, true]);
       releaseClose.resolve();
       expect.soft(await cleanup).toBeUndefined();
       expect.soft(existsSync(home)).toBe(false);

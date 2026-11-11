@@ -9,10 +9,36 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import { add, update } from "./ops-mutations.js";
 import { run as runCronJob } from "./ops-run.js";
 import { createCronServiceState } from "./state.js";
-import { onTimer } from "./timer-scheduler.js";
-import { runMissedJobs } from "./timer.js";
+import { onTimer, runMissedJobs } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-catchup-concurrency-" });
+
+function dueJob(id: string, nowMs: number, offset: number) {
+  return createDueIsolatedJob({ id, nowMs, nextRunAtMs: nowMs - offset });
+}
+
+async function readJobState(storePath: string, id: string) {
+  return (await loadCronStore(storePath)).jobs.find((job) => job.id === id)?.state;
+}
+
+function startCatchup(storePath: string, nowMs: () => number, selectedId: string) {
+  const started = createDeferred();
+  const release = createDeferred();
+  const state = createCronRegressionState({
+    storePath,
+    nowMs,
+    maxMissedJobsPerRestart: 1,
+    missedJobStaggerMs: 5_000,
+    runIsolatedAgentJob: vi.fn(async ({ job }) => {
+      if (job.id === selectedId) {
+        started.resolve();
+        await release.promise;
+      }
+      return { status: "ok" as const };
+    }),
+  });
+  return { state, started, release, catchup: runMissedJobs(state) };
+}
 
 describe("cron startup catch-up concurrency", () => {
   it.each(["display", "payload", "schedule", "cron-history", "reactivated", "timer"] as const)(
@@ -20,16 +46,8 @@ describe("cron startup catch-up concurrency", () => {
     async (change) => {
       const { storePath } = fixtures.makeStorePath();
       let now = Date.parse("2025-12-13T17:00:00.000Z");
-      const selected = createDueIsolatedJob({
-        id: "selected",
-        nowMs: now,
-        nextRunAtMs: now - 60_000,
-      });
-      const deferred = createDueIsolatedJob({
-        id: "deferred",
-        nowMs: now,
-        nextRunAtMs: now - 50_000,
-      });
+      const selected = dueJob("selected", now, 60_000);
+      const deferred = dueJob("deferred", now, 50_000);
       deferred.declarationKey = "daily-check";
       deferred.schedule = { kind: "every", everyMs: 60_000, anchorMs: now - 110_000 };
       if (change === "cron-history" || change === "reactivated") {
@@ -41,22 +59,7 @@ describe("cron startup catch-up concurrency", () => {
         }
       }
       await saveCronStore(storePath, { version: 1, jobs: [selected, deferred] });
-      const started = createDeferred();
-      const release = createDeferred();
-      const state = createCronRegressionState({
-        storePath,
-        nowMs: () => now,
-        maxMissedJobsPerRestart: 1,
-        missedJobStaggerMs: 5_000,
-        runIsolatedAgentJob: vi.fn(async ({ job }) => {
-          if (job.id === selected.id) {
-            started.resolve();
-            await release.promise;
-          }
-          return { status: "ok" as const };
-        }),
-      });
-      const catchup = runMissedJobs(state);
+      const { state, started, release, catchup } = startCatchup(storePath, () => now, selected.id);
       try {
         await started.promise;
         let reconciled = await add(state, {
@@ -86,13 +89,11 @@ describe("cron startup catch-up concurrency", () => {
         }
         release.resolve();
         await catchup;
-        const persisted = (await loadCronStore(storePath)).jobs.find(
-          (job) => job.id === deferred.id,
-        );
         const replacedSchedule = change === "schedule" || change === "reactivated";
         const expected = replacedSchedule ? reconciled.state.nextRunAtMs : now + 5_000;
-        expect(persisted?.state.nextRunAtMs).toBe(expected);
-        expect(persisted?.state.startupCatchupAtMs).toBe(replacedSchedule ? undefined : expected);
+        const persisted = await readJobState(storePath, deferred.id);
+        expect(persisted?.nextRunAtMs).toBe(expected);
+        expect(persisted?.startupCatchupAtMs).toBe(replacedSchedule ? undefined : expected);
         // A fresh scheduler must see the durable pacing fact, not replay the old due slot.
         const restarted = createCronServiceState(state.deps);
         await runMissedJobs(restarted);
@@ -105,43 +106,19 @@ describe("cron startup catch-up concurrency", () => {
   );
 
   it("does not defer a recurring job completed by another gateway during catch-up", async () => {
-    const store = fixtures.makeStorePath();
+    const { storePath } = fixtures.makeStorePath();
     const startNow = Date.parse("2025-12-13T17:00:00.000Z");
-    const selected = createDueIsolatedJob({
-      id: "foreign-window-selected",
-      nowMs: startNow,
-      nextRunAtMs: startNow - 60_000,
-    });
-    const deferred = createDueIsolatedJob({
-      id: "foreign-window-deferred",
-      nowMs: startNow,
-      nextRunAtMs: startNow - 50_000,
-    });
+    const selected = dueJob("foreign-window-selected", startNow, 60_000);
+    const deferred = dueJob("foreign-window-deferred", startNow, 50_000);
     selected.schedule = { kind: "every", everyMs: 60_000, anchorMs: startNow - 120_000 };
     deferred.schedule = { kind: "every", everyMs: 60_000, anchorMs: startNow - 110_000 };
-    await saveCronStore(store.storePath, { version: 1, jobs: [selected, deferred] });
-    const selectedStarted = createDeferred();
-    const releaseSelected = createDeferred<{ status: "ok"; summary: string }>();
-    const firstState = createCronRegressionState({
-      storePath: store.storePath,
-      nowMs: () => startNow,
-      maxMissedJobsPerRestart: 1,
-      missedJobStaggerMs: 5_000,
-      runIsolatedAgentJob: vi.fn(async ({ job }) => {
-        if (job.id === selected.id) {
-          selectedStarted.resolve();
-          return await releaseSelected.promise;
-        }
-        return { status: "ok" as const, summary: "unexpected" };
-      }),
-    });
-    const catchup = runMissedJobs(firstState);
-
+    await saveCronStore(storePath, { version: 1, jobs: [selected, deferred] });
+    const { started, release, catchup } = startCatchup(storePath, () => startNow, selected.id);
     try {
-      await selectedStarted.promise;
+      await started.promise;
       const foreignNow = startNow + 1;
       const foreignState = createCronRegressionState({
-        storePath: store.storePath,
+        storePath,
         nowMs: () => foreignNow,
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "foreign" })),
       });
@@ -149,21 +126,17 @@ describe("cron startup catch-up concurrency", () => {
         ok: true,
         ran: true,
       });
-      const foreignCompleted = (await loadCronStore(store.storePath)).jobs.find(
-        (job) => job.id === deferred.id,
-      );
+      const foreignCompleted = await readJobState(storePath, deferred.id);
 
-      releaseSelected.resolve({ status: "ok", summary: "selected" });
+      release.resolve();
       await catchup;
 
-      const persisted = (await loadCronStore(store.storePath)).jobs.find(
-        (job) => job.id === deferred.id,
-      );
-      expect(persisted?.state.lastRunAtMs).toBe(foreignNow);
-      expect(persisted?.state.nextRunAtMs).toBe(foreignCompleted?.state.nextRunAtMs);
-      expect(persisted?.state.startupCatchupAtMs).toBeUndefined();
+      const persisted = await readJobState(storePath, deferred.id);
+      expect(persisted?.lastRunAtMs).toBe(foreignNow);
+      expect(persisted?.nextRunAtMs).toBe(foreignCompleted?.nextRunAtMs);
+      expect(persisted?.startupCatchupAtMs).toBeUndefined();
     } finally {
-      releaseSelected.resolve({ status: "ok", summary: "selected" });
+      release.resolve();
       await catchup;
     }
   });

@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { RestartSentinel } from "../../infra/restart-sentinel-store.js";
-import {
-  createGatewayUpdateLifecycle,
-  type UpdateCheckLifecycle,
-} from "../../infra/update-check-lifecycle.js";
+import type {
+  RestartSentinel,
+  RestartSentinelPayload,
+} from "../../infra/restart-sentinel-store.js";
+import { createGatewayUpdateLifecycle } from "../../infra/update-check-lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { recordLatestUpdateRestartSentinel } from "../server-update-sentinel.js";
@@ -34,7 +34,7 @@ vi.mock("../../infra/update-status-schedule.js", async (importOriginal) => ({
   getGatewayUpdateSchedule: () => ({ channel: "stable", autoEnabled: false }),
 }));
 
-let lifecycle: UpdateCheckLifecycle;
+let lifecycle: ReturnType<typeof createGatewayUpdateLifecycle>;
 beforeEach(() => {
   lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
   store.read.mockReset().mockResolvedValue(null);
@@ -44,7 +44,7 @@ afterEach(async () => {
   await lifecycle.scheduler.stop();
 });
 
-async function status() {
+async function status(sentinel?: RestartSentinelPayload) {
   const respond = vi.fn<RespondFn>();
   await updateStatusHandlers["update.status"]!({
     req: { type: "req", id: "status", method: "update.status", params: {} },
@@ -56,72 +56,57 @@ async function status() {
       getRuntimeConfig: () => ({ update: { channel: "stable" } }),
     } as GatewayRequestContext,
   });
-  return respond;
+  if (sentinel) {
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ sentinel }));
+  }
 }
 
-it.each([false, true])(
-  "shares cold sentinel preparation and later publications (empty=%s)",
-  async (empty) => {
+it.each(["disk", "empty", "published-during-read"])(
+  "shares %s preparation without losing producer publications",
+  async (source) => {
     const started = createDeferredCore();
     const read = createDeferredCore<RestartSentinel | null>();
-    store.read.mockImplementation(() => {
+    store.read.mockImplementationOnce(() => {
       started.resolve();
       return read.promise;
     });
     const payload = { kind: "update", status: "ok", ts: 1 } as const;
-    const initial = empty ? { ...payload, ts: 0 } : payload;
-    if (empty) {
+    const initial = {
+      ...payload,
+      status: source === "published-during-read" ? ("error" as const) : payload.status,
+      ts: source === "empty" ? 0 : source === "disk" ? 1 : 20,
+    };
+    if (source === "empty") {
       recordLatestUpdateRestartSentinel(initial);
     }
-    const clients = Array.from({ length: 20 }, () => status());
+    const clients = Array.from({ length: 20 }, () => status(initial));
     await started.promise;
-    read.resolve(empty ? null : { version: 1, revision: 1, payload });
-    for (const respond of await Promise.all(clients)) {
-      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ sentinel: initial }));
+    if (source === "published-during-read") {
+      recordLatestUpdateRestartSentinel(initial);
     }
-    const published = { ...payload, status: "error", ts: 2 } as const;
+    read.resolve(source === "empty" ? null : { version: 1, revision: 1, payload });
+    await Promise.all(clients);
+    await status(initial);
+    const published = { ...payload, status: "error", ts: 30 } as const;
     store.read.mockResolvedValue({ version: 1, revision: 2, payload: published });
     recordLatestUpdateRestartSentinel(published);
-    expect(await status()).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ sentinel: published }),
-    );
+    await status(published);
     expect(store.read).toHaveBeenCalledOnce();
 
     await lifecycle.stop();
     await lifecycle.scheduler.stop();
     lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
-    store.read.mockResolvedValue({ version: 1, revision: 3, payload: { ...payload, ts: 3 } });
-    expect(await status()).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ sentinel: { ...payload, ts: 3 } }),
-    );
+    store.read.mockResolvedValue({ version: 1, revision: 3, payload: { ...payload, ts: 40 } });
+    await status({ ...payload, ts: 40 });
     expect(store.read).toHaveBeenCalledTimes(2);
   },
 );
-
-it("does not replace a producer publication with a late initial read", async () => {
-  const started = createDeferredCore();
-  const read = createDeferredCore<RestartSentinel | null>();
-  store.read.mockImplementationOnce(() => {
-    started.resolve();
-    return read.promise;
-  });
-  const request = status();
-  await started.promise;
-  const current = { kind: "update", status: "error", ts: 20 } as const;
-  recordLatestUpdateRestartSentinel(current);
-  read.resolve({ version: 1, revision: 10, payload: { ...current, status: "ok", ts: 10 } });
-  expect(await request).toHaveBeenCalledWith(true, expect.objectContaining({ sentinel: current }));
-  expect(await status()).toHaveBeenCalledWith(true, expect.objectContaining({ sentinel: current }));
-  expect(store.read).toHaveBeenCalledOnce();
-});
 
 it("retries failed preparation instead of retaining an unavailable snapshot", async () => {
   store.read.mockRejectedValueOnce(new Error("state unavailable"));
   await status();
   const payload = { kind: "update", status: "ok", ts: 30 } as const;
   store.read.mockResolvedValue({ version: 1, revision: 30, payload });
-  expect(await status()).toHaveBeenCalledWith(true, expect.objectContaining({ sentinel: payload }));
+  await status(payload);
   expect(store.read).toHaveBeenCalledTimes(2);
 });

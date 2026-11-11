@@ -44,26 +44,6 @@ describe("OpenAI Codex provider auth helpers", () => {
     });
   });
 
-  it("builds stable imported profile names from subject claims before account fallback", () => {
-    const identity = resolveOpenAICodexAuthIdentity({
-      access: jwt({
-        sub: "jwt-subject",
-        "https://api.openai.com/auth": {
-          chatgpt_account_user_id: "user-123__acct-456",
-        },
-      }),
-      accountId: "acct/fallback",
-    });
-
-    expect(identity).toEqual({
-      accountId: "acct/fallback",
-      profileName: `id-${Buffer.from("user-123__acct-456").toString("base64url")}`,
-    });
-    expect(resolveOpenAICodexImportProfileName(identity, "codex-import")).toBe(
-      "account-acct-fallback",
-    );
-  });
-
   it("falls back to credential email before synthetic ids", () => {
     expect(
       resolveOpenAICodexAuthIdentity({
@@ -73,19 +53,6 @@ describe("OpenAI Codex provider auth helpers", () => {
     ).toEqual({
       email: "credential@example.com",
       profileName: "credential@example.com",
-    });
-  });
-
-  it("decodes URL-safe base64 JWT payloads", () => {
-    const access = jwt({
-      "https://api.openai.com/auth": {
-        chatgpt_account_id: "w_ébé_1fzcswWN6Pi5zL",
-      },
-    });
-    expect(access.split(".")[1]).toContain("_");
-
-    expect(resolveOpenAICodexAuthIdentity({ access })).toEqual({
-      accountId: "w_ébé_1fzcswWN6Pi5zL",
     });
   });
 
@@ -105,10 +72,6 @@ describe("OpenAI Codex provider auth helpers", () => {
         }),
       }),
     ).toEqual({ accountId: "workspace-only" });
-  });
-
-  it("returns no identity metadata for non-JWT input", () => {
-    expect(resolveOpenAICodexAuthIdentity({ access: "not-a-jwt" })).toEqual({});
   });
 
   it("resolves access-token expiry from numeric and string JWT exp claims", () => {

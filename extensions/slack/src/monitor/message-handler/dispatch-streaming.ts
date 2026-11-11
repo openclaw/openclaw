@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveSlackMarkdownOptions } from "../../accounts.js";
 import { trackSlackDraftMessage } from "../../draft-message-boundaries.js";
 import { formatSlackError } from "../../errors.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "../../limits.js";
@@ -25,7 +26,6 @@ import { resolveSlackReplyThreadTs } from "../../thread-ts.js";
 import { countSlackTextUtf8Bytes } from "../../truncate.js";
 import { deliverReplies } from "../replies.js";
 import {
-  createSlackEventDeliveryTracker,
   buildSlackEventDeliveryKey,
   resolveSlackStreamRecipientTeamId,
 } from "./dispatch-helpers.js";
@@ -33,12 +33,7 @@ import type { SlackDispatchSetup } from "./dispatch-setup.js";
 
 export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
   const {
-    account,
-    ctx,
-    forcedReplyThreadTs,
     isThreadReply,
-    message,
-    messageSentDeliveryHookContext,
     messageSentHookContext,
     messageSentHookTarget,
     prepared,
@@ -48,9 +43,13 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     slackClient,
     slackClientOptions,
     slackIdentity,
-    slackMessageMetadata,
     slackStreamFallbackTeamId,
   } = setup;
+  const { account, ctx, forcedReplyThreadTs, message, slackMessageMetadata } = prepared;
+  const markdownOptions = resolveSlackMarkdownOptions({
+    cfg: ctx.cfg,
+    accountId: account.accountId,
+  });
   const boundaryState: {
     streamBoundary: ReturnType<typeof trackSlackDraftMessage> | null;
     interruptedThreadTs: string | undefined;
@@ -131,7 +130,8 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       replyToMode: replyDeliveryMode,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
       ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
-      ...messageSentDeliveryHookContext,
+      ...messageSentHookContext,
+      messageSentHookTarget,
       ...(deferMessageSentHooks ? { deferMessageSentHooks: true } : {}),
       eventScope: prepared.eventScope,
     });
@@ -147,19 +147,24 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       ...result,
     });
   };
-  let deliveryTracker = createSlackEventDeliveryTracker();
+  const deliveredKeys = new Set<string>();
+  const markDelivered = (key: string | null) => {
+    if (key) {
+      deliveredKeys.add(key);
+    }
+  };
   const markPreviewPayloadDelivered = (params: {
     kind: ReplyDispatchKind;
     payload: ReplyPayload;
     threadTs: string | undefined;
   }) => {
-    const preparedReply = prepareSlackReply(params.payload);
-    deliveryTracker.markDelivered(buildSlackEventDeliveryKey(params, preparedReply));
+    const preparedReply = prepareSlackReply(params.payload, markdownOptions);
+    markDelivered(buildSlackEventDeliveryKey(params, preparedReply));
     // Single-use reply modes move later same-turn payloads off the preview
     // thread, so protect both delivery keys from duplicates.
     const nextThreadTs = replyPlan.peekThreadTs();
     if (nextThreadTs !== params.threadTs) {
-      deliveryTracker.markDelivered(
+      markDelivered(
         buildSlackEventDeliveryKey({ ...params, threadTs: nextThreadTs }, preparedReply),
       );
     }
@@ -187,6 +192,12 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       state.usedBlockReplyThreadTs = deliveredThreadTs;
     }
   };
+  const stopStream = (session: SlackStreamSession, chunks?: AnyChunk[]) =>
+    stopSlackStream({
+      session,
+      ...(chunks?.length ? { chunks } : {}),
+      ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
+    });
   const deliverPendingStreamFallback = async (
     session: SlackStreamSession,
     err: SlackStreamNotDeliveredError,
@@ -197,10 +208,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     let fallbackError = err;
     if (!session.stopped) {
       try {
-        const stopResult = await stopSlackStream({
-          session,
-          ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
-        });
+        const stopResult = await stopStream(session);
         if (session.stoppedBySlack) {
           return undefined;
         }
@@ -226,7 +234,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       return undefined;
     }
     const sent = await deliverPreparedReply(
-      prepareSlackReply({ text: fallbackText }),
+      prepareSlackReply({ text: fallbackText }, markdownOptions),
       session.threadTs,
       true,
     );
@@ -236,10 +244,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     markSlackStreamFallbackDelivered(session);
     if (!session.stopped) {
       try {
-        await stopSlackStream({
-          session,
-          ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
-        });
+        await stopStream(session);
       } catch (finalizeErr) {
         runtime.error?.(
           danger(
@@ -268,11 +273,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     if (session && !session.stopped) {
       try {
         try {
-          await stopSlackStream({
-            session,
-            ...(chunks?.length ? { chunks } : {}),
-            ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
-          });
+          await stopStream(session, chunks);
           state.observedReplyDelivery ||= session.delivered;
         } catch (error) {
           if (!(error instanceof SlackStreamNotDeliveredError)) {
@@ -337,7 +338,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       replyDeliveryMode === "off" && !forcedReplyThreadTs && !isThreadReply
         ? undefined
         : replyThreadTs;
-    const preparedReply = prepareSlackReply(params.payload);
+    const preparedReply = prepareSlackReply(params.payload, markdownOptions);
     const deliveryKey = buildSlackEventDeliveryKey(
       {
         kind: params.kind,
@@ -346,8 +347,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       },
       preparedReply,
     );
-    if (deliveryTracker.hasDelivered(deliveryKey)) {
-      logVerbose("slack: suppressed duplicate normal delivery within the same turn");
+    if (deliveryKey && deliveredKeys.has(deliveryKey)) {
       return { visibleReplySent: false };
     }
     const sent = await deliverPreparedReply(preparedReply, deliveryReplyThreadTs);
@@ -364,7 +364,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     // Record the thread ts only after confirmed delivery success.
     rememberDeliveredThreadTs(params.kind, deliveredThreadTs);
     replyPlan.markSent();
-    deliveryTracker.markDelivered(deliveryKey);
+    markDelivered(deliveryKey);
     return {
       visibleReplySent: true,
       messageIds: sent.receipt.platformMessageIds,
@@ -375,11 +375,22 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
 
   const isStreamingEligible = (payload: ReplyPayload, options?: { maxTextBytes?: number }) => {
     const reply = resolveSendableOutboundReplyParts(payload);
-    const renderPlan = resolveSlackReplyRenderPlan(payload);
+    const renderPlan = resolveSlackReplyRenderPlan(payload, payload.text, markdownOptions);
     const plannedBlocks =
       renderPlan.mode === "single" ? renderPlan.blocks : renderPlan.blockPart?.blocks;
+    const previewThreadTs =
+      state.streamSession?.threadTs ??
+      state.interruptedThreadTs ??
+      state.nativeProgressStreamThreadTs;
+    const finalThreadTs = resolveSlackReplyThreadTs({
+      replyToMode: replyDeliveryMode,
+      replyToId: payload.replyToId,
+      threadId: previewThreadTs,
+      replyToCurrent: payload.replyToCurrent,
+    });
     return (
       !state.streamFailed &&
+      (!previewThreadTs || finalThreadTs === previewThreadTs) &&
       !reply.hasMedia &&
       renderPlan.mode !== "split" &&
       !renderPlan.textIsSlackPlainText &&
@@ -415,7 +426,12 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       return { visibleReplySent: false };
     }
     let session = state.streamSession;
-    const threadTs = session?.threadTs ?? state.interruptedThreadTs ?? replyPlan.nextThreadTs();
+    const threadTs = resolveSlackReplyThreadTs({
+      replyToMode: replyDeliveryMode,
+      replyToId: params.payload.replyToId,
+      threadId: session?.threadTs ?? state.interruptedThreadTs ?? replyPlan.nextThreadTs(),
+      replyToCurrent: params.payload.replyToCurrent,
+    });
     if (state.streamFailed || !threadTs) {
       state.streamFailed = true;
       return await deliverNormally({
@@ -426,9 +442,11 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     }
     const hookContent = resolveSendableOutboundReplyParts(params.payload).trimmedText;
     const text = params.streamText ?? hookContent;
-    const deliveryKey = buildSlackEventDeliveryKey({ ...params, threadTs, textOverride: text });
-    if (deliveryTracker.hasDelivered(deliveryKey)) {
-      logVerbose("slack-stream: suppressed duplicate reply payload");
+    const deliveryKey = buildSlackEventDeliveryKey(
+      { ...params, threadTs, textOverride: text },
+      prepareSlackReply(params.payload, markdownOptions),
+    );
+    if (deliveryKey && deliveredKeys.has(deliveryKey)) {
       return { visibleReplySent: false };
     }
     let messageId: string | undefined;
@@ -491,7 +509,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     state.observedReplyDelivery = true;
     rememberDeliveredThreadTs(params.kind, threadTs);
     replyPlan.markSent();
-    deliveryTracker.markDelivered(deliveryKey);
+    markDelivered(deliveryKey);
     emitStreamedDelivery(hookContent, { success: true, ...(messageId ? { messageId } : {}) });
     return (
       fallbackDelivery ?? {
@@ -523,9 +541,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     rememberDeliveredThreadTs,
     rotateInterruptedStream,
     startStream,
-    resetDeliveryTracker: () => {
-      deliveryTracker = createSlackEventDeliveryTracker();
-    },
+    resetDeliveryTracker: () => deliveredKeys.clear(),
   });
 }
 

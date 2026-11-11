@@ -136,6 +136,13 @@ The download is lazy and demand-driven. It happens on the first authorized looku
 
 On that first qualifying lookup the plugin fetches the database into `<state-dir>/geolocation/`, parses it before publishing it, and keeps it until it ages past `refreshDays`.
 
+The opened database is released from memory after one minute without lookups.
+The next public-address lookup reopens the cached file; it does not download a
+fresh copy unless the file needs refreshing. A download that could not be saved
+to disk is exempt from idle eviction, preserving the in-memory fallback during
+its refresh window. After that window, a failed download still makes lookups
+unavailable when no disk cache exists.
+
 Four behaviors are worth knowing because they decide what you see during a failure:
 
 - The response is read against a compressed ceiling and inflated against an on-disk ceiling, both enforced while reading. A replaced source cannot allocate an unbounded body, and a compression bomb cannot inflate past the limit.
