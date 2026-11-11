@@ -44,6 +44,11 @@ function pendingAvatar(url: string) {
   return { response, fetchAvatar };
 }
 
+it("labels unnamed agent avatars with the localized product noun", () => {
+  const view = mountSolid(() => <ChatAvatar role="assistant" />);
+  expect(view.container.querySelector('[aria-label="Agent"]')).not.toBeNull();
+});
+
 function agentIdentity(agentId: string, revision = 1, name = agentId) {
   return { agentId, name, avatar: `/avatar/${agentId}?v=${revision}` };
 }

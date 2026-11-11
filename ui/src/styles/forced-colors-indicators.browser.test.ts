@@ -37,6 +37,7 @@ function readIndicators(page: Page) {
 const css = readStyles(
   "styles/base",
   "styles/components",
+  "styles/checkbox",
   "styles/settings-controls",
   "styles/settings",
   "styles/channels",
@@ -90,6 +91,32 @@ fixture.describe("Control UI forced-colors indicators", () => {
         for (const actual of colors.actual) {
           expect(actual).toEqual(colors.expected);
         }
+      },
+    );
+  });
+
+  it("keeps status dots painted when forced colors repaint backgrounds", async () => {
+    await withBrowserPage(
+      fixture.page({ forcedColors: "active", colorScheme: "light" }),
+      async (page) => {
+        await page.setContent(
+          styleDocument(
+            css,
+            `<span id="palette" style="color:CanvasText"></span>
+            <span class="status-dot settings-status__dot"></span>
+            <span class="status-dot cron-table__state-dot"></span>
+            <span class="status-dot activity-pulse__running"></span>
+            <span class="status-dot activity-feed__presence-dot"></span>`,
+          ),
+        );
+        const colors = await page.evaluate(() => ({
+          expected: getComputedStyle(document.getElementById("palette")!).color,
+          actual: Array.from(
+            document.querySelectorAll(".status-dot"),
+            (element) => getComputedStyle(element).backgroundColor,
+          ),
+        }));
+        expect(colors.actual).toEqual(Array(4).fill(colors.expected));
       },
     );
   });

@@ -78,7 +78,7 @@ export function addControlUiSessionPrMembership(
 }
 
 /** Retire the unused cell through the same owner that retains its prepared readers. */
-export function retireControlUiSessionPrState<
+function retireControlUiSessionPrState<
   State extends PreparedSessionPrState & { cancelRefresh?: () => void },
 >(state: State | undefined, keyStates: Map<string, State>): void {
   if (!state || state.prepared || state.connIds.size > 0) {

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
 import { enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
@@ -29,9 +30,12 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
+import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import { retainGatewayOperatorRun } from "./operator-run-cancellation.js";
+import { pairedOperator, recoveryFixture } from "./operator-run-recovery.test-support.js";
 import { createChatRunState } from "./server-chat-state.js";
 import { createChatSendWorkAdmission } from "./server-methods/chat-send-work-admission.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
@@ -52,7 +56,7 @@ async function withCancellationFixture(
     };
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
-    const fixture = await createCancellationFixture(cfg);
+    const fixture = await createCancellationFixture(cfg, state.stateDir);
     try {
       await run(fixture);
     } finally {
@@ -69,7 +73,7 @@ function cancellationCase<T>(
   return (value: T) => withCancellationFixture((fixture) => run(fixture, value));
 }
 
-async function createCancellationFixture(cfg: OpenClawConfig) {
+async function createCancellationFixture(cfg: OpenClawConfig, stateDir: string) {
   const profile = ensureProfileForEmail("guest-cancellation@example.test");
   const source = new AbortController();
   const scope = {
@@ -143,24 +147,35 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
     }
     return {
       ...registration,
-      retain: () => retain(runId, registration.entry),
+      retain: (
+        invocationAuthority?: Parameters<typeof retainGatewayOperatorRun>[0]["invocationAuthority"],
+        client?: Parameters<typeof retainGatewayOperatorRun>[0]["client"],
+      ) => retain(runId, registration.entry, invocationAuthority, client),
       expectCurrent: () => {
         expect(registration.controller.signal.aborted).toBe(false);
         expect(rpcSourceTesting.get(runId)).toBe(registration.entry);
       },
     };
   };
-  const retain = async (runId: string, entry: RpcSourceRef) => {
+  const retain = async (
+    runId: string,
+    entry: RpcSourceRef,
+    invocationAuthority?: Parameters<typeof retainGatewayOperatorRun>[0]["invocationAuthority"],
+    client?: Parameters<typeof retainGatewayOperatorRun>[0]["client"],
+  ) => {
     const { signal } = source;
     const retained = await retainGatewayOperatorRun({
       context,
       runId,
       entry,
-      client: {
+      client: client ?? {
         connect: gatewayConnect(["operator.sessions.write"], { id: "test", mode: "test" }),
         internal: { operatorRoleActor: { kind: "operator", profileId: profile.id } },
       },
-      sourceAuthority: { signal, assertCurrent: () => signal.throwIfAborted() },
+      sourceAuthority: client
+        ? undefined
+        : { signal, assertCurrent: () => signal.throwIfAborted() },
+      invocationAuthority,
     });
     if (!retained.authority) {
       throw new Error("fixture operator source was not retained");
@@ -176,6 +191,7 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
   return {
     source,
     scope,
+    stateDir,
     context,
     execution,
     settle,
@@ -215,6 +231,72 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
 }
 
 describe("operator access cancellation", () => {
+  it.each([
+    { sender: "agent:main:cron-sender", end: "occurrence retired" },
+    { sender: "agent:main:guest-and-staff", end: "occurrence retired" },
+    { sender: "agent:main:cron-sender", end: "sender session cleaned up" },
+  ] as const)(
+    "an accepted turn sent from $sender keeps its authority after $end",
+    cancellationCase(async (f, { sender, end }) => {
+      const profile = ensureProfileForEmail("scheduled-sender@example.test");
+      const occurrence = await recoveryFixture(f.stateDir, profile.id, {
+        device: pairedOperator(),
+        scopes: ["operator.write"],
+      });
+      const restored = expectDefined(await occurrence.restore(), "scheduled sender authority");
+      try {
+        // sessions_send admits the target turn with the sending run's in-process client.
+        const client = createSyntheticPluginRuntimeClient({
+          authenticatedUserProfile: occurrence.client.authenticatedUserProfile,
+          operatorRoleActor: { kind: "operator", profileId: restored.authority.profileId },
+          operatorRunAuthority: restored.authority,
+          agentToolCaller: { agentId: "main", sessionKey: sender },
+          scopes: ["operator.write"],
+        });
+        const target = await f.register("sent-turn");
+        const retained = await target.retain(undefined, client);
+        retained.armCancellation();
+        if (end === "occurrence retired") {
+          occurrence.retire();
+        } else {
+          // An isolated run's exact-run session is removed when the run finishes.
+          await replaceSessionEntry(occurrence.target, {
+            ...occurrence.entry,
+            sessionId: "next-run-session",
+          });
+        }
+        expect(restored.authority.assertCurrent).toThrow();
+        expect(restored.authority.signal?.aborted).toBe(end !== "occurrence retired");
+        expect(retained.authority!.assertCurrent).not.toThrow();
+        expect(retained.authority!.signal?.aborted).not.toBe(true);
+        target.expectCurrent();
+        // The accepted turn still enforces the sender's device, profile and role.
+        invalidateGatewayDeviceRevocation(occurrence.context, "recovery-device", "operator");
+        expect(retained.authority!.assertCurrent).toThrow();
+      } finally {
+        restored.release();
+      }
+    }),
+  );
+
+  it("keeps invocation custody until the final retained operator releases it", async () => {
+    await withCancellationFixture(async (f) => {
+      const guest = await f.register("retained-invocation");
+      const release = vi.fn();
+      const retained = await guest.retain({ assertCurrent: () => {}, release });
+      const releaseChild = retained.authority!.retain!();
+      try {
+        retained.release();
+        expect(release).not.toHaveBeenCalled();
+        expect(retained.authority!.assertCurrent).not.toThrow();
+      } finally {
+        releaseChild();
+        retained.release();
+      }
+      expect(release).toHaveBeenCalledOnce();
+    });
+  });
+
   it.each([false, true])(
     "stops only its run and settles persistence (hidden progress refresh: %s)",
     cancellationCase(async (f, hiddenRefresh) => {

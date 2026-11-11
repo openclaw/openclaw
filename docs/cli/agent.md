@@ -27,6 +27,8 @@ For Gateway-backed turns, the Gateway resolves `--session-id`, including when it
 
 A completed turn exits `0`. Error, timeout, and cancellation outcomes exit `1`, after any text or JSON result is written. A received `SIGINT` or `SIGTERM` instead preserves the signal-specific exit status described below.
 
+An earlier tool-failure warning does not hide a later provider failure. Existing usage-limit and reset details appear before the tool warning.
+
 Related: [Agent send tool](/tools/agent-send)
 
 ## `agent exec`

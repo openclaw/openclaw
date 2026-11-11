@@ -354,6 +354,21 @@ export async function runMattermostMessageAction(
     case "download-file": {
       const fileId = readStringParam(params, "fileId", { required: true });
       assertAccount();
+      const current = delegated ? resolveCurrentMattermostConversation(context) : undefined;
+      const currentTarget = current ? `${current.kind}:${current.id}` : undefined;
+      const messagingTarget = normalizeOptionalString(context.toolContext?.currentMessagingTarget);
+      const currentPeer = messagingTarget && normalizeMattermostMessagingTarget(messagingTarget);
+      const requestedTarget =
+        authorizedTarget && normalizeMattermostMessagingTarget(authorizedTarget);
+      if (
+        delegated &&
+        (!currentTarget ||
+          (authorizedTarget &&
+            requestedTarget !== currentTarget &&
+            !(currentPeer?.startsWith("user:") && requestedTarget === currentPeer)))
+      ) {
+        throw new Error("Mattermost delegated downloads are limited to the current conversation.");
+      }
       const info = await client.request<{
         id: string;
         name?: string | null;
@@ -366,21 +381,14 @@ export async function runMattermostMessageAction(
         const postId = normalizeOptionalString(info.post_id);
         const channelId = normalizeOptionalString(info.channel_id);
         if (postId) {
-          // A file download names no destination, so the current conversation is the
-          // only target the runner can vouch for.
           await authorizeMattermostPostForConversation({
             client,
             postId,
-            authorizedTarget:
-              authorizedTarget ??
-              normalizeOptionalString(context.toolContext?.currentChannelId) ??
-              normalizeOptionalString(context.toolContext?.currentMessagingTarget),
+            authorizedTarget: currentTarget,
             cacheKey,
             label: "download",
           });
-        } else if (channelId) {
-          await authorizeChannel(channelId);
-        } else {
+        } else if (!channelId || current?.kind !== "channel" || current.id !== channelId) {
           throw new Error("Mattermost download-file target is not bound to a conversation.");
         }
       }

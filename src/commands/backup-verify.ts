@@ -347,6 +347,9 @@ async function verifySqliteSnapshots(params: {
   assertCanonicalStateAssetRoot(params.manifest);
   const tempRoot = params.spool.tempRoot;
   const batches = [initialEntries];
+  if (!initialEntries.some((entry) => entry.role === "global")) {
+    await params.spool.discardExcept(initialEntries);
+  }
   const extractedEntries: SqliteSnapshotEntry[] = [];
   for (const sqliteEntries of batches) {
     extractedEntries.push(...sqliteEntries);
@@ -419,6 +422,9 @@ async function verifySqliteSnapshots(params: {
           if (agentEntries.length > 0) {
             batches.push(agentEntries);
           }
+          // The verified registry completes selection, even with a manifest inventory.
+          // Keep unvisited initial entries and later batches while releasing opaque candidates.
+          await params.spool.discardExcept(batches.flat());
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

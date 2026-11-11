@@ -17,7 +17,6 @@ import {
   isGatewayRestartDraining,
 } from "../process/gateway-work-admission.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome-classification.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { readActiveGatewayLockIdentity } from "./gateway-lock.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
@@ -127,7 +126,7 @@ const { pathToFileURL } = require("node:url");
 
 ${MANAGED_HANDOFF_BOOTSTRAP_SOURCE}
 
-const { parseLaunchctlJob, OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, prepareManagedHandoffLeaseStore, extractSqliteTableSchema, inspectManagedHandoffSentinelRowSync, recordManagedHandoffSentinelOutcomeRowSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice, procCgroupMembershipMatches } =
+const { parseLaunchctlJob, classifyUpdateOutcome, OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, prepareManagedHandoffLeaseStore, extractSqliteTableSchema, inspectManagedHandoffSentinelRowSync, recordManagedHandoffSentinelOutcomeRowSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice, procCgroupMembershipMatches, handoffLedger, packageActivationIdentity, recoverInterruptedManagedUpdate, readManagedHandoffGatewayStop, findUpdateGatewayStop } =
   require("./runtime/${MANAGED_HANDOFF_RUNTIME_ENTRY}");
 if (!params.updateLeaseDatabaseIdentity) {
   throw new Error("Managed handoff requires its prepared lease database identity");
@@ -209,6 +208,7 @@ let parkedServiceInvocation = null;
 let parkedServiceFragment = null;
 let restorationArmed = false;
 let updaterStarted = false;
+let originalInstallationIdentity;
 let pendingServiceStop;
 let finishBeforeParkNotice;
 
@@ -369,7 +369,9 @@ let foregroundParkFlight;
 let foregroundRespawn = false;
 async function assertForegroundOrigin(closed = false) {
   assertGatewayParkOwner();
-  await runLedger.assertForegroundUpdateOrigin(params.foregroundOrigin, closed);
+  // Parking precedes the updater, so the installed runtime still owns origin checks.
+  const { assertForegroundUpdateOrigin } = await import(pathToFileURL(params.recoveryModulePath).href);
+  await assertForegroundUpdateOrigin(params.foregroundOrigin, closed);
   assertGatewayParkOwner();
 }
 async function parkForegroundGateway() {
@@ -475,6 +477,10 @@ async function collectUpdateFailureTriage() {
     // Diagnostic reads share this boundary so they cannot bypass terminal cleanup.
     await captureManagedUpdateResult();
     appendLog("If triage is unavailable, run " + params.triageRecoveryCommand + " on the Gateway host.");
+    if (terminalRuntimePath === stagedRuntimePath() || !fs.existsSync(terminalRuntimePath)) {
+      appendLog("Installed runtime remains unavailable or unverified; run openclaw update repair before triage.");
+      return;
+    }
     // The helper and outer updater start from the same installation. Preserve
     // its complete export; absent exports have only the helper's observed failure.
     const recordedFailure = fs.existsSync(params.triageContextPath);
@@ -558,9 +564,12 @@ async function collectUpdateFailureTriage() {
   const controlDeadlineAt = performance.now() + params.parentExitTimeoutMs;
   try {
     if (params.action === "update" && params.runId) {
-      // Admission and stop recording use the serving runtime. Terminal writes after
-      // the updater starts must load the installed runtime in a fresh process.
-      runLedger = await import(pathToFileURL(params.recoveryModulePath).href);
+      // Refuse before ownership transfer when the installation it would update is incomplete.
+      if (!fs.existsSync(params.recoveryModulePath)) throw new Error("installed runtime is unavailable: " + params.recoveryModulePath);
+      // Bookkeeping, including lazy fs-safe loads, must survive a missing install.
+      // Terminal writes prefer the fresh candidate after any schema migration.
+      runLedger = handoffLedger;
+      originalInstallationIdentity = packageActivationIdentity(params.updateLeaseKey, true);
       for (const name of ["adoptUpdateRun", "finishUpdateRun", "getUpdateRun", "recordUpdateRunStep", "recordUpdateRunVerification"]) {
         if (typeof runLedger[name] !== "function") throw new Error("managed update ledger writer is unavailable");
       }
@@ -745,8 +754,11 @@ async function collectUpdateFailureTriage() {
     // Only this invocation's direct child result carries the producer decision.
     // Success may change install roots; only recovery requires the original root.
     // Sentinels and diagnostic exports never authorize activation.
-    let result = null;
-    try { if (!outputOverflow) result = JSON.parse(updaterOutput); } catch {}
+    const result = outputOverflow ? null : parseManagedUpdateResult(updaterOutput);
+    if ((exit.signal || !result) && shouldRecoverInterruptedUpdater()) {
+      await recoverInterruptedUpdater();
+      return;
+    }
     if (!exit.signal && ownsManagedUpdateLease() && result?.status === "skipped" &&
       result.reason === "update-ledger-busy" && result.root === undefined && result.runId === undefined &&
       ((result.mode === "unknown" && exit.code === 0) || (result.mode === "finalize" && exit.code === 1))) {
@@ -761,7 +773,7 @@ async function collectUpdateFailureTriage() {
     if (result?.status === "ok" && resultRoot && resultRoot !== params.updateLeaseKey) {
       terminalRuntimePath = path.join(resultRoot, "dist", "cli", "daemon-cli.js");
     }
-    const reportedFailure = isFailedUpdateOutcome(result?.status, result?.reason);
+    const reportedFailure = classifyUpdateOutcome(result ?? {}) === "failed";
     if (!exit.signal && exit.code === 0 && resultRoot && result?.status === "ok") {
       runOutcome = { status: "succeeded", after: result.after };
     } else if (resultRoot && ["error", "skipped"].includes(result?.status)) {
@@ -1011,6 +1023,12 @@ async function spawnManagedServiceUpdateHandoff(
       "--preserve-definition",
       "--json",
     ]),
+    finalizeCommandArgv: resolveManagedServiceCliArgv(commandRuntime, [
+      "update",
+      "finalize",
+      "--yes",
+      "--json",
+    ]),
     recoveryTimeoutMs: owner.recoveryTimeoutMs,
     triageCommandArgv: resolveManagedServiceCliArgv(commandRuntime, [
       "triage",
@@ -1034,7 +1052,6 @@ async function spawnManagedServiceUpdateHandoff(
       "Update triage runs after service recovery; see the managed update helper log for the outcome and the installation-specific openclaw triage command.",
     commandLabel,
     handoffId: params.handoffId,
-    nonFailureSkippedReasons: Object.keys(SKIPPED_UPDATE_OUTCOMES),
     logPath,
     metaPath,
     stateDatabasePath,

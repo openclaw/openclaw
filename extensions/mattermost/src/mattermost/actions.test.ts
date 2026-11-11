@@ -320,6 +320,36 @@ describe("mattermost message actions", () => {
     },
   );
 
+  it("refuses a conflicting delegated download destination before any provider request", async () => {
+    await withLoopbackMattermost(async (baseUrl, requests) => {
+      await expect(
+        run(baseUrl, "download-file", { fileId: "file-1", to: "channel:chan-other" }),
+      ).rejects.toThrow("limited to the current conversation");
+      expect(requests).toEqual([]);
+    });
+  });
+
+  it("uses the current DM channel when the caller names its trusted peer target", async () => {
+    await withLoopbackMattermost(async (baseUrl, requests) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("mattermost-dm-download-"));
+      const peer = "user:user-1";
+      const context = {
+        conversationReadOrigin: "delegated" as const,
+        requesterAccountId: "default",
+        toolContext: { ...toolContext, currentMessagingTarget: peer },
+      };
+      const result = parse(
+        await run(baseUrl, "download-file", { fileId: "file-1", to: peer }, { context }),
+      );
+      expect(result).toMatchObject({ ok: true, fileId: "file-1" });
+      expect(requestKeys(requests)).toEqual([
+        "GET /api/v4/files/file-1/info",
+        "GET /api/v4/posts/post-1",
+        "GET /api/v4/files/file-1",
+      ]);
+    });
+  });
+
   it("saves a downloaded file and never fetches its bytes for a caller revoked after the info lookup", async () => {
     await withLoopbackMattermost(async (baseUrl, requests) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("mattermost-download-"));

@@ -25,7 +25,7 @@ const recoveryTool = {
   arguments: { path: "README.md" },
 };
 const sessionKey = "agent:main:main";
-const stopButton = (page: Page) => page.getByRole("button", { name: "Stop generating" });
+const stopButton = (page: Page) => page.getByRole("button", { name: "Stop", exact: true });
 const threadText = (page: Page, text: string) =>
   page.locator(".chat-thread-inner").getByText(text, { exact: true });
 const toolData = (phase = "start") => ({

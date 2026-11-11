@@ -14,6 +14,7 @@ import {
   preflightOpenClawStateDatabasePath,
 } from "./openclaw-database-preflight.js";
 import {
+  expectLiveReadSourceFamily,
   snapshotSourceFamily,
   writeUnreadableNewerStateSchema,
 } from "./openclaw-database-preflight.test-support.js";
@@ -510,7 +511,7 @@ it.each(["gateway-startup", "gateway-restart"] as const)(
     }).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(Error);
     expectNewerSchema(String(failure));
-    deepStrictEqual(snapshotSourceFamily(databasePath), before);
+    expectLiveReadSourceFamily(databasePath, before);
   },
 );
 

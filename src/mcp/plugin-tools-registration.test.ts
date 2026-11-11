@@ -190,9 +190,9 @@ describe("MCP serving registration ownership", () => {
         expect(() => released.resolveTools()).toThrow("Plugin tool registry has been released");
         expect(state.factories).toBe(1);
         expect(scheduler.signal.aborted).toBe(ownership === "standalone");
-        expect(scheduler.nextWakeAtMs).toBe(
-          ownership === "standalone" ? null : clock.clock.now() + 30_000,
-        );
+        await clock.advanceBy(30_000);
+        await waitForDiagnosticEventsDrained();
+        expect(heartbeats).toHaveLength(ownership === "standalone" ? 1 : 2);
       } finally {
         stopDiagnosticHeartbeat();
         unsubscribe();

@@ -228,6 +228,20 @@ describe("prepared status", () => {
     },
   );
 
+  it.each([
+    [undefined, "off", "channels.telegram.widgets=true"],
+    [true, "on", "Bot API 10.4 message widgets"],
+  ] as const)("renders the Telegram widgets setting (%s)", async (widgets, enabled, hint) => {
+    await expectText(
+      render({
+        cfg: { channels: { telegram: { widgets } } },
+        statusChannel: "telegram",
+        sessionEntry: entry({}),
+      }),
+      [`Telegram widgets: ${enabled}`, hint],
+    );
+  });
+
   it("shows the selected global agent's children instead of the default agent's", async () => {
     const cfg: Params["cfg"] = {
       agents: { defaults: { systemAgent: { agentId: "ops" } }, entries: { research: {}, ops: {} } },
@@ -547,21 +561,19 @@ describe("prepared status", () => {
     await expectText(terminal(patch), ["Context: 45k/1.0m"], [`Fallback: ${fallback}`]);
   });
 
-  it("uses the admitted effective cap for the terminal pair", async () => {
+  it.each([false, true])("caps the terminal window (choice=%s)", async (choice) => {
+    const activeLimits = {
+      ...catalog[1]!,
+      contextTokens: 96_000,
+      contextWindows: choice ? [{ id: "50k", label: "50K", contextWindow: 50_000 }] : [],
+      contextWindowDefault: choice ? "50k" : undefined,
+    };
     await expectText(
       terminal({
         entry: { providerOverride: selected.provider, modelOverride: selected.model },
-        status: {
-          ...active,
-          thinkingCatalog: catalog.map(({ provider, id, contextWindow }) => ({
-            provider,
-            id,
-            contextWindow,
-            contextTokens: id === active.model ? 96_000 : contextWindow,
-          })),
-        },
+        status: { ...active, thinkingCatalog: [catalog[0]!, activeLimits] },
       }),
-      [`Fallback: ${fallback}`, "Context: 45k/96k"],
+      [`Fallback: ${fallback}`, `Context: 45k/${choice ? "50k" : "96k"}`],
     );
   });
 

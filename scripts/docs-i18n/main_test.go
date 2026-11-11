@@ -172,7 +172,6 @@ func TestRunDocsI18NRewritesFinalLocalizedPageLinks(t *testing.T) {
 	t.Parallel()
 
 	docsRoot := t.TempDir()
-	writeFile(t, filepath.Join(docsRoot, ".i18n", "glossary.zh-CN.json"), "[]")
 	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
 	writeFile(t, filepath.Join(docsRoot, "gateway", "index.md"), stringsJoin(
 		"---",
@@ -199,7 +198,7 @@ func TestRunDocsI18NRewritesFinalLocalizedPageLinks(t *testing.T) {
 		thinking:   "high",
 		overwrite:  true,
 		parallel:   1,
-	}, []string{filepath.Join(docsRoot, "gateway", "index.md")}, func(_, _ string, _ []GlossaryEntry, _ string) docsTranslator {
+	}, []string{filepath.Join(docsRoot, "gateway", "index.md")}, func(_, _, _ string) docsTranslator {
 		return fakeDocsTranslator{}
 	})
 	if err != nil {
@@ -259,7 +258,6 @@ func TestRunDocsI18NOnlyBecomesSkippableAfterPostprocessSucceeds(t *testing.T) {
 	t.Parallel()
 
 	docsRoot := t.TempDir()
-	writeFile(t, filepath.Join(docsRoot, ".i18n", "glossary.zh-CN.json"), "[]")
 	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
 	sourcePath := filepath.Join(docsRoot, "gateway", "index.md")
 	writeFile(t, sourcePath, stringsJoin(
@@ -465,7 +463,6 @@ func TestRunDocsI18NAllowPartialKeepsEarlierSuccessfulDocOutputs(t *testing.T) {
 	t.Parallel()
 
 	docsRoot := t.TempDir()
-	writeFile(t, filepath.Join(docsRoot, ".i18n", "glossary.zh-CN.json"), "[]")
 	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
 	okPath := filepath.Join(docsRoot, "aaa-ok.md")
 	failPath := filepath.Join(docsRoot, "zzz-fail.md")
@@ -481,7 +478,7 @@ func TestRunDocsI18NAllowPartialKeepsEarlierSuccessfulDocOutputs(t *testing.T) {
 		overwrite:    true,
 		allowPartial: true,
 		parallel:     1,
-	}, []string{okPath, failPath}, func(_, _ string, _ []GlossaryEntry, _ string) docsTranslator {
+	}, []string{okPath, failPath}, func(_, _, _ string) docsTranslator {
 		return partialFailTranslator{}
 	})
 	if err != nil {
@@ -499,7 +496,6 @@ func TestRunDocsI18NAllowPartialContinuesAfterFailedDoc(t *testing.T) {
 	t.Parallel()
 
 	docsRoot := t.TempDir()
-	writeFile(t, filepath.Join(docsRoot, ".i18n", "glossary.zh-CN.json"), "[]")
 	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
 	failPath := filepath.Join(docsRoot, "aaa-fail.md")
 	okPath := filepath.Join(docsRoot, "zzz-ok.md")
@@ -515,7 +511,7 @@ func TestRunDocsI18NAllowPartialContinuesAfterFailedDoc(t *testing.T) {
 		overwrite:    true,
 		allowPartial: true,
 		parallel:     1,
-	}, []string{failPath, okPath}, func(_, _ string, _ []GlossaryEntry, _ string) docsTranslator {
+	}, []string{failPath, okPath}, func(_, _, _ string) docsTranslator {
 		return partialFailTranslator{}
 	})
 	if err != nil {
@@ -533,7 +529,6 @@ func TestRunDocsI18NAllowPartialParallelKeepsQueuedDocsAfterFailure(t *testing.T
 	t.Parallel()
 
 	docsRoot := t.TempDir()
-	writeFile(t, filepath.Join(docsRoot, ".i18n", "glossary.zh-CN.json"), "[]")
 	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
 	failPath := filepath.Join(docsRoot, "aaa-fail.md")
 	slowPath := filepath.Join(docsRoot, "bbb-slow.md")
@@ -551,7 +546,7 @@ func TestRunDocsI18NAllowPartialParallelKeepsQueuedDocsAfterFailure(t *testing.T
 		overwrite:    true,
 		allowPartial: true,
 		parallel:     2,
-	}, []string{failPath, slowPath, okPath}, func(_, _ string, _ []GlossaryEntry, _ string) docsTranslator {
+	}, []string{failPath, slowPath, okPath}, func(_, _, _ string) docsTranslator {
 		return partialFailSlowTranslator{}
 	})
 	if err != nil {
@@ -572,7 +567,6 @@ func TestRunDocsI18NAllowPartialStopsAfterRunCancellation(t *testing.T) {
 	t.Parallel()
 
 	docsRoot := t.TempDir()
-	writeFile(t, filepath.Join(docsRoot, ".i18n", "glossary.zh-CN.json"), "[]")
 	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
 	firstPath := filepath.Join(docsRoot, "aaa-first.md")
 	secondPath := filepath.Join(docsRoot, "zzz-second.md")
@@ -590,7 +584,7 @@ func TestRunDocsI18NAllowPartialStopsAfterRunCancellation(t *testing.T) {
 		overwrite:    true,
 		allowPartial: true,
 		parallel:     1,
-	}, []string{firstPath, secondPath}, func(_, _ string, _ []GlossaryEntry, _ string) docsTranslator {
+	}, []string{firstPath, secondPath}, func(_, _, _ string) docsTranslator {
 		return cancelAwareTranslator{}
 	})
 	if err == nil {
@@ -605,7 +599,6 @@ func TestRunDocsI18NAllowPartialReturnsCancellationAfterPartialSuccess(t *testin
 	t.Parallel()
 
 	docsRoot := t.TempDir()
-	writeFile(t, filepath.Join(docsRoot, ".i18n", "glossary.zh-CN.json"), "[]")
 	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
 	firstPath := filepath.Join(docsRoot, "aaa-first.md")
 	secondPath := filepath.Join(docsRoot, "zzz-second.md")
@@ -622,7 +615,7 @@ func TestRunDocsI18NAllowPartialReturnsCancellationAfterPartialSuccess(t *testin
 		overwrite:    true,
 		allowPartial: true,
 		parallel:     1,
-	}, []string{firstPath, secondPath}, func(_, _ string, _ []GlossaryEntry, _ string) docsTranslator {
+	}, []string{firstPath, secondPath}, func(_, _, _ string) docsTranslator {
 		return &cancelAfterFirstDocTranslator{cancel: cancel}
 	})
 	if !errors.Is(err, context.Canceled) {
@@ -640,7 +633,6 @@ func TestRunDocsI18NAllowPartialStopsAfterContextError(t *testing.T) {
 	t.Parallel()
 
 	docsRoot := t.TempDir()
-	writeFile(t, filepath.Join(docsRoot, ".i18n", "glossary.zh-CN.json"), "[]")
 	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
 	firstPath := filepath.Join(docsRoot, "aaa-first.md")
 	cancelPath := filepath.Join(docsRoot, "bbb-cancel.md")
@@ -658,7 +650,7 @@ func TestRunDocsI18NAllowPartialStopsAfterContextError(t *testing.T) {
 		overwrite:    true,
 		allowPartial: true,
 		parallel:     1,
-	}, []string{firstPath, cancelPath, laterPath}, func(_, _ string, _ []GlossaryEntry, _ string) docsTranslator {
+	}, []string{firstPath, cancelPath, laterPath}, func(_, _, _ string) docsTranslator {
 		return contextErrorTranslator{}
 	})
 	if !errors.Is(err, context.Canceled) {
@@ -669,56 +661,6 @@ func TestRunDocsI18NAllowPartialStopsAfterContextError(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(docsRoot, "zh-CN", "zzz-later.md")); err == nil {
 		t.Fatal("did not expect later output to be written after context error")
-	}
-}
-
-func TestRunDocsI18NRewritesLineTitleFromExactGlossaryWithoutModel(t *testing.T) {
-	t.Parallel()
-
-	docsRoot := t.TempDir()
-	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
-	linePath := filepath.Join(docsRoot, "channels", "line.md")
-	writeFile(t, linePath, stringsJoin(
-		"---",
-		"title: LINE",
-		"---",
-		"",
-	))
-
-	locales := []string{"zh-CN", "zh-TW", "de", "es"}
-	for _, locale := range locales {
-		writeFile(t, filepath.Join(docsRoot, ".i18n", "glossary."+locale+".json"), `[{"source":"LINE","target":"LINE"}]`)
-		writeFile(t, filepath.Join(docsRoot, locale, "channels", "line.md"), stringsJoin(
-			"---",
-			"title: 行",
-			"---",
-			"",
-		))
-
-		err := runDocsI18N(context.Background(), runConfig{
-			targetLang: locale,
-			sourceLang: "en",
-			docsRoot:   docsRoot,
-			mode:       "doc",
-			thinking:   "low",
-			overwrite:  true,
-			parallel:   1,
-		}, []string{linePath}, func(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) docsTranslator {
-			translator := NewCodexTranslator(srcLang, tgtLang, glossary, thinking)
-			translator.runPrompt = func(context.Context, codexPromptRequest) (string, error) {
-				t.Fatalf("exact LINE title for %s should not call Codex", tgtLang)
-				return "", nil
-			}
-			return translator
-		})
-		if err != nil {
-			t.Fatalf("runDocsI18N(%s) failed: %v", locale, err)
-		}
-
-		got := mustReadFile(t, filepath.Join(docsRoot, locale, "channels", "line.md"))
-		if !containsLine(got, "title: LINE") {
-			t.Fatalf("expected %s title to stay LINE, got:\n%s", locale, got)
-		}
 	}
 }
 
@@ -842,7 +784,7 @@ func TestRunDocsI18NKeepsModelSelectionPrivate(t *testing.T) {
 				"",
 				"# Previous translation",
 			))
-			if err := runDocsI18N(context.Background(), runConfig{docsRoot: docsRoot, sourceLang: "en", targetLang: "zh-CN", mode: mode, parallel: 1}, []string{source}, func(string, string, []GlossaryEntry, string) docsTranslator {
+			if err := runDocsI18N(context.Background(), runConfig{docsRoot: docsRoot, sourceLang: "en", targetLang: "zh-CN", mode: mode, parallel: 1}, []string{source}, func(string, string, string) docsTranslator {
 				return fakeDocsTranslator{}
 			}); err != nil {
 				t.Fatal(err)

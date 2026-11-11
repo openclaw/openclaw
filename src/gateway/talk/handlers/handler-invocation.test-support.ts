@@ -28,7 +28,10 @@ export function createTalkHandlerCaller(talkHandlers: GatewayRequestHandlers) {
       respond,
       config = {},
       context = { getRuntimeConfig: () => config },
-      client = { connId: "conn-1" },
+      client = {
+        connId: "conn-1",
+        connect: { scopes: [method === "talk.catalog" ? "operator.read" : "operator.talk"] },
+      },
       id = "1",
     }: TalkHandlerCallOptions,
   ) {

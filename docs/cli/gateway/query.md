@@ -48,6 +48,10 @@ before retrying.
 When you set `--url`, the CLI does not fall back to config or environment credentials. Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
 </Note>
 
+Invalid client ports and combining `--port` with `--url` report their specific
+input error with exit code 1. JSON error envelopes remain unchanged, including
+the separate options-phase errors from `setup` and `onboard`.
+
 WebSocket opening-handshake timeouts report a Gateway transport error with
 `ETIMEDOUT`, including the target and a status-check hint. JSON error output uses
 `error.type: "gateway_transport_error"`, as for other connection failures.
@@ -217,6 +221,10 @@ Installed-service config, runtime intent, and log diagnostics use the service's
 own state selectors. An inspecting CLI's `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
 `OPENCLAW_PROFILE`, and `OPENCLAW_CONFIG_PATH` do not fill in selectors omitted
 from the service definition.
+
+Plugin-version drift checks read committed install records without staging a copy
+of the shared state database. SQLite may update WAL/SHM coordination files; the
+check does not write plugin records or change the schema.
 
 ```bash
 openclaw gateway status

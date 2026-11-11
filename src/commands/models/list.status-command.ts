@@ -56,6 +56,7 @@ import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
 import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { throwExpectedCliError } from "../../cli/expected-cli-error.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { createConfigIO } from "../../config/config.js";
 import {
@@ -71,7 +72,6 @@ import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infr
 import type { ProviderModelRouteCandidate } from "../../plugin-sdk/provider-model-types.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
-import type { ProviderSyntheticAuthResult } from "../../plugins/provider-external-auth.types.js";
 import { prepareProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
@@ -79,7 +79,11 @@ import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { listUnavailableAuthProfiles } from "./auth-unavailability.js";
-import { getModelCatalogWarnings, readModelCatalog } from "./catalog-warnings.js";
+import {
+  getModelCatalogWarnings,
+  readModelCatalog,
+  runModelCatalogReadCommand,
+} from "./catalog-warnings.js";
 import {
   formatProviderAuthProfileCounts,
   resolveProviderAuthOverview,
@@ -87,7 +91,12 @@ import {
 import { groupByProvider, isRich } from "./list.format.js";
 import type { runAuthProbes } from "./list.probe.js";
 import { resolveStatusUtilityModel } from "./list.status-utility.js";
-import type { ProviderAuthOverview, StatusRuntimeAuthRoute } from "./list.types.js";
+import type {
+  ModelsStatusOptions,
+  ProviderAuthOverview,
+  StatusRuntimeAuthRoute,
+  StatusSyntheticAuth,
+} from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
   DEFAULT_MODEL,
@@ -100,14 +109,6 @@ import {
 const listProbeRuntimeLoader = createLazyImportLoader(() => import("./list.probe.js"));
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
-
-type StatusSyntheticAuth = {
-  value: string;
-  source: string;
-  credential?: string;
-  mode?: ProviderSyntheticAuthResult["mode"];
-  expiresAt?: number;
-};
 
 type StatusProviderUseRef = {
   provider: string;
@@ -160,7 +161,7 @@ function parseProbeOption(
   const parsed =
     kind === "integer" ? parseStrictPositiveInteger(raw) : parseStrictFiniteNumber(raw);
   if (parsed === undefined || parsed <= 0) {
-    throw new Error(`${label} must be a positive ${kind}.`);
+    throwExpectedCliError(`${label} must be a positive ${kind}.`);
   }
   return parsed;
 }
@@ -202,24 +203,14 @@ function finishModelsStatusOutput(
   }
 }
 
-export async function modelsStatusCommand(
-  opts: {
-    json?: boolean;
-    plain?: boolean;
-    check?: boolean;
-    probe?: boolean;
-    probeProvider?: string;
-    probeProfile?: string | string[];
-    probeTimeout?: string;
-    probeConcurrency?: string;
-    probeMaxTokens?: string;
-    agent?: string;
-  },
+async function runModelsStatusCommand(
+  opts: ModelsStatusOptions,
   runtime: RuntimeEnv,
+  signal?: AbortSignal,
 ) {
   ensureFlagCompatibility(opts);
   if (opts.plain && opts.probe) {
-    throw new Error("--probe cannot be used with --plain output.");
+    throwExpectedCliError("--probe cannot be used with --plain output.");
   }
   const configPath = createConfigIO().configPath;
   const cfg = await loadModelsConfig({
@@ -227,10 +218,6 @@ export async function modelsStatusCommand(
     runtime,
     skipPluginValidation: opts.probe !== true,
   });
-  const gatewayCatalog = await readModelCatalog(cfg, opts.agent?.trim());
-  for (const warning of getModelCatalogWarnings(gatewayCatalog)) {
-    runtime.error(terminalText`${warning.message} ${warning.fixHint}`);
-  }
   const explicitAgentId = opts.agent?.trim();
   const envAgentDir =
     process.env.OPENCLAW_AGENT_DIR?.trim() || process.env.PI_CODING_AGENT_DIR?.trim();
@@ -238,6 +225,10 @@ export async function modelsStatusCommand(
     agentDirOverride: !explicitAgentId && envAgentDir ? resolveUserPath(envAgentDir) : undefined,
     kind: "read",
   });
+  const gatewayCatalog = await readModelCatalog(cfg, workspaceAgentId, signal);
+  for (const warning of getModelCatalogWarnings(gatewayCatalog)) {
+    runtime.error(terminalText`${warning.message} ${warning.fixHint}`);
+  }
   // Only an explicit --agent narrows the reported model/fallback overrides; an inferred
   // system-agent target still reports unscoped defaults, matching this command's shipped output.
   const agentId = explicitAgentId ? workspaceAgentId : undefined;
@@ -960,12 +951,11 @@ export async function modelsStatusCommand(
         2,
         "integer",
       );
-      const probeMaxTokens = parseProbeOption(
-        opts.probeMaxTokens,
-        "--probe-max-tokens",
-        8,
-        "integer",
-      );
+      // No default cap: a small cap leaves reasoning models with no visible reply.
+      const probeMaxTokens =
+        opts.probeMaxTokens === undefined || opts.probeMaxTokens === null
+          ? undefined
+          : parseProbeOption(opts.probeMaxTokens, "--probe-max-tokens", 1, "integer");
 
       let probeSummary: Awaited<ReturnType<typeof runAuthProbes>> | undefined;
       if (opts.probe) {
@@ -1459,5 +1449,9 @@ export async function modelsStatusCommand(
     },
     { config: cfg, workspaceDir, env: process.env },
   );
+}
+
+export async function modelsStatusCommand(opts: ModelsStatusOptions, runtime: RuntimeEnv) {
+  await runModelCatalogReadCommand((signal) => runModelsStatusCommand(opts, runtime, signal));
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

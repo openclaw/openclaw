@@ -1,6 +1,6 @@
 // Persists gateway boot outcomes for supervisor crash-loop decisions.
 import { formatCliCommand } from "../cli/command-format.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -8,14 +8,59 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import {
   buildGatewayCrashLoopBreakerDecision,
   maintenanceStartupReasons,
 } from "./gateway-boot-lifecycle.kernel.js";
+import {
+  publishGatewayRecentCrashes,
+  formatGatewayCrash,
+  type GatewayCrashRecord,
+} from "./gateway-crash.js";
 import { resolveGatewayPlatformSupervisor } from "./gateway-supervision.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
+import { detectGatewayRespawnSupervisorIdentity } from "./supervisor-markers.js";
+
+export async function readGatewayRecentCrashesAsync(
+  env = process.env,
+): Promise<GatewayCrashRecord[]> {
+  const reply = await executeExistingOpenClawStateRead(
+    { env },
+    { type: "gatewayBoot.crashes", input: undefined },
+    { signal: getAsyncWorkSignal(), current: true },
+  );
+  return reply?.crashes ?? [];
+}
+
+/** Reports the predecessor once, after startup, through the boot owner's worker. */
+export async function reportPreviousGatewayCrash(
+  previous: GatewayCrashRecord,
+  log: Pick<SubsystemLogger, "warn">,
+  env = process.env,
+): Promise<void> {
+  let crash = previous;
+  try {
+    const { readGatewayCrashCause } = await import("../daemon/gateway-crash-cause.js");
+    const evidence = await readGatewayCrashCause(previous, env);
+    if (evidence) {
+      const context = captureOpenClawStateWorkerContext({ env });
+      const result = await runOpenClawStateWorkerOperation(context, (scope) =>
+        scope.execute({
+          type: "gatewayBoot.enrichCrash",
+          input: { bootId: previous.bootId, evidence },
+        }),
+      );
+      publishGatewayRecentCrashes(result.crashes);
+      crash = result.crash ?? previous;
+    }
+  } catch {
+    // Inspection and enrichment cannot erase the durable unclean-exit fact.
+  }
+  log.warn(`previous Gateway run ended unexpectedly: ${formatGatewayCrash(crash)}`);
+}
 
 export {
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
@@ -70,6 +115,17 @@ export type GatewayCrashLoopBreakerDecision = ReturnType<
   typeof buildGatewayCrashLoopBreakerDecision
 >;
 
+export type GatewayRestartResumeWindow = { startedAt: number; endedAt: number };
+export type GatewayRestartResumeWindows = Record<string, GatewayRestartResumeWindow[]>;
+
+export type GatewayBootLifecycleStart = {
+  decision: GatewayCrashLoopBreakerDecision;
+  id: string | undefined;
+  restartResumeWindow?: GatewayRestartResumeWindow;
+  restartResumeWindows?: GatewayRestartResumeWindows;
+  previousCrash?: GatewayCrashRecord;
+};
+
 /** Inspection keeps snapshot preparation off the caller's event loop. */
 export async function readGatewayLastShutdownAsync(env = process.env) {
   const reply = await executeExistingOpenClawStateRead(
@@ -91,16 +147,51 @@ export async function readGatewayLastInstallationReplacementAsync(env = process.
 export async function beginGatewayBootLifecycle(
   env: NodeJS.ProcessEnv = process.env,
   nowMs = Date.now(),
-): Promise<{ decision: GatewayCrashLoopBreakerDecision; id: string | undefined }> {
+  previousOwner?: { pid: number; heartbeatAt?: number },
+): Promise<GatewayBootLifecycleStart> {
+  // A new startup owns the serving process's diagnostic projection, including failed admission.
+  publishGatewayRecentCrashes([]);
   try {
     const context = captureOpenClawStateWorkerContext({ env });
-    return await runOpenClawStateWorkerOperation(context, (scope) =>
-      scope.execute({ type: "gatewayBoot.begin", input: nowMs }),
+    const supervisor = detectGatewayRespawnSupervisorIdentity();
+    const result = await runOpenClawStateWorkerOperation(context, (scope) =>
+      scope.execute({
+        type: "gatewayBoot.begin",
+        input: {
+          nowMs,
+          previousOwner,
+          metadata: {
+            version: VERSION,
+            commit: resolveRuntimeServiceCommit() ?? undefined,
+            runtime: process.versions.bun
+              ? `Bun ${process.versions.bun}`
+              : `Node ${process.versions.node}`,
+            supervisor: supervisor ?? undefined,
+            systemdInvocationId: supervisor?.kind === "systemd" ? env.INVOCATION_ID : undefined,
+          },
+        },
+      }),
     );
+    if (result.crashes) {
+      publishGatewayRecentCrashes(result.crashes);
+    }
+    return result;
   } catch (err) {
     gatewayLifecycleLog.warn(`crash-loop breaker state unavailable; fail-open: ${String(err)}`);
     return { decision: buildGatewayCrashLoopBreakerDecision({ uncleanBoots: 0 }), id: undefined };
   }
+}
+
+/** A completed agent pass retires only the crash intervals captured by that boot. */
+export async function completeGatewayAgentRestartRecovery(
+  agentId: string,
+  through: number,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const context = captureOpenClawStateWorkerContext({ env });
+  await runOpenClawStateWorkerOperation(context, (scope) =>
+    scope.execute({ type: "gatewayBoot.recoveredAgent", input: { agentId, through } }),
+  );
 }
 
 /** Runtime readers share the boot owner's decision without opening SQLite on the main thread. */

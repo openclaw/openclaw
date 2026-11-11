@@ -9,15 +9,19 @@ const fresh = <T>(value: T) => ({ value, stale: false });
 const stale = <T>(value: T) => ({ value, stale: true });
 
 let now = 1_000;
+let wall = 0;
 beforeEach(() => {
   now = 1_000;
-  vi.spyOn(Date, "now").mockImplementation(() => now);
+  wall = 0;
+  vi.spyOn(Date, "now").mockImplementation(() => now + wall);
+  vi.spyOn(performance, "now").mockImplementation(() => now);
 });
 afterEach(() => vi.restoreAllMocks());
 
 it.each([true, false])("coalesces stale refreshes (cacheable=%s)", async (cacheable) => {
   const cache = cacheFor<string>({ cacheable: (value) => value !== "uncacheable" });
   await expect(cache.read("item", async () => "first")).resolves.toEqual(fresh("first"));
+  wall += cacheable ? -60_000 : 60_000;
   const pending = createDeferredCore<string>();
   const refresh = vi.fn(() => pending.promise);
   await expect(cache.read("item", refresh)).resolves.toEqual(fresh("first"));
@@ -109,8 +113,10 @@ it("evicts failed stale data and honors error cooldown before retrying", async (
   failed.reject(new Error("offline"));
   await waiting;
   expect(onBackgroundError).toHaveBeenCalledOnce();
+  wall += 60_000;
   await expect(cache.read("item", replacement)).rejects.toThrow("offline");
   expect(replacement).not.toHaveBeenCalled();
+  wall -= 120_000;
   now += 50;
   await expect(cache.read("item", replacement)).resolves.toEqual(fresh("recovered"));
   expect(replacement).toHaveBeenCalledExactlyOnceWith(undefined);

@@ -19,6 +19,7 @@ import {
   type MessagePresentation,
   resolveMessagePresentationButtonAction,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import { resolvePayloadMediaUrls, sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
   createComputedAccountStatusAdapter,
@@ -28,10 +29,7 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  chunkTextForOutbound,
-  sanitizeAssistantVisibleText,
-} from "openclaw/plugin-sdk/text-chunking";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { mattermostApprovalAuth } from "./approval-auth.js";
 import { normalizeMattermostAllowEntry as normalizeAllowEntry } from "./channel-config-shared.js";
 import { mattermostMessageActions } from "./channel-message-actions.js";
@@ -171,7 +169,7 @@ const mattermostOutbound: ChannelOutboundAdapter = {
   // Core hands a multi-file payload to sendPayload only when the adapter declares
   // it; otherwise it fans out one post per file and the grouping below is never reached.
   sendPayloadGroupsMedia: true,
-  chunker: chunkTextForOutbound,
+  chunker: (text, limit) => chunkMarkdownTextWithMode(text, limit, "length"),
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),

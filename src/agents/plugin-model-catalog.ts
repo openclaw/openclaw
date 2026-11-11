@@ -696,6 +696,8 @@ export type PluginModelCatalogMetadataSnapshot = Pick<PluginMetadataSnapshot, "o
 export function resolvePluginModelCatalogOwnerPluginId(params: {
   providerId: string;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
+  /** Generated catalogs may publish a CLI backend's models (claude-cli/<model>). */
+  includeCliBackends?: boolean;
 }): string | undefined {
   const snapshot = params.pluginMetadataSnapshot;
   const owners = snapshot?.owners;
@@ -707,6 +709,7 @@ export function resolvePluginModelCatalogOwnerPluginId(params: {
     owners.modelCatalogProviders.get(providerId),
     owners.providers.get(providerId),
     owners.setupProviders.get(providerId),
+    params.includeCliBackends ? owners.cliBackends.get(providerId) : undefined,
   ].find((entry): entry is readonly string[] => Boolean(entry?.length));
   const pluginId = candidates?.length === 1 ? candidates[0] : undefined;
   if (!pluginId) {
@@ -748,6 +751,7 @@ export function filterGeneratedPluginModelCatalogProviders<T>(params: {
         resolvePluginModelCatalogOwnerPluginId({
           providerId,
           pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+          includeCliBackends: true,
         }) === params.catalogPluginId &&
         isProviderCatalogSourceAllowed({
           provider: providerId,

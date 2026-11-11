@@ -10,6 +10,7 @@ import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -26,7 +27,6 @@ import {
   fetchMattermostUserTeams,
   parseMattermostApiStatus,
   uploadMattermostFile,
-  type MattermostPost,
   type MattermostUser,
 } from "./client.js";
 import {
@@ -275,6 +275,41 @@ export async function sendMessageMattermost(
     throw new Error("Mattermost message is empty");
   }
 
+  // Callers chunk text-only replies, but a file post carries its whole text. Split
+  // long captions the same way: the first chunk goes with the file and the rest
+  // follow as plain posts in the same thread.
+  const messageParts =
+    fileIds?.length && message
+      ? resolveTextChunksWithFallback(
+          message,
+          core.channel.text.chunkMarkdownTextWithMode(
+            message,
+            core.channel.text.resolveTextChunkLimit(cfg, "mattermost", accountId, {
+              fallbackLimit: account.textChunkLimit ?? 4000,
+            }),
+            core.channel.text.resolveChunkMode(cfg, "mattermost", accountId),
+          ),
+        )
+      : [message];
+  const kind = fileIds?.length ? "media" : opts.buttons?.length || props ? "card" : "text";
+  type SentPost = { messageId: string; content: string; sentAt: number };
+  const posts: SentPost[] = [];
+  // Stamp each post once so progress reports and the returned receipt agree.
+  const createResult = (sent: readonly SentPost[]): MattermostSendResult => ({
+    messageId: sent[0]!.messageId,
+    channelId,
+    receipt: createMessageReceiptFromOutboundResults({
+      results: sent.map(({ messageId }) => ({ channel: "mattermost", messageId, channelId })),
+      kind,
+      sentAt: sent[0]!.sentAt,
+      ...(opts.replyToId ? { replyToId: opts.replyToId } : {}),
+    }),
+    content: sent
+      .map((post) => post.content)
+      .filter(Boolean)
+      .join("\n"),
+  });
+
   client.assertRequestCurrent?.();
   try {
     await opts.onPlatformSendDispatch?.();
@@ -282,82 +317,57 @@ export async function sendMessageMattermost(
     client.assertRequestCurrent?.();
     throw error;
   }
-  // Mattermost caps attachments per post; overflow continues in follow-up posts in the same thread.
-  const fileBatches: string[][] = [];
-  for (let index = 0; index < (fileIds?.length ?? 0); index += MATTERMOST_MAX_FILES_PER_POST) {
-    fileBatches.push((fileIds ?? []).slice(index, index + MATTERMOST_MAX_FILES_PER_POST));
-  }
-  const post = await createMattermostPost(client, {
-    channelId,
-    message,
-    rootId: opts.replyToId,
-    fileIds: fileBatches[0],
-    props,
-  });
-  const delivered: MattermostPost[] = [post];
-  const buildReceipt = () =>
-    createMessageReceiptFromOutboundResults({
-      results: delivered.map((entry) => ({
-        channel: "mattermost",
-        messageId: entry.id,
-        channelId,
-      })),
-      kind: fileIds?.length ? "media" : opts.buttons?.length || props ? "card" : "text",
-      ...(opts.replyToId ? { replyToId: opts.replyToId } : {}),
-    });
-  const content = post.message ?? message;
-  // Overflow posts stay with their caption: in the caller's thread, or threaded
-  // under the first post when the send was top-level.
-  const overflowRootId = opts.replyToId ?? post.id;
-  for (const batch of fileBatches.slice(1)) {
-    try {
-      client.assertRequestCurrent?.();
-      delivered.push(
-        await createMattermostPost(client, {
-          channelId,
-          message: "",
-          rootId: overflowRootId,
-          fileIds: batch,
-        }),
-      );
-    } catch (error: unknown) {
-      // Earlier posts are already visible; report them so the caller settles
-      // what landed instead of resending the whole batch.
-      const receipt = buildReceipt();
-      throw createChannelPartialDeliveryError(error, {
-        messageIds: listMessageReceiptPlatformIds(receipt),
-        receipt,
-        visibleReplySent: true,
-        content,
+  const drafts = messageParts.map((part, index) => ({
+    message: part,
+    ...(index === 0 ? { fileIds: fileIds?.slice(0, MATTERMOST_MAX_FILES_PER_POST), props } : {}),
+  }));
+  if (fileIds) {
+    for (
+      let index = MATTERMOST_MAX_FILES_PER_POST;
+      index < fileIds.length;
+      index += MATTERMOST_MAX_FILES_PER_POST
+    ) {
+      drafts.push({
+        message: "",
+        fileIds: fileIds.slice(index, index + MATTERMOST_MAX_FILES_PER_POST),
       });
     }
   }
-
-  const receipt = buildReceipt();
-  const result: MattermostSendResult = {
-    messageId: post.id,
-    channelId,
-    receipt,
-    content,
-  };
   try {
-    // Core must learn the provider identity before local bookkeeping can fail;
-    // preserve the receipt if either post-send step rejects to prevent a duplicate retry.
-    await opts.onDeliveryResult?.(result);
+    for (const [index, draft] of drafts.entries()) {
+      client.assertRequestCurrent?.();
+      const post = await createMattermostPost(client, {
+        channelId,
+        ...draft,
+        rootId: opts.replyToId ?? (index >= messageParts.length ? posts[0]?.messageId : undefined),
+      });
+      posts.push({
+        messageId: post.id,
+        content: post.message ?? draft.message,
+        sentAt: Date.now(),
+      });
+      // Core must learn each provider identity before a later post or local
+      // bookkeeping can fail.
+      await opts.onDeliveryResult?.(createResult(posts.slice(-1)));
+    }
     getOptionalMattermostRuntime()?.channel.activity.record({
       channel: "mattermost",
       accountId,
       direction: "outbound",
     });
   } catch (error: unknown) {
-    // The provider post is already durable. Preserve its identity so callers do not
-    // retry and duplicate the visible message when local bookkeeping fails afterward.
+    if (posts.length === 0) {
+      throw error;
+    }
+    // Earlier posts are already durable. Preserve their identities so callers do not
+    // retry and duplicate visible messages when a later step fails.
+    const sent = createResult(posts);
     throw createChannelPartialDeliveryError(error, {
-      messageIds: listMessageReceiptPlatformIds(receipt),
-      receipt,
+      messageIds: listMessageReceiptPlatformIds(sent.receipt),
+      receipt: sent.receipt,
       visibleReplySent: true,
-      content: result.content,
+      content: sent.content,
     });
   }
-  return result;
+  return createResult(posts);
 }

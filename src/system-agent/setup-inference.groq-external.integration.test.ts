@@ -10,7 +10,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
+import { prepareCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
@@ -34,7 +34,9 @@ it("resolves a Groq manifest model from a global external install during setup",
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
   clearLoadInstalledPluginIndexInstallRecordsCache();
-  const sdkHost = createCompiledSdkHost(groqSetupSdkEntrypoints, (prefix) => tempDirs.make(prefix));
+  const sdkHost = prepareCompiledSdkHost(groqSetupSdkEntrypoints)((prefix) =>
+    tempDirs.make(prefix),
+  );
   await withOpenClawTestState(
     {
       label: "groq-external-setup",

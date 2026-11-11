@@ -1,69 +1,62 @@
-import { For } from "solid-js";
 import type { WebSearchTestResult } from "../../../../packages/gateway-protocol/src/schema/web-search.ts";
-import {
-  SettingsEmpty,
-  SettingsRow,
-  SettingsSection,
-} from "../../components/solid/settings-ui.tsx";
-import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
+import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 
-export function renderSearchTestResult(result: WebSearchTestResult | null, error: string) {
-  if (error || result?.status === "error") {
-    return (
-      <div role="alert" class="callout danger">
-        {error || result?.error || t("searchPage.failure")}
-      </div>
-    );
-  }
-  if (!result) {
-    return undefined;
-  }
-  const sources: Array<{ url: string; title?: string; snippet?: string }> = [
-    ...(result.results ?? []),
-    ...(result.citations ?? []),
-  ];
-  const uniqueSources = sources.filter(
-    (source, index) => sources.findIndex((item) => item.url === source.url) === index,
-  );
+export type SearchTestOutcomeProps = {
+  pending?: boolean;
+  result?: WebSearchTestResult | null;
+  error?: string;
+  /** What this route tests, shown until a result names the provider that answered. */
+  route: string;
+  providerLabel: (id: string) => string;
+};
+
+function outcome(
+  pending: boolean | undefined,
+  error: string | undefined,
+  result: WebSearchTestResult | null | undefined,
+) {
+  const last = pending || error ? null : (result ?? null);
+  const failed = !pending && Boolean(error || last?.status === "error");
+  return { last, failed };
+}
+
+/** The test's state, in the place a row title takes. */
+export function SearchTestStatus(props: SearchTestOutcomeProps) {
+  const state = () => outcome(props.pending, props.error, props.result);
   return (
-    <>
-      {result.content ? (
-        <SettingsSection title={t("searchPage.result")}>
-          <SettingsRow title={result.content} />
-        </SettingsSection>
-      ) : undefined}
-      {uniqueSources.length ? (
-        <SettingsSection title={t("searchPage.sources")} count={uniqueSources.length}>
-          <For each={uniqueSources} keyed={(source) => source.url}>
-            {(source) => {
-              const url = () => {
-                const safe = resolveSafeExternalUrl(source().url, window.location.href);
-                return safe && /^https?:/u.test(safe) ? safe : undefined;
-              };
-              return (
-                <SettingsRow
-                  title={
-                    url() ? (
-                      <a href={url()} target="_blank" rel="noopener noreferrer">
-                        {source().title || source().url}
-                      </a>
-                    ) : (
-                      source().title || source().url
-                    )
-                  }
-                  description={(() => {
-                    const entry = source();
-                    return "snippet" in entry ? entry.snippet : entry.url;
-                  })()}
-                />
-              );
-            }}
-          </For>
-        </SettingsSection>
-      ) : !result.content ? (
-        <SettingsEmpty message={t("searchPage.noResults")} />
-      ) : undefined}
-    </>
+    <span role="status" class="search-test-status">
+      <SettingsStatus
+        kind={state().failed ? "danger" : state().last ? "ok" : "muted"}
+        label={t(
+          `searchPage.${props.pending ? "testing" : state().failed ? "failure" : state().last ? "success" : "untested"}`,
+        )}
+      />
+    </span>
   );
+}
+
+/**
+ * One line under the state. Settings proves that search answered, through which provider and how
+ * fast; the pages it returned belong in chat, not here.
+ */
+export function SearchTestDetail(props: SearchTestOutcomeProps) {
+  const text = () => {
+    const { last, failed } = outcome(props.pending, props.error, props.result);
+    if (failed) {
+      return props.error || last?.error || t("searchPage.failure");
+    }
+    if (!last) {
+      return props.route;
+    }
+    if (!last.content && !last.results?.length && !last.citations?.length) {
+      return t("searchPage.noResults");
+    }
+    return [
+      props.providerLabel(last.provider),
+      t("searchPage.duration", { ms: String(last.latencyMs) }),
+      ...(last.cached ? [t("searchPage.cached")] : []),
+    ].join(" · ");
+  };
+  return <>{text()}</>;
 }

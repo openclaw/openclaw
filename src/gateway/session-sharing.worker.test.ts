@@ -519,6 +519,36 @@ it.for([false, true])(
     }),
 );
 
+it.each(["membership", "lifecycle"] as const)(
+  "keeps committing %s facts authoritative over older published sharing",
+  (change) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = rolePolicyConfig();
+      const client = roleClient("view", "transaction-member");
+      const scope = await memberSession(client);
+      const authorization = await authorize(client, scope, () => cfg);
+      using _ = { [Symbol.dispose]: () => authorization.release?.() };
+      const input = authorization.admittedInputAuthority!;
+      const effect = vi.fn();
+      await input.withCurrent((facts, assertSourceCurrent) => {
+        expect(facts.members).toContainEqual(
+          expect.objectContaining({ identityId: client.authenticatedUserProfile!.profileId }),
+        );
+        const committing = {
+          ...facts,
+          ...(change === "membership"
+            ? { members: [] }
+            : { entry: { ...facts.entry!, lifecycleRevision: "transaction-successor" } }),
+        };
+        expect(() => input.withPreparedCurrent(committing, effect, assertSourceCurrent)).toThrow(
+          change === "membership" ? "session is read-only" : "session changed",
+        );
+      });
+      authorization.assertAdmittedInputCurrent!();
+      expect(effect).not.toHaveBeenCalled();
+    }),
+);
+
 it.each([
   "worker-before-read",
   "reset-before-read",

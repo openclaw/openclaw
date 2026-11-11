@@ -164,6 +164,8 @@ describe("worker placement startup health lifetime", () => {
 
     try {
       sidecar = await startRuntime(runtime, { startupTrace });
+      // Readiness no longer waits for the tracked remote recovery chain.
+      await nextTurn();
       const completedPhases = info.mock.calls.flatMap(([line]) => {
         const match = /sidecars\.worker-environments\.([\w-]+) [\d.]+ms/.exec(line);
         return match ? [match[1]] : [];
@@ -213,7 +215,7 @@ describe("worker placement startup health lifetime", () => {
   });
 
   it.each(["provisioning", "active"] as const)(
-    "waits for %s placement resource settlement before exposing readiness",
+    "admits startup while %s placement recovery waits and drains it before stopping environments",
     async (state) => {
       const releaseRecovery = createDeferredCore();
       const reconcile = vi.fn(async () => await releaseRecovery.promise);
@@ -227,23 +229,29 @@ describe("worker placement startup health lifetime", () => {
         await vi.waitFor(() =>
           expect(reconcile).toHaveBeenCalledWith("startup", expect.any(Function)),
         );
-        expect(environments.start).not.toHaveBeenCalled();
-
         let ready = false;
         void starting.then(() => {
           ready = true;
         });
-        await Promise.resolve();
-        expect(ready).toBe(false);
-
-        releaseRecovery.resolve();
+        await nextTurn();
+        expect(ready).toBe(true);
         const sidecar = await starting;
         expect(sidecar).not.toBeNull();
         expect(environments.start).toHaveBeenCalledOnce();
-        await sidecar?.stop();
+
+        let stopped = false;
+        const stopping = sidecar!.stop().then(() => {
+          stopped = true;
+        });
+        await nextTurn();
+        expect(stopped).toBe(false);
+        expect(environments.stop).not.toHaveBeenCalled();
+        releaseRecovery.resolve();
+        await stopping;
+        expect(environments.stop).toHaveBeenCalledOnce();
       } finally {
         releaseRecovery.resolve();
-        await starting.catch(() => undefined);
+        await (await starting)?.stop();
       }
     },
   );
@@ -271,7 +279,9 @@ describe("worker placement startup health lifetime", () => {
         unregisterSidecar,
       });
       await expect(starting).resolves.toBe(sidecar);
-      expect(runtimeFactoryMocks.resolveSessionEvidence).toHaveBeenCalledOnce();
+      await vi.waitFor(() =>
+        expect(runtimeFactoryMocks.resolveSessionEvidence).toHaveBeenCalledOnce(),
+      );
       expect(reconcileActive).not.toHaveBeenCalled();
       expect(retireSessionPlacementAsync).not.toHaveBeenCalled();
 

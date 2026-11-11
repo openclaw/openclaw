@@ -329,7 +329,7 @@ it.for([
       );
       const observed = createDeferred();
       const observer = admission.observation;
-      const waitForPreparation = observer.waitForAgentPreparation.bind(observer);
+      const waitForPreparation = observer.waitForAgentPreparation;
       vi.spyOn(observer, "waitForAgentPreparation").mockImplementation((id, options) => {
         const waiting = waitForPreparation(id, options);
         observed.resolve();

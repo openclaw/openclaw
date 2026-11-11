@@ -67,7 +67,11 @@ it("explains the missing capability and scope before sending an agent creation r
 
   expect(request).not.toHaveBeenCalled();
   const error = page.querySelector('[role="alert"]')?.textContent;
-  for (const text of ["openclaw.chat", "operator.admin", "Pair", "reconnect"]) {
+  for (const text of [
+    "doesn’t have admin access",
+    "Reconnect with admin access",
+    "set up OpenClaw",
+  ]) {
     expect(error).toContain(text);
   }
   expect(error).not.toContain("Update the Gateway");

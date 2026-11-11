@@ -33,6 +33,7 @@ import {
   requiresGoogleToolCallId,
   convertGoogleTools,
   type GoogleStreamChunk as GoogleSseChunk,
+  applyProviderPayloadHook,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
   failTransportStream,
@@ -75,6 +76,8 @@ type GoogleTransportModel = ProviderModel<GoogleTransportApi> & {
 type GoogleTransportOptions = SimpleStreamOptions &
   ProviderCallStreamOptions & {
     cachedContent?: string;
+    topP?: number;
+    seed?: number;
     toolChoice?:
       | "auto"
       | "none"
@@ -275,8 +278,10 @@ export function buildGoogleGenerativeAiParams(
     options?.thinking ?? buildGoogleSimpleThinking(canonicalGoogleModel(model), options),
     options?.maxTokens,
   );
-  if (typeof options?.temperature === "number") {
-    generationConfig.temperature = options.temperature;
+  for (const key of ["temperature", "topP", "seed"] as const) {
+    if (typeof options?.[key] === "number") {
+      generationConfig[key] = options[key];
+    }
   }
   if (options?.stop !== undefined && options.stop.length > 0) {
     generationConfig.stopSequences = options.stop;
@@ -291,6 +296,7 @@ export function buildGoogleGenerativeAiParams(
       (id) => (requiresGoogleToolCallId(model.id) ? normalizeToolCallId(id) : id),
       { preserveCrossModelToolCallThoughtSignature: isGoogleGemini3ThinkingLevelModel(model.id) },
     ) as ProviderContext["messages"],
+    tools: context.tools,
     replay: "managed",
     requiresToolCallSignature: isGoogleGemini3ThinkingLevelModel(model.id),
     videoPart: (video) =>
@@ -508,10 +514,8 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           : context;
         const videoSlots: GoogleVideoSlots = new Map();
         let params = buildGoogleGenerativeAiParams(model, providerContext, options, videoSlots);
-        const nextParams = await options?.onPayload?.(params, canonicalModel);
-        if (nextParams !== undefined) {
-          params = nextParams as GoogleGenerateContentRequest;
-        }
+        const nextParams = await applyProviderPayloadHook(options, params, canonicalModel);
+        params = nextParams as GoogleGenerateContentRequest;
         const trustedVideoSlots: Record<string, unknown>[] = [];
         materializeGoogleVideoSlots(
           params,
@@ -651,6 +655,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           chunks: sse.chunks,
           model: canonicalModel,
           output,
+          tools: providerContext.tools,
           stream,
           signal: options?.signal,
           nextToolCallId: (name) => `${name || "tool"}_${Date.now()}_${++toolCallCounter}`,

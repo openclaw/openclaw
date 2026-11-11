@@ -3,12 +3,11 @@
 import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classify";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_INPUT_IMAGE_MIMES, resolveInputFileLimits } from "./input-file-limits.js";
 import {
-  DEFAULT_INPUT_IMAGE_MIMES,
   extractFileContentFromBuffer,
   extractFileContentFromSource,
   extractImageContentFromSource,
-  resolveInputFileLimits,
 } from "./input-files.js";
 
 describe("named attachment text decoding", () => {

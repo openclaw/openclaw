@@ -88,7 +88,12 @@ export function runSqliteIntegrityCheckInWorkerSync(check: SqliteIntegrityCheck)
       databaseLabel: check.databaseLabel,
       identity,
       busyTimeoutMs: readSqliteBusyTimeout(check.database),
-      integrity: { check: check.check, tables: check.tables, ftsSchemas: check.ftsSchemas },
+      integrity: {
+        check: check.check,
+        schemaOnly: check.schemaOnly,
+        tables: check.tables,
+        ftsSchemas: check.ftsSchemas,
+      },
     } satisfies SqliteIntegrityWorkerInput),
     timeout: readSqliteInspectionBudget("integrity check", check.databaseLabel, identity.size)
       .timeoutMs,

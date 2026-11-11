@@ -1,0 +1,3 @@
+# Subagent label shimmer regression coverage from #194975 (chat-details-subagents test).
+# Exact grant: main was 16 lines over the ceiling after that merge; no slack.
+16

@@ -34,7 +34,7 @@ it("does not rebuild the large device inventory for unrelated config feedback", 
   const first = view.container.querySelector(".device-entry");
   expect(first).not.toBeNull();
   reads = 0;
-  setCurrent((previous) => ({ ...previous, configDirty: true }));
+  setCurrent((previous) => ({ ...previous, configSaving: true }));
   flush();
   expect(view.container.querySelector(".device-entry")).toBe(first);
   expect(reads).toBe(0);

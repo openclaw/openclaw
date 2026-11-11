@@ -1,10 +1,11 @@
 import { createMemo, Errored, lazy, Loading, onSettled, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { templateCreatorOwner, type TemplateCreator } from "./creator-publication.ts";
 import "../../styles/template-creator.css";
+import { templateCreatorOwner, type TemplateCreator } from "./creator-publication.ts";
 
 const CreatorReviewView = lazy(() => import("./creator-review-view.tsx"), {
   export: "TemplateCreatorReviewView",
@@ -54,12 +55,12 @@ function ActiveTemplateCreatorReview(props: {
     <Show when={visible()}>
       <Errored
         fallback={(error, retry) => (
-          <div role="alert" class="callout danger">
+          <InlineAlert tone="danger" role="alert">
             {formatUiError(error())}
             <button class="btn btn--sm" onClick={retry}>
               {t("common.retry")}
             </button>
-          </div>
+          </InlineAlert>
         )}
       >
         <Loading fallback={<p role="status">{t("common.loading")}</p>}>

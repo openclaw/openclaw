@@ -25,8 +25,8 @@ import {
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
+import { resolveWorkshopSkillsDir } from "../test-support/workshop-config.test-support.js";
 import type { OpenClawSkillMetadata, SkillEligibilityContext } from "../types.js";
-import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { captureWarningLogger } from "./loading.test-support.js";
 import {
   loadVisibleSkills,

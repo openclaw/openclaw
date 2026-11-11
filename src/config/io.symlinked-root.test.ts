@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createConfigIO } from "./io.factory.js";
+import { mutateConfigFile } from "./mutate.js";
 
 describe("config writes through a symlinked state root", () => {
   const roots = createSuiteTempRootTracker({ prefix: "openclaw-config-symlink-" });
@@ -50,6 +51,50 @@ describe("config writes through a symlinked state root", () => {
 
     expect(JSON.parse(await fs.readFile(io.configPath, "utf8")).gateway.port).toBe(19001);
   });
+
+  it.runIf(process.platform === "win32").each([false, true])(
+    "writes through an existing directory with different casing (includes: %s)",
+    async (withInclude) => {
+      const home = await roots.make();
+      const stateDir = path.join(home, "mixed-case-state");
+      await fs.mkdir(stateDir);
+      const configPath = path.join(stateDir, "openclaw.json");
+      if (withInclude) {
+        await fs.writeFile(configPath, JSON.stringify({ gateway: { $include: "gateway.json" } }));
+        await fs.writeFile(
+          path.join(stateDir, "gateway.json"),
+          JSON.stringify({ mode: "local", port: 18789 }),
+        );
+      }
+      const io = createConfigIO({
+        env: { HOME: home, NODE_ENV: "test", OPENCLAW_STATE_DIR: stateDir.toUpperCase() },
+        homedir: () => home,
+        logger: { warn: vi.fn(), error: vi.fn() },
+      });
+
+      if (withInclude) {
+        await mutateConfigFile({
+          io,
+          mutate: (draft) => {
+            draft.gateway = { ...draft.gateway, port: 19001 };
+          },
+        });
+        expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({
+          gateway: { $include: "gateway.json" },
+        });
+        expect(
+          JSON.parse(await fs.readFile(path.join(stateDir, "gateway.json"), "utf8")).port,
+        ).toBe(19001);
+      } else {
+        await io.writeConfigFile({ gateway: { mode: "local", port: 19001 } });
+      }
+
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
+      expect(snapshot.config.gateway?.port).toBe(19001);
+      expect(io.configPath).toBe(path.join(stateDir.toUpperCase(), "openclaw.json"));
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "reads a config-file alias and its includes without allowing publication through it",

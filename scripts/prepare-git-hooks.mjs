@@ -71,7 +71,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       process.exit(generated.status ?? 1);
     }
   }
-  configurePrepareGitHooks();
+  // CI preparation must not persist developer hooks in reusable workspaces.
+  if (!process.env.CI) {
+    configurePrepareGitHooks();
+  }
   if (existsSync(join(DEFAULT_PACKAGE_ROOT, "scripts/native-protocol-inputs.json"))) {
     const { prepareNativeProtocol } = await import("./prepare-native-protocol.mjs");
     await prepareNativeProtocol();

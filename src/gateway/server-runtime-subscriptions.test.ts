@@ -591,7 +591,9 @@ describe("startGatewayEventSubscriptions", () => {
 
     emit({ phase: "error", error: "retryable provider failure", endedAt: 2_000 });
     emit({ phase: "start", startedAt: 2_500 });
-    expect(agentEventHandlerMocks.persistLifecycle).not.toHaveBeenCalled();
+    expect(
+      agentEventHandlerMocks.persistLifecycle.mock.calls.map(([call]) => call.event.data?.phase),
+    ).toEqual(["start", "start"]);
 
     const terminalPersistence = createDeferred();
     agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminalPersistence.promise);

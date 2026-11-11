@@ -61,12 +61,9 @@ env:
 jobs:
   discover:
     name: Find trusted release candidate
-    runs-on: &linux_runner_hybrid_small >-
+    runs-on: &linux_runner_ubuntu >-
       ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.repository == 'openclaw/openclaw' &&
-      vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')))
-      || (github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' &&
-      'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 10
     outputs:
       state: ${{ steps.discover.outputs.state }}
@@ -155,7 +152,7 @@ jobs:
     name: Resolve release candidate
     needs: [discover, prepare]
     if: always()
-    runs-on: *linux_runner_hybrid_small
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 5
     outputs:
       state: ${{ steps.result.outputs.state }}

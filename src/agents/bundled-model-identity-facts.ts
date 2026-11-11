@@ -1,6 +1,8 @@
 import { canonicalModelKey } from "@openclaw/model-catalog-core";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { ModelApi, ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
+import type { ModelDataMediaInputConfig as ModelMediaInputConfig } from "../../packages/llm-core/src/model-data.js";
+import type { ModelApi } from "../config/model-config-vocabulary.js";
+import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 import {
   createBundledStaticCatalogModelResolver,
   listBundledVendorCatalogRows,

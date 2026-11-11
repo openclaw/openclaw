@@ -3,6 +3,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { isPathInside } from "../infra/path-guards.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { resolveAgentDatabaseIdleHandleTtlMs } from "../infra/sqlite-handle-lifecycle.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
@@ -11,7 +12,6 @@ import {
   hasSqlitePostCommitScope,
 } from "../infra/sqlite-post-commit.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
-import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGatewayShutdownCleanupSignal } from "../process/gateway-work-admission.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -213,7 +213,7 @@ export function retainFailedAgentDatabaseClose(
   };
   cache.retainedCloses.add(retained);
   getOpenClawDatabaseMaintenanceScope()?.own(retained, "agent-handles", retained.close);
-  cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
+  cache.unregisterExitClose ??= registerProcessExitCleanup(closeOpenClawAgentDatabases);
 }
 
 export function revokePendingAgentDatabaseOpen(pathname: string, expectedAgentId?: string): void {

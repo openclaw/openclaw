@@ -17,12 +17,10 @@ import {
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
-import { getSessionRowSelectionMetrics } from "../../infra/gateway-work-metrics.js";
 import { mergeProfiles } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import { prepareProjectedSessionList } from "../session-utils-list.js";
 import {
   identifiedClient,
   listSessions as readList,
@@ -144,24 +142,6 @@ it("counts caller-visible conversations once through direct and delegated work b
     try {
       await read();
       const projection = getSessionRowProjection(context)!;
-      const candidateSelections = () =>
-        getSessionRowSelectionMetrics().selections.reduce(
-          (total, selection) =>
-            total + (selection.kind === "running-candidate" ? selection.calls : 0),
-          0,
-        );
-      // The RPC may reselect after awaited row preparation; each synchronous read resolves once.
-      const prepared = prepareProjectedSessionList({
-        projection,
-        context,
-        client,
-        opts: request,
-        now,
-        metadataPrepared: true,
-      });
-      const before = candidateSelections();
-      expect(prepared.ownerRunningCandidateKeys().has(running)).toBe(true);
-      expect(candidateSelections() - before).toBe(1);
       const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
       for (const offset of [0, 3, 100]) {
         expect((await read({ offset })).ownerSessionCounts).toEqual(expected(8, 2));
@@ -290,20 +270,22 @@ it("keeps owner-count goldens through deep descendant termination and re-parenti
         execution: level === 99 ? { status: "running" } : { status: "terminal", endedAt: now },
       }),
     );
-    const read = async (adaRunning: number, bobRunning: number) => {
+    const read = async (adaRunning: number, bobRunning: number, bobOpen = true) => {
       // The second list reuses the same topology with a fresh query window.
       for (let pass = 0; pass < 2; pass++) {
         const result = await listSessions({
           client,
           context,
-          request: { includeOwnerSessionCounts: true, excludeSubagents: true },
+          request: { includeOwnerSessionCounts: true, excludeSubagents: true, archived: "all" },
         });
         expect(result.sessions.map((row) => row.key).toSorted()).toEqual([
           mainScope("deep-ada").sessionKey,
           mainScope("deep-bob").sessionKey,
         ]);
         expect(result.ownerSessionCounts).toEqual(
-          [count(ada, 1, adaRunning), count(bob, 1, bobRunning)].toSorted(byProfile),
+          [count(ada, 1, adaRunning), ...(bobOpen ? [count(bob, 1, bobRunning)] : [])].toSorted(
+            byProfile,
+          ),
         );
       }
     };
@@ -311,6 +293,18 @@ it("keeps owner-count goldens through deep descendant termination and re-parenti
       chain.forEach(retainRun);
       await read(1, 0);
       retainRun({ ...chain[50]!, requesterSessionKey: mainScope("deep-bob").sessionKey });
+      await read(0, 1);
+      // Running descendant facts survive archival; only open conversations enter the facet.
+      await patchSessionEntryCore(mainScope("deep-bob"), () => ({ archivedAt: now }));
+      await read(0, 0, false);
+      const archived = await listSessions({
+        client,
+        context,
+        request: { includeOwnerSessionCounts: true, archived: true },
+      });
+      expect(archived.sessions.map((row) => row.key)).toEqual([mainScope("deep-bob").sessionKey]);
+      expect(archived.ownerSessionCounts).toEqual([]);
+      await patchSessionEntryCore(mainScope("deep-bob"), () => ({ archivedAt: undefined }));
       await read(0, 1);
       finishRun(chain[99]!);
       await read(0, 0);

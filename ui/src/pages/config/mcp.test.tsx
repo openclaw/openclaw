@@ -10,33 +10,7 @@ import {
 } from "../../test-helpers/solid-application-context.tsx";
 import { Mcp } from "./mcp.tsx";
 
-type McpViewProps = Parameters<typeof Mcp>[0];
-
-function createProps(overrides: Partial<McpViewProps> = {}): McpViewProps {
-  return {
-    configObject: {
-      mcp: {
-        servers: {
-          docs: {
-            url: "https://mcp.example.com/mcp",
-            auth: "oauth",
-            toolFilter: { include: ["search"] },
-          },
-          local: {
-            command: "node",
-            enabled: false,
-            supportsParallelToolCalls: true,
-          },
-        },
-      },
-    },
-    pluginsHref: "/settings/plugins",
-    editor: <div class="test-editor" />,
-    ...overrides,
-  };
-}
-
-function mountMcp(props: McpViewProps) {
+function mountMcp() {
   const { gateway } = createApplicationGateway();
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const context = {
@@ -45,7 +19,9 @@ function mountMcp(props: McpViewProps) {
     agentSelection: { subscribe: () => () => undefined },
   } as unknown as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
-  const view = mountSolid(() => <Mcp {...props} />, { wrapper: provider.wrapper });
+  const view = mountSolid(() => <Mcp editor={<div class="test-editor" />} />, {
+    wrapper: provider.wrapper,
+  });
   onTestFinished(() => {
     view.unmount();
     runtimeConfig.dispose();
@@ -53,47 +29,26 @@ function mountMcp(props: McpViewProps) {
   return view.container;
 }
 
-function buttonByText(container: Element, text: string): HTMLButtonElement {
-  const button = Array.from(container.querySelectorAll("button")).find(
-    (candidate) => candidate.textContent?.trim() === text,
-  );
-  if (!(button instanceof HTMLButtonElement)) {
-    throw new Error(`Expected ${text} button`);
-  }
-  return button;
-}
-
 describe("Mcp", () => {
-  it("renders summary counts, operator commands, and the managed servers card", () => {
-    const container = mountMcp(createProps());
+  it("leads with the server list and keeps reference commands on demand", () => {
+    const container = mountMcp();
 
-    const summary = container.querySelector(".mcp-page__summary");
-    expect(summary?.textContent).toContain("Servers");
-    expect(
-      [...(summary?.querySelectorAll(".settings-row") ?? [])].map((row) => [
-        row.querySelector(".settings-row__title")?.textContent,
-        row.querySelector(".settings-row__control")?.textContent,
-      ]),
-    ).toEqual([
-      ["Servers", "2"],
-      ["Enabled", "1"],
-      ["OAuth", "1"],
-      ["Filtered", "1"],
-    ]);
-    expect(container.textContent).toContain("openclaw mcp doctor --probe");
-
-    const card = container.querySelector("openclaw-mcp-servers-card");
-    expect(card).not.toBeNull();
-    expect(card?.querySelector(".settings-section__desc a")?.getAttribute("href")).toBe(
-      "/settings/plugins",
-    );
+    expect(container.querySelector("openclaw-mcp-servers-card")).not.toBeNull();
+    expect(container.querySelector(".test-editor")).not.toBeNull();
+    const commands = container.querySelector<HTMLDetailsElement>("details.mcp-page__commands");
+    expect(commands?.open).toBe(false);
+    expect(commands?.textContent).toContain("openclaw mcp doctor --probe");
+    expect(commands?.querySelectorAll(".chat-copy-btn")).toHaveLength(3);
   });
 
-  it("keeps the summary free of save actions and preserves the embedded editor", () => {
-    const container = mountMcp(createProps());
+  it("has no summary counts and no save actions", () => {
+    const container = mountMcp();
 
-    expect(buttonByText.bind(null, container, "Save")).toThrow();
-    expect(buttonByText.bind(null, container, "Save & Publish")).toThrow();
-    expect(container.querySelector(".test-editor")).not.toBeNull();
+    expect(container.querySelector(".mcp-page__summary")).toBeNull();
+    expect(container.textContent).not.toContain("Filtered");
+    const labels = [...container.querySelectorAll("button")].map((button) =>
+      button.textContent?.trim(),
+    );
+    expect(labels).not.toContain("Save");
   });
 });
