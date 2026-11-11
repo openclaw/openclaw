@@ -39,7 +39,7 @@ openclaw-board-view {
   border: 1px solid color-mix(in srgb, var(--danger) 42%, transparent);
   border-radius: var(--radius-md);
   color: var(--danger);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   padding: 9px 12px;
 }
 
@@ -75,7 +75,7 @@ openclaw-board-view {
   flex: 0 0 auto;
   border-bottom: 2px solid transparent;
   font-family: inherit;
-  font-size: calc(12.5px * var(--control-ui-text-scale));
+  font-size: 12.5px;
   font-weight: var(--control-ui-font-weight-normal);
   min-height: 38px;
   padding: 0 13px;
@@ -255,7 +255,7 @@ openclaw-board-widget-cell {
 
 .board-widget__title {
   color: var(--text);
-  font-size: calc(12.5px * var(--control-ui-text-scale));
+  font-size: 12.5px;
   font-weight: 590;
   min-width: 0;
   overflow: hidden;
@@ -267,9 +267,9 @@ openclaw-board-widget-cell {
   border: 1px solid var(--board-line);
   border-radius: 999px;
   color: var(--muted);
-  font-size: calc(8px * var(--control-ui-text-scale));
+  font-size: 8px;
   letter-spacing: 0.08em;
-  line-height: calc(15px * var(--control-ui-text-scale));
+  line-height: 15px;
   margin-left: auto;
   padding: 0 5px;
 }
@@ -287,7 +287,7 @@ openclaw-board-widget-cell {
 
 .board-widget__menu-empty {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   padding: 5px 9px;
 }
 
@@ -391,7 +391,7 @@ openclaw-board-widget-cell {
 .board-widget__app-loading,
 .board-widget__stale {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 
 .board-widget__plugin-loading,
@@ -433,7 +433,7 @@ openclaw-board-widget-cell {
 .board-widget__grant strong,
 .board-widget__error strong {
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .board-widget__stale > span {
@@ -654,7 +654,7 @@ openclaw-board-widget-cell {
 }
 
 .board-widget__page-menu-heading strong {
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -662,7 +662,7 @@ openclaw-board-widget-cell {
 
 .board-widget__menu-capabilities {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   overflow-wrap: anywhere;
   padding: 0 12px 8px;
 }
@@ -742,7 +742,7 @@ openclaw-board-widget-cell {
 .board-widget__grant > span,
 .board-widget__error > span {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   line-height: 1.45;
   max-width: 32ch;
 }
@@ -750,7 +750,7 @@ openclaw-board-widget-cell {
 .board-widget__grant-summary {
   color: var(--muted);
   display: grid;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   gap: 4px;
   line-height: 1.45;
   margin: 0;
@@ -773,7 +773,7 @@ openclaw-board-widget-cell {
 
 .board-widget__grant-groups section > strong {
   color: var(--text);
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   text-transform: uppercase;
 }
 
@@ -783,7 +783,7 @@ openclaw-board-widget-cell {
   border-radius: 999px;
   color: var(--ok);
   display: inline-flex;
-  font-size: calc(9px * var(--control-ui-text-scale));
+  font-size: 9px;
   font-weight: 650;
   line-height: 1;
   padding: 3px 6px;
@@ -832,7 +832,7 @@ openclaw-board-widget-cell {
 
 .board-widget__error details {
   color: var(--muted);
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   max-width: 100%;
 }
 
@@ -859,11 +859,11 @@ openclaw-board-widget-cell {
 
 .board-empty strong {
   color: var(--text);
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
 }
 
 .board-empty span:last-child {
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .board-empty__mark {

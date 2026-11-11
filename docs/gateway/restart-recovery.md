@@ -172,6 +172,13 @@ behind that session at shutdown. These private limits are not included in chat
 history or model messages. The Gateway writes one marker per running root session or recorded yield wait,
 batched by session store, before aborting work. It uses the existing session-entry JSON in SQLite and needs
 no schema migration.
+
+Shutdown closes request admission and scheduled wakeups before writing markers.
+Accepted ingress inputs retain their live source authority until the markers are
+written and the session owner stops them for restart. A real grant revocation or
+permission change during that interval still cancels the affected work. At startup,
+queued inputs must regain current authority before they can execute.
+
 Crash recovery uses the nonterminal run marker committed with accepted plain
 chat input, before dispatch hooks or runtime start. The same commit records its
 writer identity; terminal settlement clears the run marker. Recovery is bounded
