@@ -1,4 +1,5 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   formatErrorMessage,
   readErrorName,
@@ -712,16 +713,20 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    const signal = getAsyncWorkSignal();
     return await this.withManagerOperation(async () => {
+      signal?.throwIfAborted();
       const cached = this.getCachedEmbeddingAvailability();
       if (cached) {
         return cached;
       }
       await this.ensureProviderInitialized();
+      signal?.throwIfAborted();
       // Diagnostics must describe the provider search actually uses. A published index that
       // belongs to the configured fallback is adopted on the search path, so adopt it here
       // too instead of probing a provider this workspace's index cannot be read with.
       await this.adoptPublishedFallbackProviderIfMatched();
+      signal?.throwIfAborted();
       // FTS-only mode: embeddings not available but search still works
       if (!this.provider) {
         return this.cacheProbeResult({
@@ -731,9 +736,11 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         });
       }
       try {
-        await this.probeEmbeddingProvider(this.provider, this.providerRuntime);
+        await this.probeEmbeddingProvider(this.provider, this.providerRuntime, signal);
+        signal?.throwIfAborted();
         return this.cacheProbeResult({ ok: true });
       } catch (err) {
+        signal?.throwIfAborted();
         const message = formatErrorMessage(err);
         return this.cacheProbeResult({ ok: false, error: message });
       }

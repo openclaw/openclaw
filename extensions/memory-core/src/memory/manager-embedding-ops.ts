@@ -17,7 +17,6 @@ import {
   type MemorySearchDeadlineControl,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
   withMemoryWorkspaceLock,
@@ -60,13 +59,12 @@ import type {
 } from "./manager-sync-base.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
-import { runEmbeddingOperationWithTimeout } from "./paused-deadline.js";
+import {
+  resolveMemoryEmbeddingTimeout,
+  runEmbeddingOperationWithTimeout,
+} from "./paused-deadline.js";
 
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
-const EMBEDDING_TIMEOUTS_MS = {
-  query: { remote: 60_000, local: 5 * 60_000 },
-  batch: { remote: 2 * 60_000, local: 10 * 60_000 },
-};
 const SOURCE_PUBLICATION_MAX_FILES = 8;
 const SOURCE_PUBLICATION_MAX_ROWS = 128;
 const SOURCE_WIDE_BATCH_MAX_FILES = 2048;
@@ -267,7 +265,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         items: requestItems,
         maxInputsPerRequest: provider.maxInputsPerRequest,
         run: async (batchItems) => {
-          const timeoutMs = this.resolveEmbeddingTimeout("batch", provider, generation?.runtime);
+          const timeoutMs = resolveMemoryEmbeddingTimeout(
+            "batch",
+            provider,
+            generation?.runtime ?? this.providerRuntime,
+          );
           log.debug(`memory embeddings: ${label} start`, {
             provider: provider.id,
             items: batchItems.length,
@@ -341,39 +343,31 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     await sleepWithAbort(delayMs, signal);
   }
 
-  private resolveEmbeddingTimeout(
-    kind: "query" | "batch",
-    provider: MemoryEmbeddingProvider | null = this.provider,
-    providerRuntime: MemoryEmbeddingProviderRuntime | undefined = this.providerRuntime,
-  ): number {
-    const defaults = EMBEDDING_TIMEOUTS_MS[kind];
-    const runtimeTimeoutMs =
-      kind === "query"
-        ? providerRuntime?.inlineQueryTimeoutMs
-        : providerRuntime?.inlineBatchTimeoutMs;
-    return typeof runtimeTimeoutMs === "number" && runtimeTimeoutMs > 0
-      ? resolveTimerTimeoutMs(runtimeTimeoutMs, defaults.remote)
-      : defaults[provider?.id === "local" ? "local" : "remote"];
-  }
-
   protected async probeEmbeddingProvider(
     provider: MemoryEmbeddingProvider,
     providerRuntime: MemoryEmbeddingProviderRuntime | undefined,
+    signal?: AbortSignal,
   ): Promise<void> {
-    const timeoutMs = this.resolveEmbeddingTimeout("query", provider, providerRuntime);
+    const timeoutMs = resolveMemoryEmbeddingTimeout(
+      "query",
+      provider,
+      providerRuntime ?? this.providerRuntime,
+    );
     const deadlineControl = createMemorySearchDeadlineControl();
     try {
       await runEmbeddingOperationWithTimeout({
         timeoutMs,
         message: `memory embedding probe timed out after ${Math.round(timeoutMs / 1000)}s`,
+        signal,
         deadlineControl,
-        run: (signal) =>
+        run: (opSignal) =>
           embedMemoryQuery(provider, "ping", this.settings, {
-            signal,
+            signal: opSignal,
             [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl,
           }),
       });
     } catch (error) {
+      signal?.throwIfAborted();
       if (provider === this.provider) {
         this.markLocalEmbeddingProviderDegraded(error);
       }
@@ -398,7 +392,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         profile: "query",
         run: async () => {
           signal?.throwIfAborted();
-          const timeoutMs = this.resolveEmbeddingTimeout("query", provider, providerRuntime);
+          const timeoutMs = resolveMemoryEmbeddingTimeout(
+            "query",
+            provider,
+            providerRuntime ?? this.providerRuntime,
+          );
           log.debug("memory embeddings: query start", { provider: provider.id, timeoutMs });
           return await runEmbeddingOperationWithTimeout({
             timeoutMs,
