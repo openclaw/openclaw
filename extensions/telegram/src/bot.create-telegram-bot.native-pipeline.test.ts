@@ -25,6 +25,7 @@ import {
   apiCalls,
   groupChat,
   groupCommand,
+  deliverTelegramUpdate,
   nextTelegramTestMessageId,
   publishTelegramTestConfig,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
@@ -695,12 +696,10 @@ it.each([
     ? { photo: [{ ...photo[0], file_id: "p2", file_unique_id: unique }] }
     : { text: "What is in this image?" };
   const replied = { ...messageBase, message_id: nextTelegramTestMessageId(), photo, origin };
-  const messageId = nextTelegramTestMessageId();
-  await handleMessage(bot, messageId, {
-    ...messageBase,
-    message_id: messageId,
-    ...current,
-    [field]: replied,
+  const message_id = nextTelegramTestMessageId();
+  await deliverTelegramUpdate(bot, {
+    update_id: message_id,
+    message: { ...messageBase, message_id, ...current, [field]: replied },
   });
   expect(apiPayloads("getFile")).toEqual(
     fileIds.map((id) => expect.objectContaining({ file_id: id })),
