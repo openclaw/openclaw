@@ -105,7 +105,7 @@ read_when:
   </Accordion>
 
   <Accordion title="Can I run multiple Gateways on the same host?">
-    Usually no - one Gateway can run multiple messaging channels and agents. Use multiple Gateways only for redundancy (for example a rescue bot) or hard isolation, and isolate each with its own `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`, `agents.defaults.workspace`, and unique `gateway.port`.
+    Usually no - one Gateway can run multiple messaging channels and agents. Use multiple Gateways only for redundancy (for example a rescue bot) or hard isolation, and isolate each with its own `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`, `agents.defaults.workspace`, and unique `gateway.port`, with base ports at least 120 apart for the normal derived-port ranges. Explicit sandbox/browser/CDP port overrides and high-base-port fallbacks can still overlap, so check those ports separately.
 
     Recommended: `openclaw --profile <name> ...` per instance (auto-creates `~/.openclaw-<name>`), a unique `gateway.port` per profile config (or `--port` for manual runs), and a per-profile service with `openclaw --profile <name> gateway install`.
 

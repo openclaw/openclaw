@@ -291,7 +291,7 @@ Use the corresponding tool, terminal, channel, and plugin policies for those.
 
 ### Multi-instance isolation
 
-Run multiple gateways on one host with unique ports and state dirs:
+Run multiple gateways on one host with unique ports and state dirs. Keep base ports at least 120 apart for the normal derived-port ranges. Explicit sandbox/browser/CDP port overrides and high-base-port fallbacks can still overlap, so check those ports separately:
 
 ```bash
 OPENCLAW_CONFIG_PATH=~/.openclaw/a.json \
