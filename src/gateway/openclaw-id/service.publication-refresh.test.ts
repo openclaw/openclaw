@@ -11,6 +11,7 @@ import {
   signStatement,
   type PublishSnapshotRequest,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOpenClawIdAuthority } from "./authority.js";
 import { memoryStore, nowSeconds, TEST_K_SRV } from "./openclaw-id.test-support.js";
 import { PUBLICATION_REFRESH_MS } from "./publication-retry.js";
@@ -144,6 +145,38 @@ async function expectArmed() {
 }
 
 describe("service publication refresh scheduling", () => {
+  it("invalidates People after a publication refusal settles", async () => {
+    await commitLink();
+    const entered = createDeferred();
+    const response = createDeferred<Response>();
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/snapshot")) {
+        entered.resolve();
+        return response.promise;
+      }
+      return answer(input, init);
+    });
+    const changed = vi.fn();
+    const stop = service.onPeopleChanged(changed);
+    const publishing = service.publish();
+    await entered.promise;
+    changed.mockClear();
+    response.resolve(
+      Response.json(
+        { error: { code: "binding_superseded", message: "newer binding" } },
+        { status: 409 },
+      ),
+    );
+    await expect(publishing).resolves.toMatchObject({
+      state: "failed",
+      code: "binding_superseded",
+    });
+    expect(changed).toHaveBeenCalled();
+    stop();
+  });
+
   it("keeps a code given to publish for its retries after a transient failure", async () => {
     await commitLink();
     await authority.recordDiscovery({
