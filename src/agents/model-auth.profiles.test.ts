@@ -399,6 +399,135 @@ it.each([
   );
 });
 
+describe("missing provider auth recovery", () => {
+  const providerId = "fixture-oauth";
+  const baseUrl = "https://oauth.example.test/v1";
+  const oauthChoice = {
+    provider: providerId,
+    method: "browser",
+    choiceId: "fixture-sign-in",
+    appGuidedAuth: "oauth" as const,
+  };
+
+  function metadataFixture(mixedMethods = false) {
+    return createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: providerId,
+          origin: "global",
+          providers: [providerId],
+          providerAuthAliases: { "fixture-alias": providerId },
+          providerAuthChoices: [
+            oauthChoice,
+            ...(mixedMethods
+              ? [
+                  {
+                    provider: providerId,
+                    method: "api-key",
+                    choiceId: "fixture-key",
+                    appGuidedSecret: true,
+                  },
+                ]
+              : []),
+          ],
+          modelCatalog: {
+            providers: {
+              [providerId]: {
+                baseUrl,
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        },
+      ],
+    });
+  }
+
+  it.each([
+    [providerId, undefined],
+    ["fixture-alias", undefined],
+    [providerId, false],
+  ] as const)(
+    "offers sign-in for an inline OAuth-only %s model (profile fallback=%s)",
+    async (provider, allowAuthProfileFallback) => {
+      const metadata = vi
+        .spyOn(currentPluginMetadata, "getCurrentPluginMetadataSnapshot")
+        .mockReturnValue(metadataFixture());
+      try {
+        await withAuthState(async (state) => {
+          const error = await resolveAuth({
+            provider,
+            cfg: configFor(provider, baseUrl, { models: [modelDefinition("sample")] }),
+            store: authStore({}),
+            agentDir: state.agentDir(),
+            allowAuthProfileFallback,
+          }).catch((caught: unknown) => caught);
+          expect(error).toMatchObject({ code: "missing-provider-auth", provider });
+          if (!(error instanceof Error)) {
+            throw error;
+          }
+          expect(error.message).toContain(`models auth login --provider ${providerId}`);
+          expect(error.message).toContain("--agent <id>");
+          expect(error.message).toContain("Auth store:");
+          expect(error.message).not.toMatch(/API key|paste-api-key|copy.*profiles/i);
+        });
+      } finally {
+        metadata.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    "custom endpoint",
+    "model endpoint",
+    "explicit API key",
+    "mixed methods",
+    "disabled plugin",
+    "unowned provider",
+  ] as const)("preserves API-key recovery for %s", async (scenario) => {
+    const provider = scenario === "unowned provider" ? "fixture-custom" : providerId;
+    const metadata = vi
+      .spyOn(currentPluginMetadata, "getCurrentPluginMetadataSnapshot")
+      .mockReturnValue(metadataFixture(scenario === "mixed methods"));
+    try {
+      await withAuthState(async (state) => {
+        const cfg: OpenClawConfig = {
+          ...configFor(
+            provider,
+            scenario === "custom endpoint" ? "https://custom.example.test/v1" : baseUrl,
+            {
+              models: [modelDefinition("sample")],
+              ...(scenario === "explicit API key" ? { auth: "api-key" } : {}),
+            },
+          ),
+          ...(scenario === "disabled plugin"
+            ? { plugins: { entries: { [providerId]: { enabled: false } } } }
+            : {}),
+        };
+        const error = await resolveAuth({
+          provider,
+          cfg,
+          store: authStore({}),
+          agentDir: state.agentDir(),
+          ...(scenario === "model endpoint"
+            ? { modelBaseUrl: "https://custom.example.test/v1" }
+            : {}),
+        }).catch((caught: unknown) => caught);
+        expect(error).toMatchObject({ code: "missing-provider-auth", provider });
+        if (!(error instanceof Error)) {
+          throw error;
+        }
+        expect(error.message).toContain(`No API key found for provider "${provider}"`);
+        expect(error.message).toContain(`models auth paste-api-key --provider ${provider}`);
+        expect(error.message).not.toContain("models auth login");
+      });
+    } finally {
+      metadata.mockRestore();
+    }
+  });
+});
+
 describe("getApiKeyForModelCore", () => {
   it.each([
     ["openai-responses", "openai:api-key", "direct-openai-key", "api-key"],
