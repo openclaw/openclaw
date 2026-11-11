@@ -340,6 +340,31 @@ export class ShellGatewayOwner {
     if (!command) {
       return;
     }
+    if (command.kind === "template-review") {
+      const agentId = commandParams.agentId?.trim();
+      const sessionKey = commandParams.sessionKey?.trim();
+      if (agentId && sessionKey) {
+        const reviewClient = context.gateway.snapshot.client;
+        const revision = context.gateway.connectionRevision;
+        const isCurrent = () =>
+          this.host.context === context &&
+          context.gateway.snapshot.client === reviewClient &&
+          context.gateway.connectionRevision === revision;
+        void (async () => {
+          try {
+            const { openTemplateCreator } = await import("../pages/templates/creator-owner.ts");
+            if (isCurrent()) {
+              openTemplateCreator(context, { agentId, sessionKey, draftId: command.draftId });
+            }
+          } catch (error) {
+            if (isCurrent()) {
+              showToast({ severity: "error", message: String(error) });
+            }
+          }
+        })();
+      }
+      return;
+    }
     if (command.kind === "agent-github-settings") {
       const agentId = commandParams.agentId?.trim();
       if (agentId) {

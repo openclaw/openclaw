@@ -456,6 +456,106 @@ tests and failed the repaired tests: project identity, tree identity,
 completeness, path, mode, duplicate path, byte bound and comparison base.
 Source bytes were restored after each mutation. No production code changed.
 
+### CI observation and timing follow-up
+
+At `2d5b14db1a64086d838c3f6a096a29900c299dfb`, four suites were reviewed with
+their owners, callers, support, history and CI routing: 23 declarations / 34
+expanded cases. These standalone counts do not add to the overlapping
+root/scripts aggregate. All cases remain; no safe deletion or consolidation
+was identified.
+
+| Suite under `test/scripts/`        | Declarations / cases | Retained contract                                                                                                                                         |
+| ---------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ci-test-observations.test.ts`     | 14 / 17              | Checkout identity, immutable launch inputs, native outcomes, dependency graphs, bounded exports, privacy, malformed evidence and the real export command. |
+| `ci-shard-timings-refresh.test.ts` | 3 / 11               | Runtime-specific wall costs, selection identity, runner exclusions and unchanged timing bytes on invalid evidence.                                        |
+| `vitest-shard-timings.test.ts`     | 4 / 4                | Duplicate ownership rejection, whole-config identity, reordered selection history and named-shard duration persistence.                                   |
+| `weighted-test-shards.test.ts`     | 2 / 2                | Deterministic weighted assignment across batches and rejection of an empty shard list.                                                                    |
+
+One mixed declaration retains its interrupted/missing-dependency proof and
+repairs the unavailable-repository control. Previously it sent a terminal event
+without inventory, rejecting before any repository read. It now sends valid
+inventory and requires the existing snapshot to remain byte-identical.
+The named-shard timing test is renamed to describe its duration roundtrip;
+unused persisted metadata fields are not restored as incidental assertions.
+All four suites passed on the original and repaired tests (34 cases) under
+Node 26.13.0 on macOS. A deliberate owner mutation that ignored the configured
+repository root passed the original control and failed the repaired snapshot
+assertion. Production and test bytes were restored after the mutation.
+The baseline took 28.67 seconds and the candidate 22.67 seconds wall time;
+these single runs establish correctness, not a performance improvement.
+
+### PR preparation follow-up
+
+At `3f805fa2e950994cdad3f9e857eb966cf5fa8103`, three preparation suites were
+reviewed with their owners, callers, support, history and CI routing:
+24 declarations / 56 expanded cases, with R53/F3 by expanded case.
+These standalone counts do not add to the overlapping root/scripts aggregate.
+
+| Suite under `test/scripts/`    | Original declarations / cases | Retained contract                                                                                                    |
+| ------------------------------ | ----------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `pr-prepare-preflight.test.ts` | 2 / 12                        | Mode selection and real wrapper rejection before observations, locks or evidence retirement.                         |
+| `pr-prepare-testbox.test.ts`   | 5 / 13                        | Remote argument normalization, input rejection, ordered stages, receipt integrity and last-success selection.        |
+| `pr-prepare-gates.test.ts`     | 17 / 31                       | Local and hosted qualification, source/alias authority, Git publication, evidence replacement and workspace pinning. |
+
+The stamp fixture now has two valid successes, so it distinguishes first-match
+from last-match selection. The runtime-commit case requires exact-head verifier
+dispatch as well as excluding parent reuse. The existing local-build fixture
+now runs real workspace pinning and checks its plugin root at bootstrap;
+the mock-only ordering case is consolidated into that keeper.
+The candidate has 23 declarations / 55 expanded cases and 12 fewer test lines.
+Qualification at `ac87d3b362f43d24e25aebbb241dfb7dd692e14a` used an independently
+installed native PR checkout. The baseline passed all 56 cases (140.94 seconds
+wall time); the candidate passed all 55 (108.38 seconds). These single runs do
+not establish a speedup. A separate changed-suite run passed 43 cases in 23.52
+seconds wall time: gates reported 6.495 seconds and Testbox 15.010 seconds.
+
+Selected original tests passed with first-success stamp selection, skipped
+exact-head verification and no-op real pinning. Their repaired keepers failed
+under those same mutations. Reversing pin/bootstrap order failed both the old
+ordering test and its keeper. The pinning mutations stopped before commands
+were recorded and surfaced as a missing fixture commands file; the other two
+failed their stamp and verifier assertions. All production and test bytes were
+restored exactly after qualification.
+
+Targeted tooling typecheck, lint, formatting and diff checks passed. The
+production and full-tree unused-file scans passed with zero entries. Both
+`deadcode:dependencies` (its export phase) and `deadcode:exports` reported exports
+in four untouched files: `src/daemon/launchd.ts`,
+`src/plugins/provider-external-auth.ts`, `src/plugins/provider-runtime.ts` and
+`ui/src/pages/dashboards/dashboard-tools.tsx`. Script unused exports passed with
+zero entries. The four files and both Knip configurations match the frozen base;
+these unrelated findings remain recorded rather than expanding this patch.
+
+Independent preservation review and full local ClawSweeper review found no
+lost contract or actionable source finding. Hosted CI and landing remain
+pending; local proof does not establish either.
+
+### PR gate changed-test routing
+
+At `ee9f6b4d5e0cd405a399b706b071a0e9998ef67f`, changing
+`scripts/pr-lib/gates.sh` selected nine explicit test owners but omitted
+`pr-prepare-testbox.test.ts`. One owner entry restores that suite in ordinary
+local selection and bounded CI selection without changing discovery policy.
+
+One parameterized regression in the existing routing suite covers both modes;
+the bounded case also requires Testbox in the declared owner targets. Both cases
+failed on the omitted target before the repair and passed afterward in an
+independently installed native checkout. The focused baseline took 14.43 seconds
+wall time and the repaired run 9.95 seconds; these single runs are correctness
+evidence, not a performance comparison. The routing and planner suites passed
+all 324 cases together in 109.94 seconds wall time.
+The changed routing file separately passed all 114 cases in 33.08 seconds wall
+time (31.29 seconds Vitest duration). It exercises real checkout inventories,
+import-graph selection and subprocess routing; this repair adds no new fixture
+or subprocess, and its bounded case retains the real CI selection boundary.
+
+The regression adds 13 test lines, recorded in its own allocation. It adds no
+fixtures, mocks, timers or parallel discovery path. Independent source review
+found no lost contract or unnecessary scope. Targeted tooling typecheck, lint,
+formatting, source-line and test-line ratchets passed. Full local ClawSweeper
+review of `6c07f87ef1c397281053836c97af0968d3e6be01` found no actionable issues.
+Hosted CI and landing remain pending.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.

@@ -104,6 +104,23 @@ describe("Template draft human authority", () => {
   });
 
   it.each(["synthetic", "disconnected", "labs-off"])(
+    "does not turn an agent-authored proposal into %s publication authority",
+    async (condition) => {
+      const reply = await requestDraft(
+        "publish",
+        "/not-a-real-template-draft-workspace",
+        {
+          draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
+          reviewToken: "a".repeat(64),
+        },
+        condition,
+      );
+      expect(reply[0]).toBe(false);
+      expect(reply[2]).toMatchObject({ code: "FORBIDDEN" });
+    },
+  );
+
+  it.each(["synthetic", "disconnected", "labs-off"])(
     "refuses %s creation before touching the workspace",
     async (condition) => {
       const reply = await requestDraft(
@@ -224,11 +241,12 @@ agent: { id: research-brief, description: Original agent description }
 workspace:
   bootstrapFiles: { AGENTS.md: { source: workspace/AGENTS.md } }
   files: [{ source: workspace/checklist.md, path: checklist.md }]
-packages:
-  - { kind: skill, source: clawhub, ref: "@maker/sources", version: 1.2.3 }
-  - { kind: plugin, source: clawhub, ref: "@maker/github", version: 2.0.0 }
+skills:
+  - { ref: "@maker/sources", version: 1.2.3 }
+plugins:
+  - { ref: "@maker/github", version: 2.0.0 }
 mcpServers: { research: { command: research-mcp } }
-cronJobs:
+automations:
   - id: weekly-recap
     schedule: { cron: "0 9 * * 1", timezone: UTC }
     session: isolated
@@ -247,8 +265,8 @@ Research public sources.
       description: "Researches public sources for a new user.",
       excluded: [
         "file:workspace/checklist.md",
-        "package:skill:@maker/sources",
-        "package:plugin:@maker/github",
+        "package:skill:clawhub:@maker/sources",
+        "package:plugin:clawhub:@maker/github",
         "mcp:research",
         "cron:weekly-recap",
       ],

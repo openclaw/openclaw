@@ -23,9 +23,8 @@ import {
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { SESSION_TRANSCRIPT_WORKER_LIMITS } from "./session-transcript-read-pools.js";
 import type {
-  SessionEntryWorkerInput,
   SessionEntriesWorkerInput,
-  SessionEntriesWorkerResult,
+  SessionEntriesWorkerUpdate,
   SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
   SessionSqliteTargetWorkerInput,
@@ -128,7 +127,7 @@ const modelContextReads = createSessionTranscriptReadPool<
 
 // Background transcript exports cannot occupy the foreground context worker.
 const sessionEntries = createSessionTranscriptReadPool<
-  SessionEntryWorkerInput | SessionEntriesWorkerInput | SessionResetRecallWorkerInput
+  SessionEntriesWorkerInput | SessionResetRecallWorkerInput
 >(resolveWorkerPoolSize("singleton"), true);
 
 export async function readSessionTranscriptModelContextInWorker(
@@ -212,27 +211,22 @@ export async function readSessionTranscriptContextMessagesInWorker(
   return value;
 }
 
-export async function prepareSessionEntryInWorker(
-  absPath: string,
-  options: SessionEntryWorkerInput["options"],
-) {
-  const result = await readSessionEntryInWorker({
-    kind: "session-entry",
-    absPath,
-    options,
-  });
-  if (!("entry" in result)) {
-    throw new Error("Session transcript worker returned a snapshot instead of an export");
-  }
-  return result;
-}
+type SessionEntriesStreamResult = Extract<SessionEntriesWorkerUpdate, { value: unknown }>["value"];
 
-export async function prepareSessionEntriesInWorker(entries: SessionEntriesWorkerInput["entries"]) {
-  const prepared: SessionEntriesWorkerResult["entries"] = [];
+/**
+ * Streams a bounded group of exports through one background worker request. Each delivered page
+ * and reset is acknowledged only after `deliver` settles, so neither side retains a whole export.
+ */
+export async function streamSessionEntriesInWorker(
+  entries: SessionEntriesWorkerInput["entries"],
+  deliver: (
+    index: number,
+    update: Exclude<SessionEntriesWorkerUpdate, { value: unknown }>,
+  ) => Promise<void>,
+): Promise<SessionEntriesStreamResult[]> {
+  const results: SessionEntriesStreamResult[] = [];
   let received = 0;
-  const result = unwrapSessionTranscriptWorkerReply<
-    "session-entry" | "session-entries" | "session-reset-recall"
-  >(
+  const result = unwrapSessionTranscriptWorkerReply<"session-entries" | "session-reset-recall">(
     await sessionEntries.run(
       {
         kind: "session-entries",
@@ -244,23 +238,26 @@ export async function prepareSessionEntriesInWorker(entries: SessionEntriesWorke
       {
         inputBytes: JSON.stringify(entries).length * 2,
         onRequest: async (progress) => {
-          // SAFETY: The paired worker publishes one complete entry before reading its next batch.
+          // SAFETY: The paired worker delivers one entry's updates in order, then its summary.
           const update = progress as {
             kind: "session-entries";
             index: number;
-            value: SessionEntriesWorkerResult["entries"][number];
-          };
+          } & SessionEntriesWorkerUpdate;
           if (
             update.kind !== "session-entries" ||
             !Number.isInteger(update.index) ||
             update.index < 0 ||
             update.index >= entries.length ||
-            update.index in prepared
+            update.index in results
           ) {
             throw new Error("Invalid session export delivery");
           }
-          prepared[update.index] = update.value;
-          received++;
+          if ("value" in update) {
+            results[update.index] = update.value;
+            received++;
+          } else {
+            await deliver(update.index, "page" in update ? { page: update.page } : { reset: true });
+          }
           return { input: undefined, timeoutMs: 60_000 };
         },
       },
@@ -278,71 +275,19 @@ export async function prepareSessionEntriesInWorker(entries: SessionEntriesWorke
     ),
   );
   if (!("entries" in result)) {
-    throw new Error("Session transcript worker returned a single export instead of a batch");
+    throw new Error("Session transcript worker returned reset metadata instead of exports");
   }
   if (received !== entries.length) {
     throw new Error("Session transcript worker returned an incomplete export batch");
   }
-  return prepared;
-}
-
-export async function readSessionEntrySnapshotInWorker(
-  absPath: string,
-  options: SessionEntryWorkerInput["options"],
-  includeOriginalMessages: boolean,
-) {
-  const result = await readSessionEntryInWorker({
-    kind: "session-entry",
-    mode: "snapshot",
-    includeOriginalMessages,
-    absPath,
-    options,
-  });
-  if (!("snapshot" in result)) {
-    throw new Error("Session transcript worker returned an export instead of a snapshot");
-  }
-  return result.snapshot;
-}
-
-async function readSessionEntryInWorker(input: SessionEntryWorkerInput) {
-  const { absPath, options } = input;
-  const receipt = resolveSessionTranscriptReadFence(options);
-  const result = unwrapSessionTranscriptWorkerReply<
-    "session-entry" | "session-entries" | "session-reset-recall"
-  >(
-    await sessionEntries.run(
-      {
-        ...input,
-        ...(receipt ? { admission: { ...receipt } } : {}),
-      },
-      {
-        inputBytes:
-          2 *
-          (absPath.length +
-            options.agentId.length +
-            options.sessionId.length +
-            options.storePath.length +
-            (options.sessionKey?.length ?? 0)),
-      },
-      {
-        storePaths: [options.storePath],
-        admissionPaths: [resolveUnsuffixedSqliteTargetFromSessionStorePath(options.storePath).path],
-      },
-    ),
-  );
-  if (!("entry" in result) && !("snapshot" in result)) {
-    throw new Error("Session transcript worker returned reset metadata instead of an export");
-  }
-  return result;
+  return results;
 }
 
 export async function readSessionResetRecallCutoffInWorker(
   scope: SessionResetRecallWorkerInput["scope"],
 ) {
   const receipt = resolveSessionTranscriptReadFence(scope);
-  const result = unwrapSessionTranscriptWorkerReply<
-    "session-entry" | "session-entries" | "session-reset-recall"
-  >(
+  const result = unwrapSessionTranscriptWorkerReply<"session-entries" | "session-reset-recall">(
     await sessionEntries.run(
       {
         kind: "session-reset-recall",

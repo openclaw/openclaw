@@ -7,11 +7,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
 import { withBundledPluginEnablementCompat } from "../../plugins/bundled-compat.js";
+import { resolveProviderRuntimePlugin } from "../../plugins/provider-hook-runtime.js";
 import type {
   prepareProviderDynamicModel,
   runProviderDynamicModel,
 } from "../../plugins/provider-runtime.js";
-import { resolveProviderModernModelRef } from "../../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProviderRef } from "../../plugins/providers.js";
 import type { ProviderResolveDynamicModelContext } from "../../plugins/types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -20,7 +20,7 @@ import { liveProvidersShareOwningPlugin } from "../live-provider-owner.js";
 type ModelRef = { provider?: string | null; id?: string | null };
 type ResolvedModelRef = { provider: string; id: string };
 type LiveProviderScope = Pick<
-  Parameters<typeof resolveProviderModernModelRef>[0],
+  Parameters<typeof resolveProviderRuntimePlugin>[0],
   "config" | "workspaceDir" | "env"
 >;
 type LiveModelPolicyRef = ModelRef & LiveProviderScope;
@@ -117,17 +117,18 @@ export function isModernModelRef(ref: LiveModelPolicyRef): boolean {
   const provider = normalizeProviderId(ref.provider ?? "");
   const modelId = normalizeLowercaseStringOrEmpty(ref.id);
   // Live fixtures enable plugins in their scoped config; ambient Vitest defaults disable them.
-  return Boolean(
-    provider &&
-    modelId &&
-    resolveProviderModernModelRef({
-      provider,
-      config: ref.config,
-      workspaceDir: ref.workspaceDir,
-      env: ref.env,
-      context: { provider, modelId },
-    }) === true,
-  );
+  if (!provider || !modelId) {
+    return false;
+  }
+  const params = {
+    provider,
+    config: ref.config,
+    workspaceDir: ref.workspaceDir,
+    env: ref.env,
+    context: { provider, modelId },
+  };
+  const plugin = resolveProviderRuntimePlugin(params);
+  return plugin?.isModernModelRef?.(params.context) === true;
 }
 
 export function isHighSignalLiveModelRef(ref: LiveModelPolicyRef): boolean {

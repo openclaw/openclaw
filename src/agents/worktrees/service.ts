@@ -24,7 +24,7 @@ import { autoRemovalProtectionReason, type WorktreeCleanupDeferrals } from "./gc
 import {
   createWorktreeGcRemoval,
   removeWorktreeIfLossless,
-  type WorktreeCleanupOwnerPolicy,
+  type ManagedWorktreeGcParams,
 } from "./gc-removal.js";
 import { createWorktreeGcPrefilter, lockState, unlockWorktree } from "./git-lock.js";
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
@@ -132,11 +132,6 @@ type ServiceOptions = {
   getConfig?: () => OpenClawConfig;
 };
 
-type ManagedWorktreeGcParams = WorktreeCleanupOwnerPolicy &
-  WorktreeMutationGuard & {
-    checkpoint?: (progress: ManagedWorktreeGcResult) => Promise<void>;
-  };
-
 type WorktreeCreation =
   | ManagedWorktreeCreationOutcome
   | (() => Promise<ManagedWorktreeCreationOutcome>);
@@ -172,7 +167,7 @@ export class ManagedWorktreeService {
   private readonly orphanCleanupFailures: Parameters<
     typeof collectRetiredWorktreeArtifacts
   >[0]["orphanFailures"] = new Map();
-  private readonly maintainGit: ReturnType<typeof createWorktreeGitMaintenance>;
+  readonly maintainGit: ReturnType<typeof createWorktreeGitMaintenance>;
 
   constructor(options: ServiceOptions = {}) {
     this.env = options.env ?? process.env;
@@ -1007,7 +1002,11 @@ export class ManagedWorktreeService {
           await collectWorktreeTemplates(
             this.env,
             now - IDLE_GC_MS,
-            { signal: params.signal, commitGuard: assertCurrent },
+            {
+              signal: params.signal,
+              commitGuard: assertCurrent,
+              beforeRemoval: params.beforeTemplateRemoval,
+            },
             (error, id) => progress.error("templates", error, id),
           );
         }

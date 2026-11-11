@@ -18,7 +18,7 @@ async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
 }
 
 suite.define(() => {
-  it("moves sessions between rendered groups when Person grouping falls back", async () => {
+  it("moves sessions between custom groups after switching from Person grouping", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
       const key = "agent:main:planning";
       const rows = [
@@ -33,14 +33,15 @@ suite.define(() => {
         sessionGroups: ["Planning", "Ready"],
         sessions: rows,
         methodResponses: {
-          // An authoritative roster without multiple owners renders category groups,
-          // but must retain the Person preference for later multi-owner rosters.
           "sessions.list": { ...support.sessionsListResponse(rows), owners: [] },
         },
       });
       await page.goto(support.controlUiSessionUrl(suite.server.baseUrl, key));
       const section = (id: string) => page.locator(`[data-session-section="${id}"]`);
       const row = (id: string) => section(id).locator(`[data-session-key="${key}"]`);
+      await row("groups").waitFor();
+      await chooseSidebarMenuOption(page, "Group by", "Custom groups");
+      await closeSidebarMenu(page);
       await row("category:Planning").waitFor();
       await chooseSidebarMenuOption(page, "Hide empty groups", "Never");
       await closeSidebarMenu(page);
@@ -62,6 +63,8 @@ suite.define(() => {
         { key, agentId: "main", expectedSessionId: rows[0]!.sessionId, category: "Ready" },
         { key, agentId: "main", expectedSessionId: rows[0]!.sessionId, category: null },
       ]);
+      await chooseSidebarMenuOption(page, "Group by", "Person");
+      await closeSidebarMenu(page);
       expect(
         await page.evaluate(() => localStorage.getItem("openclaw:sidebar:sessions:grouping")),
       ).toBe("person");

@@ -251,17 +251,60 @@ This works with local models too, for example a second Ollama model dedicated to
 
 When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
 
-If the summarizer refuses the request, built-in compaction keeps the prepared recent
-history without requesting another summary. This applies to automatic maintenance
-and `/compact`. A persisted marker records that older messages were omitted without
-a new summary; saved history remains intact. A warning always explains the trim and
-asks you to resend essential older details, even when ordinary compaction notices
-are disabled. If the current request cannot fit, reduce it or use `/new` and resend
-the context needed to continue. Provider refusals do not switch models.
+If the summarizer refuses the request and that chain has another distinct model,
+OpenClaw requests the summary once more from the next model in the chain, with that
+model's own credentials. A summary from that model is committed normally, and its
+compaction details record that model's `provider/model` as `summaryRoute`; Gateway
+logs record `[compaction] summary refused by ...; retrying the summary once on ...`.
+The refusing model is never asked again, and the retry never walks further down the
+chain.
+
+If there is no other model, or the retry also refuses or fails, built-in compaction
+keeps the prepared recent history without another summary request. This applies to
+automatic maintenance and `/compact`. A persisted marker records that older messages
+were omitted without a new summary; saved history remains intact. A warning always
+explains the trim and asks you to resend essential older details, even when ordinary
+compaction notices are disabled. If the current request cannot fit, reduce it or use
+`/new` and resend the context needed to continue. An explicit
+`agents.defaults.compaction.model` has no chain, so its refusals go straight to this
+trim.
 
 Preflight compaction also uses that chain when the primary auth profile is already in cooldown. Each candidate must pass auth admission before summarization; a healthy fallback can compact the session without waiting for the primary cooldown to expire.
 
 In safeguard mode, provider timeouts and rate limits from built-in summarization remain eligible for that chain when no earlier summary can be reused. A summary deadline or an HTTP 408 or 504 instead uses the automatic timeout fallback (see [Auto-compaction](#auto-compaction)). Caller cancellation and failed safeguard quality checks do not trigger a model switch.
+
+### Summary size
+
+Client-side compaction keeps at most 16,000 characters in its persisted summary
+by default, including preserved recent turns and other summary sections. Set
+`agents.defaults.compaction.maxSummaryChars` to change that ceiling, or
+`agents.entries.<id>.compaction.maxSummaryChars` to override it for one agent:
+
+```json5
+{
+  agents: {
+    defaults: { compaction: { maxSummaryChars: 48000 } },
+    entries: {
+      research: { compaction: { maxSummaryChars: 64000 } },
+    },
+  },
+}
+```
+
+Both settings accept integers from 1,000 to 200,000. An omitted per-agent setting
+inherits the default. This is a ceiling, not a target: the summary still has to
+fit the active model's token budget beside instructions, tools, and retained
+history. Larger summaries increase context usage and replay cost on subsequent
+requests. They do not increase the summarizer's input or output allowance, recover
+facts already lost from earlier summaries, or change provider-native compaction.
+
+After the capped summary, client-side compaction appends a deterministic record of
+the compacted region, built without a model: recent user-role messages quoted with
+their recorded origin, the most-referenced identifiers, and the last assistant
+replies, with credential shapes redacted. It has its own budget of up to 6,000
+characters (never more than `maxSummaryChars`) outside the summary ceiling. It
+shrinks or is dropped when the active model's token budget has no room for it.
+Each compaction replaces the previous record instead of summarizing it again.
 
 ### Identifier preservation
 

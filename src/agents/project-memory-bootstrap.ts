@@ -14,10 +14,10 @@ import {
 } from "../memory-host-sdk/host/types.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import type {
-  MemoryCallerContext,
   MemorySearchHit,
   MemoryProviderHandle,
-} from "../plugins/memory-provider-types.js";
+} from "../plugins/memory-provider-runtime-types.js";
+import type { MemoryCallerContext } from "../plugins/memory-provider-types.js";
 import { getMemoryRuntime, resolveLoadedMemoryProviderKind } from "../plugins/memory-state.js";
 import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";

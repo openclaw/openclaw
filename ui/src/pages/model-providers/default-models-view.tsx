@@ -15,6 +15,7 @@ import {
   SettingsSection,
   SettingsSegmented,
 } from "../../components/solid/settings-ui.tsx";
+import { isChatFastModeProviderSupported } from "../../lib/chat/model-select-state.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -351,20 +352,19 @@ export function DefaultModels(props: DefaultModelsViewProps) {
   );
   const fastModeOptions = createMemo(() => {
     const model = primaryModel();
-    const priority =
-      model?.supportsFastMode === true &&
-      (model.serviceTiers === undefined || model.serviceTiers.includes("priority"));
+    // Request support can be omitted by native catalogs; tier advertisements only gate Ultrafast.
+    const fast =
+      model?.supportsFastMode ??
+      (model?.available === true && isChatFastModeProviderSupported(model.provider));
     const ultrafast =
-      model?.supportsFastMode === true &&
-      model.available === true &&
-      model.serviceTiers?.includes("ultrafast") === true;
+      fast && model?.available === true && model.serviceTiers?.includes("ultrafast") === true;
     const options = [
       {
         value: "auto" as const,
         label: t("quickSettings.model.fastModes.auto"),
-        supported: priority,
+        supported: fast,
       },
-      { value: "on" as const, label: t("quickSettings.model.fastModes.on"), supported: priority },
+      { value: "on" as const, label: t("chat.modelControls.fast"), supported: fast },
       {
         value: "ultrafast" as const,
         label: t("chat.modelControls.ultrafast"),

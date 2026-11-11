@@ -3,6 +3,7 @@ import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { PersonalSessionGroup } from "../../../src/shared/personal-session-groups.js";
 import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
+import { isComposingKeyboardEvent } from "../lib/ime.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import type {
   PersonalSessionGroupCandidate,
@@ -350,13 +351,10 @@ export function PersonalSessionGroupDialogView(props: {
                 ref={[
                   // Escape clears, then closes, search before the dialog treats it as cancel.
                   nativeListener("keydown", (event) => {
-                    if (event.isComposing) {
-                      return;
-                    }
                     if (event.key === "Enter") {
-                      // Enter filters; it must not submit (save) the section.
+                      // Enter filters, IME confirms too; it must not submit (save) the section.
                       event.preventDefault();
-                    } else if (event.key === "Escape") {
+                    } else if (event.key === "Escape" && !isComposingKeyboardEvent(event)) {
                       event.preventDefault();
                       event.stopPropagation();
                       if (query()) {

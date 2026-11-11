@@ -142,7 +142,7 @@ it("does not consume an unfinished refill, a stale base, or a modified ready slo
     await git(repo, "commit", "-am", "advance base");
     const advanced = await create("pool-new-base");
     expect(await read(advanced.path, "README.md")).toBe("new base\n");
-    expect(backend.cloneTemplate).toHaveBeenCalledTimes(4);
+    expect(backend.cloneTemplate).toHaveBeenCalledTimes(5);
     await service.prewarm(requests.at(-1)!, {});
     const slot = (await listTemplatesAsync(env)).find((record) =>
       record.cacheKey.startsWith("warm:"),
@@ -151,7 +151,7 @@ it("does not consume an unfinished refill, a stale base, or a modified ready slo
     const clean = await create("pool-dirty");
     expect(await read(clean.path, "README.md")).toBe("new base\n");
     expect(await git(clean.path, "status", "--porcelain")).toBe("");
-    expect(backend.cloneTemplate).toHaveBeenCalledTimes(6);
+    expect(backend.cloneTemplate).toHaveBeenCalledTimes(7);
   } finally {
     unsubscribe();
   }
@@ -188,15 +188,17 @@ it("keeps cloning when disk admission is slow", async () => {
     expect(await git(destination, "rev-parse", "HEAD")).toBe(await git(repo, "rev-parse", "HEAD"));
   }
   expect(backend.createTemplate).toHaveBeenCalledTimes(1);
-  expect(backend.cloneTemplate).toHaveBeenCalledTimes(4);
+  expect(backend.cloneTemplate).toHaveBeenCalledTimes(5);
 });
 
 it("keeps cloning after a slow snapshot and refreshes changed commits", async () => {
   let elapsed = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsed);
   const clone = createCopyWorktreeBackend().cloneTemplate;
+  const clonedMtimes = new Map<string, number>();
   vi.mocked(backend.cloneTemplate).mockImplementation(async (...args) => {
     await clone(...args);
+    clonedMtimes.set(args[1], (await fs.stat(path.join(args[1], "unchanged.txt"))).mtimeMs);
     elapsed += 1_000;
   });
   await fs.writeFile(path.join(repo, "unchanged.txt"), "unchanged\n");
@@ -209,7 +211,6 @@ it("keeps cloning after a slow snapshot and refreshes changed commits", async ()
     expect(await git(created.path, "status", "--porcelain")).toBe("");
   }
   const original = (await listTemplatesAsync(env))[0]!;
-  const unchanged = await fs.stat(path.join(original.path, "unchanged.txt"));
   for (const name of ["commit-b", "commit-c"]) {
     await fs.writeFile(path.join(repo, "README.md"), `${name}\n`);
     await git(repo, "commit", "-am", name);
@@ -222,14 +223,39 @@ it("keeps cloning after a slow snapshot and refreshes changed commits", async ()
       code: "ENOENT",
     });
   }
-  const refreshed = (await listTemplatesAsync(env))[0]!;
-  expect(refreshed.id).toBe(original.id);
+  const refreshed = (await listTemplatesAsync(env)).find(
+    (record) => record.cacheKey === original.cacheKey,
+  )!;
+  expect(await git(original.path, "rev-parse", "HEAD")).toBe(original.sourceCommit);
+  expect(await git(original.path, "status", "--porcelain")).toBe("");
+  expect(await read(original.path, "README.md")).toBe("base\n");
+  expect(refreshed.id).not.toBe(original.id);
   expect(refreshed.sourceCommit).toBe(await git(repo, "rev-parse", "HEAD"));
   expect(await git(refreshed.path, "status", "--porcelain")).toBe("");
   const kept = await fs.stat(path.join(refreshed.path, "unchanged.txt"));
-  expect([kept.ino, kept.mtimeMs]).toEqual([unchanged.ino, unchanged.mtimeMs]);
+  expect(kept.mtimeMs).toBe(clonedMtimes.get(refreshed.path));
   expect.soft(backend.createTemplate).toHaveBeenCalledTimes(1);
-  expect.soft(backend.cloneTemplate).toHaveBeenCalledTimes(5);
+  expect.soft(backend.cloneTemplate).toHaveBeenCalledTimes(7);
+
+  await fs.writeFile(path.join(repo, "README.md"), "interrupted refresh\n");
+  await git(repo, "commit", "-am", "interrupted refresh");
+  vi.mocked(backend.cloneTemplate).mockImplementationOnce(async (...args) => {
+    await clone(...args);
+    throw new Error("clone settled after interruption, before Git marker replacement");
+  });
+  const fallback = await create("interrupted");
+  expect(await read(fallback.path, "README.md")).toBe("interrupted refresh\n");
+  const interrupted = (await listTemplatesAsync(env)).find((record) =>
+    record.cacheKey.startsWith("preparing:"),
+  )!;
+  expect(await fs.readFile(path.join(interrupted.path, ".git"), "utf8")).toBe(
+    await fs.readFile(path.join(refreshed.path, ".git"), "utf8"),
+  );
+  await collectWorktreeTemplates(env, 0, { commitGuard: () => {} });
+  await expect(fs.access(interrupted.path)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain(interrupted.path);
+  expect(await git(refreshed.path, "rev-parse", "HEAD")).toBe(refreshed.sourceCommit);
+  expect(await git(refreshed.path, "status", "--porcelain")).toBe("");
 });
 
 it.each([".gitattributes", "nested/.gitattributes"])(

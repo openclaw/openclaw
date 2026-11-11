@@ -26,6 +26,7 @@ import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers
 import {
   cloneProjectCheckout,
   ensureProjectCheckoutCommit,
+  prepareProjectCheckoutDefaultBase,
   ProjectCloneError,
   refreshProjectCheckout,
 } from "./project-clone-runtime.js";
@@ -465,8 +466,7 @@ describe("project registry persistence", () => {
     const target = path.join(root, "partial");
     const url = pathToFileURL(source).href;
     await git(root, "clone", "--filter=blob:none", "--no-checkout", url, target);
-    await git(target, "config", `remote.${url}.promisor`, "true");
-    await git(target, "config", `remote.${url}.partialclonefilter`, "blob:none");
+    await git(target, "config", "fetch.unpackLimit", "1");
     const base = await gitText(target, "rev-parse", "HEAD");
     const packs = path.join(target, ".git", "objects", "pack");
     const before = new Set(await fs.readdir(packs));
@@ -482,9 +482,11 @@ describe("project registry persistence", () => {
       (name) => name.endsWith(".idx") && !before.has(name),
     );
     expect(added).toHaveLength(1);
+    await fs.stat(path.join(packs, added[0]!.replace(/\.idx$/, ".promisor")));
     const indexed = (await git(target, "verify-pack", "-v", path.join(packs, added[0]!))).stdout;
     expect(indexed).toContain(`${commit} commit`);
     expect(indexed).not.toContain(`${base} commit`);
+    expect(indexed).not.toContain(" blob ");
     expect(await gitText(target, "rev-parse", "HEAD")).toBe(base);
     expect(await gitText(target, "cat-file", "-t", commit)).toBe("commit");
     await ensureProjectCheckoutCommit(
@@ -505,6 +507,62 @@ describe("project registry persistence", () => {
       "keep refreshed blobs lazy\n",
     );
   });
+
+  it("preserves partial-clone filtering and promisor packs when the default advances", async () => {
+    const source = await initializeRepository(root, "source");
+    await git(source, "config", "uploadpack.allowFilter", "true");
+    const target = path.join(root, "partial");
+    const url = pathToFileURL(source).href;
+    await git(root, "clone", "--filter=blob:none", "--no-checkout", url, target);
+    const packs = path.join(target, ".git", "objects", "pack");
+    const before = new Set(await fs.readdir(packs));
+    const commit = await commitFile(source, "later.txt", "keep the new default blob lazy\n");
+    const blob = await gitText(source, "rev-parse", "HEAD:later.txt");
+    expect(await prepareProjectCheckoutDefaultBase({ url, target }, {})).toEqual({
+      baseRef: "origin/main",
+      baseCommit: commit,
+    });
+    const added = (await fs.readdir(packs)).filter(
+      (name) => name.endsWith(".idx") && !before.has(name),
+    );
+    expect(added.length).toBeGreaterThan(0);
+    for (const pack of added) {
+      await fs.stat(path.join(packs, pack.replace(/\.idx$/, ".promisor")));
+    }
+    await expect(
+      execFileAsync("git", ["-C", target, "cat-file", "-e", blob], {
+        env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+    expect(await gitText(target, "config", "remote.origin.partialclonefilter")).toBe("blob:none");
+  });
+
+  it.each(["main", "renamed"])(
+    "publishes the advanced %s default to the source cache for offline reuse",
+    async (branch) => {
+      const { source, target } = await cloneFixture();
+      if (branch !== "main") {
+        await git(source, "branch", "-m", branch);
+      }
+      const commit = await commitFile(source, "later.txt", "new default\n");
+      // Local transport rewrites cannot redirect the registry's canonical URL.
+      await git(target, "config", `url.${path.join(root, "unavailable")}.insteadOf`, source);
+      const expected = { baseRef: `origin/${branch}`, baseCommit: commit };
+      expect(await prepareProjectCheckoutDefaultBase({ url: source, target }, {})).toEqual(
+        expected,
+      );
+      expect(await gitText(target, "rev-parse", `origin/${branch}`)).toBe(commit);
+      expect(await gitText(target, "symbolic-ref", "refs/remotes/origin/HEAD")).toBe(
+        `refs/remotes/origin/${branch}`,
+      );
+      expect(
+        await prepareProjectCheckoutDefaultBase(
+          { url: source, target },
+          { env: { ...process.env, GIT_ALLOW_PROTOCOL: "" } },
+        ),
+      ).toEqual(expected);
+    },
+  );
 
   it.each([
     ["initial", false],
