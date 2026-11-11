@@ -3,13 +3,13 @@ import {
   formatMediaPlaceholderText,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { runInDetachedAsyncContext } from "openclaw/plugin-sdk/concurrency-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   generateConversationLabel as generateTopicLabel,
   resolveChunkMode,
 } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import { runInDetachedAsyncContext } from "openclaw/plugin-sdk/concurrency-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveAutoTopicLabelConfig } from "./auto-topic-label-config.js";
