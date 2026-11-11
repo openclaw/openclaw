@@ -1,4 +1,6 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
@@ -105,6 +107,8 @@ export async function runDoctorLintChecks(
   ctx: HealthCheckContext,
   opts: DoctorLintRunOptions = {},
 ): Promise<DoctorLintRunResult> {
+  const signal = resolveCommandProcessSignal(resolveSqliteInspectionSignal());
+  signal?.throwIfAborted();
   const all = opts.checks ?? listHealthChecks();
   const skip = opts.skipIds instanceof Set ? opts.skipIds : new Set(opts.skipIds ?? []);
   const only = opts.onlyIds instanceof Set ? opts.onlyIds : new Set(opts.onlyIds ?? []);
@@ -139,12 +143,15 @@ export async function runDoctorLintChecks(
     });
   }
   for (const check of selected) {
+    signal?.throwIfAborted();
     try {
       const out = await check.detect(ctx);
+      signal?.throwIfAborted();
       for (const f of out) {
         findings.push(f);
       }
     } catch (err) {
+      signal?.throwIfAborted();
       const aborted =
         err instanceof OpenClawStateLeaseAcquisitionError && err.outcome.kind === "aborted"
           ? err.outcome

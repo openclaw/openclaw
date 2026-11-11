@@ -80,7 +80,7 @@ import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { listUnavailableAuthProfiles } from "./auth-unavailability.js";
-import { getModelCatalogWarnings, readModelCatalog } from "./catalog-warnings.js";
+import { getModelCatalogWarnings, readCommandModelCatalog } from "./catalog-warnings.js";
 import {
   formatProviderAuthProfileCounts,
   resolveProviderAuthOverview,
@@ -235,7 +235,7 @@ export async function modelsStatusCommand(
     agentDirOverride: !explicitAgentId && envAgentDir ? resolveUserPath(envAgentDir) : undefined,
     kind: "read",
   });
-  const gatewayCatalog = await readModelCatalog(cfg, workspaceAgentId);
+  const gatewayCatalog = await readCommandModelCatalog(cfg, workspaceAgentId);
   for (const warning of getModelCatalogWarnings(gatewayCatalog)) {
     runtime.error(terminalText`${warning.message} ${warning.fixHint}`);
   }

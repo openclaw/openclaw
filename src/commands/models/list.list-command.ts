@@ -10,6 +10,7 @@ import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { startProxy, stopProxy } from "../../infra/net/proxy/proxy-lifecycle.js";
 import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { getModelCatalogWarnings, readSelectedGatewayModelCatalog } from "./catalog-warnings.js";
 import { formatTokenK, isRich, padTerminalCell, truncate } from "./list.format.js";
 import type { ModelRow } from "./list.types.js";
@@ -37,6 +38,8 @@ export async function modelsListCommand(
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
+  const signal = opts.refresh ? undefined : getAsyncWorkSignal();
+  signal?.throwIfAborted();
   const rawProvider = opts.provider?.trim();
   if (rawProvider && /\s/u.test(rawProvider)) {
     const message = `Invalid provider filter "${sanitizeTerminalText(rawProvider)}". Use a provider id such as "moonshot", not a display label.`;
@@ -56,6 +59,7 @@ export async function modelsListCommand(
     cfg,
     params,
     opts.refresh ? MODEL_CATALOG_REFRESH_TIMEOUT_MS : undefined,
+    signal,
   );
   if (!result) {
     runtime.error(
@@ -81,6 +85,7 @@ export async function modelsListCommand(
       signal: AbortSignal;
       assertCurrent: () => void;
     }) => {
+      signal?.throwIfAborted();
       const localConfig = await loadModelsConfig({
         commandName: "models list",
         runtime,
@@ -165,6 +170,7 @@ export async function modelsListCommand(
       throw error;
     }
   }
+  signal?.throwIfAborted();
   for (const warning of getModelCatalogWarnings(result)) {
     runtime.error(`${warning.message} ${warning.fixHint}`);
   }
