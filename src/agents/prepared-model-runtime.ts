@@ -38,6 +38,8 @@ import {
   publishPreparedModelRuntimeOwnerBatch,
   publishModelRuntimeSnapshot,
   resolveConfiguredOwner,
+  isPreparedModelRuntimeGatewayLifecycleActive,
+  setPreparedModelRuntimeGatewayLifecycleActive,
   readPublishedModelRuntimeSnapshot,
   resolvePreparedModelRuntimeOwnerBySnapshot,
   preparedModelRuntimeConfigsMatch,
@@ -105,7 +107,6 @@ const agentBuildCompletions = new Map<string, Promise<void>>();
 const standaloneActivationTails = new Map<string, Promise<void>>();
 const retainedDirectRunOwners = new PreparedModelRuntimeOwnerRetention(1);
 const retainedGatewayRunOwners = new PreparedModelRuntimeOwnerRetention(8);
-let gatewayLifecycleActive = false;
 const publicationQueue = new PreparedModelRuntimePublicationQueue();
 let refreshRequestEpoch = 0;
 let refreshCancellation = new AbortController();
@@ -140,7 +141,7 @@ const getAdmissionReplacement = (input?: PreparedModelRuntimeInput) =>
 
 const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
   retainOwner: retainPublishedModelRuntimeOwner,
-  isGatewayLifecycleActive: () => gatewayLifecycleActive,
+  isGatewayLifecycleActive: isPreparedModelRuntimeGatewayLifecycleActive,
   getConfiguredOwner: (agentId) =>
     resolveConfiguredOwner(owners, { agentId, agentDir: ".", config: {} }),
   getPendingReplacement: (agentId) =>
@@ -185,7 +186,7 @@ async function closeModelRuntime(error: Error): Promise<void> {
   closingOwners.forEach(retirePreparedModelRuntimeGeneration);
   retainedDirectRunOwners.clear(owners);
   retainedGatewayRunOwners.clear(owners);
-  gatewayLifecycleActive = false;
+  setPreparedModelRuntimeGatewayLifecycleActive(false);
   replyDispatchPublication.clear();
   refreshCancellation.abort(error);
   const results = await Promise.allSettled([
@@ -334,7 +335,10 @@ export async function activateStandalonePreparedModelRuntime(
           (input.agentId === undefined || owner.input.agentId === input.agentId) &&
           (input.workspaceDir === undefined || owner.input.workspaceDir === input.workspaceDir),
       );
-      if (gatewayLifecycleActive && (!input.readOnly || overlapsConfiguredOwner)) {
+      if (
+        isPreparedModelRuntimeGatewayLifecycleActive() &&
+        (!input.readOnly || overlapsConfiguredOwner)
+      ) {
         // Gateway startup/reload owns configured identities. Isolated read-only drafts may publish
         // separately, but stale drafts must never replace an overlapping configured generation.
         return undefined;
@@ -359,7 +363,7 @@ const preparedModelRuntimeLeaseContext = {
   retainedGatewayRunOwners,
   replyDispatchPublication,
   getBuildTimeoutMs: () => modelRuntimeBuildTimeoutMs,
-  getGatewayLifecycleActive: () => gatewayLifecycleActive,
+  getGatewayLifecycleActive: isPreparedModelRuntimeGatewayLifecycleActive,
   getPendingReplacement: getAdmissionReplacement,
 };
 const publishedModelRuntime = createPublishedModelRuntimeAccess(
@@ -477,7 +481,8 @@ export function rejectPendingPreparedModelRuntimeReplacement(
 
 const modelRuntimeRecovery = createPreparedModelRuntimeRecovery({
   owners,
-  canRecover: () => gatewayLifecycleActive && !refreshCancellation.signal.aborted,
+  canRecover: () =>
+    isPreparedModelRuntimeGatewayLifecycleActive() && !refreshCancellation.signal.aborted,
   getReplacement: () => pendingModelRuntimeReplacement,
   getAdmissionReplacement: () => modelRuntimeDrain.pending ?? pendingModelRuntimeReplacement,
   captureLifetime: captureModelRuntimeLifetime,
@@ -516,7 +521,9 @@ export function refreshPreparedModelRuntimeSnapshots(
     agentIds: initialAgentIds,
     preservePluginGenerations: options.preservePluginGenerations,
   });
-  gatewayLifecycleActive ||= options.gatewayLifecycle === true;
+  if (options.gatewayLifecycle === true) {
+    setPreparedModelRuntimeGatewayLifecycleActive(true);
+  }
   const requestEpoch = refreshRequestEpoch;
   const acquisitionSignal = refreshCancellation.signal;
   const replacement = pendingModelRuntimeReplacement;
@@ -601,7 +608,7 @@ export function refreshPreparedModelRuntimeSnapshots(
         {
           owners,
           agentBuildCompletions,
-          gatewayLifecycleActive,
+          gatewayLifecycleActive: isPreparedModelRuntimeGatewayLifecycleActive(),
           isPublicationCurrent,
           buildTimeoutMs: modelRuntimeBuildTimeoutMs,
           progress: startup?.progress,
