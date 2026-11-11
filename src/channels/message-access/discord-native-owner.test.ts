@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { registerPluginCommand } from "../../plugins/commands.js";
 import { createPluginCommandRuntime } from "../../plugins/plugin-command-runtime.js";
+import { changeCanonicalUserChannelIdentity } from "../../state/user-channel-identity-operations.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { withDiscordNativeAdminFixture } from "./discord-native-owner.test-support.js";
 import { configureNativeAcp, installNativeAcpRuntime } from "./native-acp-owner.test-support.js";
@@ -68,6 +69,25 @@ it.each(["linked owner", "configured owner", "allowlisted non-owner"])(
       });
       if (role === "allowlisted non-owner") {
         expect(observed).not.toHaveProperty("assertOwnerCurrent");
+        expect(observed?.assertAuthorizedCurrent).toBeTypeOf("function");
+        observed?.assertAuthorizedCurrent?.();
+        await changeCanonicalUserChannelIdentity("unlink", profile.id, {
+          channelId: "discord",
+          accountId: "default",
+          senderId: user,
+        });
+        expect(observed?.assertAuthorizedCurrent).toThrow("requester identity changed");
+        console.info(
+          "AUTHORITY_CHAIN " +
+            JSON.stringify({
+              entry: "native-discord",
+              principal: "allowlisted-non-owner",
+              gatewayOwner: observed?.senderIsOwner,
+              callbackEntries: execute.mock.calls.length,
+              initialAssertion: "allowed",
+              afterIdentityUnlink: "refused",
+            }),
+        );
       } else {
         expect(observed?.assertOwnerCurrent).toBeTypeOf("function");
         observed?.assertOwnerCurrent?.();

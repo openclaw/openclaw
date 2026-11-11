@@ -36,6 +36,7 @@ import {
   type CommandOwnerAssertion,
 } from "./command-owner-authority.js";
 import { getCommandSenderAuthority } from "./command-sender-authority.js";
+import { getRequesterProfile } from "./requester-profile.js";
 import {
   formatAllowFromList,
   normalizeAllowFromEntry,
@@ -54,6 +55,8 @@ export type CommandAuthorization = {
   isAuthorizedSender: boolean;
   /** Retains command-policy admission independently of owner-only authority. */
   assertAuthorizedCurrent?: () => void;
+  /** Original host requester only; native adapters retain their own command-policy owner. */
+  assertRequesterCurrent?: () => void;
   from?: string;
   to?: string;
 };
@@ -488,6 +491,15 @@ function retainCommandAuthorization(
   readConfig: () => OpenClawConfig,
 ): CommandAuthorization {
   const captured = { ...params, ctx: { ...params.ctx }, cfg: readConfig() };
+  const requester = getRequesterProfile(params.ctx);
+  const assertRequesterCurrent = requester
+    ? () => {
+        if (!requester.isCurrent()) {
+          throw new Error("Your requester identity changed; send a new request.");
+        }
+        requester.operatorAuthority?.assertCurrent();
+      }
+    : undefined;
   const { authorization, prepared: admitted } = resolveCommandAuthorizationState(
     captured,
     prepared,
@@ -497,7 +509,9 @@ function retainCommandAuthorization(
     : undefined;
   return {
     ...authorization,
+    ...(assertRequesterCurrent ? { assertRequesterCurrent } : {}),
     assertAuthorizedCurrent: () => {
+      assertRequesterCurrent?.();
       // Channel admission stays with its prepared worker/channel owner. Reuse
       // that fact while the command-policy owner evaluates the current config.
       const current = resolveCommandAuthorizationState(
