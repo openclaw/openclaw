@@ -12,7 +12,10 @@ const ADVERTISED_HEAD = /^ref: refs\/heads\/(.+)\tHEAD\r?$(?:\n([a-f0-9]{40,64})
 export async function fetchRemoteDefault(
   repoRoot: string,
   options: NonNullable<Parameters<typeof runGit>[2]>,
+  transport?: { cwd: string; remote: string; filter?: string },
 ): Promise<ResolvedWorktreeBase & { branch: string }> {
+  const transportRoot = transport?.cwd ?? repoRoot;
+  const remote = transport?.remote ?? "origin";
   const cached = await runGit(
     repoRoot,
     ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
@@ -21,7 +24,7 @@ export async function fetchRemoteDefault(
   if (cached.cleanup === "uncertain") {
     throw new CommandProcessCleanupError();
   }
-  const advertised = await runGit(repoRoot, ["ls-remote", "--symref", "origin", "HEAD"], {
+  const advertised = await runGit(transportRoot, ["ls-remote", "--symref", remote, "HEAD"], {
     ...options,
     timeoutMs: 30_000,
   });
@@ -69,8 +72,9 @@ export async function fetchRemoteDefault(
       "--no-recurse-submodules",
       "--no-tags",
       "--refmap=",
+      ...(transport?.filter ? [`--filter=${transport.filter}`] : []),
       ...(cachedCommit ? [`--negotiation-tip=${cachedCommit}`] : []),
-      "origin",
+      remote,
       `+refs/heads/${branch}:${remoteRef}`,
     ];
     const fetchOptions = { ...options, timeoutMs: 60_000 };
@@ -80,6 +84,7 @@ export async function fetchRemoteDefault(
       cachedCommit,
       args,
       fetchOptions,
+      transportRoot,
     );
     if (fetched.cleanup === "uncertain") {
       throw new CommandProcessCleanupError();
@@ -125,16 +130,21 @@ export async function fetchRemoteDefault(
   };
 }
 
-/** Keep origin's effective transport policy, without enumerating unrelated source refs. */
+/** Keep the selected transport policy, publishing through the source ref owner. */
 async function fetchDefaultWithIsolatedRefs(
   repoRoot: string,
   remoteRef: string,
   previous: string | undefined,
   args: string[],
   options: NonNullable<Parameters<typeof runGit>[2]>,
+  transportRoot: string,
 ) {
-  // Resolve conditional includes against the source worktree before changing Git metadata.
-  const config = await requireGit(repoRoot, ["config", "--null", "--list", "--includes"], options);
+  // Resolve conditional includes against the transport before changing Git metadata.
+  const config = await requireGit(
+    transportRoot,
+    ["config", "--null", "--list", "--includes"],
+    options,
+  );
   const entries: [string, string][] = [];
   for (const field of config.split("\0").filter(Boolean)) {
     const separator = field.indexOf("\n");
@@ -145,14 +155,14 @@ async function fetchDefaultWithIsolatedRefs(
     entries.push([key, separator < 0 ? "true" : field.slice(separator + 1)]);
   }
   if (!entries.some(([key]) => key === "remote.origin.url")) {
-    // Legacy remote files belong to the source metadata, not the temporary transport.
+    // Legacy remote files belong to the selected transport's original metadata.
     entries.push([
       "remote.origin.url",
-      await requireGit(repoRoot, ["ls-remote", "--get-url", "origin"], options),
+      await requireGit(transportRoot, ["ls-remote", "--get-url", "origin"], options),
     ]);
   }
   return await withGitObjectStoreTransport(
-    repoRoot,
+    transportRoot,
     (cwd, command) => requireGit(cwd, command, options),
     async (staging, objects) => {
       const transport = {

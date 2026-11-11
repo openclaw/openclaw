@@ -8,6 +8,10 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
+import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
+import type { GatewayClient } from "./server-methods/types.js";
+import { ConnectionSessionRows } from "./session-ancestor-references.js";
+import { prepareSessionEventProjection } from "./session-event-projection.js";
 import {
   createSessionRowDeltaDiffer,
   prepareSessionRowDeltaFields,
@@ -38,6 +42,12 @@ it("retains nested publication facts across real transcript writes without hidin
     });
     const clients = profiles.map(
       (profile) => createSessionRowEventPeer(profile, profile.id, Date.now()).client,
+    );
+    for (const client of clients) {
+      client.connect.caps = ["session-row-deltas"];
+    }
+    const histories = new Map<GatewayClient, ConnectionSessionRows>(
+      clients.map((client) => [client, new ConnectionSessionRows()]),
     );
     const cfg = rolePolicyConfig();
     const query = { agentId: "main", key: "agent:main:fingerprint-publication" };
@@ -70,10 +80,28 @@ it("retains nested publication facts across real transcript writes without hidin
     const read = async (unchanged = false) => {
       await projection.ensureMaterialized();
       const publication = prepareSessionRowPublication(projection, Date.now());
+      const projectRun = createVisibleActiveSessionRunProjector();
       const common = projection.describe(query)!.materialized.row;
+      const deliver = prepareSessionEventProjection(projection)(
+        "session.message",
+        { sessionKey: query.key, agentId: query.agentId, session: common },
+        { sessionKeys: [query.key] },
+        {
+          isCurrentProjection: (current) => current === projection,
+          resolveAgentScope: () => [query.agentId, query.agentId, undefined],
+          forgetAncestors: () => {},
+          references: (client) => histories.get(client)!,
+          createRunProjector: () => projectRun,
+        },
+      )!;
       using keys = vi.spyOn(Object, "keys");
       const rows = clients.map((client) => {
-        const row = publication(client).getPresentation().snapshot(query).row!;
+        const delivery = deliver(client)!;
+        delivery.delivered?.(client);
+        const row = publication(client, projectRun).getPresentation().snapshot(query, {
+          includeDerivedTitles: true,
+          includeLastMessage: true,
+        }).row!;
         return {
           row,
           fields: prepareSessionRowDeltaFields(row, common),
@@ -93,6 +121,9 @@ it("retains nested publication facts across real transcript writes without hidin
       await append();
       vi.mocked(hash).mockClear();
       const current = await read(true);
+      expect(
+        vi.mocked(hash).mock.calls.some(([, encoded]) => encoded === JSON.stringify(query.key)),
+      ).toBe(false);
       const nestedHashes = vi
         .mocked(hash)
         .mock.calls.filter(([, encoded]) => typeof encoded === "string" && /^[{[]/.test(encoded));
