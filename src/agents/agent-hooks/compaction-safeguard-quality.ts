@@ -58,7 +58,7 @@ export function resolveSummaryReserveTokens(
 }
 
 /** Demotes canonical headings when a summary is embedded as supporting context. */
-export function nestRequiredSummaryHeadings(text: string): string {
+function nestRequiredSummaryHeadings(text: string): string {
   return text.replace(/^##[ \t]+\S.*$/gmu, (heading) =>
     REQUIRED_SUMMARY_SECTIONS.some((required) => required === heading.trim())
       ? heading.replace("##", "###")

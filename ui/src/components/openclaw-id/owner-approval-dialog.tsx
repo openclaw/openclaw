@@ -28,13 +28,7 @@ function ApprovalRow(props: { request: OwnerApprovalRequest; owner: OwnerApprova
         {(code) => (
           <>
             <p>{t("openclawId.approvalCompare")}</p>
-            <strong
-              class="mono"
-              style={{
-                "font-size": "calc(2rem * var(--control-ui-text-scale))",
-                "letter-spacing": "0.25em",
-              }}
-            >
+            <strong class="mono" style={{ "font-size": "2rem", "letter-spacing": "0.25em" }}>
               {code()}
             </strong>
           </>

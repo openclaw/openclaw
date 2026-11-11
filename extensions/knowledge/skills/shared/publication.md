@@ -12,8 +12,8 @@
    explicit reconciliation. Legacy individual writes are not in this registry;
    "missing" does not prove the source was never ingested. Same content under a
    different source key is not automatically semantically deduplicated. Reuse verified existing evidence/pages when possible.
-3. For edits read the entire body and observed revision/hash; request
-   `includeMetadata: true` if changing domain fields. Preserve unrelated prose.
+3. For edits read the entire body and observed revision/hash; the read includes
+   domain fields, aliases, tags and dependencies. Preserve unrelated prose.
    Omit `fields` to preserve them; supplying `fields` replaces the complete object.
    Only use fields allowed by the selected ontology. `save_page` also supports
    aliases, tags and dependencies: omitted preserves, supplied replaces, empty
@@ -40,8 +40,8 @@ rejected with section sizes and connected candidates. Extract sections with
 
 Record, revision and recovery reads remain paginated. Follow returned offsets;
 for recovery use file offset plus contentField/charOffset and compare field hashes.
-A search hit with snippet.matchLocated=false is an opening excerpt, not a located
-match; full-record matching/ranking still apply. Read the record for context.
+A search snippet is a short excerpt, not the whole match context. Read the
+record for context.
 
 ## Retain the source
 
@@ -163,7 +163,7 @@ the original to make it fit.
 
 The backend chooses descriptive filenames from titles; do not predict a slug or
 choose a client-side ID. For a new source page needing self-citations, publish its
-substantive body with retained evidence first, then use the returned path for
+substantive body with retained evidence first, then use the returned ID for
 readable inline self-links. Likewise add cross-links after target pages exist.
 Read the current revision/hash before each follow-up edit and preserve unrelated
 content/metadata. The workflow is not complete until final links pass the shared
@@ -184,10 +184,11 @@ multi-record journal operation. Keep dependent calls sequential
   A null receipt is not proof of failure while a call is still in flight; wait
   for it to settle and replay the original payload/ID. Uploads use their chunk
   receipts instead of `knowledge_mutation`.
-- `state: accepted` is durable intent, not completion. `state: published` means
-  the page was saved. `indexed: false` describes publication-time state; a fresh
-  search reconciles indexing. A pending/unavailable Git checkpoint does not undo
-  publication or justify another save.
+- `state: accepted` is durable intent, not completion. A receipt without
+  `state` was published: the page was saved. Keyword indexing reconciles on the
+  next search. A receipt that names a pending/unavailable `git` checkpoint does
+  not undo publication or justify another save. `knowledge_mutation` returns the
+  complete receipt when you need its path, time or commit.
 - A rejection before acceptance leaves no saved draft. Preserve the proposed
   text, reread, reconcile changes, then use a new request ID for the new payload.
 - `state: conflict` retains recovery material. Inspect mutation/history and

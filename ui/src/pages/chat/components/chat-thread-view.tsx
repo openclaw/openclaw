@@ -51,6 +51,7 @@ import {
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
 import type { ChatTranscript } from "./chat-transcript-controller.ts";
+import { resolveTranscriptAvatarPlacement } from "./chat-transcript-identity.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import type { TranscriptHeader } from "./chat-transcript-session.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
@@ -142,11 +143,22 @@ export function ChatThread(input: ChatThreadInput) {
                 <div
                   class={[
                     "chat-thread",
-                    { "chat-thread--annotations": input.props.commentAttachments !== undefined },
+                    {
+                      "chat-thread--annotations": input.props.commentAttachments !== undefined,
+                      // Before row preparation, use session identity; forwarded-row chrome resolves later.
+                      "chat-thread--direct": resolveTranscriptAvatarPlacement(input.props, [])
+                        .isDirectThread,
+                    },
                   ]}
                   ref={[elementRef(input.bindViewport)]}
                 >
-                  {!heldWarmBoot && <ChatConversationLoading route />}
+                  {!heldWarmBoot && (
+                    <div class="chat-thread-content">
+                      <div class="chat-thread-inner">
+                        <ChatConversationLoading route />
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </>
@@ -296,12 +308,20 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
   const sentinel = () => (input.props.historyPagination ? historySentinel : undefined);
   const contents = createMemo(() => {
     if (!renderReady()) {
-      return <ChatConversationLoading route />;
+      return (
+        <div class="chat-thread-inner">
+          <ChatConversationLoading route />
+        </div>
+      );
     }
     // Native range changes redraw this island without preparing the whole pane.
     geometry().read();
     if (routeLoading() && mobile()) {
-      return <ChatConversationLoading route />;
+      return (
+        <div class="chat-thread-inner">
+          <ChatConversationLoading route />
+        </div>
+      );
     }
     if (showLoadingSkeleton() || isEmpty()) {
       return (
@@ -498,7 +518,7 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
             name: input.props.assistantName,
           }}
         />
-        {contents()}
+        <div class="chat-thread-content">{contents()}</div>
         <Show when={commentPins() ? getTranscriptState(paneId()) : undefined} keyed>
           {(threadState) => (
             <Loading>

@@ -1,4 +1,3 @@
-# 618 lines for delegated identity, HTTP/WS authority and persisted profile regressions,
-# plus 7 lines of inherited base debt (25bf99f6fdfb07e53dab2c08e15fcf404855a3c7).
+# 618 lines for delegated identity, HTTP/WS authority and persisted profile regressions.
 # Covers real worker persistence, credential watcher, Gateway profiles, scope ceilings and revocation.
-625
+618

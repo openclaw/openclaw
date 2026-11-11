@@ -103,6 +103,8 @@ it.each([
   (provider, kind, destination) => {
     const automatic = sourceContext(provider, kind);
     const privateReply = sourceContext(provider, kind, true);
+    expect(automatic).toMatch(/^### Conversation Behavior\nYou are in a /);
+    expect(privateReply).toMatch(/^### Conversation Behavior\nYou are in a /);
     expect(automatic).toContain(`automatically sent to this ${destination}`);
     expect(privateReply).toContain(`not automatically sent to this ${destination}`);
     expect(privateReply).toContain("Normal final replies are private");
@@ -128,6 +130,7 @@ it.each([
 );
 
 it("reads markdown table guidance from channel metadata", () => {
+  expect(sourceContext("discord", "unknown")).toBe("");
   setChannels([
     { id: "table-chat", messaging: { defaultMarkdownTableMode: "off" } },
     { id: "telegram", messaging: { defaultMarkdownTableMode: "block" } },

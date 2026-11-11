@@ -418,7 +418,6 @@ export async function prepareGatewayLifecycle(params: {
     browserAuthRateLimiter.dispose();
     talkClose.beginClose();
     void runtimeState.maintenance?.stopPeriodicTasks();
-    void mentionInbox.dispose();
     healthWork.beginClose();
     broadcast("shutdown", notice);
     connectionDependentSidecarStopOwner.beginClose();
@@ -529,10 +528,12 @@ export async function prepareGatewayLifecycle(params: {
     // Close intake before cancellation; accepted persistence keeps its own drain.
     worktreeRunEnd.beginClose();
     sandboxRegistry.beginClose();
+    void mentionInbox.dispose();
     void stopModelAccountsForClose();
     void closeAuthProfileUsage(params.sdkResourceHost);
     requestEntryLifetime.beginClose();
-    runtime.scheduler.beginClose();
+    runtime.scheduler.fence();
+    runtime.resolvePluginGatewayContext()?.scopeUpgradeCoordinator?.beginClose();
     cronReconciliation.invalidate();
     const preparation = await shutdownRuntime.prepareGatewayClose(
       {
@@ -558,7 +559,9 @@ export async function prepareGatewayLifecycle(params: {
           await terminateLiveSubagentsForShutdown(runtime.resolvePluginGatewayContext);
         },
         cancelReceivedWork: (reason) => {
-          // Entry is fenced; retained principals still need their binding to settle.
+          // Restart markers and session stop classification precede authority retirement.
+          requestEntryLifetime.retire(reason);
+          runtime.scheduler.beginClose();
           runtime.connectionWork.beginClose(reason);
         },
         disposeAllCodeModeRuns: shutdownRuntime.disposeAllCodeModeRuns,
