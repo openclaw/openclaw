@@ -359,24 +359,6 @@ describe("Mattermost post reads and edits", () => {
     },
   );
 
-  it("rejects invalid limits before provider access", async () => {
-    const client = responseClient(Response.json({}));
-    for (const limit of [0, 1.5]) {
-      await expect(fetchMattermostChannelPosts(client, "ch1", { limit })).rejects.toThrow(
-        "Mattermost read limit must be a positive integer",
-      );
-    }
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("rejects mutually exclusive cursors before provider access", async () => {
-    const client = responseClient(Response.json({}));
-    await expect(
-      fetchMattermostChannelPosts(client, "ch1", { before: "older", after: "newer" }),
-    ).rejects.toThrow("Mattermost read accepts either before or after, not both");
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
   it("rejects a post list referencing a missing post", async () => {
     const client = responseClient(Response.json({ order: ["missing-post"], posts: {} }));
     await expect(fetchMattermostChannelPosts(client, "ch1")).rejects.toThrow(

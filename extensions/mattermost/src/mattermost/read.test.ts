@@ -82,12 +82,12 @@ describe("readMattermostMessages", () => {
     });
   });
 
-  it("denies unconfigured and direct-message cross-channel targets before reading posts", async () => {
-    for (const channelType of ["O", "D"]) {
-      fetchFixture.current = fetchImpl = createReadFetch({ channelType });
-      await expect(read()).rejects.toThrow("Mattermost read target channel is not allowed");
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
-    }
+  it("denies direct-message cross-channel targets after one channel lookup", async () => {
+    fetchFixture.current = fetchImpl = createReadFetch({ channelType: "D" });
+    await expect(read({ cfg: config({ groupPolicy: "open" }) })).rejects.toThrow(
+      "Mattermost read target channel is not allowed",
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("uses the trusted native channel ID for the current DM", async () => {
@@ -102,6 +102,7 @@ describe("readMattermostMessages", () => {
   });
 
   it.each([
+    ["unconfigured cross-channel target", {}, "Mattermost read target channel is not allowed", 0],
     [
       "account switching",
       { context: { ...delegatedContext(), requesterAccountId: "other-account" } },
@@ -112,7 +113,7 @@ describe("readMattermostMessages", () => {
       "conflicting native conversation",
       { channelId: "CURRENT", context: delegatedContext("channel:OTHER", "channel:CURRENT") },
       "Mattermost read target channel is not allowed",
-      1,
+      0,
     ],
     [
       "disabled account",
