@@ -7,7 +7,6 @@ import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/ru
 import { FailoverError } from "../../agents/failover-error.js";
 import { registerGeneratedMediaTaskActivity } from "../../agents/media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../agents/media-generation-activity.test-support.js";
-import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -29,6 +28,10 @@ import {
 import { createTestUserTurnRecorder } from "./agent-runner-execution.transcript.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
+// Placement admission reaches CLI runtime selection through Gateway session utilities. A static
+// import would evaluate that graph before the harness mocks register, binding real CLI detection.
+const { installSessionPlacementAdmissionProvider } =
+  await import("../../agents/session-placement-admission.js");
 
 afterEach(resetGeneratedMediaTaskActivityForTests);
 
