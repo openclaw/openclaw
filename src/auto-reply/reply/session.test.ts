@@ -78,7 +78,6 @@ import {
   writeSessionStore as writeSessionStoreFast,
   writeTerminalTranscriptSessionStore,
 } from "./test/session.test-support.js";
-
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionFromParent: vi.fn(),
   nextSessionId: 0,
@@ -89,29 +88,23 @@ const channelSummaryMocks = vi.hoisted(() => ({
 const browserMaintenanceMocks = vi.hoisted(() => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
 }));
-
 type ForkSessionParamsForTest = {
   parentEntry: SessionEntry;
   sessionKey: string;
 };
-
 vi.mock("./session-fork.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-fork.js")>()),
   forkSessionFromParent: sessionForkMocks.forkSessionFromParent,
 }));
-
 vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   closeTrackedBrowserTabsForSessions: browserMaintenanceMocks.closeTrackedBrowserTabsForSessions,
 }));
-
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => null,
 }));
-
 vi.mock("../../infra/channel-summary.js", () => ({
   buildChannelSummary: channelSummaryMocks.buildChannelSummary,
 }));
-
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   readPreparedModelCatalog: vi.fn(async () => [
@@ -119,41 +112,33 @@ vi.mock("../../agents/prepared-model-catalog.js", () => ({
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
   ]),
 }));
-
 // Keep the fixture caller visible when a nested database admission fails.
 const previousStackTraceLimit = Error.stackTraceLimit;
 Error.stackTraceLimit = 64;
 afterAll(() => {
   Error.stackTraceLimit = previousStackTraceLimit;
 });
-
 const suiteRoot = useSessionStoreTempDirs(afterAll, "openclaw-session-suite-").make();
 let suiteCase = 0;
-
 async function makeCaseDir(prefix: string): Promise<string> {
   const dir = path.join(suiteRoot, `${prefix}${++suiteCase}`);
   await fs.mkdir(dir);
   return dir;
 }
-
 async function makeStorePath(prefix: string, agentId?: string): Promise<string> {
   const root = await makeCaseDir(prefix);
   const sessionsDir = agentId ? path.join(root, "agents", agentId, "sessions") : root;
   return path.join(sessionsDir, "sessions.json");
 }
-
 const TEST_NATIVE_MODEL_PROFILE_ID = "openai:secondary@example.test";
-
 describe("resolveReplySessionPreprocessingState", () => {
   const sessionKey = "agent:main:harness:codex:supervision:media-preflight";
-
   function resolvePreprocessingState(storePath: string) {
     return resolveReplySessionPreprocessingState({
       cfg: { session: { store: storePath } } as OpenClawConfig,
       ctx: finalizeInboundContext(telegramTurn(sessionKey, "<media:audio>", "media-preflight")),
     });
   }
-
   // A "missing session id" case is unrepresentable post-flip: sessions rows
   // are NOT NULL on session_id and upsert repairs id-less patches at write
   // time, so the store can never hand preprocessing such an entry.
@@ -171,11 +156,9 @@ describe("resolveReplySessionPreprocessingState", () => {
   ] as const)("rejects a reserved %s before preprocessing", async (_label, entry) => {
     const storePath = await makeStorePath(`openclaw-media-preflight-invalid-${_label}-`);
     await writeSessionStoreFast(storePath, entry ? { [sessionKey]: entry } : {});
-
     await expect(resolvePreprocessingState(storePath)).rejects.toThrow();
   });
 });
-
 function setMinimalCurrentConversationBindingRegistryForTests(): void {
   setActivePluginRegistry(
     createTestRegistry([
@@ -205,7 +188,6 @@ function setMinimalCurrentConversationBindingRegistryForTests(): void {
     ]),
   );
 }
-
 function registerCurrentConversationBindingAdapterForTest(params: {
   channel: "slack" | "signal" | "googlechat";
   accountId: string;
@@ -252,7 +234,6 @@ function registerCurrentConversationBindingAdapterForTest(params: {
       ) ?? null,
   });
 }
-
 beforeEach(() => {
   channelSummaryMocks.buildChannelSummary.mockReset().mockResolvedValue([]);
   browserMaintenanceMocks.closeTrackedBrowserTabsForSessions.mockReset().mockResolvedValue(0);
@@ -271,7 +252,6 @@ afterEach(() => {
 });
 describe("initSessionState guarded initialization", () => {
   registerSessionInitializationAdmissionTests({ makeStorePath });
-
   it("reuses unchanged initialization without losing related entries or later in-process updates", async () => {
     const storePath = await makeStorePath("openclaw-session-accepted-activity-");
     const sessionKey = "agent:main:dashboard:accepted-activity";
@@ -312,7 +292,6 @@ describe("initSessionState guarded initialization", () => {
       sessionId: "model-parent",
       modelOverride: "test-model",
     });
-
     const updated = expectDefined(
       await upsertSessionEntryCore(
         { storePath, sessionKey },
@@ -329,7 +308,6 @@ describe("initSessionState guarded initialization", () => {
     expect(resumed.sessionEntry).toMatchObject(expected);
     expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(expected);
   });
-
   it.each(["session", "key", "reset"] as const)(
     "does not reuse accepted activity after a %s change",
     async (change) => {
@@ -361,7 +339,6 @@ describe("initSessionState guarded initialization", () => {
       }
     },
   );
-
   it("pins an admitted non-default-agent incognito session to its process-local store", async () => {
     const stateDir = await makeCaseDir("openclaw-session-incognito-init-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -373,7 +350,6 @@ describe("initSessionState guarded initialization", () => {
         { agentId, sessionKey, storePath },
         { sessionId, incognito: true, updatedAt: Date.now() },
       );
-
       try {
         await expect(
           initSessionState({
@@ -402,7 +378,6 @@ describe("initSessionState guarded initialization", () => {
       }
     });
   });
-
   it("rejects inbound work for an archived session", async () => {
     const storePath = await makeStorePath("openclaw-session-init-archived-");
     const sessionKey = "agent:main:telegram:chat:archived";
@@ -413,7 +388,6 @@ describe("initSessionState guarded initialization", () => {
         updatedAt: 100,
       },
     });
-
     await expect(
       initSessionState({
         ctx: {
@@ -430,7 +404,6 @@ describe("initSessionState guarded initialization", () => {
         'Session "agent:main:telegram:chat:archived" is archived. Restore it before starting new work.',
     });
   });
-
   it("waits for real settlement when reply cancellation throws after committing abort", async () => {
     const storePath = await makeStorePath("openclaw-session-init-reset-cancel-failure-");
     const sessionKey = "agent:main:matrix:channel:cancel-failure";
@@ -453,7 +426,6 @@ describe("initSessionState guarded initialization", () => {
     });
     activeReply.attachBackend({ kind: "embedded", cancel, isStreaming: () => false });
     activeReply.setPhase("running");
-
     try {
       const initialization = initSessionState({
         ctx: {
@@ -473,7 +445,6 @@ describe("initSessionState guarded initialization", () => {
       await cancellationAttempted.promise;
       activeReply.complete();
       const reset = await initialization;
-
       expect(reset.resetTriggered).toBe(true);
       expect(cancel).toHaveBeenCalledWith("restart");
       expect(isSessionRunActiveForKey(sessionKey)).toBe(false);
@@ -482,14 +453,12 @@ describe("initSessionState guarded initialization", () => {
     }
   });
 });
-
 describe("initSessionState thread forking", () => {
   it("forks a new SQLite session from the parent session with native consent preseeded", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-");
     const parentSessionId = "parent-session";
     const parentSessionFile = path.join(root, "parent.jsonl");
-
     const storePath = path.join(root, "sessions.json");
     const parentSessionKey = "agent:main:slack:channel:c1";
     const threadSessionKey = "agent:main:slack:channel:c1:thread:123";
@@ -508,12 +477,10 @@ describe("initSessionState thread forking", () => {
         nativeRuntimeConsent: "acp-opencode",
       },
     });
-
     const cfg = {
       agents: { defaults: { sandbox: { mode: "all" } } },
       session: { store: storePath },
     } as OpenClawConfig;
-
     const threadLabel = "Slack thread #general: starter";
     const result = await initSessionState({
       ctx: {
@@ -524,14 +491,12 @@ describe("initSessionState thread forking", () => {
       },
       cfg,
     });
-
     expect(result.sessionKey).toBe(threadSessionKey);
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
     expect(result.sessionEntry.sessionId).not.toBe("preseed-native-session");
     expect(result.sessionEntry.displayName).toBe(threadLabel);
     expect(result.sessionEntry.totalTokens).toBeUndefined();
     expect(result.sessionEntry.totalTokensFresh).toBe(false);
-
     expect(result.sessionEntry.forkedFromParent).toBe(true);
     expect(result.sessionEntry.forkSource).toEqual({
       sessionKey: parentSessionKey,
@@ -557,7 +522,6 @@ describe("initSessionState thread forking", () => {
     expect(forkCall.parentEntry).not.toHaveProperty("sessionFile");
     warn.mockRestore();
   });
-
   it("forks from parent when thread session key already exists but was not forked yet", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-existing-");
@@ -586,11 +550,9 @@ describe("initSessionState thread forking", () => {
       { agentId: "main", sessionId: parentSessionId, sessionKey: parentSessionKey, storePath },
       { message: { role: "assistant", content: "Parent reply" } },
     );
-
     const cfg = {
       session: { store: storePath },
     } as OpenClawConfig;
-
     const first = await initSessionState({
       ctx: {
         Body: "Thread reply",
@@ -603,7 +565,6 @@ describe("initSessionState thread forking", () => {
       },
       cfg,
     });
-
     expect(first.sessionEntry.sessionId).not.toBe("preseed-thread-session");
     expect(first.sessionEntry.forkedFromParent).toBe(true);
     expect(first.sessionEntry.forkSource).toEqual({
@@ -613,7 +574,6 @@ describe("initSessionState thread forking", () => {
     expect(first.sessionEntry.totalTokens).toBeUndefined();
     expect(first.sessionEntry.totalTokensFresh).toBe(false);
     expect(first.sessionEntry.abortedLastRun).toBe(false);
-
     const second = await initSessionState({
       ctx: {
         Body: "Thread reply 2",
@@ -623,7 +583,6 @@ describe("initSessionState thread forking", () => {
       },
       cfg,
     });
-
     expect(second.sessionEntry.sessionId).toBe(first.sessionEntry.sessionId);
     expect(second.sessionEntry.displayName).toBe("User title");
     expect(second.sessionEntry.forkedFromParent).toBe(true);
@@ -631,12 +590,10 @@ describe("initSessionState thread forking", () => {
     expect(second.sessionEntry.totalTokensFresh).toBe(false);
     warn.mockRestore();
   });
-
   it("skips fork and creates fresh session when parent tokens exceed threshold", async () => {
     const root = await makeCaseDir("openclaw-thread-session-overflow-");
     const parentSessionId = "parent-overflow";
     const parentSessionFile = path.join(root, "parent.jsonl");
-
     const storePath = path.join(root, "sessions.json");
     const parentSessionKey = "agent:main:slack:channel:c1";
     const threadSessionKey = "agent:main:slack:channel:c1:thread:456";
@@ -651,7 +608,6 @@ describe("initSessionState thread forking", () => {
         totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       },
     });
-
     const cfg = {
       session: { store: storePath },
     } as OpenClawConfig;

@@ -28,7 +28,6 @@ import {
 } from "../../sessions/session-controller.js";
 import { waitForCapturedSessionNativeAttemptEnd } from "../../sessions/session-controller.native-runtime.js";
 import {
-  assertSessionControllerOperation,
   getAttachedBackend,
   getSessionControllerEntryForOperation,
   markReplyOperationExecutionStarted,
@@ -78,6 +77,7 @@ import {
   type ActiveEmbeddedRunAttachment,
   type EmbeddedRunRegistration,
 } from "./run-state.js";
+import { assertAdmittedEmbeddedRunTurn } from "./runs.admitted-turn.js";
 import { isEmbeddedRunHandleAbortable, isEmbeddedRunHandleInProgress } from "./runs.probes.js";
 import { normalizeSessionFileRegistryKey } from "./runs.session-index.js";
 import { createEmbeddedRunsTestApi } from "./runs.test-cleanup.js";
@@ -857,14 +857,7 @@ export function attachActiveEmbeddedRun(
     throw new Error("Native registration received conflicting session turn owners");
   }
   if (operation) {
-    assertSessionControllerOperation(operation);
-    if (
-      (sessionKey !== undefined && operation.key !== sessionKey) ||
-      operation.sessionId !== sessionId ||
-      (operation.agentId && agentId && operation.agentId !== normalizeAgentId(agentId))
-    ) {
-      throw new Error("Native registration does not match the exact admitted session turn");
-    }
+    assertAdmittedEmbeddedRunTurn(operation, sessionId, sessionKey, agentId);
   } else if (sessionKey && toolAuthority?.detached === true) {
     // A prepared detached attempt can carry a policy key without owning that session.
     toolAuthority.assertActive();
