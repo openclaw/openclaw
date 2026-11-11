@@ -181,7 +181,7 @@ suite.define(() => {
         const sidebar = page.locator("openclaw-app-sidebar");
         const selected = sidebar.locator(`[data-session-key="${key}"]`);
         await roster.getByText("Initial rate proof", { exact: true }).first().waitFor();
-        // Rows can render before the owner-filtered and child startup reads finish.
+        await chooseSidebarOwner(page, "owner:" + viewerId);
         await expect
           .poll(() =>
             [
