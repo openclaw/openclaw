@@ -245,10 +245,26 @@ describe("gateway plugin instance bindings", () => {
     let reloadEventIndex = proof.events.length;
     const socket = await connectAdmin(port);
     const reload = await patchInstanceBindingTestConfig(socket);
-    expect(reload.ok, reload.error?.message).toBe(true);
-    expect(reload.payload).toMatchObject({
-      sentinel: { payload: { stats: { requiresRestart: false } } },
-    });
+    if (reload.ok) {
+      expect(reload.payload).toMatchObject({
+        sentinel: { payload: { stats: { requiresRestart: false } } },
+      });
+    } else {
+      // Saving config may defer replacement while retained plugin work settles.
+      expect(reload.error).toMatchObject({
+        code: "UNAVAILABLE",
+        details: {
+          application: { status: "deferred" },
+          persistedConfig: {
+            config: {
+              plugins: {
+                entries: { "instance-binding-probe": { subagent: { allowModelOverride: true } } },
+              },
+            },
+          },
+        },
+      });
+    }
     await expect
       .poll(() => coordinator.runtimes.length, { timeout: 300_000 })
       .toBeGreaterThan(registrationsBeforeReload);
