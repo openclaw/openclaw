@@ -16,7 +16,7 @@ import {
   MAX_LATEST_USER_REQUEST_CHARS,
   parseCompactionDetails,
 } from "./compaction-details.js";
-import { buildCompactionFloor } from "./compaction-floor.js";
+import { buildCompactionFloor, stripSummaryFloor } from "./compaction-floor.js";
 import {
   capCompactionSummary,
   fitCompactionSummary,
@@ -366,7 +366,8 @@ export function prepareCompaction(
   let boundaryStart = 0;
   if (prevBoundaryIndex >= 0) {
     const prevBoundary = pathEntries[prevBoundaryIndex];
-    previousSummary = prevBoundary?.type === "compaction" ? prevBoundary.summary : undefined;
+    previousSummary =
+      prevBoundary?.type === "compaction" ? stripSummaryFloor(prevBoundary.summary) : undefined;
     if (prevBoundary?.type === "compaction") {
       const details = parseCompactionDetails(prevBoundary.details);
       previousLatestUnresolvedUserRequest = details?.latestUnresolvedUserRequest;

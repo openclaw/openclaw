@@ -1,9 +1,27 @@
-/** Model-free record of a compacted region, used when no summary could be generated. */
+/** Model-free record of a compacted region: the whole record without a summary, an appendix beside one. */
 import type { AgentMessage } from "../../types.js";
+import { parseCompactionDetails } from "./compaction-details.js";
+import {
+  capCompactionSummary,
+  fitCompactionSummary,
+  MAX_COMPACTION_SUMMARY_CHARS,
+} from "./compaction-summary-budget.js";
+import type { CompactionPreparation, CompactionResult } from "./compaction.js";
 import { extractCompactionMessageText, formatCompactionUserLabel } from "./utils.js";
 
 /** Upper bound for the whole floor; the caller's summary fitting may shrink it further. */
 const MAX_COMPACTION_FLOOR_CHARS = 8_000;
+/**
+ * Beside a generated summary the floor only backs up verbatim asks and identifiers, so it
+ * gets less than the no-summary record, outside the summary's own ceiling, and never more
+ * than that ceiling when an operator lowers it.
+ */
+const MAX_SUMMARY_FLOOR_CHARS = 6_000;
+// Below this a floor cannot quote one user message; drop it rather than leave a bare heading.
+const MIN_SUMMARY_FLOOR_CHARS = 1_000;
+// Appended after the summary and replaced at the next compaction, never summarized again.
+const SUMMARY_FLOOR_HEADING =
+  "\n\n---\n\n## Deterministic record of the compacted region\nExtracted without a model; the summary above remains the primary handoff.\n\n";
 const MAX_FLOOR_USER_MESSAGE_CHARS = 1_000;
 const MAX_FLOOR_OUTCOME_CHARS = 600;
 const FLOOR_OUTCOMES = 3;
@@ -146,4 +164,66 @@ export function buildCompactionFloor(
   }
   const floor = sections.join("\n\n");
   return floor.length <= maxChars ? floor : `${floor.slice(0, maxChars - 6)} [...]`;
+}
+
+/** Characters a committed summary may carry beyond its ceiling for the floor and heading. */
+export function resolveSummaryFloorChars(maxSummaryChars = MAX_COMPACTION_SUMMARY_CHARS): number {
+  return SUMMARY_FLOOR_HEADING.length + Math.min(MAX_SUMMARY_FLOOR_CHARS, maxSummaryChars);
+}
+
+/**
+ * Appends the floor after an already capped summary. The floor shrinks, then disappears,
+ * before the combined artifact may exceed the foreground token budget.
+ */
+function appendSummaryFloor(
+  summary: string,
+  messages: readonly AgentMessage[],
+  maxSummaryChars?: number,
+  tokenBudget?: number,
+): string {
+  const fitted = fitCompactionSummary(
+    tokenBudget,
+    (maxChars) => {
+      const floor =
+        maxChars >= MIN_SUMMARY_FLOOR_CHARS ? buildCompactionFloor(messages, maxChars) : "";
+      return floor ? { summary: `${summary}${SUMMARY_FLOOR_HEADING}${floor}` } : undefined;
+    },
+    resolveSummaryFloorChars(maxSummaryChars) - SUMMARY_FLOOR_HEADING.length,
+  );
+  return fitted.ok ? fitted.value.summary : summary;
+}
+
+/**
+ * The committed summary of every producer: capped at the summary ceiling, then followed by
+ * the floor. No-summary artifacts already carry their floor inside the ceiling. Without a
+ * foreground budget, the floor still has to fit the window beside the fixed prompt, tools
+ * and retained history.
+ */
+export function commitCompactionSummary(
+  result: Pick<CompactionResult, "summary" | "details">,
+  preparation: Pick<
+    CompactionPreparation,
+    "messagesToSummarize" | "turnPrefixMessages" | "summaryTokenBudget"
+  > & { settings: { maxSummaryChars?: number } },
+  withoutSummary: boolean,
+  replayTokenBudget?: () => number | undefined,
+): string {
+  const { maxSummaryChars } = preparation.settings;
+  const summary = capCompactionSummary(result.summary, maxSummaryChars);
+  if (withoutSummary || parseCompactionDetails(result.details)?.summaryRefused) {
+    return summary;
+  }
+  // Accepted edge case: with an unknown window the floor is bounded only by its own budget.
+  return appendSummaryFloor(
+    summary,
+    [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages],
+    maxSummaryChars,
+    preparation.summaryTokenBudget ?? replayTokenBudget?.(),
+  );
+}
+
+/** A carried summary drops its old floor; the next compaction builds one for its own region. */
+export function stripSummaryFloor(summary: string): string {
+  const index = summary.lastIndexOf(SUMMARY_FLOOR_HEADING);
+  return index < 0 ? summary : summary.slice(0, index);
 }
