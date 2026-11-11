@@ -61,14 +61,14 @@ vi.mock("./registry.js", () => ({
     },
   ),
 }));
+// mock-isolation: Synthetic container lifetimes must not prepare host directories or discover daemon mounts.
 vi.mock("./mount-plan.js", () => ({
   prepareSandboxMountPlan: vi.fn(async () => ({ binds: [], skippedBinds: [] })),
   compareSandboxMountPlan: vi.fn(async () => "match"),
   resolveSandboxContainerOnlyMounts: vi.fn(async () => []),
 }));
-vi.mock("./container-engine.js", () => ({
-  DOCKER_SANDBOX_ENGINE: { id: "docker", command: "docker", displayName: "Docker" },
-  PODMAN_SANDBOX_ENGINE: { id: "podman", command: "podman", displayName: "Podman" },
+vi.mock("./container-engine.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./container-engine.js")>()),
   execContainerRaw: vi.fn(),
   execContainer: vi.fn(async (_engine: unknown, args: string[], opts?: ExecContainerRawOptions) => {
     fixture.calls.push(args);

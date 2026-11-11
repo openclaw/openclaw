@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { deriveTranscriptPredicateFields } from "../config/sessions/transcript-predicate-fields.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB } from "./openclaw-agent-db.generated.js";
@@ -133,8 +134,10 @@ export function repairDeepTranscriptPredicatesInTransaction(database: DatabaseSy
       let canonical = row.event_json;
       if (canonical === null && row.navigation_json !== null) {
         try {
-          const metadata = JSON.parse(row.navigation_json) as { navigation?: unknown };
-          canonical = JSON.stringify(metadata.navigation) ?? null;
+          const metadata: unknown = JSON.parse(row.navigation_json);
+          if (isRecord(metadata)) {
+            canonical = JSON.stringify(metadata.navigation) ?? null;
+          }
         } catch {
           // Corrupt projections remain invalid and retain the ordinary repair diagnostic.
         }

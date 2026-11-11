@@ -9,10 +9,12 @@ import * as archiveCompression from "../config/sessions/archive-decode.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { runWithAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-lease.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { recoverTranscriptArchivePublication } from "./state-migrations.transcript-archive-publication.js";
+import {
+  recoverTranscriptArchivePublication,
+  TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE,
+} from "./state-migrations.transcript-archive-publication.js";
 import {
   migrateCanonicalTranscriptArchives,
-  TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE,
   transcriptDirectiveArchivesNeedMigration,
 } from "./state-migrations.transcript-directives-archives.js";
 
@@ -217,7 +219,7 @@ describe("canonical transcript archive batch transactions", () => {
   });
 
   it("checkpoints unchanged archives once per bounded batch", async () => {
-    const f = fixture(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE + 3);
+    const f = fixture(TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE + 3);
     try {
       const before = f.database
         .prepare("SELECT archive_sha256 FROM session_transcript_archives ORDER BY session_id")
@@ -369,7 +371,7 @@ describe("canonical transcript archive batch transactions", () => {
   });
 
   it("recovers a failed second batch when the caller restarts at the beginning", async () => {
-    const f = fixture(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE + 3);
+    const f = fixture(TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE + 3);
     try {
       const renameSync = fs.renameSync;
       const failedPath = path.join(f.archiveDirectory, "archive-33.jsonl");
@@ -425,7 +427,7 @@ describe("canonical transcript archive batch transactions", () => {
   });
 
   it("settles a recovery journal in bounded batches", async () => {
-    const f = fixture(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE + 3);
+    const f = fixture(TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE + 3);
     try {
       await f.migrate({ transformLine: changeContent });
       const transactionsBeforeRecovery = f.transactions;
@@ -458,14 +460,14 @@ describe("canonical transcript archive batch transactions", () => {
             "SELECT count(*) AS count FROM session_transcript_archives WHERE published_at = 123",
           )
           .get()?.count,
-      ).toBe(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE + 3);
+      ).toBe(TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE + 3);
     } finally {
       f.close();
     }
   });
 
   it("keeps a missing-file receipt across later batches until its copy returns", async () => {
-    const f = fixture(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE + 3);
+    const f = fixture(TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE + 3);
     try {
       const missingPath = path.join(f.archiveDirectory, "archive-1.jsonl");
       let leaveMissing = false;

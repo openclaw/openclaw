@@ -1,15 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData } from "node:worker_threads";
+import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { sql } from "kysely";
 import { expect, it } from "vitest";
 import {
   LEGACY_MISSING_TOOL_RESULT_TEXT,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { projectSessionModelContextEntry } from "../../config/sessions/session-model-context-entry.js";
+import { projectSessionModelContextNavigation } from "../../config/sessions/session-model-context-navigation.js";
 import {
   projectModelContextEventSql,
-  projectModelContextJson,
   projectModelContextNavigationSql,
   projectResetBoundaryNavigationSql,
 } from "../../config/sessions/session-model-context-projection.js";
@@ -25,6 +27,16 @@ import { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { jsonNativeFieldsValid } from "./json-values.js";
+
+function projectCanonicalContext(raw: string, navigation: boolean, omitCheckpoint = false): string {
+  // SAFETY: The input is a canonical SessionTreeEntry serialized by this fixture or the transcript reader.
+  const entry = JSON.parse(raw) as SessionTreeEntry;
+  return JSON.stringify(
+    navigation
+      ? projectSessionModelContextNavigation(entry)
+      : projectSessionModelContextEntry(entry, { entry, omitCheckpoint }),
+  );
+}
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -190,17 +202,17 @@ it.skipIf(typeof connection !== "string")(
               // PostgreSQL returns exceptional canonical text to the existing reader's JS decoder.
               const model =
                 db === postgres && !row.native
-                  ? projectModelContextJson(row.model, false, omit === 1)
+                  ? projectCanonicalContext(row.model, false, omit === 1)
                   : row.model;
               const navigation =
                 db === postgres && !row.native
-                  ? projectModelContextJson(row.navigation, true)
+                  ? projectCanonicalContext(row.navigation, true)
                   : row.navigation;
               expect(JSON.parse(model)).toEqual(
-                JSON.parse(projectModelContextJson(canonical[index]!, false, omit === 1)),
+                JSON.parse(projectCanonicalContext(canonical[index]!, false, omit === 1)),
               );
               expect(JSON.parse(navigation)).toEqual(
-                JSON.parse(projectModelContextJson(canonical[index]!, true)),
+                JSON.parse(projectCanonicalContext(canonical[index]!, true)),
               );
               expect(row.retained).toBe(canonical[index]);
               if (!row.native) {

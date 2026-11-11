@@ -296,7 +296,7 @@ export function hydrateSessionActorState(
               "navigation_valid",
               (isPostgresSqlConnection(database.db)
                 ? jsonNativeFieldsValid(database.db, sql`event_json`)
-                : sql<SqlBool>`1`
+                : sql.lit<SqlBool>(1)
               ).as("native"),
               transcriptEventModelNavigationSql(database.db).as("navigation_json"),
               /* kysely-allow-raw: retain exact stored JSONL sizes without loading payloads. */
@@ -385,15 +385,16 @@ export function hydrateSessionActorState(
   const storedNavigation = selected
     ? decodeJsonProjection(selected.actor_navigation).toSorted((a, b) => a.seq - b.seq)
     : [];
-  const navigation = storedNavigation.map((row) =>
-    Object.assign(
-      // SAFETY: The canonical model codec preserves discriminants with readable empty payloads.
-      row.native
-        ? (JSON.parse(row.navigation_json) as SessionTreeEntry)
-        : projectSessionModelContextNavigation(JSON.parse(row.navigation_json) as SessionTreeEntry),
-      { seq: row.seq },
-    ),
-  );
+  const navigation = storedNavigation.map((row) => {
+    // SAFETY: The canonical model codec preserves discriminants with readable empty payloads.
+    const navigationEntry = JSON.parse(row.navigation_json) as SessionTreeEntry;
+    return Object.assign(
+      row.native ? navigationEntry : projectSessionModelContextNavigation(navigationEntry),
+      {
+        seq: row.seq,
+      },
+    );
+  });
   const contextVersion = {
     generation: rewrite?.generation ?? null,
     rawSeq: coldArchive?.last_seq ?? navigation.at(-1)?.seq ?? null,

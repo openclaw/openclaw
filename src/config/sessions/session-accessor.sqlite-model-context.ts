@@ -417,6 +417,7 @@ function withTranscriptContextSnapshot<T>(
                       : Buffer.byteLength(
                           JSON.stringify(
                             projectSessionModelContextEntry(
+                              // SAFETY: The canonical payload matches its navigation entry in this read snapshot.
                               JSON.parse(row.exceptional_json) as SessionTreeEntry,
                               request,
                             ),
@@ -452,6 +453,7 @@ function withTranscriptContextSnapshot<T>(
                   const hydrated = row.native
                     ? hydrateContextEntry(row.event_json, entry)
                     : projectSessionModelContextEntry(
+                        // SAFETY: The canonical payload matches its navigation entry in this read snapshot.
                         JSON.parse(row.event_json) as SessionTreeEntry,
                         batch.find((item) => item.entry === entry)!,
                       );
@@ -496,10 +498,11 @@ function modelNavigationNativeSql(
   // SQLite projects deep rows inside its reader; PostgreSQL has no JS SQL callback.
   return isPostgresSqlConnection(database)
     ? jsonNativeFieldsValid(database, sql`event_json`)
-    : sql<SqlBool>`1`;
+    : sql.lit<SqlBool>(1);
 }
 
 function readModelNavigation(row: { navigation_json: string; native: unknown }): SessionTreeEntry {
+  // SAFETY: The model navigation codec preserves canonical entry discriminants and empty payloads.
   const entry = JSON.parse(row.navigation_json) as SessionTreeEntry;
   return row.native ? entry : projectSessionModelContextNavigation(entry);
 }

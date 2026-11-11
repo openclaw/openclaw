@@ -32,7 +32,7 @@ import {
 const registeredDeepProjectors = new WeakSet<DatabaseSync>();
 
 /** JavaScript owner for rows native JSON cannot project: SQLite deep JSON, PostgreSQL JSONB-invalid escapes. */
-export function projectModelContextJson(
+function projectModelContextJson(
   raw: string,
   navigation: boolean,
   omitCheckpoint = false,

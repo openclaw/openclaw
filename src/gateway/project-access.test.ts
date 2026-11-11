@@ -8,7 +8,7 @@ import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  canRequesterUseRepositoryUrl,
+  canRequesterUseProject,
   filterProjectsForRequester,
   type ProjectRequester,
   resolveRunProjectRequester,
@@ -88,7 +88,7 @@ describe("project access", () => {
     fetchImpl.mockClear();
     await expect(filterProjectsForRequester(cfg, projects, maintainer)).resolves.toEqual(projects);
     await expect(
-      canRequesterUseRepositoryUrl(cfg, project("openclaworg").originUrl, { kind: "internal" }),
+      canRequesterUseProject(cfg, project("openclaworg"), { kind: "internal" }),
     ).resolves.toBe(true);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
@@ -104,9 +104,9 @@ describe("project access", () => {
       })
       .mockResolvedValue(Response.json({ visibility: "private" }));
     vi.stubGlobal("fetch", fetchImpl);
-    const discovery = canRequesterUseRepositoryUrl(cfg, project("race").originUrl, guest);
+    const discovery = canRequesterUseProject(cfg, project("race"), guest);
     await started.promise;
-    const handoff = canRequesterUseRepositoryUrl(cfg, project("race").originUrl, guest, {
+    const handoff = canRequesterUseProject(cfg, project("race"), guest, {
       fresh: true,
     });
     held.resolve(Response.json({ visibility: "public" }));
@@ -155,7 +155,7 @@ describe("project access", () => {
     const visibility: Record<string, string | number> = { cached: "public", flaky: 403 };
     const fetchImpl = visibilityFetch(visibility);
     const check = (name = "cached", fresh = false) =>
-      canRequesterUseRepositoryUrl(cfg, project(name).originUrl, guest, { fresh });
+      canRequesterUseProject(cfg, project(name), guest, { fresh });
 
     await expect(check()).resolves.toBe(true);
     visibility.cached = "private";
@@ -180,9 +180,7 @@ describe("project access", () => {
       originUrl: "https://ghe.example.test/project-access-test/cached.git",
     };
     visibility.cached = "internal";
-    await expect(
-      canRequesterUseRepositoryUrl(enterprise, enterpriseProject.originUrl, guest),
-    ).resolves.toBe(false);
+    await expect(canRequesterUseProject(enterprise, enterpriseProject, guest)).resolves.toBe(false);
     expect(fetchImpl.mock.lastCall?.[0]).toBe(
       "https://ghe.example.test/api/v3/repos/project-access-test/cached",
     );

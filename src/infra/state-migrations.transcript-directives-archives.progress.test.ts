@@ -9,9 +9,9 @@ import { ensureSessionTranscriptArchiveSchema } from "../state/openclaw-agent-se
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
+import { TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE } from "./state-migrations.transcript-archive-publication.js";
 import {
   migrateCanonicalTranscriptArchives,
-  TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE,
   transcriptDirectiveArchivesNeedMigration,
 } from "./state-migrations.transcript-directives-archives.js";
 import * as directiveTransform from "./state-migrations.transcript-directives-transform.js";
@@ -146,7 +146,7 @@ describe("canonical archive migration progress", () => {
       .run(() => migrateCanonicalTranscriptArchives(f.options))
       .catch((error: unknown) => error);
     expect(f.database.isTransaction).toBe(false);
-    expect(f.rewritten()).toBe(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE);
+    expect(f.rewritten()).toBe(TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE);
     expect(String(failure)).toMatch(
       /040:retained.*OpenClaw state database read admission is closed/,
     );
@@ -178,7 +178,7 @@ describe("canonical archive migration progress", () => {
       ),
     ).rejects.toThrow(interrupted);
     expect(f.database.isTransaction).toBe(false);
-    expect(f.rewritten()).toBe(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE);
+    expect(f.rewritten()).toBe(TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE);
     expect(f.cursor()).toEqual({ sessionId: "031", generation: "retained" });
   });
 
@@ -191,7 +191,7 @@ describe("canonical archive migration progress", () => {
       .spyOn(directiveTransform, "parseDirectiveMigrationTranscriptEvent")
       .mockImplementation((...args) => {
         const event = parse(...args);
-        if (++calls === TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE) {
+        if (++calls === TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE) {
           f.controller.abort(interrupted);
         }
         return event;
@@ -202,7 +202,7 @@ describe("canonical archive migration progress", () => {
         { signal: f.controller.signal, deadlineOwnedByCaller: true },
       ),
     ).rejects.toBe(interrupted);
-    expect(parsed).toHaveBeenCalledTimes(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE);
+    expect(parsed).toHaveBeenCalledTimes(TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE);
     expect(f.rewritten()).toBe(0);
   });
 
@@ -249,7 +249,7 @@ describe("canonical archive migration progress", () => {
         onArchive(archivePath) {
           if (
             Number(path.basename(archivePath, ".jsonl")) %
-              TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE ===
+              TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE ===
             0
           ) {
             now += 75;

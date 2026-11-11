@@ -28,7 +28,8 @@ import {
 } from "./delivery-queue.test-helpers.js";
 
 const sendRecoveryNotice = vi.hoisted(() => vi.fn());
-vi.mock("../../gateway/server-recovery-runtime-context.js", () => ({
+vi.mock("../../gateway/server-recovery-runtime-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/server-recovery-runtime-context.js")>()),
   getGatewayRecoveryRuntime: () => ({ sendRecoveryNotice }),
 }));
 const resolveAdapter = vi.hoisted(() => vi.fn());

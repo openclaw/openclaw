@@ -34,7 +34,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
-import { TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE } from "./state-migrations.transcript-directives-archives.js";
+import { TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE } from "./state-migrations.transcript-archive-publication.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
 
 const tempDirs: string[] = [];
@@ -875,7 +875,7 @@ describe("historical transcript directive migration", () => {
     const stateDir = makeTempDir(tempDirs, "transcript-directive-lease-renewal-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const opened = openLegacyAgentDatabase(stateDir);
-    const batchSize = TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE;
+    const batchSize = TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE;
     const sessionIdAt = (index: number) =>
       `session-${String(index).padStart(String(batchSize).length, "0")}`;
     for (let index = 0; index <= batchSize; index += 1) {

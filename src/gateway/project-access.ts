@@ -160,16 +160,6 @@ export async function canRequesterUseProject(
   return await isPublicGitHubOrigin(cfg, project.originUrl, options);
 }
 
-/** Repository URLs follow the same public-only rule as registered projects. */
-export async function canRequesterUseRepositoryUrl(
-  cfg: OpenClawConfig,
-  url: string,
-  requester: ProjectRequester,
-  options: ProjectAccessOptions = {},
-): Promise<boolean> {
-  return hasFullProjectAccess(requester) || (await isPublicGitHubOrigin(cfg, url, options));
-}
-
 /** Hidden projects are indistinguishable from unknown ids. */
 export async function resolveRequesterProject(
   cfg: OpenClawConfig,

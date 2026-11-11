@@ -198,7 +198,7 @@ vi.mock("commander", () => {
   return { Command: MockCommand, CommanderError: MockCommanderError };
 });
 
-// Dispatch tests isolate native service discovery; its real boundary has dedicated coverage.
+// mock-isolation: Dispatch tests must not inspect native host services; service discovery has dedicated coverage.
 vi.mock("./run-main-service-installation.js", () => ({
   inspectCliGatewayServiceInstallation: async () => undefined,
 }));

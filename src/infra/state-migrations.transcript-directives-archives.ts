@@ -50,7 +50,6 @@ import {
 } from "./state-migrations.transcript-directives-transform.js";
 import { Utf8InputError } from "./utf8-input.js";
 
-export const TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE = TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE;
 export const MEDIA_ARCHIVE_VERIFICATION_KEY = "media-transcript-archive-verification-v1";
 export { recoverPendingTranscriptArchivePublication } from "./state-migrations.transcript-archive-publication.js";
 
@@ -156,7 +155,7 @@ async function listArchiveBatch(
     ])
     .orderBy("session_id", "asc")
     .orderBy("generation", "asc")
-    .limit(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE);
+    .limit(TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE);
   if (cursor) {
     // Empty key parts still seek the composite key; only the first page has no cursor.
     // Seek the composite key; OR branches rescan the visited prefix on every page.
