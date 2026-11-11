@@ -27,6 +27,7 @@ import {
   loadPreparedModelRuntimeAuth,
   bindPreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
+import { isPreparedModelRuntimeGatewayLifecycleActive } from "./prepared-model-runtime-gateway-lifecycle.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
@@ -168,6 +169,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
   full: PreparedModelRuntimeInput;
   activationExact: PreparedModelRuntimeInput;
   activationFull: PreparedModelRuntimeInput;
+  inventory: PreparedModelRuntimeInput;
 } {
   const config = params.config ?? getRuntimeConfig();
   const explicitOrDefaultAgentId =
@@ -200,9 +202,17 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
     activationWorkspaceDir && activationWorkspaceDir !== full.workspaceDir
       ? { ...full, workspaceDir: activationWorkspaceDir }
       : full;
+  // Gateway inventory belongs to the configured agent; a session cwd only controls execution.
+  // Without a workspace, lookup resolves that configured owner, as turn admission does.
+  // Standalone hosts keep workspace-scoped discovery.
+  const inventory =
+    full.workspaceDir === undefined || !isPreparedModelRuntimeGatewayLifecycleActive()
+      ? full
+      : { ...full, workspaceDir: undefined };
   return {
     exact,
     full,
+    inventory,
     activationFull,
     activationExact:
       activationFull === full
@@ -233,8 +243,11 @@ export function getPreparedModelCatalogOwnerSnapshot(
   if (!getPreparedSharedAuthStoreOwnership(params.env ?? process.env)) {
     return undefined;
   }
-  const { activationExact, activationFull, exact, full } = resolveInputs(params);
-  return findPreparedCatalogOwner([full, activationFull, exact, activationExact], "exact");
+  const { activationExact, activationFull, exact, full, inventory } = resolveInputs(params);
+  return findPreparedCatalogOwner(
+    [full, activationFull, exact, activationExact, inventory],
+    "exact",
+  );
 }
 
 /**
@@ -247,8 +260,8 @@ export function getPublishedPreparedModelCatalogOwnerSnapshot(
   if (!getPreparedSharedAuthStoreOwnership(params.env ?? process.env)) {
     return undefined;
   }
-  const { activationFull, full } = resolveInputs(params);
-  return findPreparedCatalogOwner([full, activationFull], "published");
+  const { activationFull, full, inventory } = resolveInputs(params);
+  return findPreparedCatalogOwner([full, activationFull, inventory], "published");
 }
 
 /** Requests expiry renewal for an inventory consumer without waiting for discovery. */
@@ -274,8 +287,8 @@ async function resolveReadOnlyPublishedModelCatalogOwner(
   preparePublishedOwner = preparePublishedCatalogOwner,
   selection: "owner" | "completed-inventory" = "owner",
 ): Promise<PreparedModelCatalogOwner | undefined> {
-  const { activationFull, full } = resolveInputs(params);
-  for (const candidate of new Set([full, activationFull])) {
+  const { activationFull, full, inventory } = resolveInputs(params);
+  for (const candidate of new Set([full, activationFull, inventory])) {
     try {
       // Full lifecycle owners include provider augmentation omitted by read-only fallback builds.
       const prepared = await preparePublishedOwner(candidate);
