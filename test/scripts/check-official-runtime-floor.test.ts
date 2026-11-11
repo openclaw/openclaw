@@ -35,11 +35,10 @@ describe("planRuntimeFloorChecks", () => {
     ["2026.10.6", "2026.10.7", true, true, "skip-above-release"],
   ] as const)("host %s, floor %s, released %s, own version admitted %s: %s", (...row) => {
     const [hostVersion, floor, released, admits, action] = row;
-    const candidates = [{ ...codex, minimumCompatibleVersion: floor }];
     expect(
       plan({
         hostVersion,
-        candidates,
+        candidates: [{ ...codex, minimumCompatibleVersion: floor }],
         isReleased: () => released,
         admitsMatchingRuntime: () => admits,
       }),
@@ -74,9 +73,7 @@ describe("partitionTypecheckErrors", () => {
       other: [expect.stringContaining("Duplicate identifier")],
     });
   });
-});
 
-describe("partitionTypecheckErrors on a failed compiler run", () => {
   it("treats a failed run without diagnostics as a broken check, not a pass", () => {
     expect(partitionTypecheckErrors("tsgo: binary not found\n", "x/extensions/codex", 1)).toEqual({
       runtime: [],
