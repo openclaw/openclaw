@@ -86,9 +86,7 @@ function truncateToolResultToChars(
       ]);
       const replacement = { ...msg, content: retainedContent } as AgentMessage;
       const bounded = truncateToolResultMessage(
-        details?.contentPolicy === "whole" && replacement.role !== "toolResult"
-          ? { ...replacement, role: "toolResult" }
-          : replacement,
+        replacement,
         Math.max(0, maxChars - reservedChars),
         { minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE },
       );

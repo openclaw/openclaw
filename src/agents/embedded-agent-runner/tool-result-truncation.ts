@@ -426,10 +426,10 @@ export function truncateToolResultMessage(
   options: ToolResultTruncationOptions = {},
 ): AgentMessage {
   const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
-  const content = (msg as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
+  if (!("content" in msg) || !Array.isArray(msg.content)) {
     return msg;
   }
+  const content = msg.content;
 
   const blockTextChars = content.map((block) =>
     isToolResultTextBlock(block)
@@ -444,13 +444,13 @@ export function truncateToolResultMessage(
     details?.contentPolicy === "whole" || deferredDetails?.contentPolicy === "whole";
   // Promote deferred delivery policy before persistence compacts nested metadata.
   const preparedMessage =
-    msg.role === "toolResult" && requiresWholeContent && details?.contentPolicy !== "whole"
+    requiresWholeContent && details?.contentPolicy !== "whole"
       ? { ...msg, details: { ...details, contentPolicy: "whole" } }
       : msg;
   if (totalTextChars <= maxChars) {
     return preparedMessage;
   }
-  if (requiresWholeContent && preparedMessage.role === "toolResult") {
+  if (requiresWholeContent) {
     return {
       ...preparedMessage,
       content: [
