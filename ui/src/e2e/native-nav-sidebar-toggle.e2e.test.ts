@@ -391,7 +391,7 @@ suite.define(() => {
       .toEqual({ focusVisible: true, outlineStyle: "solid", outlineWidth: "2px" });
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
-    const search = page.locator(".sidebar-brand__search");
+    const search = toolbar.locator(".macos-titlebar-controls__search");
     const newThread = page.locator(".sidebar-rail__create a, .sidebar-rail__create button");
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(true);
@@ -399,7 +399,7 @@ suite.define(() => {
     await visible(newThread);
     await page.locator(".sidebar-issues-button__count").waitFor();
 
-    await page.locator(".sidebar-session-toolbar__collapse").click();
+    await page.locator(".macos-titlebar-controls__sidebar").click();
     await expectShellClass(page, "shell--nav-collapsed");
     await visible(newThread);
     await page.locator(".sidebar-rail__bottom .sidebar-issues-button").waitFor();
@@ -436,7 +436,7 @@ suite.define(() => {
         return box.top + box.height / 2;
       }),
     );
-    expect(centerlines).toHaveLength(2);
+    expect(centerlines).toHaveLength(4);
     for (const centerline of centerlines.slice(1)) {
       expect(centerline).toBeCloseTo(centerlines[0]!, 1);
     }
@@ -451,7 +451,8 @@ suite.define(() => {
     );
     expect(footerBoxes).toHaveLength(3);
     for (const [index, box] of footerBoxes.entries()) {
-      expect(box.x + box.width / 2).toBeCloseTo(railBox!.x + (railBox!.width - 1) / 2, 1);
+      expect(box.x).toBeGreaterThanOrEqual(railBox!.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(railBox!.x + railBox!.width);
       expect(box.y).toBeGreaterThanOrEqual(toolbarBox!.y + toolbarBox!.height + 4);
       expect(box.y + box.height).toBeLessThanOrEqual(railBox!.y + railBox!.height);
       if (index > 0) {
@@ -471,7 +472,7 @@ suite.define(() => {
         "background-color": "rgba(0, 0, 0, 0)",
         "box-shadow": "none",
       },
-      3,
+      5,
     );
     const inbox = attention;
     await inbox.hover();
@@ -514,8 +515,22 @@ suite.define(() => {
 
     await newThread.click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-    await page.locator(".shell-chrome-controls__nav-toggle").click();
+    await page.locator(".macos-titlebar-controls__sidebar").click();
     await expectShellClass(page, "shell--nav-collapsed", false);
+
+    for (const view of ["sessions", "pages", "online"]) {
+      await rail.locator(".sidebar-identity-card").click();
+      await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+      await expectShellClass(page, "shell--settings");
+      const toggle = toolbar.locator(".macos-titlebar-controls__sidebar");
+      await expect.poll(() => toggle.isDisabled()).toBe(true);
+      const target = rail.locator(`[data-navigation-view="${view}"]`);
+      await attr(target, "aria-pressed", "false");
+      await target.click();
+      await expectShellClass(page, "shell--settings", false);
+      await expectShellClass(page, "shell--nav-collapsed", false);
+      await attr(target, "aria-pressed", "true");
+    }
   });
 
   it.each([
@@ -541,7 +556,7 @@ suite.define(() => {
       webChrome: true,
       width: 1280,
     });
-    await page.locator(".sidebar-session-toolbar__collapse").click();
+    await page.locator(".macos-titlebar-controls__sidebar").click();
     await openChatSidePanelType(page, "Side chat");
     await focusChatSidePanel(page);
 

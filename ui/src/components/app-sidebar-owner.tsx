@@ -4,9 +4,7 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { finishBootFrame } from "../app/boot-composer.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
-import { isNativeMacWebChromeHost } from "../app/native-web-chrome.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
-import { t } from "../lib/reactive/i18n.ts";
 import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
@@ -57,7 +55,6 @@ import { SidebarViewBoundary } from "./sidebar-view-boundary.tsx";
 import { GatewaySidebarSkeleton } from "./solid/gateway-connection-view.tsx";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
 import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
 
@@ -578,24 +575,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                   }
                 >
                   <SidebarPagesHeader host={this} />
-                </Show>
-                <Show when={isNativeMacWebChromeHost()}>
-                  <div class="macos-sidebar-new-session">
-                    <NewSessionLink
-                      basePath={this.basePath}
-                      agentId={this.expandedAgentId()}
-                      class="macos-sidebar-new-session__link"
-                      icon="sessionNew"
-                      label={t("agentChip.newConversation")}
-                      showLabel
-                      showShortcut
-                      disabledReason={(() => {
-                        const access = this.readNewSessionAccess();
-                        return access.allowed ? undefined : access.reason;
-                      })()}
-                      onOpen={(agentId, target) => this.requestOpenNewSession(agentId, target)}
-                    />
-                  </div>
                 </Show>
                 <div
                   ref={scrollRef}

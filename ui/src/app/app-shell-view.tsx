@@ -34,7 +34,11 @@ import { ShellDocks } from "./app-shell-docks.tsx";
 import { ShellLazyOverlays, type ShellElementAttributes } from "./app-shell-lazy-view.tsx";
 import { readShellView, type ShellView, type ShellViewHost } from "./app-shell-view-state.ts";
 import { isNativeMacWebChromeHost } from "./native-web-chrome.ts";
-import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
+import {
+  beginNativeWindowDrag,
+  beginNativeWindowDragFromTopInset,
+  beginNativeWindowDragFromTitlebar,
+} from "./native-window-drag.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
 import { RouterOutlet } from "./router-outlet.tsx";
@@ -152,6 +156,7 @@ export function ApplicationShell(props: {
       />
       <div
         ref={(element) => (props.host.shellElement = element)}
+        onMouseDown={beginNativeWindowDragFromTitlebar}
         class={[
           "shell",
           {
@@ -192,18 +197,7 @@ export function ApplicationShell(props: {
               macNavigation={isNativeMacWebChromeHost() && !view().mobileNavLayout}
               navigationExpanded={!view().navCollapsed}
               onToggleSidebar={() => props.host.viewCallbacks.toggleSidebar()}
-              newSessionAction={() => (
-                <NewSessionLink
-                  basePath={view().context.basePath}
-                  agentId={view().selectedAgentId}
-                  class="topbar-icon-btn macos-titlebar-controls__button"
-                  icon="sessionNew"
-                  label={t("chat.runControls.newSession")}
-                  showShortcut
-                  disabledReason={view().newSessionDisabledReason}
-                  onOpen={props.host.viewCallbacks.requestOpenNewSession}
-                />
-              )}
+              onOpenPalette={props.host.openPalette}
               canGoBack={props.host.nativeHistoryState().canGoBack}
               canGoForward={props.host.nativeHistoryState().canGoForward}
             />
@@ -338,20 +332,18 @@ export function ApplicationShell(props: {
             inert={view().navigationSurfaceHidden}
           >
             <Show
-              when={view().settingsTakeover}
-              fallback={
-                <Show when={view().workspaceChromeVisible}>
-                  <Show
-                    when={(props.host.shellRevision(), !props.host.navigationSidebar.isConnected)}
-                  >
-                    <NavigationFallback />
-                  </Show>
-                  <ShellComponentBoundary label={t("palette.categories.navigation")}>
-                    <NavigationSidebar host={props.host} />
-                  </ShellComponentBoundary>
-                </Show>
+              when={
+                view().railAvailable || (view().workspaceChromeVisible && !view().settingsTakeover)
               }
             >
+              <Show when={(props.host.shellRevision(), !props.host.navigationSidebar.isConnected)}>
+                <NavigationFallback />
+              </Show>
+              <ShellComponentBoundary label={t("palette.categories.navigation")}>
+                <NavigationSidebar host={props.host} />
+              </ShellComponentBoundary>
+            </Show>
+            <Show when={view().settingsTakeover}>
               <LazySettingsSidebar
                 host={props.host}
                 sidebarProps={{ ...view().settingsSidebarProps, footerStatus: footerStatus() }}

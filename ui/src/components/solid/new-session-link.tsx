@@ -22,7 +22,6 @@ export function renderNewSessionLink(params: {
   disabledReason?: string;
   showShortcut?: boolean;
   showTooltip?: boolean;
-  showLabel?: boolean;
   icon?: IconName;
   onOpen?: (agentId: string, target?: NewSessionTarget) => void;
 }): JSX.Element {
@@ -52,9 +51,6 @@ export function renderNewSessionLink(params: {
       }}
     >
       <Icon name={params.icon ?? "plus"} />
-      <Show when={params.showLabel}>
-        <span>{params.label}</span>
-      </Show>
     </a>
   );
   return params.showTooltip === false ? (

@@ -315,9 +315,10 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 /* The standard macOS window keeps navigation in its continuous titlebar.
    The existing sidebar and route outlet retain their state beneath it. */
 html.openclaw-native-macos.openclaw-native-web-chrome
-  .shell:not(.shell--mobile-nav, .shell--embed, .shell--settings) {
+  .shell:not(.shell--mobile-nav, .shell--embed, .shell--onboarding) {
+  --shell-native-titlebar-controls-inset: var(--openclaw-native-controls-inset, 80px);
   --shell-native-titlebar-controls-left: var(--shell-native-titlebar-controls-inset);
-  --shell-native-titlebar-controls-width: 92px;
+  --shell-native-titlebar-controls-width: 124px;
   --shell-titlebar-inset: max(
     12px,
     calc(
@@ -326,8 +327,30 @@ html.openclaw-native-macos.openclaw-native-web-chrome
     )
   );
 
-  &.shell--nav-collapsed {
-    --shell-native-titlebar-controls-width: 124px;
+  position: relative;
+  border-inline-end: 1px solid var(--sidebar-rail-surface);
+
+  /* One contour follows the workspace across routes and sidebar collapse.
+     Corner cutouts clear pane backgrounds without clipping their menus. */
+  &::after {
+    position: absolute;
+    z-index: 30;
+    inset: var(--openclaw-native-titlebar-height, 52px) 0 0 var(--shell-nav-rail-width, 0px);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 var(--radius-lg);
+    box-shadow:
+      0 0 0 var(--radius-lg) var(--sidebar-rail-surface),
+      inset 0 0 0 0.5px color-mix(in srgb, var(--border) 50%, var(--bg-content));
+    clip-path: inset(0);
+    content: "";
+    pointer-events: none;
+  }
+
+  .macos-titlebar-controls__sidebar svg {
+    transform: scaleX(-1);
+  }
+
+  .sidebar-rail .sidebar-brand__search {
+    display: none;
   }
 
   .shell-nav {
@@ -338,11 +361,16 @@ html.openclaw-native-macos.openclaw-native-web-chrome
         transparent var(--openclaw-native-titlebar-height, 52px),
         var(--resize-handle-rest-color) 0
       )
-      1;
+      0 1;
   }
 
   .sidebar-resizer {
     margin-top: var(--openclaw-native-titlebar-height, 52px);
+  }
+
+  .settings-sidebar__header {
+    /* Override the titlebar inset injected by installed native hosts. */
+    padding-top: 8px !important;
   }
 
   .chat,
@@ -357,13 +385,6 @@ html.openclaw-native-macos.openclaw-native-web-chrome
 
   .shell-chrome-controls {
     display: none;
-  }
-
-  .content:not(.content--chat) {
-    background-image: linear-gradient(
-      var(--sidebar-rail-surface) var(--openclaw-native-titlebar-height, 52px),
-      transparent var(--openclaw-native-titlebar-height, 52px)
-    );
   }
 
   /* Explicit personal backgrounds keep their existing pane renderer. Only the
@@ -382,21 +403,46 @@ html.openclaw-native-macos.openclaw-native-web-chrome
     }
   }
 
-  .macos-titlebar-controls::after {
-    position: fixed;
-    top: calc((var(--openclaw-native-titlebar-height, 52px) - 18px) / 2);
-    left: max(
-      var(--shell-nav-width),
-      calc(
-        var(--shell-native-titlebar-controls-inset) + var(--shell-native-titlebar-controls-width) +
-          8px
-      )
-    );
-    width: 1px;
-    height: 18px;
-    background: var(--border);
+  /* New session has no chat header, but keeps the same native titlebar surface. */
+  .content--new-session .new-session-page::before {
+    flex: 0 0 var(--openclaw-native-titlebar-height, 52px);
+    margin-inline: calc(0px - var(--content-inline-padding));
+    background: var(--sidebar-rail-surface);
     content: "";
     pointer-events: none;
+  }
+
+  .content--new-session .new-session-page__scroll {
+    padding-top: max(
+      0px,
+      calc(clamp(44px, 5vh, 52px) - var(--openclaw-native-titlebar-height, 52px))
+    );
+  }
+
+  .new-session-page__incognito-rail {
+    top: calc((var(--openclaw-native-titlebar-height, 52px) - var(--rail-header-action-size)) / 2);
+  }
+  /* Keep the native drag band outside page scrollports, including Settings. */
+  background-image:
+    linear-gradient(
+      var(--sidebar-rail-surface) var(--openclaw-native-titlebar-height, 52px),
+      transparent var(--openclaw-native-titlebar-height, 52px)
+    ),
+    var(--app-background-image);
+
+  .content--plugin-embed .plugin-tab-embed {
+    margin-top: var(--openclaw-native-titlebar-height, 52px);
+  }
+
+  .content:not(.content--chat, .content--custodian, .content--workboard, .content--plugin-embed) {
+    margin-top: var(--openclaw-native-titlebar-height, 52px);
+    padding-top: max(
+      0px,
+      calc(
+        var(--settings-content-block-start-padding, var(--openclaw-native-titlebar-height, 52px)) -
+          var(--openclaw-native-titlebar-height, 52px)
+      )
+    );
   }
 }
 
@@ -442,9 +488,21 @@ div.shell.shell--onboarding {
   padding-top: 0;
 }
 
-/* Settings routes replace the app chrome with a dedicated sidebar
-   (settings-sidebar.ts). Below the drawer breakpoint the regular mobile
-   shell stays in charge and the settings sidebar rides inside the drawer. */
+/* Settings replaces the adjacent sidebar; the desktop rail stays available.
+   On phones the settings sidebar still occupies the navigation drawer. */
+.shell--settings.shell--navigation-rail {
+  .shell-nav {
+    flex-direction: row;
+  }
+
+  .sidebar {
+    flex: 0 0 var(--shell-nav-rail-width);
+  }
+
+  .sidebar-shell {
+    display: none;
+  }
+}
 
 .shell--settings:not(.shell--mobile-nav) {
   --settings-content-block-start-padding: 44px;
@@ -481,6 +539,8 @@ div.shell.shell--onboarding {
 
 .settings-sidebar,
 .sidebar {
+  /* Both navigation sidebars and their sticky headers share one surface. */
+  --sidebar-bg: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -490,11 +550,7 @@ div.shell.shell--onboarding {
 }
 
 .settings-sidebar {
-  background: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
-}
-
-:root[data-theme-mode="light"] .settings-sidebar {
-  background: color-mix(in srgb, var(--panel) 98%, white 2%);
+  background: var(--sidebar-bg);
 }
 
 .settings-sidebar__header {
@@ -867,9 +923,6 @@ div.shell.shell--onboarding {
 }
 
 .sidebar {
-  /* Sticky headers inside the sidebar reuse --sidebar-bg so scrolled rows
-     never shine through with a mismatched tone. */
-  --sidebar-bg: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
   /* One rhythm for every group boundary in the sidebar (Pages and each
      session section) so the column reads as separate shelves, not one list. */
   --sidebar-group-gap: var(--space-4);
@@ -877,7 +930,8 @@ div.shell.shell--onboarding {
   background: var(--sidebar-bg);
 }
 
-:root[data-theme-mode="light"] .sidebar {
+:root[data-theme-mode="light"] .sidebar,
+:root[data-theme-mode="light"] .settings-sidebar {
   --sidebar-bg: color-mix(in srgb, var(--panel) 98%, white 2%);
 }
 
