@@ -31,7 +31,10 @@ export async function prewarmWorkspaceTemplate(
           }
           await retainRepository({ ...guard, repository });
           let preparedRecord: WorktreeTemplateRecord | undefined;
-          if (recipe.kind === "managed") {
+          if (template.sourceCommit === commit) {
+            // Foreground preparation can finish first; its obsolete generations still need collection.
+            preparedRecord = template;
+          } else if (recipe.kind === "managed") {
             const bytes = await estimateWorktreeGitBytes(repository.repoRoot, commit, {
               signal: guard.signal,
               assertCurrent: guard.commitGuard,
@@ -68,7 +71,7 @@ export async function prewarmWorkspaceTemplate(
               source: repository.repoRoot,
               repoRoot: repository.repoRoot,
               baseCommit: commit,
-              temporaryRoot: recipe.temporaryRoot,
+              temporaryRoot: template.worktreeRoot,
               templateRoot: template.worktreeRoot,
               env,
               sandbox: recipe.sandbox,

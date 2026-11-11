@@ -375,7 +375,6 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
       kind: "sandbox",
       template,
       sandbox: params.sandbox,
-      temporaryRoot: params.temporaryRoot,
       buildCacheInputs,
     },
   });

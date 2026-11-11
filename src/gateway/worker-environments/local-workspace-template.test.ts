@@ -12,7 +12,9 @@ import { withWorktreeAllocationLease } from "../../agents/worktrees/allocation.j
 import { createCopyWorktreeBackend } from "../../agents/worktrees/filesystem-backend.test-support.js";
 import * as worktreeGit from "../../agents/worktrees/git.js";
 import { withWorktreePreparationTiming } from "../../agents/worktrees/preparation-timing.js";
+import { onWorktreeTemplateActivity } from "../../agents/worktrees/run-end-lifecycle.js";
 import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
+import type { WorktreeTemplateRecipe } from "../../agents/worktrees/template-prewarm.types.js";
 import { listTemplatesAsync } from "../../agents/worktrees/template-registry-async.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { RuntimeMsgContext, TemplateContext } from "../../auto-reply/templating.js";
@@ -26,6 +28,7 @@ import { initializeLocalWorkspaceProjection } from "./local-workspace-checkout.j
 import { prewarmLocalWorkspaceTemplates } from "./local-workspace-prewarm.js";
 import { cloneLocalWorkspaceTemplate } from "./local-workspace-template.js";
 import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
+import { prewarmWorkspaceTemplate } from "./workspace-template-prewarm.js";
 
 const mocks = vi.hoisted(() => ({
   backend: vi.fn(),
@@ -325,6 +328,62 @@ it("retains dependencies without credentials or install debris", async ({ signal
     expect(await read(checkout, `packages/tool/${dependencyFile}`)).toBe("workspace dependency\n");
     expect(await read(checkout, ".git/config")).not.toContain("credential");
     await expectMissing(checkout, ...installerSecrets, "build", "untracked-output.txt");
+  });
+});
+
+it("prewarms after the foreground projection removes its temporary checkout", async ({
+  signal,
+}) => {
+  await withEnvAsync({ OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR }, async () => {
+    const root = directories.make("openclaw-deferred-template-");
+    const projectionPath = path.join(root, "templates", "projection", "workspace");
+    const recipes: WorktreeTemplateRecipe[] = [];
+    const stop = onWorktreeTemplateActivity(env, (event) => {
+      if (event.type === "used") {
+        recipes.push(event.recipe);
+      }
+    });
+    try {
+      await withWorktreeAllocationLease({ env, signal }, (allocation) =>
+        initializeLocalWorkspaceProjection({
+          owner: {
+            agentId: "main",
+            sessionKey: "agent:main:deferred-template",
+            sessionId: "deferred-template",
+            lifecycleRevision: null,
+            assertCurrent: () => {},
+            env,
+            worktree: makeWorktreeRecord(source, "deferred-template", { branch: "guest" }),
+          },
+          projectionPath,
+          baseCommit,
+          signal,
+          assertCurrent: () => {},
+          buildCacheInputs: async () => [],
+          dependencies: { sandbox, allocation },
+        }),
+      );
+      expect(await fs.readdir(path.dirname(projectionPath))).toEqual(["workspace"]);
+      const recipe = recipes[0];
+      assert(recipe, "Foreground template recipe was not published");
+      await prewarmWorkspaceTemplate(recipe, sourceCommit, {
+        signal,
+        commitGuard: () => signal.throwIfAborted(),
+      });
+      const prepared = (await listTemplatesAsync(env)).find(
+        (record) =>
+          record.sourceCommit === sourceCommit &&
+          record.worktreeRoot === recipe.template.worktreeRoot,
+      );
+      assert(prepared, "Deferred generation was not prepared");
+      expect(prepared.status).toBe("ready");
+      expect(await read(prepared.path, "node_modules/source-derived.txt")).toBe(
+        (await git(source, "show", `${sourceCommit}:source.ts`)) + "\n",
+      );
+      expect(mocks.install).toHaveBeenCalledTimes(2);
+    } finally {
+      stop();
+    }
   });
 });
 

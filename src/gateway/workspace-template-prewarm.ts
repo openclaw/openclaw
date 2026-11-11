@@ -184,7 +184,6 @@ export function startWorkspaceTemplatePrewarm(params: {
       active.set(key, {
         ...previous,
         recipe: event.recipe,
-        head: previous?.head === event.recipe.template.sourceCommit ? undefined : previous?.head,
         config: params.getConfig(),
         publication: getRuntimeConfigSnapshotMetadata(),
       });
@@ -194,18 +193,9 @@ export function startWorkspaceTemplatePrewarm(params: {
           continue;
         }
         item.observed = event.commit;
-        if (item.recipe.template.sourceCommit === event.commit) {
-          item.head = undefined;
-          if (running?.key === key && running.commit !== event.commit && !servingForeground()) {
-            running.controller.abort(
-              new Error("Template prewarm superseded by a prepared main head"),
-            );
-          }
-          continue;
-        }
         item.head = event.commit;
         item.at = scheduler.now() + DEBOUNCE_MS;
-        if (running?.key === key && !servingForeground()) {
+        if (running?.key === key && running.commit !== event.commit && !servingForeground()) {
           running.controller.abort(new Error("Template prewarm superseded by a newer main head"));
         }
       }

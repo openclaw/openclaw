@@ -110,12 +110,18 @@ it("coalesces advancing main to the newest head for used templates only", async 
   f.use();
   f.advance("e");
   await f.clock.advanceBy(30_000);
-  expect(mocks.prepare).toHaveBeenCalledTimes(1);
+  expect(mocks.prepare).toHaveBeenCalledTimes(2);
+  expect(mocks.prepare).toHaveBeenLastCalledWith(f.recipe, "e", expect.anything());
   f.advance("f");
   f.recipe.template.sourceCommit = "f";
   f.use();
   await f.clock.advanceBy(30_000);
-  expect(mocks.prepare).toHaveBeenCalledTimes(1);
+  expect(mocks.prepare).toHaveBeenCalledTimes(3);
+  expect(mocks.prepare).toHaveBeenLastCalledWith(f.recipe, "f", expect.anything());
+  f.advance("f");
+  f.use();
+  await f.clock.advanceBy(30_000);
+  expect(mocks.prepare).toHaveBeenCalledTimes(3);
 });
 
 it.each([
