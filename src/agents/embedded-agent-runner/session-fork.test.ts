@@ -131,10 +131,7 @@ function guardedTransport(beforeDns?: () => void, api: WireApi = "openai-respons
   );
   return {
     physicalFetch,
-    request: (index = -1) => {
-      const [url, init] = physicalFetch.mock.calls.at(index)!;
-      return new Request(url, init);
-    },
+    request: () => new Request(...physicalFetch.mock.calls.at(-1)!),
     streamFn:
       api === "anthropic-messages"
         ? createAnthropicMessagesTransportStreamFn()
@@ -168,10 +165,12 @@ it.each([
     );
     Object.freeze(prepared.messages);
     await expect(fork(streamFn, requestModel, prepared)).resolves.toBe("Answer");
+    // Only the parent's cached input keeps a cache checkpoint, never the fork's own suffix.
+    const parent = api === "anthropic-messages" ? '"Parent question","cache_control"' : "Parent";
     expectText(
       await request().text(),
-      ["pending_call", "still running", "result is not available yet"],
-      ["aborted", '"is_error":true'],
+      ["pending_call", "still running", "result is not available yet", parent],
+      ["aborted", '"is_error":true', 'yet.","cache_control"', '"Review only","cache_control"'],
     );
     expect(prepared.messages).toHaveLength(2);
     await expect(
