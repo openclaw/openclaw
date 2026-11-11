@@ -280,10 +280,9 @@ export async function prepareModelsListResult({
       );
     }
     await withCurrentReadAuthority(authority, () => {});
-    const catalog = dedupeModelCatalogEntries([
-      ...preparedCatalog.catalog,
-      ...projector.snapshot.entries,
-    ]).filter((entry) => entry.inference?.chat !== false);
+    const { routeVariants, providerOutcomes, entries: snapshotEntries } = projector.snapshot;
+    const allRows = dedupeModelCatalogEntries([...preparedCatalog.catalog, ...snapshotEntries]);
+    const catalog = allRows.filter((entry) => entry.inference?.chat !== false);
     const { evaluateNative } = projector;
     const { normalizeProvider, providerFilter, matchesProvider } = createModelsListProviderFilter({
       config: cfg,
@@ -292,11 +291,11 @@ export async function prepareModelsListResult({
       provider: params.params.provider,
     });
     const decisionModels = availableDecisionModels.filter(matchesProvider);
-    const { routeVariants, providerOutcomes } = projector.snapshot;
     const publicProviderOutcomes = projectProviderCatalogOutcomes(providerOutcomes);
     const visibilityPolicy = createModelVisibilityPolicy({
       cfg,
-      catalog,
+      // The policy needs typed-only rows to tell them from refs no catalog knows.
+      catalog: allRows,
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel,
       agentId,
