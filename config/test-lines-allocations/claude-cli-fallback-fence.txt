@@ -1,0 +1,3 @@
+52
+# Source 85b3c4a4cf8018018b65f82bcf6fdc30b5351e91; src/config/sessions/session-transcript-hydration.ts resolve physical databasePath and use it consistently in hydration/fence identity instead of logical sessions.json target.storePath.
+# Exact net LF growth of independently justified retained regressions against frozen LOCAL11.8 baseline; no removed assertions or scalar change.
