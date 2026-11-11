@@ -809,7 +809,7 @@ async function prepareCliRunContextWithinReadFence(
       })
     : { params, tools: [], grantAudience: undefined };
   params = await retainPolicyAllowedManagedNativeTools(
-    mcpProjection.params,
+    mcpProjection,
     managedNativeTools,
     backendResolved,
     resolveNativeMcpCapabilityProfile,
