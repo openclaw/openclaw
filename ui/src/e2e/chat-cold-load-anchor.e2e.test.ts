@@ -261,7 +261,10 @@ suite.define(() => {
         await page
           .getByText("Synthetic final reply: the report is ready.", { exact: true })
           .waitFor();
-        await page.getByText("Worked for 3m", { exact: true }).waitFor();
+        await page
+          .locator(".chat-activity-group__summary")
+          .getByText("Worked for 3m", { exact: true })
+          .waitFor();
         await page.locator(".chat-reply-attribution__name").filter({ hasText: "Avery" }).waitFor();
         const progress = await openChatTaskProgress(page);
         await progress
@@ -449,7 +452,7 @@ suite.define(() => {
         });
         const reader = await captureTopVisibleVirtualRow(scroller);
         const previousThread = await scroller.evaluateHandle((element) => element);
-        for (let index = 0; index < 3; index++) {
+        for (const index of [199, 198, 197]) {
           await page
             .locator(
               `.sidebar-recent-session[data-session-key="agent:main:recent-${index}"] a.sidebar-recent-session__link`,
