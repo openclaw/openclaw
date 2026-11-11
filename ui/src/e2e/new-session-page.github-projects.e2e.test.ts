@@ -33,7 +33,6 @@ const localRepository = {
 async function selectRemoteProject(page: Page, query: string, name: RegExp) {
   await page.locator("#new-session-project-trigger").click();
   const picker = page.locator(".oc-popover.new-session-page__project-popover");
-  await picker.locator(".header-search__toggle").click();
   await picker.getByRole("searchbox", { name: "Search projects or paste a Git URL" }).fill(query);
   await picker.getByRole("button", { name }).click();
 }
@@ -53,6 +52,55 @@ const remoteSearchResult = {
 };
 
 suite.define(() => {
+  it("opens project search focused even for an empty catalog", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          workspace: WORKSPACE,
+          workspaceGit: false,
+          featureMethods: projectMethods,
+          methodResponses: { "projects.list": { projects: [] } },
+        });
+        await page.goto(suite.server.baseUrl + "new");
+        const trigger = page.locator("#new-session-project-trigger");
+        const picker = page.locator(".oc-popover.new-session-page__project-popover");
+        const search = picker.getByRole("searchbox", {
+          name: "Search projects or paste a Git URL",
+        });
+        await trigger.click();
+        await pollVisible(picker).toBe(true);
+        await expect.poll(() => search.isVisible()).toBe(true);
+        await expect
+          .poll(() => search.evaluate((input) => input === document.activeElement))
+          .toBe(true);
+        await trigger.click();
+        await pollVisible(picker).toBe(false);
+        await trigger.click();
+        await expect
+          .poll(() => search.evaluate((input) => input === document.activeElement))
+          .toBe(true);
+        await picker.locator(".header-search__toggle").click();
+        await expect.poll(() => search.count()).toBe(0);
+        await trigger.click();
+        await pollVisible(picker).toBe(false);
+        await trigger.click();
+        await expect
+          .poll(() => search.evaluate((input) => input === document.activeElement))
+          .toBe(true);
+        await page.keyboard.type("https://github.com/acme/project.git");
+        await expect.poll(() => search.inputValue()).toBe("https://github.com/acme/project.git");
+        await trigger.click();
+        await pollVisible(picker).toBe(false);
+        await trigger.click();
+        await pollVisible(picker).toBe(true);
+        await expect
+          .poll(() => search.evaluate((input) => input === document.activeElement))
+          .toBe(true);
+      },
+    );
+  });
+
   it.each(["saved", "explicit", "branch"] as const)(
     "preserves %s choices when discovering a default repository",
     async (source) => {
@@ -167,7 +215,6 @@ suite.define(() => {
       const project = page.locator("#new-session-project-trigger");
       await project.click();
       const picker = page.locator(".oc-popover.new-session-page__project-popover");
-      await picker.locator(".header-search__toggle").click();
       await picker
         .getByRole("searchbox", { name: "Search projects or paste a Git URL" })
         .fill(cloneUrl);
@@ -342,7 +389,6 @@ suite.define(() => {
       const trigger = page.locator("#new-session-project-trigger");
       const place = page.locator(".oc-popover.new-session-page__project-popover");
       await trigger.click();
-      await place.locator(".header-search__toggle").click();
       const search = place.getByRole("searchbox", {
         name: "Search projects or paste a Git URL",
       });

@@ -203,12 +203,7 @@ export function HeaderSearch(props: HeaderSearchProps) {
       ownerDocument,
       "overlay-after-hide",
       (event) => {
-        if (
-          event.target instanceof HTMLElement &&
-          event.target.contains(root) &&
-          props.open &&
-          !props.query
-        ) {
+        if (event.target instanceof HTMLElement && event.target.contains(root) && !props.query) {
           props.onOpenChange(false);
         }
       },
@@ -232,7 +227,7 @@ export function HeaderSearch(props: HeaderSearchProps) {
           placeholder={props.placeholder}
           query={props.query}
           disabled={props.disabled}
-          focus={focusField}
+          focus={focusField || Boolean(props.inputProps?.autofocus)}
           class={props.inputClass}
           inputProps={props.inputProps}
           controlRef={props.controlRef}

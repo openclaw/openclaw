@@ -143,6 +143,28 @@ suite.define(() => {
     }
     await page.setViewportSize({ width: 320, height: 700 });
     for (const selector of await selectors.all()) {
+      const closePicker = async () => {
+        const project = (await selector.getAttribute("id")) === "new-session-project-trigger";
+        const search = page.getByRole("searchbox", { name: "Search projects or paste a Git URL" });
+        if (project) {
+          await expect
+            .poll(() => search.evaluate((input) => input === document.activeElement))
+            .toBe(true);
+        }
+        await page.keyboard.press("Escape");
+        if (project) {
+          await pollCount(search).toBe(0);
+          await pollAttribute(selector, "aria-expanded").toBe("true");
+          await page.keyboard.press("Escape");
+        }
+        await pollAttribute(selector, "aria-expanded").toBe("false");
+        if (project) {
+          await pollAttribute(
+            page.locator(".new-session-page__project-popover"),
+            "data-phase",
+          ).toBe("hidden");
+        }
+      };
       await selector.click();
       await pollAttribute(selector, "aria-expanded").toBe("true");
       const panelSelector =
@@ -152,13 +174,11 @@ suite.define(() => {
       expect(panelBox!.x).toBeGreaterThanOrEqual(0);
       expect(panelBox!.x + panelBox!.width).toBeLessThanOrEqual(320);
       expect(await page.evaluate(() => window.scrollX)).toBe(0);
-      await page.keyboard.press("Escape");
-      await pollAttribute(selector, "aria-expanded").toBe("false");
+      await closePicker();
       await selector.focus();
       await page.keyboard.press("Enter");
       await pollAttribute(selector, "aria-expanded").toBe("true");
-      await page.keyboard.press("Escape");
-      await pollAttribute(selector, "aria-expanded").toBe("false");
+      await closePicker();
     }
     await checkout.click();
     const baseRef = page.locator("#new-session-worktree-base-ref");

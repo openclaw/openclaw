@@ -1,0 +1,2 @@
+88
+# Project search visibility/reopening regressions and the required Chromium/WebKit native autofocus contract. Real browser focus, immediate typing, and retained overlay behavior cannot be proved by the cheaper static picker tests.
