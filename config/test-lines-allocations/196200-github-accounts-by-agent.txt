@@ -1,0 +1,5 @@
+# Control UI e2e for managing every agent's GitHub account in Profile: per-agent rows,
+# inline own-account setup, return to the shared account, and shared changes reaching
+# only inheriting agents. Replaces the Agents → Tools override tests it retires.
+# Exact net growth for PR #196200.
+209

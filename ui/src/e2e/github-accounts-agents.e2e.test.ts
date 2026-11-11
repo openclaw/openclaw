@@ -198,7 +198,7 @@ suite.define(() => {
         const sharedSetup = section.locator(
           '[data-github-connection="system"] [data-github-setup]',
         );
-        await expect(sharedSetup).toContainText("dashboard data, and Publish PR by default");
+        await expect(sharedSetup).toContainText("including their dashboard data and Publish PR");
         await expect(sharedSetup).toContainText("Agents with their own account keep it.");
         await sharedSetup.getByRole("button", { name: "Use a PAT instead", exact: true }).click();
         await sharedSetup

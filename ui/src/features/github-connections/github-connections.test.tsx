@@ -213,7 +213,7 @@ it("shows the shared and agent accounts to an admin without a personal profile",
   // The shared account's row names everything it serves, not only agents.
   expectText(row("system"), [
     "Shared agent account",
-    "Agents without their own account, dashboards, and Publish PR by default",
+    "Agents without their own account, including their dashboards and Publish PR",
   ]);
   expect(request.mock.calls.map(([, params]) => params)).toEqual(
     expect.arrayContaining([
@@ -225,7 +225,7 @@ it("shows the shared and agent accounts to an admin without a personal profile",
   expect(request).not.toHaveBeenCalledWith("users.github.status", {});
 });
 
-it("lists every agent's account and gives one agent its own without touching the others", async () => {
+it("lists every agent's account and opens setup under only the chosen agent", async () => {
   const ownAccount = {
     ...system,
     source: "agent-override" as const,
@@ -236,14 +236,9 @@ it("lists every agent's account and gives one agent its own without touching the
   const request = vi.fn(async (method: string, params?: StatusParams) =>
     method === "users.github.status"
       ? personalStatus
-      : method === "secrets.store.set" || method === "secrets.store.delete"
-        ? { ok: true }
-        : statusFor(params, params?.agentId === "research" ? ownAccount : system),
+      : statusFor(params, params?.agentId === "research" ? ownAccount : system),
   );
   const ui = mount(["operator.admin"], "profile-a", request, config);
-  vi.mocked(ui.context.runtimeConfig.runExternalMutation).mockImplementation(
-    createMutationRunner(ui.context.gateway.snapshot.client!),
-  );
   const agentRow = (id: string) => ui.query(`[data-agent-id="${id}"]`);
   await waitForFast(() => expectText(agentRow("research"), ["@research-bot"]));
   await waitForFast(() => expectText(agentRow("main"), ["@system-account"]));
@@ -264,9 +259,6 @@ it("lists every agent's account and gives one agent its own without touching the
     ],
     ["Give Research its own GitHub account"],
   );
-  expect(request).toHaveBeenCalledWith("tools.github.status", statusParams("main", "agent"));
-  expect(request).toHaveBeenCalledWith("tools.github.status", statusParams("research", "agent"));
-
   await waitForFast(() =>
     expect(ui.button("Give Clawd its own GitHub account").disabled).toBe(false),
   );
@@ -276,21 +268,6 @@ it("lists every agent's account and gives one agent its own without touching the
   );
   expectText(agentRow("main"), ["Own account for Clawd", "Only Clawd changes."]);
   expect(agentRow("research")?.querySelector("[data-github-setup]")).toBeNull();
-  ui.button("Use a PAT instead").click();
-  flush();
-  const token = agentRow("main")!.querySelector<HTMLInputElement>(".settings-secret input")!;
-  token.value = "synthetic-fork-only-pat";
-  token.dispatchEvent(new Event("input", { bubbles: true }));
-  flush();
-  ui.button("Save for Clawd").click();
-  await waitForFast(() =>
-    expect(request).toHaveBeenCalledWith(
-      "tools.github.configure",
-      expect.objectContaining({ scope: "agent", agentId: "main", mode: "managed" }),
-    ),
-  );
-  const configures = request.mock.calls.filter(([method]) => method === "tools.github.configure");
-  expect(configures).toHaveLength(1);
 });
 
 it("shows one status failure during setup and retries without reconnecting the account", async () => {

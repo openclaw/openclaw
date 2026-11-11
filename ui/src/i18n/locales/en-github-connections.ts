@@ -9,14 +9,14 @@ const enGitHubConnections = {
     descriptionMore: "Check the accounts used for agent commands, dashboard data, and publishing.",
     agentsTitle: "Agent GitHub accounts",
     agentsDescription:
-      "The shared agent account serves agents without their own account, dashboard GitHub data, and Publish PR unless you choose My GitHub. Changes apply to new replies; active replies keep their current account.",
+      "Each agent uses its own account if it has one, otherwise the shared agent account, for its commands, its dashboard GitHub data, and Publish PR unless you choose My GitHub. Changes apply to new replies; active replies keep their current account.",
     mine: en.githubConnections.mine,
     system: en.githubConnections.system,
     personalUse: "Only when you publish a PR with it. Agents never use it.",
     personalDescription: "Your account when you choose it to publish a PR.",
-    systemUse: "Agents without their own account, dashboards, and Publish PR by default",
+    systemUse: "Agents without their own account, including their dashboards and Publish PR",
     systemDescription:
-      "Used for agent commands by every agent without its own account, for authenticated dashboard data, and by Publish PR unless you choose My GitHub.",
+      "Used by every agent without its own account for its commands, authenticated dashboard data, and Publish PR unless you choose My GitHub.",
     unboundDescription:
       "Sign in with a personal profile to connect My GitHub. Admins can still manage the shared agent account.",
     signInRequired: "Personal sign-in required",
@@ -44,7 +44,7 @@ const enGitHubConnections = {
     forSystem: en.githubConnections.forSystem,
     personalSetupHint: "Only My GitHub changes. Agents keep their accounts.",
     systemSetupHint:
-      "Agents without their own account, dashboard data, and Publish PR by default switch to the new account; agents use it for new replies. Agents with their own account keep it.",
+      "Agents without their own account switch to the new account for new replies, including their dashboard data and Publish PR. Agents with their own account keep it.",
     continue: "Continue with GitHub",
     usage: "Where these accounts are used",
     usageDescription:
@@ -54,7 +54,7 @@ const enGitHubConnections = {
     agentDescription:
       "Used for this agent’s commands and dashboard data. Verified confirms the account; repository access is checked when data is requested.",
     agentsHelp:
-      "An agent with its own account uses it instead of the shared agent account. Giving one agent its own account leaves the shared account and every other agent unchanged.",
+      "An agent with its own account uses it instead of the shared agent account, including for its dashboard data and Publish PR. Giving one agent its own account leaves the shared account and every other agent unchanged.",
     usesShared: "Uses the shared agent account",
     ownAccount: "Own account",
     ownAccountKind: "Own account · {kind}",
