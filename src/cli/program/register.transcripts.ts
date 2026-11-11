@@ -1,10 +1,14 @@
 import path from "node:path";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { defaultRuntime } from "../../runtime.js";
 import { normalizeExportText } from "../../transcripts/store-artifacts.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
+import { runCommandWithRuntime } from "../cli-utils.js";
 import { throwExpectedCliError } from "../expected-cli-error.js";
+import { formatDocsHelp } from "../help-format.js";
 
 type TranscriptsCliOptions = {
   json?: boolean;
@@ -148,4 +152,46 @@ export function registerTranscriptsCli(program: Command): void {
       }
       writeLine(selectedPath);
     });
+
+  transcripts
+    .command("status")
+    .description("Report transcript capture status via the running gateway")
+    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option("--token <token>", "Gateway token (if required)")
+    .option("--password <password>", "Gateway password (if required)")
+    .option("--timeout <ms>", "RPC timeout in milliseconds")
+    .option("--json", "Print JSON", false)
+    .addHelpText("after", () => formatDocsHelp("/cli/transcripts"))
+    .addHelpText(
+      "after",
+      () =>
+        `\nBacked by the \`transcripts.status\` gateway RPC; capture state is reported separately from the provider and source inventory, which is still listed while capture is disabled.`,
+    )
+    .action(
+      async (opts: {
+        url?: string;
+        token?: string;
+        password?: string;
+        timeout?: string;
+        json?: boolean;
+      }) => {
+        const timeoutMs = parseStrictPositiveInteger(opts.timeout);
+        if (opts.timeout !== undefined && timeoutMs === undefined) {
+          throwExpectedCliError("--timeout must be a positive integer (milliseconds).");
+        }
+        await runCommandWithRuntime(defaultRuntime, async () => {
+          const { transcriptsStatusCommand } = await import("../../commands/transcripts-status.js");
+          await transcriptsStatusCommand(
+            {
+              url: opts.url,
+              token: opts.token,
+              password: opts.password,
+              timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
+              json: Boolean(opts.json),
+            },
+            defaultRuntime,
+          );
+        });
+      },
+    );
 }

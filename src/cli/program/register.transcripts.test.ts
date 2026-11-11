@@ -30,6 +30,15 @@ import { registerPreActionHooks } from "./preaction.js";
 import { captureStdout } from "./program.test-helpers.js";
 import { registerTranscriptsCli } from "./register.transcripts.js";
 
+const transcriptsStatusMocks = vi.hoisted(() => ({
+  status: vi.fn(),
+}));
+
+// mock-isolation: the gateway-backed status owner is lazy-loaded; do not contact a gateway.
+vi.mock("../../commands/transcripts-status.js", () => ({
+  transcriptsStatusCommand: transcriptsStatusMocks.status,
+}));
+
 const originalArgv = process.argv;
 const originalTitle = process.title;
 const originalVerbose = isVerbose();
@@ -212,5 +221,26 @@ describe("transcripts CLI", () => {
       exists: true,
     });
     expect(ownershipReads, "standalone export ownership SQL on the caller thread").toEqual([]);
+  });
+
+  it("forwards gateway options to the transcripts status owner", async () => {
+    transcriptsStatusMocks.status.mockResolvedValue(undefined);
+    await runCli(["status", "--url", "ws://gateway.test", "--token", "test-token", "--json"]);
+    expect(transcriptsStatusMocks.status).toHaveBeenCalledExactlyOnceWith(
+      {
+        url: "ws://gateway.test",
+        token: "test-token",
+        password: undefined,
+        timeout: undefined,
+        json: true,
+      },
+      expect.anything(),
+    );
+  });
+
+  it("rejects a non-positive --timeout before loading the status owner", async () => {
+    transcriptsStatusMocks.status.mockReset();
+    await expect(runCli(["status", "--timeout", "0"])).rejects.toHaveProperty("humanOutput");
+    expect(transcriptsStatusMocks.status).not.toHaveBeenCalled();
   });
 });
