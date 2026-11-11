@@ -324,6 +324,12 @@ extension OpenClawChatViewModel {
         self.inputHistoriesBySession[key, default: ChatInputHistory()].draftChanged(to: self.input)
     }
 
+    func noteComposerAttachmentsChanged() {
+        guard !self.isApplyingRestoredAttachments else { return }
+        let key = self.composerSessionKey(for: self.sessionKey)
+        self.composerAttachmentRevisionsBySession[key, default: 0] &+= 1
+    }
+
     func prepareComposerForSessionSwitch(to nextSessionKey: String, agentID: String? = nil) {
         let currentKey = self.composerSessionKey(for: self.sessionKey)
         let nextKey = self.composerSessionKey(for: nextSessionKey, agentID: agentID)
@@ -351,6 +357,10 @@ extension OpenClawChatViewModel {
 
     func composerRevision(for sessionKey: String) -> UInt64 {
         self.composerRevisionsBySession[self.composerSessionKey(for: sessionKey), default: 0]
+    }
+
+    func composerAttachmentRevision(for sessionKey: String) -> UInt64 {
+        self.composerAttachmentRevisionsBySession[self.composerSessionKey(for: sessionKey), default: 0]
     }
 
     private func applyRecalledInput(_ value: String, advancesRevision: Bool) {

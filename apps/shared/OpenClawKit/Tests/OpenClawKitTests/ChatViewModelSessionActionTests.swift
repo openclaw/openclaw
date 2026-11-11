@@ -939,6 +939,106 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.historySessionKeys() == ["main"])
     }
 
+    @Test func `rewind preserves text edited while the request is pending`() async {
+        // #193817: the composer is one draft; a text edit made while Rewind is in
+        // flight keeps the composer's own state instead of mixing in rewound content.
+        let gate = SessionActionCompletionGate()
+        let oldImage = Data("old image".utf8)
+        let transport = SessionActionTransport(
+            rewindGate: gate,
+            rewindEditorText: "edit this turn",
+            rewindEditorAttachments: [
+                OpenClawChatEditorAttachment(
+                    mimeType: "image/png",
+                    data: Data("rewound image".utf8).base64EncodedString()),
+            ])
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.input = "old draft"
+        viewModel.attachments = [OpenClawPendingAttachment(
+            url: nil,
+            data: oldImage,
+            fileName: "old.png",
+            mimeType: "image/png",
+            preview: nil)]
+
+        let completion = Task { await viewModel.rewindToMessage(self.userMessage(entryID: "message-42")) }
+        await gate.waitUntilStarted()
+        viewModel.input = "newer draft"
+        gate.release()
+        await completion.value
+
+        #expect(viewModel.input == "newer draft")
+        #expect(viewModel.attachments.map(\.data) == [oldImage])
+        #expect(await transport.rewoundMessages().map { [$0.sessionKey, $0.entryID] } == [["main", "message-42"]])
+        #expect(await transport.historySessionKeys() == ["main"])
+    }
+
+    @Test func `rewind preserves attachments added while the request is pending`() async {
+        // #193817: attachment-only edits also advance the composer and must survive.
+        let gate = SessionActionCompletionGate()
+        let transport = SessionActionTransport(
+            rewindGate: gate,
+            rewindEditorText: "edit this turn",
+            rewindEditorAttachments: [
+                OpenClawChatEditorAttachment(
+                    mimeType: "image/png",
+                    data: Data("rewound image".utf8).base64EncodedString()),
+            ])
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.input = "old draft"
+        let newerImage = Data("newer image".utf8)
+
+        let completion = Task { await viewModel.rewindToMessage(self.userMessage(entryID: "message-42")) }
+        await gate.waitUntilStarted()
+        viewModel.attachments = [OpenClawPendingAttachment(
+            url: nil,
+            data: newerImage,
+            fileName: "newer.png",
+            mimeType: "image/png",
+            preview: nil)]
+        gate.release()
+        await completion.value
+
+        #expect(viewModel.attachments.map(\.data) == [newerImage])
+        #expect(viewModel.input == "old draft")
+        #expect(await transport.rewoundMessages().map { [$0.sessionKey, $0.entryID] } == [["main", "message-42"]])
+        #expect(await transport.historySessionKeys() == ["main"])
+    }
+
+    @Test func `rewind preserves text and attachments edited while the request is pending`() async {
+        // #193817: combined edits keep the newer draft in full, and the history
+        // rewind plus branch reconciliation still complete.
+        let gate = SessionActionCompletionGate()
+        let transport = SessionActionTransport(
+            rewindGate: gate,
+            rewindEditorText: "edit this turn",
+            rewindEditorAttachments: [
+                OpenClawChatEditorAttachment(
+                    mimeType: "image/png",
+                    data: Data("rewound image".utf8).base64EncodedString()),
+            ])
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.input = "old draft"
+        let newerImage = Data("newer image".utf8)
+
+        let completion = Task { await viewModel.rewindToMessage(self.userMessage(entryID: "message-42")) }
+        await gate.waitUntilStarted()
+        viewModel.input = "newer draft"
+        viewModel.attachments = [OpenClawPendingAttachment(
+            url: nil,
+            data: newerImage,
+            fileName: "newer.png",
+            mimeType: "image/png",
+            preview: nil)]
+        gate.release()
+        await completion.value
+
+        #expect(viewModel.input == "newer draft")
+        #expect(viewModel.attachments.map(\.data) == [newerImage])
+        #expect(await transport.rewoundMessages().map { [$0.sessionKey, $0.entryID] } == [["main", "message-42"]])
+        #expect(await transport.historySessionKeys() == ["main"])
+    }
+
     @Test func `rewind does not dispatch while busy`() async {
         let transport = SessionActionTransport()
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)

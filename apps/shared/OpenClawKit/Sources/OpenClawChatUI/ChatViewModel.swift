@@ -39,6 +39,10 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     var composerRevisionsBySession: [String: UInt64] = [:]
     @ObservationIgnored
+    var composerAttachmentRevisionsBySession: [String: UInt64] = [:]
+    @ObservationIgnored
+    var isApplyingRestoredAttachments = false
+    @ObservationIgnored
     var savedDraftRevisionsBySession: [String: UInt64] = [:]
     @ObservationIgnored
     var isApplyingRecalledInput = false
@@ -95,7 +99,10 @@ public final class OpenClawChatViewModel {
     var attachmentStagingCount = 0
     public private(set) var isAborting = false
     public var errorText: String?
-    public var attachments: [OpenClawPendingAttachment] = []
+    public var attachments: [OpenClawPendingAttachment] = [] {
+        didSet { self.noteComposerAttachmentsChanged() }
+    }
+
     public internal(set) var healthOK: Bool = false
     /// Bumped after every successful group-catalog mutation so views keyed on it
     /// refetch; catalog-only changes (e.g. creating an empty group) alter no
