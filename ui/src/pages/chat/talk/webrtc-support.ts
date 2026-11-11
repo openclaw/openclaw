@@ -41,7 +41,6 @@ export type RealtimeServerEvent = {
 };
 
 export type RealtimeTalkCompletedToolCall = {
-  itemId?: string;
   name: string;
   callId: string;
   args: string;
@@ -62,12 +61,11 @@ export function* realtimeTalkCompletedToolCalls(
     ) {
       continue;
     }
-    const itemId = typeof output.id === "string" ? output.id.trim() || undefined : undefined;
     const callId = typeof output.call_id === "string" ? output.call_id.trim() : "";
     const name = typeof output.name === "string" ? output.name.trim() : "";
     const args = typeof output.arguments === "string" ? output.arguments : "";
     if (callId && name && args.trim()) {
-      yield { itemId, callId, name, args };
+      yield { callId, name, args };
     }
   }
 }
@@ -199,7 +197,19 @@ export class RealtimeTalkWebRtcOfferExchange {
     gatewayUrl: string;
     isCurrent: () => boolean;
   }): Promise<string | undefined> {
-    const request = this.beginRequest();
+    this.abort();
+    const controller = new AbortController();
+    const request = {
+      controller,
+      timeout: globalThis.setTimeout(() => {
+        controller.abort(
+          new Error(
+            `Realtime WebRTC offer request timed out after ${REALTIME_WEBRTC_OFFER_TIMEOUT_MS}ms`,
+          ),
+        );
+      }, REALTIME_WEBRTC_OFFER_TIMEOUT_MS),
+    };
+    this.pendingRequest = request;
     try {
       const response = await fetch(
         resolveRealtimeTalkOfferUrl(params.session.offerUrl, params.gatewayUrl),
@@ -237,7 +247,12 @@ export class RealtimeTalkWebRtcOfferExchange {
       }
       throw error;
     } finally {
-      this.finishRequest(request);
+      globalThis.clearTimeout(request.timeout);
+      // A stopped transport may already have started a replacement request.
+      // Never let the old request's finally block detach the new lifecycle owner.
+      if (this.pendingRequest === request) {
+        this.pendingRequest = null;
+      }
     }
   }
 
@@ -249,32 +264,6 @@ export class RealtimeTalkWebRtcOfferExchange {
     this.pendingRequest = null;
     globalThis.clearTimeout(request.timeout);
     request.controller.abort();
-  }
-
-  private beginRequest(): PendingOfferRequest {
-    this.abort();
-    const controller = new AbortController();
-    const request = {
-      controller,
-      timeout: globalThis.setTimeout(() => {
-        controller.abort(
-          new Error(
-            `Realtime WebRTC offer request timed out after ${REALTIME_WEBRTC_OFFER_TIMEOUT_MS}ms`,
-          ),
-        );
-      }, REALTIME_WEBRTC_OFFER_TIMEOUT_MS),
-    };
-    this.pendingRequest = request;
-    return request;
-  }
-
-  private finishRequest(request: PendingOfferRequest): void {
-    globalThis.clearTimeout(request.timeout);
-    // A stopped transport may already have started a replacement request.
-    // Never let the old request's finally block detach the new lifecycle owner.
-    if (this.pendingRequest === request) {
-      this.pendingRequest = null;
-    }
   }
 }
 

@@ -1,5 +1,5 @@
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
-import type { ExecApprovalsSnapshot, ExecAsk, ExecSecurity } from "./exec-approvals-core.js";
+import type { ExecApprovalsFile, ExecAsk, ExecSecurity } from "./exec-approvals-core.js";
 import type { AllowAlwaysPattern, ExecAllowlistEntry } from "./exec-approvals.types.js";
 
 export type ExecApprovalsDefaultOverrides = {
@@ -35,13 +35,15 @@ export type ExecApprovalUsageAuthorization = {
 
 export type ExecAuthorizationCommitInput = {
   agentId: string | undefined;
-  matches: readonly ExecAllowlistEntry[];
+  matches: readonly (ExecAllowlistEntry & { resolvedPath?: string })[];
   command: string;
   resolvedPath?: string;
   authorization: ExecApprovalUsageAuthorization;
   allowAlwaysDecision?: AllowAlwaysPersistenceDecision;
+  /** Native spawn consumes this final admission even when no usage row changes. */
+  requireCommit?: true;
 };
 
 export type ExecAuthorizationCommitOutcome =
-  | { ok: true; snapshot: ExecApprovalsSnapshot }
+  | { ok: true; file: ExecApprovalsFile }
   | { ok: false; message: string };

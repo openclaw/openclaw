@@ -14,6 +14,10 @@ const CITE_PATH_SEGMENT_RE = /^[A-Za-z0-9._~-]+$/;
 
 // Only used to normalize the composed path; no request is ever made against it.
 const CITE_PATH_NORMALIZATION_BASE = "https://tlon.invalid";
+const CITATION_SCOPE_SKIP_LOG =
+  "[tlon] Skipping cited post: citation is outside the configured citation scope";
+
+class CitationScopeChangedError extends Error {}
 
 function isSafeCitePathSegment(segment: string): boolean {
   if (segment === "." || segment === "..") {
@@ -44,8 +48,25 @@ function buildCitedPostScryPath(nest: string, postId: string): string | null {
   return scryPath;
 }
 
+/**
+ * Auto-discovery admits any channel the bot ship can read; otherwise only explicit channels.
+ * With cross-channel citations off, the cited channel must also be the one posted in.
+ */
+export function isCitedNestInScope(
+  nest: string,
+  scope: { effectiveAutoDiscoverChannels: boolean; explicitChannels: readonly string[] },
+  crossChannel: boolean,
+  sourceNest?: string,
+): boolean {
+  return (
+    (crossChannel || nest === sourceNest) &&
+    (scope.effectiveAutoDiscoverChannels || scope.explicitChannels.includes(nest))
+  );
+}
+
 export async function resolveTlonCitations(
   content: unknown,
+  canExpandNest: (nest: string) => boolean,
   api: Pick<UrbitSSEClient, "scry">,
   runtime: RuntimeEnv,
 ): Promise<string> {
@@ -62,6 +83,10 @@ export async function resolveTlonCitations(
     if (!nest || !postId) {
       continue;
     }
+    if (!canExpandNest(nest)) {
+      runtime.log?.(CITATION_SCOPE_SKIP_LOG);
+      continue;
+    }
     const scryPath = buildCitedPostScryPath(nest, postId);
     if (!scryPath) {
       runtime.log?.("[tlon] Skipping cited post: citation does not name a channel post");
@@ -69,13 +94,27 @@ export async function resolveTlonCitations(
     }
     try {
       runtime.log?.(`[tlon] Fetching cited post: ${scryPath}`);
-      const data = asRecord(await api.scry(scryPath));
+      const data = asRecord(
+        await api.scry(scryPath, () => {
+          if (!canExpandNest(nest)) {
+            throw new CitationScopeChangedError();
+          }
+        }),
+      );
+      if (!canExpandNest(nest)) {
+        runtime.log?.(CITATION_SCOPE_SKIP_LOG);
+        continue;
+      }
       const essay = asRecord(data?.essay);
       const text = essay?.content ? extractMessageText(essay.content) : "";
       if (text) {
         resolved.push(`> ${whereMatch?.[1] || "unknown"} wrote: ${text}`);
       }
     } catch (err) {
+      if (err instanceof CitationScopeChangedError) {
+        runtime.log?.(CITATION_SCOPE_SKIP_LOG);
+        continue;
+      }
       runtime.log?.(`[tlon] Failed to fetch cited post: ${String(err)}`);
     }
   }

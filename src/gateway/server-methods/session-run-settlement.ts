@@ -1,25 +1,31 @@
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { isCurrentSessionControllerTurnInput } from "../../sessions/session-controller.context.js";
+import { selectedOperations } from "../../sessions/session-controller.lifecycle-projections.js";
+import {
+  getCurrentSessionControllerOwner,
+  getTerminalSessionWorkAdmissionRelease,
+  SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+} from "../../sessions/session-controller.lifecycle.js";
+import {
+  getRpcSourceIdentity,
+  isRpcSourceWaitingForTurn,
+  listRpcSourceEntriesForTarget,
+} from "../../sessions/session-controller.rpc-sources.js";
+import { waitForReplyOperationOwnerSettlement } from "../../sessions/session-controller.settlement.js";
 import {
   hasCommittedReplyOperationOutcome,
-  replyRunRegistry,
-  resolveReplyOperationsForSession,
-  waitForReplyOperationOwnerSettlement,
-} from "../../auto-reply/reply/reply-run-registry.js";
-import { getAttachedBackend } from "../../auto-reply/reply/reply-run-registry.state.js";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
-import {
-  isCompetingSessionWorkAdmissionActive,
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-} from "../../sessions/session-lifecycle-admission.js";
-import {
-  isCurrentChatAbortExecution,
-  waitForChatAbortControllerRemoval,
-} from "../chat-abort-lifecycle-internal.js";
+  isReplyOperationAbortable,
+} from "../../sessions/session-controller.state.js";
+import { captureSessionTarget } from "../../sessions/session-controller.target.js";
+import { settlesWithin } from "../../shared/settle-within.js";
+import { waitForChatAbortControllerRemoval } from "../chat-abort-lifecycle-internal.js";
 import { chatRunBelongsToAgent } from "../chat-run-owner.js";
+import { captureGatewayScopeMatcher } from "../session-runtime-scope.js";
 import type { GatewayRequestContext } from "./types.js";
 
 /** Join terminal writers before taking lifecycle locks; live turns retain the caller's idle gate. */
 export async function waitForTerminalSessionRunSettlement(params: {
-  context: Pick<GatewayRequestContext, "chatAbortControllers">;
+  context: Pick<GatewayRequestContext, "resolveGatewayContext">;
   storePath: string;
   requestedKey: string;
   canonicalKey: string;
@@ -27,48 +33,86 @@ export async function waitForTerminalSessionRunSettlement(params: {
   agentId: string;
   defaultAgentId?: string;
   signal?: AbortSignal;
+  /** Compaction owns preemption; independent admissions still require an idle gate. */
+  liveRuns?: "preempt";
 }): Promise<boolean> {
   params.signal?.throwIfAborted();
   const sessionKeys = [params.requestedKey, params.canonicalKey];
-  // Admissions have no run identity; never wait on a possibly live competing turn.
-  if (isCompetingSessionWorkAdmissionActive(params.storePath, [...sessionKeys, params.sessionId])) {
-    return false;
-  }
-  const matchingRuns = [...params.context.chatAbortControllers].filter(
-    ([, entry]) =>
-      (sessionKeys.includes(entry.sessionKey.trim()) || entry.sessionId === params.sessionId) &&
-      chatRunBelongsToAgent({ ...entry, defaultAgentId: params.defaultAgentId }, params.agentId),
-  );
-  const currentRunId = matchingRuns.find(([, entry]) => isCurrentChatAbortExecution(entry))?.[0];
-  const terminalRuns = matchingRuns
-    .filter(([, entry]) => entry.projectSessionTerminalObservedAt !== undefined)
-    .map(([runId, entry]) => ({ runId, entry }));
-  const replies = resolveReplyOperationsForSession({ ...params, sessionKeys }).filter(
+  const target = captureSessionTarget({
+    storeScope: params.storePath,
+    sessionKey: params.canonicalKey,
+    aliases: sessionKeys,
+    incarnation: params.sessionId,
+    agentId: params.agentId,
+  });
+  const matchesGateway = captureGatewayScopeMatcher(params.context.resolveGatewayContext);
+  const matchingRuns = listRpcSourceEntriesForTarget(target).filter(([, entry]) => {
+    const identity = getRpcSourceIdentity(entry);
+    return (
+      matchesGateway(entry.input) &&
+      !isRpcSourceWaitingForTurn(entry) &&
+      !isCurrentSessionControllerTurnInput(entry.input) &&
+      (sessionKeys.includes(identity.sessionKey.trim()) ||
+        identity.sessionId === params.sessionId) &&
+      chatRunBelongsToAgent({ ...identity, defaultAgentId: params.defaultAgentId }, params.agentId)
+    );
+  });
+  const current = getCurrentSessionControllerOwner();
+  const replies = [...selectedOperations([target])].filter(
     (operation) =>
-      currentRunId === undefined ||
-      (replyRunRegistry.getSourceTurnId(operation.key) !== currentRunId &&
-        getAttachedBackend(operation)?.runId !== currentRunId),
+      operation !== current &&
+      matchesGateway(operation) &&
+      operation.sessionId === params.sessionId &&
+      chatRunBelongsToAgent(
+        {
+          agentId: operation.agentId,
+          sessionKey: operation.key,
+          defaultAgentId: params.defaultAgentId,
+        },
+        params.agentId,
+      ),
+  );
+  const liveReplies = new Set(
+    replies.filter(
+      (operation) => operation.result === null && !hasCommittedReplyOperationOutcome(operation),
+    ),
+  );
+  const preemptingOperations =
+    params.liveRuns === "preempt"
+      ? new Set([...liveReplies].filter(isReplyOperationAbortable))
+      : undefined;
+  const admissions = getTerminalSessionWorkAdmissionRelease({
+    scope: params.storePath,
+    identities: [...sessionKeys, params.sessionId],
+    resolveGatewayContext: params.context.resolveGatewayContext,
+    preemptingOperations,
+  });
+  const terminalRuns = matchingRuns.filter(
+    ([, entry]) =>
+      !entry.input.claim?.operation || !preemptingOperations?.has(entry.input.claim.operation),
   );
   if (
-    matchingRuns.some(
-      ([runId, entry]) =>
-        runId !== currentRunId && entry.projectSessionTerminalObservedAt === undefined,
+    admissions === false ||
+    terminalRuns.some(
+      ([, entry]) =>
+        !entry.adapter.terminalOutcomeObserved &&
+        entry.adapter.projectSessionTerminalObservedAt === undefined,
     ) ||
-    replies.some(
-      (operation) => operation.result === null && !hasCommittedReplyOperationOutcome(operation),
-    )
+    [...liveReplies].some((operation) => !preemptingOperations?.has(operation))
   ) {
     return false;
   }
-  const timeoutMs = SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS;
+  const timeoutMs = SESSION_CONTROLLER_DRAIN_TIMEOUT_MS;
   return await racePromiseWithAbortSignal(
     Promise.all([
+      settlesWithin(admissions, timeoutMs),
       waitForChatAbortControllerRemoval({
-        entries: params.context.chatAbortControllers,
-        targets: terminalRuns,
+        targets: terminalRuns.map(([runId, entry]) => ({ runId, entry })),
         timeoutMs,
       }),
-      ...replies.map((operation) => waitForReplyOperationOwnerSettlement(operation, timeoutMs)),
+      ...replies
+        .filter((operation) => !preemptingOperations?.has(operation))
+        .map((operation) => waitForReplyOperationOwnerSettlement(operation, timeoutMs)),
     ]).then((results) => results.every(Boolean)),
     params.signal,
   );

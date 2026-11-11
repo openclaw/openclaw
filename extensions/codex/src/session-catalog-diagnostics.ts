@@ -96,21 +96,8 @@ function controlWaiterTuple(
   controlCallOrdinal: number,
   summary: CodexRequestWaiterSummary,
 ): ControlWaiterTuple | undefined {
-  const ordinals = [
-    controlCallOrdinal,
-    summary.overloadAttemptOrdinal,
-    summary.rpcId,
-    summary.waiterOrdinal,
-  ];
-  const times = [summary.attemptCreatedAtMs, summary.waiterAttachedAtMs, summary.waiterSettledAtMs];
-  const optionalTimes = [summary.firstPossibleWriteAtMs, summary.wireObservedAtMs];
-  const validTime = (value: number) =>
-    Number.isFinite(value) && value >= 0 && Number.isSafeInteger(Math.round(value));
   if (
     !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(summary.clientInstanceId) ||
-    !ordinals.every((value) => Number.isSafeInteger(value) && value > 0) ||
-    !times.every(validTime) ||
-    !optionalTimes.every((value) => value === null || validTime(value)) ||
     (summary.disposition !== "new" && summary.disposition !== "joined") ||
     !WAITER_OUTCOMES.has(summary.waiterOutcome) ||
     !WIRE_OUTCOMES.has(summary.wireOutcomeAtWaiterSettlement)

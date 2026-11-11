@@ -30,6 +30,9 @@ export type ReplyPayloadTtsSupplement = {
 /** Channel-agnostic assistant reply payload. */
 export type ReplyPayload = {
   text?: string;
+  /** For block previews only: append this text to the current answer. Omitted means replacement.
+   * Durable sends and transcripts still consume this payload's text; finals always replace. */
+  textMode?: "delta";
   /** Visible body a channel adapter may use when native structured content requires text. */
   fallbackText?: {
     text: string;

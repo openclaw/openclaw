@@ -38,6 +38,17 @@ Or per session:
 
 Once set, any `exec` call with `host=node` runs on the node host (subject to the node allowlist/approvals).
 
+Quote arguments containing literal shell separators, such as OAuth callback URLs:
+`/usr/bin/printf '%s\n' 'http://127.0.0.1:9876/oauth2/callback?state=example&code=example'`.
+Single or double quotes preserve literal separators through approval preparation.
+An escaped `\&` also passes preparation; quote the full URL to prevent shell
+wildcard expansion. The normal node execution policy and human approval still apply.
+
+Child commands retain the node's profile and state paths, but do not inherit its
+daemon identity or native service selectors. This lets `openclaw gateway status`
+and `openclaw update` inspect the Gateway independently of the node service.
+Explicit service selectors in permitted environment overrides still apply.
+
 `host=auto` will not implicitly choose the node on its own. An explicit per-call `host=node` request is allowed from `auto` only when no sandbox runtime is active; while a sandbox runtime is active, `auto` rejects it. To run on a node from a sandboxed session, or to make node exec the session default, set `tools.exec.host=node` or `/exec host=node ...` explicitly.
 
 Related:

@@ -2,13 +2,10 @@ import type { Event } from "nostr-tools";
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
-  DEFAULT_INGRESS_ADOPTION_STALL_MS,
   type ChannelIngressMonitorLifecycle,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
-import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   inspectNostrIngressEvent,
@@ -20,7 +17,6 @@ import {
 import { getNostrRuntime } from "./runtime.js";
 
 const NOSTR_INGRESS_POLL_INTERVAL_MS = 500;
-const NOSTR_INGRESS_APPEND_RETRY_MS = [0, 100, 300] as const;
 
 export type NostrIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
@@ -69,8 +65,6 @@ export function createNostrIngress(options: {
   afterDurableAppend: (event: Event) => void;
   deliver: (event: Event, lifecycle: NostrIngressLifecycle) => Promise<void>;
   onError?: (error: Error, context: string) => void;
-  pollIntervalMs?: number;
-  adoptionStallTimeoutMs?: number;
 }) {
   let queue = options.queue;
   let admissionFailure: Error | undefined;
@@ -89,23 +83,46 @@ export function createNostrIngress(options: {
     return queue;
   };
 
+  type PreparedEvent = ReturnType<typeof prepareAdmission>;
   const monitor = createChannelIngressMonitor<
-    Event,
+    PreparedEvent,
     { receivedAt: number; rawEvent: string },
     NostrIngressPayload
   >({
     queue: getQueue,
-    inspect: (event) => {
-      const facts = inspectNostrIngressEvent(event);
-      return { eventId: facts.eventId, laneKey: facts.laneKey };
+    inspect: ({ facts }) => facts,
+    inspectAsync: async ({ facts }, context) => {
+      if (context.phase === "admission") {
+        await monitorStart;
+        if (admissionFailure) {
+          throw admissionFailure;
+        }
+        const pending = await getQueue().listPending({ limit: options.maxPendingEvents });
+        const claims = await getQueue().listClaims();
+        if (pending.length + claims.length >= options.maxPendingEvents) {
+          throw new NostrIngressAdmissionRejectedError(
+            "backpressure",
+            "Nostr event exceeds the durable ingress backlog.",
+          );
+        }
+      }
+      return facts;
     },
     payload: {
       version: NOSTR_INGRESS_PAYLOAD_VERSION,
-      serialize: (event, { receivedAt }) => ({
-        receivedAt,
-        rawEvent: JSON.stringify(event),
+      serialize: ({ payload }) => ({
+        receivedAt: payload.receivedAt,
+        rawEvent: payload.rawEvent,
       }),
-      deserialize: (body, { claim }) => deserializeNostrIngressEvent(body.rawEvent, claim.id),
+      deserialize: (body, { claim }) => {
+        const event = deserializeNostrIngressEvent(body.rawEvent, claim.id);
+        return {
+          event,
+          facts: inspectNostrIngressEvent(event),
+          receivedAt: body.receivedAt,
+          payload: { version: NOSTR_INGRESS_PAYLOAD_VERSION, ...body },
+        };
+      },
       encode: ({ body }) => ({ version: NOSTR_INGRESS_PAYLOAD_VERSION, ...body }),
       decode: (payload, { claim }) => {
         if (
@@ -134,14 +151,27 @@ export function createNostrIngress(options: {
             : `Nostr ingress row ${claim.id} changed event identity.`,
         ),
     },
-    deliver: options.deliver,
-    pollIntervalMs: options.pollIntervalMs ?? NOSTR_INGRESS_POLL_INTERVAL_MS,
+    deliver: ({ event }, lifecycle) => options.deliver(event, lifecycle),
+    onDurableAdmission: ({ event }) => options.afterDurableAppend(event),
+    onAdmissionFailure: (_event, error) => {
+      if (
+        error instanceof NostrIngressAdmissionRejectedError ||
+        error instanceof NostrIngressPermanentError
+      ) {
+        return;
+      }
+      admissionFailure ??= new Error(
+        `Nostr durable admission failed: ${formatErrorMessage(error)}`,
+        { cause: error },
+      );
+      throw admissionFailure;
+    },
+    pollIntervalMs: NOSTR_INGRESS_POLL_INTERVAL_MS,
     retention: {
       completedMaxEntries: 100_000,
       failedMaxEntries: 100_000,
     },
     drain: {
-      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
       resolveNonRetryableFailure: (error) =>
         error instanceof NostrIngressPermanentError
           ? { reason: error.reason, message: error.message }
@@ -167,9 +197,6 @@ export function createNostrIngress(options: {
   })();
   void monitorStart.catch((error: unknown) => options.onError?.(error as Error, "ingress drain"));
 
-  // Admission stays local because relay ack needs accepted/duplicate plus rate,
-  // size, backlog, cursor, and failure-latch semantics the shared monitor hides.
-  let admissionTail: Promise<void> = Promise.resolve();
   const prepareAdmission = (event: Event) => {
     const facts = inspectNostrIngressEvent(event);
     const receivedAt = Date.now();
@@ -217,48 +244,8 @@ export function createNostrIngress(options: {
     return { event, facts, receivedAt, payload };
   };
 
-  const admitOnce = async (
-    prepared: ReturnType<typeof prepareAdmission>,
-  ): Promise<"accepted" | "duplicate"> => {
-    await monitorStart;
-    const pending = await getQueue().listPending({ limit: options.maxPendingEvents });
-    const claims = await getQueue().listClaims();
-    if (pending.length + claims.length >= options.maxPendingEvents) {
-      throw new NostrIngressAdmissionRejectedError(
-        "backpressure",
-        "Nostr event exceeds the durable ingress backlog.",
-      );
-    }
-
-    try {
-      return await retryAsync(
-        async () => {
-          const result = await getQueue().enqueue(prepared.facts.eventId, prepared.payload, {
-            receivedAt: prepared.receivedAt,
-            laneKey: prepared.facts.laneKey,
-          });
-          options.afterDurableAppend(prepared.event);
-          monitor.requestDrain();
-          return result.kind === "accepted" ? "accepted" : "duplicate";
-        },
-        {
-          attempts: NOSTR_INGRESS_APPEND_RETRY_MS.length,
-          minDelayMs: 0,
-          delayMs: ({ attempt }) => NOSTR_INGRESS_APPEND_RETRY_MS[attempt] ?? 0,
-          sleep: (delayMs) => sleepWithAbort(delayMs),
-        },
-      );
-    } catch (error) {
-      throw new Error(`Nostr durable admission failed: ${formatErrorMessage(error)}`, {
-        cause: error,
-      });
-    }
-  };
-
   return {
-    ready: async () => {
-      await monitorStart;
-    },
+    ready: () => monitorStart,
     receive: (event: Event) => {
       if (stopping) {
         return Promise.reject(createStoppedError());
@@ -270,43 +257,23 @@ export function createNostrIngress(options: {
         return Promise.reject(error as Error);
       }
       queuedAdmissions += 1;
-      const admission = admissionTail.then(async () => {
-        if (admissionFailure) {
-          throw admissionFailure;
-        }
-        try {
-          return await admitOnce(prepared);
-        } catch (error) {
-          if (
-            error instanceof NostrIngressAdmissionRejectedError ||
-            error instanceof NostrIngressPermanentError
-          ) {
-            throw error;
-          }
-          admissionFailure =
-            error instanceof Error ? error : new Error(formatErrorMessage(error), { cause: error });
-          throw admissionFailure;
-        }
-      });
-      const settledAdmission = admission.finally(() => {
-        queuedAdmissions -= 1;
-      });
-      admissionTail = settledAdmission.then(
-        () => undefined,
-        () => undefined,
-      );
-      return settledAdmission;
+      return monitor
+        .admit(prepared, { receivedAt: prepared.receivedAt })
+        .then((result): "accepted" | "duplicate" =>
+          result.queueResult?.kind === "accepted" ? "accepted" : "duplicate",
+        )
+        .finally(() => {
+          queuedAdmissions -= 1;
+        });
     },
     stop: () => {
       if (stopTask) {
         return stopTask;
       }
       stopping = true;
-      // pause() closes the polling gate synchronously before waiting for local
-      // admissions that still retain Nostr's relay acknowledgement contract.
+      // Pause delivery before joining the monitor's accepted durable admissions.
       const pauseTask = monitor.pause();
       stopTask = (async () => {
-        await admissionTail;
         await monitorStart.catch(() => undefined);
         await pauseTask;
         await monitor.stop();
@@ -314,7 +281,6 @@ export function createNostrIngress(options: {
       return stopTask;
     },
     waitForIdle: async () => {
-      await admissionTail;
       await monitorStart;
       await monitor.waitForIdle();
     },

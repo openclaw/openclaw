@@ -10,7 +10,7 @@ export async function refreshModelAuthStateAfterMutation(
   agentId: string,
 ): Promise<void> {
   // The first CLI login can move the shared store after this Gateway pinned its owner.
-  reloadSharedAuthStoreOwnership();
+  await reloadSharedAuthStoreOwnership();
   clearModelAuthStatusUsageCache();
   await refreshActiveProviderAuthRuntimeSnapshot();
   const config = getRuntimeConfig();

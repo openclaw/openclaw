@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { findExistingAncestor } from "../infra/fs-safe.js";
@@ -17,14 +18,15 @@ import {
   collectServiceFiles,
   isLegacyLabel,
   isPotentialGatewayServiceName,
-  readServiceFile,
   scanSystemdDir,
   type ExtraGatewayService,
   type ServiceFileInspectionError,
 } from "./inspect-files.js";
 import {
+  areSystemdCommandsMaintenance,
   hasGatewaySubcommandArg,
   hasGatewayServiceMarker,
+  detectSystemdGatewayExecutionMarker,
   detectLaunchdGatewayExecutionMarker,
   isOpenClawGatewayTaskName,
   detectWindowsServiceExecutionMarker,
@@ -96,10 +98,12 @@ export function renderGatewayServiceCleanupHints(
             ? "system"
             : "gui/$UID";
         const launchctlCommand = domain === "system" ? "sudo launchctl" : "launchctl";
-        hints.push(`${launchctlCommand} bootout ${domain}/${quoteCliArg(service.label)}`);
+        hints.push(
+          terminalText`${launchctlCommand} bootout ${domain}/${quoteCliArg(service.label)}`,
+        );
         if (plistPath) {
           const removeCommand = service.scope === "system" ? "sudo rm" : "rm";
-          hints.push(`${removeCommand} ${quoteCliArg(plistPath)}`);
+          hints.push(terminalText`${removeCommand} ${quoteCliArg(plistPath)}`);
         }
         break;
       }
@@ -107,13 +111,16 @@ export function renderGatewayServiceCleanupHints(
         const systemctlCommand = `systemctl --${service.scope}`;
         const unit = quoteCliArg(service.label);
         // A discovered unit may be the only running Gateway; inspect before removal.
-        hints.push(`${systemctlCommand} status -- ${unit}`, `${systemctlCommand} cat -- ${unit}`);
+        hints.push(
+          terminalText`${systemctlCommand} status -- ${unit}`,
+          terminalText`${systemctlCommand} cat -- ${unit}`,
+        );
         break;
       }
       case "win32":
         if (service.windowsStartupEntry) {
           hints.push(
-            `Get-Item -LiteralPath '${service.windowsStartupEntry.replaceAll("'", "''")}'`,
+            terminalText`Get-Item -LiteralPath '${service.windowsStartupEntry.replaceAll("'", "''")}'`,
           );
           break;
         }
@@ -121,7 +128,7 @@ export function renderGatewayServiceCleanupHints(
         // The hint can be pasted into cmd.exe or PowerShell, so exclude names
         // that either shell can expand rather than guessing a common escape.
         if (/^[A-Za-z0-9_. ()\\/-]+$/.test(service.label)) {
-          hints.push(`schtasks /Query /TN "${service.label}" /V /FO LIST`);
+          hints.push(terminalText`schtasks /Query /TN "${service.label}" /V /FO LIST`);
         }
         break;
     }
@@ -442,7 +449,13 @@ async function scanGatewayServices(
           continue;
         }
         const backupPath = path.join(userDir, `${name}.service.bak`);
-        if ((await readServiceFile(backupPath)) !== null) {
+        const backup = await fs.readFile(backupPath).catch((error: unknown) => {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            errors.push({ source: backupPath, message: "Service path could not be inspected." });
+          }
+          return null;
+        });
+        if (backup !== null) {
           push({
             platform: "linux",
             label,
@@ -472,11 +485,7 @@ async function scanGatewayServices(
           try {
             for (const unit of await listLoadedSystemdUnits(scope, env)) {
               const name = unit.name.slice(0, -".service".length);
-              const command = normalizeLowercaseStringOrEmpty(unit.execStart);
-              const gatewayArg = /(?:^|[\s;])gateway(?:[\s;]|$)/.test(command);
-              const marker = gatewayArg
-                ? (EXTRA_MARKERS.find((value) => command.includes(value)) ?? null)
-                : null;
+              const marker = detectSystemdGatewayExecutionMarker(unit.commands);
               const selected = isPotentialGatewayServiceName(
                 name,
                 "linux",
@@ -490,6 +499,9 @@ async function scanGatewayServices(
                   source: unit.name,
                   message: "Loaded systemd Gateway definition could not be inspected.",
                 });
+                continue;
+              }
+              if (!selected && areSystemdCommandsMaintenance(unit.commands)) {
                 continue;
               }
               push({
@@ -711,9 +723,8 @@ export async function findExtraGatewayServices(
 /** Complete managed selectors are discovery facts, not native lifecycle authority. */
 export async function listManagedOpenClawGatewayServices(
   env: Record<string, string | undefined>,
-  options: { requireComplete?: boolean } = {},
 ): Promise<{ services: ManagedGatewayService[]; errors: GatewayServiceInventory["errors"] }> {
-  const inventory = await scanGatewayServices(env, { deep: true }, options.requireComplete);
+  const inventory = await scanGatewayServices(env, { deep: true }, true);
   return {
     services: inventory.services
       .filter((service) => service.managedGateway)

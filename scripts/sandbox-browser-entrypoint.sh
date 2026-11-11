@@ -90,9 +90,13 @@ trap 'cleanup 143' TERM
 
 mkdir -p "${HOME}" "${HOME}/.chrome" "${XDG_CONFIG_HOME}" "${XDG_CACHE_HOME}"
 
-Xvfb :1 -screen 0 1280x800x24 -ac -nolisten tcp &
-XVFB_PID=$!
-echo "[sandbox] Xvfb started (PID: ${XVFB_PID})"
+# Headless Chromium does not use a display server. Keep the headed/noVNC path
+# unchanged, including when noVNC itself is disabled but Chromium is headed.
+if [[ "${HEADLESS}" != "1" ]]; then
+  Xvfb :1 -screen 0 1280x800x24 -ac -nolisten tcp &
+  XVFB_PID=$!
+  echo "[sandbox] Xvfb started (PID: ${XVFB_PID})"
+fi
 
 if [[ "${CDP_PORT}" -ge 65535 ]]; then
   CHROME_CDP_PORT="$((CDP_PORT - 1))"

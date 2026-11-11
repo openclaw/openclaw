@@ -16,7 +16,7 @@ import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
 import { withProgress } from "../cli/progress.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import {
   resolveMessageBroadcastAccountPlan,
@@ -28,36 +28,16 @@ import {
 } from "../infra/outbound/message-action-contracts.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-
-function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>>) {
-  const messageId = resolveMessageActionMessageId(result.payload);
-  const sendResult = result.kind === "send" ? result.sendResult : undefined;
-  const outcome = resolveMessageActionOutcome(result);
-  return {
-    ...(result.kind === "broadcast"
-      ? { ok: outcome.ok }
-      : !outcome.ok
-        ? {
-            ...formatCliJsonFailure(outcome.error),
-            ...(sendResult ? { deliveryStatus: sendResult.deliveryStatus } : {}),
-            ...(outcome.sentBeforeError ? { sentBeforeError: true } : {}),
-          }
-        : {}),
-    action: result.action,
-    channel: result.channel,
-    dryRun: result.dryRun,
-    handledBy: result.handledBy,
-    ...(messageId ? { messageId } : {}),
-    payload: result.payload,
-  };
-}
+import { prepareTemplateInstallSchemaVersions } from "../templates/provenance-runtime-read.js";
+import { collectTemplateToolPolicyCandidates } from "../templates/tool-policy-candidates.js";
+import { prepareCapturedTemplateToolPolicyConsent } from "../templates/tool-policy-runtime.js";
 
 export async function messageCommand(
   opts: Record<string, unknown>,
   deps: CliDeps,
   runtime: RuntimeEnv,
 ) {
-  const loadedRaw = getRuntimeConfig();
+  const loadedRaw = await captureRuntimeConfigAsyncReader()();
   const rawAction = normalizeOptionalString(opts.action) ?? "";
   const actionInput = rawAction || "send";
   const normalizedActionInput = normalizeLowercaseStringOrEmpty(actionInput);
@@ -114,6 +94,12 @@ export async function messageCommand(
       )}. Example: ${formatCliCommand("openclaw message send --channel <channel> --target <id> --text <message>")}.`,
     );
   }
+  // The CLI pins config synchronously; media policy resolution also needs the
+  // consent facts that Gateway startup normally prepares for this config.
+  if (collectTemplateToolPolicyCandidates(cfg).length > 0) {
+    (await prepareTemplateInstallSchemaVersions({ artifactPreservingReadOnly: false })).publish();
+    prepareCapturedTemplateToolPolicyConsent(cfg, {});
+  }
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
 
   // Keep the gateway client identity explicit so channel plugins can distinguish
@@ -150,7 +136,26 @@ export async function messageCommand(
     : await run();
 
   if (json) {
-    writeRuntimeJson(runtime, buildMessageCliJson(result));
+    const messageId = resolveMessageActionMessageId(result.payload);
+    const sendResult = result.kind === "send" ? result.sendResult : undefined;
+    const outcome = resolveMessageActionOutcome(result);
+    writeRuntimeJson(runtime, {
+      ...(result.kind === "broadcast"
+        ? { ok: outcome.ok }
+        : !outcome.ok
+          ? {
+              ...formatCliJsonFailure(outcome.error),
+              ...(sendResult ? { deliveryStatus: sendResult.deliveryStatus } : {}),
+              ...(outcome.sentBeforeError ? { sentBeforeError: true } : {}),
+            }
+          : {}),
+      action: result.action,
+      channel: result.channel,
+      dryRun: result.dryRun,
+      handledBy: result.handledBy,
+      ...(messageId ? { messageId } : {}),
+      payload: result.payload,
+    });
     return result;
   }
 

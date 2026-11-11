@@ -97,7 +97,7 @@ agent workspace, use **Plugins → Skills → My skills**. Create or import the
 You do not need host shell access or permission to edit shared Gateway settings.
 
 You can also ask the agent to create or improve a personal skill. Its
-`skill_workshop` tool uses the Gateway's authorized library service; it does not
+`skill_library` tool uses the Gateway's authorized library service; it does not
 write managed revision directories directly. The result names the published
 revision and explains when the session can use it. Ask explicitly to use the new revision in the current session or share it
 with the team.
@@ -159,7 +159,7 @@ metadata: { "openclaw": { "requires": { "bins": ["gemini"] }, "primaryEnv": "GEM
     | `requires.anyBins` | At least one binary must exist on `PATH` |
     | `requires.env` | Each env var must exist in the process or config |
     | `requires.config` | Each `openclaw.json` path must be truthy |
-    | `os` | Platform filter: `["darwin"]`, `["linux"]`, `["win32"]` |
+    | `os` | Platform filter: `["darwin"]` (or `["macos"]`), `["linux"]`, `["win32"]` |
     | `always` | Include on a compatible OS even when `requires.*` checks fail |
 
     Full reference: [Skills — Gating](/tools/skills#gating).
@@ -212,7 +212,8 @@ Your account has a personal owner. Organization owners can have members with
 personal owner or an organization where you have publisher access.
 
 <Steps>
-  <Step title="Ensure your SKILL.md is complete">
+  <Step title="Complete your SKILL.md">
+    <a id="ensure-your-skillmd-is-complete" />
     Make sure `name`, `description`, and any `metadata.openclaw` gating fields
     are set. Add a `homepage` URL if you have a project page.
   </Step>
@@ -240,7 +241,7 @@ personal owner or an organization where you have publisher access.
 
 <Tip>
   - **Be concise** — instruct the model on *what* to do, not how to be an AI.
-  - **Safety first** — if your skill uses `exec`, ensure prompts do not allow
+  - **Safety first** — if your skill uses `exec`, write prompts that do not allow
     arbitrary command injection from untrusted input.
   - **Test locally** — use `openclaw agent --message "..."` before sharing.
   - **Use ClawHub** — browse community skills at [clawhub.ai](https://clawhub.ai)

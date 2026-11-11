@@ -78,8 +78,9 @@ import { resolvePromptBuildHookResult } from "../src/agents/embedded-agent-runne
  *      healthy plugin's contribution still survives.
  *   3. Handler timeout (per-hook `timeoutMs`) — reason code only; the timeout
  *      text stays out of the prompt.
- *   4. Re-entrancy guard — a nested prompt build gets a marker naming every
- *      plugin whose contribution the guard skipped; the outer build stays clean.
+ *   4. RETIRED — upstream removed the prompt-build re-entrancy guard
+ *      (0301614ddd9, "remove retired prompt recursion guarantee"), so there is
+ *      no skipped-chain drop left to prove. Numbers stay stable for PR 118555.
  *   5. Dispatch rejection — a fail-closed runner makes `runBeforePromptBuild`
  *      itself reject; the call site's `.catch()` emits the marker. This is the
  *      one and only place the `dispatch-failed` code is produced for the
@@ -89,7 +90,7 @@ import { resolvePromptBuildHookResult } from "../src/agents/embedded-agent-runne
  *      model-visible marker and PRESENT in the operator log.
  *   7. Entry + byte caps — 30 failing plugins through the harness and embedded
  *      consumers: 5 named, "+25 more", marker under the byte cap.
- *   8. Re-entrancy cap — 31 registered hooks skipped by the guard: same caps.
+ *   8. RETIRED with scenario 4 (the guard it capped no longer exists).
  *   9. CLI consumer end to end — secret-bearing failure and the 30-failure
  *      overflow, asserted on the prompt `prepareCliRunContext` hands the backend.
  *  10. Hostile plugin id — a plugin id containing the marker's own closing tag
@@ -104,7 +105,7 @@ import { resolvePromptBuildHookResult } from "../src/agents/embedded-agent-runne
  * Every drop scenario also asserts the dropped plugin's own block is genuinely
  * absent, so the marker is never mistaken for the contribution surviving.
  *
- * RUN: pnpm tsx scripts/proof-prompt-build-drop-marker.ts
+ * RUN: node --import ./scripts/tsx.mjs scripts/proof-prompt-build-drop-marker.ts
  */
 import { resolveAgentHarnessBeforePromptBuildResult } from "../src/agents/harness/prompt-compaction-hook-helpers.js";
 import { SessionManager } from "../src/agents/sessions/session-manager.js";
@@ -412,49 +413,6 @@ async function main(): Promise<void> {
     "timeout: dropped block really is absent",
   );
 
-  console.log("\n[4] re-entrancy guard: nested prompt build is told what was skipped");
-  let nested: PluginHookBeforePromptBuildResult | undefined;
-  const reentrantRegistry = buildRegistry([
-    {
-      pluginId: "proof-beads",
-      priority: -20,
-      handler: async () => {
-        // A plugin that starts a nested agent run from inside its own handler.
-        nested = await runEmbeddedPromptBuild(getGlobalHookRunner(), "proof-run-nested");
-        return { prependContext: PLANS_BLOCK };
-      },
-    },
-    {
-      pluginId: "proof-provenance",
-      priority: 10,
-      handler: () => ({ prependContext: "TAINT: trusted" }),
-    },
-  ]);
-  initializeGlobalHookRunner(reentrantRegistry);
-  const outer = await runEmbeddedPromptBuild(getGlobalHookRunner(), "proof-run-outer");
-  assert(
-    (outer.prependContext ?? "").includes(PLANS_BLOCK),
-    "re-entrancy: outer prompt build still gets the block",
-  );
-  assert(
-    !(outer.appendContext ?? "").includes(MARKER_OPEN),
-    "re-entrancy: outer prompt build is not marked (nothing was dropped there)",
-  );
-  assert(nested !== undefined, "re-entrancy: nested prompt build ran");
-  assert(
-    (nested?.appendContext ?? "").includes(MARKER_OPEN),
-    "re-entrancy: nested prompt build carries the marker",
-  );
-  assert(
-    (nested?.appendContext ?? "").includes("proof-beads (nested-prompt-build)") &&
-      (nested?.appendContext ?? "").includes("proof-provenance (nested-prompt-build)"),
-    "re-entrancy: marker names every plugin the guard skipped",
-  );
-  assert(
-    !(nested?.prependContext ?? "").includes(PLANS_BLOCK),
-    "re-entrancy: nested prompt build really lost the block",
-  );
-
   console.log("\n[5] dispatch rejection: the call site's .catch() emits the marker");
   const failClosedRunner = createHookRunner(
     buildRegistry([
@@ -547,32 +505,6 @@ async function main(): Promise<void> {
     label: "cap/embedded",
     reason: "handler-failed",
     totalDrops: 30,
-  });
-
-  console.log("\n[8] re-entrancy cap: 31 registered hooks skipped by the guard");
-  let nestedBulk: PluginHookBeforePromptBuildResult | undefined;
-  initializeGlobalHookRunner(
-    buildRegistry([
-      ...Array.from({ length: 30 }, (_unused, index) => ({
-        pluginId: `proof-quiet-${index}`,
-        handler: () => undefined,
-      })),
-      {
-        pluginId: "proof-nesting",
-        priority: 100,
-        handler: async () => {
-          nestedBulk = await runEmbeddedPromptBuild(getGlobalHookRunner(), "proof-run-nested-bulk");
-          return undefined;
-        },
-      },
-    ]),
-  );
-  await runEmbeddedPromptBuild(getGlobalHookRunner(), "proof-run-outer-bulk");
-  assertBoundedMarker({
-    prompt: nestedBulk?.appendContext ?? "",
-    label: "cap/re-entrancy",
-    reason: "nested-prompt-build",
-    totalDrops: 31,
   });
 
   console.log("\n[9] CLI consumer end to end: prompt handed to the backend");

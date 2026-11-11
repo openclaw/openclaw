@@ -1,8 +1,8 @@
 /** Aggregates redacted SecretRef degradation diagnostics at the Gateway activation boundary. */
 import { isProviderScopedSecretResolutionError } from "../secrets/resolve-errors.js";
 import {
+  formatSecretDegradationRetryHint,
   redactSecretDegradationReason,
-  SECRET_DEGRADATION_RETRY_HINT,
   type DegradedSecretOwner,
   type SecretDegradation,
 } from "../secrets/runtime-degraded-state.js";
@@ -10,16 +10,17 @@ import type { GatewayStartupLog } from "./server-startup-config-helpers.js";
 
 function logSecretDegradation(log: GatewayStartupLog, degradation: SecretDegradation): void {
   const reason = redactSecretDegradationReason(degradation.reason);
+  const retryHint = formatSecretDegradationRetryHint(reason);
   log.warn(
     `[SECRETS_DEGRADED] ${degradation.state} ${degradation.kind}:${degradation.id}: ` +
-      `${reason}. Retry: ${degradation.retryHint}.`,
+      `${reason}. Retry: ${retryHint}.`,
     {
       event: "secrets.degraded",
       ownerKind: degradation.kind,
       ownerId: degradation.id,
       reason,
       state: degradation.state,
-      retryHint: degradation.retryHint,
+      retryHint,
     },
   );
 }
@@ -32,6 +33,7 @@ function logSecretProviderDegradation(
   const reason = redactSecretDegradationReason(
     degradations[0]?.reason ?? "secret resolution failed",
   );
+  const retryHint = formatSecretDegradationRetryHint(reason);
   const affectedOwners = degradations
     .map(({ kind, id, state }) => ({ ownerKind: kind, ownerId: id, state }))
     .toSorted(
@@ -43,14 +45,14 @@ function logSecretProviderDegradation(
     .join(", ");
   log.warn(
     `[SECRETS_PROVIDER_DEGRADED] ${providerFailure.source}:${providerFailure.provider}: ${reason}. ` +
-      `Affected owners: ${affectedOwnerSummary}. Retry: ${SECRET_DEGRADATION_RETRY_HINT}.`,
+      `Affected owners: ${affectedOwnerSummary}. Retry: ${retryHint}.`,
     {
       event: "secrets.provider_degraded",
       source: providerFailure.source,
       provider: providerFailure.provider,
       reason,
       affectedOwners,
-      retryHint: SECRET_DEGRADATION_RETRY_HINT,
+      retryHint,
     },
   );
 }
@@ -73,7 +75,7 @@ export function logPreparedSecretDegradations(
       id: owner.ownerId,
       reason: owner.reason,
       state: owner.degradationState ?? "cold",
-      retryHint: SECRET_DEGRADATION_RETRY_HINT,
+      retryHint: formatSecretDegradationRetryHint(owner.reason),
     };
     if (!owner.providerFailures?.length) {
       logSecretDegradation(log, degradation);

@@ -31,3 +31,23 @@ export function resolveSlackAutoThreadId(params: {
   }
   return context.currentThreadTs;
 }
+
+export function resolveSlackThreadTsFromContext(
+  explicitThreadTs: string | undefined,
+  targetChannel: string,
+  context: SlackActionContext | undefined,
+  opts?: { suppressImplicitThread?: boolean },
+): string | undefined {
+  if (explicitThreadTs) {
+    return explicitThreadTs;
+  }
+  if (opts?.suppressImplicitThread) {
+    return undefined;
+  }
+  const threadTs = resolveSlackAutoThreadId({ to: targetChannel, toolContext: context });
+  if (isSingleUseReplyToMode(context?.replyToMode ?? "off") && !context?.hasRepliedRef) {
+    return undefined;
+  }
+  // Planning stays pure so failed sends cannot consume a thread before delivery.
+  return threadTs;
+}

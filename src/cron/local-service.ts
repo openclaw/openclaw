@@ -1,4 +1,3 @@
-import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -6,15 +5,15 @@ import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getChildLogger, getResolvedLoggerSettings, toPinoLikeLogger } from "../logging/logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { CronService } from "./service.js";
-import { resolveCronJobsStorePath } from "./store.js";
+import { resolveCronJobsStorePathAsync } from "./store.js";
 
-export async function withLocalAgentCronJobsRemoved<T>(
-  agentId: string,
+/** Offline custody is supplied by the caller; this owner never starts scheduled execution. */
+export async function withLocalCronService<T>(
   getRuntimeConfig: () => OpenClawConfig,
-  commit: () => Promise<T>,
+  run: (service: CronService) => Promise<T>,
 ): Promise<T> {
   const cfg = getRuntimeConfig();
-  const storePath = resolveCronJobsStorePath();
+  const storePath = await resolveCronJobsStorePathAsync();
   const scheduler = new GatewayScheduler();
   const service = new CronService({
     scheduler,
@@ -27,21 +26,32 @@ export async function withLocalAgentCronJobsRemoved<T>(
     ),
     defaultAgentId: tryResolveAmbientOwnerAgentId(cfg),
     resolveDefaultAgentId: () => tryResolveAmbientOwnerAgentId(getRuntimeConfig()),
-    isAgentAvailable: (id, database, facts) =>
-      !(facts?.deletionBlocked ?? isAgentDeletionBlocked(id, {}, database)) &&
+    isAgentAvailable: (id, facts) =>
+      !facts.deletionBlocked &&
       listAgentIds(getRuntimeConfig()).some(
         (configuredId) => normalizeAgentId(configuredId) === id,
       ),
     enqueueSystemEvent: () => false,
-    requestHeartbeat: () => {},
     runIsolatedAgentJob: async () => {
       throw new Error("Cron execution is unavailable in local service context.");
     },
   });
+  service.pauseScheduling();
   try {
-    return await service.removeAgentJobsTransactional(agentId, commit);
+    return await run(service);
   } finally {
     service.stop();
+    await service.waitForIdle();
     await scheduler.stop();
   }
+}
+
+export async function withLocalAgentCronJobsRemoved<T>(
+  agentId: string,
+  getRuntimeConfig: () => OpenClawConfig,
+  commit: () => Promise<T>,
+): Promise<T> {
+  return await withLocalCronService(getRuntimeConfig, async (service) =>
+    service.removeAgentJobsTransactional(agentId, commit),
+  );
 }

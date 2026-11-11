@@ -147,6 +147,7 @@ source ~/.bashrc
 ```
 
 Use `/var/tmp`, not `/tmp` -- some distros clear `/tmp` on boot, which drops the warmed cache.
+The Gateway main thread stays uncached to avoid synchronous cache writes delaying startup or shutdown. Workers retain the cache; see the [Gateway cache policy](/gateway#module-compile-cache).
 
 **Reduce memory usage** -- For headless setups, free GPU memory and disable unused services:
 

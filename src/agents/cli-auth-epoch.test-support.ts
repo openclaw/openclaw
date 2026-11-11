@@ -24,16 +24,22 @@ export function setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): v
       .mockImplementation(overrides.readGeminiCliCredentialsCached);
     restoreReaders.push(() => spy.mockRestore());
   }
-  if (overrides.ensureAuthProfileStore) {
-    const spy = vi
-      .spyOn(authStore, "ensureAuthProfileStore")
-      .mockImplementation(overrides.ensureAuthProfileStore);
-    restoreReaders.push(() => spy.mockRestore());
+  const ensureStore = overrides.ensureAuthProfileStore;
+  if (ensureStore) {
+    const spy = vi.spyOn(authStore, "ensureAuthProfileStore").mockImplementation(ensureStore);
+    const asyncSpy = vi
+      .spyOn(authStore, "ensureAuthProfileStoreAsync")
+      .mockImplementation(async (...args) => ensureStore(...args));
+    restoreReaders.push(() => {
+      spy.mockRestore();
+      asyncSpy.mockRestore();
+    });
   }
-  if (overrides.loadAuthProfileStoreForRuntime) {
+  const loadStore = overrides.loadAuthProfileStoreForRuntime;
+  if (loadStore) {
     const spy = vi
-      .spyOn(authStore, "loadAuthProfileStoreForRuntime")
-      .mockImplementation(overrides.loadAuthProfileStoreForRuntime);
+      .spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync")
+      .mockImplementation(async (...args) => loadStore(...args));
     restoreReaders.push(() => spy.mockRestore());
   }
 }

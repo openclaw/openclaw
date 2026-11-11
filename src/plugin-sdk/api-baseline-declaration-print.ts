@@ -1,12 +1,7 @@
 // Declaration printing keeps compiler-rendered public SDK signatures stable.
-import * as ts from "typescript/unstable/ast";
-import * as factory from "typescript/unstable/ast/factory";
-import {
-  NodeBuilderFlags,
-  SignatureKind,
-  type Checker,
-  type Printer,
-} from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import * as factory from "typescript/ast/factory";
+import { NodeBuilderFlags, SignatureKind, type Checker, type Printer } from "typescript/sync";
 import { normalizePluginSdkApiDeclarationText } from "./api-baseline-normalization.js";
 
 const DECLARATION_TYPE_FORMAT_FLAGS =

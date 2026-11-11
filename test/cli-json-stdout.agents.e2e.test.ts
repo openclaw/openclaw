@@ -209,7 +209,7 @@ describe("cli json stdout contract", () => {
         expect(result.stdout, result.stderr).not.toBe("");
         expect(JSON.parse(result.stdout)).toEqual(testCase.payload);
         if ("writesConfig" in testCase) {
-          await expect(fs.access(configPath)).resolves.toBeUndefined();
+          await fs.access(configPath);
         } else if ("conflict" in testCase) {
           await expect(fs.readFile(configPath, "utf8")).resolves.toBe(existingConfig);
         } else {

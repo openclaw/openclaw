@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type {
@@ -18,6 +17,7 @@ type PromptBuildDispatchPolicy = {
   mergeResults: (
     acc: PluginHookBeforePromptBuildResult | undefined,
     next: PluginHookBeforePromptBuildResult,
+    registration: PluginHookRegistration<"before_prompt_build">,
   ) => PluginHookBeforePromptBuildResult;
   includeRegistration: (registration: PluginHookRegistration<"before_prompt_build">) => boolean;
   onHandlerDropped: (params: { pluginId: string }) => void;
@@ -25,11 +25,22 @@ type PromptBuildDispatchPolicy = {
 };
 
 export type PromptBuildHookDispatchDeps = {
-  logger?: { warn: (message: string) => void };
-  /** Merges two before_prompt_build results, owned by the hook runner. */
-  mergeResults: PromptBuildDispatchPolicy["mergeResults"];
-  /** Every registered before_prompt_build hook, in the runner's priority order. */
-  listRegistrations: () => readonly PluginHookRegistration<"before_prompt_build">[];
+  /**
+   * Merges two before_prompt_build results, owned by the hook runner. Takes the
+   * contributing plugin and the dispatch context because the runner bounds
+   * plugin-authored system context per plugin and per turn.
+   */
+  mergeResults: (
+    acc: PluginHookBeforePromptBuildResult | undefined,
+    next: PluginHookBeforePromptBuildResult,
+    pluginId: string,
+    ctx: PluginHookAgentContext,
+  ) => PluginHookBeforePromptBuildResult;
+  /** Merges the authorized phase's context-only results, owned by the hook runner. */
+  mergeAuthorizedResults: (
+    acc: PluginHookBeforePromptBuildResult | undefined,
+    next: PluginHookBeforePromptBuildResult,
+  ) => PluginHookBeforePromptBuildResult;
   /** Runs the runner's modifying-hook chain for before_prompt_build. */
   dispatch: (
     event: PluginHookBeforePromptBuildEvent,
@@ -55,6 +66,14 @@ export type PromptBuildHookDispatch = {
 };
 
 /**
+ * The marker is host-authored, not a plugin contribution, but it travels through
+ * the same merge so it lands in the same append-context slot. The merge only
+ * reads a plugin id to bound plugin-authored system context, which the marker
+ * never carries.
+ */
+const DROP_MARKER_PLUGIN_ID = "openclaw";
+
+/**
  * Owns the two before_prompt_build dispatch phases and the loss reporting they
  * share: the ordinary phase, and the authorized phase that runs after the host
  * has finalized the turn's tool surface. Both answer the same question — which
@@ -63,10 +82,7 @@ export type PromptBuildHookDispatch = {
 export function createPromptBuildHookDispatch(
   deps: PromptBuildHookDispatchDeps,
 ): PromptBuildHookDispatch {
-  const { logger, mergeResults, listRegistrations, dispatch } = deps;
-  // Prompt-build hooks may start nested agent runs through any caller. The
-  // mutable token lets detached descendants dispatch after the outer run settles.
-  const beforePromptBuildDispatch = new AsyncLocalStorage<{ active: boolean }>();
+  const { mergeResults, mergeAuthorizedResults, dispatch } = deps;
 
   /**
    * Run before_prompt_build hook.
@@ -76,50 +92,21 @@ export function createPromptBuildHookDispatch(
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookBeforePromptBuildResult | undefined> {
-    if (beforePromptBuildDispatch.getStore()?.active) {
-      // The whole chain is skipped so nested prompt builds cannot recurse. Name
-      // the plugins whose contributions this prompt is missing rather than
-      // returning a prompt that reads as if they had nothing to add.
-      const skippedPluginIds = [
-        ...new Set(
-          listRegistrations()
-            .filter((hook) => hook.requiresToolAuthority !== true)
-            .map((hook) => hook.pluginId),
-        ),
-      ];
-      if (skippedPluginIds.length === 0) {
-        return undefined;
-      }
-      logger?.warn(
-        `[hooks] before_prompt_build skipped for a nested prompt build; ` +
-          `contributions from ${skippedPluginIds.join(", ")} are missing from this turn`,
-      );
-      return buildPromptBuildDropResult(
-        skippedPluginIds.map((pluginId) => ({ pluginId, reason: "nested-prompt-build" as const })),
-      );
-    }
-    const token = { active: true };
     const drops: PromptBuildDrop[] = [];
-    const result = await beforePromptBuildDispatch.run(token, async () => {
-      try {
-        return await dispatch(event, ctx, {
-          mergeResults,
-          onHandlerDropped: ({ pluginId }) => {
-            // Reason code only: the error itself is model-visible nowhere.
-            // handleHookError already logged it for operators.
-            drops.push({ pluginId, reason: "handler-failed" });
-          },
-          includeRegistration: (registration) => registration.requiresToolAuthority !== true,
-        });
-      } finally {
-        token.active = false;
-      }
+    const result = await dispatch(event, ctx, {
+      mergeResults: (acc, next, hook) => mergeResults(acc, next, hook.pluginId, ctx),
+      onHandlerDropped: ({ pluginId }) => {
+        // Reason code only: the error itself is model-visible nowhere.
+        // handleHookError already logged it for operators.
+        drops.push({ pluginId, reason: "handler-failed" });
+      },
+      includeRegistration: (registration) => registration.requiresToolAuthority !== true,
     });
     const dropMarker = buildPromptBuildDropResult(drops);
     if (!dropMarker) {
       return result;
     }
-    return mergeResults(result, dropMarker);
+    return mergeResults(result, dropMarker, DROP_MARKER_PLUGIN_ID, ctx);
   }
 
   /** Runs context enrichment only after the host has finalized the turn's tool surface. */
@@ -136,10 +123,10 @@ export function createPromptBuildHookDispatch(
     if (!sourceFingerprint) {
       return undefined;
     }
-    const activeToolNames = [
-      ...new Set(params.activeToolNames.map(normalizeToolPolicyName).filter(Boolean)),
-    ].toSorted();
-    const activeToolNameSet = new Set(activeToolNames);
+    const activeToolNameSet = new Set(
+      params.activeToolNames.map(normalizeToolPolicyName).filter(Boolean),
+    );
+    const activeToolNames = Object.freeze([...activeToolNameSet].toSorted());
     const token = { active: true };
     const assertActive = () => {
       if (!token.active) {
@@ -157,6 +144,10 @@ export function createPromptBuildHookDispatch(
         assertActive();
         return activeToolNameSet.has(normalizeToolPolicyName(toolName));
       },
+      list(): readonly string[] {
+        assertActive();
+        return activeToolNames;
+      },
       assertActive,
     });
     const drops: PromptBuildDrop[] = [];
@@ -165,7 +156,7 @@ export function createPromptBuildHookDispatch(
         event,
         { ...ctx, toolAuthority: authority },
         {
-          mergeResults,
+          mergeResults: mergeAuthorizedResults,
           includeRegistration: (registration) => registration.requiresToolAuthority === true,
           assertHandlerBoundaryActive: assertActive,
           onHandlerDropped: ({ pluginId }) => {
@@ -180,7 +171,7 @@ export function createPromptBuildHookDispatch(
           }
         : undefined;
       const dropMarker = buildPromptBuildDropResult(drops);
-      return dropMarker ? mergeResults(projectedResult, dropMarker) : projectedResult;
+      return dropMarker ? mergeAuthorizedResults(projectedResult, dropMarker) : projectedResult;
     } finally {
       token.active = false;
     }

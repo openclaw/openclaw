@@ -1,12 +1,14 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  sessionEntryCommitGuardOptions,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   cancelProviderLoginFlow,
-  answerProviderLoginModelAccess,
-  offerProviderLoginModelAccess,
-  type PreparedProviderModelAccess,
   decideProviderLoginSessionAdoption,
   createProviderLoginFlowRegistry,
   formatProviderLoginCommand,
@@ -23,6 +25,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { ReplyPayload } from "../types.js";
+import { commandReply } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
@@ -124,7 +127,7 @@ async function switchLoginSessionProfile(params: {
   loginProvider: string;
   nextProfileId: string;
   signal: AbortSignal;
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
 }): Promise<"unchanged" | "updated" | "failed"> {
   const { commandParams, loginProvider, nextProfileId } = params;
   const currentEntry = commandParams.sessionEntry;
@@ -176,10 +179,12 @@ async function switchLoginSessionProfile(params: {
           return persistedDecision.status === "patch" ? persistedDecision.patch : null;
         },
         {
-          assertCommitAllowed: () => {
-            params.signal.throwIfAborted();
-            params.assertCurrent();
-          },
+          ...sessionEntryCommitGuardOptions(
+            composeSessionSourceAssertion([params.assertCurrent], (assertSource) => {
+              params.signal.throwIfAborted();
+              assertSource();
+            }),
+          ),
           requireWriteSuccess: true,
           skipMaintenance: true,
         },
@@ -243,7 +248,6 @@ async function runChannelProviderLogin(
   const assertCurrent = (config = readConfig()) => {
     assertProviderLoginAuthority(commandParams, config);
   };
-  let modelAccess: PreparedProviderModelAccess | undefined;
   try {
     const loginResult = await runProviderChannelLoginFlow({
       choice,
@@ -255,9 +259,6 @@ async function runChannelProviderLogin(
       assertCurrent,
       sendMessage: (text) => emitLoginMessage(commandParams, text),
       sendReply,
-      onModelAccessRequested: (request) => {
-        modelAccess = request;
-      },
       unsupportedPromptMessage:
         "This provider needs input that chat cannot collect. Open Control UI → Models and choose Sign in.",
     });
@@ -280,14 +281,9 @@ async function runChannelProviderLogin(
       switchResult === "failed",
       nextProfileId ? { model: commandParams.model, profileId: nextProfileId } : undefined,
     );
-    return modelAccess
-      ? offerProviderLoginModelAccess({
-          flows: activeProviderLoginFlows,
-          flowKey,
-          prepared: modelAccess,
-          terminalMessage,
-        })
-      : { text: terminalMessage };
+    return {
+      text: [terminalMessage, loginResult.modelAccess?.message].filter(Boolean).join(" "),
+    };
   } catch (error) {
     return {
       text: formatProviderLoginFailure(choice, error),
@@ -327,44 +323,13 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
         flows: activeProviderLoginFlows,
         flowKey: buildProviderLoginFlowKey(params),
       }),
-    answerChoice: (command) =>
-      answerProviderLoginModelAccess({
-        flows: activeProviderLoginFlows,
-        flowKey: buildProviderLoginFlowKey(params),
-        command,
-        agentId: params.agentId,
-        readConfig:
-          params.opts?.getProviderLoginConfig ?? (() => getRuntimeConfigSnapshot() ?? params.cfg),
-        runtime: defaultRuntime,
-        signal: params.opts?.abortSignal,
-        assertCurrent: (config) =>
-          assertProviderLoginAuthority(
-            params,
-            config ??
-              params.opts?.getProviderLoginConfig?.() ??
-              getRuntimeConfigSnapshot() ??
-              params.cfg,
-          ),
-      }),
   });
   if (!prepared) {
     return null;
   }
-  if (prepared.status !== "ready") {
-    return { shouldContinue: false, reply: prepared.reply };
-  }
-  const reply = await runChannelProviderLogin(params, prepared.choice);
-  return { shouldContinue: false, reply };
+  return commandReply(
+    prepared.status === "ready"
+      ? await runChannelProviderLogin(params, prepared.choice)
+      : prepared.reply,
+  );
 };
-
-const commandsLoginTestApi = {
-  clearActiveFlows() {
-    activeProviderLoginFlows.logins.clear();
-    activeProviderLoginFlows.modelAccess.clear();
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.commandsLoginTestApi")] =
-    commandsLoginTestApi;
-}

@@ -116,7 +116,7 @@ export function createPendingLifecycleScheduler(params: {
         pending.cancellation ? "lifecycle-cancellation-grace" : `lifecycle-${kind}-grace`,
       );
     }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
-    timer.unref?.();
+    timer.unref();
     pendingByRunId.set(scheduleParams.runId, { ...scheduleParams, kind, timer });
   }
 

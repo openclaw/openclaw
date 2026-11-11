@@ -1,26 +1,17 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import { isDeepStrictEqual } from "node:util";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { readSessionActivitySummary } from "./activity-summary.js";
-import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import { assertSessionCreationLabelAvailable } from "./session-accessor.sqlite-creation-read.js";
-import {
-  sessionSharingEntriesEqual,
-  type SessionEntryProjectionFacts,
-  type SessionEntryReplacementPublication,
-} from "./session-accessor.sqlite-entry-cache.types.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
-import { prepareExactSessionEntryRowReads } from "./session-accessor.sqlite-entry-read.js";
-import { readSessionNodesGeneration } from "./session-accessor.sqlite-entry-revision.js";
+import {
+  prepareExactSessionEntryRowReads,
+  type ResolvedSessionEntryRow,
+} from "./session-accessor.sqlite-entry-read.js";
+import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import {
   deleteLegacySessionEntryRows,
-  readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { captureSessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   applySessionEntryMaintenanceInDatabase,
   emptySessionEntryMaintenancePlan,
@@ -32,115 +23,11 @@ import type {
   SessionEntryReplacementCommitted,
 } from "./session-accessor.sqlite-replacement-types.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
-import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.js";
+import { commitSessionCreationReceipt } from "./session-creation-receipts.js";
+import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
+import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { SessionEntry } from "./types.js";
-
-/** Receipts carry only publication facts, never saved prompts or maintenance payloads. */
-export function prepareSessionEntryReplacementPublication(
-  result: SessionEntryReplacementCommitted,
-  database: OpenClawAgentDatabase,
-): SessionEntryReplacementPublication {
-  const archived = new Set(
-    result.maintenancePlans.flatMap((plan) =>
-      plan.archivedEntries.map(({ sessionKey }) => sessionKey),
-    ),
-  );
-  const invalidated = new Set([...result.membershipInvalidatedKeys, ...archived]);
-  const current = new Map<string, SessionEntry>();
-  const projection = new Map<string, SessionEntryProjectionFacts>();
-  let readCommitted: ReturnType<typeof prepareExactSessionEntryRowReads> | undefined;
-  for (const key of result.current.keys()) {
-    readCommitted ??= prepareExactSessionEntryRowReads(
-      database,
-      [...result.current.keys()],
-      "list",
-      undefined,
-      { includeBoardPresence: true, includeMembership: true },
-    );
-    // Read the final persisted bytes and side tables after assignment, alias moves and maintenance.
-    const committed = readCommitted(key);
-    if (!committed) {
-      throw new Error(`Session publication lost its committed metadata: ${key}`);
-    }
-    const memberIds: unknown = JSON.parse(committed.row.member_ids_json ?? "null");
-    if (
-      !Array.isArray(memberIds) ||
-      !memberIds.every((id): id is string => typeof id === "string")
-    ) {
-      throw new Error(`Session publication lost its committed membership: ${key}`);
-    }
-    current.set(key, freezeJsonSnapshot(committed.entry));
-    const { entry } = committed;
-    projection.set(
-      key,
-      freezeJsonSnapshot({
-        membership: [
-          key,
-          isInternalSessionEffectsKey(key)
-            ? null
-            : (normalizeOptionalString(entry.category) ?? null),
-          memberIds,
-          {
-            ...(entry.participants ? { participants: entry.participants } : {}),
-            ...(entry.participantCount === undefined
-              ? {}
-              : { participantCount: entry.participantCount }),
-          },
-          entry.sessionId,
-        ],
-        hasBoard: committed.row.board_present === 1,
-        activitySummaryWatermark: readSessionActivitySummary(entry)
-          ? readSessionTranscriptWatermarkInDatabase(database, entry.sessionId)
-          : undefined,
-      }),
-    );
-  }
-  return {
-    kind: "session-entry-replacements",
-    pendingArchiveRecovery: result.pendingArchiveRecovery,
-    membershipInvalidatedKeys: result.membershipInvalidatedKeys,
-    sharingUnchangedKeys: [...current].flatMap(([key, entry]) =>
-      !invalidated.has(key) && sessionSharingEntriesEqual(result.previous.get(key), entry)
-        ? [key]
-        : [],
-    ),
-    // Committed rows that keep their incarnation; generation readers need not wait for them.
-    generationUnchangedKeys: [...current].flatMap(([key, entry]) => {
-      const previous = result.previous.get(key);
-      return !invalidated.has(key) &&
-        previous !== undefined &&
-        previous.sessionId === entry.sessionId &&
-        previous.lifecycleRevision === entry.lifecycleRevision
-        ? [key]
-        : [];
-    }),
-    previous: new Map(
-      [...result.previous].map(([key, entry]) => [
-        key,
-        { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision },
-      ]),
-    ),
-    current,
-    projection,
-    ageChanges: [...current].map(([sessionKey, entry]) =>
-      captureSessionEntryMaintenanceAgeChange({
-        sessionKey,
-        entry,
-        previousEntry: result.previous.get(sessionKey),
-      }),
-    ),
-    ...(getAdmittedSqliteSchemaFacts(database.db)
-      ? {
-          source: {
-            ...readOpenClawAgentDatabaseIdentity(database),
-            revision: readSessionNodesGeneration(database.db),
-          },
-        }
-      : {}),
-    changedKeys: [...new Set([...result.previous.keys(), ...result.current.keys(), ...archived])],
-  };
-}
 
 /** One SQL owner serves admitted worker writes and the native rollback exception. */
 export function commitSessionEntryReplacementsInDatabase(
@@ -148,6 +35,8 @@ export function commitSessionEntryReplacementsInDatabase(
   input: SessionEntryReplacementCommit,
   beforeReplacements: () => void,
   refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
+  onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
+  postimages?: SessionEntryWritePostimages,
 ): SessionEntryReplacementCommitted {
   if (input.labelClaim) {
     assertSessionCreationLabelAvailable(
@@ -164,18 +53,39 @@ export function commitSessionEntryReplacementsInDatabase(
   ) {
     throw new Error("SQLite session label owners changed before replacement");
   }
-  const transactionEntries = new Map<string, SessionEntry>();
+  const transactionRows = new Map<string, ResolvedSessionEntryRow>();
+  const windows = new Map<string, SessionEntryWindowRow | null>();
+  const writtenPostimages: SessionEntryWritePostimages = postimages ?? new Map();
+  let readValidation: ReturnType<typeof prepareExactSessionEntryRowReads> | undefined;
   for (const sessionKey of input.validationKeys) {
-    const transactionRow = readExactSessionEntryRow(database, sessionKey);
+    readValidation ??= prepareExactSessionEntryRowReads(
+      database,
+      input.validationKeys,
+      "full",
+      undefined,
+      { includeWindowFacts: true, includeBoardPresence: true, includeMembership: true },
+    );
+    const transactionRow = readValidation(sessionKey);
     const expectedRow = input.expectedRows.get(sessionKey);
-    if (
-      transactionRow?.row.entry_json !== expectedRow?.row.entry_json ||
-      !sqliteSessionEntriesEqual(transactionRow?.entry, expectedRow?.entry)
-    ) {
+    const unchanged = input.fieldPatch
+      ? transactionRow && expectedRow
+        ? transactionRow.entry.sessionId === expectedRow.entry.sessionId &&
+          transactionRow.entry.lifecycleRevision === expectedRow.entry.lifecycleRevision &&
+          input.fieldPatch.guardFields.every((field) =>
+            isDeepStrictEqual(transactionRow.entry[field], expectedRow.entry[field]),
+          )
+        : transactionRow === expectedRow
+      : transactionRow?.row.entry_json === expectedRow?.row.entry_json &&
+        sqliteSessionEntriesEqual(transactionRow?.entry, expectedRow?.entry);
+    if (!unchanged) {
       throw new Error(`SQLite session entry changed before replacement for ${sessionKey}`);
     }
     if (transactionRow) {
-      transactionEntries.set(sessionKey, transactionRow.entry);
+      transactionRows.set(sessionKey, transactionRow);
+      const window = transactionRow.row.window;
+      if (window !== undefined) {
+        windows.set(transactionRow.entry.sessionId, window);
+      }
     }
   }
   beforeReplacements();
@@ -195,33 +105,94 @@ export function commitSessionEntryReplacementsInDatabase(
       replacement.sessionKey,
       ...(replacement.previousSessionKeys ?? []),
     ].flatMap((sessionKey) => {
-      const entry = transactionEntries.get(sessionKey);
+      const entry = transactionRows.get(sessionKey)?.entry;
       return entry ? [{ entry, sessionKey }] : [];
     });
     const selectedBefore = sourceEntries.toSorted(
       (left, right) => (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0),
     )[0]?.entry;
     for (const { entry, sessionKey } of sourceEntries) {
-      previous.set(sessionKey, entry);
+      if (!previous.has(sessionKey)) {
+        previous.set(sessionKey, entry);
+      }
     }
+    const canonical = transactionRows.get(replacement.sessionKey);
+    let next = replacement.entry;
+    if (input.fieldPatch) {
+      const expected = input.expectedRows.get(replacement.sessionKey)?.entry;
+      if (!canonical || !expected || replacement.previousSessionKeys?.length) {
+        throw new Error("Field-scoped session patches require an existing canonical entry");
+      }
+      // Merge against the transaction's complete row so concurrent activity and cold
+      // snapshots survive; the existing writer still publishes a complete postimage.
+      next = { ...canonical.entry };
+      for (const field of input.fieldPatch.fields) {
+        const value = replacement.entry[field];
+        if (value === undefined) {
+          delete next[field];
+        } else {
+          Object.assign(next, { [field]: value });
+        }
+      }
+      next.updatedAt =
+        replacement.entry.updatedAt === expected.updatedAt
+          ? canonical.entry.updatedAt
+          : Math.max(canonical.entry.updatedAt, replacement.entry.updatedAt);
+    }
+    const canonicalFacts = canonical && captureSessionEntrySnapshot(canonical);
+    const previousWindow = windows.get(next.sessionId);
     const written = writeSessionEntry(
       database,
       replacement.sessionKey,
-      structuredClone(replacement.entry),
+      { ...next },
       {
         ...(input.consumePendingReset ? { consumePendingReset: true } : {}),
         previousEntry: selectedBefore ?? null,
-        canonicalPreviousEntry: transactionEntries.get(replacement.sessionKey) ?? null,
+        canonicalPreviousEntry: canonical?.entry ?? null,
+        canonicalPreviousRow: canonical?.row,
+        canonicalPreviousWindow:
+          previousWindow !== undefined
+            ? { sessionId: replacement.entry.sessionId, row: previousWindow }
+            : canonicalFacts?.window,
+        canonicalPreviousSideTables: canonicalFacts?.sideTables,
+        postimages: writtenPostimages,
+        publishConversationBinding: (replacement.previousSessionKeys?.length ?? 0) > 0,
       },
     );
-    deleteLegacySessionEntryRows(
-      database,
-      [...(replacement.previousSessionKeys ?? [])],
-      replacement.sessionKey,
-      {
-        rehomeMembers: selectedBefore?.sessionId === replacement.entry.sessionId,
-      },
-    );
+    if (replacement.previousSessionKeys?.length) {
+      deleteLegacySessionEntryRows(
+        database,
+        [...replacement.previousSessionKeys],
+        replacement.sessionKey,
+        {
+          rehomeMembers: selectedBefore?.sessionId === replacement.entry.sessionId,
+          validatedEntries: new Map(
+            sourceEntries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+          ),
+          postimages: writtenPostimages,
+        },
+      );
+    }
+    // Each later replacement starts from the preceding write, including shared physical windows.
+    const postimage = writtenPostimages.get(replacement.sessionKey);
+    if (postimage) {
+      // Repeated keys are a mutation batch even when the final write returns to its start.
+      postimage.changed ||= current.has(replacement.sessionKey);
+      transactionRows.set(replacement.sessionKey, {
+        entry: postimage.entry,
+        row: {
+          ...postimage.row,
+          member_ids_json: postimage.sideTables.memberIdsJson,
+          board_present: postimage.sideTables.hasBoard ? 1 : 0,
+        },
+      });
+      windows.set(postimage.entry.sessionId, postimage.window);
+    }
+    for (const previousKey of replacement.previousSessionKeys ?? []) {
+      if (previousKey !== replacement.sessionKey) {
+        transactionRows.delete(previousKey);
+      }
+    }
     if (replacement.previousSessionKeys?.some((key) => key !== replacement.sessionKey)) {
       membershipInvalidatedKeys.push(replacement.sessionKey);
     }
@@ -232,10 +203,22 @@ export function commitSessionEntryReplacementsInDatabase(
     const { sessionKey, owner } = input.ownerAssignment;
     if (
       !current.has(sessionKey) ||
-      !replaceSessionOwnerInTransaction(database, sessionKey, owner)
+      !replaceSessionOwnerInTransaction(database, sessionKey, owner, writtenPostimages)
     ) {
       throw new Error("Session owner assignment lost its creation target");
     }
+  }
+  if (input.creationOperation) {
+    const created = input.replacements[0];
+    if (!created || input.replacements.length !== 1) {
+      throw new Error("Creation receipt requires one exact session target");
+    }
+    commitSessionCreationReceipt(
+      database,
+      input.creationOperation,
+      created.sessionKey,
+      created.entry,
+    );
   }
   const preservation = maintenance?.preservation;
   const maintenancePlan =
@@ -244,11 +227,35 @@ export function commitSessionEntryReplacementsInDatabase(
           database,
           maintenance,
           () => preservation,
-          undefined,
+          (sessionKey, previousEntry, currentEntry) => {
+            if (!previous.has(sessionKey)) {
+              previous.set(sessionKey, previousEntry);
+            }
+            current.set(sessionKey, currentEntry);
+            onArchived?.(sessionKey, previousEntry, currentEntry);
+          },
           refreshCandidates,
+          writtenPostimages,
         )
       : emptySessionEntryMaintenancePlan();
+  for (const sessionKey of current.keys()) {
+    const postimage = writtenPostimages.get(sessionKey);
+    if (postimage) {
+      current.set(sessionKey, postimage.entry);
+    } else {
+      current.delete(sessionKey);
+    }
+  }
   return {
+    ...(input.fieldPatch
+      ? {
+          patchDiffBaselines: new Map(
+            [...current].flatMap(([key, entry]) =>
+              entry.sessionDiffBaseline ? [[key, entry.sessionDiffBaseline] as const] : [],
+            ),
+          ),
+        }
+      : {}),
     // Fresh creation must not retry another session's failed export.
     pendingArchiveRecovery:
       input.checkPendingArchiveRecovery === true &&

@@ -10,6 +10,10 @@ const repoRoot = path.resolve(import.meta.dirname, "../..");
 const require = createRequire(import.meta.url);
 const globMatchers = new Map<string, Minimatch>();
 
+// Match Vitest's script-extension grammar so broad selectors cannot leak opt-in suites.
+export const vitestE2eTestGlob = "**/*.e2e.test.?(c|m)[jt]s?(x)";
+export const vitestLiveTestGlob = "**/*.live.test.?(c|m)[jt]s?(x)";
+
 export const sharedVitestExcludePatterns: readonly string[] = Object.freeze([
   "dist/**",
   "test/fixtures/**",
@@ -19,8 +23,8 @@ export const sharedVitestExcludePatterns: readonly string[] = Object.freeze([
   "**/vendor/**",
   "dist/OpenClaw.app/**",
   "**/._*",
-  "**/*.live.test.ts",
-  "**/*.e2e.test.ts",
+  vitestLiveTestGlob,
+  vitestE2eTestGlob,
 ]);
 
 export function isSharedVitestExcludedPath(file: string, scopedDir = ""): boolean {

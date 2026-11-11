@@ -2,7 +2,10 @@ import fs from "node:fs";
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  openSessionArchiveDecodedStream,
+  SESSION_ARCHIVE_ZSTD_SUFFIX,
+} from "../config/sessions/archive-compression.js";
 import {
   parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
@@ -15,31 +18,35 @@ import {
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import { sha256Base64Url } from "./crypto-digest.js";
 import {
-  resolveUsageCostTranscriptFile,
-  type UsageCostCollectionAccess,
-} from "./session-cost-usage-collection.js";
-import {
-  computeUsageTokenTotals,
-  parseUsageCostTranscriptRecord,
-  needsUsageCostEstimate,
-  applyUsageCostEstimate,
-} from "./session-cost-usage-pricing.js";
-import {
-  USAGE_COST_ROLLUP_VERSION,
-  type UsageCostJsonlCheckpoint,
-  type UsageCostSqliteCheckpoint,
-  type UsageCostRollupEntry,
-} from "./session-cost-usage-rollup-codec.js";
-import {
-  appendSessionUsageRollupContribution,
-  createSessionUsageRollupData,
-} from "./session-cost-usage-rollup.js";
-import { createEmptyCostUsageTotals as emptyTotals } from "./session-cost-usage-totals.js";
-import type {
-  CostUsageTotals,
-  ParsedTranscriptEntry,
-  UsageCostTranscriptFile,
-} from "./session-cost-usage.types.js";
+  dropInheritedTranscriptEvents,
+  projectUsageScanFields,
+} from "./session-cost-usage-inherited.js";
+import { parseUsageCostTranscriptRecord } from "./session-cost-usage-pricing.js";
+import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
+import { createUsageRollupScan } from "./session-cost-usage-rollup-scan.js";
+import type { ParsedTranscriptEntry, UsageCostTranscriptFile } from "./session-cost-usage.types.js";
+
+/** Reuse resolved model prices across the bounded pages of one worker operation. */
+export function createUsageCostWorkerPriceResolver(
+  resolveMissing: (
+    pairs: Array<{ provider?: string; model?: string }>,
+  ) => Promise<Array<ModelCostConfig | undefined>>,
+) {
+  const prices = new Map<string, ModelCostConfig | undefined>();
+  return async (pairs: Array<{ provider?: string; model?: string }>) => {
+    const missing = new Map(
+      pairs
+        .filter((pair) => !prices.has(JSON.stringify(pair)))
+        .map((pair) => [JSON.stringify(pair), pair]),
+    );
+    if (missing.size > 0) {
+      const keys = [...missing.keys()];
+      const costs = await resolveMissing([...missing.values()]);
+      keys.forEach((key, index) => prices.set(key, costs[index]));
+    }
+    return pairs.map((pair) => prices.get(JSON.stringify(pair)));
+  };
+}
 
 const USAGE_COST_FILE_ANCHOR_BYTES = 4096;
 
@@ -62,43 +69,157 @@ async function readJsonlAnchorHash(filePath: string, offset: number): Promise<st
   }
 }
 
+// A compressed archive can expand far past its stored size. Past this many bytes, an
+// archive record keeps its JSON structure but only the start of each long string, so
+// usage, cost, and tree fields survive while inlined media or tool output does not.
+const USAGE_COST_MAX_ARCHIVE_RECORD_BYTES = 32 * 1024 * 1024;
+const PRUNED_STRING_BYTES = 1024;
+
+/** Copies JSON bytes while truncating string values; state spans fragments. */
+function createJsonStringPruner() {
+  const output: Buffer[] = [];
+  let outputBytes = 0;
+  let inString = false;
+  let stringBytes = 0;
+  let escaped = false;
+  let unicodeDigits = 0;
+  // An escape sequence is kept or dropped whole so the result stays valid JSON.
+  let keepEscape = true;
+  // Copy kept runs: a view would keep its whole decoded chunk alive.
+  const keepRun = (bytes: Buffer, start: number, end: number) => {
+    if (end > start) {
+      output.push(Buffer.from(bytes.subarray(start, end)));
+      outputBytes += end - start;
+    }
+  };
+  return {
+    get bytes() {
+      return outputBytes;
+    },
+    push(bytes: Buffer) {
+      let runStart = 0;
+      let keeping = true;
+      for (let index = 0; index < bytes.length; index += 1) {
+        const byte = bytes[index]!;
+        let keep = true;
+        if (!inString) {
+          if (byte === 0x22) {
+            inString = true;
+            stringBytes = 0;
+          }
+        } else if (unicodeDigits > 0) {
+          unicodeDigits -= 1;
+          keep = keepEscape;
+        } else if (escaped) {
+          escaped = false;
+          unicodeDigits = byte === 0x75 ? 4 : 0;
+          keep = keepEscape;
+        } else if (byte === 0x5c) {
+          escaped = true;
+          keepEscape = stringBytes < PRUNED_STRING_BYTES;
+          keep = keepEscape;
+          stringBytes += 1;
+        } else if (byte === 0x22) {
+          inString = false;
+        } else {
+          keep = stringBytes < PRUNED_STRING_BYTES;
+          stringBytes += 1;
+        }
+        if (keep !== keeping) {
+          if (keeping) {
+            keepRun(bytes, runStart, index);
+          } else {
+            runStart = index;
+          }
+          keeping = keep;
+        }
+      }
+      if (keeping) {
+        keepRun(bytes, runStart, bytes.length);
+      }
+    },
+    take() {
+      return Buffer.concat(output, outputBytes);
+    },
+  };
+}
+
 function parseJsonlRecord(line: Buffer): Record<string, unknown> | undefined {
   return safeParseJsonRecord(line.toString("utf8").trim());
 }
 
 async function scanJsonlRange(params: {
   filePath: string;
+  /** Compressed archives decode whole; their offsets count plaintext bytes. */
+  archive: boolean;
   startOffset: number;
   endOffset: number;
+  checkProgress?: () => void;
   onRecord: (record: Record<string, unknown>) => void | Promise<void>;
 }): Promise<number> {
   if (params.endOffset <= params.startOffset) {
     return params.startOffset;
   }
-  const stream = fs.createReadStream(params.filePath, {
-    start: params.startOffset,
-    end: params.endOffset - 1,
-  });
+  const stream = params.archive
+    ? openSessionArchiveDecodedStream(params.filePath)
+    : fs.createReadStream(params.filePath, {
+        start: params.startOffset,
+        end: params.endOffset - 1,
+      });
   // Retain fragments until a line is complete; growing a contiguous carry buffer
   // would repeatedly copy and rescan large transcript records.
   const lineChunks: Buffer[] = [];
   let lineBytes = 0;
+  let pruner: ReturnType<typeof createJsonStringPruner> | undefined;
+  const append = (fragment: Buffer) => {
+    if (
+      !pruner &&
+      params.archive &&
+      lineBytes + fragment.length > USAGE_COST_MAX_ARCHIVE_RECORD_BYTES
+    ) {
+      pruner = createJsonStringPruner();
+      for (const chunk of lineChunks) {
+        pruner.push(chunk);
+      }
+      lineChunks.length = 0;
+      lineBytes = 0;
+    }
+    if (pruner) {
+      pruner.push(fragment);
+      if (pruner.bytes > USAGE_COST_MAX_ARCHIVE_RECORD_BYTES) {
+        // Structure alone past the bound cannot come from a transcript writer.
+        throw Object.assign(
+          new RangeError(`Session archive ${params.filePath} has a record too large to account`),
+          { code: "ERR_BUFFER_TOO_LARGE" },
+        );
+      }
+      return;
+    }
+    lineChunks.push(fragment);
+    lineBytes += fragment.length;
+  };
+  const takeRecord = () => {
+    const line = pruner
+      ? pruner.take()
+      : lineChunks.length === 1
+        ? lineChunks[0]!
+        : Buffer.concat(lineChunks, lineBytes);
+    const record = pruner || lineBytes > 0 ? parseJsonlRecord(line) : undefined;
+    lineChunks.length = 0;
+    lineBytes = 0;
+    pruner = undefined;
+    return record;
+  };
   let chunkStart = params.startOffset;
   let processedOffset = params.startOffset;
   try {
     for await (const chunk of stream) {
+      params.checkProgress?.();
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       let lineStart = 0;
       for (let newline = bytes.indexOf(10); newline >= 0; newline = bytes.indexOf(10, lineStart)) {
-        const fragment = bytes.subarray(lineStart, newline);
-        let line = fragment;
-        if (lineChunks.length > 0) {
-          lineChunks.push(fragment);
-          line = Buffer.concat(lineChunks, lineBytes + fragment.length);
-          lineChunks.length = 0;
-          lineBytes = 0;
-        }
-        const record = parseJsonlRecord(line);
+        append(bytes.subarray(lineStart, newline));
+        const record = takeRecord();
         if (record) {
           const pending = params.onRecord(record);
           if (pending) {
@@ -109,17 +230,12 @@ async function scanJsonlRange(params: {
         lineStart = newline + 1;
       }
       if (lineStart < bytes.length) {
-        const fragment = bytes.subarray(lineStart);
-        lineChunks.push(fragment);
-        lineBytes += fragment.length;
+        append(bytes.subarray(lineStart));
       }
       chunkStart += bytes.length;
     }
-    const firstChunk = lineChunks[0];
-    if (firstChunk) {
-      const record = parseJsonlRecord(
-        lineChunks.length === 1 ? firstChunk : Buffer.concat(lineChunks, lineBytes),
-      );
+    if (lineBytes > 0 || pruner) {
+      const record = takeRecord();
       if (record) {
         const pending = params.onRecord(record);
         if (pending) {
@@ -141,104 +257,25 @@ type RollupScanInput = {
   resolveCosts: (
     pairs: Array<{ provider?: string; model?: string }>,
   ) => Promise<Array<ModelCostConfig | undefined>>;
+  readGeneration: (marker: SqliteSessionFileMarker) => Promise<string | null | undefined>;
   readRows: (
     marker: SqliteSessionFileMarker,
     afterSeq: number,
     throughSeq: number,
-  ) => Promise<Array<{ seq: number; event: unknown }>>;
-  access: UsageCostCollectionAccess;
+    consume: (seq: number, event: unknown) => void,
+  ) => Promise<number>;
+  checkProgress?: () => void;
 };
-
-function createUsageRollupScan(params: RollupScanInput & { appendOnly: boolean }) {
-  const previous = params.appendOnly ? params.previous : undefined;
-  // This task exclusively owns the decoded body; publication retains its original envelope for CAS.
-  const rollup = previous?.rollup ?? createSessionUsageRollupData();
-  let countedRecords = 0;
-  let parsedRecords = 0;
-  return {
-    async addRecords(records: Iterable<Record<string, unknown>>): Promise<void> {
-      let batch: ParsedTranscriptEntry[] = [];
-      const flush = async () => {
-        const estimated = batch.filter(needsUsageCostEstimate);
-        const costs = await params.resolveCosts(
-          estimated.map(({ provider, model }) => ({ provider, model })),
-        );
-        for (let i = 0; i < estimated.length; i++) {
-          applyUsageCostEstimate(estimated[i]!, () => costs[i]);
-        }
-        for (const entry of batch) {
-          let usageTotals: CostUsageTotals | undefined;
-          if (entry.usage) {
-            usageTotals = emptyTotals();
-            const tokens = computeUsageTokenTotals(entry.usage);
-            usageTotals.input += tokens.input;
-            usageTotals.output += tokens.output;
-            usageTotals.cacheRead += tokens.cacheRead;
-            usageTotals.cacheWrite += tokens.cacheWrite;
-            usageTotals.totalTokens += tokens.totalTokens;
-            const cost = entry.costBreakdown;
-            if (cost?.total !== undefined) {
-              usageTotals.totalCost += cost.total;
-              usageTotals.inputCost += cost.input ?? 0;
-              usageTotals.outputCost += cost.output ?? 0;
-              usageTotals.cacheReadCost += cost.cacheRead ?? 0;
-              usageTotals.cacheWriteCost += cost.cacheWrite ?? 0;
-            } else if (entry.costTotal === undefined) {
-              usageTotals.missingCostEntries = 1;
-              const modelKey = `${normalizeOptionalString(entry.provider) ?? "unknown"}/${normalizeOptionalString(entry.model) ?? "unknown"}`;
-              usageTotals.missingCostByModel = { [modelKey]: 1 };
-            } else {
-              usageTotals.totalCost += entry.costTotal;
-            }
-          }
-          const timestamp = entry.timestamp?.getTime();
-          appendSessionUsageRollupContribution(rollup, {
-            timestamp,
-            role: entry.role,
-            durationMs: entry.durationMs,
-            provider: entry.provider,
-            model: entry.model,
-            stopReason: entry.stopReason,
-            toolNames: entry.toolNames,
-            toolResultCounts: entry.toolResultCounts,
-            usageTotals,
-          });
-          countedRecords += entry.usage && timestamp ? 1 : 0;
-          parsedRecords += entry.usage ? 1 : 0;
-        }
-        batch = [];
-      };
-      for (const record of records) {
-        const entry = parseUsageCostTranscriptRecord(record);
-        if (entry) {
-          batch.push(entry);
-        }
-        if (batch.length === 128) {
-          await flush();
-        }
-      }
-      if (batch.length > 0) {
-        await flush();
-      }
-    },
-    finish(checkpoint: UsageCostJsonlCheckpoint | UsageCostSqliteCheckpoint): UsageCostRollupEntry {
-      return {
-        version: USAGE_COST_ROLLUP_VERSION,
-        pricingFingerprint: params.pricingFingerprint,
-        checkpoint,
-        scannedAt: Date.now(),
-        parsedRecords: (previous?.parsedRecords ?? 0) + parsedRecords,
-        countedRecords: (previous?.countedRecords ?? 0) + countedRecords,
-        rollup,
-      };
-    },
-  };
-}
 
 async function scanJsonlUsageRollup(params: RollupScanInput): Promise<UsageCostRollupEntry> {
   const previousCheckpoint =
     params.previous?.checkpoint.kind === "jsonl" ? params.previous.checkpoint : undefined;
+  // Archives are read from their durable source: freshness, identity, and the
+  // checkpoint all describe the compressed file, which is never appended to.
+  const archive = params.file.sourcePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
+  const readPath = archive ? params.file.sourcePath : params.file.filePath;
   const identityMatches =
+    !archive &&
     previousCheckpoint &&
     previousCheckpoint.device === params.file.device &&
     previousCheckpoint.inode === params.file.inode &&
@@ -252,33 +289,41 @@ async function scanJsonlUsageRollup(params: RollupScanInput): Promise<UsageCostR
   );
   const startOffset = appendOnly ? (previousCheckpoint?.parsedOffset ?? 0) : 0;
   const scan = createUsageRollupScan({ ...params, appendOnly });
-  let pendingRecords: Record<string, unknown>[] = [];
-  const processedOffset = await scanJsonlRange({
-    filePath: params.file.filePath,
+  // Project each record to its compact usage entry before batching, so a batch never
+  // retains message bodies.
+  let pendingEntries: ParsedTranscriptEntry[] = [];
+  const scannedOffset = await scanJsonlRange({
+    filePath: readPath,
+    archive,
     startOffset,
     endOffset: params.file.size,
+    checkProgress: params.checkProgress,
     onRecord: (record) => {
-      pendingRecords.push(record);
-      if (pendingRecords.length === 128) {
-        const batch = pendingRecords;
-        pendingRecords = [];
-        return scan.addRecords(batch);
+      const entry = parseUsageCostTranscriptRecord(record);
+      if (entry) {
+        pendingEntries.push(entry);
+      }
+      if (pendingEntries.length === 128) {
+        const batch = pendingEntries;
+        pendingEntries = [];
+        return scan.addEntries(batch);
       }
       return undefined;
     },
   });
-  await scan.addRecords(pendingRecords);
-  const postStats = await fs.promises.stat(params.file.filePath);
+  await scan.addEntries(pendingEntries);
+  const processedOffset = archive ? params.file.size : scannedOffset;
+  const postStats = await fs.promises.stat(readPath);
   if (
     postStats.dev !== params.file.device ||
     postStats.ino !== params.file.inode ||
     postStats.size < params.file.size
   ) {
-    throw new Error(`transcript changed identity while scanning: ${params.file.filePath}`);
+    throw new Error(`transcript changed identity while scanning: ${readPath}`);
   }
-  const anchorHash = await readJsonlAnchorHash(params.file.filePath, processedOffset);
+  const anchorHash = await readJsonlAnchorHash(readPath, processedOffset);
   if (!anchorHash) {
-    throw new Error(`transcript checkpoint unavailable: ${params.file.filePath}`);
+    throw new Error(`transcript checkpoint unavailable: ${readPath}`);
   }
   return scan.finish({
     kind: "jsonl",
@@ -329,122 +374,92 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
   }
   const maxSeq = params.file.maxSeq ?? 0;
   const eventCount = params.file.eventCount ?? 0;
-  const readAtSeq = async (seq: number) => (await params.readRows(scope, seq - 1, seq))[0];
-  const snapshotLastRow = maxSeq > 0 ? await readAtSeq(maxSeq) : undefined;
-  if (maxSeq > 0 && !snapshotLastRow) {
-    throw new Error(`SQLite transcript checkpoint unavailable: ${params.file.filePath}`);
-  }
-  const snapshotAnchorHash = snapshotLastRow
-    ? sqliteCheckpointAnchorHash(snapshotLastRow.event)
-    : sha256Base64Url("");
+  // The transcript owner changes this existing watermark on rewrites. Read it
+  // once, rather than rereading old payloads to guess whether the prefix survived.
+  const generation = await params.readGeneration(scope);
   const previousCheckpoint =
     params.previous?.checkpoint.kind === "sqlite" ? params.previous.checkpoint : undefined;
-  const previousAnchor = previousCheckpoint?.maxSeq
-    ? await readAtSeq(previousCheckpoint.maxSeq)
-    : undefined;
-  const anchorMatches =
-    previousCheckpoint?.maxSeq === 0 ||
-    (previousAnchor &&
-      sqliteCheckpointAnchorHash(previousAnchor.event) === previousCheckpoint?.anchorHash);
   const appendCandidate = Boolean(
     params.previous &&
     previousCheckpoint &&
+    generation !== undefined &&
+    previousCheckpoint.generation === generation &&
     previousCheckpoint.maxSeq < maxSeq &&
-    previousCheckpoint.eventCount < eventCount &&
-    anchorMatches,
+    previousCheckpoint.eventCount < eventCount,
   );
-  const afterSeq = appendCandidate ? (previousCheckpoint?.maxSeq ?? 0) : 0;
-  // Branch selection retains only navigation facts, never transcript bodies.
-  const readNavigation = async (startSeq: number) => {
+  // Full scans start before seq 0: the session header carries the inherited-history marker.
+  const afterSeq = appendCandidate ? (previousCheckpoint?.maxSeq ?? 0) : eventCount > 0 ? -1 : 0;
+  type UsageRecord = Record<string, unknown> & {
+    seq: number;
+    usageEntry: ParsedTranscriptEntry | null;
+  };
+  let anchorHash = sha256Base64Url("");
+  // Keep navigation and small usage contributions, never retained message bodies.
+  // Each payload page is parsed once, including during a branch rebuild.
+  const readRange = async (startSeq: number, endSeq: number) => {
     let after = startSeq;
-    const records: Array<Record<string, unknown> & { seq: number }> = [];
-    while (after < maxSeq) {
-      const page = await params.readRows(scope, after, maxSeq);
-      if (page.length === 0) {
-        break;
-      }
-      for (const { seq, event } of page) {
-        const record: Record<string, unknown> & { seq: number } = { seq };
+    const records: UsageRecord[] = [];
+    while (after < endSeq) {
+      params.checkProgress?.();
+      const lastSeq = await params.readRows(scope, after, endSeq, (seq, event) => {
+        const record: UsageRecord = {
+          seq,
+          usageEntry: isRecord(event) ? parseUsageCostTranscriptRecord(event) : null,
+        };
         if (isRecord(event)) {
-          for (const key of [
-            "type",
-            "id",
-            "parentId",
-            "targetId",
-            "appendParentId",
-            "appendMode",
-          ]) {
-            if (Object.hasOwn(event, key)) {
-              record[key] = event[key];
-            }
-          }
+          projectUsageScanFields(event, record);
+        }
+        if (seq === maxSeq) {
+          anchorHash = sqliteCheckpointAnchorHash(event);
         }
         records.push(record);
+      });
+      params.checkProgress?.();
+      if (lastSeq <= after) {
+        throw new Error(`SQLite transcript changed while scanning: ${params.file.filePath}`);
       }
-      after = page.at(-1)!.seq;
+      after = lastSeq;
     }
     return records;
   };
-  let navigation = await readNavigation(afterSeq);
+  let records = await readRange(afterSeq, maxSeq);
   const incremental = appendCandidate
-    ? selectIncrementalSqliteRecords(navigation, previousCheckpoint?.visibleLeafId)
+    ? selectIncrementalSqliteRecords(records, previousCheckpoint?.visibleLeafId)
     : undefined;
   const appendOnly = Boolean(incremental && params.previous);
   if (!appendOnly && afterSeq > 0) {
-    navigation = await readNavigation(0);
+    // A rewind or side branch needs the prefix, but the suffix is already decoded.
+    records = [...(await readRange(-1, afterSeq)), ...records];
   }
+  // Appended rows follow any inherited history, so only full scans drop it.
   const selected = appendOnly
-    ? navigation.filter(isCanonicalSessionTranscriptEntry)
-    : selectVisibleTranscriptEvents(navigation);
+    ? records.filter(isCanonicalSessionTranscriptEntry)
+    : dropInheritedTranscriptEvents(records, selectVisibleTranscriptEvents(records));
   const scan = createUsageRollupScan({ ...params, appendOnly });
-  let page = new Map<number, unknown>();
-  let pending: Record<string, unknown>[] = [];
-  for (const record of selected) {
-    if (!page.has(record.seq)) {
-      await scan.addRecords(pending);
-      pending = [];
-      page.clear();
-      page = new Map(
-        (await params.readRows(scope, record.seq - 1, maxSeq)).map((row) => [row.seq, row.event]),
-      );
-      if (!page.has(record.seq)) {
-        throw new Error(`SQLite transcript changed while scanning: ${params.file.filePath}`);
-      }
-    }
-    const event = page.get(record.seq);
-    if (isRecord(event)) {
-      pending.push(event);
-    }
-  }
-  await scan.addRecords(pending);
-  const postFile = await resolveUsageCostTranscriptFile(params.file.filePath, params.access);
-  if (!postFile || (postFile.maxSeq ?? 0) < maxSeq || (postFile.eventCount ?? 0) < eventCount) {
-    throw new Error(`SQLite transcript changed while scanning: ${params.file.filePath}`);
-  }
-  const currentLastRow = maxSeq > 0 ? await readAtSeq(maxSeq) : undefined;
-  if (
-    (maxSeq > 0 && !currentLastRow) ||
-    (currentLastRow && sqliteCheckpointAnchorHash(currentLastRow.event) !== snapshotAnchorHash)
-  ) {
-    throw new Error(`SQLite transcript changed while scanning: ${params.file.filePath}`);
-  }
+  await scan.addEntries(
+    selected.flatMap((record) => (record.usageEntry ? [record.usageEntry] : [])),
+  );
   const visibleLeafId = appendOnly
     ? incremental?.visibleLeafId
-    : (scanSessionTranscriptTree(navigation).leafId ?? undefined);
+    : (scanSessionTranscriptTree(records).leafId ?? undefined);
+  // A rewrite arriving during this background scan is handled by its publication;
+  // the next refresh observes the new generation and rebuilds this derived cache.
   return scan.finish({
     kind: "sqlite",
     maxSeq,
     eventCount,
     size: params.file.size,
     mtimeMs: params.file.mtimeMs,
-    anchorHash: snapshotAnchorHash,
+    anchorHash,
+    ...(generation !== undefined ? { generation } : {}),
     ...(visibleLeafId ? { visibleLeafId } : {}),
   });
 }
 
-export function scanUsageCostRollupInWorker(
+export async function scanUsageCostRollupInWorker(
   params: RollupScanInput,
 ): Promise<UsageCostRollupEntry> {
+  params.checkProgress?.();
   return params.file.kind === "sqlite"
     ? scanSqliteUsageRollup(params)
     : scanJsonlUsageRollup(params);

@@ -91,6 +91,11 @@ describe("resolveGatewayServiceProbeHosts", () => {
           suppressFutureVersionWarning: true,
         }),
       );
+      mocks.createConfigIO.mockClear();
+      await expect(resolveGatewayServiceProbeHosts({ config: mocks.cfg })).resolves.toEqual(
+        testCase.expected,
+      );
+      expect(mocks.createConfigIO).not.toHaveBeenCalled();
     },
   );
 });

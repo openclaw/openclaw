@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isIndexedSessionEntry } from "../../agents/sessions/session-manager-codec.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { createPrivateSqliteTempDirectorySync } from "../../infra/sqlite-private-directory.js";
 import {
@@ -13,6 +12,7 @@ import {
   transcriptRepairUserKey,
 } from "./legacy-transcript-repair.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import { equivalentLegacySessionHeaders, isIndexedSessionEntry } from "./session-entry-codec.js";
 import { projectTranscriptNavigationFields } from "./transcript-navigation-fields.js";
 import {
   scanSessionTranscriptNavigation,
@@ -116,16 +116,18 @@ export class SqliteSessionImportStage {
     return !this.rejected;
   }
 
-  addSeen(eventJson: string): void {
-    this.insertSeen.run(hash("sha256", eventJson, "buffer"), eventJson);
+  addSeen(eventJson: string, repairLegacyTranscript = false): unknown {
+    const event: unknown = repairLegacyTranscript ? JSON.parse(eventJson) : undefined;
+    const normalizedJson =
+      isRecord(event) && normalizeLegacyOpenAICodexTranscriptMetadata([event]) > 0
+        ? JSON.stringify(event)
+        : eventJson;
+    this.insertSeen.run(hash("sha256", normalizedJson, "buffer"), normalizedJson);
+    return event;
   }
 
-  /** Plan branch repair on disk; only one transcript payload is decoded at a time. */
-  repairLegacyTranscript(source: number): {
-    repaired: boolean;
-    events: number;
-    recognized: boolean;
-  } {
+  /** Plan the importer's persisted projection on disk. */
+  repairLegacyTranscript(source: number) {
     this.database.exec(
       "DELETE FROM tree; DELETE FROM tree_sets; DELETE FROM selected; DELETE FROM user_keys;",
     );
@@ -181,6 +183,7 @@ export class SqliteSessionImportStage {
     let changed = false;
     let recognized = true;
     let headerSeq: number | undefined;
+    let header: Record<string, unknown> | undefined;
     let lastEntry: Record<string, unknown> | undefined;
     let terminalControl: Node | undefined;
     const rows = this.rows(source);
@@ -192,17 +195,23 @@ export class SqliteSessionImportStage {
           recognized = false;
           continue;
         }
-        if (normalizeLegacyOpenAICodexTranscriptMetadata([entry]) > 0) {
-          eventJson = JSON.stringify(entry);
-          normalizedRows.add(String(row.seq));
-          changed = true;
-        }
         if (entry.type === "session") {
+          if (header && equivalentLegacySessionHeaders(header, entry)) {
+            repeatedRows.add(String(row.seq));
+            changed = true;
+            continue;
+          }
           if (headerSeq !== undefined || typeof entry.id !== "string") {
             recognized = false;
           }
           headerSeq ??= row.seq;
+          header ??= entry;
           continue;
+        }
+        if (normalizeLegacyOpenAICodexTranscriptMetadata([entry]) > 0) {
+          eventJson = JSON.stringify(entry);
+          normalizedRows.add(String(row.seq));
+          changed = true;
         }
         const visibleKey = transcriptRepairUserKey(entry, false);
         const strippedKey = transcriptRepairUserKey(entry, true);
@@ -383,6 +392,6 @@ export class SqliteSessionImportStage {
     const count = this.database
       .prepare("SELECT COUNT(*) AS count FROM rows WHERE source = ?")
       .get(source);
-    return { repaired: changed, events: Number(count!.count), recognized };
+    return { repaired: changed, branchRepaired: broken, events: Number(count!.count), recognized };
   }
 }

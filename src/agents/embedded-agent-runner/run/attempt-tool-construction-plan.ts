@@ -1,11 +1,11 @@
 import { TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
+import { mayMatchGlobWithPrefix } from "../../glob-pattern.js";
 import {
   type CoreToolFactoryFamily,
   type OpenClawCodingToolConstructionPlan,
   listCoreToolFactoryDescriptors,
   resolveCoreToolFactoryFamily,
-} from "../../core-tool-factory-descriptors.js";
-import { mayMatchGlobWithPrefix } from "../../glob-pattern.js";
+} from "../../tool-catalog.js";
 import { createRuntimeToolMatcher } from "../../tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,

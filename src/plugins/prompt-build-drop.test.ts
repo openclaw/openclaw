@@ -25,10 +25,10 @@ describe("prompt-build drop marker", () => {
 
   it("lists every dropped plugin in one marker while under the entry cap", () => {
     const marker = buildPromptBuildDropResult([
-      { pluginId: "beads", reason: "nested-prompt-build" },
-      { pluginId: "provenance", reason: "nested-prompt-build" },
+      { pluginId: "beads", reason: "dispatch-failed" },
+      { pluginId: "provenance", reason: "dispatch-failed" },
     ])?.appendContext;
-    expect(marker).toContain("beads (nested-prompt-build), provenance (nested-prompt-build)");
+    expect(marker).toContain("beads (dispatch-failed), provenance (dispatch-failed)");
     expect(marker).not.toContain("more");
   });
 
@@ -73,12 +73,12 @@ describe("prompt-build drop marker", () => {
   it("caps the listed plugins and summarizes the overflow", () => {
     const drops = Array.from({ length: 40 }, (_unused, index) => ({
       pluginId: `plugin-${index}`,
-      reason: "nested-prompt-build" as const,
+      reason: "dispatch-failed" as const,
     }));
     const marker = buildPromptBuildDropResult(drops)?.appendContext ?? "";
-    const listed = marker.match(/plugin-\d+ \(nested-prompt-build\)/gu) ?? [];
+    const listed = marker.match(/plugin-\d+ \(dispatch-failed\)/gu) ?? [];
     expect(listed).toHaveLength(MAX_LISTED_DROPS);
-    expect(marker).toContain("plugin-0 (nested-prompt-build)");
+    expect(marker).toContain("plugin-0 (dispatch-failed)");
     expect(marker).toContain(`+${40 - MAX_LISTED_DROPS} more`);
     expect(byteLength(marker)).toBeLessThanOrEqual(MAX_MARKER_BYTES);
   });

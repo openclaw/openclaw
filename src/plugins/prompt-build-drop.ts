@@ -23,8 +23,6 @@ import type { PluginHookBeforePromptBuildResult } from "./types.js";
  * prompt, so the union is the whole vocabulary the marker can ever emit.
  */
 type PromptBuildDropReason =
-  /** Re-entrancy guard skipped the whole hook chain for a nested prompt build. */
-  | "nested-prompt-build"
   /** One handler threw or exceeded the modifying-hook timeout. */
   | "handler-failed"
   /** The hook dispatch itself rejected, so no handler result survived. */

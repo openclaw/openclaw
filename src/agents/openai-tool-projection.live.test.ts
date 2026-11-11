@@ -1,21 +1,35 @@
 import OpenAI from "openai";
 import type { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions.js";
 import type { ResponseCreateParamsNonStreaming } from "openai/resources/responses/responses.js";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { createCodexNativeWebSearchWrapper } from "../llm/providers/stream-wrappers/openai.js";
-import type { Context, Model } from "../llm/types.js";
+import type { Context } from "../llm/types.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import {
   buildOpenAICompletionsParams,
   createOpenAIResponsesTransportStreamFn,
 } from "./openai-transport-stream.js";
 import { testing as openAITransportTesting } from "./openai-transport-stream.test-support.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const { buildOpenAIResponsesParams } = openAITransportTesting;
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
 const LIVE = isLiveTestEnabled(["OPENAI_LIVE_TEST"]) && Boolean(OPENAI_KEY);
 const describeLive = LIVE ? describe : describe.skip;
+
+function createValueProbeTool(name: string) {
+  return {
+    name,
+    description: "Return the requested probe value.",
+    parameters: {
+      type: "object",
+      properties: { value: { type: "string" } },
+      required: ["value"],
+      additionalProperties: false,
+    },
+  };
+}
 
 const probeTools = [
   {
@@ -28,16 +42,7 @@ const probeTools = [
       },
     },
   },
-  {
-    name: "live_probe",
-    description: "Return the requested probe value.",
-    parameters: {
-      type: "object",
-      properties: { value: { type: "string" } },
-      required: ["value"],
-      additionalProperties: false,
-    },
-  },
+  createValueProbeTool("live_probe"),
 ];
 
 const context = {
@@ -54,21 +59,25 @@ const context = {
 
 describeLive("OpenAI tool projection live", () => {
   const modelId = process.env.OPENCLAW_LIVE_OPENAI_TOOL_MODEL || "gpt-5.6-luna";
-  const client = new OpenAI({ apiKey: OPENAI_KEY });
+  let client: OpenAI;
+  beforeAll(() => {
+    client = new OpenAI({ apiKey: OPENAI_KEY });
+  });
 
-  it("calls a healthy Responses function after quarantining an unreadable sibling", async () => {
-    const model = {
+  function projectionModel<TApi extends "openai-responses" | "openai-completions">(api: TApi) {
+    return makeProviderModelFixture<TApi>({
       id: modelId,
-      name: modelId,
-      api: "openai-responses",
+      api,
       provider: "openai",
       baseUrl: "https://api.openai.com/v1",
       reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: 256,
-    } satisfies Model<"openai-responses">;
+    });
+  }
+
+  it("calls a healthy Responses function after quarantining an unreadable sibling", async () => {
+    const model = projectionModel("openai-responses");
     const params = buildOpenAIResponsesParams(model, context, {
       maxTokens: 128,
       reasoning: "low",
@@ -91,18 +100,7 @@ describeLive("OpenAI tool projection live", () => {
   }, 45_000);
 
   it("calls a GPT-5.6 Chat Completions function with reasoning disabled", async () => {
-    const model = {
-      id: modelId,
-      name: modelId,
-      api: "openai-completions",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200000,
-      maxTokens: 256,
-    } satisfies Model<"openai-completions">;
+    const model = projectionModel("openai-completions");
     const params = buildOpenAICompletionsParams(model, context, {
       maxTokens: 128,
       reasoning: "low",
@@ -139,18 +137,7 @@ describeLive("OpenAI tool projection live", () => {
   }, 45_000);
 
   it("keeps code-mode tools after a payload hook adds an unreadable sibling", async () => {
-    const model = {
-      id: modelId,
-      name: modelId,
-      api: "openai-responses",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200000,
-      maxTokens: 256,
-    } satisfies Model<"openai-responses">;
+    const model = projectionModel("openai-responses");
     const codeModeContext = {
       systemPrompt: "Call the requested function exactly once.",
       messages: [
@@ -161,16 +148,7 @@ describeLive("OpenAI tool projection live", () => {
         },
       ],
       tools: [
-        {
-          name: "exec",
-          description: "Return the requested probe value.",
-          parameters: {
-            type: "object",
-            properties: { value: { type: "string" } },
-            required: ["value"],
-            additionalProperties: false,
-          },
-        },
+        createValueProbeTool("exec"),
         {
           name: "wait",
           description: "Wait without doing work.",

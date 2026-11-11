@@ -1,35 +1,33 @@
-import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { createPluginServiceScheduler } from "./service-scheduler.js";
 
-function fixture() {
+function fixture(run?: Parameters<typeof createPluginServiceScheduler>[1]) {
   const time = createGatewaySchedulerClock(1_000);
   const gateway = createTestGatewayScheduler(time.clock);
-  return { time, gateway, owner: createPluginServiceScheduler(gateway).scheduler };
+  return { time, gateway, owner: createPluginServiceScheduler(gateway, run).scheduler };
 }
 
 describe("plugin service scheduling", () => {
   it.each([false, true])(
     "releases its runner after root cleanup (pending child: %s)",
     async (pending) => {
+      const references: WeakRef<object>[] = [];
       class RunnerOwner {
+        constructor() {
+          references.push(new WeakRef(this));
+        }
         run(work: () => void | Promise<unknown>) {
           return work();
         }
       }
-      const time = createGatewaySchedulerClock(1_000);
-      const gateway = createTestGatewayScheduler(time.clock);
-      const control = (() => {
-        const runner = new RunnerOwner();
-        return createPluginServiceScheduler(gateway, runner.run.bind(runner));
-      })();
-      const child = control.scheduler.scope();
+      const { time, gateway, owner } = fixture(RunnerOwner.prototype.run.bind(new RunnerOwner()));
+      const child = owner.scope();
       const work = createDeferredCore();
       let wake: ReturnType<typeof time.wake>;
       if (pending) {
@@ -37,15 +35,14 @@ describe("plugin service scheduling", () => {
         wake = time.wake();
       }
       try {
-        const stopping = control.scheduler.stop();
+        const stopping = owner.stop();
         work.resolve();
         await Promise.all([stopping, wake]);
-        await setImmediate();
-        expect(queryObjects(RunnerOwner)).toBe(0);
+        await expectCollected(...references);
         expect(() => child.schedule({ id: "late", delayMs: 0, run() {} })).toThrow("closed");
       } finally {
         work.resolve();
-        await Promise.all([control.scheduler.stop(), wake, gateway.stop()]);
+        await Promise.all([owner.stop(), wake, gateway.stop()]);
       }
     },
   );
@@ -94,12 +91,10 @@ describe("plugin service scheduling", () => {
     const stopped = vi.fn();
     const stopping = owner.stop().then(stopped);
     expect([owner, child, descendant].every((scope) => scope.signal.aborted)).toBe(true);
-    expect(completed).not.toHaveBeenCalled();
-    expect(stopped).not.toHaveBeenCalled();
+    expect([completed, stopped].map((call) => call.mock.calls.length)).toEqual([0, 0]);
     work.resolve();
     await Promise.all([wake, stopping, owner.stop()]);
-    expect(completed).toHaveBeenCalledOnce();
-    expect(stopped).toHaveBeenCalledOnce();
+    expect([completed, stopped].map((call) => call.mock.calls.length)).toEqual([1, 1]);
     await time.advanceBy(1_000);
     expect(late).not.toHaveBeenCalled();
     await gateway.stop();
