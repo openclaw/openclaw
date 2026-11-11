@@ -67,6 +67,7 @@ import {
 
 vi.mock("../../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfig: () => [],
+  listReadOnlyChannelPluginsForConfigAsync: async () => [],
 }));
 
 const fixtureService = {
