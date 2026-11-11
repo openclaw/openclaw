@@ -75,6 +75,78 @@ it("dials an authorized owner target without exposing helper internals", async (
   expect(runtime.dial).toHaveBeenCalledWith(target);
 });
 
+it("requires trusted one-shot approval for click-to-call dialing", () => {
+  expect(
+    resolveFaceTimeToolApproval({
+      action: "initiate_click_to_call",
+      handle: "owner@example.com",
+      mode: "audio",
+    }),
+  ).toEqual({
+    requireApproval: {
+      title: "Place FaceTime call via click-to-call",
+      description:
+        "Place a audio FaceTime call to owner@example.com by pressing the macOS click-to-call card.",
+      severity: "warning",
+      allowedDecisions: ["allow-once", "deny"],
+      timeoutMs: 120_000,
+    },
+  });
+});
+
+it("places a click-to-call call through the injected carrier", async () => {
+  const clickToCall = vi.fn(async () => ({
+    placed: true,
+    live: true,
+    detail: "FaceTime Audio - 0:03",
+  }));
+  const clickTool = createFaceTimeCallTool({
+    ensureRuntime,
+    getStatus: runtime.status,
+    clickToCall,
+  });
+  const clickExecute = async (input: Parameters<typeof clickTool.execute>[1]) =>
+    (await clickTool.execute("tool-2", input)).details;
+
+  expect(
+    await clickExecute({
+      action: "initiate_click_to_call",
+      handle: "owner@example.com",
+      mode: "audio",
+    }),
+  ).toEqual({
+    ok: true,
+    action: "initiate_click_to_call",
+    placed: true,
+    live: true,
+    detail: "FaceTime Audio - 0:03",
+  });
+  expect(clickToCall).toHaveBeenCalledWith({
+    handle: "owner@example.com",
+    mode: "audio",
+  });
+  expect(ensureRuntime).not.toHaveBeenCalled();
+});
+
+it("refuses click-to-call dialing without a handle", async () => {
+  const clickToCall = vi.fn(async () => ({
+    placed: true,
+    live: true,
+    detail: "unused",
+  }));
+  const clickTool = createFaceTimeCallTool({
+    ensureRuntime,
+    getStatus: runtime.status,
+    clickToCall,
+  });
+  const result = await clickTool.execute("tool-3", { action: "initiate_click_to_call" });
+  expect(result.details).toMatchObject({
+    ok: false,
+    error: "handle is required",
+  });
+  expect(clickToCall).not.toHaveBeenCalled();
+});
+
 it("ends the current call", async () => {
   expect(await execute({ action: "end_call", callUUID: "call-1" })).toEqual({
     ok: true,

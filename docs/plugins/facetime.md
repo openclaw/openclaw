@@ -295,6 +295,29 @@ automatically answered until it finishes or its cancellation is confirmed. If a
 helper disconnects or reports an uncertain dial outcome, the pending state stays
 visible while OpenClaw reconciles the call.
 
+### Place a call through the macOS click-to-call card
+
+On macOS 26 and later, the `facetime://` and `facetime-audio://` URL schemes
+no longer place a call directly. They open the Phone app "Click to Call"
+contact card in Notification Center, and the phone only rings after that card's
+Call button is pressed.
+
+The agent can place that call itself with the `initiate_click_to_call` tool
+action:
+
+```json
+{ "action": "initiate_click_to_call", "handle": "owner@example.com", "mode": "audio" }
+```
+
+The action requires the same one-shot approval as `initiate_call`, accepts only
+configured owner handles, and refuses to run while another call is active or
+pending. It reports whether the call was placed and whether the carrier
+reported a live call.
+
+The click-to-call path does not use the native helper, so it does not report
+helper call events. Call status after placement comes from the Apple call app
+and from `facetime.status`.
+
 ## Update the integration
 
 After updating the plugin and native companion, check `facetime.driverStatus`.
@@ -323,6 +346,8 @@ FaceTime, check that the audio devices are removed, and restore SIP.
 ## Limits
 
 - One managed call at a time.
+- The click-to-call carrier is macOS-only and relies on Notification Center
+  accessibility access for the signed-in user.
 - FaceTime calls only. Cellular, Wi-Fi Calling/PSTN, emergency, and unrecognized
   call types are rejected, even when the number matches an owner handle.
 - Start with FaceTime Audio in FaceTime.app. Video remains experimental and may
@@ -345,6 +370,7 @@ FaceTime, check that the audio devices are removed, and restore SIP.
 | Voice works but agent tools do not           | Check `realtime.sessionKey`, `realtime.toolPolicy`, and the selected agent's tool credentials and approvals.                                           |
 | Slow tool-backed responses                   | Use [Gateway logs](/logging) and [session inspection](/cli/sessions) to distinguish agent response time from tool execution time.                      |
 | Call does not end                            | Check `facetime.status` before dialing again. Use the Apple call app to end the call if needed.                                                        |
+| Click-to-call card is not found              | Confirm the app is running on macOS 26 or later and that the Gateway user has Notification Center accessibility access.                                |
 
 Remove account identifiers, credentials, and private conversation content before
 sharing logs.

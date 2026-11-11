@@ -9,6 +9,7 @@ import {
   type OpenClawPluginApi,
   type OpenClawPluginDefinition,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { placeClickToCallCarrier } from "./src/carrier-click-to-call.js";
 import { resolveFaceTimeConfig, validateFaceTimeConfig } from "./src/config.js";
 import { inspectFaceTimeDriver, uninstallFaceTimeDriver } from "./src/driver-setup.js";
 import { inspectFaceTimeNativePackage } from "./src/plugin-paths.js";
@@ -82,9 +83,24 @@ const faceTimePlugin: OpenClawPluginDefinition = definePluginEntry({
       }
     };
 
-    api.registerTool(() => createFaceTimeCallTool({ ensureRuntime, getStatus }), {
-      name: "facetime_call",
-    });
+    api.registerTool(
+      () =>
+        createFaceTimeCallTool({
+          ensureRuntime,
+          getStatus,
+          clickToCall: (input) =>
+            placeClickToCallCarrier({
+              runCommandWithTimeout: api.runtime.system.runCommandWithTimeout,
+              ownerHandles: config.ownerHandles,
+              handle: input.handle,
+              mode: input.mode,
+              pluginRoot,
+            }),
+        }),
+      {
+        name: "facetime_call",
+      },
+    );
     api.on("before_tool_call", (event) => {
       if (event.toolName !== "facetime_call") {
         return undefined;

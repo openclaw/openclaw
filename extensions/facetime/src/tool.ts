@@ -3,12 +3,19 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { asRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
+import type { FaceTimeClickToCallOutcome } from "./carrier-click-to-call.js";
 import type { FaceTimeRuntime, FaceTimeRuntimeStatus } from "./runtime.js";
 import type { FaceTimeStaticStatus } from "./static-status.js";
 
 const FaceTimeCallToolSchema = Type.Object(
   {
-    action: stringEnum(["get_status", "check_readiness", "initiate_call", "end_call"] as const),
+    action: stringEnum([
+      "get_status",
+      "check_readiness",
+      "initiate_call",
+      "initiate_click_to_call",
+      "end_call",
+    ] as const),
     handle: Type.Optional(
       Type.String({
         description: "Authorized owner FaceTime email or phone number",
@@ -27,7 +34,7 @@ type FaceTimeToolRuntime = Pick<FaceTimeRuntime, "status" | "preflight" | "dial"
 
 export function resolveFaceTimeToolApproval(input: unknown) {
   const raw = asRecord(input);
-  if (raw.action !== "initiate_call") {
+  if (raw.action !== "initiate_call" && raw.action !== "initiate_click_to_call") {
     return undefined;
   }
   const handle = normalizeOptionalString(raw.handle);
@@ -35,11 +42,14 @@ export function resolveFaceTimeToolApproval(input: unknown) {
     return undefined;
   }
   const mode = raw.mode === "video" ? "video" : "audio";
+  const clickToCall = raw.action === "initiate_click_to_call";
   const allowedDecisions: Array<"allow-once" | "deny"> = ["allow-once", "deny"];
   return {
     requireApproval: {
-      title: "Place FaceTime call",
-      description: `Place a ${mode} FaceTime call to ${handle}.`,
+      title: clickToCall ? "Place FaceTime call via click-to-call" : "Place FaceTime call",
+      description: clickToCall
+        ? `Place a ${mode} FaceTime call to ${handle} by pressing the macOS click-to-call card.`
+        : `Place a ${mode} FaceTime call to ${handle}.`,
       severity: "warning" as const,
       // A phone call is never safe to approve durably. Bind consent to this invocation.
       allowedDecisions,
@@ -83,6 +93,10 @@ function summarizeStatus(status: FaceTimeRuntimeStatus) {
 export function createFaceTimeCallTool(params: {
   ensureRuntime: () => Promise<FaceTimeToolRuntime>;
   getStatus: () => Promise<FaceTimeRuntimeStatus | FaceTimeStaticStatus>;
+  clickToCall?: (input: {
+    handle: string;
+    mode?: "audio" | "video";
+  }) => Promise<FaceTimeClickToCallOutcome>;
 }) {
   return {
     name: "facetime_call",
@@ -136,6 +150,30 @@ export function createFaceTimeCallTool(params: {
             const { helper: _helper, ...publicResult } = result;
             return json({ ok: true, action, ...publicResult });
           }
+          case "initiate_click_to_call": {
+            if (!params.clickToCall) {
+              throw new Error("click-to-call placement is not available");
+            }
+            const handle = normalizeOptionalString(raw.handle);
+            if (!handle) {
+              throw new Error("handle is required");
+            }
+            // The click-to-call carrier does not use the native helper, so it must
+            // not boot the runtime that requires it. When the runtime is already
+            // active its status still carries the managed call state.
+            const status = await params.getStatus();
+            if ("calls" in status) {
+              if (status.driverInstallPending) {
+                throw new Error("FaceTime audio driver installation is pending");
+              }
+              if (status.calls.length > 0 || status.outboundCallPending) {
+                throw new Error("another FaceTime call is active or pending");
+              }
+            }
+            const mode = raw.mode === "audio" || raw.mode === "video" ? raw.mode : undefined;
+            const result = await params.clickToCall({ handle, mode });
+            return json({ ok: true, action, ...result });
+          }
           case "end_call": {
             const runtime = await params.ensureRuntime();
             const result = await runtime.hangup({
@@ -145,7 +183,7 @@ export function createFaceTimeCallTool(params: {
           }
           default:
             throw new Error(
-              "action must be get_status, check_readiness, initiate_call, or end_call",
+              "action must be get_status, check_readiness, initiate_call, initiate_click_to_call, or end_call",
             );
         }
       } catch (error) {
