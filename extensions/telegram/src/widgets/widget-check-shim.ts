@@ -67,7 +67,7 @@ function parseSheet(text) {
   var cached = sheetCache.get(text);
   if (cached) return cached;
   var out = { rules: [], count: 0 };
-  (function walk(t) {
+  (function walk(t, conditional) {
     t = t.replace(/\/\*[\s\S]*?\*\//g, "");
     var i = 0;
     while (i < t.length) {
@@ -79,7 +79,9 @@ function parseSheet(text) {
       var atm = /^@(?:-webkit-)?([\w-]+)/.exec(prelude);
       if (atm) {
         var at = atm[1].toLowerCase();
-        if (at === "media" || at === "supports" || at === "container" || at === "layer") walk(bodyT);
+        // Conditional rules may never apply in the bubble; they are linted but not counted for paint.
+        if (at === "media" || at === "supports" || at === "container") walk(bodyT, true);
+        else if (at === "layer") walk(bodyT, conditional);
         else if (at === "font-face") fail("CSS @font-face: widgets cannot load fonts. Use a generic family such as sans-serif, serif or monospace.");
         continue;
       }
@@ -87,10 +89,10 @@ function parseSheet(text) {
       out.count++;
       var decls = parseDecls(bodyT.replace(/[^;{}]*\{[^}]*\}/g, ""));
       decls.forEach(function (v, k) { checkCssValue(k, v); });
-      out.rules.push({ selector: prelude, decls: decls });
+      if (!conditional) out.rules.push({ selector: prelude, decls: decls, order: out.rules.length });
     }
     if (/@import\b/i.test(t)) fail("CSS @import: widgets have no network. Put all styles inline.");
-  })(text);
+  })(text, false);
   sheetCache.set(text, out);
   return out;
 }
@@ -100,7 +102,7 @@ function short(s) { s = String(s).replace(/\s+/g, " ").trim(); return s.length >
 var REMOVED = { input: "inputs are removed (there is no keyboard); use buttons", select: "selects are removed; use buttons", textarea: "text areas are removed (there is no keyboard)", form: "forms are removed; handle taps in click handlers", iframe: "iframes are removed", frame: "frames are removed", audio: "audio is removed", video: "video is removed", object: "embedded objects are removed", embed: "embedded objects are removed", link: "link elements are removed (no network); inline styles in <style>", base: "base elements are removed" };
 var SVG_DROPPED = { clippath: "clipPath", mask: "mask", filter: "filter", foreignobject: "foreignObject", animate: "SMIL animation", animatetransform: "SMIL animation", animatemotion: "SMIL animation", set: "SMIL animation" };
 function checkUrlAttr(el, attr, v) {
-  if (el.localName === "img" && attr === "src" && !/^data:image\/(png|jpe?g|webp);/i.test(v)) fail("<img src=\"" + short(v) + "\">: widgets have no network; images must be data: PNG, JPEG or WebP.");
+  if (el.localName === "img" && attr === "src" && !/^data:image\/(png|jpe?g|webp|gif);/i.test(v)) fail("<img src=\"" + short(v) + "\">: widgets have no network; images must be data: PNG, JPEG, WebP or GIF.");
   if (el.localName === "script" && attr === "src") fail("<script src=\"" + short(v) + "\">: widgets have no network or CDN. Put the code inline.");
 }
 function isHidden(el, decl) { return el.hasAttribute("hidden") || (decl && decl.display === "none"); }
@@ -116,6 +118,17 @@ function heavyOf(d, isButton) {
   });
   return { heavy: backdrop || !none(d.filter) || opacity || shadow, backdrop: backdrop };
 }
+function specificity(steps) {
+  var ids = 0, classes = 0, tags = 0;
+  steps.forEach(function (s) {
+    var c = s.c;
+    if (c.id !== null) ids++;
+    classes += c.classes.length + c.attrs.length + c.pseudos.filter(function (p) { return p.name !== "not" && p.name !== "is" && p.name !== "where"; }).length;
+    if (c.tag) tags++;
+    if (c.pseudoEl) tags++;
+  });
+  return ids * 10000 + classes * 100 + tags;
+}
 function measure() {
   var sheets = [];
   eachElement(docEl, function (e) { if (e.localName === "style") sheets.push(parseSheet(e.textContent)); });
@@ -123,9 +136,11 @@ function measure() {
   sheets.forEach(function (s) { ruleCount += s.count; s.rules.forEach(function (r) {
     parseSelector(r.selector).forEach(function (steps) {
       var last = steps[steps.length - 1].c;
-      rules.push({ steps: steps, pseudoEl: last.pseudoEl, decls: r.decls });
+      rules.push({ steps: steps, pseudoEl: last.pseudoEl, decls: r.decls, spec: specificity(steps), order: rules.length });
     });
   }); });
+  // Cascade order: lower specificity first, then source order, so later writes win like CSS.
+  rules.sort(function (a, b) { return a.spec - b.spec || a.order - b.order; });
   var heavy = 0, backdrop = 0, nodes = 0;
   (function walk(root) {
     for (var i = 0; i < root.childNodes.length; i++) {
@@ -360,12 +375,15 @@ var widgetHandlers = new Map(WIDGET_EVENTS.map(function (e) { return [e, []]; })
 var requests = 0;
 function utf8Length(s) { var n = 0; for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i); n += c < 0x80 ? 1 : c < 0x800 ? 2 : c >= 0xd800 && c <= 0xdbff ? (i++, 4) : 3; } return n; }
 function needsTap(name) { if (!gesture) fail("TelegramWidget." + name + "() ran " + context + ", outside a tap. Telegram only allows it inside a click handler."); }
+// Dark-theme palette and a private-chat viewer, the values Telegram supplies to query-enabled widgets.
+var THEME_PARAMS = Object.freeze({ bg_color: "#212121", text_color: "#ffffff", hint_color: "#aaaaaa", link_color: "#8774e1", button_color: "#8774e1", button_text_color: "#ffffff", secondary_bg_color: "#181818", header_bg_color: "#212121", accent_text_color: "#8774e1", section_bg_color: "#212121", section_header_text_color: "#8774e1", subtitle_text_color: "#aaaaaa", destructive_text_color: "#e53935", bottom_bar_bg_color: "#212121" });
+var VIEWER = Object.freeze({ id: 1, first_name: "Test", last_name: "User", username: "test_user", language_code: "en", is_premium: false });
 var HapticFeedback = { impactOccurred: function () {}, notificationOccurred: function () {}, selectionChanged: function () {} };
 G.TelegramWidget = Object.freeze({
   get profile() { return 1; },
   isProfileAtLeast: function (n) { return typeof n === "number" && 1 >= n; },
   get colorScheme() { return "dark"; },
-  get themeParams() { return Object.freeze({}); },
+  get themeParams() { return THEME_PARAMS; },
   get isActive() { return true; },
   get contentSafeAreaInset() { return Object.freeze({ top: 0, bottom: 0, left: 0, right: 0, cornerLeft: 0, cornerRight: 0 }); },
   onEvent: function (type, handler) { var l = widgetHandlers.get(String(type)); if (l && typeof handler === "function" && l.indexOf(handler) < 0 && l.length < 16) l.push(handler); },
@@ -381,7 +399,7 @@ G.TelegramWidget = Object.freeze({
   get isForward() { return false; },
   get isPreview() { return false; },
   get chatType() { return "private"; },
-  get viewer() { return null; },
+  get viewer() { return VIEWER; },
   get wallet() { return null; },
   request: function (data) {
     if (typeof data !== "string" || data.length === 0 || utf8Length(data) > 64) {

@@ -67,6 +67,26 @@ TelegramWidget.onEvent('chatDataChanged',draw);draw();</script>`;
     ).toEqual({ errors: [] });
   });
 
+  it("matches Telegram's runtime for theme, viewer, GIFs and the cascade", async () => {
+    const theme = `<p id=o></p><script>document.getElementById('o').textContent=TelegramWidget.themeParams.text_color.toUpperCase()+TelegramWidget.viewer.first_name;</script>`;
+    expect(await check(theme)).toEqual({ errors: [] });
+    expect(await check(`<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">`)).toEqual({
+      errors: [],
+    });
+    const spans = Array.from({ length: 17 }, () => `<span class=cell>1</span>`).join("");
+    // A wide-screen media rule never applies in the bubble.
+    expect(await check(`<style>@media(min-width:700px){span{opacity:.5}}</style>${spans}`)).toEqual(
+      { errors: [] },
+    );
+    // A more specific opaque rule overrides the translucent one, as in CSS.
+    expect(await check(`<style>.cell{opacity:1} span{opacity:.5}</style>${spans}`)).toEqual({
+      errors: [],
+    });
+    expect((await check(`<style>span{opacity:.5}</style>${spans}`)).errors[0]).toMatch(
+      /^17 elements/,
+    );
+  });
+
   it("does not tap disabled buttons", async () => {
     const source = `<button disabled onclick="JSON.parse(TelegramWidget.chatData).choice.id">Confirm</button>`;
     expect(await check(source, { state: '{"choice":null}' })).toEqual({ errors: [] });

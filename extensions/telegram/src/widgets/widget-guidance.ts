@@ -8,7 +8,7 @@ export const TELEGRAM_WIDGET_REQUEST_PREFIX = "widget_request:";
 export const TELEGRAM_WIDGET_AUTHORING_GUIDANCE = [
   "Telegram shows widget_code as a widget inside a chat message: a sandbox with no network, no CDN and no libraries.",
   "Limits: 32 KB of HTML and 4 KB after zlib compression; aim for 3 KB, with no comments or dead code.",
-  "Allowed: div, span, p, h1-h6, lists, tables, details/summary, button, canvas, inline SVG (no clipPath, mask, filters or SMIL), img with data: PNG/JPEG/WebP only.",
+  "Allowed: div, span, p, h1-h6, lists, tables, details/summary, button, canvas, inline SVG (no clipPath, mask, filters or SMIL), img with data: PNG/JPEG/WebP/GIF only.",
   "Removed: input, select, textarea, forms, iframe, audio, video. There is no keyboard; use buttons.",
   "CSS: flex, grid, %, em. No vh, no scrolling (overflow auto becomes hidden), no sticky, no color-mix() or oklch(), no @font-face, no nesting; generic fonts only.",
   "Clients stop a widget that has more than 16 elements with opacity below 1, filter or a blurred box-shadow, 2000 elements or 400 CSS rules. Use solid theme colors for fills and tints, not opacity.",
