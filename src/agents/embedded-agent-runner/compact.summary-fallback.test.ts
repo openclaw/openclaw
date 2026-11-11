@@ -182,6 +182,7 @@ async function createFixture(
     modelFallback?: boolean;
     safeguard?: boolean;
     refusal?: boolean;
+    fallbackRuntime?: string;
   } = {},
 ) {
   const state = await createOpenClawTestState({ prefix: "openclaw-summary-fallback-" });
@@ -219,7 +220,13 @@ async function createFixture(
           api: options.refusal ? "anthropic-messages" : "openai-completions",
           apiKey: "synthetic-fixture",
           baseUrl,
-          models: [model("model"), model("fallback-model")],
+          models: [
+            model("model"),
+            {
+              ...model("fallback-model"),
+              ...(options.fallbackRuntime ? { agentRuntime: { id: options.fallbackRuntime } } : {}),
+            },
+          ],
         },
       },
     },
@@ -283,10 +290,18 @@ it.each([
   { safeguard: true, trigger: "manual", modelFallback: true },
   { safeguard: true, trigger: "budget", modelFallback: false },
   { safeguard: false, trigger: "budget", modelFallback: true },
+  // Fallback setup throws before any request: its harness is not registered.
+  { safeguard: false, trigger: "budget", modelFallback: true, fallbackRuntime: "missing" },
 ] as const)(
   "trims a refused summary once with a visible notice ($trigger, safeguard=$safeguard, fallback=$modelFallback)",
-  async ({ safeguard, trigger, modelFallback }) => {
-    const fixture = await createFixture({ safeguard, refusal: true, modelFallback });
+  async ({ safeguard, trigger, modelFallback, ...options }) => {
+    const fallbackRuntime = "fallbackRuntime" in options ? options.fallbackRuntime : undefined;
+    const fixture = await createFixture({
+      safeguard,
+      refusal: true,
+      modelFallback,
+      fallbackRuntime,
+    });
     const seeded = [...fixture.seeded, ...appendToolTurns(fixture, 8, 43)];
     summaryMode = "refusal";
 
@@ -298,7 +313,9 @@ it.each([
       result: { details: { summaryRefused: true } },
     });
     // The fallback route refuses too; neither route is asked twice.
-    expect(requestedModels()).toEqual(modelFallback ? ["model", "fallback-model"] : ["model"]);
+    expect(requestedModels()).toEqual(
+      modelFallback && !fallbackRuntime ? ["model", "fallback-model"] : ["model"],
+    );
     expect(result.result?.tokensAfter).toBeLessThan(24_000);
     expect(result.result?.tokensBefore).toBeGreaterThan(24_000);
     expectFallbackSummary(fixture);

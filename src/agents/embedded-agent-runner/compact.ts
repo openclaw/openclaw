@@ -30,7 +30,7 @@ import {
 } from "../cli-execution-auth.js";
 import type { CompactionSummaryRefusalMode } from "../compaction-summary-refusal.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import { coerceToFailoverError } from "../failover-error.js";
+import { coerceToFailoverError, hasModelFallbackStop } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { isFallbackSummaryError } from "../model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
@@ -571,7 +571,14 @@ export async function compactEmbeddedAgentSessionDirect(
             `[compaction] summary refused by ${refused.provider}/${refused.model}; ` +
               `retrying the summary once on ${next.provider}/${next.model}`,
           );
-          const retry = await runCandidate(next, "fallback");
+          // Setup can throw (for example, a harness that rejects the fallback model). Nothing
+          // was committed yet, so any non-terminal failure still owes the refusal floor.
+          const retry = await runCandidate(next, "fallback").catch((error: unknown) => {
+            if (params.abortSignal?.aborted || hasModelFallbackStop(error)) {
+              throw error;
+            }
+            return buildCompactionFailureResult(formatErrorMessage(error));
+          });
           if (retry.ok || params.abortSignal?.aborted) {
             return retry;
           }
