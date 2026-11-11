@@ -19,6 +19,38 @@ private actor DashboardReconnectAuthGate {
 @Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardReconnectTests {
+    @Test(arguments: ["/control/chat/main/~key/topic%2F%2B?draft=C%2B%2B#panel=details", "/other/chat/main"])
+    func `replacement loads a private document only for a chat in its dashboard mount`(_ route: String) async throws {
+        var requestedPath: String?
+        let server = try await DashboardHTTPFixture.start(requestHandler: { request in
+            requestedPath = request.components(separatedBy: " ").dropFirst().first
+            return nil
+        })
+        defer { server.stop() }
+        let baseURL = server.url("/control/")
+        let controller = DashboardWindowController(
+            url: baseURL,
+            auth: .browserIdentity(gatewayUrl: server.websocketURL("/control/").absoluteString),
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+        controller.update(url: baseURL, auth: controller.auth, restoringRoute: server.url(route))
+        try await DashboardTestWait.document(controller, "replacement document")
+        let requested = try #require(requestedPath)
+        let request = try #require(URLComponents(string: requested))
+        if route.hasPrefix("/control/chat/") {
+            #expect(request.path == "/control/__openclaw__/session-entry")
+            #expect(request.queryItems == [
+                .init(name: "path", value: "/control/chat/main/~key/topic%2F%2B?draft=C%2B%2B"),
+            ])
+            #expect(controller.webView.url?.fragment == "panel=details")
+        } else {
+            #expect(request.path == "/control/")
+            #expect(request.queryItems == nil)
+        }
+    }
+
     @Test func `primary discovery failure preserves commands owned by a pending picker`() async throws {
         let discoveryGate = DashboardWindowOwnershipPresentationGate()
         let profileGate = DashboardWindowOwnershipPresentationGate()
