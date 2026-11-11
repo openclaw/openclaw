@@ -22,10 +22,14 @@ describe("package content inventory contract", () => {
         await fs.chmod(entry, 0o700);
         expect(await collectPackageDistContentInventoryErrors(root)).toEqual([]);
         await fs.chmod(entry, 0o600);
-        expect(await collectPackageDistContentInventoryErrors(root)).not.toEqual([]);
+        expect(await collectPackageDistContentInventoryErrors(root)).toEqual([
+          expect.stringContaining(": executable permission mismatch"),
+        ]);
       }
       await fs.writeFile(entry, "export const altered = true;\n");
-      expect(await collectPackageDistContentInventoryErrors(root)).not.toEqual([]);
+      expect(await collectPackageDistContentInventoryErrors(root)).toEqual([
+        expect.stringContaining(": content mismatch"),
+      ]);
     });
   });
 
@@ -60,7 +64,7 @@ describe("package content inventory contract", () => {
           JSON.stringify(contents),
         );
         await expect(readPackageDistContentInventoryIfPresent(root)).rejects.toThrow(
-          "Invalid package dist content inventory",
+          "malformed metadata",
         );
       });
     },

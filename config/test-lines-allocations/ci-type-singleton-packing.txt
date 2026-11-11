@@ -1,0 +1,2 @@
+# Preserve each compiler graph while pairing singleton rows beside larger rows.
+41

@@ -11,6 +11,7 @@ import {
   runManagedCommand,
   signalExitCode,
 } from "./lib/managed-child-process.mts";
+import { pinnedBunEnv, requirePinnedBun } from "./lib/pinned-bun.mts";
 import { resolveTestRuntime } from "./lib/test-runtime.mts";
 
 const LABEL = "agent-plugin-gateway-e2e";
@@ -413,10 +414,17 @@ async function main() {
     children.push(mock);
     await waitForHttp(`http://127.0.0.1:${mockPort}/health`, mock, signal);
 
+    const bun = resolveTestRuntime(childEnv) === "bun" ? requirePinnedBun(childEnv) : undefined;
     const gateway = startCaptured(
-      resolveTestRuntime(childEnv) === "bun" ? "bun" : process.execPath,
+      bun ?? process.execPath,
       [entryPath, "gateway", "--port", String(gatewayPort), "--bind", "loopback"],
-      { cwd: repoRoot, env: childEnv, label: "gateway", signal, onSignal: handleSignal },
+      {
+        cwd: repoRoot,
+        env: bun ? { ...childEnv, ...pinnedBunEnv(bun, childEnv) } : childEnv,
+        label: "gateway",
+        signal,
+        onSignal: handleSignal,
+      },
     );
     children.push(gateway);
     await waitForHttp(`http://127.0.0.1:${gatewayPort}/health`, gateway, signal, 120_000);

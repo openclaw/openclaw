@@ -1,42 +1,23 @@
+import { setImmediate } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../../../src/infra/runtime-worker-url.js";
-import { resolveTestNodeExecPath } from "../../../../src/test-utils/node-process.js";
-import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
+import { collect } from "../../../../test/helpers/async-iterable.js";
+import { runRetentionNodeScript } from "../../../../test/helpers/run-node-script.js";
 import { eventStreamRetentionEntrypoint } from "../retention-runtime.test-support.js";
 import { EventStream, getEventStreamCompletion } from "./event-stream.js";
 
-function createNumberStream(): EventStream<number, number> {
-  return new EventStream(
+const createNumberStream = () =>
+  new EventStream<number>(
     (event) => event === -1,
     (event) => event,
   );
-}
 
 describe("EventStream", () => {
-  it("releases consumed events while retaining unread events and the final result", async ({
-    signal,
-  }) => {
-    const result = await runNodeScript(
-      [
-        "--expose-gc",
-        ...resolveRuntimeWorkerArgv(
-          resolveRuntimeWorkerUrl(eventStreamRetentionEntrypoint),
-          resolveTestNodeExecPath(),
-        ),
-      ],
-      { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },
-      15_000,
-      {
-        cwd: fileURLToPath(new URL("../../../../", import.meta.url)),
-        signal,
-        maxBuffer: 64 * 1024,
-        requireProcessTreeExit: process.platform !== "win32",
-      },
-    );
+  it("releases consumed events but retains unread events and results", async ({ signal }) => {
+    const result = await runRetentionNodeScript(eventStreamRetentionEntrypoint, {
+      cwd: fileURLToPath(new URL("../../../../", import.meta.url)),
+      signal,
+    });
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual([
@@ -62,88 +43,51 @@ describe("EventStream", () => {
     expect(await iterator.next()).toEqual({ value: undefined, done: true });
   });
 
-  it("compacts a consumed queue prefix at the cursor boundary without losing events", async () => {
+  it("preserves queued events across prefix compaction and subsequent pushes", async () => {
     const stream = createNumberStream();
     const iterator = stream[Symbol.asyncIterator]();
     for (let value = 0; value < 2048; value += 1) {
       stream.push(value);
     }
 
-    const prefix: IteratorResult<number>[] = [];
-    for (let value = 0; value < 1024; value += 1) {
-      prefix.push(await iterator.next());
-    }
-    expect(prefix).toEqual(Array.from({ length: 1024 }, (_, value) => ({ value, done: false })));
-    const queueState = stream as unknown as { queue: number[]; queueHead: number };
-    expect(queueState.queueHead).toBe(0);
-    expect(queueState.queue).toHaveLength(1024);
-
+    const read = (length: number) => Promise.all(Array.from({ length }, () => iterator.next()));
+    expect(await read(1024)).toEqual(
+      Array.from({ length: 1024 }, (_, value) => ({ value, done: false })),
+    );
     for (let value = 2048; value < 2052; value += 1) {
       stream.push(value);
     }
     stream.end();
-    const remaining: IteratorResult<number>[] = [];
-    for (let value = 1024; value < 2052; value += 1) {
-      remaining.push(await iterator.next());
-    }
-    expect(remaining).toEqual(
-      Array.from({ length: 1028 }, (_, index) => ({ value: index + 1024, done: false })),
+    expect(await collect({ [Symbol.asyncIterator]: () => iterator })).toEqual(
+      Array.from({ length: 1028 }, (_, index) => index + 1024),
     );
-    expect(await iterator.next()).toEqual({ value: undefined, done: true });
   });
 
-  it("resolves result() from a terminal event and from an explicit end(result)", async () => {
-    const terminal = createNumberStream();
-    terminal.push(-1);
-    terminal.end();
-    await expect(terminal.result()).resolves.toBe(-1);
-    await expect(getEventStreamCompletion(terminal)).resolves.toBe(-1);
-
-    const explicit = createNumberStream();
-    explicit.push(7);
-    explicit.end(42);
-    await expect(explicit.result()).resolves.toBe(42);
-    await expect(getEventStreamCompletion(explicit)).resolves.toBe(42);
-  });
-
-  it("rejects result() when the stream ends without a terminal event or explicit result", async () => {
+  it.each<[number, number | undefined, number]>([
+    [-1, undefined, -1],
+    [7, 42, 42],
+  ])("settles event %s/end(%s) with %s", async (event, result, expected) => {
     const stream = createNumberStream();
-    stream.push(1);
-    stream.end();
-    // result() awaiters previously hung forever on this producer bug; the
-    // contract now surfaces it loudly.
-    await expect(stream.result()).rejects.toThrow(
-      "event stream ended without a terminal event or final result",
-    );
-    await expect(getEventStreamCompletion(stream)).rejects.toThrow(
-      "event stream ended without a terminal event or final result",
-    );
-    // Iterate-only consumption of the same stream still completes normally.
-    const events: number[] = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
-    expect(events).toEqual([1]);
+    stream.push(event);
+    stream.end(result);
+    await expect(stream.result()).resolves.toBe(expected);
+    await expect(getEventStreamCompletion(stream)).resolves.toBe(expected);
   });
 
-  it("keeps iterate-only consumers free of unhandled rejections on bare end()", async () => {
+  it("rejects bare-end results without unhandled rejections for iterate-only consumers", async () => {
     const rejections: unknown[] = [];
-    const onRejection = (reason: unknown) => {
-      rejections.push(reason);
-    };
+    const onRejection = (reason: unknown) => rejections.push(reason);
     process.on("unhandledRejection", onRejection);
     try {
       const stream = createNumberStream();
       stream.push(1);
       stream.end();
-      const iterator = stream[Symbol.asyncIterator]();
-      expect(await iterator.next()).toEqual({ value: 1, done: false });
-      expect(await iterator.next()).toEqual({ value: undefined, done: true });
-      // Give the microtask queue a chance to surface any unhandled rejection.
-      await new Promise((resolve) => {
-        setImmediate(resolve);
-      });
+      expect(await collect(stream)).toEqual([1]);
+      await setImmediate(); // Let any unhandled rejection surface.
       expect(rejections).toEqual([]);
+      const error = "event stream ended without a terminal event or final result";
+      await expect(stream.result()).rejects.toThrow(error);
+      await expect(getEventStreamCompletion(stream)).rejects.toThrow(error);
     } finally {
       process.off("unhandledRejection", onRejection);
     }

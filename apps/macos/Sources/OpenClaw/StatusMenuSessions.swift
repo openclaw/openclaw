@@ -12,6 +12,8 @@ final class StatusMenuSessions: NSObject {
 
     private final class SessionMenu: NSMenu {
         var source: GatewayConnection.ServerLease?
+        var sessionKey = ""
+        var previews: [(item: NSMenuItem, title: String, maxLines: Int)] = []
     }
 
     private struct Cache {
@@ -24,11 +26,14 @@ final class StatusMenuSessions: NSObject {
 
     private var cache: Cache?
     @ObservationIgnored private let control: ControlChannel
-    @ObservationIgnored private var previewTasks: [Task<Void, Never>] = []
+    @ObservationIgnored private let previewCache: SessionPreviewCache
+    @ObservationIgnored private var previewTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+    @ObservationIgnored private var prewarmTask: Task<Void, Never>?
     @ObservationIgnored private let refreshInterval: TimeInterval = 12
 
-    init(control: ControlChannel = .shared) {
+    init(control: ControlChannel = .shared, previewCache: SessionPreviewCache = .shared) {
         self.control = control
+        self.previewCache = previewCache
         super.init()
     }
 
@@ -93,11 +98,29 @@ final class StatusMenuSessions: NSObject {
         item.isEnabled = true
         StatusMenuRenderer.configureHostedView(item, rootView: StatusSessionCard(row: row), highlights: true)
 
-        if let submenu = item.submenu as? SessionMenu, submenu.source == self.currentCache?.lease {
+        let submenu: SessionMenu
+        if let existing = item.submenu as? SessionMenu,
+           existing.source == self.currentCache?.lease, existing.sessionKey == row.key
+        {
+            submenu = existing
             self.updateSessionSubmenu(submenu, row: row)
         } else {
-            item.submenu = self.buildSessionSubmenu(for: row)
+            if let previous = item.submenu {
+                self.previewTasks.removeValue(forKey: ObjectIdentifier(previous))?.cancel()
+            }
+            submenu = self.buildSessionSubmenu(for: row)
+            item.submenu = submenu
         }
+        if let cached = self.previewCache.cachedSnapshot(
+            for: row.key,
+            gateway: self.control.gateway,
+            maxAge: SessionMenuPreviewLoader.cacheMaxAgeSeconds)
+        {
+            self.renderPreviews(cached.snapshot, in: submenu)
+        } else {
+            self.renderPreviews(SessionMenuPreviewSnapshot(items: [], status: .loading), in: submenu)
+        }
+        self.refreshPreviews(in: submenu)
     }
 
     func configureApprovalItem(
@@ -114,8 +137,10 @@ final class StatusMenuSessions: NSObject {
     }
 
     func cancelPreviewTasks() {
-        self.previewTasks.forEach { $0.cancel() }
+        self.previewTasks.values.forEach { $0.cancel() }
         self.previewTasks.removeAll()
+        self.prewarmTask?.cancel()
+        self.prewarmTask = nil
     }
 
     private func prewarmPreviews(for rows: [SessionRow]) {
@@ -125,9 +150,11 @@ final class StatusMenuSessions: NSObject {
             .prefix(6)
             .map(\.key)
         guard !keys.isEmpty else { return }
-        self.previewTasks.append(Task {
-            await SessionMenuPreviewLoader.prewarm(sessionKeys: keys, maxItems: 10, gateway: self.control.gateway)
-        })
+        self.prewarmTask?.cancel()
+        self.prewarmTask = Task {
+            await SessionMenuPreviewLoader.prewarm(
+                sessionKeys: keys, maxItems: 10, gateway: self.control.gateway, cache: self.previewCache)
+        }
     }
 
     private func compactError(_ error: Error) -> String {
@@ -139,20 +166,21 @@ final class StatusMenuSessions: NSObject {
 }
 
 extension StatusMenuSessions {
-    private func buildSessionSubmenu(for row: SessionRow) -> NSMenu {
+    private func buildSessionSubmenu(for row: SessionRow) -> SessionMenu {
         let menu = SessionMenu()
         menu.source = self.currentCache?.lease
+        menu.sessionKey = row.key
         menu.autoenablesItems = false
         menu.delegate = StatusMenuHighlightDelegate.shared
         StatusMenuAppearance.pin(menu)
 
         menu.addItem(self.makePreviewItem(
-            sessionKey: row.key,
+            in: menu,
             title: String(localized: "Recent messages (last 10)"),
             maxLines: 3))
 
         let morePreview = NSMenuItem(title: String(localized: "More preview…"), action: nil, keyEquivalent: "")
-        morePreview.submenu = self.buildPreviewSubmenu(sessionKey: row.key)
+        morePreview.submenu = self.buildPreviewSubmenu(in: menu)
         menu.addItem(morePreview)
 
         if self.shouldRecommendCompaction(for: row) {
@@ -161,23 +189,25 @@ extension StatusMenuSessions {
 
         menu.addItem(NSMenuItem.separator())
 
-        let thinking = NSMenuItem(title: String(localized: "Thinking"), action: nil, keyEquivalent: "")
-        thinking.identifier = NSUserInterfaceItemIdentifier("session.thinking")
-        thinking.submenu = self.buildPreferenceMenu(
-            key: row.key,
-            levels: ["off", "minimal", "low", "medium", "high"],
-            current: row.thinkingLevel,
-            action: #selector(self.patchThinking(_:)))
-        menu.addItem(thinking)
-
-        let verbose = NSMenuItem(title: String(localized: "Verbose"), action: nil, keyEquivalent: "")
-        verbose.identifier = NSUserInterfaceItemIdentifier("session.verbose")
-        verbose.submenu = self.buildPreferenceMenu(
-            key: row.key,
-            levels: ["on", "off"],
-            current: row.verboseLevel,
-            action: #selector(self.patchVerbose(_:)))
-        menu.addItem(verbose)
+        for (title, identifier, levels, current, action) in [
+            (
+                String(localized: "Thinking"),
+                "session.thinking",
+                ["off", "minimal", "low", "medium", "high"],
+                row.thinkingLevel,
+                #selector(self.patchThinking(_:))),
+            (
+                String(localized: "Verbose"),
+                "session.verbose",
+                ["on", "off"],
+                row.verboseLevel,
+                #selector(self.patchVerbose(_:))),
+        ] {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.identifier = NSUserInterfaceItemIdentifier(identifier)
+            item.submenu = self.buildPreferenceMenu(key: row.key, levels: levels, current: current, action: action)
+            menu.addItem(item)
+        }
 
         let color = NSMenuItem(title: String(localized: "Color"), action: nil, keyEquivalent: "")
         color.identifier = NSUserInterfaceItemIdentifier("session.color")
@@ -350,18 +380,18 @@ extension StatusMenuSessions {
         }
     }
 
-    private func buildPreviewSubmenu(sessionKey: String) -> NSMenu {
+    private func buildPreviewSubmenu(in sessionMenu: SessionMenu) -> NSMenu {
         let menu = NSMenu()
         menu.delegate = StatusMenuHighlightDelegate.shared
         StatusMenuAppearance.pin(menu)
         menu.addItem(self.makePreviewItem(
-            sessionKey: sessionKey,
+            in: sessionMenu,
             title: String(localized: "Recent messages (expanded)"),
             maxLines: 8))
         return menu
     }
 
-    private func makePreviewItem(sessionKey: String, title: String, maxLines: Int) -> NSMenuItem {
+    private func makePreviewItem(in menu: SessionMenu, title: String, maxLines: Int) -> NSMenuItem {
         let item = NSMenuItem()
         item.isEnabled = false
         StatusMenuRenderer.configureHostedView(
@@ -372,24 +402,40 @@ extension StatusMenuSessions {
                 items: [],
                 status: .loading)
                 .environment(\.isEnabled, true))
+        menu.previews.append((item, title, maxLines))
+        return item
+    }
 
+    private func refreshPreviews(in menu: SessionMenu) {
         let gateway = self.control.gateway
-        let revision = gateway.selectedEndpointRevision
-        self.previewTasks.append(Task { [weak item] in
+        let id = ObjectIdentifier(menu)
+        guard self.previewTasks[id] == nil, let source = menu.source,
+              gateway.serverLeaseMatchesCurrentRoute(source) else { return }
+        let sessionKey = menu.sessionKey
+        let cache = self.previewCache
+        // Both retained views show the same ten messages; one load owns their refresh.
+        self.previewTasks[id] = Task { [weak self] in
             let snapshot = await SessionMenuPreviewLoader.load(
-                sessionKey: sessionKey, maxItems: 10, gateway: gateway)
-            guard !Task.isCancelled, gateway.selectedEndpointRevision == revision, let item else { return }
+                sessionKey: sessionKey, maxItems: 10, gateway: gateway, cache: cache)
+            // A cancelled task must not clear or paint over its replacement after reopening.
+            guard !Task.isCancelled, let self else { return }
+            self.previewTasks[id] = nil
+            guard gateway.serverLeaseMatchesCurrentRoute(source) else { return }
+            self.renderPreviews(snapshot, in: menu)
+        }
+    }
+
+    private func renderPreviews(_ snapshot: SessionMenuPreviewSnapshot, in menu: SessionMenu) {
+        for preview in menu.previews {
             StatusMenuRenderer.configureHostedView(
-                item,
+                preview.item,
                 rootView: SessionMenuPreviewView(
-                    maxLines: maxLines,
-                    title: title,
+                    maxLines: preview.maxLines,
+                    title: preview.title,
                     items: snapshot.items,
                     status: snapshot.status)
                     .environment(\.isEnabled, true))
-        })
-
-        return item
+        }
     }
 
     private func makeActionItem(title: String, action: Selector, payload: Any) -> NSMenuItem {
@@ -424,21 +470,14 @@ extension StatusMenuSessions {
     }
 
     @objc private func patchThinking(_ sender: NSMenuItem) {
-        guard let payload = sender.representedObject as? [String: String],
-              let key = payload["key"],
-              let value = payload["value"]
-        else { return }
-
-        Task {
-            await self.performSessionAction(
-                sender,
-                request: OpenClawChatGatewayRequests.patchSessionSettings(
-                    sessionKey: key, agentID: nil, thinkingLevel: .some(value), verboseLevel: nil),
-                errorTitle: String(localized: "Update thinking failed"))
-        }
+        self.patchSessionSettings(sender, thinking: true)
     }
 
     @objc private func patchVerbose(_ sender: NSMenuItem) {
+        self.patchSessionSettings(sender, thinking: false)
+    }
+
+    private func patchSessionSettings(_ sender: NSMenuItem, thinking: Bool) {
         guard let payload = sender.representedObject as? [String: String],
               let key = payload["key"],
               let value = payload["value"]
@@ -448,8 +487,12 @@ extension StatusMenuSessions {
             await self.performSessionAction(
                 sender,
                 request: OpenClawChatGatewayRequests.patchSessionSettings(
-                    sessionKey: key, agentID: nil, thinkingLevel: nil, verboseLevel: .some(value)),
-                errorTitle: String(localized: "Update verbose failed"))
+                    sessionKey: key,
+                    agentID: nil,
+                    thinkingLevel: thinking ? .some(value) : nil,
+                    verboseLevel: thinking ? nil : .some(value)),
+                errorTitle: thinking
+                    ? String(localized: "Update thinking failed") : String(localized: "Update verbose failed"))
         }
     }
 

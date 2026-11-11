@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  buildEmbeddedRunnerAssistant,
-  makeEmbeddedRunnerAttempt,
-} from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { buildEmbeddedRunnerAssistant } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
-import { makeTerminalInput, type TerminalInput } from "./terminal-resolution.test-support.js";
-import { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
+import {
+  textAssistant,
+  assistantAttempt,
+  expectComplete,
+  makeTerminalInput,
+  type TerminalInput,
+} from "./terminal-resolution.test-support.js";
 
 vi.mock("./auth-profile-success.js", () => ({
   markEmbeddedRunAuthProfileSuccess: vi.fn(),
@@ -16,10 +18,9 @@ vi.mock("./auth-profile-success.js", () => ({
 const PSEUDO_TOOL_CALL_TEXT =
   'exec\n<invoke name="read">\n<parameter name="path">~/skills/example/SKILL.md</parameter>\n</invoke>';
 
-// The reported turn: thinking plus a tool call written as text, stopped for tool
-// use without a structured call (#138929).
-function toolUseStopWithoutCall(overrides: Parameters<typeof makeEmbeddedRunnerAttempt>[0] = {}) {
-  const assistant = buildEmbeddedRunnerAssistant({
+// #138929: thinking plus a textual invocation stopped without a structured call.
+function toolUseStopWithoutCall(
+  assistant = buildEmbeddedRunnerAssistant({
     api: "anthropic-messages",
     provider: "anthropic",
     model: "claude-sonnet-5",
@@ -28,24 +29,22 @@ function toolUseStopWithoutCall(overrides: Parameters<typeof makeEmbeddedRunnerA
       { type: "thinking", thinking: "Load the skill first.", thinkingSignature: "sig_pseudo_call" },
       { type: "text", text: PSEUDO_TOOL_CALL_TEXT },
     ],
-  });
-  const attempt = makeEmbeddedRunnerAttempt({
-    assistantTexts: [PSEUDO_TOOL_CALL_TEXT],
-    lastAssistant: assistant,
-    currentAttemptAssistant: assistant,
+  }),
+  sessionKey = "session:tool-use-without-call",
+) {
+  const text = assistant.content.flatMap((part) => (part.type === "text" ? [part.text] : []));
+  const attempt = assistantAttempt(assistant, {
+    assistantTexts: text,
     currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    ...overrides,
   });
   return {
     attempt,
     attemptAssistant: assistant,
-    activeErrorContext: { provider: "anthropic", model: "claude-sonnet-5" },
-    modelApi: "anthropic-messages",
     payloadsWithToolMedia: buildEmbeddedRunPayloads({
       assistantTexts: attempt.assistantTexts,
       lastAssistant: assistant,
       currentAssistant: assistant,
-      sessionKey: "session:tool-use-without-call",
+      sessionKey,
     }),
   } satisfies Partial<TerminalInput>;
 }
@@ -53,55 +52,48 @@ function toolUseStopWithoutCall(overrides: Parameters<typeof makeEmbeddedRunnerA
 describe("terminal resolution for a tool-use stop without a tool call", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("retries once before surfacing the incomplete-turn warning", async () => {
-    const turn = toolUseStopWithoutCall();
-    // The written call survives payload preparation as an undelivered reply.
-    expect(turn.payloadsWithToolMedia).toEqual([
-      expect.objectContaining({ text: PSEUDO_TOOL_CALL_TEXT }),
-    ]);
-    const activateInternalPrompt = vi.fn();
-
-    await expect(
-      resolveEmbeddedRunTerminal(
-        makeTerminalInput({ ...turn, sessionPromptState: { activateInternalPrompt } }),
-      ),
-    ).resolves.toEqual({ action: "retry" });
-
-    const exhausted = await resolveEmbeddedRunTerminal(
-      makeTerminalInput({
-        ...turn,
-        retryState: { ...createEmbeddedRunTerminalRetryState(), emptyResponseAttempts: 1 },
-      }),
-    );
-    expect(exhausted.action).toBe("complete");
-    if (exhausted.action !== "complete") {
-      return;
+  it.each(["pseudo", "toolUse", "length"] as const)("recovers %s", async (kind) => {
+    const pseudo = kind === "pseudo";
+    const sessionKey = "agent:main:telegram:direct:user";
+    const turn = pseudo
+      ? {
+          ...toolUseStopWithoutCall(),
+          activeErrorContext: { provider: "anthropic", model: "claude-sonnet-5" },
+          modelApi: "anthropic-messages",
+        }
+      : {
+          ...toolUseStopWithoutCall(textAssistant("NO_REPLY", { stopReason: kind }), sessionKey),
+          runParams: { messageChannel: "telegram", sessionKey },
+        };
+    if (pseudo) {
+      // Delivery hides markup; the original message still drives malformed-call recovery.
+      expect(turn.payloadsWithToolMedia).toEqual([expect.objectContaining({ text: "exec" })]);
     }
-    expect(exhausted.result.meta.error).toMatchObject({ kind: "incomplete_turn" });
-    expect(exhausted.result.payloads).toEqual([
-      { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
-    ]);
-  });
-
-  it.each([
-    { name: "a tool ran", overrides: { toolMetas: [{ toolName: "read", meta: "path=a.md" }] } },
-    {
-      name: "the attempt had side effects",
-      overrides: {
-        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-        currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-      },
-    },
-  ])("does not retry after $name", async ({ overrides }) => {
-    const activateInternalPrompt = vi.fn();
-    const result = await resolveEmbeddedRunTerminal(
-      makeTerminalInput({
-        ...toolUseStopWithoutCall(overrides),
-        sessionPromptState: { activateInternalPrompt },
-      }),
-    );
-
-    expect(result.action).toBe("complete");
-    expect(activateInternalPrompt).not.toHaveBeenCalled();
+    const input = makeTerminalInput(turn);
+    let resolved = await resolveEmbeddedRunTerminal(input);
+    if (kind !== "length") {
+      expect(resolved).toEqual({ action: "retry" });
+      expect(input.sessionPromptState.activateInternalPrompt).toHaveBeenCalledOnce();
+      resolved = await resolveEmbeddedRunTerminal(input);
+    }
+    expectComplete(resolved);
+    expect(resolved.result.meta.error).toMatchObject({
+      kind: "incomplete_turn",
+      ...(pseudo ? { fallbackSafe: true } : {}),
+    });
+    if (!pseudo) {
+      expect(resolved.result.meta.stopReason).toBe("error");
+      expect(resolved.result.sourceReplyDeliveryState).toBe("missing");
+    }
+    if (kind !== "length") {
+      expect(resolved.result.meta.terminalReply).toEqual({ disposition: "empty" });
+      expect(resolved.result.payloads).toBeUndefined();
+    } else {
+      expect(resolved.result.meta.terminalReply?.disposition).toBe("visible");
+      expect(resolved.result.payloads).toEqual([
+        expect.objectContaining({ text: expect.any(String), isError: true }),
+      ]);
+      expect(resolved.result.payloads?.[0]?.text).not.toBe("NO_REPLY");
+    }
   });
 });

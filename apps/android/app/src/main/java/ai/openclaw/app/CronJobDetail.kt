@@ -101,8 +101,7 @@ internal class CronJobDetailRequestGuard {
     val id = rawId.trim().takeIf { it.isNotEmpty() } ?: return null
     return synchronized(lock) {
       if (selectedId != id) return@synchronized null
-      generation += 1
-      CronJobDetailRequest(id = id, generation = generation).also(onBegin)
+      begin(id)?.also(onBegin)
     }
   }
 
@@ -121,9 +120,7 @@ internal class CronJobDetailRequestGuard {
     val id = rawId.trim().takeIf { it.isNotEmpty() } ?: return false
     return synchronized(lock) {
       if (selectedId != id) return@synchronized false
-      generation += 1
-      selectedId = null
-      onCancel()
+      cancel(onCancel)
       true
     }
   }
@@ -212,7 +209,7 @@ internal fun formatCronInterval(everyMs: Long): NativeText {
   val hours = minutes / 60L
   val days = hours / 24L
   return when {
-    days >= 1 && hours % 24L == 0L -> nativeText("Every \${days}d", days)
+    days >= 1 && minutes % (24L * 60L) == 0L -> nativeText("Every \${days}d", days)
     hours >= 1 && minutes % 60L == 0L -> nativeText("Every \${hours}h", hours)
     minutes >= 1 -> nativeText("Every \${minutes}m", minutes)
     else -> nativeText("Repeating")

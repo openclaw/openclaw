@@ -14,6 +14,7 @@ import {
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { projectCronRunUsage } from "../run-telemetry.js";
 import type { CronRunTelemetry } from "../types.js";
 import type { PreparedCronRunContext } from "./run-prepare.js";
 import { DEFAULT_CONTEXT_TOKENS, hasNonzeroUsage } from "./run.runtime.js";
@@ -57,18 +58,7 @@ export function applyCronRunUsage(
   prepared.cronSession.sessionEntry.outputTokens = output;
   prepared.cronSession.sessionEntry.cacheRead = cacheRead;
   prepared.cronSession.sessionEntry.cacheWrite = cacheWrite;
-  const bucketTotalTokens = input + output + cacheRead + cacheWrite;
-  const totalTokens =
-    typeof usage?.total === "number" && Number.isFinite(usage.total)
-      ? Math.max(bucketTotalTokens, usage.total)
-      : bucketTotalTokens;
-  return {
-    input_tokens: input,
-    output_tokens: output,
-    ...(totalTokens > 0 ? { total_tokens: totalTokens } : {}),
-    ...(cacheRead > 0 ? { cache_read_tokens: cacheRead } : {}),
-    ...(cacheWrite > 0 ? { cache_write_tokens: cacheWrite } : {}),
-  };
+  return projectCronRunUsage(usage);
 }
 
 /** Preserve each completed prompt's prices and diagnostics across a continuation. */

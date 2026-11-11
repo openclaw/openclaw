@@ -257,6 +257,7 @@ actor MacGatewayProfileStore {
         renewingOnly: Bool = false) async throws -> MacGatewayProfile
     {
         try self.requireCurrentAttempt(attempt)
+        let isCurrent: @Sendable () -> Bool = { attempt.isCurrent && !Task.isCancelled }
         let old = try self.loadRegistry().profiles.first { $0.profile.id == attempt.profileID }
         let oldStoreID = old.map { Self.chatStoreID(profileID: $0.profile.id, credentials: $0.credentials) }
         let newStoreID = credentials.map { Self.chatStoreID(profileID: attempt.profileID, credentials: $0) }
@@ -291,10 +292,10 @@ actor MacGatewayProfileStore {
             }
             try self.requireCurrentAttempt(attempt)
             _ = await MacGatewayConnectionFleet.shared.remove(
-                profileID: attempt.profileID, ifCurrent: { attempt.isCurrent && !Task.isCancelled })
+                profileID: attempt.profileID, ifCurrent: isCurrent)
         } else if !renewsBrowserSession {
             await MacGatewayConnectionFleet.shared.disconnect(
-                profileID: attempt.profileID, ifCurrent: { attempt.isCurrent && !Task.isCancelled })
+                profileID: attempt.profileID, ifCurrent: isCurrent)
         }
         try self.requireCurrentAttempt(attempt)
         if !renewsBrowserSession {
@@ -303,7 +304,7 @@ actor MacGatewayProfileStore {
                 registryNamespace: Self.service,
                 previous: previousSession,
                 next: nextSession,
-                ifCurrent: { attempt.isCurrent && !Task.isCancelled })
+                ifCurrent: isCurrent)
         }
         try self.requireCurrentAttempt(attempt)
         try credentials?.browserSession?.validate(for: attempt.url)
@@ -326,14 +327,14 @@ actor MacGatewayProfileStore {
         var renewedBrowserSession = false
         if renewsBrowserSession, let previousSession, let nextSession {
             await MacGatewayConnectionFleet.shared.disconnect(
-                profileID: attempt.profileID, ifCurrent: { attempt.isCurrent && !Task.isCancelled })
+                profileID: attempt.profileID, ifCurrent: isCurrent)
             do {
                 try await DashboardBrowserSessionStore.renewProfileSession(
                     profileID: profile.id,
                     registryNamespace: Self.service,
                     previous: previousSession,
                     next: nextSession,
-                    ifCurrent: { attempt.isCurrent && !Task.isCancelled })
+                    ifCurrent: isCurrent)
                 renewedBrowserSession = true
             } catch {
                 Self.logger.error("browser cookie renewal did not complete profile=\(profile.id, privacy: .public)")
@@ -412,10 +413,15 @@ actor MacGatewayProfileStore {
             .resume(throwing: CancellationError())
     }
 
-    private func storedChatStoreID(profileID: String) throws -> String {
+    private func storedProfile(profileID: String) throws -> StoredProfile {
         guard let stored = try self.loadRegistry().profiles.first(where: { $0.profile.id == profileID }) else {
             throw MacGatewayProfileError.profileNotFound
         }
+        return stored
+    }
+
+    private func storedChatStoreID(profileID: String) throws -> String {
+        let stored = try self.storedProfile(profileID: profileID)
         return Self.chatStoreID(profileID: profileID, credentials: stored.credentials)
     }
 
@@ -464,9 +470,7 @@ actor MacGatewayProfileStore {
     func remove(profileID: String) async throws -> UUID {
         try Task.checkCancellation()
         self.keychainAccess.allowRetry()
-        guard let stored = try self.loadRegistry().profiles.first(where: { $0.profile.id == profileID }) else {
-            throw MacGatewayProfileError.profileNotFound
-        }
+        let stored = try self.storedProfile(profileID: profileID)
         let attempt = try self.beginBrowserSignIn(url: stored.profile.url)
         _ = try await self.commit(name: stored.profile.name, credentials: nil, attempt: attempt)
         return attempt.id
@@ -515,10 +519,7 @@ actor MacGatewayProfileStore {
             // suspends. It must not reacquire the credentials being retired.
             throw GatewayBrowserSessionError.superseded
         }
-        let registry = try self.loadRegistry()
-        guard let stored = registry.profiles.first(where: { $0.profile.id == profileID }) else {
-            throw MacGatewayProfileError.profileNotFound
-        }
+        let stored = try self.storedProfile(profileID: profileID)
         let url = try Self.canonicalURL(stored.profile.url)
         let browserSession = stored.credentials.browserSession
         try browserSession?.validate(for: url)
@@ -681,13 +682,13 @@ actor MacGatewayProfileStore {
 actor MacGatewayConnectionFleet {
     static let shared = MacGatewayConnectionFleet()
 
-    private struct Owner {
+    struct Binding {
         let chatStoreID: String
-        let active: LockIsolated<Bool>
+        fileprivate let active: LockIsolated<Bool>
         let connection: GatewayConnection
     }
 
-    private var connections: [String: Owner] = [:]
+    private var connections: [String: Binding] = [:]
     private var ownerRevision: UInt64 = 0
 
     func boundProfileIDs() -> Set<String> {
@@ -695,11 +696,6 @@ actor MacGatewayConnectionFleet {
             key.hasPrefix("profile:") && owner.connection.hasConnectedServer
                 ? String(key.dropFirst("profile:".count)) : nil
         })
-    }
-
-    struct Binding {
-        let connection: GatewayConnection
-        let chatStoreID: String
     }
 
     func existingConnection(profileID: String) -> GatewayConnection? {
@@ -716,7 +712,7 @@ actor MacGatewayConnectionFleet {
 
     func localBinding() -> Binding {
         if let owner = self.connections["local"] {
-            return Binding(connection: owner.connection, chatStoreID: owner.chatStoreID)
+            return owner
         }
         let chatStoreID = MacChatTranscriptCache.gatewayID(
             mode: .local,
@@ -750,9 +746,10 @@ actor MacGatewayConnectionFleet {
                 return endpoint
             },
             supportsSharedEndpointRecovery: false)
-        self.connections["local"] = Owner(chatStoreID: chatStoreID, active: active, connection: connection)
+        let binding = Binding(chatStoreID: chatStoreID, active: active, connection: connection)
+        self.connections["local"] = binding
         self.ownerRevision &+= 1
-        return Binding(connection: connection, chatStoreID: chatStoreID)
+        return binding
     }
 
     func disconnectLocal(ifCurrent: @Sendable () -> Bool = { true }) async {
@@ -776,7 +773,7 @@ actor MacGatewayConnectionFleet {
             guard revision == self.ownerRevision else { continue }
             if let owner = self.connections["profile:\(profileID)"] {
                 if owner.chatStoreID == chatStoreID {
-                    return Binding(connection: owner.connection, chatStoreID: chatStoreID)
+                    return owner
                 }
                 _ = await self.remove(profileID: profileID)
                 continue
@@ -791,12 +788,10 @@ actor MacGatewayConnectionFleet {
                     return endpoint
                 },
                 supportsSharedEndpointRecovery: false)
-            self.connections["profile:\(profileID)"] = Owner(
-                chatStoreID: chatStoreID,
-                active: active,
-                connection: connection)
+            let binding = Binding(chatStoreID: chatStoreID, active: active, connection: connection)
+            self.connections["profile:\(profileID)"] = binding
             self.ownerRevision &+= 1
-            return Binding(connection: connection, chatStoreID: chatStoreID)
+            return binding
         }
     }
 

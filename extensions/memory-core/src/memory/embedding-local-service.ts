@@ -1,14 +1,5 @@
+import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-
-// Memory Core receives local-service acquisition from the host before provider creation.
-export type MemoryCoreAcquireLocalService = (
-  target: {
-    providerId: string;
-    baseUrl: string;
-    headers?: HeadersInit;
-  },
-  signal?: AbortSignal | null,
-) => Promise<{ release: () => void } | undefined>;
 
 const MEMORY_LOCAL_SERVICE_HOST_IDENTITIES_KEY = Symbol.for(
   "openclaw.memoryLocalServiceHostIdentities",
@@ -17,7 +8,7 @@ const MEMORY_LOCAL_SERVICE_HOST_IDENTITIES_KEY = Symbol.for(
 // Manager caches survive module reloads, so hook identities must survive too.
 // Otherwise a new runtime can collide with a cached manager owned by another host.
 const LOCAL_SERVICE_HOST_IDENTITIES = resolveGlobalSingleton<{
-  ids: WeakMap<MemoryCoreAcquireLocalService, number>;
+  ids: WeakMap<AcquireConfiguredProviderLocalService, number>;
   nextId: number;
 }>(MEMORY_LOCAL_SERVICE_HOST_IDENTITIES_KEY, () => ({
   ids: new WeakMap(),
@@ -25,7 +16,7 @@ const LOCAL_SERVICE_HOST_IDENTITIES = resolveGlobalSingleton<{
 }));
 
 export function resolveMemoryCoreLocalServiceHostIdentity(
-  acquireLocalService: MemoryCoreAcquireLocalService | undefined,
+  acquireLocalService: AcquireConfiguredProviderLocalService | undefined,
 ): string {
   if (!acquireLocalService) {
     return "none";

@@ -10,7 +10,11 @@ import type {
   ExecApprovalsSnapshot,
 } from "./exec-approvals-core.js";
 import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
-import { ensureExecApprovalsSnapshot, loadExecApprovals } from "./exec-approvals-store.js";
+import { readExecApprovalsSocket } from "./exec-approvals-socket.js";
+import {
+  ensureExecApprovalsSnapshot,
+  loadExecApprovalsReadOnlyAsync,
+} from "./exec-approvals-store.js";
 import { expandHomePrefix } from "./home-dir.js";
 
 export * from "./exec-approvals-analysis.js";
@@ -26,7 +30,6 @@ export type { AllowAlwaysPattern, ExecAllowlistEntry } from "./exec-approvals.ty
 export type { ExecApprovalsDefaultOverrides } from "./exec-approvals-contracts.js";
 export {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
-  mergeExecApprovalsSocketDefaults,
   normalizeExecApprovalsInternal as normalizeExecApprovals,
   resolveExecApprovalsDisplayPath,
 } from "./exec-approvals-config.js";
@@ -35,7 +38,9 @@ export {
   ensureExecApprovalsSnapshot,
   loadExecApprovals,
   loadExecApprovalsReadOnly,
+  loadExecApprovalsReadOnlyAsync,
   readExecApprovalsSnapshot,
+  readExecApprovalsSnapshotAsync,
   restoreExecApprovalsSnapshotLocked,
   updateExecApprovals,
   withAgentExecApprovalsRemoved,
@@ -83,7 +88,7 @@ export async function resolveExecApprovalsLocked(
 ): Promise<ExecApprovalsResolved> {
   const filePath = resolveExecApprovalsDisplayPath();
   if (!overrides?.requireSocket) {
-    const file = loadExecApprovals();
+    const file = await loadExecApprovalsReadOnlyAsync();
     const resolved = shapeResolvedExecApprovals({
       file,
       filePath,
@@ -94,7 +99,7 @@ export async function resolveExecApprovalsLocked(
     if (
       (resolved.agent.security === "full" || resolved.agent.security === "deny") &&
       resolved.agent.ask === "off" &&
-      !file.socket?.token?.trim()
+      !(await readExecApprovalsSocket())?.socket_token?.trim()
     ) {
       return resolved;
     }

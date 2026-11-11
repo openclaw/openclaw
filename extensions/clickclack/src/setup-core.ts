@@ -64,11 +64,7 @@ function requireClickClackSetupCodeBaseUrl(value: string | undefined): string {
   return baseUrl;
 }
 
-function parseClickClackSetupCodeInput(params: { code: string; baseUrl?: string }): {
-  code: string;
-  baseUrl: string;
-  exactClaimUrl?: string;
-} {
+function parseClickClackSetupCodeInput(params: { code: string; baseUrl?: string }) {
   const rawCode = params.code.trim();
   if (!rawCode) {
     throw new Error("ClickClack --code must not be empty.");
@@ -235,9 +231,7 @@ const clickClackSetupAdapter: ChannelSetupAdapter<ClickClackSetupInput> = {
       token: claim.token,
       workspace: claim.workspace.id,
       ...(claim.defaults.defaultTo !== undefined ? { defaultTo: claim.defaults.defaultTo } : {}),
-      ...(claim.defaults.allowFrom !== undefined
-        ? { allowFrom: [...claim.defaults.allowFrom] }
-        : {}),
+      ...(claim.defaults.allowFrom !== undefined ? { allowFrom: claim.defaults.allowFrom } : {}),
       ...(claim.defaults.agentActivity !== undefined
         ? { agentActivity: claim.defaults.agentActivity }
         : {}),
@@ -295,7 +289,7 @@ const clickClackSetupAdapter: ChannelSetupAdapter<ClickClackSetupInput> = {
         ...(baseUrl ? { baseUrl } : {}),
         ...(workspace ? { workspace } : {}),
         ...(setupInput.defaultTo?.trim() ? { defaultTo: setupInput.defaultTo.trim() } : {}),
-        ...(setupInput.allowFrom ? { allowFrom: [...setupInput.allowFrom] } : {}),
+        ...(setupInput.allowFrom ? { allowFrom: setupInput.allowFrom } : {}),
         ...(setupInput.agentActivity !== undefined
           ? { agentActivity: setupInput.agentActivity }
           : {}),

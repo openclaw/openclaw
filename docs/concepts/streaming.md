@@ -15,6 +15,14 @@ token-delta streaming** to channel messages:
 - **Preview streaming (Telegram/Discord/Slack/Matrix/Mattermost/MS Teams):**
   update a temporary **preview message** while generating (send + edits/appends).
 
+Rapid provider deltas are coalesced before channel preview callbacks and worker
+preview snapshots, with a 75 ms cadence. Message boundaries and final settlement
+flush pending text; a provider pause can leave the last partial waiting for its
+next event. Each channel still applies its own network update cadence. Final
+replies and stored transcript content retain the complete text.
+The embedded TUI also batches text presentation at 75 ms, flushing before tools,
+replacements, and terminal events.
+
 ## Control UI startup status
 
 After `chat.send` acknowledges an active run, the Gateway can send a typed,
@@ -24,8 +32,10 @@ workspace preparation, environment provisioning, context preparation, and
 model startup.
 
 The first assistant delta or tool start permanently replaces startup status for
-that run. Approval status takes precedence while a tool is waiting for operator
-action. Worktree creation and initial cloud dispatch happen before a chat run
+that run. Session-list and sidebar activity stays on until the run settles,
+including while the final reply is still streaming or being delivered. An answer
+delta or attempt-level finishing signal alone does not mark the session idle.
+Approval status takes precedence while a tool is waiting for operator action. Worktree creation and initial cloud dispatch happen before a chat run
 exists, so their pre-run RPC progress is not presented as run startup status;
 environment provisioning appears here only when an active run reprovisions a
 reclaimed worker.
@@ -79,6 +89,53 @@ the nested shape before starting the Gateway. See the
   output. Still uses the chunker if the buffered text exceeds `maxChars`, so it
   can emit multiple chunks at the end.
 
+Final-answer blocks wait while trailing tool syntax or Markdown ownership is still
+ambiguous. Recognized calls are hidden; literal examples and unfinished text are
+released when the text ends. Channel previews also withhold a possible standalone
+bracket/JSON tool call from its opening marker until the grammar settles it. Only that pending
+tail waits: ordinary prose and fenced examples keep streaming. Unfinished literal
+text is released in the final reply. Raw and ACP event streams keep their existing
+append-only behavior.
+
+<a id="pending-text-phases" />
+
+### Text phases and final replies
+
+Providers that do not declare text phases, including ordinary Chat Completions
+and native Ollama (`api: "ollama"`, `/api/chat`), stream visible model text as it
+arrives. A later tool call or reasoning continuation does not reclassify earlier
+text as commentary. Content before reasoning remains visible, and text after
+reasoning continues streaming. ACP and the Control UI preserve that visible
+text in order without retroactively rewriting it.
+
+For these providers, channels with block streaming off select their final text
+reply at turn end from the assistant text after the last tool call. When there
+are no tool calls, the visible assistant text is the final reply. This selection
+does not retract text already shown in a live surface or channel preview. With
+block streaming on, durable blocks follow the configured chunking and flush
+boundaries.
+
+If a successfully settled tool batch intentionally ends the turn, any unphased
+narration remains the reply. OpenClaw does not replace that narration with a
+missing-answer error or require another model response.
+
+Explicit provider phases still apply: OpenAI Responses `phase` and Harmony
+commentary/final channels distinguish narration from final answers. Reasoning
+visibility settings and private-tag filtering also continue to apply; preserving
+visible text does not expose hidden reasoning.
+
+Shared text filtering skips repeated reasoning/final-tag scans for marker-free
+HTML, generic types, and comparisons. Recognized or ambiguous marker heads use
+the existing tag handling, including tags split across provider chunks.
+
+Answers containing only whitespace or invisible formatting characters stay empty,
+including when a character is split across provider chunks.
+
+Provider plugins should omit `openclawDelivery.textPhaseRequiresTerminal`.
+This field, shipped in `v2026.10.1`, is now ignored. Its optional SDK type remains
+source-compatible until the next Plugin SDK major; removal also requires explicit
+breaking-release approval. It cannot enable retroactive phase inference.
+
 ### Media delivery with block streaming
 
 When a plugin uses `before_agent_finalize` to validate the built-in runtime's
@@ -116,10 +173,14 @@ Block chunking is implemented by `EmbeddedBlockChunker`:
   whitespace -> hard break.
 - **Code fences:** never split inside fences; when forced at `maxChars`, close
   and reopen the fence to keep Markdown valid.
+  Inline backtick code does not make following prose part of a fenced block.
 - **Tables:** a Markdown table that fits in `maxChars` is kept in one chunk,
   even if that means breaking before it below `minChars`, so channels that
   render tables see the header and rows together. Larger tables split at row
-  boundaries.
+  boundaries, repeating headers when the table can render independently of its
+  surrounding list or other container. If a header or an
+  individual row cannot fit within the limit, ordinary hard splitting still
+  applies.
 
 `maxChars` is clamped to the channel `textChunkLimit`, so you cannot exceed
 per-channel caps.
@@ -131,7 +192,10 @@ chunks** before sending them, reducing single-line spam while still providing
 progressive output.
 
 - Coalescing waits for **idle gaps** (`idleMs`) before flushing.
-- Buffers are capped by `maxChars` and flush if they exceed it.
+- Buffers are capped by `maxChars` and flush if they exceed it. Buffered text
+  merges into a following media caption only when the combined text, including
+  its joiner, fits this limit; otherwise text is sent before the original media
+  payload. Captionless media does not add a joiner.
 - `minChars` prevents tiny fragments from sending until enough text accumulates
   (final flush always sends remaining text).
 - Joiner is derived from `blockStreamingChunk.breakPreference`: `paragraph` ->
@@ -183,7 +247,7 @@ other turns without a preview, they retain the configured block delivery policy.
 
 ## Preview streaming modes
 
-Canonical key: `channels.<channel>.streaming` (nested `{ mode, ... }`; legacy
+Current key: `channels.<channel>.streaming` (nested `{ mode, ... }`; legacy
 top-level boolean/string spellings are rewritten by `openclaw doctor --fix`).
 
 | Mode       | Behavior                                                              |
@@ -206,16 +270,17 @@ instead of being overwritten in one editable draft.
 
 ### Channel mapping
 
-Discord defaults to `off` when `streaming` is unset, Telegram and Slack default
-to `progress`, and Mattermost and MS Teams default to `partial`.
+Discord, Telegram, and Slack default to `progress` when `streaming` is unset.
+Mattermost and MS Teams default to `partial`. Explicitly configured modes remain
+unchanged; `off` disables previews.
 
-| Channel    | `off`         | `partial` | `block` | `progress`                                    |
-| ---------- | ------------- | --------- | ------- | --------------------------------------------- |
-| Telegram   | Yes           | Yes       | Yes     | editable progress draft (default)             |
-| Discord    | Yes (default) | Yes       | Yes     | editable progress draft (opt-in)              |
-| Slack      | Yes           | Yes       | Yes     | native card in threads; quiet outside threads |
-| Mattermost | Yes           | Yes       | Yes     | Yes                                           |
-| MS Teams   | Yes           | Yes       | Yes     | native progress stream                        |
+| Channel    | `off` | `partial` | `block` | `progress`                                    |
+| ---------- | ----- | --------- | ------- | --------------------------------------------- |
+| Telegram   | Yes   | Yes       | Yes     | editable progress draft (default)             |
+| Discord    | Yes   | Yes       | Yes     | editable progress draft (default)             |
+| Slack      | Yes   | Yes       | Yes     | native card in threads; quiet outside threads |
+| Mattermost | Yes   | Yes       | Yes     | Yes                                           |
+| MS Teams   | Yes   | Yes       | Yes     | native progress stream                        |
 
 Preview chunk config (`streaming.preview.chunk.*`, e.g. under
 `channels.discord.streaming` or `channels.telegram.streaming`) defaults to
@@ -260,7 +325,9 @@ Slack-only:
 - `progress` mode keeps tool progress in an editable status draft, materializes
   the status label when answer streaming is active but no tool line is
   available yet, clears the draft at completion, and sends the final answer
-  through normal delivery.
+  through normal delivery. When the parent yields to accepted subagents, the
+  same draft keeps updating until they settle; see
+  [Subagent yield handoff](/concepts/subagent-yield-handoff#progress-after-yield).
 - Plan previews use native checkboxes when `channels.telegram.richMessages`
   is `true`; otherwise they use readable HTML checklists. Completed steps are
   checked, and the active step is marked "in progress".
@@ -284,18 +351,16 @@ Slack-only:
   answer's paragraph separators and code fences in the edited message.
 - Preview streaming is skipped when Discord block streaming is explicitly
   enabled.
-- `progress` is quiet by default: headline, authored commentary and reasoning,
-  plan milestones, and approval requests. Intermediate tool failures and nonzero
-  command exits are hidden. The same default applies on
-  other shared progress-card renderers; `streaming.progress.toolProgress: true` adds
-  the rolling tool log with its icons.
-- When a parent yields to accepted subagents, `progress` mode can transfer its
-  confirmed card to core. The same message keeps its checklist and receives
-  child activity and terminal updates; the final answer is separate. See
-  [Subagent yield handoff](/concepts/subagent-yield-handoff#progress-after-yield).
-- Without that handoff, `progress` mode deletes the status draft once the final
-  answer is delivered, so busy channels keep no orphaned tool log above the
-  reply. Error finals keep the draft as the record of the failed turn.
+- `progress` is quiet by default: a headline, enabled commentary and reasoning,
+  plan milestones, and approval requests. Without a headline, the draft falls
+  back to `Working`. Tool names, last-activity rows, delegated-task lifecycle
+  rows, intermediate tool failures, and nonzero command exits are hidden.
+  `streaming.progress.toolProgress: true` adds the rolling tool log with its icons.
+  Telegram retains its current-operation and delegated-task status presentation.
+- `progress` mode deletes the status draft once the final answer is delivered,
+  so busy channels keep no orphaned tool log above the reply. Transient deletion
+  failures are retried with backoff. Error finals keep the draft as the record
+  of the failed turn.
 - Final media, error, and explicit-reply payloads cancel pending previews
   without flushing a new draft, then use normal delivery.
 
@@ -361,6 +426,9 @@ Slack-only:
   parallel and consecutive tool updates share the current tool-activity post.
 - Falls back to sending a fresh final post if the preview post was deleted or
   is otherwise unavailable at finalize time.
+- Sends the final answer as a new post and deletes the preview when anything
+  was posted after the preview in its thread (or channel), such as a `message`
+  tool send, so the answer lands last and notifies.
 - Final media/error payloads cancel pending preview updates before normal
   delivery instead of flushing a temporary preview post.
 
@@ -419,6 +487,15 @@ Supported surfaces:
   Microsoft Teams, Mattermost, Slack session cards, and Telegram. To disable
   preview edits entirely, set `streaming.mode` to `off`.
 
+In Telegram's status-only `progress` tool log, consecutive invocations of the
+same tool share one row: `Bash`, then `Bash ×2`, then `Bash ×3`. Repeated reads
+of the same skill and identical Sessions limits keep their detail
+(`Skill Read: github ×2`, `Sessions: 30 ×2`). A different tool or detail, an
+authored progress item, a preamble, or a plan starts a new row. Failures,
+approvals, and other detailed rows stay separate. Raw command mode and other
+streaming modes are unchanged. Only the temporary preview changes; execution and
+session history are unchanged.
+
 ## Progress draft rendering
 
 [Progress cards](/tools/progress-card) replace the complete plan state in
@@ -454,6 +531,10 @@ in the draft:
   the same preamble supplies the status headline even when this optional lane
   is off; other channels keep their existing progress behavior. See
   [Progress drafts](/concepts/progress-drafts#status-headline).
+
+When verbose logging owns standalone commentary, each preamble is sent once.
+Buffered commentary and tool summaries settle before the answer preview;
+text-only progress arriving after final delivery starts is suppressed.
 
 ```json
 {

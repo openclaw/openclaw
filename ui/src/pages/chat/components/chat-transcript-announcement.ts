@@ -1,13 +1,16 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
-import { chatItemGroups, type coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
-import { isInterSessionGroup } from "../chat-turn-boundary.ts";
+import { chatItemGroups } from "../chat-agent-run-grouping.ts";
+import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
+import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
+
+registerChatComposerEnglish();
 
 registerChatMessageMetadataEnglish();
 
@@ -16,7 +19,7 @@ export type TranscriptAnnouncement = {
   text: string;
 };
 
-type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
+type ChatRenderItem = SystemEventRenderItem;
 const ANNOUNCEMENT_MAX_CHARS = 500;
 
 function assistantMessageAttachmentFailureText(message: unknown): string | null {
@@ -42,32 +45,17 @@ function assistantMessageAnnouncementText(message: unknown): string | null {
   return [failureText, text].filter(Boolean).join(" ") || null;
 }
 
-function assistantGroupAnnouncementSource(
-  group: MessageGroup,
-  messageText: (message: unknown) => string | null = assistantMessageAnnouncementText,
-): { key: string; text: string } | null {
-  if (group.role.toLowerCase() !== "assistant") {
-    return null;
-  }
-  for (let index = group.messages.length - 1; index >= 0; index -= 1) {
-    const source = group.messages[index];
-    const text = messageText(source?.message);
-    if (text) {
-      return { key: source?.key ?? group.key, text };
-    }
-  }
-  return null;
-}
-
 export function latestTranscriptAnnouncement(
   items: readonly ChatRenderItem[],
+  liveItem?: ChatRenderItem,
 ): TranscriptAnnouncement | null {
   const announcement = (key: string, text: string): TranscriptAnnouncement => ({
     key,
     text: truncateUtf16Safe(text, ANNOUNCEMENT_MAX_CHARS),
   });
   for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
-    const item = items[itemIndex];
+    const base = items[itemIndex];
+    const item = base?.key === liveItem?.key ? liveItem : base;
     if (!item) {
       continue;
     }
@@ -98,11 +86,8 @@ export function latestTranscriptAnnouncement(
         continue;
       }
       for (const group of chatItemGroups(part).toReversed()) {
-        if (isInterSessionGroup(group)) {
-          const count = group.messages.reduce(
-            (total, entry) => total + (entry.duplicateCount ?? 1),
-            0,
-          );
+        if (isSessionActivityGroup(group)) {
+          const count = group.messages.length;
           const source = group.senderSession?.label ?? group.senderSession?.sessionKey;
           const label = t(
             source
@@ -119,9 +104,15 @@ export function latestTranscriptAnnouncement(
             source ? `${label} ${source}` : label,
           );
         }
-        const source = assistantGroupAnnouncementSource(group, messageText);
-        if (source) {
-          return announcement(source.key, source.text);
+        if (group.role.toLowerCase() !== "assistant") {
+          continue;
+        }
+        for (let index = group.messages.length - 1; index >= 0; index -= 1) {
+          const source = group.messages[index];
+          const text = messageText(source?.message);
+          if (text) {
+            return announcement(source?.key ?? group.key, text);
+          }
         }
       }
     }

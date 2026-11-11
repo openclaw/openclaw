@@ -41,9 +41,12 @@ enum ShellExecutor {
             let stdoutData = (try? Data(contentsOf: self.stdoutURL)) ?? Data()
             let stderrData = (try? Data(contentsOf: self.stderrURL)) ?? Data()
             try? FileManager.default.removeItem(at: self.stdoutURL.deletingLastPathComponent())
+            // Preserve diagnostics around malformed or truncated UTF-8 from subprocesses.
             return (
-                String(bytes: stdoutData, encoding: .utf8) ?? "",
-                String(bytes: stderrData, encoding: .utf8) ?? "")
+                // swiftlint:disable:next optional_data_string_conversion
+                String(decoding: stdoutData, as: UTF8.self),
+                // swiftlint:disable:next optional_data_string_conversion
+                String(decoding: stderrData, as: UTF8.self))
         }
 
         var subprocessStandardOutput: FileDescriptorOutput {
@@ -61,30 +64,25 @@ enum ShellExecutor {
 
     private final class StreamingOutputCapture: @unchecked Sendable {
         private let lock = NSLock()
-        private var stdoutLines: [String] = []
-        private var stderrLines: [String] = []
+        private var stdout = ""
+        private var stderr = ""
 
         func appendStdout(line: String) {
             self.lock.withLock {
-                self.stdoutLines.append(line)
+                self.stdout += line + "\n"
             }
         }
 
         func appendStderr(line: String) {
             self.lock.withLock {
-                self.stderrLines.append(line)
+                self.stderr += line + "\n"
             }
         }
 
         func snapshot() -> (stdout: String, stderr: String) {
             self.lock.withLock {
-                (Self.output(from: self.stdoutLines), Self.output(from: self.stderrLines))
+                (self.stdout, self.stderr)
             }
-        }
-
-        private static func output(from lines: [String]) -> String {
-            guard !lines.isEmpty else { return "" }
-            return lines.joined(separator: "\n") + "\n"
         }
     }
 

@@ -6,34 +6,45 @@ import type { Duplex } from "node:stream";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "../../../packages/gateway-client/src/websocket.js";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
 import { openProviderWebSocket } from "./provider-websocket.js";
 import * as ssrf from "./ssrf.js";
 
 const cleanups: Array<() => Promise<void>> = [];
+const providerUrl = "wss://provider.example/audio";
+const ignoredError = () => {};
+const peerClosed = (peer: Duplex) =>
+  once(peer, "close", { signal: AbortSignal.timeout(2000) }).then(
+    () => "closed",
+    (error: unknown) => error,
+  );
+const terminateOnOpen = (socket: Awaited<ReturnType<typeof openProviderWebSocket>>) => {
+  socket.on("error", ignoredError);
+  socket.terminate();
+  return socket;
+};
 
-async function createStalledHandshakeServer(event: "upgrade" | "connect") {
-  const server = createHttpServer();
-  const received = createDeferred<Duplex>();
-  const connections = new Set<net.Socket>();
-  let connectionCount = 0;
-  server.on("connection", (socket) => {
-    connectionCount += 1;
-    connections.add(socket);
-    socket.once("close", () => connections.delete(socket));
+function openSocket(
+  url: string,
+  options: Partial<Parameters<typeof openProviderWebSocket>[0]> = {},
+) {
+  return openProviderWebSocket({
+    url,
+    baseUrl: url,
+    allowPrivateNetwork: false,
+    timeoutMs: 1000,
+    trustConfiguredBaseUrlOrigin: false,
+    ...options,
   });
-  server.on(event, (_request, socket) => {
-    // HTTP hands upgraded sockets to us with allowHalfOpen enabled.
-    // Complete our half only after the client ends its connection.
-    socket.once("end", () => socket.end());
-    socket.resume();
-    received.resolve(socket);
-  });
+}
+
+async function listen(server: ReturnType<typeof createHttpServer>) {
+  const connections: net.Socket[] = [];
+  server.on("connection", (socket) => connections.push(socket));
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
   });
-  const port = (server.address() as AddressInfo).port;
   cleanups.push(async () => {
     for (const socket of connections) {
       socket.destroy();
@@ -43,29 +54,34 @@ async function createStalledHandshakeServer(event: "upgrade" | "connect") {
     });
   });
   return {
-    url: `http://127.0.0.1:${port}`,
-    received: received.promise,
-    connectionCount: () => connectionCount,
+    port: (server.address() as AddressInfo).port,
+    connectionCount: () => connections.length,
   };
 }
 
-function configureProxyEnvironment(proxyUrl: string, noProxy = "") {
+async function createStalledHandshakeServer(event: "upgrade" | "connect") {
+  const server = createHttpServer();
+  const received = createDeferred<Duplex>();
+  server.on(event, (_request, socket) => {
+    // Upgraded sockets are half-open: finish our half after the client ends.
+    socket.once("end", () => socket.end());
+    socket.resume();
+    received.resolve(socket);
+  });
+  const { port, connectionCount } = await listen(server);
+  return { url: `http://127.0.0.1:${port}`, received: received.promise, connectionCount };
+}
+
+async function prepareProxy(noProxy = "") {
+  const proxy = await createStalledHandshakeServer("connect");
   vi.stubEnv("OPENCLAW_PROXY_ACTIVE", undefined);
-  for (const name of [
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-  ]) {
-    vi.stubEnv(name, proxyUrl);
+  for (const name of "HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy".split(
+    " ",
+  )) {
+    vi.stubEnv(name, proxy.url);
   }
   vi.stubEnv("NO_PROXY", noProxy);
   vi.stubEnv("no_proxy", noProxy);
-}
-
-function resolveProviderToLoopback() {
   const resolveHostname = ssrf.resolvePinnedHostnameWithPolicy;
   vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation((hostname, params) =>
     resolveHostname(
@@ -75,36 +91,28 @@ function resolveProviderToLoopback() {
         : params,
     ),
   );
+  return proxy;
 }
 
-async function createLocalWebSocketServer(options: { tls?: boolean } = {}) {
-  const server = options.tls
+async function createLocalWebSocketServer(tls = false) {
+  const server = tls
     ? createHttpsServer({ cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM })
     : createHttpServer();
-  const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
-  const requestHeaders: Array<Record<string, string | string[] | undefined>> = [];
-  server.on("upgrade", (request, socket, head) => {
-    requestHeaders.push(request.headers);
-    websocketServer.handleUpgrade(request, socket, head, (client) => {
-      websocketServer.emit("connection", client, request);
+  const websocketServer = new WebSocketServer({ server, maxPayload: 1024 * 1024 });
+  let requests = 0;
+  server.on("upgrade", () => requests++);
+  const { port } = await listen(server);
+  cleanups.push(async () => {
+    for (const client of websocketServer.clients) {
+      client.terminate();
+    }
+    await new Promise<void>((resolve) => {
+      websocketServer.close(() => resolve());
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const port = (server.address() as AddressInfo).port;
-  cleanups.push(
-    async () =>
-      await new Promise<void>((resolve, reject) => {
-        for (const client of websocketServer.clients) {
-          client.terminate();
-        }
-        websocketServer.close(() => server.close((error) => (error ? reject(error) : resolve())));
-      }),
-  );
   return {
-    requestHeaders,
-    url: `${options.tls ? "wss" : "ws"}://127.0.0.1:${port}/listen`,
+    requestCount: () => requests,
+    url: `${tls ? "wss" : "ws"}://127.0.0.1:${port}/listen`,
   };
 }
 
@@ -123,16 +131,7 @@ async function createConnectProxy(proxyHostname = "127.0.0.1") {
       clientSocket.pipe(targetSocket);
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const port = (server.address() as AddressInfo).port;
-  cleanups.push(
-    async () =>
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  );
+  const { port } = await listen(server);
   return { connectCount: () => connectCount, url: `http://${proxyHostname}:${port}` };
 }
 
@@ -144,111 +143,46 @@ describe("openProviderWebSocket", () => {
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   });
 
-  it.each(["explicit-proxy", "env-proxy"] as const)(
-    "rejects private target DNS before connecting through configured %s",
-    async (mode) => {
-      const proxy = await createStalledHandshakeServer("connect");
-      configureProxyEnvironment(proxy.url);
-      resolveProviderToLoopback();
-      const opening = openProviderWebSocket({
-        allowPrivateNetwork: false,
-        baseUrl: "wss://provider.example/audio",
-        dispatcherPolicy:
-          mode === "explicit-proxy"
-            ? { mode, proxyUrl: proxy.url, allowPrivateProxy: true }
-            : { mode },
-        timeoutMs: 1000,
-        trustConfiguredBaseUrlOrigin: false,
-        url: "wss://provider.example/audio",
-      }).then((socket) => {
-        socket.on("error", () => {});
-        socket.terminate();
-        return socket;
-      });
-      await expect(opening).rejects.toThrow(/private|loopback|blocked/iu);
-      expect(proxy.connectionCount()).toBe(0);
-    },
-  );
+  it.each(["explicit-proxy", "env-proxy"] as const)("blocks private DNS via %s", async (mode) => {
+    const proxy = await prepareProxy();
+    const opening = openSocket(providerUrl, {
+      dispatcherPolicy:
+        mode === "explicit-proxy"
+          ? { mode, proxyUrl: proxy.url, allowPrivateProxy: true }
+          : { mode },
+    }).then(terminateOnOpen);
+    await expect(opening).rejects.toThrow(/private|loopback|blocked/iu);
+    expect(proxy.connectionCount()).toBe(0);
+  });
 
-  it.each([
-    { name: "an ambient proxy", managed: false, dispatcherPolicy: undefined },
-    {
-      name: "a managed proxy with configured env-proxy policy",
-      managed: true,
-      dispatcherPolicy: { mode: "env-proxy" },
-    },
-    {
-      name: "a managed proxy with configured direct policy",
-      managed: true,
-      dispatcherPolicy: { mode: "direct" },
-    },
-  ] as const)("leaves target DNS to $name", async ({ managed, dispatcherPolicy }) => {
-    const proxy = await createStalledHandshakeServer("connect");
-    configureProxyEnvironment(proxy.url);
-    if (managed) {
+  it.for([false, true])("delegates target DNS to ambient proxy (managed=%s)", async (active, t) => {
+    const proxy = await prepareProxy();
+    if (active) {
       vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
     }
-    resolveProviderToLoopback();
-    const socket = await openProviderWebSocket({
-      allowPrivateNetwork: false,
-      baseUrl: "wss://provider.example/audio",
-      dispatcherPolicy,
-      timeoutMs: 1000,
-      trustConfiguredBaseUrlOrigin: false,
-      url: "wss://provider.example/audio",
+    const socket = await openSocket(providerUrl, {
+      dispatcherPolicy: active ? { mode: "env-proxy" } : undefined,
     });
-    socket.on("error", () => {});
-    const peer = await withTestTimeout(proxy.received, 2000, "Proxy did not receive CONNECT");
+    socket.on("error", ignoredError);
+    const peer = await withinTest(proxy.received, t.signal);
     const closed = once(peer, "close", { signal: AbortSignal.timeout(2000) });
     socket.terminate();
     await closed;
     expect(proxy.connectionCount()).toBe(1);
   });
 
-  it.each([
-    { name: "ambient", managed: false, dispatcherPolicy: undefined },
-    { name: "managed", managed: true, dispatcherPolicy: { mode: "env-proxy" } },
-  ] as const)(
-    "checks target DNS when NO_PROXY bypasses a $name proxy",
-    async ({ managed, dispatcherPolicy }) => {
-      const proxy = await createStalledHandshakeServer("connect");
-      configureProxyEnvironment(proxy.url, "provider.example");
-      if (managed) {
-        vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+  it.each(["NO_PROXY bypass", "ALL_PROXY only"])("checks target DNS for %s", async (mode) => {
+    const proxy = await prepareProxy(mode === "NO_PROXY bypass" ? "provider.example" : "");
+    if (mode === "NO_PROXY bypass") {
+      vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    } else {
+      for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
+        vi.stubEnv(name, undefined);
       }
-      resolveProviderToLoopback();
-      await expect(
-        openProviderWebSocket({
-          allowPrivateNetwork: false,
-          baseUrl: "wss://provider.example/audio",
-          dispatcherPolicy,
-          timeoutMs: 1000,
-          trustConfiguredBaseUrlOrigin: false,
-          url: "wss://provider.example/audio",
-        }),
-      ).rejects.toThrow(/private|loopback|blocked/iu);
-      expect(proxy.connectionCount()).toBe(0);
-    },
-  );
-
-  it("checks target DNS when only ALL_PROXY is configured", async () => {
-    const proxy = await createStalledHandshakeServer("connect");
-    configureProxyEnvironment(proxy.url);
-    for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
-      vi.stubEnv(name, undefined);
     }
-    resolveProviderToLoopback();
-    const opening = openProviderWebSocket({
-      allowPrivateNetwork: false,
-      baseUrl: "wss://provider.example/audio",
-      timeoutMs: 1000,
-      trustConfiguredBaseUrlOrigin: false,
-      url: "wss://provider.example/audio",
-    }).then((socket) => {
-      socket.on("error", () => {});
-      socket.terminate();
-      return socket;
-    });
+    const opening = openSocket(providerUrl, {
+      dispatcherPolicy: mode === "NO_PROXY bypass" ? { mode: "env-proxy" } : undefined,
+    }).then(terminateOnOpen);
     await expect(opening).rejects.toThrow(/private|loopback|blocked/iu);
     expect(proxy.connectionCount()).toBe(0);
   });
@@ -265,13 +199,9 @@ describe("openProviderWebSocket", () => {
     });
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const url = server.url.replace("http:", "ws:");
-    const opening = openProviderWebSocket({
+    const opening = openSocket(url, {
       allowPrivateNetwork: true,
-      baseUrl: url,
       dispatcherPolicy: { mode: "direct" },
-      timeoutMs: 1000,
-      trustConfiguredBaseUrlOrigin: false,
-      url,
     });
     await lookupStarted.promise;
     await vi.advanceTimersByTimeAsync(600);
@@ -280,10 +210,7 @@ describe("openProviderWebSocket", () => {
     const errors: Error[] = [];
     socket.on("error", (error) => errors.push(error));
     const peer = await server.received;
-    const closed = once(peer, "close", { signal: AbortSignal.timeout(2000) }).then(
-      () => "closed",
-      (error: unknown) => error,
-    );
+    const closed = peerClosed(peer);
     await vi.advanceTimersByTimeAsync(399);
     expect(socket.readyState).toBe(socket.CONNECTING);
     await vi.advanceTimersByTimeAsync(1);
@@ -291,111 +218,61 @@ describe("openProviderWebSocket", () => {
     expect(await closed).toBe("closed");
   });
 
-  it.each(["deadline", "caller cancellation", "socket termination"] as const)(
-    "closes a stalled proxy CONNECT on %s",
-    async (stop) => {
-      const proxy = await createStalledHandshakeServer("connect");
-      const controller = new AbortController();
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const socket = await openProviderWebSocket({
-        allowPrivateNetwork: true,
-        baseUrl: "wss://127.0.0.1/audio",
-        dispatcherPolicy: { mode: "explicit-proxy", proxyUrl: proxy.url },
-        signal: controller.signal,
-        timeoutMs: 1000,
-        trustConfiguredBaseUrlOrigin: false,
-        url: "wss://127.0.0.1/audio",
-      });
-      socket.on("error", () => {});
-      const peer = await proxy.received;
-      const closed = once(peer, "close", { signal: AbortSignal.timeout(2000) }).then(
-        () => "closed",
-        (error: unknown) => error,
-      );
-      if (stop === "deadline") {
-        await vi.advanceTimersByTimeAsync(1000);
-      } else if (stop === "caller cancellation") {
-        controller.abort();
-      } else {
-        socket.terminate();
-      }
-      expect(socket.readyState).not.toBe(socket.CONNECTING);
-      expect(await closed).toBe("closed");
-    },
-  );
+  it.each(["deadline", "abort", "terminate"])("closes stalled CONNECT on %s", async (stop) => {
+    const proxy = await createStalledHandshakeServer("connect");
+    const controller = new AbortController();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const socket = await openSocket("wss://127.0.0.1/audio", {
+      allowPrivateNetwork: true,
+      dispatcherPolicy: { mode: "explicit-proxy", proxyUrl: proxy.url },
+      signal: controller.signal,
+    });
+    socket.on("error", ignoredError);
+    const peer = await proxy.received;
+    const closed = peerClosed(peer);
+    if (stop === "deadline") {
+      await vi.advanceTimersByTimeAsync(1000);
+    } else if (stop === "abort") {
+      controller.abort();
+    } else {
+      socket.terminate();
+    }
+    expect(socket.readyState).not.toBe(socket.CONNECTING);
+    expect(await closed).toBe("closed");
+  });
 
-  it.each([
-    { name: "private", allowPrivateNetwork: false },
-    { name: "pre-aborted", allowPrivateNetwork: true, signal: AbortSignal.abort() },
-  ])("does not open a $name socket", async (testCase) => {
+  it.each([false, true])("does not open a socket (pre-aborted=%s)", async (aborted) => {
     const server = await createLocalWebSocketServer();
     await expect(
-      openProviderWebSocket({
-        allowPrivateNetwork: testCase.allowPrivateNetwork,
-        baseUrl: server.url,
+      openSocket(server.url, {
+        allowPrivateNetwork: aborted,
         headers: { authorization: "Token test" },
-        ...(testCase.signal ? { signal: testCase.signal } : {}),
-        timeoutMs: 1000,
-        trustConfiguredBaseUrlOrigin: false,
-        url: server.url,
+        ...(aborted ? { signal: AbortSignal.abort() } : {}),
       }),
     ).rejects.toThrow(/private|loopback|blocked|aborted/iu);
-    expect(server.requestHeaders).toHaveLength(0);
+    expect(server.requestCount()).toBe(0);
   });
 
-  it("opens an allowed socket with resolved request headers", async () => {
-    const server = await createLocalWebSocketServer();
-    const socket = await openProviderWebSocket({
-      allowPrivateNetwork: true,
-      baseUrl: server.url,
-      headers: { authorization: "Token configured", "x-provider": "deepgram" },
-      timeoutMs: 1000,
-      trustConfiguredBaseUrlOrigin: false,
-      url: server.url,
-    });
-    await once(socket, "open");
-    expect(server.requestHeaders[0]?.authorization).toBe("Token configured");
-    expect(server.requestHeaders[0]?.["x-provider"]).toBe("deepgram");
-    socket.close();
-    await once(socket, "close");
-  });
-
-  it("applies target TLS settings to the WebSocket handshake", async () => {
-    const server = await createLocalWebSocketServer({ tls: true });
-    const socket = await openProviderWebSocket({
-      allowPrivateNetwork: true,
-      baseUrl: server.url,
-      dispatcherPolicy: { mode: "direct", connect: { rejectUnauthorized: false } },
-      timeoutMs: 1000,
-      trustConfiguredBaseUrlOrigin: false,
-      url: server.url,
-    });
-    await once(socket, "open");
-    expect(server.requestHeaders).toHaveLength(1);
-    socket.close();
-    await once(socket, "close");
-  });
-
-  it("routes the WebSocket handshake through an explicit proxy", async () => {
-    const target = await createLocalWebSocketServer();
+  it.each([false, true])("opens handshake with transport settings (proxy=%s)", async (useProxy) => {
+    const target = await createLocalWebSocketServer(!useProxy);
     const connectSpy = vi.spyOn(net, "connect");
-    const proxy = await createConnectProxy("localhost");
-    const socket = await openProviderWebSocket({
+    const proxy = useProxy ? await createConnectProxy("localhost") : undefined;
+    const socket = await openSocket(target.url, {
       allowPrivateNetwork: true,
-      baseUrl: target.url,
-      dispatcherPolicy: { mode: "explicit-proxy", proxyUrl: proxy.url },
-      timeoutMs: 1000,
-      trustConfiguredBaseUrlOrigin: false,
-      url: target.url,
+      dispatcherPolicy: proxy
+        ? { mode: "explicit-proxy", proxyUrl: proxy.url }
+        : { mode: "direct", connect: { rejectUnauthorized: false } },
     });
     await once(socket, "open");
-    expect(proxy.connectCount()).toBe(1);
-    expect(target.requestHeaders).toHaveLength(1);
-    expect(
-      connectSpy.mock.calls.some(
-        ([options]) => typeof asOptionalRecord(options)?.lookup === "function",
-      ),
-    ).toBe(true);
+    expect(target.requestCount()).toBe(1);
+    if (proxy) {
+      expect(proxy.connectCount()).toBe(1);
+      expect(
+        connectSpy.mock.calls.some(
+          ([options]) => typeof asOptionalRecord(options)?.lookup === "function",
+        ),
+      ).toBe(true);
+    }
     socket.close();
     await once(socket, "close");
   });

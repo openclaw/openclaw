@@ -25,21 +25,19 @@ function omitMemoryCoreEntry<T extends Record<string, unknown> | undefined>(entr
 function prepareLiveTransportGatewayConfig(cfg: OpenClawConfig): OpenClawConfig {
   return {
     ...cfg,
-    plugins: cfg.plugins
-      ? {
-          ...cfg.plugins,
-          allow: cfg.plugins.allow?.filter((pluginId) => pluginId !== "memory-core"),
-          entries: omitMemoryCoreEntry(cfg.plugins.entries),
-          slots: {
-            ...cfg.plugins.slots,
-            memory: "none",
-          },
-        }
-      : {
-          slots: {
-            memory: "none",
-          },
-        },
+    plugins: {
+      ...(cfg.plugins
+        ? {
+            ...cfg.plugins,
+            allow: cfg.plugins.allow?.filter((pluginId) => pluginId !== "memory-core"),
+            entries: omitMemoryCoreEntry(cfg.plugins.entries),
+          }
+        : {}),
+      slots: {
+        ...cfg.plugins?.slots,
+        memory: "none",
+      },
+    },
     memory: {
       ...cfg.memory,
       search: {

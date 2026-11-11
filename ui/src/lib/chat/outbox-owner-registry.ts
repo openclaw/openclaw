@@ -26,10 +26,7 @@ export function outboxOwnerKey(host: ChatComposerScope): string {
 }
 
 export function storedChatOutboxItemNeedsReview(item: ChatQueueItem): boolean {
-  return (
-    !item.pendingRunId &&
-    (item.sendState === "failed" || item.sendState === "unconfirmed" || item.sendState === "held")
-  );
+  return !item.pendingRunId && (item.sendState === "failed" || item.sendState === "held");
 }
 
 export function subscribeChatOutboxAttentionChanges(listener: (ownerKey: string) => void) {

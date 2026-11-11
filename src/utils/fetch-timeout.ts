@@ -1,6 +1,7 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { resolveSafeTimeoutDelayMs } from "./timer-delay.js";
 
 const log = createSubsystemLogger("fetch-timeout");
@@ -74,7 +75,7 @@ function abortDueToTimeout(
     return;
   }
   const sanitizedUrl = sanitizeTimeoutLogUrl(url);
-  const elapsedMs = Math.max(0, Date.now() - startedAtMs);
+  const elapsedMs = Math.max(0, monotonicNow() - startedAtMs);
   const delayMs = Math.max(0, elapsedMs - timeoutMs);
   // A large elapsed/timeout gap means the timer callback itself was starved,
   // which is more useful for operators than another plain timeout message.
@@ -131,7 +132,7 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
       normalizedTimeoutMs,
       controller,
       normalizedTimeoutMs,
-      Date.now(),
+      monotonicNow(),
       params.operation,
       params.url,
       signal,
@@ -145,16 +146,12 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
       if (!active || signal.aborted) {
         return;
       }
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
+      clearTimeout(timeoutId);
       scheduleTimeout();
     },
     cleanup: () => {
       active = false;
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
+      clearTimeout(timeoutId);
     },
   };
 }
@@ -165,18 +162,13 @@ export async function fetchWithTimeout(
   timeoutMs: number,
   fetchFn: typeof fetch = fetch,
 ): Promise<Response> {
-  const { signal: timeoutSignal, cleanup } = buildTimeoutAbortSignal({
+  // The wrapper timeout ends at headers; caller cancellation still follows the response body.
+  const { signal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: Math.max(1, timeoutMs),
+    signal: init.signal ?? undefined,
     operation: "fetchWithTimeout",
     url,
   });
-  const callerSignal = init.signal ?? undefined;
-  // The wrapper timeout ends once fetch returns headers, but the response body
-  // must keep following caller cancellation (and its reason) after that point.
-  const signal =
-    callerSignal && timeoutSignal
-      ? AbortSignal.any([callerSignal, timeoutSignal])
-      : (callerSignal ?? timeoutSignal);
   try {
     return await fetchFn(url, { ...init, signal });
   } finally {

@@ -62,11 +62,11 @@ export function hasAcceptedMessageActionResult(
   );
 }
 
-export async function annotateSourceDelivery<T extends MessageActionResult>(
-  result: T,
+export async function annotateSourceDelivery(
+  result: MessageActionResult,
   ctx: ResolvedActionContext,
   replyToIsExplicit: boolean,
-): Promise<T> {
+): Promise<MessageActionResult> {
   // Current-source identity comes from the authorized route and delivery receipt,
   // not the reply mode; automatic runs also use this marker to avoid false fallbacks.
   const authorization = ctx.input.messageActionAuthorization;
@@ -118,6 +118,5 @@ export async function annotateSourceDelivery<T extends MessageActionResult>(
           },
         }
       : {}),
-    // SAFETY: preserve the concrete result variant while adding route metadata to its payloads.
-  } as T;
+  };
 }

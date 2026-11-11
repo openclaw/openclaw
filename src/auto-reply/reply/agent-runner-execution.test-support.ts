@@ -1,39 +1,39 @@
 // Shared mocks and fixtures for agent-runner execution tests.
 import path from "node:path";
 import { afterEach, beforeEach, expect, onTestFinished, vi } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
-import type { DeferredEmbeddedRunLifecycleOwner } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError, type FallbackAttemptRecord } from "../../agents/failover-error.js";
 import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/failover/user-copy.js";
+import { model as createModelFixture } from "../../agents/model-catalog-fixtures.test-support.js";
 import {
   initialModelFallbackAttemptOptions,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
-import {
-  createUserTurnTranscriptRecorder,
-  type PersistedUserTurnMessage,
-} from "../../sessions/user-turn-transcript.js";
-import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { getRawExecuteAgentTurnForTest } from "./agent-runner-execution-admission.test-support.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type {
   buildEmbeddedRunExecutionParams,
   mintReplyMessageActionTurnCapability,
 } from "./agent-runner-utils.js";
+import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import type { FollowupRun } from "./queue.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 type RunEntryParams = Parameters<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>[0];
 type RunEntryResult = Awaited<ReturnType<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>>;
 type RunEntryDelegate = (params: RunEntryParams) => Promise<RunEntryResult>;
 type RunCliAgent = typeof import("../../agents/cli-runner.js").runCliAgent;
+
+export { getRawExecuteAgentTurnForTest } from "./agent-runner-execution-admission.test-support.js";
 
 export const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
 export { createMockReplyOperation } from "./test-helpers.js";
@@ -77,34 +77,28 @@ const state = vi.hoisted(() => ({
   peekSessionMcpRuntimeMock: vi.fn(),
   recordMessageToolRunOutcomeMock: vi.fn(),
   mintReplyMessageActionTurnCapabilityMock: vi.fn<typeof mintReplyMessageActionTurnCapability>(),
-  productionBuildEmbeddedRunExecutionParams: undefined as
-    | typeof buildEmbeddedRunExecutionParams
-    | undefined,
+}));
+const productionBuilder = vi.hoisted(() => ({
+  current: undefined as typeof buildEmbeddedRunExecutionParams | undefined,
 }));
 
 export const GENERIC_RUN_FAILURE_TEXT =
   "⚠️ OpenClaw couldn't finish this request. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
-export function makeTestModel(id: string, contextTokens: number): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+export function makeTestModel(id: string, contextTokens: number) {
+  return createModelFixture(id, id, {
     contextWindow: contextTokens,
     contextTokens,
     maxTokens: 4096,
-  };
+  });
 }
 
 vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: (params: unknown) => state.runEmbeddedAgentMock(params),
 }));
 
-vi.mock("../../agents/embedded-agent-runner/run-entry.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../agents/embedded-agent-runner/run-entry.js")
-  >("../../agents/embedded-agent-runner/run-entry.js");
+vi.mock("../../agents/embedded-agent-runner/run-entry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../agents/embedded-agent-runner/run-entry.js")>();
   return {
     ...actual,
     runEmbeddedAgentEntry: (params: RunEntryParams) =>
@@ -123,8 +117,13 @@ vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (params: unknown) => state.runCliAgentMock(params),
 }));
 
+// mock-isolation: Supply controlled fallback outcomes without invoking provider or auth runtimes.
 vi.mock("../../agents/model-fallback-runner.js", () => ({
   runWithModelFallback: async (params: unknown) => {
+    const wrap = (candidate: unknown) =>
+      candidate && typeof candidate === "object" && "result" in candidate
+        ? candidate
+        : { result: candidate };
     const input = params as {
       classifyResult?: (classification: { result: unknown; [key: string]: unknown }) => unknown;
       [key: string]: unknown;
@@ -132,17 +131,8 @@ vi.mock("../../agents/model-fallback-runner.js", () => ({
     const adapted = input.classifyResult
       ? {
           ...input,
-          classifyResult: (classification: { result: unknown; [key: string]: unknown }) => {
-            const candidate = classification.result;
-            const wrappedCandidate =
-              candidate && typeof candidate === "object" && "result" in candidate
-                ? candidate
-                : { result: candidate };
-            return input.classifyResult?.({
-              ...classification,
-              result: wrappedCandidate,
-            });
-          },
+          classifyResult: (classification: { result: unknown; [key: string]: unknown }) =>
+            input.classifyResult?.({ ...classification, result: wrap(classification.result) }),
         }
       : input;
     const resolved = (await state.runWithModelFallbackMock(adapted)) as {
@@ -150,15 +140,10 @@ vi.mock("../../agents/model-fallback-runner.js", () => ({
       result?: unknown;
       [key: string]: unknown;
     };
-    const candidate = resolved?.result;
-    const wrappedCandidate =
-      candidate && typeof candidate === "object" && "result" in candidate
-        ? candidate
-        : { result: candidate };
     return {
       ...resolved,
       outcome: resolved.outcome ?? "completed",
-      result: wrappedCandidate,
+      result: wrap(resolved?.result),
     };
   },
 }));
@@ -170,146 +155,124 @@ vi.mock("../../agents/model-fallback-attempt.js", () => ({
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
-vi.mock("../../agents/model-selection.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/model-selection.js")>(
-    "../../agents/model-selection.js",
-  );
-  return {
-    ...actual,
-    isCliProvider: (provider: unknown) => state.isCliProviderMock(provider),
-  };
-});
+vi.mock("../../agents/model-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/model-selection.js")>()),
+  isCliProvider: (provider: unknown) => state.isCliProviderMock(provider),
+}));
 
-vi.mock("../../agents/bootstrap-budget.js", async () => ({
-  ...(await vi.importActual<typeof import("../../agents/bootstrap-budget.js")>(
-    "../../agents/bootstrap-budget.js",
-  )),
+vi.mock("../../agents/bootstrap-budget.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/bootstrap-budget.js")>()),
   resolveBootstrapWarningSignaturesSeen: () => [],
 }));
 
-vi.mock("../../agents/embedded-agent-helpers.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/embedded-agent-helpers.js")>(
-    "../../agents/embedded-agent-helpers.js",
-  );
-  return {
-    ...actual,
-    formatBillingErrorMessage: actual.formatBillingErrorMessage,
+vi.mock(
+  "../../agents/embedded-agent-helpers/context-overflow-observation.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../agents/embedded-agent-helpers/context-overflow-observation.js")
+    >()),
     isCompactionFailureError: (message?: string) => state.isCompactionFailureErrorMock(message),
-    isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
-    isLikelyContextOverflowError: (message?: string) =>
-      state.isLikelyContextOverflowErrorMock(message),
-    sanitizeUserFacingText: (text?: string) => text ?? "",
-  };
-});
+  }),
+);
 
-vi.mock("../../config/sessions.js", () => ({
+vi.mock("../../agents/failover/context-overflow.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/failover/context-overflow.js")>()),
+  isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
+  isLikelyContextOverflowError: (message?: string) =>
+    state.isLikelyContextOverflowErrorMock(message),
+}));
+
+vi.mock("../../config/sessions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions.js")>()),
   resolveGroupSessionKey: vi.fn(() => null),
+  resolveSessionStorePathCore: vi.fn(() => "/tmp/mock-sessions.json"),
   resolveSessionTranscriptPath: vi.fn(),
   updateSessionStore: state.updateSessionStoreMock,
 }));
 
-vi.mock("../../globals.js", async () => ({
-  ...(await vi.importActual<typeof import("../../globals.js")>("../../globals.js")),
+vi.mock("../../globals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../globals.js")>()),
   logVerbose: vi.fn(),
 }));
 
-vi.mock("../../infra/agent-events.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-    "../../infra/agent-events.js",
-  );
-  const emitAgentEvent = vi.fn((...args: Parameters<typeof actual.emitAgentEvent>) =>
-    actual.emitAgentEvent(...args),
-  );
+vi.mock("../../infra/agent-events.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/agent-events.js")>();
   return {
     ...actual,
     clearAgentRunContext: vi.fn(),
-    emitAgentEvent,
+    emitAgentEvent: vi.fn(actual.emitAgentEvent),
     registerAgentRunContext: vi.fn(),
   };
 });
-vi.mock("../../infra/agent-run-registry.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/agent-run-registry.js")>(
-    "../../infra/agent-run-registry.js",
-  );
-  return {
-    ...actual,
-    clearAgentRunContext: vi.fn(),
-    registerAgentRunContext: vi.fn(),
-  };
-});
+vi.mock("../../infra/agent-run-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/agent-run-registry.js")>()),
+  clearAgentRunContext: vi.fn(),
+  registerAgentRunContext: vi.fn(),
+}));
 
 vi.mock("../../infra/message-tool-run-outcome-store.js", () => ({
   recordMessageToolRunOutcome: (params: unknown) => state.recordMessageToolRunOutcomeMock(params),
 }));
 
-vi.mock("../../runtime.js", () => ({
-  defaultRuntime: {
-    error: vi.fn(),
-  },
-}));
+vi.mock("../../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../runtime.js")>();
+  return {
+    ...actual,
+    defaultRuntime: {
+      ...actual.defaultRuntime,
+      error: vi.fn(),
+      log: vi.fn(),
+    },
+  };
+});
 
-vi.mock("../../utils/message-channel.js", async () => ({
-  ...(await vi.importActual<typeof import("../../utils/message-channel.js")>(
-    "../../utils/message-channel.js",
-  )),
+vi.mock("../../utils/message-channel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/message-channel.js")>()),
   isMarkdownCapableMessageChannel: () => true,
   resolveMessageChannel: () => "whatsapp",
   isInternalMessageChannel: (value: unknown) => state.isInternalMessageChannelMock(value),
 }));
 
-vi.mock("../heartbeat.js", async () => {
-  const actual = await vi.importActual<typeof import("../heartbeat.js")>("../heartbeat.js");
-  return {
-    ...actual,
-    stripHeartbeatToken: (text: string) => ({
-      text,
-      didStrip: false,
-      shouldSkip: false,
-    }),
-  };
-});
+vi.mock("../heartbeat.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../heartbeat.js")>()),
+  stripHeartbeatToken: (text: string) => ({ text, didStrip: false, shouldSkip: false }),
+}));
 
 vi.mock("./current-turn-images.js", () => ({
   resolveCurrentTurnImages: (params: unknown) => state.resolveCurrentTurnImagesMock(params),
 }));
 
-vi.mock("./agent-runner-utils.js", async () => ({
-  ...(await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js")),
+vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-utils.js")>()),
   mintReplyMessageActionTurnCapability: state.mintReplyMessageActionTurnCapabilityMock,
   buildEmbeddedRunExecutionParams: (
     params: Parameters<typeof buildEmbeddedRunExecutionParams>[0],
   ) =>
     // Most execution tests isolate fallback policy from config/channel discovery. Ownership
     // regressions opt into the production builder so queue metadata must cross the real boundary.
-    state.productionBuildEmbeddedRunExecutionParams
-      ? state.productionBuildEmbeddedRunExecutionParams(params)
+    productionBuilder.current
+      ? productionBuilder.current(params)
       : {
-          embeddedContext: {
-            ...params.run,
-            messageProvider: params.replyRoute?.originatingChannel,
-            messageTo: params.replyRoute?.originatingTo,
-            agentAccountId:
-              params.replyRoute?.originatingAccountId ??
-              params.sessionCtx.AccountId ??
-              params.run.agentAccountId,
-            chatType:
-              params.replyRoute?.originatingChatType ??
-              params.sessionCtx.ChatType ??
-              params.run.chatType,
-          },
-          senderContext: {},
-          runBaseParams: {
-            runId: params.runId,
-            provider: params.provider,
-            model: params.model,
-            thinkLevel: params.run.thinkLevel,
-            authProfileId:
-              params.provider === params.run.provider ? params.run.authProfileId : undefined,
-            authProfileIdSource:
-              params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
-          },
+          ...params.run,
+          messageProvider: params.replyRoute?.originatingChannel,
+          messageTo: params.replyRoute?.originatingTo,
+          agentAccountId:
+            params.replyRoute?.originatingAccountId ??
+            params.sessionCtx.AccountId ??
+            params.run.agentAccountId,
+          chatType:
+            params.replyRoute?.originatingChatType ??
+            params.sessionCtx.ChatType ??
+            params.run.chatType,
+          runId: params.runId,
+          provider: params.provider,
+          model: params.model,
+          thinkLevel: params.run.thinkLevel,
+          authProfileId:
+            params.provider === params.run.provider ? params.run.authProfileId : undefined,
+          authProfileIdSource:
+            params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
         },
-  resolveQueuedReplyRuntimeConfig: <T>(config: T) => config,
   resolveModelFallbackOptions: vi.fn(
     (run: { provider?: string; model?: string; config?: unknown; agentDir?: string }) => ({
       provider: run.provider,
@@ -326,33 +289,31 @@ vi.mock("./agent-runner-utils.js", async () => ({
   }),
 }));
 
-vi.mock("./reply-delivery.js", () => ({
+vi.mock("./reply-delivery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-delivery.js")>()),
   createBlockReplyDeliveryHandler: (params: unknown) =>
     state.createBlockReplyDeliveryHandlerMock(params),
 }));
 
-vi.mock("./reply-media-paths.runtime.js", () => ({
-  createReplyMediaContext: () => ({
-    normalizePayload: (payload: unknown) => payload,
-  }),
+vi.mock("./reply-media-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-media-paths.js")>()),
+  createReplyMediaContext: () => ({ normalizePayload: (payload: unknown) => payload }),
   createReplyMediaPathNormalizer: () => (payload: unknown) => payload,
 }));
 
 export async function getExecuteAgentTurnForTest() {
-  const execute = (await import("./agent-runner-execution.js")).executeAgentTurn;
+  const execute = await getRawExecuteAgentTurnForTest();
   return async (...args: Parameters<typeof execute>) => {
-    const execution = await execute(...args);
-    const outcome = execution.outcome;
+    const { runId, outcome } = await execute(...args);
     if (outcome.kind === "settled") {
       return {
         kind: "success" as const,
-        runId: execution.runId,
+        runId,
         runResult: outcome.result,
         fallbackProvider: outcome.resolved.provider,
         fallbackModel: outcome.resolved.model,
         ...(outcome.fallback.exhausted ? { fallbackExhausted: true as const } : {}),
         fallbackAttempts: outcome.fallback.attempts,
-        didLogHeartbeatStrip: outcome.didLogHeartbeatStrip,
         autoCompactionCount: outcome.autoCompactionCount,
         hasDirectlySentBlockReply: outcome.hasDirectlySentBlockReply,
         directBlockDeliveries: outcome.directBlockDeliveries,
@@ -367,7 +328,7 @@ export async function getExecuteAgentTurnForTest() {
         postCompactionModelFailure: outcome.postCompactionModelFailure,
       };
     }
-    const payload: ReplyPayload = { text: "NO_REPLY" };
+    const payload: ReplyPayload = {};
     return { kind: "final" as const, payload };
   };
 }
@@ -375,7 +336,7 @@ export async function getExecuteAgentTurnForTest() {
 export async function useProductionEmbeddedRunExecutionParamsForTest(): Promise<void> {
   const actual =
     await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js");
-  state.productionBuildEmbeddedRunExecutionParams = actual.buildEmbeddedRunExecutionParams;
+  productionBuilder.current = actual.buildEmbeddedRunExecutionParams;
 }
 
 export async function loadActualRunCliAgentForTest(): Promise<RunCliAgent> {
@@ -402,68 +363,32 @@ export {
   runInitialModelFallbackAttempt as runInitialFallbackAttempt,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 
-export type EmbeddedAgentParams = {
+export type EmbeddedAgentParams = Pick<
+  RunEmbeddedAgentInternalParams,
+  | "currentInboundContext"
+  | "onDeferredLifecycleOwner"
+  | "onCompactionAccounting"
+  | "onExecutionStarted"
+  | "onExecutionPhase"
+  | "onLaneWait"
+  | "onAssistantMessageStart"
+  | "onAutoCompactionSucceeded"
+  | "onReasoningStream"
+  | "onReasoningEnd"
+  | "onAgentEvent"
+> & {
   runId: string;
   sessionId?: string;
   sessionKey?: string;
   prompt?: string;
   transcriptPrompt?: string;
-  currentInboundContext?: RunEmbeddedAgentInternalParams["currentInboundContext"];
   lifecycleGeneration?: string;
-  onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
-  onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
-  onExecutionStarted?: RunEmbeddedAgentInternalParams["onExecutionStarted"];
-  onExecutionPhase?: (info: {
-    phase:
-      | "runner_entered"
-      | "workspace"
-      | "runtime_plugins"
-      | "before_agent_reply"
-      | "model_resolution"
-      | "auth"
-      | "context_engine"
-      | "attempt_dispatch"
-      | "context_assembled"
-      | "turn_accepted"
-      | "process_spawned"
-      | "tool_execution_started"
-      | "assistant_output_started"
-      | "model_call_started";
-    provider?: string;
-    model?: string;
-    backend?: string;
-    source?: string;
-    tool?: string;
-    toolCallId?: string;
-    itemId?: string;
-  }) => void;
-  onLaneWait?: (info: { waitMs: number; queuedAhead: number; waiting?: boolean }) => void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
-  onAssistantMessageStart?: () => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
-  onAutoCompactionSucceeded?: (count: number) => void;
-  onReasoningStream?: (payload: {
-    text?: string;
-    mediaUrls?: string[];
-    isReasoningSnapshot?: boolean;
-    requiresReasoningProgressOptIn?: boolean;
-  }) => Promise<void> | void;
-  onReasoningEnd?: () => Promise<void> | void;
-  onItemEvent?: (payload: {
-    itemId?: string;
-    toolCallId?: string;
-    kind?: string;
-    title?: string;
-    name?: string;
-    phase?: string;
-    status?: string;
-    summary?: string;
-    progressText?: string;
-    approvalId?: string;
-    approvalSlug?: string;
-  }) => Promise<void> | void;
-  onAgentEvent?: RunEmbeddedAgentInternalParams["onAgentEvent"];
+  onItemEvent?: (
+    payload: Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0],
+  ) => Promise<void> | void;
 };
 
 export function createMockTypingSignaler(): TypingSignaler {
@@ -482,72 +407,60 @@ export function createMockTypingSignaler(): TypingSignaler {
   };
 }
 
-export function createFollowupRun(): FollowupRun {
-  const rootDir = useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-agent-execution-");
-  return {
-    prompt: "hello",
-    summaryLine: "hello",
-    enqueuedAt: Date.now(),
-    run: {
-      agentId: "main",
-      agentDir: path.join(rootDir, "agent"),
-      sessionId: "session",
-      sessionKey: "main",
-      messageProvider: "whatsapp",
-      sessionFile: path.join(rootDir, "session.jsonl"),
-      workspaceDir: rootDir,
-      config: {},
-      skillsSnapshot: { prompt: "", skills: [] },
-      provider: "anthropic",
-      model: "claude",
-      // Missing fixture modalities trigger real provider catalog discovery during execution.
-      thinkingCatalog: [
-        { provider: "anthropic", id: "claude", input: ["text"] },
-        { provider: "anthropic", id: "claude-opus-4-7", input: ["text", "image"] },
-        { provider: "claude-cli", id: "sonnet-4.6", input: ["text", "image"] },
-        { provider: "claude-cli", id: "claude-sonnet-4-6", input: ["text", "image"] },
-        { provider: "claude-cli", id: "claude-opus-4-6", input: ["text", "image"] },
-        { provider: "claude-cli", id: "claude-opus-4-7", input: ["text", "image"] },
-        { provider: "claude-cli", id: "claude-opus-5", input: ["text", "image"] },
-        { provider: "claude-cli", id: "claude-opus-4-8", input: ["text", "image"] },
-        { provider: "codex-cli", id: "gpt-5.4", input: ["text", "image"] },
-        { provider: "codex-cli", id: "gpt-5.5", input: ["text", "image"] },
-      ],
-      verboseLevel: "off",
-      elevatedLevel: "off",
-      bashElevated: {
-        enabled: false,
-        allowed: false,
-        defaultLevel: "off",
-      },
-      timeoutMs: 1_000,
-      blockReplyBreak: "message_end",
-    },
-  } as unknown as FollowupRun;
-}
-
-export function createTestUserTurnRecorder(message: PersistedUserTurnMessage) {
-  return createUserTurnTranscriptRecorder({
-    message,
-    target: createTestUserTurnTranscriptTarget(),
-    updateMode: "none",
+export function createFollowupRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun {
+  const followup = createTestFollowupRun({
+    // Missing fixture modalities trigger real provider catalog discovery during execution.
+    thinkingCatalog: [
+      { provider: "anthropic", id: "claude", input: ["text"] },
+      { provider: "anthropic", id: "claude-opus-4-7", input: ["text", "image"] },
+      { provider: "claude-cli", id: "sonnet-4.6", input: ["text", "image"] },
+      { provider: "claude-cli", id: "claude-sonnet-4-6", input: ["text", "image"] },
+      { provider: "claude-cli", id: "claude-opus-4-6", input: ["text", "image"] },
+      { provider: "claude-cli", id: "claude-opus-4-7", input: ["text", "image"] },
+      { provider: "claude-cli", id: "claude-opus-5", input: ["text", "image"] },
+      { provider: "claude-cli", id: "claude-opus-4-8", input: ["text", "image"] },
+      { provider: "codex-cli", id: "gpt-5.4", input: ["text", "image"] },
+      { provider: "codex-cli", id: "gpt-5.5", input: ["text", "image"] },
+    ],
   });
+  // Execution fixtures exercise runtime hints and select thinking themselves.
+  delete followup.run.thinkLevel;
+  delete followup.run.skipProviderRuntimeHints;
+  Object.assign(followup.run, overrides);
+  return followup;
 }
 
-export function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
+export function createRunResult(
+  text = "final",
+  meta: EmbeddedAgentRunResult["meta"] = { durationMs: 0 },
+) {
+  return { payloads: [{ text }], meta };
 }
+
+export async function runFallbackCandidate(
+  params: FallbackRunnerParams,
+  provider = params.provider,
+  model = params.model,
+  options = initialModelFallbackAttemptOptions(params),
+) {
+  return { result: await params.run(provider, model, options), provider, model, attempts: [] };
+}
+
+export function createCliFollowupRun(provider: string, model: string): FollowupRun {
+  state.isCliProviderMock.mockReturnValue(true);
+  state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+    runFallbackCandidate(params, provider, model),
+  );
+  return createFollowupRun({ provider, model });
+}
+
+export const requireRecord = createRequireRecord("object", "label-not-object");
 
 export function expectRecordFields(
   record: Record<string, unknown>,
   fields: Record<string, unknown>,
 ) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
+  expectObjectFields(record, fields);
 }
 
 export function requireMockCall(mock: unknown, index: number, label: string): unknown[] {
@@ -588,11 +501,7 @@ export function expectBlockReplyCall(
   expectMockCallArgFields(onBlockReply, index, "block reply payload", fields);
 }
 
-/**
- * Session-store paths reach production resolution, which derives a real agent
- * SQLite file from the store's directory. A shared /tmp path would therefore
- * open the machine-wide agent database and make unrelated suites depend on it.
- */
+// Production derives an agent SQLite file from this directory; never share /tmp across suites.
 export function makeTestSessionStorePath(): string {
   return path.join(
     useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-agent-execution-store-"),
@@ -609,7 +518,7 @@ export function createAgentTurnExecutionDefaults() {
     shouldEmitToolResult: () => true,
     shouldEmitToolOutput: () => false,
     pendingToolTasks: new Set<Promise<void>>(),
-    isHeartbeat: false,
+
     sessionKey: "main",
     getActiveSessionEntry: () => undefined,
     resolvedVerboseLevel: "off",
@@ -617,35 +526,21 @@ export function createAgentTurnExecutionDefaults() {
 }
 
 export function createRunAgentTurnParams(followupRun: FollowupRun): AgentTurnParams {
-  return {
-    commandBody: "hello",
-    followupRun,
-    sessionCtx: {
-      Provider: "whatsapp",
-      MessageSid: "msg",
-    },
-    opts: {},
-    typingSignals: createMockTypingSignaler(),
-    ...createAgentTurnExecutionDefaults(),
-  };
+  return { ...createMinimalRunAgentTurnParams({ followupRun }), commandBody: "hello" };
 }
 
-export function createMinimalRunAgentTurnParams(overrides?: {
-  followupRun?: FollowupRun;
-  opts?: GetReplyOptions;
-  replyOperation?: ReplyOperation;
-  sessionCtx?: TemplateContext;
-  typingSignals?: TypingSignaler;
-}): AgentTurnParams {
+export function createMinimalRunAgentTurnParams(
+  overrides?: Partial<
+    Pick<
+      AgentTurnParams,
+      "followupRun" | "opts" | "replyOperation" | "sessionCtx" | "typingSignals"
+    >
+  >,
+): AgentTurnParams {
   return {
     commandBody: "fix it",
     followupRun: overrides?.followupRun ?? createFollowupRun(),
-    sessionCtx:
-      overrides?.sessionCtx ??
-      ({
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext),
+    sessionCtx: overrides?.sessionCtx ?? { Provider: "whatsapp", MessageSid: "msg" },
     opts: overrides?.opts ?? ({} satisfies GetReplyOptions),
     replyOperation: overrides?.replyOperation,
     typingSignals: overrides?.typingSignals ?? createMockTypingSignaler(),
@@ -682,49 +577,36 @@ export async function setupAgentRunnerExecutionTestState() {
 
   beforeEach(() => {
     vi.useRealTimers();
-    state.runEmbeddedAgentMock.mockReset();
-    state.runEmbeddedAgentEntryMock
-      .mockReset()
-      .mockImplementation((params: RunEntryParams, delegate: RunEntryDelegate) => delegate(params));
-    state.runCliAgentMock.mockReset();
-    state.runWithModelFallbackMock.mockReset();
-    state.isCliProviderMock.mockReset();
+    for (const mock of Object.values(state)) {
+      mock.mockReset();
+    }
+    state.runEmbeddedAgentEntryMock.mockImplementation(
+      (params: RunEntryParams, delegate: RunEntryDelegate) => delegate(params),
+    );
     state.isCliProviderMock.mockReturnValue(false);
-    state.isInternalMessageChannelMock.mockReset();
     state.isInternalMessageChannelMock.mockReturnValue(false);
-    state.createBlockReplyDeliveryHandlerMock.mockReset();
     state.createBlockReplyDeliveryHandlerMock.mockReturnValue(undefined);
-    state.isCompactionFailureErrorMock.mockReset();
     state.isCompactionFailureErrorMock.mockReturnValue(false);
-    state.isContextOverflowErrorMock.mockReset();
     state.isContextOverflowErrorMock.mockReturnValue(false);
-    state.isLikelyContextOverflowErrorMock.mockReset();
     state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
-    state.updateSessionStoreMock.mockReset();
-    state.resolveCurrentTurnImagesMock.mockReset();
-    state.peekSessionMcpRuntimeMock.mockReset();
-    state.recordMessageToolRunOutcomeMock.mockReset();
-    state.mintReplyMessageActionTurnCapabilityMock.mockReset();
-    state.productionBuildEmbeddedRunExecutionParams = undefined;
     state.peekSessionMcpRuntimeMock.mockReturnValue(undefined);
+    productionBuilder.current = undefined;
     state.resolveCurrentTurnImagesMock.mockImplementation(
       async (params: { images?: unknown[]; imageOrder?: unknown[] }) => ({
         images: params.images,
         imageOrder: params.imageOrder,
       }),
     );
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
-      result: await params.run("anthropic", "claude", initialModelFallbackAttemptOptions(params)),
-      provider: "anthropic",
-      model: "claude",
-      attempts: [],
-    }));
+    state.runWithModelFallbackMock.mockImplementation((params: FallbackRunnerParams) =>
+      runFallbackCandidate(params, "anthropic", "claude"),
+    );
   });
 
   afterEach(() => {
     // Fake-timer tests must not leak into --isolate=false peers.
     vi.useRealTimers();
     cliBackendsTesting.resetDepsForTest();
+    clearRuntimeConfigSnapshot();
     vi.clearAllMocks();
   });
 

@@ -137,10 +137,10 @@ function inferWhatsAppMediaKind(
     : inferredKind;
 }
 
-function normalizeWhatsAppLoadedMedia(
+export async function prepareWhatsAppOutboundMedia(
   media: WhatsAppLoadedMediaLike,
   mediaUrl?: string,
-): CanonicalWhatsAppLoadedMedia {
+): Promise<CanonicalWhatsAppLoadedMedia> {
   // Infer the kind and native payload MIME from the same filename fact; Baileys
   // does not replace an explicit application/octet-stream on images or videos.
   const filenameMimeType = mimeTypeFromFilePath(media.fileName);
@@ -150,17 +150,10 @@ function normalizeWhatsAppLoadedMedia(
       ? (filenameMimeType ?? normalizedContentType)
       : normalizedContentType;
   const kind = inferWhatsAppMediaKind(media, resolvedContentType);
-  // Match the existing URL/filename voice rule used by the transcode decision;
-  // otherwise native .ogg/.opus uploads carry an inconsistent payload MIME.
-  const mimetype =
-    kind === "audio" &&
-    isWhatsAppNativeVoiceAudio({
-      contentType: media.contentType,
-      fileName: media.fileName,
-      mediaUrl,
-    })
-      ? WHATSAPP_VOICE_MIMETYPE
-      : (resolvedContentType ?? "application/octet-stream");
+  const nativeVoice = kind === "audio" && isWhatsAppNativeVoiceAudio(media.buffer);
+  const mimetype = nativeVoice
+    ? WHATSAPP_VOICE_MIMETYPE
+    : (resolvedContentType ?? "application/octet-stream");
   const fileName =
     kind === "document"
       ? resolveWhatsAppDocumentFileName({
@@ -168,29 +161,13 @@ function normalizeWhatsAppLoadedMedia(
           mimetype,
         })
       : media.fileName;
-  return {
+  const normalized = {
     buffer: media.buffer,
     kind,
     mimetype,
     ...(fileName ? { fileName } : {}),
   };
-}
-
-export async function prepareWhatsAppOutboundMedia(
-  media: WhatsAppLoadedMediaLike,
-  mediaUrl?: string,
-): Promise<CanonicalWhatsAppLoadedMedia> {
-  const normalized = normalizeWhatsAppLoadedMedia(media, mediaUrl);
-  if (normalized.kind !== "audio") {
-    return normalized;
-  }
-  if (
-    isWhatsAppNativeVoiceAudio({
-      contentType: media.contentType,
-      fileName: media.fileName,
-      mediaUrl,
-    })
-  ) {
+  if (kind !== "audio" || nativeVoice) {
     return normalized;
   }
 
@@ -211,18 +188,17 @@ export async function prepareWhatsAppOutboundMedia(
   };
 }
 
-function isWhatsAppNativeVoiceAudio(params: {
-  contentType?: string;
-  fileName?: string;
-  mediaUrl?: string;
-}): boolean {
-  const contentType = normalizeMimeType(params.contentType);
-  if (contentType === "audio/ogg" || contentType === "audio/opus") {
-    return true;
+function isWhatsAppNativeVoiceAudio(buffer: Buffer): boolean {
+  const segmentCount = buffer[26];
+  if (!segmentCount || buffer.toString("latin1", 0, 4) !== "OggS") {
+    return false;
   }
-  const fileName = params.fileName ?? deriveWhatsAppDocumentFileName(params.mediaUrl) ?? "";
-  const ext = path.extname(fileName).toLowerCase();
-  return ext === ".ogg" || ext === ".opus";
+  // RFC 7845: the first Ogg page contains only the Opus identification packet.
+  const packetOffset = 27 + segmentCount;
+  return (
+    buffer.length >= packetOffset + 19 &&
+    buffer.toString("latin1", packetOffset, packetOffset + 8) === "OpusHead"
+  );
 }
 
 function deriveWhatsAppDocumentFileName(mediaUrl: string | undefined): string | undefined {

@@ -24,12 +24,12 @@ struct GatewayCustomHeadersSettingsView: View {
                 Section {
                     ForEach(self.$entries) { $entry in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(entry.name)
+                            Text(GatewayCustomHeaderNames.displayName(for: entry.name))
                                 .font(OpenClawType.subheadSemiBold)
                             self.headerValueField("Value", text: $entry.value)
                         }
                     }
-                    .onDelete(perform: self.removeEntries)
+                    .onDelete { self.entries.remove(atOffsets: $0) }
                 } header: {
                     Text("Headers")
                         .font(OpenClawType.captionSemiBold)
@@ -39,14 +39,17 @@ struct GatewayCustomHeadersSettingsView: View {
                     Text(
                         String(
                             localized:
-                            "Sent with foreground app connections to this gateway. Changes apply on the next reconnect; Share extension delivery is not yet supported."))
+                            "Sent over trusted TLS connections to this gateway, including Share extension delivery. Reconnect OpenClaw after changes to update Share access."))
                         .font(OpenClawType.caption)
                     // swiftlint:enable line_length
                 }
             }
 
             Section {
-                TextField(text: self.$newName, prompt: Text("Header name").font(OpenClawType.subhead)) {
+                TextField(
+                    text: self.$newName,
+                    prompt: Text("e.g. CF-Access-Client-Id").font(OpenClawType.subhead))
+                {
                     Text("Header name")
                         .font(OpenClawType.subhead)
                 }
@@ -98,19 +101,46 @@ struct GatewayCustomHeadersSettingsView: View {
         return self.entries.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
     }
 
+    private var newNameIsCredential: Bool {
+        GatewayCustomHeaderNames.credential(named: self.trimmedNewName) != nil
+    }
+
+    /// Storage drops a non-token name on save, which made the row look added until the next visit.
+    private var newNameIsInvalidToken: Bool {
+        let name = self.trimmedNewName
+        return !name.isEmpty && !GatewayCustomHeaders.isValidName(name)
+    }
+
     private var canAddEntry: Bool {
-        !self.trimmedNewName.isEmpty && !self.newNameIsReserved && !self.newNameIsDuplicate
+        !self.trimmedNewName.isEmpty
+            && !self.newNameIsReserved
+            && !self.newNameIsDuplicate
+            && !self.newNameIsCredential
+            && !self.newNameIsInvalidToken
     }
 
     private var addFooterText: String {
         if self.newNameIsReserved {
-            return "This header is managed by the connection and cannot be overridden."
+            return String(localized: "This header is managed by the connection and cannot be overridden.")
         }
         if self.newNameIsDuplicate {
-            return "A header with this name already exists."
+            return String(localized: "A header with this name already exists.")
         }
-        return "For secure gateways behind an authenticating proxy, for example Cloudflare Access "
-            + "service token headers. Values are stored securely and sent only over TLS to this gateway."
+        // Keep the extraction key contiguous for the native localization inventory.
+        // swiftlint:disable line_length
+        if GatewayCustomHeaderNames.credential(named: self.trimmedNewName) == .clientId {
+            return String(
+                localized: "This looks like a Cloudflare Access Client ID. Put it in Header value and enter CF-Access-Client-Id as Header name.")
+        }
+        if GatewayCustomHeaderNames.credential(named: self.trimmedNewName) == .secret {
+            return String(localized: "This looks like a secret. Put it in Header value, not Header name.")
+        }
+        if self.newNameIsInvalidToken {
+            return "Header names cannot include spaces or other characters outside a single HTTP token."
+        }
+        return String(
+            localized: "Sent only over secure connections. For a Cloudflare Access service token, add two headers: Header name CF-Access-Client-Id with your Client ID as Header value, then Header name CF-Access-Client-Secret with your Client Secret as Header value.")
+        // swiftlint:enable line_length
     }
 
     private func headerValueField(_ placeholder: String, text: Binding<String>) -> some View {
@@ -143,10 +173,6 @@ struct GatewayCustomHeadersSettingsView: View {
         self.entries.append(HeaderEntry(name: self.trimmedNewName, value: self.newValue))
         self.newName = ""
         self.newValue = ""
-    }
-
-    private func removeEntries(at offsets: IndexSet) {
-        self.entries.remove(atOffsets: offsets)
     }
 
     private func persist() {

@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Prepares package-derived Docker E2E fixtures for git-style npm installs.
 import fs from "node:fs";
 import path from "node:path";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../lib/package-lifecycle-marker.mjs";
@@ -83,12 +82,6 @@ function prepare(root) {
   packageJson.dependencies["@openclaw/ai"] = "file:.openclaw-fixture/packages/ai";
   packageJson.bundleDependencies = withoutAiRuntimeDependency(packageJson.bundleDependencies);
   packageJson.bundledDependencies = withoutAiRuntimeDependency(packageJson.bundledDependencies);
-  if (packageJson.bundleDependencies === undefined) {
-    delete packageJson.bundleDependencies;
-  }
-  if (packageJson.bundledDependencies === undefined) {
-    delete packageJson.bundledDependencies;
-  }
   writeJson(packageJsonPath, packageJson);
 }
 

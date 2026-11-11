@@ -1,0 +1,2 @@
+# CLI/Gateway persistence regression: dropped env keys, no secret values, quiet edits, rejected updates.
+121

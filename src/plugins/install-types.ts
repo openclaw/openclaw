@@ -1,5 +1,5 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import type { NpmIntegrityDrift, NpmSpecResolution } from "../infra/install-source-utils.js";
+import type { NpmSpecResolution } from "../infra/npm-registry-spec.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import type { PluginInstallArtifactInspection } from "./install-artifact-inspection.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
@@ -49,8 +49,9 @@ export type InstallPluginResult =
       extensions: string[];
       setup?: PluginManifestSetup;
       artifactInspection?: PluginInstallArtifactInspection;
+      /** Only the native preparation operation returns this non-published outcome. */
+      outcome?: "prepared";
       npmResolution?: NpmSpecResolution;
-      integrityDrift?: NpmIntegrityDrift;
     }
   | {
       ok: false;
@@ -82,24 +83,30 @@ export type PluginInstallArtifactConsentHandler = (
   request: PluginInstallArtifactConsentRequest,
 ) => Promise<void>;
 
-export type PackageInstallCommonParams = InstallSafetyOverrides & {
-  extensionsDir?: string;
-  npmDir?: string;
-  timeoutMs?: number;
-  workTimeoutMs?: number | null;
-  logger?: PluginInstallLogger;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-  expectedPluginId?: string;
-  requirePluginManifest?: boolean;
-  allowSourceTypeScriptEntries?: boolean;
-  installPolicyRequest?: PluginInstallPolicyRequest;
+export type PluginInstallArtifactCallbacks = {
+  onPluginArtifactInspect?: PluginInstallArtifactConsentHandler;
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   beforePersistentApply?: () => void;
 };
 
+export type PackageInstallCommonParams = InstallSafetyOverrides &
+  PluginInstallArtifactCallbacks & {
+    extensionsDir?: string;
+    npmDir?: string;
+    timeoutMs?: number;
+    workTimeoutMs?: number | null;
+    logger?: PluginInstallLogger;
+    mode?: "install" | "update";
+    dryRun?: boolean;
+    expectedPluginId?: string;
+    requirePluginManifest?: boolean;
+    allowSourceTypeScriptEntries?: boolean;
+    installPolicyRequest?: PluginInstallPolicyRequest;
+  };
+
 export type InternalPackageInstallCommonParams = PackageInstallCommonParams & {
   onEffectiveMode?: (mode: "install" | "update") => void;
+  prepareOnly?: boolean;
 };
 
 /**

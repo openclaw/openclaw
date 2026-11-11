@@ -1,6 +1,9 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/io.js";
+import { resolveAuthenticatedDeviceTokenIdentity } from "../../../infra/device-pairing-identity.js";
+import { loadPairedDevicePairingStoreRecordReadOnly } from "../../../infra/device-pairing-store-readonly.js";
 import {
   GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
   GatewayOperatorAccessDeniedError,
@@ -9,7 +12,10 @@ import {
 } from "../../operator-access-policy.js";
 import { invalidateGatewayPolicyClient } from "../ws-policy-close.js";
 import type { GatewayWsClient } from "../ws-types.js";
-import type { GatewayConnectPhaseContext } from "./message-handler-types.js";
+import type {
+  DeviceAuthorizedGatewayConnect,
+  GatewayConnectPhaseContext,
+} from "./message-handler-types.js";
 
 export function prepareGatewayConnectOperatorAccess(client: GatewayWsClient): void {
   if (client.connect.role !== "operator" || client.internal?.operatorRoleActor?.kind === "system") {
@@ -67,4 +73,39 @@ export function bindGatewayConnectOperatorAccess(
     return false;
   }
   return true;
+}
+
+/** Capture the accepted credential before any run can retain this connection's authority. */
+export async function prepareGatewayConnectOperatorDeviceSource(
+  context: GatewayConnectPhaseContext,
+  state: DeviceAuthorizedGatewayConnect,
+  scopes: readonly string[],
+) {
+  const { device, devicePublicKey, deviceToken, authMethod } = state;
+  const token =
+    authMethod === "device-token"
+      ? normalizeOptionalString(
+          context.connectParams.auth?.deviceToken ?? context.connectParams.auth?.token,
+        )
+      : deviceToken?.token;
+  const identity =
+    device && devicePublicKey && token
+      ? resolveAuthenticatedDeviceTokenIdentity(
+          await loadPairedDevicePairingStoreRecordReadOnly(device.id),
+          { role: "operator", publicKey: devicePublicKey, token, scopes },
+        )
+      : null;
+  // Shared/proxy identity can be tokenless. A token-bearing handshake cannot
+  // bind to a replacement credential discovered while preparation yielded.
+  if (token && !identity) {
+    context.markHandshakeFailure("operator-pairing-generation-changed");
+    context.sendHandshakeErrorResponse(
+      ErrorCodes.NOT_PAIRED,
+      "device pairing changed during connect",
+    );
+    await context.releasePendingNodePairingCleanup();
+    context.handler.close(1008, "device pairing changed during connect");
+    return undefined;
+  }
+  return identity;
 }

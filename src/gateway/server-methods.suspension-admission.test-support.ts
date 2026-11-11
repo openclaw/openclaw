@@ -4,6 +4,7 @@ import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 
 export function dispatchSuspensionRequest(params: {
   method: string;
@@ -37,20 +38,19 @@ export function dispatchSuspensionRequest(params: {
     respond,
     client: {
       connId: "conn-suspend-proof",
-      connect: {
-        role: "operator",
-        scopes: params.clientScopes ?? [params.scope],
-        client: { id: "cli", version: "test", platform: "linux", mode: "cli" },
-        minProtocol: 1,
-        maxProtocol: 1,
-      },
+      connect: gatewayConnect(params.clientScopes ?? [params.scope], {
+        id: "cli",
+        platform: "linux",
+        mode: "cli",
+      }),
     },
     isWebchatConnect: () => false,
     context:
       params.context ??
-      ({ logGateway: { warn: vi.fn() } } as unknown as Parameters<
-        typeof handleGatewayRequest
-      >[0]["context"]),
+      ({
+        getRuntimeConfig: () => ({}),
+        logGateway: { warn: vi.fn(), info: vi.fn() },
+      } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"]),
     methodRegistry,
   });
   return { request, respond };

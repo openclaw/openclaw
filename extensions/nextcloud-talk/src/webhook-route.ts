@@ -20,7 +20,7 @@ export function describeNextcloudTalkWebhookRouteConflict(
   const probe = classifyGatewayProbePath(pathname);
   const reason =
     probe !== "outside" && probe !== "namespace"
-      ? "is reserved for Gateway probes"
+      ? "is reserved for Gateway checks"
       : isProtectedPluginRoutePathFromContext(resolvePluginRoutePathContext(pathname))
         ? "requires Gateway authentication"
         : undefined;

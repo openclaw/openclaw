@@ -1,4 +1,3 @@
-// Resolves provider config ownership between core and plugins.
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -10,6 +9,7 @@ import type { PluginManifestProviderEndpoint } from "./manifest-types.js";
 import {
   matchesPluginProviderEndpoint,
   normalizePluginProviderBaseUrl,
+  prepareProviderEndpoints,
 } from "./plugin-metadata-provider-facts.js";
 
 export function hasConfiguredModelProvider(params: {
@@ -21,10 +21,11 @@ export function hasConfiguredModelProvider(params: {
   );
 }
 
-/** Limits implicit catalogs to endpoints declared by their provider owner. */
+/** Limits implicit catalogs to declared endpoints or the configured runtime origin. */
 export function isProviderCatalogSourceAllowed(params: {
   provider: string;
   config?: OpenClawConfig;
+  sourceBaseUrl?: unknown;
   plugin?: Pick<PluginManifestRecord, "modelCatalog"> & {
     providerEndpoints?: readonly PluginManifestProviderEndpoint[];
   };
@@ -33,7 +34,7 @@ export function isProviderCatalogSourceAllowed(params: {
     params.config?.models?.providers,
     params.provider,
   )?.baseUrl;
-  if (!configuredBaseUrl || !params.plugin) {
+  if (!params.plugin) {
     return true;
   }
   const catalog = params.plugin.modelCatalog;
@@ -42,12 +43,36 @@ export function isProviderCatalogSourceAllowed(params: {
     catalog?.providers,
     alias?.provider ?? params.provider,
   );
+  const expectedBaseUrl = configuredBaseUrl ?? alias?.baseUrl ?? provider?.baseUrl;
+  if (
+    params.sourceBaseUrl !== undefined &&
+    expectedBaseUrl &&
+    catalog?.configuredEndpointDiscovery?.includes(
+      normalizeProviderId(alias?.provider ?? params.provider),
+    ) &&
+    findNormalizedProviderValue(catalog?.discovery, alias?.provider ?? params.provider) ===
+      "runtime"
+  ) {
+    const configuredUrl = normalizePluginProviderBaseUrl(expectedBaseUrl);
+    const sourceUrl =
+      typeof params.sourceBaseUrl === "string"
+        ? normalizePluginProviderBaseUrl(params.sourceBaseUrl)
+        : undefined;
+    // Removing an override returns runtime discovery to its manifest default.
+    // Static capability rows still use their declared endpoint restrictions below.
+    return Boolean(
+      configuredUrl && sourceUrl && new URL(configuredUrl).origin === new URL(sourceUrl).origin,
+    );
+  }
+  if (!configuredBaseUrl) {
+    return true;
+  }
   const baseUrls = [
     alias?.baseUrl,
     provider?.baseUrl,
     ...(provider?.models ?? []).map((model) => model.baseUrl),
   ].filter((baseUrl): baseUrl is string => Boolean(baseUrl));
-  const endpoints = params.plugin.providerEndpoints ?? [];
+  const endpoints = prepareProviderEndpoints(params.plugin.providerEndpoints);
   // Adapters without native declarations keep their existing discovery contract.
   // Authored rows do not pass through this implicit-source decision.
   if (baseUrls.length === 0 && endpoints.length === 0) {
@@ -102,12 +127,12 @@ export function resolveProviderConfigApiOwnerHint(params: {
   return api;
 }
 
-/** Resolves provider/model refs used to scope model catalog discovery. */
+/** Resolves model refs used to scope model catalog discovery. */
 export function resolveModelCatalogScope(params: {
   cfg?: OpenClawConfig;
   provider: string;
   model: string;
-}): { providerRefs: string[]; modelRefs: string[] } {
+}): string[] {
   const provider = params.provider.trim();
   const model = params.model.trim();
   const providerConfig = findNormalizedProviderValue(params.cfg?.models?.providers, provider);
@@ -117,8 +142,5 @@ export function resolveModelCatalogScope(params: {
       ? [qualifiedModel]
       : [qualifiedModel, model];
   // Scope ordering feeds deterministic discovery and prompt/cache inputs.
-  return {
-    providerRefs: normalizeUniqueSingleOrTrimmedStringList([provider, providerConfig?.api]),
-    modelRefs: normalizeUniqueSingleOrTrimmedStringList(modelRefs),
-  };
+  return normalizeUniqueSingleOrTrimmedStringList(modelRefs);
 }

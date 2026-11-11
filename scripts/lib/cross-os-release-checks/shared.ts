@@ -32,7 +32,21 @@ export function trimForSummary(value: string) {
   return `${truncateUtf16Safe(trimmed, 600)}...`;
 }
 
-export function formatError(error: unknown) {
+function formatErrorHeadline(error: unknown): string {
+  if (error instanceof AggregateError) {
+    return `${error.name}: ${error.message} (${error.errors.map(formatErrorHeadline).join("; ")})`;
+  }
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+}
+
+export function formatError(error: unknown): string {
+  if (error instanceof AggregateError) {
+    // Summaries keep only 600 characters, so name every inner failure before any stack.
+    return [
+      formatErrorHeadline(error),
+      ...error.errors.map((inner, index) => `[${index + 1}] ${formatError(inner)}`),
+    ].join("\n");
+  }
   if (error instanceof Error) {
     return error.stack || error.message;
   }

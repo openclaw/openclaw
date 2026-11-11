@@ -38,7 +38,7 @@ async function discoverSkillRoots(root: string): Promise<string[]> {
   const activeOrg = (await readText(path.join(orgRoot, ".active_org")))?.trim();
   async function visit(dir: string): Promise<string[]> {
     const hasSkill = await exists(path.join(dir, "SKILL.md"));
-    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const entries = await fs.readdir(dir, { withFileTypes: true });
     const roots: string[] = hasSkill ? [dir] : [];
     for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
       const child = path.join(dir, entry.name);

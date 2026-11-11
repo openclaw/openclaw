@@ -1,15 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  memoryCoreWorkspaceStateKey,
-  openMemoryCoreStateStore,
-  SHORT_TERM_LOCK_MAX_ENTRIES,
-  SHORT_TERM_LOCK_NAMESPACE,
-} from "../dreaming-state.js";
 import { forgetMemoryEntries } from "../memory-forget.js";
-import { deleteShortTermLockEntryIfCurrent } from "../memory-workspace-lock.js";
-import type { ShortTermLockEntry } from "../short-term-promotion-types.js";
 import * as cpu from "./manager-cpu-worker-runtime.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
@@ -42,35 +34,6 @@ describe("captured session preparation", () => {
     return { manager, db, cfg };
   }
 
-  it("leaves the durable lease available while preparing captured session content", async () => {
-    const { manager } = await setup();
-    const store = openMemoryCoreStateStore<ShortTermLockEntry>({
-      namespace: SHORT_TERM_LOCK_NAMESPACE,
-      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-    });
-    const key = memoryCoreWorkspaceStateKey(fixture.paths.workspace);
-    const prepare = cpu.prepareMemoryIndexInWorker;
-    const sessionClaims: boolean[] = [];
-    const memoryClaims: boolean[] = [];
-    vi.spyOn(cpu, "prepareMemoryIndexInWorker").mockImplementation(async (input) => {
-      const entry = { owner: "independent-writer", acquiredAt: Date.now() };
-      // The atomic store is the cross-process boundary; bypass only the local queue.
-      const acquired = await store.registerIfAbsent(key, entry);
-      (input.source === "sessions" ? sessionClaims : memoryClaims).push(acquired);
-      if (acquired) {
-        await deleteShortTermLockEntryIfCurrent(store, key, entry);
-      }
-      return prepare(input);
-    });
-
-    await manager.sync({ reason: "cli", force: true });
-
-    expect(sessionClaims).toEqual([true]);
-    expect(memoryClaims.length).toBeGreaterThan(0);
-    expect(memoryClaims.every((claimed) => !claimed)).toBe(true);
-    expect(await store.lookup(key)).toBeUndefined();
-  });
-
   it.each([false, true])(
     "does not resurrect a session forgotten between preparation and writing (vectors: %s)",
     async (vectorEnabled) => {
@@ -78,13 +41,11 @@ describe("captured session preparation", () => {
       await manager.sync({ reason: "baseline", force: true });
       const entered = createDeferred<void>();
       const resume = createDeferred<void>();
-      const prepare = cpu.prepareMemoryIndexInWorker;
-      vi.spyOn(cpu, "prepareMemoryIndexInWorker").mockImplementation(async (input) => {
-        const result = await prepare(input);
-        if (input.source === "sessions") {
-          entered.resolve();
-          await resume.promise;
-        }
+      const prepare = cpu.prepareSessionIndexInWorker;
+      vi.spyOn(cpu, "prepareSessionIndexInWorker").mockImplementation(async (input, stream) => {
+        const result = await prepare(input, stream);
+        entered.resolve();
+        await resume.promise;
         return result;
       });
       const sync = manager.sync({ reason: "cli", force: true });
@@ -99,7 +60,7 @@ describe("captured session preparation", () => {
         const afterForget = db
           .prepare("SELECT path, text FROM memory_index_chunks ORDER BY path")
           .all();
-        await expect(sync).rejects.toThrow("forgotten");
+        await expect(sync).rejects.toThrow("retry the full reindex");
         expect(
           db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all(),
         ).toEqual(afterForget);

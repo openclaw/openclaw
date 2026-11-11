@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveRuntimeScriptEnv } from "../../cli-invocation.mjs";
 import { resolveNpmCommand } from "./npm-command.js";
 
 const cliPath = path.join(
@@ -14,12 +17,49 @@ const originalVersions = process.versions;
 afterEach(() => {
   Object.defineProperty(process, "versions", { value: originalVersions });
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.resetModules();
 });
 
 describe("npm invocation", () => {
+  it.each(["jit", "aot"] as const)(
+    "resolves standalone npm and its Bun environment for %s artifacts",
+    async (mode) => {
+      vi.resetModules();
+      vi.stubGlobal("__openclawStandaloneBuildInfo", { mode });
+      const { resolveNpmCommand: resolveStandaloneNpmCommand } = await import("./npm-command.js");
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-npm-command-"));
+      try {
+        const entry = path.join(root, "npm", "bin", "npm-cli.js");
+        fs.mkdirSync(path.dirname(entry), { recursive: true });
+        fs.writeFileSync(entry, "// packaged npm entry");
+        vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL(root + path.sep).href);
+        Object.defineProperty(process, "versions", {
+          value: { ...originalVersions, bun: "1.4.3" },
+        });
+        const env = {
+          NPM_CONFIG_IGNORE_SCRIPTS: "true",
+          NPM_CONFIG_REGISTRY: "https://registry.example",
+        };
+        expect(resolveStandaloneNpmCommand(["install", "--ignore-scripts"])).toEqual([
+          process.execPath,
+          entry,
+          "install",
+          "--ignore-scripts",
+        ]);
+        expect(resolveRuntimeScriptEnv(env)).toEqual({ ...env, BUN_BE_BUN: "1" });
+        expect(env).not.toHaveProperty("BUN_BE_BUN");
+        fs.rmSync(entry);
+        expect(() => resolveStandaloneNpmCommand(["install"])).toThrow(entry);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.each([
     { bun: undefined, args: ["view", "@openclaw/irc", "version"], command: ["npm"] },
-    { bun: "1.4.2", args: ["install", "--ignore-scripts"], command: [process.execPath, cliPath] },
+    { bun: "1.4.3", args: ["install", "--ignore-scripts"], command: [process.execPath, cliPath] },
   ])("preserves npm arguments with Bun version $bun", ({ bun, args, command }) => {
     Object.defineProperty(process, "versions", { value: { ...originalVersions, bun } });
     const stat = vi.spyOn(fs, "statSync");
@@ -30,7 +70,7 @@ describe("npm invocation", () => {
   });
 
   it("fails with a typed missing-file error instead of falling back to PATH npm", () => {
-    Object.defineProperty(process, "versions", { value: { ...originalVersions, bun: "1.4.2" } });
+    Object.defineProperty(process, "versions", { value: { ...originalVersions, bun: "1.4.3" } });
     vi.spyOn(fs, "statSync").mockImplementation(() => {
       throw Object.assign(new Error("missing"), { code: "ENOENT" });
     });

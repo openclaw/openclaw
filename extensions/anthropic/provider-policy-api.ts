@@ -11,6 +11,7 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-typ
 import { CLAUDE_CLI_OFF_THINKING_PROFILE, CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
 import { normalizeAnthropicProviderConfigForProvider } from "./config-defaults.js";
 export { applyAnthropicConfigDefaults as applyConfigDefaults } from "./config-defaults.js";
+export { resolveAnthropicProactiveCadenceMs as resolveProactiveCadenceMs } from "./config-defaults.js";
 
 export const normalizeConfig = normalizeAnthropicProviderConfigForProvider<ModelProviderConfig>;
 
@@ -37,8 +38,9 @@ export function resolveThinkingProfile(params: {
         return CLAUDE_CLI_OFF_THINKING_PROFILE;
       }
       // Claude Code exposes Fable's native effort ladder. Keep subscription-
-      // backed and API-backed Fable routes on one model contract.
-      return resolveClaudeThinkingProfile(contractModelId, undefined, {
+      // backed and API-backed Fable routes on one model contract. Row params
+      // carry any capabilities Anthropic's model listing advertised.
+      return resolveClaudeThinkingProfile(contractModelId, params.params, {
         includeNativeMax: true,
       });
     default:

@@ -248,7 +248,10 @@ struct TailscaleIntegrationSection: View {
 
     private func applySettings() async {
         guard self.hasLoaded else { return }
-        let currentSettings = self.currentSettingsSnapshot()
+        let currentSettings = GatewayTailscaleSettingsSnapshot(
+            mode: self.tailscaleMode,
+            requireCredentialsForServe: self.requireCredentialsForServe,
+            password: self.password)
         let result = await Self.applySettingsIfChanged(
             currentSettings: currentSettings,
             lastAppliedSettings: self.lastAppliedSettings)
@@ -288,7 +291,11 @@ struct TailscaleIntegrationSection: View {
         }
 
         if settings.mode == .off {
-            gateway.removeValue(forKey: "auth")
+            // Only the Tailscale identity allowance belongs to this control; the shared token,
+            // password, and trusted-proxy settings keep authenticating every other client.
+            var auth = gateway["auth"] as? [String: Any] ?? [:]
+            auth.removeValue(forKey: "allowTailscale")
+            gateway["auth"] = auth.isEmpty ? nil : auth
         } else {
             var auth = gateway["auth"] as? [String: Any] ?? [:]
             if settings.mode == .serve, !settings.requireCredentialsForServe {
@@ -312,13 +319,6 @@ struct TailscaleIntegrationSection: View {
     private func restartGatewayIfNeeded() {
         guard self.connectionMode == .local, !self.isPaused else { return }
         Task { _ = await GatewayLaunchAgentManager.kickstart() }
-    }
-
-    private func currentSettingsSnapshot() -> GatewayTailscaleSettingsSnapshot {
-        GatewayTailscaleSettingsSnapshot(
-            mode: self.tailscaleMode,
-            requireCredentialsForServe: self.requireCredentialsForServe,
-            password: self.password)
     }
 
     static func loadedSettings(from root: [String: Any]) -> GatewayTailscaleLoadedSettings {
@@ -357,7 +357,7 @@ struct TailscaleIntegrationSection: View {
     }
 
     @MainActor
-    private static func saveTailscaleSettings(
+    static func saveTailscaleSettings(
         settings: GatewayTailscaleSettingsSnapshot,
         connectionMode: AppState.ConnectionMode) async -> GatewayTailscaleApplyResult
     {

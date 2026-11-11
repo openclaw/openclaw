@@ -1,17 +1,17 @@
+import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
-import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { stateWorkerRegistry } from "../../state/openclaw-state-worker-registry.js";
+import type { WorkerWriteOperationContext } from "../../state/worker-operation-registry.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
-import type { SqliteWorkerRequest } from "../sqlite-worker-contract.js";
+import { seedDeliveryQueueEntry } from "../delivery-queue-sqlite.test-support.js";
 import { ackDelivery } from "./delivery-queue-ack.js";
 import { startDeliveryProducerLease } from "./delivery-queue-lease.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
@@ -26,33 +26,20 @@ import {
   markDeliveryPlatformSendDispatched,
   loadPendingDelivery,
 } from "./delivery-queue-storage.js";
+import { holdDeliveryQueueReply } from "./delivery-queue-worker-reply.test-support.js";
 import { installDeliveryQueueTmpDirHooks } from "./delivery-queue.test-helpers.js";
 
-function observeRenewalDispatch(id: string) {
-  const posted = createDeferredCore();
-  let target: { worker: Worker; requestId: number } | undefined;
-  // oxlint-disable-next-line typescript/unbound-method -- call supplies the intercepted worker receiver.
-  const original = Worker.prototype.postMessage;
-  const post = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-    this: Worker,
-    request: SqliteWorkerRequest,
-    transferList,
-  ) {
-    if (request.type === "execute") {
-      const command: unknown = deserialize(request.input);
-      if (
-        isRecord(command) &&
-        command.type === "deliveryQueue.renewPlatformSendLease" &&
-        isRecord(command.input) &&
-        command.input.id === id
-      ) {
-        target = { worker: this, requestId: request.id };
-        posted.resolve();
-      }
-    }
-    return original.call(this, request, transferList);
-  });
-  return { posted: posted.promise, target: () => target, restore: () => post.mockRestore() };
+function beforeSettlement<T>(signal: Promise<T>, operation: Promise<unknown>) {
+  return Promise.race([
+    signal,
+    operation.then(() => assert.fail("Worker operation settled before its expected signal")),
+  ]);
+}
+
+function observeRenewalDispatch(id: string, holdReply = false) {
+  return holdDeliveryQueueReply("deliveryQueue.renewPlatformSendLease", id, (value) =>
+    holdReply && typeof value === "number" ? value : undefined,
+  );
 }
 
 describe("outbound producer claim worker", () => {
@@ -62,97 +49,85 @@ describe("outbound producer claim worker", () => {
     vi.useRealTimers();
   });
 
+  const payload = { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "test" }] };
+  async function claimRetained(id: string, stateDir: string) {
+    await enqueueDeliveryOnce(payload, id, stateDir);
+    const claimId = await claimReusableDeliveryPlatformSendAttempt(id, stateDir);
+    assert(claimId, "Expected claimed queue custody");
+    return claimId;
+  }
+
   it("refreshes the attempt timestamp immediately before provider I/O", async () => {
-    const id = await enqueueDelivery(
-      {
-        channel: "forum",
-        to: "123",
-        payloads: [{ text: "test" }],
-      },
-      fixtures.tmpDir(),
-    );
+    const id = await enqueueDelivery(payload, fixtures.tmpDir());
 
     await stateWorkerRegistry.prepare("deliveryQueue.mutateOutbound");
     vi.useFakeTimers();
-    try {
-      vi.setSystemTime(1_000);
-      const env = { ...process.env, OPENCLAW_STATE_DIR: fixtures.tmpDir() };
-      const database = openOpenClawStateDatabase({ env });
-      const context = { open: () => database, stateOptions: () => ({ path: database.path, env }) };
+    const env = { ...process.env, OPENCLAW_STATE_DIR: fixtures.tmpDir() };
+    const database = openOpenClawStateDatabase({ env });
+    const context: WorkerWriteOperationContext = {
+      open: () => database,
+      writeAdmitted: () => assert.fail("Outbound mutations retain their custom admission"),
+      write: (operation, options) =>
+        runOpenClawStateWriteTransaction(operation, { database, env }, options),
+      stateOptions: () => ({ path: database.path, env }),
+    };
+    for (const [time, kind] of [
+      [1_000, "start"],
+      [9_000, "dispatch"],
+    ] as const) {
+      vi.setSystemTime(time);
       stateWorkerRegistry.execute(
-        { type: "deliveryQueue.mutateOutbound", input: { kind: "start", id } },
+        { type: "deliveryQueue.mutateOutbound", input: { kind, id } },
         context,
       );
-      vi.setSystemTime(9_000);
-      stateWorkerRegistry.execute(
-        { type: "deliveryQueue.mutateOutbound", input: { kind: "dispatch", id } },
-        context,
-      );
-    } finally {
-      vi.useRealTimers();
     }
-
-    const entry = await loadPendingDelivery(id, fixtures.tmpDir());
-    expect(entry?.platformSendStartedAt).toBe(9_000);
-    expect(entry?.recoveryState).toBe("send_attempt_started");
+    vi.useRealTimers();
+    expect(await loadPendingDelivery(id, fixtures.tmpDir())).toMatchObject({
+      platformSendStartedAt: 9_000,
+      recoveryState: "send_attempt_started",
+    });
   });
 
   it("transfers only reply metadata from the actual callback-bearing send context", async () => {
     const stateDir = fixtures.tmpDir();
-    const id = await enqueueDelivery(
-      { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "ordinary result" }] },
-      stateDir,
-    );
+    const id = await enqueueDelivery(payload, stateDir);
     const localGuard = vi.fn();
     const route = {
       replyToId: "reply",
       threadId: "thread",
       assertDirectAdapterHandoff: localGuard,
     };
-    await markDeliveryPlatformSendAttemptStarted(id, stateDir, route);
-    expect(await loadPendingDelivery(id, stateDir)).toMatchObject({
-      effectiveReplyToId: "reply",
-      recoveryState: "send_attempt_started",
-    });
-    await markDeliveryPlatformSendDispatched(id, stateDir, { ...route, replyToId: null });
-    expect(await loadPendingDelivery(id, stateDir)).toMatchObject({
-      effectiveReplyToId: null,
-      recoveryState: "send_attempt_started",
-    });
+    for (const [mark, replyToId] of [
+      [markDeliveryPlatformSendAttemptStarted, "reply"],
+      [markDeliveryPlatformSendDispatched, null],
+    ] as const) {
+      await mark(id, stateDir, { ...route, replyToId });
+      expect(await loadPendingDelivery(id, stateDir)).toMatchObject({
+        effectiveReplyToId: replyToId,
+        recoveryState: "send_attempt_started",
+      });
+    }
     expect(localGuard).not.toHaveBeenCalled();
   });
 
   it("claims and renews retained custody without host data SQL, then reopens the same owner", async () => {
     const stateDir = fixtures.tmpDir();
     const id = "worker-claim";
-    await enqueueDeliveryOnce(
-      { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "retained" }] },
-      id,
-      stateDir,
-    );
+    await enqueueDeliveryOnce(payload, id, stateDir);
     await closeOpenClawStateDatabaseAsync();
     const context = captureDeliveryQueueStateContext(stateDir);
     const sql = observeHostDataSql();
-    let claimId: string | undefined;
-    let expiresAt: number | undefined;
-    try {
-      const claims = await Promise.all([
-        claimReusableDeliveryPlatformSendAttempt(id, undefined, context),
-        claimReusableDeliveryPlatformSendAttempt(id, undefined, context),
-      ]);
-      claimId = claims[0];
-      expect(claims[1]).toBeUndefined();
-      expect(claimId).toEqual(expect.any(String));
-      if (!claimId) {
-        throw new Error("Expected the unclaimed queue row to acquire an owner");
-      }
-      expiresAt = await renewDeliveryPlatformSendLease(id, undefined, claimId, context);
-      expect(expiresAt).toBeGreaterThan(Date.now());
-      expect(sql.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
-    } finally {
-      sql.restore();
-      await closeOpenClawStateDatabaseAsync();
-    }
+    const [claimId, otherClaim] = await Promise.all([
+      claimReusableDeliveryPlatformSendAttempt(id, undefined, context),
+      claimReusableDeliveryPlatformSendAttempt(id, undefined, context),
+    ]);
+    expect(otherClaim).toBeUndefined();
+    assert(claimId, "Expected the unclaimed queue row to acquire an owner");
+    const expiresAt = await renewDeliveryPlatformSendLease(id, undefined, claimId, context);
+    expect(expiresAt).toBeGreaterThan(Date.now());
+    expect(sql.queries).toEqual([]);
+    sql.restore();
+    await closeOpenClawStateDatabaseAsync();
     expect(await loadPendingDelivery(id, stateDir)).toMatchObject({
       id,
       producerClaimId: claimId,
@@ -167,19 +142,12 @@ describe("outbound producer claim worker", () => {
   it("rereads lease expiry after a real writer wait while the host remains responsive", async () => {
     const stateDir = fixtures.tmpDir();
     const id = "expired-during-writer-wait";
-    await enqueueDeliveryOnce(
-      { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "retained" }] },
-      id,
-      stateDir,
-    );
-    const claimId = await claimReusableDeliveryPlatformSendAttempt(id, stateDir);
+    const claimId = await claimRetained(id, stateDir);
     const entry = await loadPendingDelivery(id, stateDir);
-    if (!claimId || !entry) {
-      throw new Error("Expected claimed queue custody");
-    }
-    const { db } = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    assert(entry, "Expected claimed queue custody");
+    const db = requireNativeSqliteDatabase(
+      openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }).db,
+    );
     const dispatch = observeRenewalDispatch(id);
     db.exec("BEGIN IMMEDIATE");
     let settled = false;
@@ -187,18 +155,11 @@ describe("outbound producer claim worker", () => {
       settled = true;
     });
     try {
-      await Promise.race([
-        dispatch.posted,
-        renewal.then(() => {
-          throw new Error("Renewal settled before entering its worker");
-        }),
-      ]);
+      await beforeSettlement(dispatch.posted, renewal);
       await setImmediate();
       expect(settled).toBe(false);
       const expired = { ...entry, availableAt: Date.now() - 1 };
-      db.prepare(
-        "UPDATE delivery_queue_entries SET entry_json = ? WHERE queue_name = ? AND id = ?",
-      ).run(JSON.stringify(expired), OUTBOUND_DELIVERY_QUEUE_NAME, id);
+      seedDeliveryQueueEntry({ queueName: OUTBOUND_DELIVERY_QUEUE_NAME, entry: expired, stateDir });
       db.exec("COMMIT");
       await expect(renewal).resolves.toBeUndefined();
       expect(await loadPendingDelivery(id, stateDir)).toEqual(expired);
@@ -206,7 +167,6 @@ describe("outbound producer claim worker", () => {
       if (db.isTransaction) {
         db.exec("ROLLBACK");
       }
-      dispatch.restore();
       await renewal.catch(() => undefined);
     }
   });
@@ -214,71 +174,17 @@ describe("outbound producer claim worker", () => {
   it("joins an accepted renewal before lease stop permits acknowledgement", async () => {
     const stateDir = fixtures.tmpDir();
     const id = "joined-worker-renewal";
-    await enqueueDeliveryOnce(
-      { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "retained" }] },
-      id,
-      stateDir,
-    );
-    const claimId = await claimReusableDeliveryPlatformSendAttempt(id, stateDir);
-    if (!claimId) {
-      throw new Error("Expected claimed queue custody");
-    }
+    const claimId = await claimRetained(id, stateDir);
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const renew = vi.fn(() => renewDeliveryPlatformSendLease(id, stateDir, claimId));
     const lease = await startDeliveryProducerLease({ id, renew });
-    const dispatch = observeRenewalDispatch(id);
-    const held = createDeferredCore<number>();
-    let publish: (() => void) | undefined;
-    let captured = false;
-    const release = () => {
-      const send = publish;
-      publish = undefined;
-      send?.();
-    };
-    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply supplies the emitting worker receiver.
-    const original = Worker.prototype.emit;
-    const messages = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
-      this: Worker,
-      event: string | symbol,
-      ...args: unknown[]
-    ) {
-      const target = dispatch.target();
-      const reply = args[0];
-      if (
-        !captured &&
-        target?.worker === this &&
-        event === "message" &&
-        isRecord(reply) &&
-        reply.id === target.requestId &&
-        reply.ok === true &&
-        reply.value instanceof Uint8Array
-      ) {
-        const expiresAt: unknown = deserialize(reply.value);
-        if (typeof expiresAt === "number") {
-          captured = true;
-          publish = () => {
-            Reflect.apply(original, this, [event, ...args]);
-          };
-          held.resolve(expiresAt);
-          return true;
-        }
-      }
-      return Reflect.apply(original, this, [event, ...args]);
-    });
+    const dispatch = observeRenewalDispatch(id, true);
     let cleanup: Promise<void> | undefined;
     try {
       await vi.advanceTimersByTimeAsync(20_000);
-      expect(renew).toHaveBeenCalledTimes(2);
       const result = renew.mock.results.at(-1);
-      if (!result || result.type !== "return") {
-        throw new Error("Expected an admitted renewal");
-      }
-      const expiresAt = await Promise.race([
-        held.promise,
-        result.value.then(() => {
-          throw new Error("Renewal settled without its held result");
-        }),
-      ]);
+      assert(result?.type === "return", "Expected an admitted renewal");
+      const expiresAt = await beforeSettlement(dispatch.held, result.value);
       let acknowledged = false;
       cleanup = lease.stop().then(async () => {
         await ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: claimId });
@@ -290,17 +196,14 @@ describe("outbound producer claim worker", () => {
         producerClaimId: claimId,
         availableAt: expiresAt,
       });
-      release();
+      dispatch.release();
       await cleanup;
       expect(await renewDeliveryPlatformSendLease(id, stateDir, claimId)).toBeUndefined();
       expect(await loadPendingDelivery(id, stateDir)).toBeNull();
     } finally {
-      messages.mockRestore();
-      dispatch.restore();
-      release();
+      dispatch.release();
       await lease.stop();
       await cleanup;
-      vi.useRealTimers();
     }
   });
 });

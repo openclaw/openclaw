@@ -8,23 +8,49 @@ import ai.openclaw.app.requiresSetup
 import ai.openclaw.app.ui.FoldAwarePrompt
 import ai.openclaw.app.ui.design.ClawTheme
 import android.Manifest
-import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.core.content.ContextCompat
 
 internal enum class ChatRealtimeTalkLaunch {
   RequestPermission,
   ShowSetupMessage,
   StartTalk,
+}
+
+@Composable
+internal fun TalkMicrophoneButton(
+  muted: Boolean,
+  onClick: () -> Unit,
+) {
+  val state = if (muted) nativeString("Microphone muted") else nativeString("Microphone on")
+  IconButton(
+    onClick = onClick,
+    modifier = Modifier.size(ClawTheme.spacing.touchTarget).semantics { stateDescription = state },
+  ) {
+    Icon(
+      imageVector = if (muted) Icons.Default.MicOff else Icons.Default.Mic,
+      contentDescription = if (muted) nativeString("Unmute microphone") else nativeString("Mute microphone"),
+      tint = if (muted) ClawTheme.colors.warning else ClawTheme.colors.textMuted,
+    )
+  }
 }
 
 /** Resolves the only side effect a Live Talk tap may perform. */
@@ -42,7 +68,7 @@ internal fun resolveChatRealtimeTalkLaunch(
 internal fun rememberChatRealtimeTalkLauncher(viewModel: MainViewModel): () -> Unit {
   val context = LocalContext.current
   val talkSetupReadiness by viewModel.talkSetupReadiness.collectAsState()
-  val currentTalkSetup by rememberUpdatedState(talkSetupReadiness.realtimeTalk)
+  val currentTalkSetup by rememberUpdatedState(talkSetupReadiness.launch)
   val failureNotice by viewModel.talkFailureNotice.collectAsState()
   val setupMessage by viewModel.pendingTalkSetupMessage.collectAsState()
   val showSetupMessage = {
@@ -80,8 +106,8 @@ internal fun rememberChatRealtimeTalkLauncher(viewModel: MainViewModel): () -> U
   return {
     when (
       resolveChatRealtimeTalkLaunch(
-        hasMicPermission = context.hasRecordAudioPermission(),
-        requiresSetup = talkSetupReadiness.realtimeTalk.requiresSetup,
+        hasMicPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
+        requiresSetup = talkSetupReadiness.launch.requiresSetup,
       )
     ) {
       ChatRealtimeTalkLaunch.RequestPermission -> requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
@@ -90,5 +116,3 @@ internal fun rememberChatRealtimeTalkLauncher(viewModel: MainViewModel): () -> U
     }
   }
 }
-
-private fun Context.hasRecordAudioPermission(): Boolean = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED

@@ -2,7 +2,6 @@ import fs from "node:fs";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import type { NodeHostClient } from "./client.js";
-import type { SkillBinsProvider } from "./invoke-types.js";
 
 export function resolveExecutableTrustPathFromEnv(bin: string, pathEnv: string): string | null {
   if (bin.includes("/") || bin.includes("\\")) {
@@ -21,8 +20,7 @@ export function resolveExecutableTrustPathFromEnv(bin: string, pathEnv: string):
 
 /** Resolves skill bin names to trusted executable paths on the given PATH. */
 export function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinTrustEntry[] {
-  const trustEntries: SkillBinTrustEntry[] = [];
-  const seen = new Set<string>();
+  const trustEntries = new Map<string, SkillBinTrustEntry>();
   for (const raw of bins) {
     const name = raw.trim();
     if (!name) {
@@ -32,20 +30,15 @@ export function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): Sk
     if (!resolvedPath) {
       continue;
     }
-    const key = `${name}\u0000${resolvedPath}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    trustEntries.push({ name, resolvedPath });
+    trustEntries.set(`${name}\u0000${resolvedPath}`, { name, resolvedPath });
   }
-  return trustEntries.toSorted(
+  return [...trustEntries.values()].toSorted(
     (left, right) =>
       left.name.localeCompare(right.name) || left.resolvedPath.localeCompare(right.resolvedPath),
   );
 }
 
-export class SkillBinsCache implements SkillBinsProvider {
+export class SkillBinsCache {
   private bins: SkillBinTrustEntry[] = [];
   private lastRefresh = 0;
   private refreshInFlight: Promise<void> | undefined;
@@ -58,16 +51,10 @@ export class SkillBinsCache implements SkillBinsProvider {
 
   async current(): Promise<SkillBinTrustEntry[]> {
     if (Date.now() - this.lastRefresh > this.ttlMs) {
-      const refresh = this.refreshInFlight ?? this.refresh();
-      this.refreshInFlight = refresh;
-      try {
-        await refresh;
-      } finally {
-        // An older waiter must not clear a newer retry's in-flight promise.
-        if (this.refreshInFlight === refresh) {
-          this.refreshInFlight = undefined;
-        }
-      }
+      this.refreshInFlight ??= this.refresh().finally(() => {
+        this.refreshInFlight = undefined;
+      });
+      await this.refreshInFlight;
     }
     return this.bins;
   }
@@ -79,9 +66,9 @@ export class SkillBinsCache implements SkillBinsProvider {
       this.bins = resolveSkillBinTrustEntries(bins, this.pathEnv);
       this.lastRefresh = Date.now();
     } catch {
-      if (!this.lastRefresh) {
-        this.bins = [];
-      }
+      // Keep the previous inventory until the next refresh, including an empty first load.
     }
   }
 }
+
+export type SkillBinsProvider = Pick<SkillBinsCache, "current">;

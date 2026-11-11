@@ -1,4 +1,3 @@
-// Feishu API module exposes the plugin public contract.
 export { feishuPlugin } from "./src/channel.js";
 export { registerFeishuDocTools } from "./src/docx.js";
 export { registerFeishuChatTools } from "./src/chat.js";

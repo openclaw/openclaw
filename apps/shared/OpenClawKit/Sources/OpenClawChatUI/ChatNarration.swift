@@ -14,13 +14,8 @@ struct ChatNarration {
     private var segments: [Segment] = []
 
     mutating func receive(_ event: OpenClawAgentEventPayload, history: [OpenClawChatMessage]) {
-        let rawText = (event.data["progressText"]?.value as? String ?? "")
+        let text = (event.data["progressText"]?.value as? String ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        // NO_REPLY is the wire's silent-output sentinel, including Markdown
-        // wrappers. It must retract progress, never become visible narration.
-        let silent = rawText.trimmingCharacters(in: .whitespacesAndNewlines.union(
-            CharacterSet(charactersIn: "*_`~"))).caseInsensitiveCompare("NO_REPLY") == .orderedSame
-        let text = silent ? "" : rawText
         let phase = event.data["phase"]?.value as? String
         // Match the Gateway's completed-preamble contract: growing previews are
         // not transcript rows, but an empty update can retract a sealed item.
@@ -117,5 +112,14 @@ extension OpenClawChatViewModel {
         if !self.isApplyingRunSnapshot { self.invalidateRunSnapshots() }
         self.narration.receive(event, history: self.messages)
         self.markTimelineChanged()
+    }
+}
+
+extension OpenClawChatMessage {
+    /// Text blocks as sent, without Markdown parsing, for comparing transcript and streaming sources.
+    var rawText: String {
+        self.content.compactMap {
+            ChatMessageVisibleText.isVisibleContentType($0.type, role: self.role) ? $0.text : nil
+        }.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

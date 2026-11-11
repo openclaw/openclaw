@@ -3,6 +3,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { validateReleaseManifestAdvisoryJobs } from "./full-release-validation-policy.mjs";
+import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.runtime.mjs";
 import { changelogFormat, findReleaseChangelog } from "./lib/release-changelog.mjs";
 import {
   compactReleaseNotes,
@@ -36,6 +37,7 @@ type ReleaseNotesTarget = {
   tag: unknown;
   repository: unknown;
   regularStableVersion?: unknown;
+  retiredLineReason?: string;
   contributionRecordPath?: string;
   validationManifest?: unknown;
 };
@@ -99,10 +101,12 @@ function extendedStableReleaseNotice({
   version,
   repository,
   regularStableVersion,
+  retiredLineReason,
 }: {
   version: string;
   repository: string;
   regularStableVersion: unknown;
+  retiredLineReason?: string;
 }) {
   const release = parseReleaseVersion(version);
   if (!release || classifyReleaseTrain(release) !== "extended-stable") {
@@ -112,12 +116,12 @@ function extendedStableReleaseNotice({
     return "";
   }
   assertString(regularStableVersion, "regular stable version");
-  validateActiveExtendedStableLine(version, regularStableVersion);
+  validateActiveExtendedStableLine(version, regularStableVersion, retiredLineReason);
   const month = MONTH_NAMES[release.month - 1];
   if (!month) {
     fail(`unsupported extended-stable release month: ${release.month}`);
   }
-  return `This is a gateway-only \`extended-stable\` release, which is our current equivalent to LTS. This release is OpenClaw from the end of ${month} ${release.year}, plus critical security updates, reliability and performance fixes, and features like new model support. The latest version of OpenClaw at the time of this release is [${regularStableVersion}](https://github.com/${repository}/releases#release-v${regularStableVersion})`;
+  return `This is a gateway-only \`extended-stable\` release, ${retiredLineReason ? "published from a retired maintenance line by explicit maintainer decision." : "which is our current equivalent to LTS."} This release is OpenClaw from the end of ${month} ${release.year}, plus critical security updates, reliability and performance fixes, and features like new model support. The latest version of OpenClaw at the time of this release is [${regularStableVersion}](https://github.com/${repository}/releases#release-v${regularStableVersion})`;
 }
 
 export function formatContributionRecordProvenance(provenance: ContributionRecordProvenance) {
@@ -328,21 +332,15 @@ export function parseShippedBaselineExclusions(section: string) {
 }
 
 export function dedicatedSectionVersionForTag(tag: unknown) {
-  // Correction (vX-N) and alpha tags may carry their own exact changelog
-  // heading; beta and stable bodies must come from the stable base section.
+  // Exact beta sections freeze the npm-channel delta. Base-section fallback
+  // remains readable for immutable historical tags that shipped that layout.
   assertString(tag, "tag");
   const taggedVersion = tag.replace(/^v/u, "");
-  if (/-beta\.[1-9][0-9]*$/u.test(taggedVersion)) {
-    return undefined;
-  }
-  return /-(?:alpha\.)?[1-9][0-9]*$/u.test(taggedVersion) ? taggedVersion : undefined;
+  return /-(?:(?:alpha|beta)\.)?[1-9][0-9]*$/u.test(taggedVersion) ? taggedVersion : undefined;
 }
 
-function releaseNotesSectionForTag(changelog: unknown, version: unknown, tag: unknown) {
-  // Alpha and correction tags prefer their own exact heading when the
-  // changelog carries one; otherwise they fall back to the base version.
-  assertString(tag, "tag");
-  assertString(version, "version");
+function releaseNotesSectionForTag(changelog: string, version: string, tag: string) {
+  // Prefer frozen tag-specific notes; historical tags may use the base section.
   const dedicatedVersion = dedicatedSectionVersionForTag(tag);
   if (dedicatedVersion && dedicatedVersion !== version) {
     try {
@@ -385,9 +383,6 @@ export function loadReleaseNotesForTag({
   for (const selectedVersion of new Set(versions)) {
     const source = findReleaseChangelog({ rootDir, ref, version: selectedVersion });
     if (source) {
-      if (source.format !== "initial") {
-        fail("docs-mirrored release notes require the docs-publication renderer");
-      }
       return source;
     }
   }
@@ -400,6 +395,7 @@ export function renderGithubReleaseNotes({
   tag,
   repository,
   regularStableVersion,
+  retiredLineReason,
   contributionRecordPath,
   validationManifest,
   verification = "",
@@ -408,9 +404,8 @@ export function renderGithubReleaseNotes({
   assertString(tag, "tag");
   assertString(version, "version");
   validateRepository(repository);
-  validateTag(tag);
   const tagVersion = releaseNotesVersionForTag(tag);
-  if (tagVersion !== version) {
+  if (tagVersion !== version && dedicatedSectionVersionForTag(tag) !== version) {
     fail(`release tag ${tag} requires CHANGELOG.md version ${tagVersion}, got ${version}`);
   }
   assertString(changelog, "changelog");
@@ -418,7 +413,12 @@ export function renderGithubReleaseNotes({
     fail("docs-mirrored release notes require the docs-publication renderer");
   }
   const section = releaseNotesSectionForTag(changelog, version, tag);
-  const notice = extendedStableReleaseNotice({ version, repository, regularStableVersion });
+  const notice = extendedStableReleaseNotice({
+    version,
+    repository,
+    regularStableVersion,
+    retiredLineReason,
+  });
   const fullBody = joinBody(notice, section);
   const mode = fitsGithubReleaseBody(fullBody) ? "full" : "compact";
   const compactBody =
@@ -491,6 +491,7 @@ function parseArgs(argv: string[]) {
     ["--tag", "tag"],
     ["--repository", "repository"],
     ["--regular-stable-version", "regularStableVersion"],
+    ["--retired-line-reason", "retiredLineReason"],
     ["--verification-file", "verificationFile"],
     ["--validation-manifest", "validationManifest"],
     ["--output", "output"],
@@ -499,24 +500,17 @@ function parseArgs(argv: string[]) {
   ] as const satisfies ReadonlyArray<readonly [string, string]>;
   type ValueOption = (typeof valueOptions)[number][1];
   const options: Partial<Record<ValueOption, string>> & { help?: true } = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--help" || arg === "-h") {
-      options.help = true;
-      continue;
-    }
-    const option = valueOptions.find(([flag]) => flag === arg);
-    if (option) {
-      const value = argv[index + 1];
-      if (!value || value.startsWith("--")) {
-        fail(`${arg} requires a value`);
-      }
-      options[option[1]] = value;
-      index += 1;
-      continue;
-    }
-    fail(`unknown argument: ${arg}`);
-  }
+  parseFlagArgs(
+    argv,
+    options,
+    [
+      ...valueOptions.map(([flag, key]) =>
+        stringFlag(flag, key, { allowInline: false, repeatable: true }),
+      ),
+      ...["--help", "-h"].map((flag) => booleanFlag(flag, "help", true, { repeatable: true })),
+    ],
+    { ignoreDoubleDash: false, onUnhandledArg: (arg) => fail(`unknown argument: ${arg}`) },
+  );
   if (!options.help) {
     for (const name of ["tag", "repository"] as const) {
       if (!options[name]) {
@@ -570,6 +564,7 @@ function main() {
     tag,
     repository,
     regularStableVersion: options.regularStableVersion,
+    retiredLineReason: options.retiredLineReason,
     contributionRecordPath: source?.recordPath ?? undefined,
     validationManifest,
   };

@@ -1,4 +1,3 @@
-// Policy doctor shared types.
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import type { PolicyEvidence } from "../policy-state.js";
 

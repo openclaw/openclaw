@@ -1,31 +1,44 @@
 // Client-side trigger script loading for cron create/edit commands.
-import { createReadStream } from "node:fs";
-import {
-  readByteStreamWithLimit,
-  type ReadByteStreamWithLimitOptions,
-} from "@openclaw/media-core/read-byte-stream-with-limit";
+import { realpath } from "node:fs/promises";
+import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { isErrno } from "../../infra/errno.js";
+import { FsSafeError, readRegularFile } from "../../infra/fs-safe.js";
 import { CronCliError } from "./cron-cli-error.js";
 
 const MAX_CRON_TRIGGER_SCRIPT_BYTES = 65_536;
 
+function decodeCronInput(bytes: Buffer, label: string): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch (error) {
+    throw new CronCliError(`${label} must be valid UTF-8`, { cause: error });
+  }
+}
+
 async function readCronInput(
   source: string,
   stdin: AsyncIterable<unknown> | undefined,
-  options: ReadByteStreamWithLimitOptions,
+  maxBytes: number,
+  label: string,
 ): Promise<Buffer> {
-  const stream = source === "-" ? (stdin ?? process.stdin) : createReadStream(source);
+  const onOverflow = () => new CronCliError(`${label} exceeds ${maxBytes} bytes`);
   try {
-    return await readByteStreamWithLimit(stream, options);
+    if (source === "-") {
+      return await readByteStreamWithLimit(stdin ?? process.stdin, { maxBytes, onOverflow });
+    }
+    const { buffer } = await readRegularFile({ filePath: await realpath(source), maxBytes });
+    return buffer;
   } catch (error) {
-    // Filesystem read failures are operator input errors; byte-stream contract
-    // violations and other unexpected exceptions keep their original identity.
+    if (error instanceof FsSafeError && error.code === "too-large") {
+      throw onOverflow();
+    }
+    // File admission failures are operator errors; stdin contract violations
+    // and unexpected stream exceptions keep their original identity.
     if (
       error instanceof Error &&
-      isErrno(error) &&
-      typeof error.errno === "number" &&
-      typeof error.syscall === "string"
+      (source !== "-" ||
+        (isErrno(error) && typeof error.errno === "number" && typeof error.syscall === "string"))
     ) {
       throw new CronCliError(error);
     }
@@ -38,11 +51,8 @@ async function readScriptStream(
   stdin: AsyncIterable<unknown> | undefined,
   label: string,
 ): Promise<string> {
-  const bytes = await readCronInput(source, stdin, {
-    maxBytes: MAX_CRON_TRIGGER_SCRIPT_BYTES,
-    onOverflow: () => new CronCliError(`${label} exceeds ${MAX_CRON_TRIGGER_SCRIPT_BYTES} bytes`),
-  });
-  const script = bytes.toString("utf8").trim();
+  const bytes = await readCronInput(source, stdin, MAX_CRON_TRIGGER_SCRIPT_BYTES, label);
+  const script = decodeCronInput(bytes, label).trim();
   if (!script) {
     throw new CronCliError(`${label} must not be empty`);
   }
@@ -72,9 +82,11 @@ export async function readCronScratchContent(
   source: string,
   deps?: { stdin?: AsyncIterable<unknown> },
 ): Promise<string> {
-  const bytes = await readCronInput(source, deps?.stdin, {
-    maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
-    onOverflow: () => new CronCliError(`Cron scratch exceeds ${CRON_JOB_SCRATCH_MAX_BYTES} bytes`),
-  });
-  return bytes.toString("utf8");
+  const bytes = await readCronInput(
+    source,
+    deps?.stdin,
+    CRON_JOB_SCRATCH_MAX_BYTES,
+    "Cron scratch",
+  );
+  return decodeCronInput(bytes, "Cron scratch");
 }

@@ -25,14 +25,15 @@ public enum TalkConfigParsing {
         allowLegacyFallback: Bool = true) -> TalkProviderConfigSelection?
     {
         guard let talk else { return nil }
-        if let resolvedSelection = self.resolvedProviderConfig(talk) {
-            return resolvedSelection
+        if let resolved = talk["resolved"]?.dictionaryValue,
+           let providerID = resolved["provider"]?.stringValue?.trimmedNonEmpty?.lowercased()
+        {
+            return TalkProviderConfigSelection(
+                provider: providerID,
+                config: resolved["config"]?.dictionaryValue ?? [:],
+                normalizedPayload: true)
         }
-        let hasNormalizedPayload = talk["provider"] != nil || talk["providers"] != nil
-        if hasNormalizedPayload {
-            return nil
-        }
-        guard allowLegacyFallback else { return nil }
+        guard allowLegacyFallback, talk["provider"] == nil, talk["providers"] == nil else { return nil }
         return TalkProviderConfigSelection(
             provider: defaultProvider,
             config: talk,
@@ -115,18 +116,5 @@ public enum TalkConfigParsing {
         let candidates = (preferredLocaleIDs + [fallbackLocaleID])
             .compactMap(self.normalizedSpeechLocaleID)
         return candidates.first { supported.isEmpty || supported.contains($0) }
-    }
-
-    private static func resolvedProviderConfig(
-        _ talk: [String: AnyCodable]) -> TalkProviderConfigSelection?
-    {
-        guard
-            let resolved = talk["resolved"]?.dictionaryValue,
-            let providerID = resolved["provider"]?.stringValue?.trimmedNonEmpty?.lowercased()
-        else { return nil }
-        return TalkProviderConfigSelection(
-            provider: providerID,
-            config: resolved["config"]?.dictionaryValue ?? [:],
-            normalizedPayload: true)
     }
 }

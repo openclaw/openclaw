@@ -1,87 +1,17 @@
-// Spawn-boundary rechecks for gateway-host exec: approval-binding drift and skill-bin authority,
-// each turned into the denial the launch reports instead of spawning. Skill authority is also held
-// through native initiation.
+// Spawn-boundary recheck of skill-bin authority for gateway-host exec, turned into the denial the
+// launch reports instead of spawning, and held through native initiation. Approval-binding drift
+// stays with bash-tools.exec-approval-binding.
 import type { ExecCommandSegment, ExecSegmentSatisfiedBy } from "../infra/exec-approvals.js";
-import {
-  revalidateSystemRunMutableFileBinding,
-  type SystemRunMutableFileBinding,
-} from "../infra/system-run-approval-binding.js";
-import {
-  APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
-  type ApprovedCwdSnapshot,
-  revalidateApprovedCwdSnapshot,
-} from "../infra/system-run-cwd-binding.js";
 import {
   findStaleHeldGatewaySkillBinSegment,
   type HeldGatewaySkillBinAuthority,
   verifyGatewaySkillBinAuthority,
 } from "./bash-tools.exec-host-gateway-allowlist.js";
 import type { ProcessGatewayAllowlistParams } from "./bash-tools.exec-host-gateway.types.js";
+import { buildGatewayExecApprovalDeniedToolResult } from "./bash-tools.exec-host-gateway.output.js";
 import { ExecProcessPreflightError } from "./bash-tools.exec-launch.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import type { AgentToolResult } from "./runtime/index.js";
-
-/** Builds the failed tool result for a gateway exec denied before or at launch. */
-export function buildGatewayExecApprovalDeniedToolResult(params: {
-  approvalId?: string;
-  deniedReason: string;
-  command: string;
-  cwd: string;
-}): AgentToolResult<ExecToolDetails> {
-  const denialContext = params.approvalId
-    ? `gateway id=${params.approvalId}, ${params.deniedReason}`
-    : params.deniedReason;
-  const text = `Exec denied (${denialContext}): ${params.command}`;
-  return {
-    content: [{ type: "text", text }],
-    details: {
-      status: "failed",
-      exitCode: null,
-      durationMs: 0,
-      aggregated: text,
-      timedOut: params.deniedReason.includes("timeout"),
-      cwd: params.cwd,
-    },
-  };
-}
-
-/** Returns why an approved cwd or mutable-file binding no longer holds, if it changed. */
-export async function resolveGatewayExecApprovalDrift(params: {
-  binding?: SystemRunMutableFileBinding;
-  cwdSnapshot?: ApprovedCwdSnapshot;
-  cwd: string;
-}): Promise<string | undefined> {
-  if (params.binding) {
-    const current = await revalidateSystemRunMutableFileBinding({
-      binding: params.binding,
-      cwd: params.cwd,
-    });
-    if (!current.ok) {
-      return current.message;
-    }
-  }
-  if (params.cwdSnapshot && !revalidateApprovedCwdSnapshot(params.cwdSnapshot)) {
-    return APPROVAL_CWD_DRIFT_DENIED_MESSAGE;
-  }
-  return undefined;
-}
-
-/** Rechecks a gateway approval binding at the caller's final spawn boundary. */
-export async function revalidateGatewayExecApprovalBinding(params: {
-  binding?: SystemRunMutableFileBinding;
-  cwdSnapshot?: ApprovedCwdSnapshot;
-  command: string;
-  cwd: string;
-}): Promise<AgentToolResult<ExecToolDetails> | undefined> {
-  const deniedReason = await resolveGatewayExecApprovalDrift(params);
-  return deniedReason
-    ? buildGatewayExecApprovalDeniedToolResult({
-        deniedReason,
-        command: params.command,
-        cwd: params.cwd,
-      })
-    : undefined;
-}
 
 const SKILL_BIN_AUTHORITY_REVOKED_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: skill bin authorization changed before execution";

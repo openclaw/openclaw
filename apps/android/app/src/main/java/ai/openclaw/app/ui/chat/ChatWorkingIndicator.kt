@@ -171,97 +171,55 @@ internal data class WorkingClawPose(
   val powScale: Float = 0.4f,
 )
 
+private data class ClawPoseFrames(
+  val jaw: List<ClawKeyframe>,
+  val rotation: List<ClawKeyframe>? = null,
+  val x: List<ClawKeyframe>? = null,
+  val y: List<ClawKeyframe>? = null,
+  val scale: List<ClawKeyframe>? = null,
+  val scaleEasing: CubicBezierEasing = easeOut,
+  val powAlpha: List<ClawKeyframe>? = null,
+  val powScale: List<ClawKeyframe>? = null,
+)
+
+private val defaultPoseFrames = ClawPoseFrames(jaw = snipFrames, rotation = flexFrames)
+private val stancePoseFrames =
+  mapOf(
+    WorkingClawStance.Spin to ClawPoseFrames(jaw = snipFrames),
+    WorkingClawStance.Shadowbox to
+      ClawPoseFrames(
+        jaw = comboJawFrames,
+        rotation = comboRotationFrames,
+        x = comboXFrames,
+        powAlpha = powAlphaFrames,
+        powScale = powScaleFrames,
+      ),
+    WorkingClawStance.Backflip to ClawPoseFrames(jaw = snipFrames, rotation = backflipRotationFrames, y = backflipYFrames),
+    WorkingClawStance.Zen to ClawPoseFrames(jaw = zenJawFrames, scale = zenScaleFrames, scaleEasing = easeInOut),
+    WorkingClawStance.Drummer to ClawPoseFrames(jaw = drummerJawFrames, rotation = drummerRotationFrames),
+    WorkingClawStance.Peekaboo to ClawPoseFrames(jaw = peekabooJawFrames, y = peekabooYFrames, scale = peekabooScaleFrames),
+    WorkingClawStance.NodOff to ClawPoseFrames(jaw = nodOffJawFrames, rotation = nodOffRotationFrames, y = nodOffYFrames),
+    WorkingClawStance.Curious to ClawPoseFrames(jaw = curiousJawFrames, rotation = curiousRotationFrames),
+    WorkingClawStance.OmNom to ClawPoseFrames(jaw = omNomJawFrames, x = omNomXFrames),
+    WorkingClawStance.FakeOut to ClawPoseFrames(jaw = fakeOutJawFrames, rotation = fakeOutRotationFrames),
+  )
+
 internal fun workingClawPose(
   stance: WorkingClawStance,
   phase: Float,
-): WorkingClawPose =
-  when (stance) {
-    WorkingClawStance.Spin -> {
-      WorkingClawPose(
-        rotationY = phase * 360f,
-        jawRotation = sampleFrames(snipFrames, phase),
-      )
-    }
-
-    WorkingClawStance.Shadowbox -> {
-      WorkingClawPose(
-        rotationZ = sampleFrames(comboRotationFrames, phase),
-        translationXDp = sampleFrames(comboXFrames, phase),
-        jawRotation = sampleFrames(comboJawFrames, phase),
-        powAlpha = sampleFrames(powAlphaFrames, phase),
-        powScale = sampleFrames(powScaleFrames, phase),
-      )
-    }
-
-    WorkingClawStance.Backflip -> {
-      WorkingClawPose(
-        rotationZ = sampleFrames(backflipRotationFrames, phase),
-        translationYDp = sampleFrames(backflipYFrames, phase),
-        jawRotation = sampleFrames(snipFrames, phase),
-      )
-    }
-
-    WorkingClawStance.Zen -> {
-      WorkingClawPose(
-        scale = sampleFrames(zenScaleFrames, phase, easeInOut),
-        jawRotation = sampleFrames(zenJawFrames, phase),
-      )
-    }
-
-    WorkingClawStance.Drummer -> {
-      WorkingClawPose(
-        rotationZ = sampleFrames(drummerRotationFrames, phase),
-        jawRotation = sampleFrames(drummerJawFrames, phase),
-      )
-    }
-
-    WorkingClawStance.Peekaboo -> {
-      WorkingClawPose(
-        translationYDp = sampleFrames(peekabooYFrames, phase),
-        scale = sampleFrames(peekabooScaleFrames, phase),
-        jawRotation = sampleFrames(peekabooJawFrames, phase),
-      )
-    }
-
-    WorkingClawStance.NodOff -> {
-      WorkingClawPose(
-        rotationZ = sampleFrames(nodOffRotationFrames, phase),
-        translationYDp = sampleFrames(nodOffYFrames, phase),
-        jawRotation = sampleFrames(nodOffJawFrames, phase),
-      )
-    }
-
-    WorkingClawStance.Curious -> {
-      WorkingClawPose(
-        rotationZ = sampleFrames(curiousRotationFrames, phase),
-        jawRotation = sampleFrames(curiousJawFrames, phase),
-      )
-    }
-
-    WorkingClawStance.OmNom -> {
-      WorkingClawPose(
-        translationXDp = sampleFrames(omNomXFrames, phase),
-        jawRotation = sampleFrames(omNomJawFrames, phase),
-      )
-    }
-
-    WorkingClawStance.FakeOut -> {
-      WorkingClawPose(
-        rotationZ = sampleFrames(fakeOutRotationFrames, phase),
-        jawRotation = sampleFrames(fakeOutJawFrames, phase),
-      )
-    }
-
-    WorkingClawStance.Default,
-    WorkingClawStance.Southpaw,
-    WorkingClawStance.Flurry,
-    -> {
-      WorkingClawPose(
-        rotationZ = sampleFrames(flexFrames, phase),
-        jawRotation = sampleFrames(snipFrames, phase),
-      )
-    }
-  }
+): WorkingClawPose {
+  val frames = stancePoseFrames[stance] ?: defaultPoseFrames
+  return WorkingClawPose(
+    rotationZ = frames.rotation?.let { sampleFrames(it, phase) } ?: 0f,
+    rotationY = if (stance == WorkingClawStance.Spin) phase * 360f else 0f,
+    translationXDp = frames.x?.let { sampleFrames(it, phase) } ?: 0f,
+    translationYDp = frames.y?.let { sampleFrames(it, phase) } ?: 0f,
+    scale = frames.scale?.let { sampleFrames(it, phase, frames.scaleEasing) } ?: 1f,
+    jawRotation = sampleFrames(frames.jaw, phase),
+    powAlpha = frames.powAlpha?.let { sampleFrames(it, phase) } ?: 0f,
+    powScale = frames.powScale?.let { sampleFrames(it, phase) } ?: 0.4f,
+  )
+}
 
 @Composable
 internal fun WorkingClawIcon(

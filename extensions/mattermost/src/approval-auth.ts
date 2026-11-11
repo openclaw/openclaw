@@ -8,8 +8,7 @@ function normalizeMattermostApproverId(value: string | number): string | undefin
   const normalized = String(value)
     .trim()
     .replace(/^(mattermost|user):/i, "")
-    .replace(/^@/, "")
-    .trim();
+    .replace(/^@/, "");
   const lowered = normalizeLowercaseStringOrEmpty(normalized);
   return MATTERMOST_USER_ID_RE.test(lowered) ? lowered : undefined;
 }

@@ -117,6 +117,7 @@ export async function restartGatewayChannels(options: {
       });
       if (canRestart()) {
         const outcomes = await params.startChannel(channel, accountId, {
+          reason: "config-reload",
           preserveManualStop: true,
           skipUnavailableAccounts: true,
         });

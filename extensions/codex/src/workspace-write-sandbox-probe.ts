@@ -108,10 +108,10 @@ export async function probeCodexWorkspaceWriteSandbox(params: {
           status: "inconclusive",
           command,
           reason: result.outputLimitExceeded
-            ? "Sandbox probe output exceeded its capture limit."
+            ? "Sandbox check output exceeded its capture limit."
             : result.termination === "timeout"
-              ? `Sandbox probe timed out after ${PROBE_TIMEOUT_MS} ms.`
-              : `Sandbox probe ended with ${result.signal ?? result.termination}.`,
+              ? `Sandbox check timed out after ${PROBE_TIMEOUT_MS} ms.`
+              : `Sandbox check ended with ${result.signal ?? result.termination}.`,
         };
       }
       if (result.code === 0) {
@@ -127,7 +127,7 @@ export async function probeCodexWorkspaceWriteSandbox(params: {
       return {
         status: "inconclusive",
         command,
-        reason: `Sandbox probe exited with ${result.code ?? "no exit code"} without a recognized bwrap denial.`,
+        reason: `Sandbox check exited with ${result.code ?? "no exit code"} without a recognized bwrap denial.`,
       };
     } finally {
       await fs.rm(root, { recursive: true, force: true });

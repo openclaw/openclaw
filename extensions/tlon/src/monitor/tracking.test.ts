@@ -3,11 +3,12 @@ import { describe, expect, it } from "vitest";
 import { createActiveSnapshotTracker, createParticipatedThreadTracker } from "./tracking.js";
 
 describe("createParticipatedThreadTracker", () => {
-  it("evicts the least recently used thread at the configured limit", () => {
-    const tracker = createParticipatedThreadTracker(3);
+  it("evicts the least recently used thread at the 2,000-thread limit", () => {
+    const tracker = createParticipatedThreadTracker();
     tracker.add("oldest");
     tracker.add("refreshed");
     tracker.add("recent");
+    Array.from({ length: 1_997 }, (_, i) => tracker.add(`filler-${i}`));
 
     expect(tracker.has("refreshed")).toBe(true);
     tracker.add("newest");

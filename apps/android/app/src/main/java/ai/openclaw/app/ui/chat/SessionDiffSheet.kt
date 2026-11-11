@@ -413,13 +413,9 @@ private fun SessionDiffFiles(
               val distance = change.position - down.position
               if (gutterTarget == null) {
                 if (abs(distance.x) > viewConfiguration.touchSlop && abs(distance.x) > abs(distance.y)) {
-                  if (distance.x < 0f) {
-                    if (!canHide) break
-                    gutterTarget = false
-                  } else {
-                    if (!canReveal) break
-                    gutterTarget = true
-                  }
+                  val reveal = distance.x >= 0f
+                  if (!(if (reveal) canReveal else canHide)) break
+                  gutterTarget = reveal
                 } else if (abs(distance.y) > viewConfiguration.touchSlop) {
                   break
                 }

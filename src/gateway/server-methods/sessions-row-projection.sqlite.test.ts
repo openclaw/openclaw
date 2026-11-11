@@ -1,17 +1,30 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import * as historyWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import * as sqlite from "../../infra/kysely-sync.js";
+import * as nativeWorker from "../../infra/sqlite-worker-store.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import * as admission from "../../state/agent-database-admission.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
+import * as execution from "../../state/openclaw-agent-execution.js";
 import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "../methods/core-method-policy.js";
+import { dispatchAuthorizationRequest } from "../server-methods.authorization.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import * as sessionUtils from "../session-utils.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
 import {
   identifiedClient,
+  initializeSessionReadContext,
   listSessions,
+  profileSessionEntry,
   requestContext,
   seedSessions,
   sessionReadHandlers,
@@ -20,6 +33,123 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 describe("resident session rows", () => {
+  it.each(["sessions.list", "sessions.subscribe"])(
+    "serves prepared rows through %s while startup recovery is pending",
+    async (method) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const context = requestContext(await seedSessions());
+        const client = identifiedClient("owner@example.com");
+        client.connId = "startup-reader";
+        context.subscribeSessionEvents = vi.fn();
+        context.unavailableGatewayMethods = new Set(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
+        await listSessions({ context, client, request: {} });
+        const respond = await dispatchAuthorizationRequest(
+          method,
+          { limit: 100 },
+          { context, client },
+        );
+        const [ok, payload] = respond.mock.calls[0] ?? [];
+        expect(ok).toBe(true);
+        expect(method === "sessions.subscribe" ? payload.list : payload).toMatchObject({
+          sessions: expect.arrayContaining([expect.objectContaining({ key: "agent:main:active" })]),
+        });
+        if (method === "sessions.subscribe") {
+          expect(context.subscribeSessionEvents).toHaveBeenCalledWith("startup-reader");
+        }
+      });
+    },
+  );
+  it("lists ready sessions while a registered agent's native preparation is pending", async ({
+    signal,
+  }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const context = requestContext(await seedSessions());
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: "agent:main:child" },
+        {
+          ...profileSessionEntry("healthy-child", 500, "owner@example.com"),
+          parentSessionKey: "agent:work:active",
+          spawnedBy: "agent:work:active",
+        },
+      );
+      const client = identifiedClient("owner@example.com");
+      context.unavailableGatewayMethods = new Set(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
+      await closeOpenClawAgentDatabasesAsync(state.stateDir);
+      const scope = { agentId: "work", env: state.env };
+      const path = resolveOpenClawAgentSqlitePath(scope);
+      const refusal = admission.createAgentDatabaseInspectionRefusal({
+        agentId: scope.agentId,
+        paths: [path],
+        reason: "Startup inspection is still running",
+        pending: true,
+      });
+      admission.recordAgentDatabaseAdmissions([refusal], { ...state, source: "startup" });
+      const entered = createDeferred();
+      const release = createDeferred();
+      const open = nativeWorker.openAgentDatabaseSqliteWorkerStore;
+      const gate = vi
+        .spyOn(nativeWorker, "openAgentDatabaseSqliteWorkerStore")
+        .mockImplementationOnce(async (...args) => {
+          entered.resolve();
+          await release.promise;
+          return open(...args);
+        });
+      const opening = admission.preparePendingAgentDatabase(
+        refusal,
+        { env: state.env, assertCurrent() {} },
+        () => execution.prepareOpenClawAgentDatabaseExecution({ ...scope, path }, () => {}),
+      );
+      let initialize: Promise<void> | undefined;
+      try {
+        await withinTest(entered.promise, signal);
+        initialize = initializeSessionReadContext(context);
+        await withinTest(initialize, signal);
+        const respond = await dispatchAuthorizationRequest(
+          "sessions.list",
+          {},
+          { context, client },
+        );
+        expect(respond.mock.calls[0]).toMatchObject([
+          true,
+          {
+            sessions: expect.arrayContaining([
+              expect.objectContaining({ key: "agent:main:active" }),
+              expect.objectContaining({ key: "agent:main:child" }),
+            ]),
+          },
+        ]);
+        expect(respond.mock.calls[0]?.[1].sessions).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ key: "agent:work:active" })]),
+        );
+        const pending = await dispatchAuthorizationRequest(
+          "sessions.list",
+          { agentId: "work" },
+          { context, client },
+        );
+        expect(pending.mock.calls[0]).toMatchObject([
+          false,
+          undefined,
+          {
+            code: "UNAVAILABLE",
+            retryable: true,
+            details: { code: "agent-database-inspection-pending" },
+          },
+        ]);
+      } finally {
+        release.resolve();
+        gate.mockRestore();
+        await opening;
+        await initialize;
+      }
+      const recovered = await listSessions({ context, client, request: {} });
+      expect(recovered.sessions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ key: "agent:main:active" }),
+          expect.objectContaining({ key: "agent:work:active" }),
+        ]),
+      );
+    });
+  });
   it.each([
     { method: "list", transition: "a commit arrives as readiness resolves" },
     { method: "describe", transition: "its row is dirtied before the request" },
@@ -168,7 +298,7 @@ describe("resident session rows", () => {
     });
   });
 
-  it("refreshes only the dirty identity through bounded keyed readers, then reuses it without SQL", async () => {
+  it("refreshes only the invalidated identity through bounded keyed readers, then reuses it without SQL", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = await seedSessions();
       const context = requestContext(cfg);
@@ -184,6 +314,13 @@ describe("resident session rows", () => {
         { agentId: "main", sessionKey: key },
         { ...current.entry, label: "Committed label" },
       );
+      // Complete commit receipts reuse their facts; missing facts require the keyed fallback.
+      sessionChanges.invalidate({
+        agentId: "main",
+        sessionKey: key,
+        scope: "session-entry",
+        factsInvalidated: true,
+      });
       expect(projection.dirtyRowCount).toBeGreaterThan(0);
       const workerKeys = vi.fn<(keys: readonly string[]) => void>();
       const readDatabases = historyWorker.withSessionHistoryWorkerDatabases;
@@ -203,6 +340,12 @@ describe("resident session rows", () => {
       );
       const hostSql = observeHostDataSql();
       try {
+        sessionChanges.emit({
+          agentId: "main",
+          sessionKey: key,
+          storePath: current.storeTarget.storePath,
+          factsInvalidated: true,
+        });
         const listed = await listSessions({ context, client, request });
         expect(listed.sessions.find((row) => row.key === key)?.label).toBe("Committed label");
         expect(projection.materializedCount - before).toBe(1);

@@ -1,7 +1,13 @@
 import { join } from "node:path";
 import { afterAll, expect, it, onTestFinished, vi } from "vitest";
+import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshotCore,
+  setRuntimeAuthProfileStoreSnapshot,
+} from "../auth-profiles/runtime-snapshots.js";
 import { installSessionPlacementAdmissionProvider } from "../session-placement-admission.js";
 import {
   contextEngineCompactMock,
@@ -20,11 +26,13 @@ const [
   { ensureAuthProfileStoreWithoutExternalProfiles },
   { AsyncWorkScope },
   { prepareProviderRuntimeAuth },
+  { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot },
 ] = await Promise.all([
   import("../../config/sessions/session-accessor.js"),
   import("../model-auth.js"),
   import("../../shared/async-work-scope.js"),
   import("../../plugins/provider-runtime.js"),
+  import("../../config/runtime-snapshot.js"),
 ]);
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-compaction-auth-");
 
@@ -144,6 +152,7 @@ it.each([false, true])(
       revoked = revoke;
       return { info: { ownsCompaction: true }, compact: contextEngineCompactMock };
     });
+    setRuntimeConfigSnapshot({});
     try {
       const operation = runOwnedCompaction(() =>
         compactEmbeddedAgentSession({
@@ -165,6 +174,7 @@ it.each([false, true])(
       expect(dispose).toHaveBeenCalledOnce();
     } finally {
       uninstall();
+      clearRuntimeConfigSnapshot();
     }
   },
 );
@@ -221,3 +231,55 @@ it.each(["direct", "queued"] as const)(
     expect(authStore).toEqual(originalAuthStore);
   },
 );
+
+it("compacts through the configured fallback when the primary profile is cooling down", async () => {
+  const baseParams = await prepareCompactionParams();
+  const agentDir = join(baseParams.workspaceDir, "agent");
+  const authStore = {
+    version: 1 as const,
+    profiles: {
+      "primary:default": createApiKeyCredential("primary", "test-primary-key"),
+      "backup:default": createApiKeyCredential("backup", "test-backup-key"),
+    },
+    usageStats: {
+      "primary:default": {
+        cooldownUntil: Date.now() + 3_600_000,
+        cooldownReason: "rate_limit" as const,
+      },
+    },
+  };
+  prepareSharedAuthStoreOwnershipForNative();
+  setRuntimeAuthProfileStoreSnapshot(authStore, agentDir);
+  onTestFinished(() => {
+    clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
+  });
+  vi.mocked(ensureAuthProfileStoreWithoutExternalProfiles).mockReturnValue(authStore);
+  resolveContextEngineMock.mockResolvedValue({
+    info: { ownsCompaction: false },
+    compact: vi.fn(delegateCompactionToRuntime),
+  });
+
+  const result = await runOwnedCompaction(() =>
+    compactEmbeddedAgentSession({
+      ...baseParams,
+      agentDir,
+      provider: "primary",
+      model: "model",
+      trigger: "budget",
+      forcePreflight: true,
+      preflightRequired: true,
+      preflightCompactionTrigger: "transcript_bytes",
+      config: {
+        agents: {
+          defaults: { model: { primary: "primary/model", fallbacks: ["backup/model"] } },
+        },
+      },
+    }),
+  );
+
+  expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
+  expect(sessionCompactImpl).toHaveBeenCalledOnce();
+  expect(getApiKeyForModelMock).toHaveBeenCalledWith(
+    expect.objectContaining({ profileId: "backup:default" }),
+  );
+});

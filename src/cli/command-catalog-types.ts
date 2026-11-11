@@ -1,16 +1,5 @@
 // Shared CLI catalog contracts are independent of catalog entries and policy values.
-type CliCommandPluginLoadPolicy =
-  | "never"
-  | "always"
-  | ((ctx: { argv: string[]; commandPath: string[]; jsonOutputMode: boolean }) => boolean);
 type CliConfigGuardMode = "run" | "skip" | "validate" | "defer";
-type CliConfigGuardPolicy =
-  | CliConfigGuardMode
-  | ((ctx: {
-      argv: string[];
-      commandPath: string[];
-      options?: Readonly<Record<string, unknown>>;
-    }) => CliConfigGuardMode);
 export type CliPluginRegistryScope =
   | "all"
   | "channels"
@@ -19,35 +8,29 @@ export type CliPluginRegistryScope =
   | "sandbox-backends"
   | "sandbox-management";
 export type CliNetworkProxyPolicy = "default" | "bypass";
-type CliNetworkProxyPolicyResolver =
-  | CliNetworkProxyPolicy
-  | ((ctx: { argv: string[]; commandPath: string[] }) => CliNetworkProxyPolicy);
-type CliRoutedCommandId =
-  | "health"
-  | "status"
-  | "gateway-health"
-  | "gateway-status"
-  | "sessions"
-  | "agents-list"
-  | "config-get"
-  | "config-unset"
-  | "models-list"
-  | "models-status"
-  | "channels-list"
-  | "channels-status"
-  | "plugins-list";
 
 export type CliCommandPathPolicy = {
-  configGuard: CliConfigGuardPolicy;
+  configGuard:
+    | CliConfigGuardMode
+    | ((ctx: {
+        argv: string[];
+        commandPath: string[];
+        options?: Readonly<Record<string, unknown>>;
+      }) => CliConfigGuardMode);
   stateStoreGuard: "run" | "skip";
-  loadPlugins: CliCommandPluginLoadPolicy;
+  loadPlugins:
+    | "never"
+    | "always"
+    | ((ctx: { argv: string[]; commandPath: string[]; jsonOutputMode: boolean }) => boolean);
   pluginRegistry: {
     scope: CliPluginRegistryScope;
   };
   ownsProtocolStdout: boolean;
   hideBanner: boolean;
   ensureCliPath: boolean;
-  networkProxy: CliNetworkProxyPolicyResolver;
+  networkProxy:
+    | CliNetworkProxyPolicy
+    | ((ctx: { argv: string[]; commandPath: string[] }) => CliNetworkProxyPolicy);
 };
 
 export type CliCommandCatalogEntry = {
@@ -55,6 +38,19 @@ export type CliCommandCatalogEntry = {
   exact?: boolean;
   policy?: Partial<CliCommandPathPolicy>;
   route?: {
-    id: CliRoutedCommandId;
+    id:
+      | "health"
+      | "status"
+      | "gateway-health"
+      | "gateway-status"
+      | "sessions"
+      | "agents-list"
+      | "config-get"
+      | "config-unset"
+      | "models-list"
+      | "models-status"
+      | "channels-list"
+      | "channels-status"
+      | "plugins-list";
   };
 };

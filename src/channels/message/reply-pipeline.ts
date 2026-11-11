@@ -91,12 +91,7 @@ export function createChannelReplyPipeline(
     : channelId
       ? transformPluginReply
       : undefined;
-  const prefixOptions = createReplyPrefixOptions({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: params.channel,
-    accountId: params.accountId,
-  });
+  const prefixOptions = createReplyPrefixOptions(params);
   return {
     ...prefixOptions,
     resolveResponsePrefix: () =>

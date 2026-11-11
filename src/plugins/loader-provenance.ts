@@ -1,12 +1,20 @@
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { resolveUserPath } from "../utils.js";
+import { hashStableJson } from "./installed-plugin-index-hash.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import { formatPluginTrustDiagnostic } from "./plugin-trust.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import type { PluginLogger } from "./types.js";
+
+// Registry rebuilds keep warning history; Gateway close/restart begins a new generation.
+const lastProvenanceWarning = resolveGlobalMap<string, string>(
+  Symbol.for("openclaw.pluginProvenanceWarnings"),
+  "close-and-restart",
+);
 
 type PathMatcher = {
   exact: Set<string>;
@@ -14,6 +22,7 @@ type PathMatcher = {
 };
 
 type InstallTrackingRule = {
+  record: PluginInstallRecord;
   trackedWithoutPaths: boolean;
   matcher: PathMatcher;
 };
@@ -85,6 +94,7 @@ export function buildProvenanceIndex(params: {
     params.installRecords ?? loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
   for (const [pluginId, install] of Object.entries(installs)) {
     const rule: InstallTrackingRule = {
+      record: install,
       trackedWithoutPaths: false,
       matcher: createPathMatcher(),
     };
@@ -232,20 +242,30 @@ export function warnAboutUntrackedLoadedPlugins(params: {
     const diagnostic = plugin.trust ? ` ${formatPluginTrustDiagnostic(plugin.trust)}.` : "";
     const message = `OpenClaw can't verify where this plugin came from. Review it with '${formatPluginInspectCommand(plugin.id)}'. Adding it to plugins.allow lets it load, but does not make it trusted. If it's an official plugin, reinstall it from its official npm package or its official ClawHub listing to enable trusted features.${diagnostic}`;
     if (
-      params.registry.diagnostics.some(
-        (entry) => entry.pluginId === plugin.id && entry.message === message,
+      !params.registry.diagnostics.some(
+        (entry) =>
+          entry.pluginId === plugin.id &&
+          entry.source === plugin.source &&
+          entry.message === message,
       )
     ) {
-      continue;
+      params.registry.diagnostics.push({
+        level: "warn",
+        pluginId: plugin.id,
+        source: plugin.source,
+        message,
+      });
     }
-    params.registry.diagnostics.push({
-      level: "warn",
-      pluginId: plugin.id,
-      source: plugin.source,
-      message,
-    });
     if (params.emitWarning) {
-      params.logger.warn(`[plugins] ${plugin.id}: ${message} (${plugin.source})`);
+      const warningKey = hashStableJson([
+        plugin.source,
+        plugin.trust,
+        installOwner ? params.provenance.installRules.get(installOwner)?.record : undefined,
+      ]);
+      if (lastProvenanceWarning.get(plugin.id) !== warningKey) {
+        lastProvenanceWarning.set(plugin.id, warningKey);
+        params.logger.warn(`[plugins] ${plugin.id}: ${message} (${plugin.source})`);
+      }
     }
   }
 }

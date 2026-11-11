@@ -2,7 +2,6 @@
 import { resolveExtraBootstrapPatterns } from "../../../agents/workspace-bootstrap-policy.js";
 import { loadExtraBootstrapFilesWithDiagnostics } from "../../../agents/workspace.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-/** Loads the extra bootstrap files the hook config declares for a workspace. */
 export async function loadDeclaredExtraBootstrapFiles(params: {
   config: OpenClawConfig | undefined;
   workspaceDir: string;
