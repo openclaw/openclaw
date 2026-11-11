@@ -85,7 +85,12 @@ export function workspaceResultGitCommand(cwd: string, args: string[]): string[]
 export async function requireWorkspaceResultGit(
   cwd: string,
   args: string[],
-  options: { input?: Uint8Array; baseEnv?: NodeJS.ProcessEnv; beforeInput?: () => void } = {},
+  options: {
+    input?: Uint8Array;
+    stdinFileDescriptor?: number;
+    baseEnv?: NodeJS.ProcessEnv;
+    beforeInput?: () => void;
+  } = {},
 ): Promise<string> {
   const { runCommandWithTimeout } = await import("../../process/exec.js");
   const result = await withGitProcessOperation(
@@ -96,6 +101,8 @@ export async function requireWorkspaceResultGit(
         maxOutputBytes: 1024 * 1024,
         baseEnv: options.baseEnv,
         input: options.input,
+        stdinFileDescriptor: options.stdinFileDescriptor,
+        terminateOnOutputLimit: options.stdinFileDescriptor !== undefined,
         beforeInput: options.beforeInput,
       }),
     "default",

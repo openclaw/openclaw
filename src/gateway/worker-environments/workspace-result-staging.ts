@@ -4,7 +4,6 @@ import { readGitRefs } from "../../infra/git-root.js";
 import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runExec } from "../../process/exec.js";
 import type { WorkerLocalWorkspaceReconcileRequest } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 import {
@@ -31,8 +30,6 @@ import {
   requireWorkspaceResultGit as requireGit,
   updateWorkspaceResultRefs,
   withWorkspaceResultRefMutation,
-  workspaceResultGitCommand as gitCommand,
-  WORKSPACE_RESULT_GIT_TIMEOUT_MS as PATCH_TIMEOUT_MS,
 } from "./workspace-result-git.js";
 import { importWorkerWorkspaceHistory } from "./workspace-result-history.js";
 import type {
@@ -128,7 +125,6 @@ async function stageWorkerWorkspaceResult(
       : await resolveWorkspaceResultStorage(root, params.stagedResultRef, {
           assertCurrent: params.assertCurrent,
         });
-    const resultRoot = storage.root;
     const inputPath = path.join(temporary, "fast-import");
     await importWorkerWorkspaceHistory({
       ...params,
@@ -139,20 +135,18 @@ async function stageWorkerWorkspaceResult(
     params.assertCurrent?.();
     await prepareWorkspaceStageInput({ ...params, inputPath });
     await using input = await fs.open(inputPath, "r");
-    const { stdout } = await withWorkspaceResultRefMutation(
+    const resultRoot = storage.root;
+    return await withWorkspaceResultRefMutation(
       storage.root,
       (queuedEnv) => {
         params.assertCurrent?.();
-        return runExec("git", gitCommand(resultRoot, ["fast-import", "--quiet"]).slice(1), {
+        return requireGit(resultRoot, ["fast-import", "--quiet"], {
           baseEnv: queuedEnv,
           stdinFileDescriptor: input.fd,
-          timeoutMs: PATCH_TIMEOUT_MS,
-          maxBuffer: 1024 * 1024,
         });
       },
       storage,
     );
-    return stdout.trim();
   } catch (error) {
     if (storage) {
       const failedStorage = storage;

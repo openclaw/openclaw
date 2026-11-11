@@ -4,7 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import { runCommandWithTimeout, runExec, spawnCommand } from "../../process/exec.js";
+import { runCommandWithTimeout, spawnCommand } from "../../process/exec.js";
 import { MAX_WORKSPACE_RESULT_GIT_PACK_BYTES } from "../../worker/node-workspace-transfer-protocol.js";
 import type { RepositoryGitHistory } from "./session-repository-checkpoints.types.js";
 import { boundedWorkerError } from "./worker-error.js";
@@ -68,22 +68,11 @@ export async function importWorkerWorkspaceHistory(params: {
     throw new Error("Cloud workspace Git pack exceeds its byte limit");
   }
   params.assertCurrent?.();
-  const { stdout } = await runExec(
-    "git",
-    workspaceResultGitCommand(params.root, [
-      "index-pack",
-      "--stdin",
-      "--fix-thin",
-      "--strict",
-    ]).slice(1),
-    {
-      baseEnv,
-      stdinFileDescriptor: pack.fd,
-      timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
-      maxBuffer: 1024 * 1024,
-    },
-  );
-  const packHash = stdout.trim().split("\t")[1]!;
+  const output = await git(params.root, ["index-pack", "--stdin", "--fix-thin", "--strict"], {
+    baseEnv,
+    stdinFileDescriptor: pack.fd,
+  });
+  const packHash = output.split("\t")[1]!;
   // Verify the received graph, not just the worker's ancestry claim.
   await git(params.root, ["merge-base", "--is-ancestor", history.baseCommit, history.headCommit], {
     baseEnv,
@@ -211,16 +200,10 @@ async function adoptWorkerWorkspaceHistory(params: {
         "r",
       );
       params.assertCurrent?.();
-      await runExec(
-        "git",
-        workspaceResultGitCommand(params.root, ["index-pack", "--stdin", "--fix-thin"]).slice(1),
-        {
-          baseEnv,
-          stdinFileDescriptor: pack.fd,
-          timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
-          maxBuffer: 1024 * 1024,
-        },
-      );
+      await git(params.root, ["index-pack", "--stdin", "--fix-thin"], {
+        baseEnv,
+        stdinFileDescriptor: pack.fd,
+      });
     }
     const mergeIndex = ["read-tree", "-i", "-m", history.baseCommit, history.headCommit];
     const preflight = await runCommandWithTimeout(

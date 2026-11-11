@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as gitExec from "../../infra/git-exec.js";
 import * as commandRuntime from "../../process/exec.js";
 import {
   deleteStagedWorkerWorkspaceResult as deleteResult,
@@ -47,7 +48,7 @@ it("queues related worktree ref mutations while another repository progresses", 
   await git(unrelated, "pack-refs", "--all");
 
   const firstStarted = createDeferred();
-  const secondReachedGit = createDeferred();
+  const secondQueued = createDeferred();
   const releaseFirst = createDeferred();
   const mutations: string[] = [];
   const runCommand = commandRuntime.runCommandWithTimeout;
@@ -55,9 +56,6 @@ it("queues related worktree ref mutations while another repository progresses", 
     .spyOn(commandRuntime, "runCommandWithTimeout")
     .mockImplementation(async (argv, options) => {
       const cwd = argv[argv.indexOf("-C") + 1];
-      if (cwd === worktree) {
-        secondReachedGit.resolve();
-      }
       if (argv.includes("update-ref")) {
         mutations.push(cwd!);
         if (cwd === repository) {
@@ -67,6 +65,16 @@ it("queues related worktree ref mutations while another repository progresses", 
       }
       return await runCommand(argv, options);
     });
+  const enqueue = gitExec.enqueueGitRefMutation;
+  const queueSpy = vi
+    .spyOn(gitExec, "enqueueGitRefMutation")
+    .mockImplementation((cwd, common, use) => {
+      const queued = enqueue(cwd, common, use);
+      if (cwd === worktree) {
+        secondQueued.resolve();
+      }
+      return queued;
+    });
   const operations: Promise<void>[] = [];
   try {
     operations.push(deleteResult(targets[0]!));
@@ -75,7 +83,7 @@ it("queues related worktree ref mutations while another repository progresses", 
     const independent = deleteResult(targets[2]!);
     operations.push(independent);
     // Only the unrelated repository may mutate while the first writer is held.
-    await Promise.all([secondReachedGit.promise, independent]);
+    await Promise.all([secondQueued.promise, independent]);
     expect(mutations).toEqual([repository, unrelated]);
     await expect(hasRef(targets[1]!)).resolves.toBe(true);
     await expect(hasRef(targets[2]!)).resolves.toBe(false);
@@ -89,5 +97,6 @@ it("queues related worktree ref mutations while another repository progresses", 
     releaseFirst.resolve();
     await Promise.allSettled(operations);
     spy.mockRestore();
+    queueSpy.mockRestore();
   }
 });
