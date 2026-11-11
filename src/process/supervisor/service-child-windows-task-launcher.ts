@@ -41,7 +41,7 @@ export function bindWindowsTaskLauncher(launcherKind: "wscript" | "cmd" = "wscri
     }
     if (launcherKind === "cmd") {
       requireLive(cmd, "CMD launcher");
-      bindCurrentProcessLifetimeTo(cmd);
+      bindCurrentProcessLifetimeTo(cmd, { allowBreakaway: true });
       return;
     }
     launcher = requireProcess(command.parentPid, "WScript", "lifetime-owner");
@@ -55,7 +55,8 @@ export function bindWindowsTaskLauncher(launcherKind: "wscript" | "cmd" = "wscri
     // Retained handles pin identities; creation ordering rejects recycled parent PIDs.
     requireLive(cmd, "CMD launcher");
     requireLive(launcher, "WScript launcher");
-    bindCurrentProcessLifetimeTo(launcher);
+    // Only explicit update handoffs escape; ordinary children still die with the task.
+    bindCurrentProcessLifetimeTo(launcher, { allowBreakaway: true });
   } finally {
     launcher?.close();
     cmd?.close();

@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import { loadWindowsManagedHandoffSpawner } from "./update-managed-service-handoff-native.js";
 import { stageManagedHandoffRuntime } from "./update-managed-service-handoff-runtime.js";
 
 const mocks = vi.hoisted(() => ({ createRequire: vi.fn(), runtimeUrl: vi.fn() }));
@@ -18,7 +19,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const version = "0.1.0";
 const procSafe = "@openclaw/proc-safe";
 const platformName = `@openclaw/proc-safe-freebsd-${process.arch}`;
-const nativeMetadata = (pin: string) => JSON.stringify({ name: platformName, version: pin });
+const nativeMetadata = (pin: string, name = platformName) => JSON.stringify({ name, version: pin });
 const supportsPosixFiles = process.platform !== "win32";
 const runtimeBytes = Buffer.from("export const fixture = true;\n");
 const packageFiles = {
@@ -30,6 +31,7 @@ const packageFiles = {
   LICENSE: "license fixture",
   "dist/identity.js": "public identity fixture",
   "dist/native.js": "native loader fixture",
+  "dist/windows-job.js": "export function spawnWindowsProcess() { return import.meta.url; }\n",
 };
 
 function write(file: string, bytes: string | Buffer) {
@@ -38,30 +40,50 @@ function write(file: string, bytes: string | Buffer) {
 }
 
 async function rejectsStaging(message: string | RegExp, privateRequire?: () => unknown) {
-  expect(() => stageManagedHandoffRuntime(destination)).toThrow(message);
+  expect(() => stageManagedHandoffRuntime(destination, { windowsBreakaway: true })).toThrow(
+    message,
+  );
   if (privateRequire) {
     expect(privateRequire).not.toHaveBeenCalled();
   }
 }
 
-function installedProcSafe() {
+function installedProcSafe(platform: "freebsd" | "win32" = "freebsd") {
+  const nativePackage =
+    platform === "win32" ? `@openclaw/proc-safe-win32-${process.arch}-msvc` : platformName;
   const sourceRoot = path.join(root, "install", "node_modules", procSafe);
-  const nativeRoot = path.join(root, "install", "node_modules", platformName);
+  const nativeRoot = path.join(root, "install", "node_modules", nativePackage);
   const addon = path.join(nativeRoot, "proc-safe-native.node");
   const sourceEntry = path.join(sourceRoot, "dist", "identity.js");
   for (const [relative, bytes] of Object.entries(packageFiles)) {
-    write(path.join(sourceRoot, relative), bytes);
+    write(
+      path.join(sourceRoot, relative),
+      relative === "package.json" && platform === "win32"
+        ? JSON.stringify({
+            name: procSafe,
+            version,
+            type: "module",
+            optionalDependencies: { [nativePackage]: version },
+          })
+        : bytes,
+    );
   }
   const bytes = Buffer.from([0x7f, 0x45, 0x4c, 0x46]);
   write(addon, bytes);
-  write(path.join(nativeRoot, "package.json"), nativeMetadata(version));
+  write(path.join(nativeRoot, "package.json"), nativeMetadata(version, nativePackage));
+  const launcherBytes = Buffer.from([0x4d, 0x5a, 0x90]);
+  const launcher = path.join(nativeRoot, "proc-safe-spawn.exe");
+  if (platform === "win32") {
+    write(launcher, launcherBytes);
+  }
 
-  const observed = { startTimeSinceBootMicros: 5_200_002 };
-  const sourceIdentity = { readProcessIdentity: () => observed };
+  const observed: { startTimeMicros?: number; startTimeSinceBootMicros?: number } =
+    platform === "win32" ? { startTimeMicros: 5_200_002 } : { startTimeSinceBootMicros: 5_200_002 };
+  const sourceIdentity = { readProcessIdentity: vi.fn(() => observed) };
   const identity = { readProcessIdentity: vi.fn(() => observed) };
   const privateModules = path.join(destination, "runtime", "node_modules");
   const privateEntry = path.join(privateModules, procSafe, "dist", "identity.js");
-  const privateNativePath = path.join(privateModules, platformName, "proc-safe-native.node");
+  const privateNativePath = path.join(privateModules, nativePackage, "proc-safe-native.node");
   const cache = { [addon]: { filename: addon, loaded: true, exports: {} } };
   const resolve = vi.fn((name: string) =>
     name.endsWith("/package.json") ? path.join(nativeRoot, "package.json") : addon,
@@ -75,13 +97,31 @@ function installedProcSafe() {
     }),
     { cache },
   );
-  const requires: Record<string, unknown> = { [sourceEntry]: source, [privateEntry]: staged };
+  const privateWindowsEntry = path.join(privateModules, procSafe, "dist", "windows-job.js");
+  const requires: Record<string, unknown> = {
+    [sourceEntry]: source,
+    [privateEntry]: staged,
+  };
   const rootRequire = {
     resolve: (name: string) =>
       name.endsWith("/package.json") ? path.join(sourceRoot, "package.json") : sourceEntry,
   };
   mocks.createRequire.mockImplementation((entry: string) => requires[entry] ?? rootRequire);
-  return { sourceRoot, nativeRoot, addon, bytes, cache, source, identity, staged };
+  return {
+    sourceRoot,
+    nativeRoot,
+    addon,
+    bytes,
+    cache,
+    source,
+    sourceIdentity,
+    identity,
+    staged,
+    nativePackage,
+    launcher,
+    launcherBytes,
+    privateWindowsEntry,
+  };
 }
 
 beforeEach(() => {
@@ -89,6 +129,7 @@ beforeEach(() => {
   destination = path.join(root, "handoff");
   const runtime = path.join(root, "managed-handoff-runtime.mjs");
   write(runtime, runtimeBytes);
+  write(path.join(root, "windows-security-helper.exe"), "ACL helper fixture");
   mocks.createRequire.mockReset();
   mocks.runtimeUrl.mockReturnValue(pathToFileURL(runtime));
   fixture = installedProcSafe();
@@ -96,7 +137,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("preserves the single-file stage outside FreeBSD", () => {
+it("preserves the single-file stage outside native handoff platforms", () => {
   mockProcessPlatform("linux");
   const files = stageManagedHandoffRuntime(destination);
   expect(files).toEqual([path.join(destination, "runtime", "managed-handoff-runtime.mjs")]);
@@ -187,7 +228,7 @@ it("refuses external resource roots before loading a dependency", async () => {
     value: "/external-resources",
   });
   try {
-    await rejectsStaging("external FreeBSD native resource path", mocks.createRequire);
+    await rejectsStaging("external native resource path", mocks.createRequire);
   } finally {
     if (previous) {
       Object.defineProperty(process, "resourcesPath", previous);
@@ -196,3 +237,56 @@ it("refuses external resource roots before loading a dependency", async () => {
     }
   }
 });
+
+it("preserves Windows helper staging without a breakaway native dependency", () => {
+  mockProcessPlatform("win32");
+  const files = stageManagedHandoffRuntime(destination);
+  expect(files).toEqual([
+    path.join(destination, "runtime", "managed-handoff-runtime.mjs"),
+    path.join(destination, "runtime", "windows-security-helper.exe"),
+  ]);
+  expect(mocks.createRequire).not.toHaveBeenCalled();
+});
+
+it("retains the Windows breakaway executable and loads its private public spawner", async () => {
+  mockProcessPlatform("win32");
+  fixture = installedProcSafe("win32");
+  const files = stageManagedHandoffRuntime(destination, { windowsBreakaway: true });
+  const launcher = path.join(
+    destination,
+    "runtime",
+    "node_modules",
+    fixture.nativePackage,
+    "proc-safe-spawn.exe",
+  );
+  expect(files).toContain(launcher);
+  expect(fs.readFileSync(launcher)).toEqual(fixture.launcherBytes);
+  fs.rmSync(path.join(root, "install"), { recursive: true });
+  const { createRequire } = await vi.importActual<typeof import("node:module")>("node:module");
+  mocks.createRequire.mockImplementation(createRequire);
+  const spawn = loadWindowsManagedHandoffSpawner(destination);
+  expect(spawn("synthetic.exe", [])).toBe(pathToFileURL(fixture.privateWindowsEntry).href);
+});
+
+it.skipIf(!supportsPosixFiles)("rejects a symlinked Windows breakaway executable", async () => {
+  mockProcessPlatform("win32");
+  fixture = installedProcSafe("win32");
+  const moved = path.join(root, "substitute-spawn.exe");
+  fs.renameSync(fixture.launcher, moved);
+  fs.symlinkSync(moved, fixture.launcher);
+  await rejectsStaging("requires regular package files", fixture.staged);
+});
+
+it.each(["sourceIdentity", "identity"] as const)(
+  "requires Windows creation time in the %s observation",
+  async (observation) => {
+    mockProcessPlatform("win32");
+    fixture = installedProcSafe("win32");
+    fixture[observation].readProcessIdentity.mockReturnValue({
+      startTimeSinceBootMicros: 5_200_002,
+    });
+    await rejectsStaging(
+      observation === "sourceIdentity" ? "could not read" : "did not load its private",
+    );
+  },
+);

@@ -392,6 +392,13 @@ swap with the running Gateway service. When a manual installation is required,
 for example to bypass an older installed updater once, use this procedure for an
 OpenClaw-managed Gateway service. Other pages link here instead of repeating it.
 
+On Windows, an affected Scheduled Task updater can stop its own update helper,
+hang at **Activating**, and leave the task disabled. The installed updater owns
+that first handoff; downloading a newer candidate cannot repair it. Use the
+manual procedure below once, from a terminal outside the Gateway, to install a
+release containing the Windows handoff fix. Refreshing the service definition
+also restores the task's enabled state.
+
 1. Create a [verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup).
 2. Stop the Gateway. Package managers replace files in place, and a running
    Gateway can otherwise try to load core or plugin files mid-swap.
