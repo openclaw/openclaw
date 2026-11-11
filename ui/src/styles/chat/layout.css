@@ -30,7 +30,10 @@ openclaw-pending-session-create {
   grid-column: 1;
 }
 
-.chat-error .app-toast__body > .lazy-view-error__details {
+.chat-error .app-toast__body > .lazy-view-error__details,
+.chat-pr__publication-note,
+.chat-annotation-editor--expanded textarea,
+.chat-annotation-editor--expanded .chat-annotation-editor__controls {
   grid-column: 1 / -1;
 }
 
@@ -770,7 +773,13 @@ openclaw-pending-session-create {
   white-space: nowrap;
 }
 
-.chat-history-boundary--error .chat-history-boundary__status {
+.chat-history-boundary--error .chat-history-boundary__status,
+.context-usage__limit-value--danger,
+.chat-pr[data-state="closed"] .chat-pr__icon,
+.chat-pr__deletions,
+.chat-pr__checks[data-checks="failing"],
+.chat-ci__status[data-state="failed"],
+.chat-pr__publication-status [role="alert"] {
   color: var(--danger);
 }
 
@@ -896,7 +905,8 @@ openclaw-pending-session-create {
   color: var(--ctx-color, var(--muted));
 }
 
-.context-usage details {
+.context-usage details,
+.chat-pr__publication-chevron {
   display: inline-flex;
 }
 
@@ -1199,9 +1209,6 @@ openclaw-pending-session-create {
 }
 .context-usage__limit-value--warn {
   color: color-mix(in oklab, var(--warn) 80%, var(--text));
-}
-.context-usage__limit-value--danger {
-  color: var(--danger);
 }
 .context-usage__report-skeleton {
   margin-top: 10px;
@@ -2081,13 +2088,6 @@ openclaw-chat-video-player {
   color: var(--ok);
 }
 
-.chat-pr[data-state="closed"] .chat-pr__icon,
-.chat-pr__deletions,
-.chat-pr__checks[data-checks="failing"],
-.chat-ci__status[data-state="failed"] {
-  color: var(--danger);
-}
-
 .chat-pr[data-state="merged"] .chat-pr__icon,
 .chat-pr[data-state="merged"] .chat-pr__state {
   color: var(--pr-merged);
@@ -2553,10 +2553,6 @@ openclaw-chat-ci-details {
   line-height: 1.4;
 }
 
-.chat-pr__publication-note {
-  grid-column: 1 / -1;
-}
-
 .chat-pr__publication-status {
   min-width: 0;
 }
@@ -2578,14 +2574,6 @@ openclaw-chat-ci-details {
   border-radius: 4px;
   outline: none;
   box-shadow: var(--focus-ring);
-}
-
-.chat-pr__publication-status [role="alert"] {
-  color: var(--danger);
-}
-
-.chat-pr__publication-chevron {
-  display: inline-flex;
 }
 
 .chat-pr__publication-more {
@@ -3135,11 +3123,6 @@ openclaw-chat-ci-details {
 
 .chat-annotation-editor__controls {
   display: none;
-}
-
-.chat-annotation-editor--expanded textarea,
-.chat-annotation-editor--expanded .chat-annotation-editor__controls {
-  grid-column: 1 / -1;
 }
 
 .chat-annotation-editor--expanded .chat-annotation-editor__confirm {
