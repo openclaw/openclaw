@@ -14,6 +14,10 @@ on:
         description: Run bounded Linux proof without repeating Windows alias proof.
         type: boolean
         default: false
+      checks_only:
+        description: Recheck workflow-only repair without repeating green compilers or tests.
+        type: boolean
+        default: false
       source_sha:
         description: Exact product source commit, independent of this workflow harness.
         type: string
@@ -183,7 +187,6 @@ jobs:
           cache-mode: "off"
       - name: Run selected proof
         env:
-          GRAPH: ${{ matrix.graph || '' }}
           LANE: ${{ github.job }}
         run: |
           set -euo pipefail
@@ -223,13 +226,16 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: alias-${{ github.job }}-${{ matrix.graph || 'all' }}-${{ github.run_attempt }}
+          name: alias-${{ github.job }}-${{ env.GRAPH || 'all' }}-${{ github.run_attempt }}
           path: .artifacts/alias-static/
           if-no-files-found: warn
           retention-days: 7
 
   static-types:
+    if: ${{ !inputs.checks_only }}
     needs: static-plan
+    env:
+      GRAPH: ${{ matrix.graph }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -239,6 +245,7 @@ jobs:
     steps: *static_consumer_steps
 
   static-tests:
+    if: ${{ !inputs.checks_only }}
     needs: static-plan
     runs-on: ubuntu-24.04
     timeout-minutes: 30
