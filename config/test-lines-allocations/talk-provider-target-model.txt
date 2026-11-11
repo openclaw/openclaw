@@ -1,2 +1,3 @@
 # Cross-provider target-model catalog regression plus relay-preservation UI case (PR 195156).
-92
+# OAuth-only Platform-auth projection, error handling, and provider/model/default routing: 71 new lines, 31 existing headroom.
+132
