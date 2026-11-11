@@ -353,6 +353,7 @@ export function Agents(props: AgentsProps) {
                               <AgentTools
                                 {...props.tools}
                                 {...configActions()}
+                                canReadConfig={props.access.settings.reads.config}
                                 readData={props.readData}
                                 agentId={agent().id}
                               />

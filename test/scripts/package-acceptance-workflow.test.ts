@@ -90,6 +90,7 @@ const ANDROID_RELEASE_WORKFLOW = ".github/workflows/android-release.yml";
 const STABLE_MAIN_CLOSEOUT_WORKFLOW = ".github/workflows/openclaw-stable-main-closeout.yml";
 const WINDOWS_NODE_RELEASE_WORKFLOW = ".github/workflows/windows-node-release.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
+const FULL_RELEASE_STATE_WATCHER = ".github/workflows/full-release-state-watcher.yml";
 const FULL_RELEASE_CANDIDATE_WORKFLOW = ".github/workflows/full-release-candidate.yml";
 const FULL_RELEASE_ARTIFACTS_WORKFLOW = ".github/workflows/full-release-artifacts.yml";
 const ACTIONS_CACHE_V6 = "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
@@ -9016,11 +9017,11 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(performanceJob).not.toContain(
       "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
     );
-    expect(workflow).toContain(
-      "full-release-decision-${{ github.run_id }}-${{ github.run_attempt }}",
-    );
-    expect(workflow).toContain(
-      "full-release-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}",
+    expect(
+      workflowStep(workflowJob(FULL_RELEASE_STATE_WATCHER, "watch"), "Upload release state").with
+        ?.name,
+    ).toBe(
+      "full-release-${{ inputs.mode == 'decision' && 'decision' || 'diagnostics' }}-${{ github.run_id }}-${{ github.run_attempt }}",
     );
     expectTextToIncludeAll(releaseChecksWorkflow, [
       "refs/heads/release-ci/[0-9a-f]{12}-[0-9]+",
@@ -9390,10 +9391,11 @@ test "$package_manager" = "pnpm@12.1.0"
     const decision = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "release_decision");
     const drain = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "diagnostic_drain");
     const summary = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary");
-    const decisionStep = workflowStep(decision, "Evaluate release decision");
-    const drainStep = workflowStep(drain, "Drain child diagnostics");
-    const decisionUpload = workflowStep(decision, "Upload release decision");
-    const drainUpload = workflowStep(drain, "Upload diagnostic drain manifest");
+    const watcher = workflowJob(FULL_RELEASE_STATE_WATCHER, "watch");
+    const decisionStep = workflowStep(watcher, "Evaluate release state");
+    const drainStep = workflowStep(watcher, "Evaluate release state");
+    const decisionUpload = workflowStep(watcher, "Upload release state");
+    const drainUpload = workflowStep(watcher, "Upload release state");
     const planInputsStep = workflowStep(
       executionPlan,
       "Prepare immutable release execution plan inputs",
@@ -9419,6 +9421,12 @@ test "$package_manager" = "pnpm@12.1.0"
       "prepare_docker_release",
       "release_execution_plan",
     ];
+    expect(decision.uses).toBe(
+      "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@ad1621f7e9d896dfdcc202d007e766e6c30153df",
+    );
+    expect(drain.uses).toBe(decision.uses);
+    expect(decision.with?.mode).toBe("decision");
+    expect(drain.with?.mode).toBe("drain");
     expect(decision.needs).toEqual(terminalNeeds);
     expect(drain.needs).toEqual(terminalNeeds);
     const waiterCondition =
@@ -9427,12 +9435,12 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(drain.if).toBe(waiterCondition);
     expect(decisionStep.run).toBe(drainStep.run);
     expect(decisionStep.env).toMatchObject({
-      FAIL_FAST: "${{ inputs.fail_fast }}",
-      FULL_RELEASE_STATE_MODE: "decision",
+      FAIL_FAST: "${{ inputs.mode == 'decision' && inputs.fail_fast || false }}",
+      FULL_RELEASE_STATE_MODE: "${{ inputs.mode }}",
     });
     expect(drainStep.env).toMatchObject({
-      FAIL_FAST: "false",
-      FULL_RELEASE_STATE_MODE: "drain",
+      FAIL_FAST: "${{ inputs.mode == 'decision' && inputs.fail_fast || false }}",
+      FULL_RELEASE_STATE_MODE: "${{ inputs.mode }}",
     });
     expectTextToIncludeAll(decisionStep.run, [
       'node "$RELEASE_STATE_SCRIPT" "$FULL_RELEASE_STATE_MODE"',
@@ -9488,10 +9496,10 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(manifestStep.env).not.toHaveProperty("EVIDENCE_MANIFEST");
     expect(manifestStep.run).not.toContain("needs.evidence_reuse.outputs");
     expect(decisionUpload.with?.name).toBe(
-      "full-release-decision-${{ github.run_id }}-${{ github.run_attempt }}",
+      "full-release-${{ inputs.mode == 'decision' && 'decision' || 'diagnostics' }}-${{ github.run_id }}-${{ github.run_attempt }}",
     );
     expect(drainUpload.with?.name).toBe(
-      "full-release-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}",
+      "full-release-${{ inputs.mode == 'decision' && 'decision' || 'diagnostics' }}-${{ github.run_id }}-${{ github.run_attempt }}",
     );
     expect(decisionDownloads.with).toMatchObject({
       path: "${{ runner.temp }}/full-release-decision-attempts",
@@ -9536,13 +9544,16 @@ test "$package_manager" = "pnpm@12.1.0"
 
   it("pins every Full Release Validation artifact download to the canonical action", () => {
     const workflow = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW);
-    const downloadSteps = Object.entries(workflow.jobs ?? {}).flatMap(([jobId, job]) =>
+    const downloadSteps = Object.entries({
+      ...workflow.jobs,
+      watch: workflowJob(FULL_RELEASE_STATE_WATCHER, "watch"),
+    }).flatMap(([jobId, job]) =>
       (job.steps ?? [])
         .filter((step) => step.uses?.startsWith("actions/download-artifact@"))
         .map((step) => ({ jobId, step })),
     );
 
-    expect(downloadSteps).toHaveLength(10);
+    expect(downloadSteps).toHaveLength(9);
     expect(
       downloadSteps.map(({ jobId, step }) => [
         jobId,
@@ -9582,18 +9593,6 @@ test "$package_manager" = "pnpm@12.1.0"
         "${{ runner.temp }}/full-release-publication-admission",
       ],
       [
-        "release_decision",
-        "Download immutable release execution plan",
-        "full-release-execution-plan-${{ github.run_id }}",
-        "${{ runner.temp }}/full-release-execution-plan",
-      ],
-      [
-        "diagnostic_drain",
-        "Download immutable release execution plan",
-        "full-release-execution-plan-${{ github.run_id }}",
-        "${{ runner.temp }}/full-release-execution-plan",
-      ],
-      [
         "summary",
         "Download immutable release execution plan",
         "full-release-execution-plan-${{ github.run_id }}",
@@ -9610,6 +9609,12 @@ test "$package_manager" = "pnpm@12.1.0"
         "Download diagnostic drain attempts",
         "full-release-diagnostics-${{ github.run_id }}-*",
         "${{ runner.temp }}/full-release-diagnostic-attempts",
+      ],
+      [
+        "watch",
+        "Download immutable release execution plan",
+        "full-release-execution-plan-${{ github.run_id }}",
+        "${{ runner.temp }}/full-release-execution-plan",
       ],
     ]);
     for (const { step } of downloadSteps) {
@@ -14026,9 +14031,18 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "cancel-in-progress: false",
       "FULL_RELEASE_PLAN_INPUTS_JSON",
       "full-release-validation-policy.mjs",
-      'FAIL_FAST: "false"',
       "NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}",
     ]);
+    const drain = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "diagnostic_drain");
+    const watcher = workflowJob(FULL_RELEASE_STATE_WATCHER, "watch");
+    expect(
+      evaluateWorkflowExpression(workflowStep(watcher, "Evaluate release state").env?.FAIL_FAST, {
+        eventName: "workflow_dispatch",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        inputs: { mode: drain.with?.mode, fail_fast: true },
+      }),
+    ).toBe(false);
     expect(workflow).not.toContain("force-cancel");
     expect(workflow).not.toContain("workflow_ref:");
     expect(workflow).not.toContain("inputs.workflow_ref");
@@ -15913,7 +15927,14 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       workflow: Workflow,
       job: string,
       profile: (typeof profiles)[number] = "stable",
-    ) => timeoutForProfile(workflow.jobs?.[job]?.["timeout-minutes"], profile);
+    ) =>
+      timeoutForProfile(
+        workflow.jobs?.[job]?.uses ===
+          "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@ad1621f7e9d896dfdcc202d007e766e6c30153df"
+          ? workflowJob(FULL_RELEASE_STATE_WATCHER, "watch")["timeout-minutes"]
+          : workflow.jobs?.[job]?.["timeout-minutes"],
+        profile,
+      );
     const timeouts = (
       workflow: Workflow,
       jobs: string[],

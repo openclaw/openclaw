@@ -796,6 +796,11 @@ openclaw-appearance-background .settings-background-preview .session-background_
   max-width: 60%;
 }
 
+/* Keep the native control dimensions while its initial value is unread. */
+.settings-row__control--pending > * {
+  visibility: hidden;
+}
+
 /* Rows that carry only a control (action/button rows) hug the right edge. */
 .settings-row > .settings-row__control:only-child {
   margin-left: auto;
