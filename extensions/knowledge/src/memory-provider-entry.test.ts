@@ -54,7 +54,8 @@ it("entry retains native tools, denies untrusted provider callers and prompt hon
   expect(capability!.promptBuilder({ availableTools: new Set() })).toStrictEqual([]);
   // Page-State upkeep guidance appears only when the agent can edit pages.
   const tools = ["knowledge_grep", "knowledge_remember", "knowledge_record", "knowledge_save_page"];
-  const prompt = (t: string[]) => capability!.promptBuilder({ availableTools: new Set(t) }).join();
+  const prompt = (t: string[]) =>
+    capability!.promptBuilder({ availableTools: new Set(t) }).join("\n");
   const stateRule = /alters what an existing page's State says, also rewrite that State/;
   expect(prompt(tools.slice(0, 2))).not.toMatch(stateRule);
   expect(prompt([...tools, "knowledge_status", "knowledge_ontology"])).toMatch(stateRule);
