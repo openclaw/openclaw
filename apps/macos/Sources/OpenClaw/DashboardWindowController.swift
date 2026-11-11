@@ -24,8 +24,8 @@ private final class DashboardWindowContentView: NSView {
     }
 }
 
-/// The dashboard's empty unified toolbar exists only to grow the titlebar to
-/// 52pt so the traffic lights align with the hosted web chrome. `View > Hide
+/// The empty compact toolbar keeps the traffic lights aligned with the
+/// hosted web chrome's 40pt row. `View > Hide
 /// Toolbar` (and ⌥⌘T) would collapse the titlebar while the web inset stays
 /// pinned at `--openclaw-native-titlebar-height`, resurrecting the traffic-light
 /// misalignment. Refusing the toggle keeps the two heights in lockstep.
@@ -693,11 +693,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         window.title = title
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        // An empty unified toolbar grows the transparent titlebar to 52pt so the
-        // traffic lights sit vertically centered against the web titlebar row
-        // (--openclaw-native-titlebar-height); without it they hug the top edge.
+        // Keep AppKit's traffic lights and the web titlebar on the same centerline.
+        // DashboardWindowLayout supplies this style and the CSS row height.
         window.toolbar = NSToolbar(identifier: "DashboardWindowTitlebar")
-        window.toolbarStyle = .unified
+        window.toolbarStyle = DashboardWindowLayout.toolbarStyle
         window.titlebarSeparatorStyle = .none
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false

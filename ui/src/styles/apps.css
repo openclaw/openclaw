@@ -29,7 +29,7 @@ openclaw-apps-page openclaw-mcp-app-catalog:not([surface]) .mcp-app-catalog__ent
 .apps-hero__title {
   margin: 0;
   color: var(--text-strong);
-  font-size: calc(30px * var(--control-ui-text-scale));
+  font-size: 30px;
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.15;
@@ -265,6 +265,6 @@ openclaw-apps-page openclaw-mcp-app-catalog:not([surface]) .mcp-app-catalog__ent
 
 @media (max-width: 560px) {
   .apps-hero__title {
-    font-size: calc(25px * var(--control-ui-text-scale));
+    font-size: 25px;
   }
 }

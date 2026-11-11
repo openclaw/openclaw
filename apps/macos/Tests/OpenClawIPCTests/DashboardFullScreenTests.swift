@@ -27,7 +27,7 @@ struct DashboardFullScreenTests {
             NotificationCenter.default.post(name: NSWindow.didExitFullScreenNotification, object: window)
             #expect(toolbar.isVisible)
             #expect(window.toolbar === toolbar)
-            #expect(window.toolbarStyle == .unified)
+            #expect(window.toolbarStyle == .unifiedCompact)
             window.toggleToolbarShown(nil)
             #expect(toolbar.isVisible)
         }

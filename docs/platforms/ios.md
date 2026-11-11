@@ -738,6 +738,8 @@ When iOS wakes the app for a silent push, background refresh, or significant-loc
 
 When chat messages are waiting in the offline outbox, a silent push or background refresh wake then stays open for up to 8 seconds while they send, in order and with the usual retry backoff; a slow reconnect leaves less of that time, and a wake that does not reach the Gateway does not wait.
 
+A wake that finds the node still connected skips the beacon while the last recorded beacon is less than 10 minutes old, so `lastSeenAtMs`/`lastSeenReason` keep their earlier values. A wake that finds the node disconnected reconnects and sends regardless of that window. Significant-location wakes run only while the node is disconnected, at most once every 3 minutes.
+
 The app treats a background wake as successfully recorded only when the Gateway response includes `handled: true`. Older Gateways may acknowledge `node.event` with `{ "ok": true }`; that response is compatible but does not count as a durable last-seen update.
 
 Background refresh wakes are requested through the system BackgroundTasks scheduler whenever the app moves to the background, after a silent push that could not be applied, and again after each refresh run; iOS decides when they actually execute. They stop if Background App Refresh is turned off for OpenClaw in iOS Settings, leaving push and significant-location wakes.

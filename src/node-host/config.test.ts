@@ -72,7 +72,12 @@ async function idTarget(
     discoveryUrl: "https://discovery.example",
     freshness: {
       claw_id: world.binding.body.claw_id,
-      snapshot: { seq: snapshotSeq, issued_at: WORLD_NOW, binding_seq: bindingSeq },
+      snapshot: {
+        seq: snapshotSeq,
+        issued_at: WORLD_NOW,
+        binding_seq: bindingSeq,
+        k_gw: world.gateway.pub,
+      },
     },
   };
 }
@@ -229,12 +234,12 @@ describe("node-host SQLite config", () => {
     await expect(
       refresh(advanced, { ...initial, discoveryUrl: "https://other.example" }),
     ).rejects.toThrow("configuration changed");
-    // A verified snapshot can announce binding 3 while Discovery still serves binding 2.
+    // The client verified binding 3 but refused it (stale snapshot), so its pin stays at 2.
     const staleBinding = {
       ...advanced,
       freshness: {
         claw_id: advanced.pin.claw_id,
-        snapshot: { seq: 4, issued_at: WORLD_NOW, binding_seq: 3 },
+        snapshot: { seq: 4, issued_at: WORLD_NOW, binding_seq: 3, k_gw: advanced.pin.k_gw! },
       },
     };
     await expect(refresh(staleBinding)).resolves.toEqual(staleBinding);
@@ -252,13 +257,13 @@ describe("node-host SQLite config", () => {
     const initial = await idTarget(2, 5);
     initial.freshness = {
       claw_id: initial.pin.claw_id,
-      snapshot: { seq: 5, issued_at: WORLD_NOW, binding_seq: 4 },
+      snapshot: { seq: 5, issued_at: WORLD_NOW, binding_seq: 4, k_gw: initial.pin.k_gw! },
     };
     const config = await configure({ gateway: { kind: "openclaw-id", openclawId: initial } });
     const candidate = await idTarget(3, 6);
     candidate.freshness = {
       claw_id: candidate.pin.claw_id,
-      snapshot: { seq: 6, issued_at: WORLD_NOW, binding_seq: 1 },
+      snapshot: { seq: 6, issued_at: WORLD_NOW, binding_seq: 1, k_gw: initial.pin.k_gw! },
     };
     await expect(
       refreshNodeHostOpenClawIdTarget({
@@ -274,7 +279,9 @@ describe("node-host SQLite config", () => {
         openclawId: {
           pin: { binding_seq: 3 },
           evidence: candidate.evidence,
-          freshness: { snapshot: { seq: 6, issued_at: WORLD_NOW, binding_seq: 4 } },
+          freshness: {
+            snapshot: { seq: 6, issued_at: WORLD_NOW, binding_seq: 4, k_gw: initial.pin.k_gw! },
+          },
         },
       },
     });

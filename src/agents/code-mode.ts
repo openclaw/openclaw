@@ -234,7 +234,6 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     markCodeModePermissionChangeResult(result, signal);
     const controlResult = formatToolSearchControlResult(result, runtime, {
       terminalBatchStatus: result.status,
-      compact: true,
     });
     runtime?.sourceReplyCell.attach(controlResult, result.status);
     return recordCodeModeToolOutcome(

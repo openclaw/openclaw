@@ -27,6 +27,7 @@ import {
 import { configureHeapRigCatalog } from "./lib/gateway-heap-rig-catalog.mjs";
 import { prepareHeapRigFixture } from "./lib/gateway-heap-rig-fixture.mjs";
 import { captureHeapRigRetention } from "./lib/gateway-heap-rig-retention.mjs";
+import { prepareHeapRigSandboxWorkspaces } from "./lib/gateway-heap-rig-sandbox.mjs";
 import { configureHeapRigTurns } from "./lib/gateway-heap-rig-turns.mjs";
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
@@ -35,6 +36,8 @@ const { values } = parseArgs({
     root: { type: "string" },
     "runtime-root": { type: "string" },
     "fixture-gib": { type: "string" },
+    "sandbox-image": { type: "string" },
+    "sandbox-worktrees": { type: "boolean" },
     "legacy-workshop": { type: "boolean" },
     "event-chars": { type: "string", default: "15000" },
     minutes: { type: "string", default: "90" },
@@ -82,6 +85,9 @@ if (values.coverage && !values["module-census"]) {
 }
 if (Boolean(values["ready-file"]) !== Boolean(values["start-file"])) {
   throw new Error("--ready-file and --start-file must be supplied together");
+}
+if (values["sandbox-worktrees"] && !values["sandbox-image"]) {
+  throw new Error("sandbox-worktrees requires sandbox-image");
 }
 const fixtureGib =
   values["fixture-gib"] === undefined
@@ -231,6 +237,21 @@ config.agents.defaults = {
   systemAgent: { agentId: "main" },
 };
 config.agents.ownership = "explicit";
+if (values["sandbox-image"]) {
+  config.agents.defaults.sandbox = {
+    mode: "all",
+    backend: "docker",
+    scope: "session",
+    workspaceAccess: "ro",
+    workspaceRoot: path.join(root, "sandboxes"),
+    docker: {
+      image: values["sandbox-image"],
+      containerPrefix: `heap-rig-${port}-`,
+      network: "none",
+    },
+    browser: { enabled: false },
+  };
+}
 config.agents.entries = Object.fromEntries(
   ["main", "second"].map((id) => {
     const workspace = path.join(root, `workspace-${id}`);
@@ -248,6 +269,18 @@ config.agents.entries = Object.fromEntries(
   }),
 );
 const turnDriver = await configureHeapRigTurns(config, root, port + 1);
+let sandboxFixture;
+if (values["sandbox-image"]) {
+  sandboxFixture = await prepareHeapRigSandboxWorkspaces(
+    config,
+    fixtureGib === 35 || values["sandbox-worktrees"],
+    values["sandbox-worktrees"],
+  );
+  record({
+    kind: "sandbox-fixture",
+    ...sandboxFixture,
+  });
+}
 if (values["shell-turns"]) {
   config.tools.exec = { security: "full", ask: "off" };
 }
@@ -263,7 +296,6 @@ const env = createGatewayBenchEnv(root, configPath, {
     OPENCLAW_PROFILE: `heap-rig-${port}`,
     OPENCLAW_SYSTEMD_UNIT: `openclaw-heap-rig-${port}`,
     PATH: `${path.dirname(process.execPath)}:${process.env.PATH}`,
-    TMPDIR: root,
   },
 });
 const stateFixture =
@@ -539,7 +571,25 @@ try {
           return;
         }
         const { key, agentId } = sessions[index];
-        const created = await admin.rpc("sessions.create", { key, agentId });
+        const managed = values["sandbox-worktrees"] && index < fixedTurnSessions;
+        const created = await admin.rpc("sessions.create", {
+          key,
+          agentId,
+          ...(managed
+            ? {
+                cwd: config.agents.entries[agentId].workspace,
+                worktree: true,
+                worktreeName: `retention-${index}`,
+                worktreeBaseRef: sandboxFixture.commits[agentId],
+              }
+            : {}),
+        });
+        if (managed) {
+          if (!created.worktree?.id || !created.worktree.path) {
+            throw new Error("Sandbox fixture did not create a managed worktree");
+          }
+          record({ kind: "sandbox-worktree", key, worktree: created.worktree });
+        }
         if (fixedTurnSessions && index < fixedTurnSessions) {
           if (!created.sessionId) {
             throw new Error("Fixed-session seed did not return a session ID");

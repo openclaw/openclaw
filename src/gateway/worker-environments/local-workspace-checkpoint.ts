@@ -3,7 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { nativeWorktreeFilesystem } from "../../agents/worktrees/filesystem-native.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
+import {
+  captureWorktreeRunEndContext,
+  withWorktreeRunEnd,
+} from "../../agents/worktrees/run-end-lifecycle.js";
 import { hasErrnoCode } from "../../infra/errno.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { assertLocalWorkspaceDirectory } from "./local-workspace-checkout.js";
 import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
 import type { LocalWorkspaceStore } from "./local-workspace-store.js";
@@ -12,6 +18,9 @@ import type {
   LocalWorkspaceRejectedResult,
 } from "./local-workspace-store.types.js";
 import type { LocalWorkspaceCapture } from "./local-workspace-types.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
+import { serializeWorkerWorkspaceReconciliationPlan } from "./workspace-manifest.js";
+import type { applyStagedWorkerWorkspace } from "./workspace-reconcile-apply.js";
 import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
 import {
   workerWorkspaceResultRef,
@@ -24,6 +33,91 @@ export type LocalWorkspaceSyncOptions = {
   afterCapture?: () => Promise<void>;
   capture?: (run: (source?: LocalWorkspaceCapture) => Promise<void>) => Promise<void>;
 };
+
+export type LocalWorkspaceCaptureDiagnostics = {
+  reason:
+    | "adaptive-direct"
+    | "btrfs"
+    | "non-subvolume"
+    | "btrfs-unavailable"
+    | "clone-unavailable"
+    | "nested-incomplete";
+  cloneError?: "CLONE_UNAVAILABLE" | "EXDEV" | "ENOSYS";
+  pausedAt?: number;
+  preCopyMs?: number;
+  copyMs?: number;
+  postCopyBeforeResumeMs?: number;
+  resumeMs?: number;
+};
+
+type CaptureOptions = Parameters<typeof nativeWorktreeFilesystem.remove>[1] & {
+  env?: NodeJS.ProcessEnv;
+};
+const pendingCaptureRemovals = resolveGlobalSingleton(
+  Symbol.for("openclaw.localWorkspaceCaptureRemovals"),
+  () => new Map<string, Promise<void>>(),
+);
+const log = createSubsystemLogger("agents/worktrees");
+
+function captureRemovalOwner(projectionPath: string, env?: NodeJS.ProcessEnv) {
+  const context = captureWorktreeRunEndContext(env ?? process.env);
+  return {
+    context,
+    key: JSON.stringify([context.admission.coordinationKey, projectionPath]),
+  };
+}
+
+/** The lease transfers this immutable, disposable capture to the existing run-end owner. */
+export async function retireLocalWorkspaceCheckpointCapture(
+  projectionPath: string,
+  options: CaptureOptions,
+) {
+  const parent = path.dirname(projectionPath);
+  const retired = path.join(parent, `checkpoint-retired-${randomUUID()}`);
+  options.signal?.throwIfAborted();
+  options.commitGuard();
+  try {
+    await fs.rename(path.join(parent, "checkpoint-capture"), retired);
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return;
+    }
+    throw error;
+  }
+  options.commitGuard();
+  const { context, key } = captureRemovalOwner(projectionPath, options.env);
+  // Unique names prevent a delayed child from deleting a later checkpoint.
+  // Caller cancellation cannot revoke an already transferred artifact.
+  const pending = withWorktreeRunEnd(
+    context.environment,
+    () =>
+      nativeWorktreeFilesystem.remove(retired, {
+        commitGuard: context.admission.assertCurrent,
+      }),
+    { independent: true },
+  );
+  pendingCaptureRemovals.set(key, pending);
+  void pending.then(
+    () => pendingCaptureRemovals.delete(key),
+    (error: unknown) => {
+      pendingCaptureRemovals.delete(key);
+      log.warn(`Local workspace checkpoint capture cleanup failed: ${String(error)}`);
+    },
+  );
+}
+
+async function finishRetiredCheckpointCaptures(projectionPath: string, options: CaptureOptions) {
+  const { key } = captureRemovalOwner(projectionPath, options.env);
+  // At most one retired capture per workspace. A failed or interrupted removal
+  // must finish before a later snapshot can create another artifact.
+  await pendingCaptureRemovals.get(key)?.catch(() => {});
+  const parent = path.dirname(projectionPath);
+  for (const name of await fs.readdir(parent)) {
+    if (/^checkpoint-retired-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(name)) {
+      await nativeWorktreeFilesystem.remove(path.join(parent, name), options);
+    }
+  }
+}
 
 export async function removeLocalWorkspaceCheckpointCapture(
   projectionPath: string,
@@ -47,36 +141,52 @@ export async function removeLocalWorkspaceCheckpointCapture(
 
 export async function prepareLocalWorkspaceCheckpointCapture(
   projectionPath: string,
-  options: Parameters<typeof nativeWorktreeFilesystem.copy>[2],
+  options: CaptureOptions,
   resume: () => Promise<void>,
   pause: () => Promise<void>,
+  diagnostics: LocalWorkspaceCaptureDiagnostics,
 ): Promise<LocalWorkspaceSyncOptions["capture"]> {
   // The lease owns this sibling artifact, including leftovers from interrupted capture.
+  await finishRetiredCheckpointCaptures(projectionPath, options);
   await removeLocalWorkspaceCheckpointCapture(projectionPath, options);
   const source = await fs.lstat(projectionPath, { bigint: true });
-  if (
-    source.ino !== 256n ||
-    (await nativeWorktreeFilesystem.probe(path.dirname(projectionPath), options)) !== "btrfs"
-  ) {
+  if (source.ino !== 256n) {
+    diagnostics.reason = "non-subvolume";
     return undefined;
   }
+  if ((await nativeWorktreeFilesystem.probe(path.dirname(projectionPath), options)) !== "btrfs") {
+    diagnostics.reason = "btrfs-unavailable";
+    return undefined;
+  }
+  diagnostics.reason = "btrfs";
   const root = path.join(path.dirname(projectionPath), "checkpoint-capture");
   return async (run) => {
     const capturedAtMs = Date.now();
+    const copyStarted = performance.now();
+    diagnostics.preCopyMs =
+      diagnostics.pausedAt === undefined ? undefined : copyStarted - diagnostics.pausedAt;
+    let copyFinished: number;
     try {
-      await nativeWorktreeFilesystem.copy(projectionPath, root, options);
+      try {
+        await nativeWorktreeFilesystem.copy(projectionPath, root, options);
+      } finally {
+        copyFinished = performance.now();
+        diagnostics.copyMs = copyFinished - copyStarted;
+      }
     } catch (error) {
-      if (
-        !hasErrnoCode(error, "CLONE_UNAVAILABLE") &&
-        !hasErrnoCode(error, "EXDEV") &&
-        !hasErrnoCode(error, "ENOSYS")
-      ) {
+      const code = (["CLONE_UNAVAILABLE", "EXDEV", "ENOSYS"] as const).find((value) =>
+        hasErrnoCode(error, value),
+      );
+      if (!code) {
         throw error;
       }
+      diagnostics.reason = "clone-unavailable";
+      diagnostics.cloneError = code;
       await run();
       return;
     }
     const snapshot = await fs.lstat(root, { bigint: true });
+    diagnostics.postCopyBeforeResumeMs = performance.now() - copyFinished;
     await resume();
     try {
       await run({ root, sourceDev: source.dev, snapshotDev: snapshot.dev, capturedAtMs });
@@ -86,6 +196,7 @@ export async function prepareLocalWorkspaceCheckpointCapture(
       }
       // Btrfs omits nested subvolumes. No receipt was accepted; recapture the
       // complete live tree under the same lease using the durable Git path.
+      diagnostics.reason = "nested-incomplete";
       await pause();
       await run();
     }
@@ -297,4 +408,79 @@ export async function prepareLocalWorkspaceCheckpoint(params: {
     params.synchronize("projection"),
   );
   return params.current().projection_path;
+}
+
+export function createLocalWorkspaceCheckpointAcceptance(params: {
+  current: () => LocalWorkspaceProjection;
+  update: (
+    patch: Parameters<LocalWorkspaceStore["update"]>[1],
+    manifest?: Parameters<LocalWorkspaceStore["update"]>[3],
+  ) => Promise<void>;
+  replaceBaseline: (
+    raw: string,
+    ref: string,
+    patch: Parameters<LocalWorkspaceStore["update"]>[1],
+  ) => Promise<void>;
+  checkpoint?: LocalWorkspaceManifestCheckpoint;
+  target: LocalWorkspaceSyncTarget;
+  refreshBaseCommit?: string;
+  rawManifest: string;
+  manifestRef: string;
+  beforeCommit: () => void;
+}): Pick<Parameters<typeof applyStagedWorkerWorkspace>[0], "journal" | "acceptance"> {
+  let conflictPaths: string[] | undefined;
+  return {
+    journal: {
+      load: async () => undefined,
+      begin: async (journal) => {
+        await params.update({
+          journal_json: serializeWorkerWorkspaceReconciliationPlan(journal),
+          journal_pack: journal.basePack,
+        });
+      },
+      abort: async () => {
+        await params.update({ journal_json: null, journal_pack: null });
+      },
+      commit: async () => {
+        params.beforeCommit();
+        if (!conflictPaths) {
+          throw new Error("Local workspace acceptance is missing");
+        }
+        // A conflicting result remains a durable pending receipt. No guest
+        // bytes are discarded or silently replaced by the canonical side.
+        try {
+          if (conflictPaths.length) {
+            await params.update({ journal_json: null, journal_pack: null });
+          } else if (params.refreshBaseCommit && params.target === "canonical") {
+            await params.update({
+              pending_target: "projection",
+              journal_json: null,
+              journal_pack: null,
+            });
+          } else {
+            const patch = {
+              ...(params.refreshBaseCommit ? { base_commit: params.refreshBaseCommit } : {}),
+              pending_target: null,
+              journal_json: null,
+              journal_pack: null,
+            };
+            if (params.checkpoint) {
+              await params.update(patch, params.checkpoint);
+            } else {
+              await params.replaceBaseline(params.rawManifest, params.manifestRef, patch);
+            }
+          }
+        } catch (error) {
+          throw new AcceptedWorkspacePublicationIndeterminateError("commit", error);
+        }
+      },
+    },
+    acceptance: {
+      kind: "reconcile",
+      publish: async (value) => {
+        params.current();
+        conflictPaths = value.conflictPaths;
+      },
+    },
+  };
 }

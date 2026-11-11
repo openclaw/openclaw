@@ -16,12 +16,39 @@ import {
 
 type StreamOptions = NonNullable<Parameters<StreamFn>[2]>;
 
+// The fork denies client tool calls itself; tool_choice none is what stops provider-hosted
+// tools (for example web search), which run before the fork sees them.
 const FORK_TOOL_CHOICE_SHAPES = new Map<Model["api"], "object" | "string">([
   ["anthropic-messages", "object"],
   ["openai-responses", "string"],
   ["openai-chatgpt-responses", "string"],
   ["openai-completions", "string"],
 ]);
+// Responses WebSockets check fork authority through responsesRequestLifecycle. Other
+// transports must send through the host's guarded fetch, which checks it before every
+// physical send, including DNS/proxy setup, retries and redirects. An egress check makes
+// SDKs that otherwise choose their own fetch (Google GenAI) use the guarded one.
+const RESPONSES_LIFECYCLE_APIS = new Set<Model["api"]>([
+  "openai-responses",
+  "openai-chatgpt-responses",
+]);
+// The AWS SDK sends Bedrock requests and their retries through its own HTTP handler, so
+// a fork whose authority ended could still send.
+const UNFENCED_FORK_APIS = new Set<Model["api"]>(["bedrock-converse-stream"]);
+
+/** Function declarations the fork can deny; anything else may run at the provider. */
+function isClientTool(tool: unknown): boolean {
+  if (!isRecord(tool)) {
+    return false;
+  }
+  if (tool.type === undefined) {
+    // Anthropic client tools, or a Gemini functionDeclarations group.
+    return (
+      "input_schema" in tool || Object.keys(tool).every((key) => key === "functionDeclarations")
+    );
+  }
+  return tool.type === "function" || tool.type === "custom";
+}
 
 /** Prepare and run a tool-free request only when a caller actually forks. */
 export async function runEmbeddedSessionFork(params: {
@@ -35,9 +62,9 @@ export async function runEmbeddedSessionFork(params: {
   assertCurrent: () => void;
   onUsage?: (usage: NormalizedUsage | undefined) => void;
 }): Promise<string> {
-  if (!FORK_TOOL_CHOICE_SHAPES.has(params.model.api)) {
+  if (UNFENCED_FORK_APIS.has(params.model.api)) {
     throw new Error(
-      `Session forks do not support provider API ${params.model.api}. Use OpenAI Responses, Chat Completions, or Anthropic Messages.`,
+      `Session forks do not support provider API ${params.model.api}: its transport cannot enforce live fork authority.`,
     );
   }
   const assertCurrent = () => {
@@ -92,9 +119,17 @@ export async function runEmbeddedSessionFork(params: {
         }
         // Mutate the prepared body: provider wrappers reapply their defaults to
         // replacement objects, but preserve an in-place caller override.
-        if (Array.isArray(payload.tools) && payload.tools.length > 0) {
-          payload.tool_choice =
-            FORK_TOOL_CHOICE_SHAPES.get(model.api) === "object" ? { type: "none" } : "none";
+        const toolChoiceShape = FORK_TOOL_CHOICE_SHAPES.get(model.api);
+        if (!toolChoiceShape) {
+          // Gemini SDK requests carry tools in config.
+          const tools = [payload.tools, isRecord(payload.config) && payload.config.tools];
+          if (!tools.every((list) => !Array.isArray(list) || list.every(isClientTool))) {
+            throw new Error(
+              `Session forks cannot disable provider-hosted tools on provider API ${model.api}. Remove hosted tools from this model's requests to fork it.`,
+            );
+          }
+        } else if (Array.isArray(payload.tools) && payload.tools.length > 0) {
+          payload.tool_choice = toolChoiceShape === "object" ? { type: "none" } : "none";
         } else {
           delete payload.tool_choice;
         }
@@ -113,11 +148,15 @@ export async function runEmbeddedSessionFork(params: {
       settle: async () => assertCurrent(),
     });
     assertCurrent();
-    const result = await withGuardedFetchRequestAuthority(assertCurrent, async () => {
-      const stream = await params.streamFn(model, context, options);
-      assertCurrent();
-      return await stream.result();
-    });
+    const result = await withGuardedFetchRequestAuthority(
+      assertCurrent,
+      async () => {
+        const stream = await params.streamFn(model, context, options);
+        assertCurrent();
+        return await stream.result();
+      },
+      RESPONSES_LIFECYCLE_APIS.has(model.api) ? undefined : assertCurrent,
+    );
     assertCurrent();
     mergeUsageIntoAccumulator(usage, normalizeUsage(result.usage));
     params.onUsage?.(toNormalizedUsage(usage));

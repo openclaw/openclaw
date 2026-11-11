@@ -1196,6 +1196,7 @@ src/infra/private-store-file.ts
 src/infra/process-env.ts
 src/infra/process-exit-cleanup.ts
 src/infra/prototype-keys.ts
+src/infra/resolve-system-bin.ts
 src/infra/restart-stale-pids.ts
 src/infra/retry-attempt-errors.ts
 src/infra/retry.ts
@@ -1864,6 +1865,7 @@ src/process/exec.ts
 src/process/gateway-work-admission-state.ts
 src/process/gateway-work-admission.ts
 src/process/kill-tree.ts
+src/process/linux-core-dump.ts
 src/process/linux-exec-cgroup-device.ts
 src/process/linux-exec-cgroup.ts
 src/process/linux-oom-score-spawn.ts
