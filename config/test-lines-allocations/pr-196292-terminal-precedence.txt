@@ -1,0 +1,2 @@
+# PR #196292: projectTranscriptChain regression for preserving a completed answer after later same-run tool work.
+38

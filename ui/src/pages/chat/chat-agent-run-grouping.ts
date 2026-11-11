@@ -199,6 +199,7 @@ export function coalesceAgentRunFrames(
   const messages = opts.messages ?? [];
   const continuedRunIds = new Set<string>();
   const lastAssistantByRun = new Map<string, unknown>();
+  const terminalRunIds = new Set<string>();
   for (const message of messages) {
     const id = transcriptRunId(message);
     const record = asRecord(message);
@@ -206,6 +207,9 @@ export function coalesceAgentRunFrames(
       continue;
     }
     lastAssistantByRun.set(id, message);
+    if (hasTerminalRunOutcome(message, id)) {
+      terminalRunIds.add(id);
+    }
     const sourceRunId = asRecord(asRecord(record["__openclaw"])?.execCompletion)?.sourceRunId;
     if (typeof sourceRunId === "string" && assistantMessageCanOwnTurnActions(message, true)) {
       continuedRunIds.add(sourceRunId);
@@ -262,8 +266,7 @@ export function coalesceAgentRunFrames(
       stopReason !== "timeout" &&
       stopReason !== "timed_out";
     const failedOutcome = failed && !explicitInterruption;
-    const explicitTerminalOutcome =
-      failed || hasTerminalRunOutcome(lastAssistant, runId) || sessionInterrupted;
+    const explicitTerminalOutcome = failed || terminalRunIds.has(runId) || sessionInterrupted;
     // Persisted terminal state wins over stale active-session/stream snapshots.
     // A surviving background exec is reported separately by backgroundActive.
     const active =

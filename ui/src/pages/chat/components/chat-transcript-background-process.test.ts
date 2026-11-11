@@ -147,4 +147,42 @@ describe("session background exec transcript state", () => {
       activeRow?.kind === "item" && activeRow.revision,
     );
   });
+
+  it("keeps a completed answer when later tool work shares its run", () => {
+    const sourceMessages = [
+      ...messages,
+      completedAnswer,
+      makeMessage("later-call", 5, {
+        runId,
+        stopReason: "toolUse",
+        content: [{ type: "toolCall", id: "later-tool", name: "read", arguments: {} }],
+      }),
+      makeMessage("later-result", 6, {
+        role: "toolResult",
+        runId,
+        toolCallId: "later-tool",
+        toolName: "read",
+        content: "Read completed.",
+      }),
+    ];
+    const source = buildChatItems({
+      paneId: "issue-196190-later-work",
+      sessionKey,
+      messages: sourceMessages,
+      toolMessages: [],
+      streamSegments: [],
+      stream: null,
+      streamStartedAt: null,
+      showToolCalls: true,
+    });
+    const session: TranscriptSession = { key: sessionKey, backgroundProcessRunIds: [runId] };
+    const frame = chainFor(session, source, sourceMessages).transcriptItems.find(
+      (item) => item.kind === "agent-run-frame",
+    );
+
+    expect(frame?.outcome).toMatchObject({
+      kind: "completed",
+      actionOwner: { message: completedAnswer },
+    });
+  });
 });
