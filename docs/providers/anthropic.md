@@ -919,8 +919,12 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
 <AccordionGroup>
   <Accordion title="Fast mode">
-    For Claude Opus 5.5, Opus 5, and Opus 4.8, OpenClaw's shared `/fast` toggle uses
-    Anthropic's native fast mode for direct API-key traffic to `api.anthropic.com`.
+    For Claude Fable 5.2, Opus 5.5, Opus 5, Opus 4.8, and Claude models released after
+    this OpenClaw version, OpenClaw's shared `/fast` toggle uses Anthropic's native fast
+    mode for direct API-key traffic to `api.anthropic.com`. If Anthropic answers that a
+    model does not support the `speed` parameter, OpenClaw resends that request at
+    standard speed and stops offering native fast mode for the model, including after a
+    restart. That one resent request is estimated at fast-mode prices.
 
     | Command | Maps to |
     | --- | --- |
@@ -942,7 +946,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     ```
 
     <Note>
-    - Native fast mode is a research preview with up to 2.5x higher output-token throughput. It is billed at `$8/$40` per million input/output tokens for Opus 5.5 and `$10/$50` for Opus 5 and Opus 4.8. OpenClaw applies the same 2x multiplier to cache pricing in its cost estimate.
+    - Native fast mode is a research preview with up to 2.5x higher output-token throughput. It is billed at twice the standard rates, for example `$16/$80` per million input/output tokens for Fable 5.2, `$8/$40` for Opus 5.5, and `$10/$50` for Opus 5 and Opus 4.8. OpenClaw applies the same 2x multiplier to cache pricing in its cost estimate.
     - Native fast mode only applies to direct `api.anthropic.com` requests made with an API key. OAuth/subscription-token requests, Claude CLI, proxies, Bedrock, Vertex, and Foundry never receive the beta or `speed` field.
     - Accounts need fast-mode access and a non-zero fast-mode rate limit. Anthropic returns a fast-specific `429` when the separate fast quota is exhausted or zero.
     - For other direct Anthropic models, `/fast` retains the existing Priority Tier mapping: on uses `service_tier: "auto"` and off uses `service_tier: "standard_only"`.

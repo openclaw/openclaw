@@ -86,7 +86,14 @@ it.each(["code", "approval", "legacy", "delegated-code", "delegated-approval"] a
     expect(recovered.recoveryId).toBe(issuedId);
     expect(recovered.principal).toEqual(principal);
     expect(recovered.assertCurrent).not.toThrow();
+    await reloaded.approveGrant(grantFixture({ grantId: "unrelated" }), () => {});
+    const unrelated = await owner.resume("unrelated");
+    assert(unrelated);
+    await reloaded.authorize("continuation", 101);
+    expect(recovered.signal.aborted).toBe(false);
     await reloaded.revoke("continuation");
+    expect(recovered.signal.aborted).toBe(true);
+    expect(unrelated.signal.aborted).toBe(false);
     expect(await owner.resume("continuation")).toBeUndefined();
     expect(recovered.assertCurrent).toThrow("revoked");
     // A consent ID may be reused in the same millisecond; time is not issuance identity.
@@ -97,5 +104,7 @@ it.each(["code", "approval", "legacy", "delegated-code", "delegated-approval"] a
     expect(recovered.operatorScopeCeiling).toEqual(["operator.read"]);
     expect(recovered.assertCurrent).toThrow("replaced");
     nextService.abort();
+    expect(replacement?.signal.aborted).toBe(true);
+    expect(unrelated.signal.aborted).toBe(true);
   },
 );

@@ -161,7 +161,10 @@ export async function createFullModelCatalogAccess(
   const worker = withRemoteModelCatalogSnapshot(params.pluginGeneration.remoteCatalog, () =>
     createPreparedModelCatalogWorker({
       pluginRegistry: params.pluginGeneration.pluginRegistry,
-      agentFacts: params.agentFacts,
+      agentFacts: {
+        ...params.agentFacts,
+        configuredRuntimeModels: params.catalogFacts.configuredRuntimeModels,
+      },
       pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
       preferBuiltPluginArtifacts: params.pluginGeneration.preferBuiltPluginArtifacts,
       isCurrent: params.isCurrent,

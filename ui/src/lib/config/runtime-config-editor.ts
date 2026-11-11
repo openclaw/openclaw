@@ -1,4 +1,3 @@
-import type { Result } from "@openclaw/normalization-core/result";
 import { registerListener } from "../../../../src/shared/listeners.js";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
@@ -23,6 +22,7 @@ import {
   type createInitialConfigState,
   currentConfigConnectionEpoch,
   type RuntimeConfigGateway,
+  type ConfigReadResult,
   type RuntimeConfigState,
 } from "./config-state-model.ts";
 import { createConfigWriteCoordinator } from "./config-write-coordinator.ts";
@@ -66,7 +66,7 @@ export function createRuntimeConfigEditor(
         });
   const listeners = new Set<(state: RuntimeConfigState) => void>();
   const loads = new Map<"config" | "schema", Promise<unknown>>();
-  let schemaRead: Promise<Result<void, string>> | null = null;
+  let schemaRead: Promise<ConfigReadResult> | null = null;
   let schemaDemand: RuntimeConfigState["client"] | "admitted" = null;
   let disposed = false;
 

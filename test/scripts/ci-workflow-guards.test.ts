@@ -2538,9 +2538,9 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
 
   it.each([
     {
-      file: "full-release-validation.yml",
+      file: "full-release-state-watcher.yml",
       runner: "blacksmith-2vcpu-ubuntu-2404",
-      job: "release_decision",
+      job: "watch",
     },
     {
       file: "openclaw-npm-preflight.yml",
@@ -3712,6 +3712,23 @@ server.listen(0, "127.0.0.1", () => {
   });
 
   it("keeps each compiled worker preset in a separate archive", () => {
+    const uiSetup = requiredWorkflowStep(
+      readCiWorkflow().jobs["checks-ui-e2e"].steps,
+      "Setup Node environment",
+    );
+    expect(uiSetup.with?.["vitest-worker-preset"]).toBe("runtime");
+    for (const [task, frozen, expected] of [
+      ["control-ui", "false", "true"],
+      ["control-ui", "true", "false"],
+      ["browser-extension", "false", "false"],
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(uiSetup.with?.["vitest-worker-cache"], {
+          matrix: { task },
+          preflightOutputs: { frozen_target: frozen },
+        }),
+      ).toBe(expected);
+    }
     const setup = readWorkflow(".github/actions/setup-node-env/action.yml");
     const steps = setup.runs.steps as WorkflowStep[];
     const restore = requiredWorkflowStep(steps, "Restore compiled Vitest workers");
