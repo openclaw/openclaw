@@ -48,6 +48,8 @@ const catalog = {
     saveKey: "Save key",
     apiKeyFromEnvironment: "From environment · {name}",
     apiKeyFromSecretRef: "Set by a SecretRef. Change it in the config file.",
+    apiKeyConfigError: "Couldn't read the configuration, so this key's source is unknown: {error}",
+    retry: "Retry",
     source: "Source",
     package: "Package",
     securityCheck: "Security check",

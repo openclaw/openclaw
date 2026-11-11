@@ -36,7 +36,6 @@ describe("Skills mutation presentation", () => {
       client,
       skillsAgentId: "main",
       runtimeConfig: {
-        state: { configSnapshot: null },
         runExternalMutation: async (task) => ({
           ok: true,
           value: await task(client),

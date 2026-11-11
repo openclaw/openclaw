@@ -39,7 +39,6 @@ import {
   reconcileSkillsAgentId,
   saveSkillApiKey,
   setSkillsAgentId,
-  storedSkillApiKeySource,
   updateSkillEdit,
   updateSkillEnabled,
   type SkillsState,
@@ -104,12 +103,7 @@ export function SkillsPage(props: SkillsPageProps) {
     },
   });
   const data = skills.state;
-  // Save key needs the stored key's source; until the snapshot loads, it stays locked.
-  const configSnapshot = projectOwner(
-    context.runtimeConfig,
-    (config) => config.state.configSnapshot,
-  );
-  void context.runtimeConfig.ensureLoaded();
+  const runtimeConfig = projectOwner(context.runtimeConfig, (owner) => owner.state);
   const verdictCompletion = createMemo(() => skills.read().clawhubVerdictsRead);
   const acceptedVerdicts = createMemo(() => skills.read().clawhubVerdicts);
   // Optional verdict enrichment must not hold independent inventory or detail selection.
@@ -531,6 +525,10 @@ export function SkillsPage(props: SkillsPageProps) {
   }
 
   function selectSkill(key: string | null) {
+    if (key) {
+      // The dialog needs the stored API key's source; read config only once one opens.
+      void context.runtimeConfig.ensureDisplayLoaded();
+    }
     setLocal((state) => {
       state.skillsDetailKey = key;
       state.skillsDetailTab = "overview";
@@ -673,10 +671,16 @@ export function SkillsPage(props: SkillsPageProps) {
                 updateSkillEdit(data, key, value);
               }
             }}
-            apiKeySource={(key) => storedSkillApiKeySource(configSnapshot.read(), key)}
-            onSaveKey={(key) => {
+            apiKeyConfig={{
+              snapshot: () => runtimeConfig.read().configSnapshot,
+              error: () => runtimeConfig.read().lastError,
+              retry: () => void context.runtimeConfig.refreshDisplay(),
+            }}
+            onSaveKey={(key, replaceable) => {
               if (canUpdateSkills()) {
-                void mutations.run(() => saveSkillApiKey(data, key, canUpdateSkills));
+                // Read at save and again at dispatch, from the owner's current snapshot.
+                const current = () => replaceable(context.runtimeConfig.state.configSnapshot, key);
+                void mutations.run(() => saveSkillApiKey(data, key, current, canUpdateSkills));
               }
             }}
             onInstall={(skillKey, name, installId) => {

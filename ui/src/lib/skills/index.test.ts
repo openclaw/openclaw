@@ -1,12 +1,8 @@
 // @vitest-environment node
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { resolveConfigEnvVars } from "../../../../src/config/env-substitution.js";
-import { redactConfigSnapshot } from "../../../../src/config/redact-snapshot.js";
-import { buildConfigSchemaCore } from "../../../../src/config/schema.js";
-import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { ConfigSnapshot, SkillStatusReport } from "../../api/types.ts";
+import type { SkillStatusReport } from "../../api/types.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
 import { createProps, createSkill } from "../../pages/skills/view.test-support.ts";
@@ -40,7 +36,6 @@ beforeEach(() => {
   state.skillsAgentId = "main";
   state.client = { request } as unknown as SkillsState["client"];
   state.runtimeConfig = {
-    state: { configSnapshot: configSnapshot({}) },
     runExternalMutation: async (task, options) => {
       // As executeConfigExternalMutation: canDispatch is checked right before the task runs.
       if (options?.canDispatch?.() === false) {
@@ -388,7 +383,7 @@ describe("skill mutations", () => {
   it("saves API keys and reports success", async () => {
     request.mockResolvedValue({});
     state.skillEdits.github = "  sk-test  ";
-    await saveSkillApiKey(state, "github");
+    await saveSkillApiKey(state, "github", () => true);
     expect(request).toHaveBeenCalledWith("skills.update", {
       skillKey: "github",
       apiKey: "sk-test",
@@ -399,74 +394,22 @@ describe("skill mutations", () => {
     });
   });
 
-  function skillKeySnapshot(apiKey: unknown): ConfigSnapshot {
-    const authored = { skills: { entries: { github: { apiKey } } } };
-    const resolved = resolveConfigEnvVars(authored, {
-      SKILL_KEY: "env-key-not-real",
-    }) as OpenClawConfig;
-    // SAFETY: the Gateway's own redaction produces the config.get payload the UI types as ConfigSnapshot.
-    return redactConfigSnapshot(
-      {
-        path: "/fixture/openclaw.json",
-        exists: true,
-        raw: JSON.stringify(authored, null, 2),
-        parsed: authored,
-        sourceConfig: resolved,
-        resolved,
-        config: resolved,
-        runtimeConfig: resolved,
-        valid: true,
-        hash: "fixture",
-        issues: [],
-        warnings: [],
-        legacyIssues: [],
-      },
-      buildConfigSchemaCore().uiHints,
-    ) as unknown as ConfigSnapshot;
-  }
-  const secretRef = { source: "env", provider: "default", id: "SKILL_KEY" };
-
   it.each([
-    ["a SecretRef", secretRef, false],
-    ["a ${VAR}", "${SKILL_KEY}", false],
-    ["plaintext", "old-key-not-real", true],
-  ])("only replaces a stored API key written as plaintext: %s", async (_name, apiKey, replaced) => {
-    request.mockResolvedValue({});
-    state.runtimeConfig = {
-      ...state.runtimeConfig,
-      state: { configSnapshot: skillKeySnapshot(apiKey) },
-    };
+    ["a stored reference", [false]],
+    ["an unknown stored source", [undefined]],
+    ["a reference stored while the save waited", [true, false]],
+  ])("never saves an API key over %s", async (_name, answers) => {
     state.skillEdits.github = "new-key-not-real";
-
-    await saveSkillApiKey(state, "github");
-
-    expect(request.mock.calls.some(([method]) => method === "skills.update")).toBe(replaced);
-    expect(state.skillMessages.github?.kind).toBe(replaced ? "success" : "error");
-  });
-
-  it("rechecks the stored API key right before dispatch", async () => {
-    request.mockResolvedValue({});
-    const runtimeState = { configSnapshot: skillKeySnapshot("old-key-not-real") };
-    const run = state.runtimeConfig.runExternalMutation;
-    state.runtimeConfig = {
-      state: runtimeState,
-      // A queued Settings draft lands a SecretRef while the save waits its turn.
-      runExternalMutation: (task, options) => {
-        runtimeState.configSnapshot = skillKeySnapshot(secretRef);
-        return run(task, options);
-      },
-    };
-    state.skillEdits.github = "new-key-not-real";
-
-    await saveSkillApiKey(state, "github");
-
-    expect(request.mock.calls.some(([method]) => method === "skills.update")).toBe(false);
+    const replaceable = vi.fn<() => boolean | undefined>();
+    answers.forEach((answer) => replaceable.mockReturnValueOnce(answer));
+    await saveSkillApiKey(state, "github", replaceable);
+    expect(request).not.toHaveBeenCalled();
     expect(state.skillMessages.github?.kind).toBe("error");
   });
 
   it("does not clear an existing API key when its replacement is blank", async () => {
     state.skillEdits.github = "   ";
-    await saveSkillApiKey(state, "github");
+    await saveSkillApiKey(state, "github", () => true);
     expect(request).not.toHaveBeenCalled();
     expect(state.skillMessages.github).toBeUndefined();
     expect(state.skillOperation).toBeNull();
