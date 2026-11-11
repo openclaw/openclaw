@@ -85,6 +85,7 @@ suite.define(() => {
           ];
           await installMockGateway(page, {
             sessionKey: "agent:main:current",
+            hasMultipleSessionSharingIdentities: true,
             presenceUsers: [
               { id: "riley", name: "Riley", self: true },
               { id: "devon", name: "Devon" },

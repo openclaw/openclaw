@@ -129,7 +129,13 @@ suite.define(() => {
             .click();
           await waitForControlUiGatewayReady(page);
           await waitForControlUiInitialRoster(page);
-          await page.locator('[data-navigation-view="online"]').click();
+          const users = page.locator('[data-navigation-view="online"]');
+          expect(await users.count()).toBe(0);
+          ensureProfileForEmail("count-proof-colleague@example.test");
+          await page.reload();
+          await waitForControlUiGatewayReady(page);
+          await waitForControlUiInitialRoster(page);
+          await users.click();
           const person = page.locator('[data-online-user-id="' + profile.id + '"]');
           await expect
             .poll(() => person.getAttribute("aria-description"))

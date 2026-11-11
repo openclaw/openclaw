@@ -14,7 +14,7 @@ suite.define(() => {
     await suite.withPage(
       { colorScheme: "dark", locale: "en-US", viewport: { width: 1280, height: 800 } },
       async ({ page }) => {
-        await installMockGateway(page);
+        await installMockGateway(page, { hasMultipleSessionSharingIdentities: true });
         await page.goto(`${suite.server.baseUrl}new`);
         const sidebar = page.locator("openclaw-app-sidebar .sidebar-shell");
         const selected = page.locator('[data-navigation-view][aria-pressed="true"]');
