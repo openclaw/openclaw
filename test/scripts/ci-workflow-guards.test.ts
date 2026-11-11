@@ -2538,9 +2538,9 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
 
   it.each([
     {
-      file: "full-release-validation.yml",
+      file: "full-release-state-watcher.yml",
       runner: "blacksmith-2vcpu-ubuntu-2404",
-      job: "release_decision",
+      job: "watch",
     },
     {
       file: "openclaw-npm-preflight.yml",
@@ -3712,6 +3712,23 @@ server.listen(0, "127.0.0.1", () => {
   });
 
   it("keeps each compiled worker preset in a separate archive", () => {
+    const uiSetup = requiredWorkflowStep(
+      readCiWorkflow().jobs["checks-ui-e2e"].steps,
+      "Setup Node environment",
+    );
+    expect(uiSetup.with?.["vitest-worker-preset"]).toBe("runtime");
+    for (const [task, frozen, expected] of [
+      ["control-ui", "false", "true"],
+      ["control-ui", "true", "false"],
+      ["browser-extension", "false", "false"],
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(uiSetup.with?.["vitest-worker-cache"], {
+          matrix: { task },
+          preflightOutputs: { frozen_target: frozen },
+        }),
+      ).toBe(expected);
+    }
     const setup = readWorkflow(".github/actions/setup-node-env/action.yml");
     const steps = setup.runs.steps as WorkflowStep[];
     const restore = requiredWorkflowStep(steps, "Restore compiled Vitest workers");
@@ -5352,6 +5369,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     () => {
       const directory = tempDirs.make("ci-preflight-dependencies-");
       const harness = exportPreflightHarness(directory);
+      const adaptiveImport = spawnSync(
+        testNodeExecPath,
+        [
+          "--input-type=module",
+          "-e",
+          `await import(${JSON.stringify(pathToFileURL(path.join(harness, "scripts/ci-adaptive-priors.mjs")).href)});`,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(adaptiveImport.status, adaptiveImport.stderr).toBe(0);
       const harnessPaths = new Set<string>();
       const steps: WorkflowStep[] = readCiWorkflow().jobs.preflight.steps;
       for (const step of steps) {
@@ -6646,13 +6673,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           GITHUB_ENV: output,
           FIXTURE_CORES: String(cores),
           RUNSON_JOB: "true",
+          OPENCLAW_NODE_TEST_CPU_BUDGET: "",
           RUNNER_ENVIRONMENT: "self-hosted",
           FROZEN_TARGET: "false",
           SHARD_PLAN_CONCURRENCY: "1",
         },
       });
       expect(result.status, result.stderr).toBe(0);
-      expect(readWorkflowOutputs(output)).toEqual({ OPENCLAW_VITEST_MAX_WORKERS: String(workers) });
+      expect(readWorkflowOutputs(output)).toEqual({
+        OPENCLAW_NODE_TEST_CPU_BUDGET: "",
+        OPENCLAW_VITEST_MAX_WORKERS: String(workers),
+      });
     }
   });
 
@@ -7681,7 +7712,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     path: ".release-tooling",
     "persist-credentials": false,
     "sparse-checkout":
-      "apps/linux/src-tauri/tauri.conf.json\nscripts/lib/record-shared.mjs\nscripts/release-tooling-identity.mjs\nscripts/linux-updater-manifest.mjs\nscripts/lib/release-version.mjs\n",
+      "apps/linux/src-tauri/tauri.conf.json\nscripts/lib/record-shared.mjs\nscripts/lib/plain-gh.mjs\nscripts/release-tooling-identity.mjs\nscripts/linux-updater-manifest.mjs\nscripts/lib/release-version.mjs\n",
   });
   const tooling = requiredWorkflowStep(linuxSteps, "Verify trusted release tooling identity");
   expect(tooling?.env).toMatchObject({

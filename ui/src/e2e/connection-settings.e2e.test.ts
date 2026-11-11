@@ -1,5 +1,6 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { pageRunner } from "./config-composer-fixtures.test-support.ts";
 import {
@@ -36,6 +37,7 @@ suite.define(() => {
     await withPage(async ({ page }) => {
       const gateway = await installMockGateway(page, {
         deferredMethods: ["last-heartbeat"],
+        featureMethods: [...defaultControlUiFeatureMethods, "last-heartbeat"],
       });
       await page.goto(`${suite.server.baseUrl}settings/connection`);
       await gateway.waitForRequest("last-heartbeat");

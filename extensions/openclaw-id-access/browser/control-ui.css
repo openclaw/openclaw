@@ -654,7 +654,7 @@
 
 .ocid-node-dialog__code {
   font-family: var(--mono);
-  font-size: calc(28px * var(--control-ui-text-scale));
+  font-size: 28px;
   letter-spacing: 0.12em;
 }
 
