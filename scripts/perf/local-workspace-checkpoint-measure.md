@@ -195,6 +195,14 @@ coverage; check the post-import reuse's captured Git worker and hash counters
 before making an allocation claim. This adds no profiler work or awaits to timing
 mode. Main and worker samples have different boundaries and must stay separate.
 
+Supplemental `retainedMemory` collection runs after the measured work and, for
+serial preparation, after full correctness validation. It reports main memory after
+explicit GC alongside unforced native worker heap statistics. A worker can exit while synchronous validation delays its exit event;
+`ERR_WORKER_NOT_RUNNING` produces an explicit `unavailable: "worker-exited"`
+sample rather than zero. Other inspection errors still fail the run. The same
+scope applies to dedicated retention-mode reports; this tail is not an owner
+allocation or latency measurement.
+
 Do not compare instrumented timings against the plain timing arms. Report aggregate process and
 main-thread CPU separately, and retain raw samples so phase overlap and outliers
 remain inspectable.

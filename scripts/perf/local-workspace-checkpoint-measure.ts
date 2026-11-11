@@ -46,8 +46,8 @@
  * its warm counts, as they are outside recurring heartbeat ticks.
  * Maintenance also holds this sibling lease so recurring sweeps share a warm
  * heartbeat carrier, as they do with other active owners on a busy Gateway.
- * --instrument retention samples memory after collecting the main isolate and
- * observed direct workers, outside timing/GC measurements. Use identical-code controls
+ * --instrument retention samples main memory after GC and unforced heap statistics
+ * from observed direct workers, outside timing measurements. Use identical-code controls
  * to separate retained memory from different natural-GC/worker-idle schedules.
  * --retention-ms 120000 gives both revisions the same minimum elapsed time
  * after warmup before collection, including their normal idle-worker retirement.
@@ -726,12 +726,28 @@ const collectRetainedMemory = async () => {
   try {
     const workerHeaps = [];
     for (const worker of workers) {
-      const profile = await worker.startHeapProfile({ forceGC: true });
-      await profile.stop();
-      workerHeaps.push({ threadId: worker.threadId, ...(await worker.getHeapStatistics()) });
+      const threadId = worker.threadId;
+      try {
+        workerHeaps.push({ threadId, ...(await worker.getHeapStatistics()) });
+      } catch (error) {
+        if (
+          typeof error !== "object" ||
+          error === null ||
+          !("code" in error) ||
+          error.code !== "ERR_WORKER_NOT_RUNNING"
+        ) {
+          throw error;
+        }
+        workerHeaps.push({ threadId, unavailable: "worker-exited" });
+      }
     }
     globalThis.gc();
-    return { ...process.memoryUsage(), workerHeaps };
+    return {
+      ...process.memoryUsage(),
+      workerHeaps,
+      accounting:
+        "Main heap after explicit GC; worker heap statistics without forced GC. Exited workers are explicitly unavailable, not zero.",
+    };
   } finally {
     clearInterval(keepAlive);
   }
@@ -2482,7 +2498,7 @@ measurement: try {
         : undefined,
       retainedMemory: globalThis.gc ? await collectRetainedMemory() : null,
       retainedMemoryAccounting: globalThis.gc
-        ? "forced GC after all timing and correctness checks; workers then main"
+        ? "main GC after all timing and correctness checks; worker heap statistics are not forced-GC samples; exited workers explicitly unavailable"
         : "not measured; run with --expose-gc",
 
       physicalReaderAccounting:
