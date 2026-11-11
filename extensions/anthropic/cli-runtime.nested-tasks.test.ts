@@ -108,7 +108,12 @@ type AncestryScenario = {
   stopAfterWaiting?: boolean;
 };
 
-async function context(mode: string, childType = "local_agent", ancestry?: AncestryScenario) {
+async function context(
+  signal: AbortSignal,
+  mode: string,
+  childType = "local_agent",
+  ancestry?: AncestryScenario,
+) {
   const root = await mkdtemp(path.join(os.tmpdir(), "claude-nested-"));
   roots.push(root);
   const script = path.join(root, "fixture.mjs");
@@ -152,26 +157,25 @@ async function context(mode: string, childType = "local_agent", ancestry?: Ances
     useResume: false,
     liveSession,
     timeoutMs: 1500,
+    // Native process construction belongs to the test budget, not a second 2s clock.
+    // Vitest cancellation still reaches the real process owner and joins cleanup.
+    abortSignal: signal,
     requestToolPermission: async () => ({ behavior: "deny", message: "unused" }),
     requestUserInput: async () => ({ status: "cancelled", message: "unused" }),
   } satisfies CliBackendExecuteContext;
   return { ...ctx, generations };
 }
-function executeTurn(ctx: CliBackendExecuteContext) {
-  // A reused native session still receives a fresh, independently bounded request.
-  return executeClaudeCli({ ...ctx, abortSignal: AbortSignal.timeout(2000) });
-}
 async function collect(ctx: CliBackendExecuteContext) {
   const records: Record<string, unknown>[] = [];
-  for await (const record of executeTurn(ctx)) {
+  for await (const record of executeClaudeCli(ctx)) {
     records.push(record);
   }
   return records.filter((record) => record.type === "result");
 }
-it.each(["local_agent", "local_workflow"])(
+it.for(["local_agent", "local_workflow"])(
   "settles nested %s while its background parent consumes its notification",
-  async (childType) => {
-    const ctx = await context("child-first", childType);
+  async (childType, { signal }) => {
+    const ctx = await context(signal, "child-first", childType);
     const results = await collect(ctx);
     expect(results.map((record) => record.result)).toEqual(["waiting", "parent reply"]);
     expect(results[0]).toHaveProperty("openclaw_interim_result", true);
@@ -183,10 +187,10 @@ it.each(["local_agent", "local_workflow"])(
   },
 );
 
-it.each(["local_agent", "local_workflow"])(
+it.for(["local_agent", "local_workflow"])(
   "waits for a forwarded nested %s result after its background parent ends",
-  async (childType) => {
-    const ctx = await context("parent-first", childType);
+  async (childType, { signal }) => {
+    const ctx = await context(signal, "parent-first", childType);
     const results = await collect(ctx);
     expect(results.map((record) => record.result)).toEqual([
       "waiting",
@@ -198,15 +202,15 @@ it.each(["local_agent", "local_workflow"])(
     expect(ctx.liveSession.current()?.isIdle()).toBe(true);
   },
 );
-it.each([
+it.for([
   "foreground",
   "before-input",
   "old-input",
   "duplicate",
   "reverse-list",
   "owned-list-first",
-])("preserves ownership across %s ordering", async (mode) => {
-  const ctx = await context(mode);
+])("preserves ownership across %s ordering", async (mode, { signal }) => {
+  const ctx = await context(signal, mode);
   const results = await collect(ctx);
   const expected =
     mode === "foreground"
@@ -239,10 +243,10 @@ it.each([
   }
 });
 
-it.each(["local_agent", "local_workflow"])(
+it.for(["local_agent", "local_workflow"])(
   "consumes queued forwarded %s results without inline replay receipts",
-  async (childType) => {
-    const ctx = await context("parent-first-native", childType);
+  async (childType, { signal }) => {
+    const ctx = await context(signal, "parent-first-native", childType);
     const results = await collect(ctx);
     expect(results.map((record) => record.result)).toEqual([
       "waiting",
@@ -277,31 +281,34 @@ const ancestryOrders = [
   [4, 3, 2, 1, 0],
   [2, 4, 0, 3, 1],
 ];
-it.each(
+it.for(
   (["local_agent", "local_workflow"] as const).flatMap((taskType) =>
     ancestryOrders.map((order) => ({ taskType, order })),
   ),
-)("preserves deep ancestry answers for $taskType order $order", async ({ taskType, order }) => {
-  const scenario = ancestryScenario(order, taskType);
-  const ctx = await context("ancestry", taskType, scenario);
-  const results = await collect(ctx);
-  expect(results.map((record) => record.result)).toEqual([
-    "waiting",
-    ...scenario.chain.map((id) => id + " reply"),
-  ]);
-  expect(results.slice(0, -1).every((record) => record.openclaw_interim_result === true)).toBe(
-    true,
-  );
-  expect(results.at(-1)).not.toHaveProperty("openclaw_interim_result");
-  expect(ctx.liveSession.current()?.isIdle()).toBe(true);
-  expect((await collect({ ...ctx, useResume: true, prompt: "next" }))[0]?.result).toBe(
-    "warm reply",
-  );
-});
+)(
+  "preserves deep ancestry answers for $taskType order $order",
+  async ({ taskType, order }, { signal }) => {
+    const scenario = ancestryScenario(order, taskType);
+    const ctx = await context(signal, "ancestry", taskType, scenario);
+    const results = await collect(ctx);
+    expect(results.map((record) => record.result)).toEqual([
+      "waiting",
+      ...scenario.chain.map((id) => id + " reply"),
+    ]);
+    expect(results.slice(0, -1).every((record) => record.openclaw_interim_result === true)).toBe(
+      true,
+    );
+    expect(results.at(-1)).not.toHaveProperty("openclaw_interim_result");
+    expect(ctx.liveSession.current()?.isIdle()).toBe(true);
+    expect((await collect({ ...ctx, useResume: true, prompt: "next" }))[0]?.result).toBe(
+      "warm reply",
+    );
+  },
+);
 
-it.each(["owned", "old-input", "notified", "cycle", "orphan"] as const)(
+it.for(["owned", "old-input", "notified", "cycle", "orphan"] as const)(
   "does not acquire excluded descendant holds through %s ancestry",
-  async (exclusion) => {
+  async (exclusion, { signal }) => {
     const scenario = ancestryScenario([2, 1, 0], "local_agent");
     const excluded: AncestryTask = {
       task_id: "excluded",
@@ -325,7 +332,7 @@ it.each(["owned", "old-input", "notified", "cycle", "orphan"] as const)(
       excluded.parent_task_id = "unknown-parent";
     }
     scenario.tasks.unshift(descendant, excluded);
-    const ctx = await context("ancestry", "local_agent", scenario);
+    const ctx = await context(signal, "ancestry", "local_agent", scenario);
     const results = await collect(ctx);
     expect(results.map((record) => record.result)).toEqual([
       "waiting",
@@ -348,12 +355,12 @@ it.each(["owned", "old-input", "notified", "cycle", "orphan"] as const)(
   },
 );
 
-it("retires deep ancestry holds when the consumer cancels the stream", async () => {
+it("retires deep ancestry holds when the consumer cancels the stream", async ({ signal }) => {
   const scenario = ancestryScenario([4, 3, 2, 1, 0], "local_agent");
   scenario.stopAfterWaiting = true;
-  const ctx = await context("ancestry", "local_agent", scenario);
+  const ctx = await context(signal, "ancestry", "local_agent", scenario);
   let sawWaiting = false;
-  for await (const record of executeTurn(ctx)) {
+  for await (const record of executeClaudeCli(ctx)) {
     if (record.type === "result") {
       expect(record).toMatchObject({ result: "waiting", openclaw_interim_result: true });
       sawWaiting = true;

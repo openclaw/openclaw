@@ -2,8 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenBlobStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginBlobKernelStore } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createMemoryBlobStore } from "./blob-store.test-support.js";
 import {
   configureMemoryWikiCompiledCacheStore,
   createMemoryWikiCompiledCacheStore,
@@ -17,12 +16,9 @@ const [rootDir, target] = process.argv.slice(2);
 assert.ok(rootDir);
 assert.ok(target === "source" || target === "page");
 configureMemoryWikiCompiledCacheStore(
-  createMemoryWikiCompiledCacheStore(<T>(options: OpenBlobStoreOptions) =>
-    createPluginBlobKernelStore<T>("memory-wiki", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: path.join(rootDir, "state") },
-    }),
-  ),
+  // This fixture covers file safety, not state persistence. Match the other wiki
+  // tests instead of loading the entire state database before the FIFO check.
+  createMemoryWikiCompiledCacheStore(<T>() => createMemoryBlobStore<T>()),
 );
 const config = resolveMemoryWikiConfig({ vault: { path: path.join(rootDir, "vault") } });
 await initializeMemoryWikiVault(config);
