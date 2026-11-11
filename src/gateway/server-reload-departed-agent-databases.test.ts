@@ -22,7 +22,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { readSessionEntrySnapshotInWorker } from "../config/sessions/session-transcript-read-worker-runtime.js";
+import { resolveSessionSqliteTargetInWorker } from "../config/sessions/session-transcript-read-worker-runtime.js";
 import {
   historyLane,
   maintenanceLane,
@@ -523,16 +523,12 @@ it("closes idle native history lanes when their close latch is false", async () 
   // history lane is worker-process startup, which is the multi-second cost on CI.
   // The product close itself gives up after 1s; this test waits for the promise.
   await readHistoryPresence(worker.path);
-  await readSessionEntrySnapshotInWorker(
-    worker.path,
-    {
-      agentId: "worker",
-      sessionId: "missing-session",
-      storePath: worker.path,
-      sessionKey: "agent:worker:main",
-    },
-    false,
-  );
+  await resolveSessionSqliteTargetInWorker({
+    storePath: worker.path,
+    agentId: "worker",
+    env: process.env,
+    registeredDatabases: [{ agentId: "worker", path: worker.path }],
+  });
   expect(getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources).toBe(true);
   const latch = vi.spyOn(historyLane.pool, "canCloseNativeResources").mockReturnValue(false);
   try {
