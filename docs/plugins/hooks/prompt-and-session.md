@@ -75,6 +75,9 @@ On embedded, CLI, and harness runtime prompt-preparation paths (including
 ACPX, Agents API, Codex, and Copilot), ordering is: drain queued injections →
 `agent_turn_prepare` → ordinary
 `before_prompt_build` → finalized tool policy → authorized prompt enrichment.
+On CLI runtimes, authorized enrichment also runs after the native session
+reuse decision, transcript checks, and history selection, so it can report and
+respond to that decision on the same turn.
 
 For multiple registrations, the first defined provider/model/fallback override and
 `systemPrompt` win. Context additions concatenate in priority order, and tool
@@ -201,6 +204,49 @@ Treat `toolAuthority` as an ephemeral capability:
 The host revalidates authority after each awaited handler and discards stale
 enrichment. A retained `toolAuthority` object rejects use after dispatch.
 
+#### Session continuity
+
+In this phase, `event.continuity` reports what the runtime's session owner
+decided for this request:
+
+- `state`: `fresh` (no prior native session), `resumed` (the request continues
+  an existing session), or `invalidated` (a stored native session binding was
+  discarded for this turn, so the model starts a replacement session).
+- `invalidatedReason`: optional runtime reason when `state` is `invalidated`.
+  CLI runtimes use their session-reuse reasons, such as `prompt-tools`,
+  `system-prompt`, `auth-profile`, `auth-epoch`, `mcp`, `cwd`,
+  `missing-transcript`, and `orphaned-tool-use`.
+- `history`: `included` when the host placed prior conversation in this
+  request (replayed history or a resume handoff), `withheld` when it sent only
+  a notice that earlier messages exist without their contents, and `none`
+  otherwise.
+
+The field contains no transcript content and grants no authority; it does not
+allow replaying history across an account or authentication boundary. Use it to
+restore plugin-owned context only when a turn needs it, for example:
+
+```typescript
+api.on(
+  "before_prompt_build",
+  async (event) =>
+    event.continuity?.state === "invalidated"
+      ? { prependContext: await loadPluginSummary() }
+      : undefined,
+  { requiresToolAuthority: true },
+);
+```
+
+CLI runtimes report all three states. Codex reports `fresh` or `resumed` from
+its native thread binding and `invalidated` when that binding is rotated away
+before the turn starts. The embedded runtime owns its transcript and has no
+native binding, so it reports `fresh` or `resumed`. Other runtimes omit the
+field; omission means unknown. The ordinary prompt-build phase never receives
+it, because its tool restrictions are inputs to the reuse decision.
+
+The phase runs once per logical turn. When a model fallback candidate repeats
+the same request with the same tool surface, it reuses the first result instead
+of invoking handlers again, even if that candidate's session decision differs.
+
 This option requires a host that implements the post-policy phase. Published
 plugins must set `package.json` `openclaw.compat.pluginApi` to a range beginning
 with the first OpenClaw version they build against for this contract. Older
@@ -211,9 +257,15 @@ treat an unknown option as an ordinary pre-policy hook.
 
 On the embedded and CLI runners, `before_agent_run` runs after prompt
 construction and before model submission, including `llm_input` observation.
-On the embedded path it also precedes prompt-local image loading. It receives
-the current user input as `prompt`, plus loaded session history in `messages`
-and the active system prompt. Return `{ outcome: "block", reason, message? }`
+It receives the current user input as `prompt`, loaded session history in
+`messages`, the active system prompt, and prepared current-turn images in `images`.
+Image preparation, including prompt-local image paths, completes before this gate;
+the runner submits the same prepared image bytes after approval. The event is a
+copy, so mutating its images does not rewrite model input. `images: []` means no
+current-turn images; an absent field means an older host without this contract.
+Gateway worker turns expose Gateway-prepared images too; legacy worker turns do
+not expose a worker-local system prompt. Paired-node CLI sessions do not support
+images. This hook remains limited to runners that implement it. Return `{ outcome: "block", reason, message? }`
 to stop the run before the model reads the prompt. `reason` is internal;
 `message` is the user-facing replacement. Only `pass` and `block` outcomes are
 supported; unsupported decision shapes are rejected.

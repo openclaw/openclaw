@@ -1,12 +1,13 @@
 // Write rules of the reference membership authority: who may change what, over which channel.
 import { hexToBytes } from "../bytes.js";
+import { inviteSecretHash, verifyInviteRedemption, type AssertedIdentity } from "../invites.js";
 import {
-  inviteSecretHash,
-  MAX_INVITE_LIFETIME_SECONDS,
-  verifyInviteRedemption,
-  type AssertedIdentity,
-} from "../invites.js";
-import { fingerprint, type IrohEndpointKey, type KeyFingerprint } from "../keys.js";
+  fingerprint,
+  formatIrohEndpointKey,
+  rawPublicKey,
+  type IrohEndpointKey,
+  type KeyFingerprint,
+} from "../keys.js";
 import {
   MAX_INVITES,
   MAX_MEMBER_PEER_KEYS,
@@ -26,11 +27,11 @@ import {
   peerKeyListedSeq,
   withoutMemberPeerKeys,
 } from "./allowlist.js";
-import { withoutSpentInvites } from "./invite-retention.js";
+import { inviteLifetimeError, withoutSpentInvites } from "./invite-retention.js";
+import { addNode, nodeRemovalEvents, withoutNodes } from "./nodes.js";
 import { applyRevocation } from "./revocation.js";
 import {
   applied,
-  CERT_CLOCK_SKEW_SECONDS,
   certificateWindowError,
   ownerLookup,
   proofKeyHex,
@@ -152,6 +153,16 @@ async function applyTarget(
   context: WriteContext,
 ): Promise<AuthorityResult> {
   switch (target.op) {
+    case "add_node":
+      if (authority.kind !== "root" && authority.kind !== "owner_device") {
+        return refuse(state, "not_an_owner", "only an owner can add a node");
+      }
+      return addNode(state, target, authority, context.now);
+    case "remove_node":
+      if (!state.nodes[target.peer_key]) {
+        return refuse(state, "target_mismatch", "unknown node");
+      }
+      return applied(withoutNodes(state, [target.peer_key]), nodeRemovalEvents([target.peer_key]));
     case "add":
       return addMember(state, target, context.now);
     case "remove": {
@@ -187,6 +198,26 @@ async function applyTarget(
     case "add_owner_device":
       return addOwnerDevice(state, target.cert, authority, context);
     case "deny_invite": {
+      const nodeInvite = state.node_invites[target.invite_id];
+      if (nodeInvite?.status === "pending") {
+        return applied(
+          {
+            ...state,
+            node_invites: {
+              ...state.node_invites,
+              [target.invite_id]: {
+                ...nodeInvite,
+                status: "consumed",
+                pending: null,
+              },
+            },
+          },
+          [
+            { type: "notify_owners", event: "redemption_resolved", ref: target.invite_id },
+            { type: "publish_snapshot" },
+          ],
+        );
+      }
       const invite = state.invites[target.invite_id];
       if (!invite || invite.status !== "pending") {
         return refuse(state, "invite_not_pending", "no pending redemption for this invite");
@@ -227,6 +258,9 @@ function addMember(
   target: Extract<SignedStatement<"MembershipChange">["body"]["target"], { op: "add" }>,
   now: UnixSeconds,
 ): AuthorityResult {
+  if (target.peer_keys.some((key) => state.nodes[key])) {
+    return refuse(state, "target_mismatch", "a node key cannot be a member key");
+  }
   const existing = state.members[target.account_id];
   if (!existing && Object.keys(state.members).length >= MAX_MEMBERS) {
     return refuse(state, "limit_reached", `a claw has at most ${MAX_MEMBERS} members`);
@@ -362,6 +396,13 @@ async function addOwnerDevice(
       `an owner device has at most ${MAX_OWNER_DEVICE_PEER_KEYS} peer keys`,
     );
   }
+  if (
+    [formatIrohEndpointKey(rawPublicKey(cert.body.device_pub)), ...cert.body.peer_keys].some(
+      (key) => state.nodes[key],
+    )
+  ) {
+    return refuse(state, "target_mismatch", "a node key cannot be an owner device key");
+  }
   const fp = await fingerprint(cert.body.device_pub);
   const existing = state.owner_devices[fp];
   if (existing && !(await mayReAdd(state, authority, fp))) {
@@ -456,10 +497,10 @@ export async function registerInvite(
   }
   // Spent records go first, so the cap counts only invites that can still matter.
   const kept = withoutSpentInvites(state, context.now).state;
-  if (kept.invites[cap.invite_id]) {
+  if (kept.invites[cap.invite_id] || kept.node_invites[cap.invite_id]) {
     return refuse(state, "invite_used", "invite id already registered");
   }
-  if (Object.keys(kept.invites).length >= MAX_INVITES) {
+  if (Object.keys(kept.invites).length + Object.keys(kept.node_invites).length >= MAX_INVITES) {
     return refuse(
       state,
       "limit_reached",
@@ -481,22 +522,6 @@ export async function registerInvite(
       },
     },
   });
-}
-
-// Why an invite expiring at `expiresAt` cannot be registered at `now`, or null: it has already
-// expired, or it lasts longer than MAX_INVITE_LIFETIME_SECONDS (beyond the clock skew).
-function inviteLifetimeError(
-  expiresAt: UnixSeconds,
-  now: UnixSeconds,
-): { code: "expired" | "limit_reached"; detail: string } | null {
-  if (expiresAt <= now) {
-    return { code: "expired", detail: "invite expired" };
-  }
-  if (expiresAt > now + MAX_INVITE_LIFETIME_SECONDS + CERT_CLOCK_SKEW_SECONDS) {
-    const days = MAX_INVITE_LIFETIME_SECONDS / 86400;
-    return { code: "limit_reached", detail: `an invite lasts at most ${days} days` };
-  }
-  return null;
 }
 
 /**

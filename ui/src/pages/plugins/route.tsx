@@ -1,39 +1,10 @@
-import {
-  definePage,
-  redirect,
-  type RouteLoaderOptions,
-  type RouteLocation,
-} from "@openclaw/uirouter";
+import { definePage, type RouteLoaderOptions, type RouteLocation } from "@openclaw/uirouter";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
-import { formatUiError } from "../../lib/format-error.ts";
-import { loadPluginCatalog } from "../../lib/plugins/index.ts";
-import {
-  canonicalPluginsRouteLocation,
-  pluginSettingsNeedsSchema,
-  pluginsRouteLocation,
-  type PluginsRouteData,
-} from "./route-data.ts";
-
-async function loadPluginsRouteData(
-  context: ApplicationContext,
-  options: RouteLoaderOptions,
-): Promise<PluginsRouteData> {
-  const location = pluginsRouteLocation(options.location);
-  const gateway = context.gateway;
-  const gatewaySnapshot = gateway.snapshot;
-  const client = gatewaySnapshot.client;
-  const data: PluginsRouteData = { gateway, gatewaySnapshot, result: null, error: null, location };
-  if (gatewaySnapshot.phase === "connected" && client) {
-    try {
-      data.result = await loadPluginCatalog(client);
-    } catch (error) {
-      data.error = formatUiError(error);
-    }
-  }
-  return data;
-}
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import type { PluginListResult } from "../../lib/plugins/index.ts";
+import { pluginsRouteLocation, type PluginsRouteData } from "./route-data.ts";
 
 type PluginsSurface = "discovery" | "settings";
 
@@ -45,22 +16,30 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
       return `${routeLocation.pathname}\u0000${routeLocation.search}\u0000${routeLocation.hash}`;
     },
     loader: (context: ApplicationContext, options: RouteLoaderOptions) => {
-      const location = pluginsRouteLocation(options.location);
-      const canonical = canonicalPluginsRouteLocation(location, context.basePath);
-      if (canonical) {
-        return redirect(canonical);
+      const data: PluginsRouteData = { location: pluginsRouteLocation(options.location) };
+      const gateway = context.gateway;
+      const snapshot = gateway.snapshot;
+      if (
+        options.shouldRun() &&
+        !options.signal.aborted &&
+        snapshot.phase === "connected" &&
+        snapshot.client &&
+        hasOperatorReadAccess(snapshot.hello?.auth ?? null)
+      ) {
+        const signal = options.signal;
+        data.inventory = {
+          gateway,
+          gatewaySnapshot: { ...snapshot },
+          generation: snapshot.pluginCapabilities?.generation,
+          signal,
+          // Observe rejection now, even if navigation never adopts this page.
+          result: snapshot.client.request<PluginListResult>("plugins.list", {}, { signal }).then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          ),
+        };
       }
-      if (surface === "settings") {
-        const configLoad = context.runtimeConfig.ensureLoaded();
-        void configLoad
-          .then(() =>
-            pluginSettingsNeedsSchema(surface, location, context.basePath)
-              ? context.runtimeConfig.ensureSchemaLoaded()
-              : undefined,
-          )
-          .catch(() => undefined);
-      }
-      return loadPluginsRouteData(context, options);
+      return data;
     },
     component: async () => {
       const { PluginsPage } = await import("./plugins-page.tsx");
@@ -79,6 +58,7 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
   });
 }
 
-const page = definePluginsPage("plugins", "discovery");
-const settingsPage = definePluginsPage("plugin-settings", "settings");
-export const pages = [page, settingsPage] as const;
+export const pages = [
+  definePluginsPage("plugins", "discovery"),
+  definePluginsPage("plugin-settings", "settings"),
+] as const;

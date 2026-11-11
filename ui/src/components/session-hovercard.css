@@ -405,28 +405,6 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   color: var(--danger);
 }
 
-.session-hovercard__error {
-  display: grid;
-  grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr);
-  align-items: start;
-  gap: var(--space-2);
-  color: var(--danger);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.session-hovercard__error-icon {
-  white-space: normal;
-}
-
-.session-hovercard__error-icon svg {
-  display: block;
-  width: var(--session-hovercard-context-icon-size);
-  height: var(--session-hovercard-context-icon-size);
-}
-
 .session-hovercard__pr-number {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);

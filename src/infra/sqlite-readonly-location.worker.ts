@@ -82,6 +82,7 @@ async function inspect(
       mode !== "metadata" &&
       mode !== "backup-engine" &&
       mode !== "backup-engine-preserving" &&
+      mode !== "state-sqlite-populated" &&
       mode !== "consolidated" &&
       mode !== "task-delivery-recovery" &&
       !isSqliteSnapshotStagingMode(mode)) ||
@@ -93,6 +94,19 @@ async function inspect(
     };
   }
   try {
+    if (mode === "state-sqlite-populated") {
+      const [{ inspectPhysicalStoreInProcess }, { inspectStateSqlite }] = await Promise.all([
+        import("./database-engine/physical-store.js"),
+        import("../state/openclaw-state-db-engine.js"),
+      ]);
+      return {
+        ok: true,
+        hasExistingData: await inspectPhysicalStoreInProcess(pathname, true, (db) => {
+          const facts = inspectStateSqlite(db);
+          return !facts.hasEngineAnchor && facts.hasExistingData;
+        }),
+      };
+    }
     if (mode === "backup-engine" || mode === "backup-engine-preserving") {
       const { readBackupEngineInProcess } = await import("./database-engine/physical-store.js");
       return {
@@ -246,7 +260,9 @@ async function inspect(
     // Engine probes moved native reads into this child; callers still classify corruption.
     // Released snapshot modes retain their exact { ok, message } response shape.
     const errcode =
-      mode === "backup-engine" || mode === "backup-engine-preserving"
+      mode === "backup-engine" ||
+      mode === "backup-engine-preserving" ||
+      mode === "state-sqlite-populated"
         ? sqliteExtendedResultCode(error)
         : undefined;
     return {

@@ -1,9 +1,12 @@
+import type { AdmissionDiagnostics } from "../infra/diagnostics-timeline.js";
+
 export const SESSION_WATCHDOG_WARNING_MS = 120_000;
 export const SESSION_WATCHDOG_ABORT_FLOOR_MS = 5 * 60_000;
 export const SESSION_WATCHDOG_QUIET_TOOL_MS = 15 * 60_000;
 export const SESSION_WATCHDOG_CLEANUP_MS = 60_000;
 
 export type OwnedWait = {
+  admission?: AdmissionDiagnostics;
   kind:
     | "global_capacity"
     | "deferred_maintenance"
@@ -35,7 +38,7 @@ export type SessionWatchdogSnapshot = Readonly<{
   semanticDeadlineAtMs: number;
   executionDeadlineAtMs?: number;
   cleanupDeadlineAtMs?: number;
-  waits: ReadonlyArray<{ kind: OwnedWait["kind"]; deadlineAtMs?: number }>;
+  waits: ReadonlyArray<Pick<OwnedWait, "kind" | "deadlineAtMs" | "admission">>;
   requests?: ReadonlyArray<{ requestTimeoutMs?: number; deadlineAtMs?: number }>;
   tools: ReadonlyArray<{
     toolName: string;

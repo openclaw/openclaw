@@ -40,8 +40,10 @@ import {
   prepareChat,
   scrollTranscriptToTop,
 } from "./control-ui-interaction-navigation.ts";
+import { logbookReadinessScenarios } from "./control-ui-logbook-readiness-scenarios.ts";
 import { runProjectionFixture } from "./control-ui-projection-fixtures.ts";
 import type { ControlUiResourceCounts } from "./control-ui-resource-counts.ts";
+import { skillsReadinessScenarios } from "./control-ui-skills-readiness-scenarios.ts";
 import {
   exerciseWorkboardResourceFixture,
   idleWorkboardResourceFixture,
@@ -1870,11 +1872,13 @@ async function searchProviderModels(page: Page) {
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
+  ...skillsReadinessScenarios,
   ...dataActivityLiveScenarios,
   ...dataActivityScenarios,
   ...dataBoardScenarios,
   ...dataCatalogScenarios,
   ...dataLogScenarios,
+  ...logbookReadinessScenarios,
   ...dataUsageDetailScenarios,
   ...dataUsageScenarios,
   ...(

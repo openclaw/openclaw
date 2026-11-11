@@ -18,6 +18,10 @@ import {
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
 import type { SessionEntry } from "../../sessions/session-manager-types.js";
+import {
+  sessionManagerReadToolResultProjectionEntries,
+  sessionManagerReadTranscriptBranch,
+} from "../../sessions/session-manager-view-types.js";
 
 const mocks = vi.hoisted(() => ({
   createAnthropicPayloadLogger: vi.fn(),
@@ -106,7 +110,7 @@ function createHistoryFixture(messages?: ReturnType<typeof buildSystemUpdateMess
   const entries: SessionEntry[] = [];
   const appendCustomEntryAsync = createCheckpointWriter(entries, "marker");
   Object.assign(fixture.sessionManager, {
-    getBranch: () => entries,
+    [sessionManagerReadTranscriptBranch]: () => entries,
     getSessionTarget: () => undefined,
     getSessionId: () => "history-session",
     appendCustomEntryAsync,
@@ -114,7 +118,9 @@ function createHistoryFixture(messages?: ReturnType<typeof buildSystemUpdateMess
   const agentState = { messages: messages ?? [] };
   Object.assign(fixture.activeSession, { agent: { state: agentState } });
   if (messages) {
-    Object.assign(fixture.sessionManager, { getToolResultProjectionEntries: () => entries });
+    Object.assign(fixture.sessionManager, {
+      [sessionManagerReadToolResultProjectionEntries]: () => entries,
+    });
     Object.defineProperty(fixture.activeSession, "messages", { get: () => agentState.messages });
   }
   const persist = (runtime: Awaited<ReturnType<typeof prepareEmbeddedAttemptSessionRuntime>>) =>
@@ -140,9 +146,9 @@ function createFixture() {
   const f = {
     order,
     sessionManager: {
-      getBranch: () => [activeMarker],
+      [sessionManagerReadTranscriptBranch]: () => [activeMarker],
       getBoundaryCount: () => 0,
-      getToolResultProjectionEntries: () => [activeMarker],
+      [sessionManagerReadToolResultProjectionEntries]: () => [activeMarker],
     },
     activeSession: {
       messages: [{ role: "user" }, { role: "assistant" }],
@@ -292,7 +298,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       "## Policy\nUnsent update",
     );
 
-    const getBranch = vi.spyOn(fixture.sessionManager, "getBranch");
+    const getBranch = vi.spyOn(fixture.sessionManager, sessionManagerReadTranscriptBranch);
     try {
       const next = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
       expect(getBranch).not.toHaveBeenCalled();
@@ -497,10 +503,10 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
 
     expect(mocks.restoreProjections).toHaveBeenCalledWith(
       fixture.promptState.toolResults,
-      fixture.sessionManager.getBranch(),
+      fixture.sessionManager[sessionManagerReadTranscriptBranch](),
     );
     expect(fixture.order.join(" ")).toBe(
-      "manager own-sessionManager prompt-state own-promptStateLease own-getUserTranscriptContexts " +
+      "manager own-sessionManager own-ownsSessionManager prompt-state own-promptStateLease own-getUserTranscriptContexts " +
         "agent-session own-session owned-boundary boundary settle-tracker arm-session-abort " +
         "own-buildAbortSettlePromise own-yield context-guards own-removeToolResultContextGuard cache-trace " +
         "payload-logger trajectory own-trajectoryRecorder transport",

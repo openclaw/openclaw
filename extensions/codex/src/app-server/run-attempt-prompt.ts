@@ -25,17 +25,21 @@ import {
   resolveProjectionPromptBudgetTokens,
   type CodexProjectedImageGroup,
 } from "./context-engine-projection.js";
-import { joinPresentSections } from "./developer-instruction-sections.js";
+import { joinPresentSections, renderCodexThreadPolicy } from "./developer-instruction-sections.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import type { CodexAttemptContext } from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
+import {
+  resolveCodexPromptContinuity,
+  selectCodexStaleBindingDelta,
+} from "./run-attempt-prompt-continuity.js";
 import { resolveCodexShiftedPromptRanges } from "./run-attempt-prompt-ranges.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
+import { hasAuthoredCodexBaseInstructions } from "./thread-prompt.js";
 import { resolveCodexProjectionStartupBinding } from "./thread-restricted-resume.js";
 import { buildCodexHistoryProvenancePrefix, buildTurnCollaborationMode } from "./turn-params.js";
-import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const {
@@ -341,6 +345,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       deferredHistoryRejection = error;
     }
   }
+  // The binding owner decides native continuity; thread startup may later replace a binding.
+  const initialNativeThreadId = mutable.startupBinding?.threadId;
+  let nativeThreadAction: "started" | "resumed" | "forked" | undefined;
   // Refresh changes the transport prompt, but retains the admitted request's recorder.
   const buildPromptFromCurrentInputs = () =>
     resolveAgentHarnessBeforePromptBuildResult({
@@ -366,6 +373,13 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         // Shipped prompt-hook capabilities revalidate synchronously after awaits.
         assertActive: connection.assertLegacyCurrent,
       },
+      continuity: resolveCodexPromptContinuity({
+        initialNativeThreadId,
+        nativeThreadAction,
+        currentNativeThreadId: mutable.startupBinding?.threadId,
+        historyIncluded:
+          promptState.noEngineContinuityProjectionApplied || contextEngineBootstrapPromptApplied,
+      }),
     });
   const decorateCodexTurnPromptText = (
     promptBuildResult: {
@@ -438,6 +452,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   };
   let parentLocalEgress = false;
   let inferenceInstructions: string | undefined;
+  let baseInDeveloperCarrier = false;
   // Observability view of OpenClaw-managed developer instructions; not the complete
   // native/provider prompt. Reuse registered relay text so diagnostics include every
   // relay component. Hook context is already in that text, so only native policy
@@ -445,13 +460,19 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const buildRenderedCodexDeveloperInstructions = () =>
     inferenceInstructions !== undefined
       ? joinPresentSections(
-          turnState.promptBuild.threadDeveloperInstructions ??
-            turnState.promptBuild.developerInstructions,
+          renderCodexThreadPolicy(
+            baseInDeveloperCarrier ? reportedOpenClawBaseInstructions : undefined,
+            turnState.promptBuild.threadDeveloperInstructions ??
+              turnState.promptBuild.developerInstructions,
+          ),
           inferenceInstructions,
         )
       : joinPresentSections(
-          turnState.promptBuild.developerInstructions,
-          refreshableInstructions,
+          renderCodexThreadPolicy(
+            baseInDeveloperCarrier ? reportedOpenClawBaseInstructions : undefined,
+            turnState.promptBuild.developerInstructions,
+            refreshableInstructions,
+          ),
           buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
         );
   // Reports, hooks, trajectory, and history budgets also count the pinned base. The
@@ -462,7 +483,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     : openClawBaseInstructions;
   const buildRenderedCodexInstructions = () =>
     joinPresentSections(
-      reportedOpenClawBaseInstructions,
+      baseInDeveloperCarrier ? undefined : reportedOpenClawBaseInstructions,
       buildRenderedCodexDeveloperInstructions(),
     );
   const rebuildCodexPromptBuildFromCurrentProjection = async (preserveInstructions = false) => {
@@ -492,36 +513,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const applyResumeStaleBindingContinuityProjection = async (
     binding: NonNullable<typeof mutable.startupBinding>,
   ) => {
-    const cutoff = Date.parse(binding.historyCoveredThrough ?? "");
-    const nativeThreadPrefix = `codex-app-server:${binding.threadId}:`;
-    const newerVisibleMessages = historyState.messages.filter((message) => {
-      if (
-        message.role !== "user" &&
-        message.role !== "assistant" &&
-        !isCodexDurableCustomMessage(message)
-      ) {
-        return false;
-      }
-      const mirrorIdentity = readMirrorIdentity(message);
-      const timestamp =
-        typeof message.timestamp === "number"
-          ? message.timestamp
-          : typeof message.timestamp === "string"
-            ? Date.parse(message.timestamp)
-            : Number.NaN;
-      return (
-        !(
-          "idempotencyKey" in message &&
-          typeof message.idempotencyKey === "string" &&
-          message.idempotencyKey.startsWith(nativeThreadPrefix)
-        ) &&
-        // Origin alone does not imply coverage: temporary threads and host-admitted
-        // user rows belong in the unseen delta. Unqualified rows rely on the cutoff.
-        !mirrorIdentity?.startsWith(nativeThreadPrefix) &&
-        Number.isFinite(timestamp) &&
-        timestamp > (Number.isFinite(cutoff) ? cutoff : 0)
-      );
-    });
+    const newerVisibleMessages = selectCodexStaleBindingDelta(historyState.messages, binding);
     if (newerVisibleMessages.length === 0) {
       return false;
     }
@@ -551,6 +543,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     action: "started" | "resumed" | "forked",
     binding?: NonNullable<typeof mutable.startupBinding>,
   ) => {
+    nativeThreadAction = action;
     // A bounded history can retain an answer after its user turn falls outside the window.
     // Fresh threads need that text (or summaries), but tool-only suffixes are not continuity.
     // Resumed bindings hand off only newer local conversation and durable notes.
@@ -704,6 +697,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     /** Pending supervision probes its native model during startup, after the estimate. */
     adoptThreadBaseInstructions: (thread: CodexAppServerThreadLifecycleBinding) => {
       reportedOpenClawBaseInstructions = thread.preparedOpenClawBaseInstructions;
+      baseInDeveloperCarrier = hasAuthoredCodexBaseInstructions({
+        nativeConfig: thread.preparedEffectiveConfig,
+      });
       Object.assign(systemPromptReport, buildSystemPromptReport(!workspaceReferencesIncluded));
     },
     setNativeModelContext: (next: CodexNativeModelContext) => {

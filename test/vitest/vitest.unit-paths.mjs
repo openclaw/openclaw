@@ -85,11 +85,10 @@ const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 export function filterUnitConfigTestFiles(files) {
   let candidates = files.map(normalizeRepoPath);
   let exclude = unitTestAdditionalExcludePatterns;
-  // Keep singleton routing cheap and use equality only for proven Node/Linux paths.
+  // Canonical POSIX paths retain literal equality in both Node and Bun.
   if (
     candidates.length > 1 &&
-    process.platform === "linux" &&
-    !process.versions.bun &&
+    (process.platform === "linux" || process.platform === "darwin") &&
     candidates.every(isPlainRepoRelativePath)
   ) {
     const literalExcludes = new Set(exclude.filter(isPlainRepoRelativePath));

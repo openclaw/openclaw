@@ -28,6 +28,10 @@ export class InvocationFrame implements PluginExecutionFrame {
     return undefined;
   }
 
+  get canUseInteractiveStateReadCapacity(): boolean {
+    return false;
+  }
+
   withScopes(scopes: PluginExecutionScopes): InvocationFrame {
     return new InvocationFrame(scopes);
   }

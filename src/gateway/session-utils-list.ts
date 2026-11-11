@@ -42,7 +42,6 @@ import {
 } from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
 import { retainCurrentSessionListPartitions } from "./session-list-view-cache.js";
-import { resolveProfileActivityViewerId } from "./session-profile-activity-policy.js";
 import type { SessionRowGeneration } from "./session-row-identity.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import {
@@ -59,7 +58,6 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
 import { createSessionRuntimeResolution } from "./session-runtime-resolution.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
-import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
@@ -96,8 +94,9 @@ export function selectSessionEntries(
     let hits = 0;
     let misses = 0;
     let activityExpiresAt = Infinity;
+    const archived = params.opts.archived ?? false;
     for (const partition of params.partitions!) {
-      if (!partition.entries.size) {
+      if (!partition.entries.size || (archived !== "all" && partition.archived !== archived)) {
         continue;
       }
       let part = params.retained!.get(partition.revision);
@@ -105,15 +104,7 @@ export function selectSessionEntries(
         misses++;
         part = filterSessionEntries({
           ...params,
-          entries(archived) {
-            const entries: SessionEntryPair[] = [];
-            partition.entries.forEach((pair) => {
-              if (matchesSessionArchiveFilter(pair[1], archived)) {
-                entries.push(pair);
-              }
-            });
-            return entries;
-          },
+          entries: () => Array.from(partition.entries.values()),
         });
         part.entries = sortAndLimitSessionEntries(part.entries, pageEnd, params.opts.sortBy);
         part.ownerEntries = sortAndLimitSessionEntries(
@@ -476,11 +467,7 @@ export function prepareProjectedSessionList(params: {
     involvingActorId: opts.involvingMe ? identity : undefined,
     ownerFirstActorId: opts.ownerFirst ? identity : undefined,
     restrictProfileReferences: client !== undefined,
-    profileActivityViewerId: resolveProfileActivityViewerId(
-      client,
-      presentation.sharing.policy?.scopes,
-      identity,
-    ),
+    viewerProfileId: identity,
     projectActiveRun: context ? (key) => active(getTarget(key)!)! : undefined,
     entryFilter:
       (client === undefined || !presentation.sharing.entryFilter) &&
@@ -491,16 +478,16 @@ export function prepareProjectedSessionList(params: {
             const storeKey = row.storeKey ?? key;
             let visible = visibility?.get(entry);
             if (visible === undefined) {
-              const selected = getTarget(key)!;
               visible =
                 client === undefined ||
                 (presentation.sharing.entryFilter?.(
                   storeKey,
                   entry,
                   Boolean(
+                    presentation.sharing.sessionCap === "invited" &&
                     presentation.sharing.identity &&
                     projection.hasMembership(
-                      selected.storeTarget.storePath,
+                      getTarget(key)!.storeTarget.storePath,
                       storeKey,
                       presentation.sharing.identity.id,
                     ),
