@@ -1,0 +1,4 @@
+# Publisher regression for the curated recommended-models seed: asserts the seed
+# recommends the canonical deepseek-flash and contains no retired DeepSeek ids
+# (issue #194819, PR #197263). Red against the pre-fix seed, green after repair.
+18
