@@ -1,0 +1,4 @@
+# PR for #197015: regression coverage for the browser upload error naming both
+# accepted upload roots (uploads directory and inbound media directory).
+# Exact net test-line growth from the two new upload-path tests.
+10
