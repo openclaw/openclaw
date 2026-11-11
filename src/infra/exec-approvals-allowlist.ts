@@ -37,7 +37,6 @@ import {
 import type { AllowAlwaysPattern, ExecAllowlistEntry } from "./exec-approvals.types.js";
 import {
   canUseReusableWrapperPayloadCandidates,
-  isPathScopedExecutableToken,
   planShellAuthorization,
   type ExecAuthorizationPlan,
 } from "./exec-authorization-plan.js";

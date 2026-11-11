@@ -11,15 +11,12 @@ import {
   resolveExecutionTargetTrustPath,
   type ExecCommandSegment,
 } from "./exec-approvals-analysis.js";
+import { isPathScopedExecutableToken } from "./exec-authorization-plan.js";
 
 export type SkillBinTrustEntry = {
   name: string;
   resolvedPath: string;
 };
-
-function isPathScopedExecutableToken(token: string): boolean {
-  return token.includes("/") || token.includes("\\");
-}
 
 function normalizeSkillBinResolvedPath(value: string | undefined): string | null {
   const trimmed = normalizeOptionalString(value);

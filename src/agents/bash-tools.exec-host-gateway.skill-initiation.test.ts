@@ -156,11 +156,7 @@ describe.skipIf(process.platform === "win32")(
     const uninstallSkill = () => {
       const skillDir = path.join(workspace, "skills", "skill-tool");
       fs.rmSync(skillDir, { recursive: true });
-      bumpSkillsSnapshotVersion({
-        workspaceDir: workspace,
-        reason: "watch",
-        changedPath: skillDir,
-      });
+      bumpSkillsSnapshotVersion({ workspaceDir: workspace, reason: "watch" });
     };
 
     // The spawn preflight has already re-resolved skill trust when these withdrawals land, so only a

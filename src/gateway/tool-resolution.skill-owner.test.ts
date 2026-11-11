@@ -117,6 +117,7 @@ describe.skipIf(process.platform === "win32")(
       });
       const { tools } = await resolveGatewayScopedTools({
         ...context,
+        nativeCronCreatorToolAllowlist: context.nativeCronCreatorToolAllowlist ?? undefined,
         cfg,
         surface: "loopback",
         cwd: root,
@@ -160,10 +161,10 @@ describe.skipIf(process.platform === "win32")(
       expect(result).toMatchObject({ details: { status: "completed", exitCode: 0 }, ran: true });
     });
 
-    it.each([
+    it.each<[string, Pick<SkillSnapshot, "skillFilter" | "skillOverrides">]>([
       ["filter-excluded", { skillFilter: ["other-skill"] }],
       ["override-disabled", { skillOverrides: { "exec-tool": false } }],
-    ] as const)(
+    ])(
       "denies a bin whose skill the session's snapshot left %s, with no I/O",
       async (_case, narrowing) => {
         const result = await runBin("exec-tool", { prompt: "", skills: [], ...narrowing });

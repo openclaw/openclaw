@@ -167,7 +167,7 @@ describe.skipIf(process.platform === "win32")("gateway-host exec autoAllowSkills
   function uninstallSkillTool() {
     const skillDir = path.join(workspace, "skills", "skill-tool");
     fs.rmSync(skillDir, { recursive: true });
-    bumpSkillsSnapshotVersion({ workspaceDir: workspace, reason: "watch", changedPath: skillDir });
+    bumpSkillsSnapshotVersion({ workspaceDir: workspace, reason: "watch" });
   }
 
   function mockDetachedAllowOnce(onDecision?: () => void) {
