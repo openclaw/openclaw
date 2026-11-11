@@ -7,7 +7,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { hasErrnoCode, isMissingPathError } from "../infra/errno.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { canonicalPathFromExistingAncestor, findExistingAncestor } from "../infra/fs-safe.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -104,6 +104,23 @@ async function readStableFile(
   }
 }
 
+// systemd reports a unit's own drop-ins only after its fragment exists. Fingerprint
+// operator drop-ins already waiting beside a first publication so their discovery
+// is not mistaken for a concurrent edit; anything appearing later still changes it.
+async function readWaitingUnitDropIns(unit: string): Promise<string[]> {
+  const directory = `${unit}.d`;
+  const names = await fs.readdir(directory).catch((error: unknown) => {
+    if (isMissingPathError(error)) {
+      return [];
+    }
+    throw error;
+  });
+  return names
+    .filter((name) => name.endsWith(".conf") && !name.startsWith("."))
+    .toSorted()
+    .map((name) => path.join(directory, name));
+}
+
 async function inspect(
   env: GatewayServiceEnv,
   environment: GatewayServiceEnv,
@@ -135,7 +152,9 @@ async function inspect(
     });
     sourcePath = command?.sourcePath;
     const targets = new Set([unit, generated, `${unit}.bak`]);
-    const definitions = new Set(command?.definitionPaths ?? []);
+    const definitions = new Set(
+      command ? (command.definitionPaths ?? []) : await readWaitingUnitDropIns(unit),
+    );
     // Type-wide service.d defaults are shared read-only inputs. Selected fragments
     // and unit-specific overrides still require authority; never shadow a sealed unit.
     shared = new Set(
