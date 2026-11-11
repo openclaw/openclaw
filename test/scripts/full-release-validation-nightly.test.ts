@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
 import * as publication from "../../scripts/full-release-publication-contract.mjs";
 import * as validation from "../../scripts/full-release-validation-at-sha.mts";
@@ -64,6 +65,90 @@ it("isolates the main-only scheduling canary while preserving cleanup admission"
   }
 });
 
+it.each([
+  ["watch", "queued", true],
+  ["watch", "queued", false],
+  ["watch", "in_progress", false],
+  ["cancel", "in_progress", true],
+  ["cancel", "in_progress", false],
+] as const)("bounds canary %s from %s (completes=%s)", async (phase, status, completes) => {
+  const cleanup = nightly.jobs.cleanup_boat_nightly_runner;
+  const step = cleanup.steps.find((step) =>
+    phase === "watch"
+      ? step.id === "canary_wait"
+      : step.name === "Cancel an unfinished canary before cleanup",
+  )!;
+  const outputs = new Map<string, unknown>();
+  const failures: string[] = [];
+  let now = 0;
+  let calls = 0;
+  let cancelled = false;
+  const execution = runInNewContext(`(async () => { ${step.with!.script} })()`, {
+    context: { repo: { owner: "openclaw", repo: "openclaw" }, runId: 123, sha: "source" },
+    process: { env: { GITHUB_RUN_ATTEMPT: "2", CANARY_LABEL: "owned-label" } },
+    Date: { now: () => now },
+    setTimeout: (callback: () => void, delay: number) => {
+      now += delay;
+      callback();
+    },
+    core: {
+      setOutput: (key: string, value: unknown) => outputs.set(key, value),
+      setFailed: (message: string) => failures.push(message),
+    },
+    github: {
+      rest: {
+        actions: {
+          cancelWorkflowRun: async (request: unknown) => {
+            expect(request).toMatchObject({ run_id: 123, request: { timeout: 10_000 } });
+            cancelled = true;
+          },
+          listJobsForWorkflowRunAttempt: async (request: unknown) => {
+            expect(request).toMatchObject({
+              run_id: 123,
+              attempt_number: 2,
+              request: { timeout: 10_000 },
+            });
+            return {
+              data: {
+                jobs: [
+                  {
+                    name: "Verify Boat runner scheduling",
+                    head_sha: "source",
+                    labels: ["owned-label"],
+                    status: completes && calls++ > 0 ? "completed" : status,
+                    conclusion: "success",
+                    runner_id: 7,
+                    runner_name: "owned-label",
+                  },
+                ],
+              },
+            };
+          },
+        },
+      },
+    },
+  });
+  if (phase === "cancel" && !completes) {
+    await expect(execution).rejects.toThrow("Canary cancellation did not settle");
+  } else {
+    await execution;
+  }
+  if (phase === "watch") {
+    expect(outputs.get("terminal")).toBe(String(completes));
+    expect(outputs.get("succeeded")).toBe(completes || "false");
+    expect(failures).toHaveLength(completes ? 0 : 1);
+  }
+  expect(cancelled).toBe(phase === "cancel");
+  expect(now).toBe(completes ? 5_000 : 300_000);
+  expect(cleanup.needs).not.toContain("runner_canary");
+  const cancel = cleanup.steps.findIndex(
+    (step) => step.name === "Cancel an unfinished canary before cleanup",
+  );
+  expect(cancel).toBeLessThan(cleanup.steps.findIndex((step) => step.id === "nightly"));
+  expect(cleanup.steps[cancel].if).toContain("always()");
+  expect(cleanup.steps.find((step) => step.id === "nightly")!.if).toBe("always()");
+});
+
 it.each(["schedule", "workflow_dispatch"] as const)("restricts %s to main", (eventName) => {
   expect(
     [
@@ -78,7 +163,7 @@ it.each(["schedule", "workflow_dispatch"] as const)("restricts %s to main", (eve
 
 it("pins candidate, tooling and qualification inputs through the SHA-pinned helper", () => {
   const text = workflow.readTrackedText(nightlyPath);
-  expect(text).not.toMatch(/createWorkflowDispatch|gh workflow run|github-script/u);
+  expect(text).not.toMatch(/createWorkflowDispatch|gh workflow run/u);
   expect(text).toContain("--trusted-workflow-ref main");
   expect(text).not.toMatch(/--ref\s+main|ref:\s*["']?main["']?\s*$/mu);
   expect(Object.keys(nightly.jobs)).toEqual([
@@ -182,9 +267,7 @@ it("routes long watchers to their own Boat runner and always cleans up after the
         }),
       ).toBe(true);
     }
-    expect(selected.jobs[cleanup].needs).toEqual(
-      selected === nightly ? [provision, "runner_canary", ...waiters] : [provision, ...waiters],
-    );
+    expect(selected.jobs[cleanup].needs).toEqual([provision, ...waiters]);
     expect(
       workflow.evaluateWorkflow(`\${{ ${selected.jobs[cleanup].if} }}`, {
         ...failedProvision,

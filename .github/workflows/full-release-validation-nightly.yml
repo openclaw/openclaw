@@ -146,12 +146,14 @@ jobs:
 
   cleanup_boat_nightly_runner:
     name: Remove Boat nightly runner
-    needs: [boat_nightly_runner, runner_canary, validate]
+    needs: [boat_nightly_runner, validate]
     if: always() && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'runner-canary'))
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'runner-canary' && 25 || 15 }}
     permissions:
       contents: read
+      # The canary watchdog cancels only this workflow before normal cleanup.
+      actions: write
     steps:
       - name: Checkout Boat runner tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -167,6 +169,70 @@ jobs:
         uses: ./.github/actions/setup-boat
       - name: Setup Crabbox
         run: node --import ./scripts/tsx.mjs scripts/crabbox-setup.mts
+      # This hosted job must not wait on runner_canary: a runner that never
+      # accepts the job cannot start that job's execution timeout.
+      - name: Await the managed runner canary
+        id: canary_wait
+        timeout-minutes: 6
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'runner-canary' && needs.boat_nightly_runner.result == 'success'
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CANARY_LABEL: ${{ needs.boat_nightly_runner.outputs.nightly_label }}
+        with:
+          script: |
+            core.setOutput("terminal", "false");
+            core.setOutput("succeeded", "false");
+            const deadline = Date.now() + 5 * 60_000;
+            while (Date.now() < deadline) {
+              const { data } = await github.rest.actions.listJobsForWorkflowRunAttempt({
+                ...context.repo, run_id: context.runId,
+                attempt_number: Number(process.env.GITHUB_RUN_ATTEMPT), per_page: 100,
+                request: { timeout: 10_000 },
+              });
+              const matches = data.jobs.filter((job) => job.name === "Verify Boat runner scheduling");
+              if (matches.length > 1) throw new Error("Ambiguous canary job identity.");
+              const job = matches[0];
+              if (job && (job.head_sha !== context.sha || !job.labels.includes(process.env.CANARY_LABEL))) {
+                throw new Error("Canary job does not match this workflow's runner.");
+              }
+              if (job?.status === "completed") {
+                core.setOutput("terminal", "true");
+                core.setOutput("succeeded", job.conclusion === "success" && job.runner_id > 0 &&
+                  job.runner_name === process.env.CANARY_LABEL);
+                return;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 5_000));
+            }
+            core.setFailed("The managed runner did not complete the canary within five minutes.");
+      - name: Cancel an unfinished canary before cleanup
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.operation == 'runner-canary' && steps.canary_wait.outputs.terminal != 'true'
+        timeout-minutes: 6
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CANARY_LABEL: ${{ needs.boat_nightly_runner.outputs.nightly_label }}
+        with:
+          script: |
+            await github.rest.actions.cancelWorkflowRun({
+              ...context.repo, run_id: context.runId, request: { timeout: 10_000 },
+            });
+            const deadline = Date.now() + 5 * 60_000;
+            while (Date.now() < deadline) {
+              const { data } = await github.rest.actions.listJobsForWorkflowRunAttempt({
+                ...context.repo, run_id: context.runId,
+                attempt_number: Number(process.env.GITHUB_RUN_ATTEMPT), per_page: 100,
+                request: { timeout: 10_000 },
+              });
+              const matches = data.jobs.filter((job) => job.name === "Verify Boat runner scheduling");
+              if (matches.length > 1) throw new Error("Ambiguous canary job identity.");
+              const job = matches[0];
+              if (job && (job.head_sha !== context.sha || !job.labels.includes(process.env.CANARY_LABEL))) {
+                throw new Error("Canary job does not match this workflow's runner.");
+              }
+              if (job?.status === "completed") return;
+              await new Promise((resolve) => setTimeout(resolve, 5_000));
+            }
+            throw new Error("Canary cancellation did not settle; resource cleanup will still be attempted.");
       - name: Cleanup nightly runner
         id: nightly
         if: always()
@@ -181,3 +247,8 @@ jobs:
           app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
           vm: ${{ needs.boat_nightly_runner.outputs.nightly_vm }}
           runner: ${{ needs.boat_nightly_runner.outputs.nightly_runner }}
+      - name: Require successful canary completion
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.operation == 'runner-canary'
+        env:
+          CANARY_SUCCEEDED: ${{ steps.canary_wait.outputs.succeeded }}
+        run: test "$CANARY_SUCCEEDED" = true
