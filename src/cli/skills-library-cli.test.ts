@@ -115,6 +115,21 @@ describe("skills library CLI", () => {
     expect(mocks.writeJson).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["list", []],
+    ["read", [skillId]],
+  ])(
+    "suppresses the aborted request rejection instead of rendering failure (%s)",
+    async (name, args) => {
+      mocks.signal = AbortSignal.abort();
+      mocks.call.mockRejectedValue(new Error(`gateway request aborted for skills.library.${name}`));
+      await parse([name, ...args, "--json"]);
+      expect(mocks.call).toHaveBeenCalled();
+      expect(mocks.writeJson).not.toHaveBeenCalled();
+      expect(mocks.error).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["list", "create", "import", "rollback", "refresh"])(
     "inherits connection and JSON options before or after %s",
     async (name) => {

@@ -85,7 +85,17 @@ export function registerSkillsLibraryCli(skills: Command): void {
         json: value("json"),
       };
       const signal = readOnly ? getAsyncWorkSignal() : undefined;
-      const result = await action(opts, signal);
+      let result: T;
+      try {
+        result = await action(opts, signal);
+      } catch (error) {
+        // A cancellation rejection races the output guard: swallowing it keeps an
+        // interrupted read from rendering failure output (callGatewayReadOnlyCliUnlessAborted pattern).
+        if (signal?.aborted) {
+          return;
+        }
+        throw error;
+      }
       if (signal?.aborted) {
         return;
       }
