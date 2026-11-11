@@ -972,8 +972,8 @@ describe("degraded compaction reload", () => {
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     let sessionManager = SessionManager.open(target, dir);
     for (const at of [1, 3]) {
-      sessionManager.appendMessage(makeUserMessage(`prompt ${at}`, at));
-      sessionManager.appendMessage({
+      await sessionManager.appendMessageAsync(makeUserMessage(`prompt ${at}`, at));
+      await sessionManager.appendMessageAsync({
         ...createAssistant(model, `answer ${at}`),
         timestamp: at + 1,
       });
@@ -1020,9 +1020,8 @@ describe("degraded compaction reload", () => {
     fixture = await safeguardFixture(model, sessionManager);
     expect(JSON.stringify(sessionManager.buildSessionContext())).toBe(context);
     const cancelled = { failure: "timeout", required: false, outcome: "cancelled" };
-    expect(attempts()).toEqual(
-      [1, 2].map(() => ({ ...cancelled, tokensBefore: expect.any(Number) })),
-    );
+    const cancelledRow = { ...cancelled, tokensBefore: expect.any(Number) };
+    expect(attempts()).toEqual([cancelledRow, cancelledRow]);
 
     // A required compaction commits the floor and takes the degraded notice path.
     expect(await compactOnce(true)).toMatchObject({ status: "completed", qualityDegraded: true });
