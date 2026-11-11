@@ -71,6 +71,7 @@ function fixture() {
     hello: null,
     handleSendChat: vi.fn(async () => {}),
     handleOpenSidebar: vi.fn(),
+    handleCloseSidebar: vi.fn(),
   };
   const owner: ChatPaneMcpAppOwner = {
     context,
@@ -151,6 +152,26 @@ function fixture() {
     },
   };
 }
+
+it("opens a transcript App's expanded view in this pane's detail sidebar", () => {
+  const f = fixture();
+  const view = document.createElement("mcp-app-view");
+  view.title = "Excalidraw";
+  f.element.append(view);
+  const detail = { sessionKey: f.state.sessionKey, mode: "fullscreen", view };
+  const expand = () =>
+    !view.dispatchEvent(
+      new CustomEvent("openclaw-mcp-app-display-mode", { detail, bubbles: true, cancelable: true }),
+    );
+  expect(expand()).toBe(true);
+  expect(f.state.handleOpenSidebar).toHaveBeenCalledWith({
+    kind: "mcp-app-preview",
+    title: "Excalidraw",
+    view,
+  });
+  f.owner.presented = false;
+  expect(expand()).toBe(false);
+});
 
 function message(sessionKey: string, target: "active" | "new" = "active") {
   const receipt = createDeferred<boolean>();

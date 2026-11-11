@@ -1,6 +1,11 @@
 import { onCleanup } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
-import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "../../components/mcp-app-launch.ts";
+import {
+  MCP_APP_OPEN_EVENT,
+  MCP_APP_DISPLAY_MODE_EVENT,
+  type McpAppDisplayModeDetail,
+  type McpAppOpenDetail,
+} from "../../components/mcp-app-launch.ts";
 import {
   MCP_APP_RESOURCE_MENTION_EVENT,
   type McpAppResourceMentionDetail,
@@ -52,6 +57,7 @@ declare global {
     [MCP_APP_FILE_OPEN_EVENT]: CustomEvent<McpAppFileOpenEventDetail>;
     [MCP_APP_CONTEXT_EVENT]: CustomEvent<McpAppContextEventDetail>;
     [MCP_APP_OPEN_EVENT]: CustomEvent<McpAppOpenDetail>;
+    [MCP_APP_DISPLAY_MODE_EVENT]: CustomEvent<McpAppDisplayModeDetail>;
   }
 }
 
@@ -65,6 +71,7 @@ type ChatPaneMcpAppState = ChatComposerScope &
     | "hello"
     | "handleSendChat"
     | "handleOpenSidebar"
+    | "handleCloseSidebar"
     | "sessionWorkspaceState"
     | "connectionEpoch"
     | "sessions"
@@ -83,6 +90,7 @@ export type ChatPaneMcpAppOwner = {
   replaceAttachments: (attachments: ChatPaneMcpAppState["chatAttachments"]) => void;
   /** Captures this state; the workspace owner still owns file admission and rendering. */
   openFile: (path: string) => void | Promise<SessionWorkspacePreview | undefined>;
+  openAppPanel?: () => void;
 };
 
 /** Create inside the mounted pane's Solid owner. */
@@ -310,6 +318,29 @@ export function createChatPaneMcpApps(options: {
   }
 
   // Pane-local listeners keep split-view prompts with their iframe.
+  function receiveDisplayMode(event: CustomEvent<McpAppDisplayModeDetail>): void {
+    const owner = presentedEventOwner(event);
+    if (!owner) {
+      return;
+    }
+    const { view, mode } = event.detail;
+    if (mode === "fullscreen") {
+      event.preventDefault();
+      owner.state.handleOpenSidebar({
+        kind: "mcp-app-preview",
+        title: view.title || t("mcpApp.title"),
+        view,
+      });
+      owner.openAppPanel?.();
+    } else if (
+      owner.state.sidebarContent?.kind === "mcp-app-preview" &&
+      owner.state.sidebarContent.view === view
+    ) {
+      event.preventDefault();
+      owner.state.handleCloseSidebar("detail");
+    }
+  }
+
   const element = options.element;
   const stopEvents = [
     listen(element, MCP_APP_RESOURCE_MENTION_EVENT, { handleEvent: receiveResourceMention }),
@@ -317,6 +348,7 @@ export function createChatPaneMcpApps(options: {
     listen(element, MCP_APP_FILE_OPEN_EVENT, { handleEvent: receiveFile }),
     listen(element, MCP_APP_CONTEXT_EVENT, { handleEvent: receiveContext }),
     listen(element, MCP_APP_OPEN_EVENT, { handleEvent: receiveOpen }),
+    listen(element, MCP_APP_DISPLAY_MODE_EVENT, { handleEvent: receiveDisplayMode }),
     listen(element, WIDGET_PROMPT_EVENT, { handleEvent: receiveWidgetPrompt }),
   ];
   onCleanup(() => {

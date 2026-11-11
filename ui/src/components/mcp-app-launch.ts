@@ -3,6 +3,29 @@ import type {
   McpAppExtensionTarget,
 } from "../../../src/shared/mcp-app-extensions.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import type { McpAppViewElement } from "./mcp-app-view-types.ts";
+
+export const MCP_APP_DISPLAY_MODE_EVENT = "openclaw-mcp-app-display-mode";
+export type McpAppDisplayModeDetail = {
+  sessionKey: string;
+  mode: "inline" | "fullscreen";
+  view: McpAppViewElement;
+};
+
+/** The containing conversation can present an expanded App beside its composer. */
+export function requestMcpAppDisplayMode(view: McpAppViewElement): boolean {
+  return (
+    view.surface === "conversation" &&
+    !view.dispatchEvent(
+      new CustomEvent<McpAppDisplayModeDetail>(MCP_APP_DISPLAY_MODE_EVENT, {
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+        detail: { sessionKey: view.sessionKey, mode: view.displayMode, view },
+      }),
+    )
+  );
+}
 
 /** The synchronous workspace owner retires presentation without cancelling admitted writes. */
 export type McpAppPanelRetirement = (retire: () => void) => () => void;

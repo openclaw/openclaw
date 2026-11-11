@@ -43,6 +43,26 @@ mcp-app-view .exit-fullscreen {
   top: 4px;
   right: 8px;
 }
+mcp-app-view[display-mode="fullscreen"][data-sidebar] {
+  inset: auto;
+  top: anchor(top, -10000px);
+  left: anchor(left, -10000px);
+  width: anchor-size(width, 0px);
+  height: anchor-size(height, 0px);
+  min-height: 0;
+  padding: 0;
+}
+mcp-app-view[data-sidebar]:not([data-sidebar-ready]) {
+  visibility: hidden;
+}
+mcp-app-view[data-sidebar] .exit-fullscreen {
+  display: none;
+}
+.mcp-app-sidebar-target {
+  width: 100%;
+  height: 100%;
+  min-height: 160px;
+}
 mcp-app-view .inactive {
   display: flex;
   align-items: center;

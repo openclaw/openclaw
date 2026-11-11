@@ -58,5 +58,9 @@ export type McpAppViewProps = {
   relaunching: boolean;
   displayMode: "inline" | "fullscreen";
 };
-export type ViewMethods = { teardown(): Promise<void>; restartAfterTeardown(): void };
+export type ViewMethods = {
+  teardown(): Promise<void>;
+  restartAfterTeardown(): void;
+  presentInSidebar(target: HTMLElement): () => void;
+};
 export type McpAppViewElement = SolidBridgeElement<McpAppViewProps, ViewMethods>;

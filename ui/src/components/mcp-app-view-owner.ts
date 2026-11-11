@@ -20,6 +20,7 @@ import {
   waitForMcpAppHandlerRegistration,
   waitForMcpAppInitialization,
 } from "./mcp-app-frame.ts";
+import { requestMcpAppDisplayMode } from "./mcp-app-launch.ts";
 import {
   buildMcpAppHostCapabilities,
   dispatchMcpAppMessage,
@@ -72,6 +73,7 @@ export function createMcpAppView(
     | undefined;
   let titleInput: string | undefined;
   let surfaceInput: McpAppViewProps["surface"] | undefined;
+  let presentedMode: McpAppViewProps["displayMode"] | undefined;
 
   function inputChanged() {
     if (!started || disposed || inputFlushPending) {
@@ -244,6 +246,11 @@ export function createMcpAppView(
 
   function updatePresentation() {
     confirmation.update();
+    if (presentedMode !== host.displayMode) {
+      presentedMode = host.displayMode;
+      const claimed = requestMcpAppDisplayMode(host);
+      host.toggleAttribute("data-sidebar", claimed && host.displayMode === "fullscreen");
+    }
     if (host.displayMode === "fullscreen") {
       promoteToPopoverTopLayer(host, () => [host]);
     } else {

@@ -344,6 +344,12 @@ type McpAppSidebarContent = {
 };
 
 export type SidebarContent =
+  | {
+      kind: "mcp-app-preview";
+      title: string;
+      view: import("../../../components/mcp-app-view-types.ts").McpAppViewElement;
+      rawText?: null;
+    }
   | McpAppSidebarContent
   | ToolOutputSidebarContent
   | MarkdownSidebarContent

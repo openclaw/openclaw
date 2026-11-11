@@ -6,6 +6,7 @@ import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { McpAppConfirmation } from "./mcp-app-confirm-solid.tsx";
+import { presentMcpAppInSidebar } from "./mcp-app-sidebar.ts";
 import { registerMcpAppUnmountTarget } from "./mcp-app-unmount.ts";
 import { createMcpAppView, type McpAppViewOwner } from "./mcp-app-view-owner.ts";
 import type { McpAppViewProps, McpAppViewElement, ViewMethods } from "./mcp-app-view-types.ts";
@@ -102,6 +103,7 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
     methods: {
       teardown: (host) => owners.get(host)?.teardown() ?? Promise.resolve(),
       restartAfterTeardown: (host) => owners.get(host)?.restartAfterTeardown(),
+      presentInSidebar: (host, target) => presentMcpAppInSidebar(host, target),
     },
   },
 );
