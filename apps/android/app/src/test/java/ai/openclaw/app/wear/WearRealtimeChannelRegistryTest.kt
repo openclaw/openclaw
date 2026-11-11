@@ -489,12 +489,15 @@ class WearRealtimeChannelRegistryTest {
       }
     }
 
+  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun `promotion reserved before discovery timeout commits after bounded cleanup`() =
     runBlocking {
+      val handoffDispatcher = UnconfinedTestDispatcher()
       val registry =
         WearRealtimeChannelRegistry(
-          scope = scope,
+          // Keep expiry and handoff timers virtual; channel readers still run on IO.
+          scope = CoroutineScope(scope.coroutineContext + handoffDispatcher),
           transport = transport,
           connectionReadyTimeoutMillis = 200L,
           pendingConnectionTimeoutMillis = 1_000L,
@@ -520,11 +523,24 @@ class WearRealtimeChannelRegistryTest {
       try {
         registry.accept(first, appendAudio = { _, _ -> }, stopTalk = stopTalk)
         transport.awaitOpened(first)
-        checkNotNull(registry.claim("watch-a", "attempt-a"))
+        val firstOwner = checkNotNull(registry.claim("watch-a", "attempt-a")).owner
         registry.accept(replacement, appendAudio = { _, _ -> }, stopTalk = stopTalk)
         transport.awaitOpened(replacement)
-        val replacementClaim = async { registry.claim("watch-a", "attempt-b") }
+        val replacementClaim = async(handoffDispatcher) { registry.claim("watch-a", "attempt-b") }
+        // Transport open precedes publication; drive polling only until reservation owns the handoff.
+        withTimeout(1_000L) {
+          while (registry.isCurrent(firstOwner)) {
+            handoffDispatcher.scheduler.advanceTimeBy(1L)
+            handoffDispatcher.scheduler.runCurrent()
+            yield()
+          }
+        }
         withTimeout(1_000L) { stopStarted.await() }
+        // Discovery uses monotonic wall time; let its deadline expire before virtual cleanup.
+        delay(250L)
+        assertFalse(replacementClaim.isCompleted)
+        handoffDispatcher.scheduler.advanceTimeBy(300L)
+        handoffDispatcher.scheduler.runCurrent()
 
         val replacementOwner =
           withTimeout(1_000L) {
