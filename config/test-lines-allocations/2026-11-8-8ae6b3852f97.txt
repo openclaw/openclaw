@@ -1,0 +1,5 @@
+70
+# LOCAL 2026.11.8 row 42; source 8ae6b3852f9775007478e69692068828e3c7fc14.
+# Adds configured inventory as last candidate only during Gateway lifecycle; one lifecycle flag owner and standalone scope retained. Scope limits: Mocked discovery worker; no live provider discovery. Parent personal sibling Codex read required if claiming Codex model behavior.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
