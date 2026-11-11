@@ -1,6 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
+import { resolveAgentOperationAgentId } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemoryCallerContext } from "openclaw/plugin-sdk/memory-host-search";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawConfig, OpenClawPluginApi } from "../api.js";
@@ -177,7 +177,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     const agentId =
       config.agentId ??
       requestedAgentId ??
-      (appConfig ? resolveDefaultAgentId(appConfig) : undefined);
+      (appConfig ? resolveAgentOperationAgentId(appConfig) : undefined);
     return { agentId, appConfig, config, signal };
   };
 
