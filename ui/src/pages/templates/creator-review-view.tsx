@@ -6,7 +6,6 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import type { SourceProjection } from "../../lib/reactive/projection.ts";
-import { TemplateArtwork } from "../agents-home/template-artwork.tsx";
 import { agentDocuments, fileRole } from "../agents-home/template-workspace-file-roles.ts";
 import { createSessionAutomationSchedule } from "../chat/components/session-automation-schedule-loader.ts";
 import "../../styles/templates-catalog.css";
@@ -142,7 +141,7 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
           when={category()}
           fallback={
             <span class="template-package-art template-creator__art">
-              <TemplateArtwork />
+              <Icon name="box" />
             </span>
           }
         >

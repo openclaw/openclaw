@@ -520,9 +520,7 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
         {contents()}
         <Show when={input.props.applicationContext}>
           {(context) => (
-            <div class="chat-template-review">
-              <TemplateCreatorReview context={context()} sessionKey={input.props.sessionKey} />
-            </div>
+            <TemplateCreatorReview context={context()} sessionKey={input.props.sessionKey} />
           )}
         </Show>
         <Show when={commentPins() ? getTranscriptState(paneId()) : undefined} keyed>

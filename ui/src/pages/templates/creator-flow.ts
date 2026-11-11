@@ -86,6 +86,16 @@ export class TemplateCreatorFlow implements TemplateCreator {
   }
 
   constructor(private readonly context: ApplicationContext) {
+    // Admission installs retirement before the cold presentation can mount.
+    const router = context.router;
+    let pathname = router.getState().location.pathname;
+    router.subscribe(() => {
+      const next = router.getState().location.pathname;
+      if (next !== pathname) {
+        pathname = next;
+        this.retirePresentation();
+      }
+    });
     let client = context.gateway.snapshot.client;
     context.gateway.subscribe((snapshot) => {
       if (snapshot.client === client) {
@@ -597,12 +607,13 @@ export class TemplateCreatorFlow implements TemplateCreator {
 export function templateCreatorFlow(context: ApplicationContext, target?: TemplateReviewTarget) {
   const owner = templateCreatorOwner(context);
   if (target) {
+    const flows = (owner.inlineFlows ??= new Map());
     const key = JSON.stringify([target.agentId, target.draftId, target.sessionKey]);
-    let flow = owner.inlineFlows.get(key) ?? (owner.flow?.matches(target) ? owner.flow : undefined);
+    let flow = flows.get(key) ?? (owner.flow?.matches(target) ? owner.flow : undefined);
     if (!flow) {
       flow = new TemplateCreatorFlow(context);
     }
-    owner.inlineFlows.set(key, flow);
+    flows.set(key, flow);
     return flow;
   }
   if (!owner.flow || owner.flow.inlineReview) {

@@ -21,20 +21,22 @@ export function ActiveTemplateCreatorReview(props: { flow: TemplateCreator; sess
   };
   return (
     <Show when={visible()}>
-      <Errored
-        fallback={(error, retry) => (
-          <InlineAlert tone="danger" role="alert">
-            {formatUiError(error())}
-            <button class="btn btn--sm" onClick={retry}>
-              {t("common.retry")}
-            </button>
-          </InlineAlert>
-        )}
-      >
-        <Loading fallback={<p role="status">{t("common.loading")}</p>}>
-          <CreatorReviewView flow={props.flow} view={view()} />
-        </Loading>
-      </Errored>
+      <div class="chat-template-review">
+        <Errored
+          fallback={(error, retry) => (
+            <InlineAlert tone="danger" role="alert">
+              {formatUiError(error())}
+              <button class="btn btn--sm" onClick={retry}>
+                {t("common.retry")}
+              </button>
+            </InlineAlert>
+          )}
+        >
+          <Loading fallback={<p role="status">{t("common.loading")}</p>}>
+            <CreatorReviewView flow={props.flow} view={view()} />
+          </Loading>
+        </Errored>
+      </div>
     </Show>
   );
 }

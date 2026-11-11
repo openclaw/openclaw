@@ -50,7 +50,7 @@ type PendingIntent = {
 };
 export type CreatorOwner = {
   flow: TemplateCreator | null;
-  inlineFlows: Map<string, TemplateCreator>;
+  inlineFlows?: Map<string, TemplateCreator>;
   pending: PendingIntent | null;
   loading: boolean;
   subscribe: (listener: () => void) => () => void;
@@ -65,7 +65,6 @@ export function templateCreatorOwner(context: ApplicationContext): CreatorOwner 
   if (!owner) {
     owner = {
       flow: null,
-      inlineFlows: new Map(),
       pending: null,
       loading: false,
       ...createChangeListeners(),
