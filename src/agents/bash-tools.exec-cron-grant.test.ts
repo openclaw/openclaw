@@ -399,7 +399,10 @@ it("rechecks skill authority before spending a standing grant", async () => {
   const result = await runCron();
   expect(result.pendingResult).toBeUndefined();
   expect(result.deniedResult).toBeUndefined();
-  await expectNativeDenied(runNativeCron(result), "skill bin authorization changed before execution");
+  await expectNativeDenied(
+    runNativeCron(result),
+    "skill bin authorization changed before execution",
+  );
   await expectNoNativeEffects(0);
 });
 

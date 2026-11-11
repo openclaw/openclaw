@@ -39,7 +39,6 @@ import {
   resolveExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
 import { hasPosixShellStartupBeforeInlineCommand } from "../infra/exec-wrapper-resolution.js";
-import { LruCache } from "../infra/lru-cache.js";
 import {
   prepareSystemRunMutableFileBinding,
   type SystemRunMutableFileBinding,
@@ -64,12 +63,15 @@ import {
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
 import { prepareCronStandingGrantConsumption } from "./bash-tools.exec-cron-grant.js";
-import { evaluateGatewayShellAllowlist } from "./bash-tools.exec-host-gateway-allowlist.js";
 import {
   chainRevalidations,
-  createGatewaySkillBinAuthorityRecheck,
+  evaluateGatewayShellAllowlistWithSkillAuthority,
   GatewaySkillBinAuthorityWithdrawnError,
 } from "./bash-tools.exec-host-gateway-revalidation.js";
+import {
+  clearAutoReviewDenials,
+  recordAutoReviewDenialReachesLimit,
+} from "./bash-tools.exec-host-gateway.auto-review-denials.js";
 import {
   buildGatewayExecApprovalFollowupSummary,
   buildGatewayExecAllowlistDeniedMessage,
@@ -98,21 +100,6 @@ const ONE_SHOT_ALLOW_ALWAYS: AllowAlwaysPersistenceDecision = {
 };
 // Keep compound reviews bounded independently of the serialized prompt cap.
 const MAX_GATEWAY_AUTO_REVIEW_CANDIDATES = 64;
-const MAX_CONSECUTIVE_AUTO_REVIEW_DENIALS = 3;
-const MAX_AUTO_REVIEW_SESSIONS = 256;
-const consecutiveAutoReviewDenials = new LruCache<number>(MAX_AUTO_REVIEW_SESSIONS);
-
-function recordAutoReviewDenial(sessionKey: string | undefined): number {
-  if (!sessionKey) {
-    return 1;
-  }
-  const count = Math.min(
-    (consecutiveAutoReviewDenials.get(sessionKey) ?? 0) + 1,
-    MAX_CONSECUTIVE_AUTO_REVIEW_DENIALS,
-  );
-  consecutiveAutoReviewDenials.set(sessionKey, count);
-  return count;
-}
 
 /** Processes gateway exec policy and returns execution/approval/denial outcome. */
 export async function processGatewayAllowlist(
@@ -146,24 +133,13 @@ export async function processGatewayAllowlist(
     agentId: params.agentId,
   });
   const fallbackSecurity = minSecurity(hostSecurity, askFallback);
-  const allowlistEval = await evaluateGatewayShellAllowlist(
+  const { allowlistEval, skillAuthority } = await evaluateGatewayShellAllowlistWithSkillAuthority(
     params,
     approvals.allowlist,
     evaluationPolicySnapshot.autoAllowSkills,
   );
   const allowlistMatches = allowlistEval.allowlistMatches;
   const analysisOk = allowlistEval.analysisOk;
-  const {
-    resolveSkillBinAuthorityDrift,
-    revalidateSkillBinAuthority,
-    assertSkillBinAuthorityCurrent,
-  } = createGatewaySkillBinAuthorityRecheck({
-    allowlistParams: params,
-    analysisOk,
-    segments: allowlistEval.segments,
-    segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
-    autoAllowSkills: evaluationPolicySnapshot.autoAllowSkills,
-  });
   const allowlistSatisfied =
     hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
   const obsoleteGeneratedApprovalCount = countObsoleteGeneratedExecApprovals(approvals.file);
@@ -319,7 +295,7 @@ export async function processGatewayAllowlist(
     }
     assertCommittedAuthorization();
     // Committed policy never records skill trust; hold it through native initiation too.
-    assertSkillBinAuthorityCurrent?.();
+    skillAuthority.assertSkillBinAuthorityCurrent?.();
   };
   const commitExecutionAuthorization = async (options: {
     source: ExecApprovalUsageAuthorization["source"];
@@ -511,16 +487,13 @@ export async function processGatewayAllowlist(
         });
       return {
         execCommandOverride: enforcedCommand,
-        assertCurrent: () => {
-          consumeGrant.assertCurrent();
-          assertSkillBinAuthorityCurrent?.();
-        },
+        assertCurrent: skillAuthority.holdWith(consumeGrant.assertCurrent),
         initiateSpawn: consumeGrant.initiateSpawn,
         releaseSpawn: consumeGrant.releaseSpawn,
         revalidateBeforeExecution: async () => {
           // Recheck skill authority before consuming the grant, so a withdrawn skill bin denies
           // the launch without spending the standing grant.
-          const skillAuthorityDenied = await revalidateSkillBinAuthority?.();
+          const skillAuthorityDenied = await skillAuthority.revalidateSkillBinAuthority?.();
           if (skillAuthorityDenied) {
             return skillAuthorityDenied;
           }
@@ -629,7 +602,7 @@ export async function processGatewayAllowlist(
               cwd: params.workdir,
             })
         : undefined,
-      revalidateSkillBinAuthority,
+      skillAuthority.revalidateSkillBinAuthority,
     ]);
     const authorizationCandidates = allowlistEval.authorizationPlan?.ok
       ? allowlistEval.authorizationPlan.groups.flatMap((group) => group.candidates)
@@ -712,8 +685,7 @@ export async function processGatewayAllowlist(
         throw error;
       }
       const denialEscalated =
-        decision.decision === "deny" &&
-        recordAutoReviewDenial(params.sessionKey) >= MAX_CONSECUTIVE_AUTO_REVIEW_DENIALS;
+        decision.decision === "deny" && recordAutoReviewDenialReachesLimit(params.sessionKey);
       publishGatewayGuardianReview(
         params,
         decision.decision === "allow-once" ? "approved" : "denied",
@@ -725,9 +697,7 @@ export async function processGatewayAllowlist(
           if (decision.risk !== "low" && decision.risk !== "medium") {
             break;
           }
-          if (params.sessionKey) {
-            consecutiveAutoReviewDenials.delete(params.sessionKey);
-          }
+          clearAutoReviewDenials(params.sessionKey);
           const deniedResult = await revalidateGatewayExecApprovalBinding({
             binding: approvalMutableFileBinding,
             cwdSnapshot: approvedCwdSnapshot,
@@ -950,8 +920,8 @@ export async function processGatewayAllowlist(
       }
 
       const { decision, state: resolvedDecision } = approvalOutcome;
-      if (decision !== null && params.sessionKey) {
-        consecutiveAutoReviewDenials.delete(params.sessionKey);
+      if (decision !== null) {
+        clearAutoReviewDenials(params.sessionKey);
       }
       const { approvedByAsk } = resolvedDecision;
       let { deniedReason } = resolvedDecision;
@@ -1148,7 +1118,8 @@ export async function processGatewayAllowlist(
                 // same skill-authority re-resolution as the inline paths; assertCurrent then
                 // holds the authority it verifies through native initiation.
                 finalBindingDenied =
-                  (await resolveApprovalDrift()) ?? (await resolveSkillBinAuthorityDrift?.());
+                  (await resolveApprovalDrift()) ??
+                  (await skillAuthority.resolveSkillBinAuthorityDrift?.());
                 if (finalBindingDenied) {
                   throw finalBindingDeniedError;
                 }
@@ -1271,7 +1242,7 @@ export async function processGatewayAllowlist(
             cwd: params.workdir,
           })
       : undefined,
-    revalidateSkillBinAuthority,
+    skillAuthority.revalidateSkillBinAuthority,
   ]);
   return {
     execCommandOverride: enforcedCommand,

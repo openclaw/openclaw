@@ -1,14 +1,19 @@
 // Spawn-boundary recheck of skill-bin authority for gateway-host exec, turned into the denial the
 // launch reports instead of spawning, and held through native initiation. Approval-binding drift
 // stays with bash-tools.exec-approval-binding.
-import type { ExecCommandSegment, ExecSegmentSatisfiedBy } from "../infra/exec-approvals.js";
+import type {
+  ExecAllowlistEntry,
+  ExecCommandSegment,
+  ExecSegmentSatisfiedBy,
+} from "../infra/exec-approvals.js";
 import {
+  evaluateGatewayShellAllowlist,
   findStaleHeldGatewaySkillBinSegment,
   type HeldGatewaySkillBinAuthority,
   verifyGatewaySkillBinAuthority,
 } from "./bash-tools.exec-host-gateway-allowlist.js";
-import type { ProcessGatewayAllowlistParams } from "./bash-tools.exec-host-gateway.types.js";
 import { buildGatewayExecApprovalDeniedToolResult } from "./bash-tools.exec-host-gateway.output.js";
+import type { ProcessGatewayAllowlistParams } from "./bash-tools.exec-host-gateway.types.js";
 import { ExecProcessPreflightError } from "./bash-tools.exec-launch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -52,7 +57,7 @@ export class GatewaySkillBinAuthorityWithdrawnError extends ExecProcessPreflight
  * secret-egress registration, the supervisor scope fence and adapter preparation all await after
  * them. All members are undefined when no segment was admitted on skill trust.
  */
-export function createGatewaySkillBinAuthorityRecheck(params: {
+function createGatewaySkillBinAuthorityRecheck(params: {
   allowlistParams: ProcessGatewayAllowlistParams;
   analysisOk: boolean;
   segments: readonly ExecCommandSegment[];
@@ -65,6 +70,7 @@ export function createGatewaySkillBinAuthorityRecheck(params: {
       resolveSkillBinAuthorityDrift: undefined,
       revalidateSkillBinAuthority: undefined,
       assertSkillBinAuthorityCurrent: undefined,
+      holdWith: (assertCurrent: () => void) => assertCurrent,
     };
   }
   // Nothing is held until a re-resolution verifies trust, so initiation without one denies.
@@ -94,5 +100,27 @@ export function createGatewaySkillBinAuthorityRecheck(params: {
     resolveSkillBinAuthorityDrift,
     revalidateSkillBinAuthority,
     assertSkillBinAuthorityCurrent,
+    /** Extends another initiation-time currentness check to also hold skill-bin authority. */
+    holdWith: (assertCurrent: () => void) => () => {
+      assertCurrent();
+      assertSkillBinAuthorityCurrent();
+    },
   };
+}
+
+/** Evaluates the gateway allowlist and prepares the authority recheck for its skill-trusted segments. */
+export async function evaluateGatewayShellAllowlistWithSkillAuthority(
+  params: ProcessGatewayAllowlistParams,
+  allowlist: ExecAllowlistEntry[],
+  autoAllowSkills: boolean,
+) {
+  const allowlistEval = await evaluateGatewayShellAllowlist(params, allowlist, autoAllowSkills);
+  const skillAuthority = createGatewaySkillBinAuthorityRecheck({
+    allowlistParams: params,
+    analysisOk: allowlistEval.analysisOk,
+    segments: allowlistEval.segments,
+    segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
+    autoAllowSkills,
+  });
+  return { allowlistEval, skillAuthority };
 }
