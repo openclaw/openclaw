@@ -61,6 +61,20 @@ async function runWithRetainedUpdateRuntime<T>(
   moduleUrl: string,
   operation: (retain: RetainUpdateRuntime) => Promise<T>,
 ): Promise<T> {
+  // Temporary CI diagnostics; remove before production integration.
+  const diagnostics = process.env.OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS === "1";
+  const started = diagnostics ? performance.now() : 0;
+  const trace = (stage: string) => {
+    if (diagnostics) {
+      process.stderr.write(
+        JSON.stringify({
+          phase: "retained-owner",
+          stage,
+          elapsedMs: Math.round(performance.now() - started),
+        }) + "\n",
+      );
+    }
+  };
   let directory: string | undefined;
   let prepared = false;
   let closing = false;
@@ -82,12 +96,14 @@ async function runWithRetainedUpdateRuntime<T>(
           if (prepared) {
             return undefined;
           }
+          trace("package-root-start");
           const root = await resolveOpenClawPackageRoot({ moduleUrl });
           if (!root) {
             throw new Error("Cannot retain the running updater's package root");
           }
           const sourceRoot = await fs.realpath(root);
           assertCurrent();
+          trace("package-root-ready");
           // Boundaries use the same native spelling as sourceRoot. Windows 8.3
           // names and case-insensitive volumes otherwise hide that the update
           // replaces this runtime, and its workers load from the new package.
@@ -121,12 +137,14 @@ async function runWithRetainedUpdateRuntime<T>(
           ) {
             return undefined;
           }
+          trace("maintenance-start");
           await maintainRetainedUpdateRuntimes({
             packageRoots: [sourceRoot],
             repair: true,
             assertCurrent,
           });
           assertCurrent();
+          trace("maintenance-completed");
           // Package inventories include their module owner, and native activation
           // replaces its whole project. Scratch must be a sibling of both boundaries.
           const boundaries = [sourceRoot, ...mutationBoundaries];
@@ -182,6 +200,7 @@ async function runWithRetainedUpdateRuntime<T>(
               path.relative(base, source),
             );
           };
+          trace("scratch-ready");
           const candidateRoot = project(sourceRoot);
           const roots = new Map<string, string>();
           for (const name of ["package.json", "dist", "node_modules"]) {
@@ -192,6 +211,8 @@ async function runWithRetainedUpdateRuntime<T>(
               roots.set(entry, project(entry));
             }
           }
+          trace("roots-ready");
+          trace("inventory-start");
           const inventoryStartedAt = performance.now();
           const plan = await prepareUpdateCandidatePluginTrees({
             roots,
@@ -207,6 +228,8 @@ async function runWithRetainedUpdateRuntime<T>(
             onProgress: assertCurrent,
           });
           const inventoryMs = Math.round(performance.now() - inventoryStartedAt);
+          trace("inventory-completed");
+          trace("materialization-start");
           const materializationStartedAt = performance.now();
           const counts = await withUpdateCandidateIoBudget(
             { directory: privateRoot, bytes: plan.bytes, timeoutMs, progress: "reported" },
@@ -225,6 +248,7 @@ async function runWithRetainedUpdateRuntime<T>(
               }),
           );
           const materializationMs = Math.round(performance.now() - materializationStartedAt);
+          trace("materialization-completed");
           assertCurrent();
           const relocations = prepareRuntimeRelocations(
             [
@@ -236,6 +260,7 @@ async function runWithRetainedUpdateRuntime<T>(
           );
           const resolve = (url: URL) =>
             pathToFileURL(relocateRuntimePath(fileURLToPath(url), relocations));
+          trace("binding-start");
           bind(resolve);
           // Workers and the parent must use the same generation after activation
           // replaces dist; preserving URLs also preserves already-loaded singletons.
@@ -254,6 +279,7 @@ async function runWithRetainedUpdateRuntime<T>(
               })),
           );
           prepared = true;
+          trace("binding-completed");
           return {
             inventoryMs,
             materializationMs,

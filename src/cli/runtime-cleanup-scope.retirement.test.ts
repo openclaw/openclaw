@@ -241,6 +241,7 @@ for (const runtime of ["node", "node-short-path"] as const) {
                 OPENCLAW_STATE_DIR: stateDirectory,
                 OPENCLAW_CONFIG_PATH: path.join(stateDirectory, "openclaw.json"),
                 OPENCLAW_TEST_FAST: "1",
+                OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS: process.env.OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS,
                 NODE_DISABLE_COMPILE_CACHE: "1",
                 TMPDIR: directory,
                 TMP: directory,
