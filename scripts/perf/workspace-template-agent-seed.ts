@@ -108,12 +108,20 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const config = { session: { maintenance: morningSessionMaintenance } };
   setRuntimeConfigSnapshot(config, config);
   const { seedTeamShapeSessions } = await import("./team-shape-sessions.js");
-  const { closeOpenClawAgentDatabasesAsync } = await import("../../src/state/openclaw-agent-db.js");
-  const { closeOpenClawStateDatabaseAsync } = await import("../../src/state/openclaw-state-db.js");
+  const agentDb = await import("../../src/state/openclaw-agent-db.js");
+  const stateDb = await import("../../src/state/openclaw-state-db.js");
+  const { retainOpenClawStateDatabaseForIdle } =
+    await import("../../src/state/openclaw-state-db-cache.js");
   const { drainGlobalSingletonLifecycleState } =
     await import("../../src/shared/global-singleton.js");
   const started = performance.now();
+  const agent = agentDb.openOpenClawAgentDatabase({ agentId: "fixture" });
+  const state = stateDb.openOpenClawStateDatabase();
+  const releaseState = retainOpenClawStateDatabaseForIdle(state);
   try {
+    // The offline writer owns checkpoints; join periodic work before the bulk load.
+    await agent.walMaintenance.stop();
+    await state.walMaintenance.stop();
     await seedTeamShapeSessions({
       stateDir,
       agentId: "fixture",
@@ -124,8 +132,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       transcriptBytes,
     });
   } finally {
-    await closeOpenClawAgentDatabasesAsync();
-    await closeOpenClawStateDatabaseAsync();
+    releaseState();
+    await agentDb.closeOpenClawAgentDatabasesAsync();
+    await stateDb.closeOpenClawStateDatabaseAsync();
     await drainGlobalSingletonLifecycleState();
   }
   const evidence = inspect(stateDir, sessions);

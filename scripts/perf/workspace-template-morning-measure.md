@@ -42,6 +42,11 @@ nice -n 19 node --max-old-space-size=2048 --import ./scripts/tsx.mjs \
 
 The helper generates deterministic synthetic session metadata, participants and
 real transcript rows for agent `fixture`. It adds no tables or schema changes.
+Like the canonical offline fixture caller, it retains the state handle and stops
+and joins both handles' periodic WAL maintenance before bulk loading. The writer
+still requires each explicit checkpoint to complete. This avoids competing with
+Linux sidecar inspection during a long seed; measured arms open fresh owners with
+normal periodic maintenance enabled.
 `--transcript-mib` measures logical text; canonical transcript/search storage
 amplifies those bytes. Bounded 64/256 MiB calibration produced approximately
 2.96 database bytes per logical byte, so the full input targets approximately
