@@ -119,15 +119,24 @@ function heavyOf(d, isButton) {
   return { heavy: backdrop || !none(d.filter) || opacity || shadow, backdrop: backdrop };
 }
 function specificity(steps) {
-  var ids = 0, classes = 0, tags = 0;
+  var ids = 0, classes = 0, tags = 0, extra = 0;
   steps.forEach(function (s) {
     var c = s.c;
     if (c.id !== null) ids++;
-    classes += c.classes.length + c.attrs.length + c.pseudos.filter(function (p) { return p.name !== "not" && p.name !== "is" && p.name !== "where"; }).length;
+    c.pseudos.forEach(function (p) {
+      // :where() adds nothing; :is(), :not() and :has() take their most specific argument.
+      if (p.name === "where") return;
+      if (p.name === "is" || p.name === "not" || p.name === "has") {
+        extra += parseSelector(p.arg || "").reduce(function (max, inner) { return Math.max(max, specificity(inner)); }, 0);
+        return;
+      }
+      classes++;
+    });
+    classes += c.classes.length + c.attrs.length;
     if (c.tag) tags++;
     if (c.pseudoEl) tags++;
   });
-  return ids * 10000 + classes * 100 + tags;
+  return ids * 10000 + classes * 100 + tags + extra;
 }
 function measure() {
   var sheets = [];

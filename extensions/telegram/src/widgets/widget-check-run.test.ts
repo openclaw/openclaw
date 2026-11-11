@@ -82,6 +82,8 @@ TelegramWidget.onEvent('chatDataChanged',draw);draw();</script>`;
     expect(await check(`<style>.cell{opacity:1} span{opacity:.5}</style>${spans}`)).toEqual({
       errors: [],
     });
+    const isRule = `<style>span{opacity:.5}:is(.cell){opacity:1}</style>${spans}`;
+    expect(await check(isRule)).toEqual({ errors: [] });
     expect((await check(`<style>span{opacity:.5}</style>${spans}`)).errors[0]).toMatch(
       /^17 elements/,
     );
