@@ -1,0 +1,2 @@
+# Rendered header/body wallpaper exclusion on desktop/mobile in light/member and dark/guest contexts, plus updated theme-header expectations.
+108

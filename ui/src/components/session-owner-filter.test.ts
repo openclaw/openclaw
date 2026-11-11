@@ -99,6 +99,7 @@ function expectReads(host: ReturnType<typeof fixture>["host"], scheduled: number
 
 describe("sidebar owner filter", () => {
   it("retains a known profile's filter while reconnect identity is unresolved", () => {
+    storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice("profile-ada"));
     const { gateway, host, update } = fixture();
     update();
     for (const phase of ["reconnecting", "connected"] as const) {
@@ -119,6 +120,8 @@ describe("sidebar owner filter", () => {
   it.each(["no query change", "replacement profile", "disconnected host"])(
     "does not carry explicit intent into later automatic work after %s",
     (retirement) => {
+      storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice("profile-ada"));
+      storeSidebarSessionOwnerFilter(gatewayUrl, "replacement-profile", choice(null, true));
       const { connect, disconnect, filter, host, update } = fixture();
       update();
       filter.set(filter.read().ownerId, filter.read().involvingMe);
@@ -130,7 +133,7 @@ describe("sidebar owner filter", () => {
       }
       update({ selfUser: { id: "replacement-profile" } });
       expectReads(host, 2);
-      expectOwner(host, "replacement-profile");
+      expectOwner(host, null, true);
     },
   );
 
@@ -177,8 +180,8 @@ describe("sidebar owner filter", () => {
       ["write role", auth(["operator.sessions.write"], "write")],
       ["admin operator", auth(["operator.admin"])],
       ["legacy hello", {}],
-    ])("keeps the own-sessions default: %s", (_label, snapshot) => {
-      expect(fixture(snapshot).host.sidebarSessionOwnerFilter()).toEqual(choice("profile-ada"));
+    ])("starts on All owners: %s", (_label, snapshot) => {
+      expect(fixture(snapshot).host.sidebarSessionOwnerFilter()).toEqual(choice(null));
     });
   });
 
@@ -302,7 +305,7 @@ describe("sidebar owner filter", () => {
     update({ selfUser: { id: "profile-bob" } });
     expectOwner(host, null, true);
     update({}, "wss://two.example/ws");
-    expectOwner(host, "profile-bob");
+    expectOwner(host, null);
     filter.set("owner-two");
     update();
     update({ selfUser: { id: "profile-ada" } }, gatewayUrl);

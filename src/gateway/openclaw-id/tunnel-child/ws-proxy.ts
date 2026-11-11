@@ -1,6 +1,7 @@
 // kind=ws streams: one tunnel stream carries one WebSocket to the Gateway
 // ingress socket. Each message is one frame: opcode byte (1 text, 2 binary,
 // 8 close + 2-byte code + reason) then data. Either side closes, then FINs.
+import net from "node:net";
 import WebSocket, { type RawData } from "ws";
 import {
   decodeWsMessage,
@@ -31,7 +32,8 @@ export function proxyWs(params: {
 }): Promise<number | "reset"> {
   const { head, reader, send, headers, target } = params;
   return new Promise((resolve) => {
-    const ws = new WebSocket(`ws+unix:${target.socketPath}:${head.path}`, head.protocols, {
+    const ws = new WebSocket(`ws://localhost${head.path}`, head.protocols, {
+      createConnection: () => net.connect(target.socketPath),
       // SAFETY: ws passes headers to http.request, which also accepts string[] values.
       headers: headers as Record<string, string>,
       perMessageDeflate: false,

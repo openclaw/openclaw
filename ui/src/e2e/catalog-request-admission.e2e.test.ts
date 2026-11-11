@@ -44,6 +44,8 @@ async function client(path: string) {
     operatorScopes: ["operator.read", "operator.admin"],
     featureMethods: [
       ...(fixture.scenario.featureMethods ?? []),
+      "models.list",
+      "config.get",
       "tools.catalog",
       "tools.effective",
     ],

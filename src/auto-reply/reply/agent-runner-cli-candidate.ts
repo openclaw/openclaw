@@ -20,7 +20,7 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
 import { resolveCyberAccessProgramForProvider } from "../../agents/model-catalog-access-programs.js";
-import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
+import { findModelByNativeAlias, findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -93,11 +93,14 @@ export async function runCliFallbackCandidate(
     );
   };
   const expectedLifecycleRevision = turn.getActiveSessionEntry()?.lifecycleRevision;
-  const selectedModelEntry = findModelInCatalog(
+  const nativeAliasEntry = findModelByNativeAlias(
     params.candidateRun.thinkingCatalog ?? [],
-    params.provider,
+    params.cliExecutionProvider,
     params.model,
   );
+  const selectedModelEntry =
+    findModelInCatalog(params.candidateRun.thinkingCatalog ?? [], params.provider, params.model) ??
+    nativeAliasEntry;
   const modelHasVision = await resolveRunModelHasVision({
     run: params.candidateRun,
     provider: params.provider,
@@ -455,6 +458,7 @@ export async function runCliFallbackCandidate(
             requesterModel: { provider: params.provider, model: params.model },
             modelHasVision,
             modelContextWindow: selectedModelEntry?.contextWindow,
+            ...(nativeAliasEntry ? { nativeModelId: nativeAliasEntry.id } : {}),
             modelContextTokens: selectedModelEntry?.contextTokens,
             contextWindow: sessionEntry?.contextWindow,
             provider: params.cliExecutionProvider,
