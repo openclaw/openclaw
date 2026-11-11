@@ -1,0 +1,4 @@
+23
+# #197307 malformed chat-export rows: subprocess regression for physical-line
+# diagnostics (valid row, blank line, then malformed JSON) asserting exit 1,
+# the row-specific stderr message, no stack frame, and no chunks.json written.
