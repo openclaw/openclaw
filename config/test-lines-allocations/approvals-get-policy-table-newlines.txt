@@ -1,2 +1,0 @@
-2
-# approvals get keeps each Effective Policy setting on its own line instead of a literal backslash-n.
