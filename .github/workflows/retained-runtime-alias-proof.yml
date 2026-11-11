@@ -1,0 +1,80 @@
+name: Retained runtime alias proof
+
+# Diagnostic dispatch only. Never changes a release candidate or qualification ref.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  alias-proof:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["24.22.1", "26.12.1"]
+        alias: [node-short-path, node-junction]
+    env:
+      OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS: "1"
+      ALIAS_MODE: ${{ matrix.alias }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ matrix.node }}
+          install-bun: "false"
+      - name: Record exact source and runtime
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .artifacts/retained-alias | Out-Null
+          git rev-parse HEAD | Tee-Object .artifacts/retained-alias/head.txt
+          node --version | Tee-Object .artifacts/retained-alias/node.txt
+      - name: Run unmodified owner regression and canonical control
+        id: proof
+        shell: pwsh
+        run: |
+          node scripts/run-vitest.mjs src/infra/update-retained-runtime-imports.process.test.ts --maxWorkers=1 -t "keeps (node|$env:ALIAS_MODE) late imports" 2>&1 | Tee-Object .artifacts/retained-alias/unmodified.log
+          exit $LASTEXITCODE
+      - name: Add temporary operand logging only
+        if: ${{ !cancelled() && steps.proof.outcome != 'skipped' }}
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          const file = "src/infra/update-retained-runtime-imports.ts";
+          let source = fs.readFileSync(file, "utf8");
+          const additions = [
+            [
+              "  const relocateUrl = (value: string, mapping: ReadonlyMap<string, string>) => {",
+              '  console.error(JSON.stringify({ phase: "retained-import-maps", rules: prepared.rules, forward: [...forward], reverse: [...reverse] }));',
+            ],
+            [
+              "      if (!parentURL || parentURL === context.parentURL) {",
+              '      console.error(JSON.stringify({ phase: "retained-import-resolve", specifier, parentURL: context.parentURL, relocatedParent: parentURL, conditions: context.conditions, disposition: !parentURL || parentURL === context.parentURL ? "passthrough" : "retained" }));',
+            ],
+          ];
+          for (const [anchor, diagnostic] of additions) {
+            if (source.split(anchor).length !== 2) throw new Error("Diagnostic anchor changed: " + anchor);
+            source = source.replace(anchor, diagnostic + "\n" + anchor);
+          }
+          fs.writeFileSync(file, source);
+          NODE
+          git diff -- src/infra/update-retained-runtime-imports.ts > .artifacts/retained-alias/logging-only.diff
+      - name: Capture exact owner maps and Node hook operands
+        if: ${{ !cancelled() && steps.proof.outcome != 'skipped' }}
+        shell: pwsh
+        run: |
+          node scripts/run-vitest.mjs src/infra/update-retained-runtime-imports.process.test.ts --maxWorkers=1 -t "keeps (node|$env:ALIAS_MODE) late imports" 2>&1 | Tee-Object .artifacts/retained-alias/diagnostic.log
+          exit $LASTEXITCODE
+      - name: Upload proof including failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: retained-alias-node-${{ matrix.node }}-${{ matrix.alias }}-${{ github.run_attempt }}
+          path: .artifacts/retained-alias/
+          if-no-files-found: warn
+          retention-days: 7

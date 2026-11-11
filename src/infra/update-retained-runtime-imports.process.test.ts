@@ -8,9 +8,13 @@ import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 
 const directories = useAutoCleanupTempDirTracker(afterAll);
 
-for (const runtime of ["node", "bun"] as const) {
-  it.skipIf(runtime === "bun" && (process.platform === "win32" || !bunAvailable))(
-    `keeps ${runtime} late imports on the old generation through replacement and CLI teardown`,
+for (const runtime of ["node", "bun", "node-short-path", "node-junction"] as const) {
+  const alias = runtime === "node-short-path" || runtime === "node-junction";
+  it.skipIf(
+    (runtime === "bun" && (process.platform === "win32" || !bunAvailable)) ||
+      (alias && process.platform !== "win32"),
+  )(
+    `keeps ${runtime} late imports on the old generation through replacement and teardown`,
     async () => {
       const base = directories.make("openclaw-retained-imports-");
       const root = path.join(base, "install");
@@ -45,7 +49,7 @@ for (const runtime of ["node", "bun"] as const) {
         "dist/late-old-hash.mjs":
           'import dependency from "fixture"; import conditional from "fixture-conditional"; import commonjs from "fixture-cjs"; import { named } from "fixture-commonjs-js"; import data from "./value.json" with { type: "json" }; import { existsSync } from "node:fs"; import { createRequire } from "node:module"; import path from "path"; import { shared } from "./shared.mjs"; const require = createRequire(import.meta.url); export { shared, commonjs, named, data, conditional }; export const requiredConditional = require("fixture-conditional"); export const required = require("fixture-cjs"); export const requiredJson = require("./value.json"); export const builtin = typeof existsSync === "function" && path.sep.length > 0; export const value = dependency; export const url = import.meta.url;',
         "dist/updater.mjs":
-          'import { fileURLToPath } from "node:url"; import preloaded from "fixture-preloaded"; export { preloaded }; export { shared } from "./shared.mjs"; export const late = () => import("./late-old-hash.mjs"); export const query = () => import("./late-old-hash.mjs?variant=1#x"); export const absolute = () => import(fileURLToPath(new URL("./absolute-old-hash.mjs", import.meta.url))); export const cleanup = () => import("./cleanup-old-hash.mjs");',
+          'import { fileURLToPath } from "node:url"; import preloaded from "fixture-preloaded"; export { preloaded }; export const url = import.meta.url; export { shared } from "./shared.mjs"; export const late = () => import("./late-old-hash.mjs"); export const query = () => import("./late-old-hash.mjs?variant=1#x"); export const absolute = () => import(fileURLToPath(new URL("./absolute-old-hash.mjs", import.meta.url))); export const cleanup = () => import("./cleanup-old-hash.mjs");',
         "dist/absolute-old-hash.mjs": 'export const value = "old absolute";',
         "dist/cleanup-old-hash.mjs": 'export const value = "cleanup retained";',
         "dist/tool-dependency.mjs": 'export const value = "old tooling";',
@@ -54,16 +58,39 @@ for (const runtime of ["node", "bun"] as const) {
       for (const [file, content] of Object.entries(files)) {
         await fs.writeFile(path.join(root, file), content);
       }
+      let importRoot = root;
+      if (runtime === "node-short-path") {
+        const shortPath = spawnSync(
+          process.env.ComSpec ?? "cmd.exe",
+          ["/d", "/c", `for %I in ("${root}") do @echo %~sI`],
+          { encoding: "utf8" },
+        );
+        expect(shortPath.status, shortPath.stderr).toBe(0);
+        importRoot = shortPath.stdout.trim();
+        // No silent fallback: an unavailable 8.3 name is a fixture blocker, not proof.
+        expect(importRoot, "8.3 alias unavailable on the fixture volume").not.toBe(root);
+        expect(await fs.realpath(importRoot)).toBe(await fs.realpath(root));
+      } else if (runtime === "node-junction") {
+        importRoot = path.join(base, "install-alias");
+        await fs.symlink(root, importRoot, "junction");
+      }
       const source = `import assert from "node:assert/strict";
      import fs from "node:fs/promises";
      import path from "node:path";
      import { pathToFileURL } from "node:url";
      import { withRetainedUpdateRuntime } from ${JSON.stringify(new URL("./update-retained-runtime.ts", import.meta.url).href)};
      const root = ${JSON.stringify(root)};
-     const url = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
+     const importRoot = ${JSON.stringify(importRoot)};
+     const url = pathToFileURL(path.join(importRoot, "dist/updater.mjs")).href;
      const updater = await import(url);
+     if (${alias}) {
+       const physicalURL = pathToFileURL(path.join(await fs.realpath(root), "dist/updater.mjs")).href;
+       console.error(JSON.stringify({ phase: "alias-parent", runtime: ${JSON.stringify(runtime)}, requested: url, observed: updater.url, physicalURL }));
+       assert.equal(updater.url, url, "Node canonicalized the alias: fixture did not reach the mismatch");
+       assert.notEqual(updater.url, physicalURL, "alias parent must differ from physical inventory");
+     }
      const jsonBaseline = await import(pathToFileURL(path.join(root, "dist/json-baseline.mjs")).href);
-     await withRetainedUpdateRuntime(url, async retain => {
+     const verify = await withRetainedUpdateRuntime(url, async retain => {
        await retain({ mutationRoots: [root], timeoutMs: 30000, assertCurrent() {} });
        await fs.rm(path.join(root, "dist"), { recursive: true });
        await fs.mkdir(path.join(root, "dist"));
@@ -82,26 +109,33 @@ for (const runtime of ["node", "bun"] as const) {
        await fs.rm(path.join(root, "node_modules/fixture-conditional/require.cjs"));
        await fs.writeFile(path.join(root, "node_modules/fixture-conditional/import.mjs"), 'export default "new import branch";');
        await fs.writeFile(path.join(root, "node_modules/fixture-conditional/require.cjs"), 'module.exports = "new require branch";');
-       const late = await updater.late();
-       assert.equal(late.value, "old dependency");
-       assert.equal(late.conditional, "old import branch");
-       assert.equal(late.requiredConditional, "old require branch");
-       assert.equal(late.commonjs.value, "old CJS dependency");
-       assert.equal(late.named, "old CommonJS JS");
-       assert.equal(late.commonjs, late.required);
-       assert.equal(late.commonjs.state, updater.preloaded);
-       assert.equal(late.data.value, "old JSON");
-       assert.deepEqual(late.requiredJson, { value: "old JSON" });
-       assert.equal(late.data === late.requiredJson, jsonBaseline.sharesIdentity);
-       assert.equal(late.builtin, true);
-       assert.equal(late.shared, updater.shared);
-       assert.equal(late.url, pathToFileURL(path.join(root, "dist/late-old-hash.mjs")).href);
-       const queried = await updater.query();
-       assert.equal(queried.value, "old dependency");
-       assert.equal(queried.url, late.url + "?variant=1#x");
-       assert.equal((await updater.absolute()).value, "old absolute");
-       assert.equal((await import(pathToFileURL(path.join(root, "tooling.mjs")).href)).value, "new tooling");
+       const verify = async () => {
+         const late = await updater.late();
+         assert.equal(late.value, "old dependency");
+         assert.equal(late.conditional, "old import branch");
+         assert.equal(late.requiredConditional, "old require branch");
+         assert.equal(late.commonjs.value, "old CJS dependency");
+         assert.equal(late.named, "old CommonJS JS");
+         assert.equal(late.commonjs, late.required);
+         assert.equal(late.commonjs.state, updater.preloaded);
+         assert.equal(late.data.value, "old JSON");
+         assert.deepEqual(late.requiredJson, { value: "old JSON" });
+         assert.equal(late.data === late.requiredJson, jsonBaseline.sharesIdentity);
+         assert.equal(late.builtin, true);
+         assert.equal(late.shared, updater.shared);
+         assert.equal(late.url, new URL("./late-old-hash.mjs", updater.url).href);
+         const queried = await updater.query();
+         assert.equal(queried.value, "old dependency");
+         assert.equal(queried.url, late.url + "?variant=1#x");
+         assert.equal((await updater.absolute()).value, "old absolute");
+         assert.equal((await import(pathToFileURL(path.join(root, "tooling.mjs")).href)).value, "new tooling");
+       };
+       if (!${alias}) await verify();
+       return verify;
      });
+     // Preserve the existing in-command proof; alias cases first resolve after
+     // the command scope settles, as the old CLI finalizer did.
+     if (${alias}) await verify();
      assert.equal((await updater.cleanup()).value, "cleanup retained");
      assert.equal((await import(pathToFileURL(path.join(root, "dist/late-new-hash.mjs")).href)).value, "new build");`;
       const options = {
@@ -110,6 +144,10 @@ for (const runtime of ["node", "bun"] as const) {
         timeout: 30_000,
         env: {
           PATH: process.env.PATH,
+          SystemRoot: process.env.SystemRoot,
+          // A junction normally canonicalizes; preserve it explicitly to exercise
+          // a real differently spelled Node parent, not a mocked resolve context.
+          NODE_OPTIONS: runtime === "node-junction" ? "--preserve-symlinks" : undefined,
           HOME: base,
           TMPDIR: base,
           OPENCLAW_STATE_DIR: path.join(base, "state"),
@@ -119,12 +157,15 @@ for (const runtime of ["node", "bun"] as const) {
         },
       };
       const result =
-        runtime === "node"
+        runtime !== "bun"
           ? spawnNodeEvalSync(source, {
               ...options,
               imports: [new URL("../../scripts/tsx.mjs", import.meta.url).href],
             })
           : spawnSync("bun", ["--eval", source], options);
+      if (process.env.OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS === "1") {
+        console.error(result.stderr);
+      }
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.status, result.stderr).toBe(0);
     },
