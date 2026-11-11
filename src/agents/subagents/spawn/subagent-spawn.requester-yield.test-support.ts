@@ -1,4 +1,6 @@
 /** Cancellation, yield, and requester-continuation proofs through native owners. */
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
@@ -19,6 +21,7 @@ import {
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
+import { createAgentHarnessHostCapabilities } from "../../harness/host-capability.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -111,6 +114,18 @@ export function registerYieldedRequesterBatchCase(
       const childTool = instance.wrap(() => "CHILD_TOOL_OK");
       const toolResults: string[] = [];
       const deniedTool = createDeferred<unknown>();
+      const allowedEffect = createDeferred();
+      const finishRevokedCall = createDeferred();
+      const target = path.join(
+        expectDefined(bound.cfg.agents?.defaults?.workspace, "workspace"),
+        "yield-authority-probe.txt",
+      );
+      if (actor === "revoke-after-yield") {
+        await fs.writeFile(target, "before");
+      }
+      const openFile = vi.spyOn(fs, "open");
+      const targetOpens = () =>
+        openFile.mock.calls.filter(([name]) => String(name) === target).length;
       const childResult = createDeferred<EmbeddedAgentRunResult>();
       const parentStarted = createDeferred();
       const parentCalls: string[] = [];
@@ -130,6 +145,49 @@ export function registerYieldedRequesterBatchCase(
               resolveAdmittedRunActiveAssertion(admitted, params.abortSignal),
               "child execution authority",
             );
+            if (actor === "revoke-after-yield") {
+              const attempt = {
+                ...params,
+                admittedRunContext: admitted,
+                agentId: "main",
+                config: bound.cfg,
+              };
+              const host = createAgentHarnessHostCapabilities({
+                pluginId: "yield-authority-fixture",
+                attempt,
+              });
+              try {
+                const tools = await host.capabilities.createToolSurfaceAsync!({
+                  config: bound.cfg,
+                  agentId: "main",
+                  sessionKey: params.sessionKey,
+                  workspaceDir: params.workspaceDir,
+                  includeToolSearchControls: false,
+                });
+                const write = expectDefined(
+                  tools.find((tool) => tool.name === "write"),
+                  "real write tool",
+                );
+                childStarts[childCalls++]!.resolve();
+                await childResult.promise;
+                await write.execute("allowed-after-yield", { path: target, content: "allowed" });
+                await recordFinal(bound, params, "Nested child result.");
+                allowedEffect.resolve();
+                await finishRevokedCall.promise;
+                try {
+                  await write.execute("revoked-after-yield", {
+                    path: target,
+                    content: "forbidden",
+                  });
+                  deniedTool.resolve(undefined);
+                } catch (error) {
+                  deniedTool.resolve(error);
+                }
+                return visibleResult("Nested child result.");
+              } finally {
+                host.close();
+              }
+            }
             assertChildCurrent();
             childStarts[childCalls++]!.resolve();
             const aborted = createDeferred<EmbeddedAgentRunResult>();
@@ -142,28 +200,14 @@ export function registerYieldedRequesterBatchCase(
             let result: EmbeddedAgentRunResult;
             try {
               // A held tool can resume after cancellation; its original authority must reject it.
-              result =
-                actor === "revoke-after-yield"
-                  ? await childResult.promise
-                  : await Promise.race([childResult.promise, aborted.promise]);
+              result = await Promise.race([childResult.promise, aborted.promise]);
             } finally {
               params.abortSignal?.removeEventListener("abort", abortChild);
             }
             if (result.meta.aborted) {
               return result;
             }
-            try {
-              assertChildCurrent();
-            } catch (error) {
-              if (actor !== "revoke-after-yield") {
-                throw error;
-              }
-              deniedTool.resolve(error);
-              return { payloads: [], meta: { durationMs: 1, aborted: true } };
-            }
-            if (actor === "revoke-after-yield") {
-              deniedTool.resolve(undefined);
-            }
+            assertChildCurrent();
             toolResults.push(childTool());
             assertChildCurrent();
             await recordFinal(bound, params, "Nested child result.");
@@ -290,9 +334,18 @@ export function registerYieldedRequesterBatchCase(
         guest?.source.closeRequest();
         pluginScope.release();
         if (actor === "revoke-after-yield") {
-          expectDefined(guest, "guest operator source").source.revoke();
           childResult.resolve(visibleResult("Nested child result."));
-          expect(await withinTest(deniedTool.promise, signal)).toBeInstanceOf(Error);
+          await withinTest(allowedEffect.promise, signal);
+          expect(await fs.readFile(target, "utf8")).toBe("allowed");
+          const opensBeforeRevocation = targetOpens();
+          expect(opensBeforeRevocation).toBeGreaterThan(0);
+          expectDefined(guest, "guest operator source").source.revoke();
+          finishRevokedCall.resolve();
+          expect(String(await withinTest(deniedTool.promise, signal))).toMatch(
+            /authority|source|capability|revoked|abort/i,
+          );
+          expect(targetOpens()).toBe(opensBeforeRevocation);
+          expect(await fs.readFile(target, "utf8")).toBe("allowed");
           await vi.waitFor(() => {
             const child = subagentRuns.get(childRunId!);
             expect(!child || child.execution.status === "terminal").toBe(true);
@@ -328,6 +381,8 @@ export function registerYieldedRequesterBatchCase(
       } finally {
         pluginScope.release();
         childResult.resolve(visibleResult("Nested child result."));
+        finishRevokedCall.resolve();
+        openFile.mockRestore();
         deliveryObserver.mockRestore();
         runtime.lifecycle.waitForAgent = waitForRegisteredParent;
         waitCleanup.abort(new Error("yielded requester wait cleanup"));
