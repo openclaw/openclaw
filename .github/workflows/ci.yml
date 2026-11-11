@@ -4917,7 +4917,7 @@ jobs:
   postgres-conformance:
     permissions:
       contents: read
-    name: ${{ matrix.shard == 'pg16-smoke' && 'PostgreSQL 16 Gateway cron smoke' || format('PostgreSQL conformance ({0})', matrix.shard) }}
+    name: PostgreSQL conformance (${{ matrix.shard }})
     needs: [preflight]
     if: needs.preflight.outputs.run_postgres_conformance == 'true'
     runs-on: *ubuntu_linux_runner
