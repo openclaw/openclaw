@@ -1,6 +1,0 @@
-# Approved exact inherited-debt reconciliation for PR #195761.
-# CI merge 69dcb4ab432bfa875285fc1bbbeae766c53b9e25, base 9d5de42838ba1e4e3d700f9f26476c5e037fa9f4.
-# Base: 6635529 test lines / 6635404 ceiling, hence 125 inherited lines.
-# This PR adds 39 lines; its existing 49-line grant covers those plus 10 inherited lines.
-# The remaining 115 makes the merge total and ceiling 6635568, with no new slack.
-115
