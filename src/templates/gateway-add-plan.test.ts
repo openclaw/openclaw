@@ -211,20 +211,20 @@ describe("Gateway Template Add plan", () => {
     expect(projected.configuredAccess).toBeUndefined();
   });
 
-  it("never plans an agent with a reserved system agent ID", async () => {
+  it("rejects a reserved system agent ID like agents add", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-templates-reserved-add-"));
     const fixture = await readFixture();
-    const source = {
+    const reserved = expect.objectContaining({ code: "reserved_agent_id" });
+
+    const declared = await buildPlan({
       ...fixture,
       manifest: { ...fixture.manifest, agent: { ...fixture.manifest.agent, id: "openclaw" } },
-    };
+    });
+    expect(declared.agent.finalId).toBe("openclaw");
+    expect(declared.blockers).toContainEqual(reserved);
 
-    const plan = await buildPlan(source);
-    expect(plan.agent.finalId).toBe("openclaw-2");
-    expect(plan.blockers).toEqual([]);
-
-    const pinned = await buildPlan(source, undefined, "crestodian");
-    expect(pinned.blockers).toContainEqual(expect.objectContaining({ code: "reserved_agent_id" }));
+    const pinned = await buildPlan(fixture, undefined, "crestodian");
+    expect(pinned.blockers).toContainEqual(reserved);
     expect(pinned.actions).toContainEqual(
       expect.objectContaining({ kind: "agent", id: "crestodian", blocked: true }),
     );
