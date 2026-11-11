@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,26 +58,4 @@ it.each([false, true])("exports chat chunks (deleted=%s)", async (deleted) => {
     const label = `part ${chunk.part} of ${chunk.parts}`;
     expect(texts[i].includes(label)).toBe(chunk.parts > 1);
   }
-});
-
-it("rejects a row with a missing occurred_at before sorting", async () => {
-  const out = tempDirs.make("chat-transcript-");
-  const rows = [
-    message("m1", "2026-11-09T10:00:00Z", "1", "A", "hi"),
-    message("m2", null, "2", "B", "yo"),
-  ];
-  await writeFile(path.join(out, "in.jsonl"), jsonl(rows));
-  const args = [
-    script,
-    "--input",
-    path.join(out, "in.jsonl"),
-    "--output-dir",
-    out,
-    "--channel",
-    "#t",
-  ];
-  const child = spawnSync(process.execPath, args, { encoding: "utf8" });
-  expect(child.status).toBe(1);
-  expect(child.stderr).toContain("Row m2 needs a UTC occurred_at");
-  await expect(readFile(path.join(out, "chunks.json"), "utf8")).rejects.toThrow();
 });

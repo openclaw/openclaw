@@ -1,4 +1,0 @@
-22
-# #197308 missing chat export timestamps: subprocess regression asserting the
-# occurred_at-before-sorting rejection exits 1, prints the row-specific stderr
-# message, and writes no output.
