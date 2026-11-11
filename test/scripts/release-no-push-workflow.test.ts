@@ -445,7 +445,7 @@ describe("release validation no-push transport", () => {
         (candidate) => candidate.name === "Report release runner routing",
       );
       expect(notice?.if).toBe("vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'");
-      expect(notice?.run).toContain("QA Lab runtime-pair stays pinned to Blacksmith");
+      expect(notice?.run).toContain("QA Lab runtime-pair stays on its dedicated runtime backend");
     },
   );
 
