@@ -552,7 +552,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
           return false;
         }
         // Backend waits override the headline only; the prior work status stays intact.
-        toolRuns?.breakRun();
+        // A wait renders no tool row, so it must not split a consecutive tool run.
         modelWaitText = payload.phase === "end" ? "" : (payload.progressText ?? "");
         return modelWaitText
           ? await startAndRender({ flush: true })
