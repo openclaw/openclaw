@@ -395,7 +395,7 @@ export async function installTemplateCronJobsStateless(
         declarationId: action.id,
         schedulerJobId: result.id,
         name: "automation" in job ? job.automation.name : (job.name ?? job.id),
-        enabled: "automation" in job ? job.automation.enabled : true,
+        enabled: "automation" in job ? job.automation.enabled : (job.enabled ?? true),
       });
       publishingOutcome = false;
       assertCurrent();

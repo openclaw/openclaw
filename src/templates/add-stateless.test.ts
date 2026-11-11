@@ -1,6 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { cp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
@@ -11,7 +11,6 @@ import {
   readSessionEntryRow,
   writeSessionEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-store.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
   closeOpenClawAgentDatabasesForTest,

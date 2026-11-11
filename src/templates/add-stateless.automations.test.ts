@@ -85,6 +85,7 @@ it.each([false, undefined])(
         runIsolatedAgentJob: run,
       });
       await cron.start();
+      const onSetupEvent = vi.fn(async () => undefined);
       try {
         const result = await applyTemplateAddPlanStateless(plan, {
           config,
@@ -95,6 +96,7 @@ it.each([false, undefined])(
             setRuntimeConfigSnapshot(config);
           },
           cronGateway: createTemplateCronAdapter(cron),
+          onSetupEvent,
         });
         expect(result.status, result.error?.message).toBe("complete");
         const jobs = await cron.list({ includeDisabled: true });
@@ -105,6 +107,14 @@ it.each([false, undefined])(
           agentId: "watcher",
           declarationKey: "template:watcher:weekly",
         });
+        expect(onSetupEvent).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            kind: "automation-created",
+            declarationId: "weekly",
+            schedulerJobId: job.id,
+            enabled: enabled ?? true,
+          }),
+        );
         if (enabled !== false) {
           return;
         }
