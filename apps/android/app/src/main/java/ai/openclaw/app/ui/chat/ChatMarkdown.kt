@@ -986,6 +986,8 @@ private fun buildPlainText(start: Node?): String {
   for (node in markdownSiblings(start)) {
     when (node) {
       is MarkdownTextNode -> sb.append(node.literal)
+      // Code is a leaf node: its text lives in `literal`, so recurse-firstChild would drop it.
+      is Code -> sb.append(node.literal)
       is SoftLineBreak, is HardLineBreak -> sb.append('\n')
       else -> sb.append(buildPlainText(node.firstChild))
     }
