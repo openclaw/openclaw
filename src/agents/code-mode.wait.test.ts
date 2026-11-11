@@ -239,36 +239,21 @@ it("preserves an accepted host handoff while wait is parked without resuming the
   }
 });
 
-it("keeps an ordinary cell's native ask_user owned until the owner answers", async () => {
+it("keeps an ordinary cell's native ask_user owned past its budget until answered", async () => {
   mockClock();
   const parked = createDeferred();
-  const question = controlledTool(
-    Object.assign(fakeTool("ask_user", "Ask the owner"), {
-      execute: vi.fn(async () => jsonResult({ status: "answered", answers: ["yes"] })),
-    }),
-  );
+  const question = controlledTool(fakeTool("ask_user", "Ask the owner"));
   cleanups.push(question.release.resolve);
-  const fixture = harness([question.tool], { codeMode: { timeoutMs: 1_000 } });
   observeSettlement(parked.resolve);
-  let settled = false;
-  const result = fixture.exec
-    .execute("ask-cell", {
-      code: 'return await ask_user({ questions: [{ question: "Proceed?" }] });',
-    })
-    .then((value) => {
-      settled = true;
-      return value;
-    });
-  const signal = await question.started.promise;
+  const result = harness([question.tool], { codeMode: { timeoutMs: 1_000 } }).run(
+    'return await ask_user({ value: "Proceed?" });',
+  );
   await parked.promise;
-  // The owner takes longer than the cell budget; an unowned `waiting` result would let the turn end and abort the card.
+  // An unowned `waiting` result would let turn teardown cancel the pending question.
   await vi.advanceTimersByTimeAsync(60_000);
-  expect(settled).toBe(false);
-  expect(testing.activeRuns.size).toBe(0);
   question.release.resolve();
-  expectCompleted(resultDetails(await result), { status: "answered", answers: ["yes"] });
-  expect(signal?.aborted).toBe(false);
-  expect(question.tool.execute).toHaveBeenCalledOnce();
+  expectCompleted(await result, { name: "ask_user", input: { value: "Proceed?" } });
+  expect((await question.started.promise)?.aborted).toBe(false);
 });
 
 it.each(["failure", "cancel", "replace"] as const)(

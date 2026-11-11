@@ -1,0 +1,4 @@
+# Regression for issue #197024: an ordinary Code Mode cell calling native ask_user stays owned
+# past its execution budget until the owner answers, instead of parking as a cancellable waiting result.
+# Exact net test-line growth for the fix.
+18
