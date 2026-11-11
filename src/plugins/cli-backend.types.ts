@@ -547,9 +547,11 @@ type CliBackendPluginBase = {
   /**
    * Operator-selected native tools kept on OpenClaw-mediated agent turns, which
    * otherwise expose no native tools. Core applies the same list to ordinary and
-   * verified completion turns, so return only tools that confer no capability
-   * through `projectNativeToolAuthority`; caller caps, restricted senders,
-   * delegated execution, and workspace-only runs still receive none.
+   * verified completion turns. A tool that confers a capability through
+   * `projectNativeToolAuthority` is kept only while the turn's policy-filtered
+   * OpenClaw catalog offers that capability, and its calls are refused on
+   * completion turns; caller caps, restricted senders, delegated execution, and
+   * workspace-only runs still receive none.
    */
   resolveManagedNativeTools?: (ctx: {
     config?: OpenClawConfig;
