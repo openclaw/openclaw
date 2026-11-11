@@ -1,0 +1,4 @@
+# Regression test proving a provider's background catalog renewal never starts sooner than the
+# ten-minute floor even when its cache TTL is shorter, plus the harness hook that supplies per-provider
+# expiries. Exact net growth for PR #197124.
+55

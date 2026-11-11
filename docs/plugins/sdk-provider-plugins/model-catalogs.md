@@ -120,8 +120,12 @@ alias of the selected provider; unrelated sibling outcomes remain excluded.
 With a positive cache lifetime, validated empty results use the same
 successful-observation lifetime as nonempty results. After expiry, ordinary
 catalog reads return retained rows while the existing inventory owner refreshes
-the provider in the background. `ttlMs: 0` still disables response caching and
-does not record an expiry for this renewal path.
+the provider in the background. That background renewal never starts sooner than
+ten minutes after the provider's previous successful refresh, so a shorter
+`ttlMs` (including the 60-second default) shortens response caching but not
+how often passive reads renew the provider. Explicit refresh requests ignore this
+floor. `ttlMs: 0` still disables response caching and does not record an expiry
+for this renewal path.
 
 A successful authenticated outcome may include private `modelServiceTiers`
 observations: `{ modelId, runtimeId, api, baseUrl, serviceTiers }` rows bound to

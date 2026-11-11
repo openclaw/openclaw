@@ -651,24 +651,29 @@ it("keeps background renewal of a provider at least ten minutes apart", async ()
     ).toBeGreaterThanOrEqual(before + renewalIntervalMs);
   }
   const calls = mocks.runPreparedModelCatalogWorker.mock.calls.length;
+  const published = createDeferredCore();
+  const unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
+    if (event.phase === "catalog-published") {
+      published.resolve();
+    }
+  });
   vi.useFakeTimers({ toFake: ["Date"] });
   try {
     // The provider cache deadline (60s) has passed, but the renewal interval has not.
     vi.setSystemTime(before + 5 * 60_000);
-    const published = owner.readFullModelCatalog!();
+    const retained = owner.readFullModelCatalog!();
     owner.refreshExpiredModelCatalog!();
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 20);
-    });
+    // Expiry is decided synchronously, so one turn proves no renewal was queued.
+    await nextEventLoopTurn();
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(calls);
-    expect(owner.readFullModelCatalog!()).toBe(published);
+    expect(owner.readFullModelCatalog!()).toBe(retained);
     vi.setSystemTime(before + renewalIntervalMs + 60_000);
     owner.refreshExpiredModelCatalog!();
-    await vi.waitFor(() => {
-      expect(mocks.runPreparedModelCatalogWorker.mock.calls.length).toBeGreaterThan(calls);
-    });
+    await published.promise;
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(calls + 1);
   } finally {
     vi.useRealTimers();
+    unsubscribe();
   }
 });
 
