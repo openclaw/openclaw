@@ -190,11 +190,33 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     "Prepared npm adoption requires the exact FRV run and attempt.",
   );
   const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
-  const { authenticateFullReleaseValidationEvidence } =
+  const { authenticateFullReleaseValidationEvidence, revalidateCandidateArtifactAuthority } =
     await import("./validate-full-release-validation-evidence.mjs");
   const client =
     params.evidenceClient ??
     createReleaseEvidenceClient(repository, { immutableReads: params.immutableReads });
+  // Only the private CLI path may consume the carrier-authenticated projection.
+  // Exported helpers must not accept a caller-forged transport property as proof.
+  const prepared = !revalidateOnReturn && params.immutableReads?.authenticatedPreparedEvidence;
+  if (prepared) {
+    const descriptor = validatePreparedNpmArtifactDescriptor(prepared.artifact, {
+      repository,
+      sourceSha,
+      workflowSha: prepared.workflowSha,
+    });
+    requireValue(
+      !artifact || isDeepStrictEqual(artifact, descriptor),
+      "Prepared npm artifact differs from the authenticated preview descriptor.",
+    );
+    const revalidateAuthority = async () => {
+      await params.immutableReads.revalidate(client);
+      revalidateCandidateArtifactAuthority(prepared.publicationAuthority, client);
+    };
+    if (revalidateOnReturn) {
+      await revalidateAuthority();
+    }
+    return { ...prepared, artifact: descriptor, evidenceClient: client, revalidateAuthority };
+  }
   const runId = String(params.fullReleaseValidationRunId);
   const runAttempt = Number(params.fullReleaseValidationRunAttempt);
   const { manifest } = await client.loadManifest(runId, runAttempt);
@@ -311,6 +333,7 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     publisherPolicySha256,
     publicationSelection: selected,
     publicationOperation: operation,
+    publicationAuthority: authenticated.publicationAuthority,
     evidenceClient: params.immutableReads ? client : undefined,
     revalidateAuthority,
   };
@@ -613,6 +636,7 @@ export async function consumePreparedNpmPackage(params) {
     expected: { ...entry.artifact, runStatePolicy: "completed-success" },
     archivePath,
   });
+  params.immutableReads?.observeArchive(entry.artifact.artifactId, downloaded.artifactMetadata);
   const metadataPath = join(cacheDir, `${entry.artifact.artifactId}.metadata.json`);
   const runPath = join(cacheDir, `${entry.artifact.artifactId}.run.json`);
   writeFileSync(metadataPath, JSON.stringify(downloaded.artifactMetadata));
@@ -947,7 +971,7 @@ async function runPreparedNpmCommand(argv) {
       const binding = npmEvidenceBinding(adoptionParams);
       const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
       adoptionParams.immutableReads = options["--evidence-output"]
-        ? createReleaseEvidenceReplay(binding)
+        ? createReleaseEvidenceReplay(binding, undefined, { shareAcquisitionReads: true })
         : await loadNpmEvidenceReplay({
             binding,
             artifactId: process.env.PREPARED_NPM_EVIDENCE_ID,
@@ -955,21 +979,30 @@ async function runPreparedNpmCommand(argv) {
             token: common.token,
             archivePath: process.env.RUNNER_TEMP + "/plugin-npm-evidence.zip",
             client: createReleaseEvidenceClient(common.repository),
+            shareAcquisitionReads: true,
           });
     }
     adoption = await authenticatePreparedNpmArtifactEvidence(adoptionParams, false);
     if (options["--evidence-output"]) {
       requireValue(command === "load", "Only trusted preview load can write an evidence handoff");
-      writeEvidenceOutput = () =>
+      writeEvidenceOutput = () => {
+        const {
+          evidenceClient: _client,
+          revalidateAuthority: _authority,
+          ...preparedEvidence
+        } = adoption;
+        adoptionParams.immutableReads.setPreparedEvidence(preparedEvidence);
         writeFileSync(options["--evidence-output"], adoptionParams.immutableReads.serialize(), {
           flag: "wx",
         });
+      };
     }
     Object.assign(common, {
       workflowSha: adoption.workflowSha,
       publisherPolicySha256: adoption.publisherPolicySha256,
       selectionMode: adoptionParams.selectionMode,
       plugins: adoptionParams.plugins,
+      immutableReads: adoptionParams.immutableReads,
     });
     if (command !== "authorize" || options["--package"]) {
       prepared = await downloadPreparedNpmRelease({

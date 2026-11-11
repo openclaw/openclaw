@@ -1263,12 +1263,14 @@ export async function downloadExactActionsArtifactArchive(params) {
     ),
   };
   const transfer = createArtifactTransfer(params, expected);
-  const artifactMetadata = await transfer.json(
-    `actions/artifacts/${expected.artifactId}`,
-    "GitHub Actions artifact metadata",
+  const replay = params.immutableReads;
+  const metadataRoute = `actions/artifacts/${expected.artifactId}`;
+  const readMetadata = async () =>
+    JSON.stringify(await transfer.json(metadataRoute, "GitHub Actions artifact metadata"));
+  const artifactMetadata = JSON.parse(
+    await (replay ? replay.text(metadataRoute, readMetadata) : readMetadata()),
   );
   validateArtifactMetadata(artifactMetadata, expected);
-  const replay = params.immutableReads;
   replay?.observeArchive(expected.artifactId, artifactMetadata);
   const archiveBytes = replay
     ? await replay.bytes(`actions/artifacts/${expected.artifactId}/zip`, () => transfer.archive())
