@@ -24,7 +24,7 @@ function snapshot(): ChannelsStatusSnapshot {
 
 function mountChannels(
   channels: ReturnType<typeof createChannelCapability>,
-  onRefresh: () => void,
+  onRefresh: () => undefined,
 ) {
   return mountSolid(() => {
     const source = projectChannels(channels);
