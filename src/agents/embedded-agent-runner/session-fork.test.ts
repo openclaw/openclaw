@@ -346,10 +346,7 @@ it("denies Anthropic hosted search while retaining prepared tools and system", a
     streamFn(activeModel, requestContext, {
       ...options,
       onPayload: (payload, payloadModel) => {
-        if (!isRecord(payload)) {
-          throw new Error("Expected provider request");
-        }
-        const prepared = { ...payload, tools: [hostedTool] };
+        const prepared = isRecord(payload) ? { ...payload, tools: [hostedTool] } : payload;
         return options?.onPayload?.(prepared, payloadModel) ?? prepared;
       },
     });

@@ -13,7 +13,6 @@ import {
 import {
   downloadExactActionsArtifactArchive,
   inspectActionsArtifactZip,
-  readBoundedResponseBody,
 } from "./actions-artifact-archive.mjs";
 import { canonicalizeJsonValue } from "./canonical-json.mjs";
 import {
@@ -74,6 +73,24 @@ function requestValue(request) {
   return { ...request, inputs: normalizedInputs(request.inputs), spec };
 }
 
+function githubFailureReason(error) {
+  // Classify the original response without exposing its body, identity, or credentials.
+  // Keep the ordinary gh route: --include selects a different Octopool transport.
+  const output = [error?.message, error?.stderr, error?.stdout].join("\n");
+  for (const [reason, pattern] of [
+    ["secondary-rate-limit", /secondary rate limit|abuse detection mechanism/iu],
+    ["primary-rate-limit", /API rate limit exceeded/iu],
+    ["permission", /Resource not accessible by (?:integration|personal access token)/iu],
+    ["saml-enforcement", /SAML enforcement|SAML SSO/iu],
+    ["bad-credentials", /Bad credentials/iu],
+  ]) {
+    if (pattern.test(output)) {
+      return reason;
+    }
+  }
+  return "unclassified";
+}
+
 function dependencies(repository, deps) {
   const deadlineMs = deps.deadlineMs ?? Date.now() + 120_000;
   const remaining = (stage = "verification") => {
@@ -81,7 +98,7 @@ function dependencies(repository, deps) {
     requireEvidence(milliseconds > 0, `${stage} exceeded its time budget`);
     return milliseconds;
   };
-  const github = async (endpoint, { smallerPageFallback = false } = {}) => {
+  const github = async (endpoint, { smallerPageFallback = false, replay = true } = {}) => {
     const args = ["api", "repos/" + repository + "/" + endpoint];
     const stage = `API GET ${args[1]}`;
     remaining(stage);
@@ -111,7 +128,7 @@ function dependencies(repository, deps) {
                 `${error?.message ?? ""}\n${error?.stderr ?? ""}`,
               )?.[0] ?? (serverError ? "HTTP 5xx" : undefined);
             throw new Error(
-              `Full release child evidence ${stage} failed${status ? ` (${status})` : ""}`,
+              `Full release child evidence ${stage} failed${status ? ` (${status})` : ""}; reason=${githubFailureReason(error)}`,
             );
           }
           requireEvidence(delay < remaining(stage), `${stage} exceeded its time budget`);
@@ -120,7 +137,7 @@ function dependencies(repository, deps) {
       }
     };
     const value = JSON.parse(
-      await (deps.immutableReads ? deps.immutableReads.text(endpoint, load) : load()),
+      await (replay && deps.immutableReads ? deps.immutableReads.text(endpoint, load) : load()),
     );
     deps.immutableReads?.observeRun(endpoint, value);
     return value;
@@ -134,28 +151,7 @@ function dependencies(repository, deps) {
         if (params.token) {
           return downloadExactActionsArtifactArchive({
             ...params,
-            ...(deps.immutableReads
-              ? {
-                  fetchImpl: async (url, options) => {
-                    const route = String(url).replace(
-                      "https://api.github.com/repos/" + repository + "/",
-                      "",
-                    );
-                    if (!route.endsWith("/zip")) {
-                      return fetch(url, options);
-                    }
-                    const bytes = await deps.immutableReads.bytes(route, async () => {
-                      const response = await fetch(url, options);
-                      return readBoundedResponseBody(response, {
-                        expectedBytes: params.expected.artifactSizeBytes,
-                        maxBytes: MAX_RELEASE_ARTIFACT_BYTES,
-                        label: "Child evidence archive",
-                      });
-                    });
-                    return new Response(bytes);
-                  },
-                }
-              : {}),
+            immutableReads: deps.immutableReads,
           });
         }
         // Local verifiers can use gh's authenticated session without exporting
@@ -238,43 +234,40 @@ function validateRun(run, selection, request) {
 
 async function readAttemptJobs(deps, run, runAttempt) {
   const path = `actions/runs/${run.id}/attempts/${runAttempt}/jobs?`;
-  return readReleaseJobListing(
-    async (perPage, { smallerPageFallback }) => {
-      const jobs = [];
-      let total;
-      const maxPages = Math.ceil((MAX_JOB_PAGES * 100) / perPage);
-      for (let page = 1; page <= maxPages; page += 1) {
-        const inventory = await deps.github(
-          `actions/runs/${run.id}/attempts/${runAttempt}/jobs?per_page=${perPage}&page=${page}`,
-          { smallerPageFallback },
-        );
-        total ??= inventory?.total_count;
-        requireEvidence(
-          positiveInteger(total) &&
-            total <= MAX_JOB_PAGES * 100 &&
-            inventory?.total_count === total &&
-            Array.isArray(inventory.jobs) &&
-            inventory.jobs.length > 0 &&
-            inventory.jobs.every(
-              (job) =>
-                String(job.run_id) === String(run.id) &&
-                job.run_attempt === runAttempt &&
-                job.head_sha === run.head_sha &&
-                job.status === "completed",
-            ),
-          "job inventory is incomplete or belongs to another attempt",
-        );
-        jobs.push(...inventory.jobs);
-        if (jobs.length >= total) {
-          requireEvidence(jobs.length === total, "job inventory count changed");
-          deps.immutableReads?.selectJobPageSize(path, perPage);
-          return jobs;
-        }
+  return readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
+    const jobs = [];
+    let total;
+    const maxPages = Math.ceil((MAX_JOB_PAGES * 100) / perPage);
+    for (let page = 1; page <= maxPages; page += 1) {
+      const inventory = await deps.github(
+        `actions/runs/${run.id}/attempts/${runAttempt}/jobs?per_page=${perPage}&page=${page}`,
+        { smallerPageFallback },
+      );
+      total ??= inventory?.total_count;
+      requireEvidence(
+        positiveInteger(total) &&
+          total <= MAX_JOB_PAGES * 100 &&
+          inventory?.total_count === total &&
+          Array.isArray(inventory.jobs) &&
+          inventory.jobs.length > 0 &&
+          inventory.jobs.every(
+            (job) =>
+              String(job.run_id) === String(run.id) &&
+              job.run_attempt === runAttempt &&
+              job.head_sha === run.head_sha &&
+              job.status === "completed",
+          ),
+        "job inventory is incomplete or belongs to another attempt",
+      );
+      jobs.push(...inventory.jobs);
+      if (jobs.length >= total) {
+        requireEvidence(jobs.length === total, "job inventory count changed");
+        deps.immutableReads?.selectJobPageSize(path, perPage);
+        return jobs;
       }
-      throw new Error("Full release child evidence job inventory exceeded its bound");
-    },
-    deps.immutableReads?.jobPageSizes(path),
-  );
+    }
+    throw new Error("Full release child evidence job inventory exceeded its bound");
+  }, deps.immutableReads?.jobPageSizes(path));
 }
 
 function validatePublisher(jobs, receipt) {
@@ -343,11 +336,7 @@ async function validateEvidence(selection, request, deps) {
       "workflow SHA is not a main ancestor or the candidate SHA",
     );
   }
-  const artifact = await deps.github(`actions/artifacts/${String(selection.artifact.id)}`);
-  requireEvidence(
-    canonical(artifactIdentity(artifact, request, run, deps.now)) === canonical(selection.artifact),
-    "artifact identity changed after selection",
-  );
+  // The archive owner returns fresh metadata; validate that one acquisition below.
   const downloaded = await deps.downloadArchive({
     deadlineMs: deps.deadlineMs,
     expected: {
@@ -437,15 +426,12 @@ async function validateEvidence(selection, request, deps) {
       ),
     "receipt does not match the complete live composite workload",
   );
-  if (deps.immutableReads) {
-    const currentParent = await deps.github("actions/runs/" + selection.sourceParentRunId);
-    requireEvidence(
-      currentParent.run_attempt === selection.sourceParentAttempt,
-      "source parent attempt changed",
-    );
-  }
+  // The source parent is the pinned dispatch origin, not a live evidence producer.
+  // Its later reruns do not supersede the independently checked child attempt.
+  // Read the exact origin below, including when immutable payloads are replayed.
   const parent = await deps.github(
     `actions/runs/${selection.sourceParentRunId}/attempts/${selection.sourceParentAttempt}`,
+    { replay: false },
   );
   requireEvidence(
     String(parent?.id) === selection.sourceParentRunId &&

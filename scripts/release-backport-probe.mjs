@@ -3,11 +3,15 @@ import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.runtime.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { ensureGitCommit } from "./lib/merge-head-diff-base.mjs";
 
 const HEADER = [
   "candidate",
   "baseline",
-  "status",
+  "scan_end",
+  "scan_reachable",
+  "qualification",
+  "patch_status",
   "conflict_count",
   "touched_file_count",
   "touched_file",
@@ -32,12 +36,21 @@ function git(args, options = {}) {
 }
 
 function resolveCommit(value, label, cwd) {
-  const result = git(["rev-parse", "--verify", `${value}^{commit}`], { cwd });
-  const oid = result.stdout.trim();
+  const oid = ensureGitCommit(value, cwd);
   if (!/^[0-9a-f]{40}$/u.test(oid)) {
     throw new Error(`Unable to resolve ${label} as one commit: ${value}`);
   }
   return oid;
+}
+
+function assertCandidateReachable(candidate, scanEnd, cwd) {
+  const result = git(["merge-base", "--is-ancestor", candidate, scanEnd], {
+    accept: [0, 1],
+    cwd,
+  });
+  if (result.status === 1) {
+    throw new Error(`Candidate ${candidate} is not reachable from scan end ${scanEnd}`);
+  }
 }
 
 function candidateParent(candidate, cwd) {
@@ -59,9 +72,11 @@ function tsv(value) {
   return String(value).replaceAll("\\", "\\\\").replaceAll("\t", "\\t").replaceAll("\n", "\\n");
 }
 
-export function probeBackport({ baseline, candidate, cwd = process.cwd() }) {
+export function probeBackport({ baseline, candidate, scanEnd, cwd = process.cwd() }) {
   const resolvedBaseline = resolveCommit(baseline, "baseline", cwd);
   const resolvedCandidate = resolveCommit(candidate, "candidate", cwd);
+  const resolvedScanEnd = resolveCommit(scanEnd, "scan end", cwd);
+  assertCandidateReachable(resolvedCandidate, resolvedScanEnd, cwd);
   const parent = candidateParent(resolvedCandidate, cwd);
   const touched = nulPaths(
     git(["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", parent, resolvedCandidate], {
@@ -90,7 +105,7 @@ export function probeBackport({ baseline, candidate, cwd = process.cwd() }) {
   }
   const conflicts = new Set(lines);
   const baselineTree = git(["rev-parse", `${resolvedBaseline}^{tree}`], { cwd }).stdout.trim();
-  const status =
+  const patchStatus =
     merge.status === 1 ? "conflicted" : tree === baselineTree ? "already-covered" : "clean";
   const paths = [...new Set([...touched, ...conflicts])].toSorted((left, right) =>
     left.localeCompare(right),
@@ -100,8 +115,11 @@ export function probeBackport({ baseline, candidate, cwd = process.cwd() }) {
     candidate: resolvedCandidate,
     conflictCount: conflicts.size,
     conflicts,
+    patchStatus,
     paths,
-    status,
+    qualification: "contract-review-required",
+    scanEnd: resolvedScanEnd,
+    scanReachable: true,
     touchedFileCount: touched.length,
   };
 }
@@ -114,7 +132,10 @@ export function formatBackportProbes(probes) {
       rows.push([
         probe.candidate,
         probe.baseline,
-        probe.status,
+        probe.scanEnd,
+        probe.scanReachable ? 1 : 0,
+        probe.qualification,
+        probe.patchStatus,
         probe.conflictCount,
         probe.touchedFileCount,
         file,
@@ -130,18 +151,21 @@ export function runBackportProbe(args = process.argv.slice(2)) {
     args: stripLeadingPackageManagerSeparator(args),
     options: {
       baseline: { type: "string" },
+      "scan-end": { type: "string" },
       candidate: { type: "string", multiple: true },
     },
     strict: true,
   });
-  if (!values.baseline || !values.candidate?.length) {
+  if (!values.baseline || !values["scan-end"] || !values.candidate?.length) {
     throw new Error(
-      "Usage: pnpm release:backport-probe -- --baseline <commit> --candidate <commit> [--candidate <commit> ...]",
+      "Usage: pnpm release:backport-probe -- --baseline <commit> --scan-end <commit> --candidate <commit> [--candidate <commit> ...]",
     );
   }
   process.stdout.write(
     formatBackportProbes(
-      values.candidate.map((candidate) => probeBackport({ baseline: values.baseline, candidate })),
+      values.candidate.map((candidate) =>
+        probeBackport({ baseline: values.baseline, candidate, scanEnd: values["scan-end"] }),
+      ),
     ),
   );
 }

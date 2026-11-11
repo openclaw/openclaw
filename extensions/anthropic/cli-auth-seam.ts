@@ -60,13 +60,16 @@ export async function probeClaudeCliAuthStatus(params?: {
       packageName: "@anthropic-ai/claude-code",
     });
     const invocation = materializeWindowsSpawnProgram(program, ["auth", "status", "--json"]);
+    params?.signal?.throwIfAborted();
+    // `auth status` refreshes an expiring OAuth token under Claude Code's refresh lock, and a
+    // killed refresh leaves that lock behind, stalling or failing the next Claude turn. So a
+    // cancelled caller still joins the probe's own exit; only the deadline terminates it.
     const result = await runUtf8CommandWithTimeout([invocation.command, ...invocation.argv], {
       baseEnv: env,
       maxOutputBytes: 64 * 1024,
       maxCombinedOutputBytes: 64 * 1024,
       terminateOnOutputLimit: true,
       timeoutMs: CLAUDE_CLI_AUTH_TIMEOUT_MS,
-      signal: params?.signal,
       killProcessTree: true,
     });
     params?.signal?.throwIfAborted();

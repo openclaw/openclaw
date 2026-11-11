@@ -61,8 +61,5 @@ export function isCustodianPanelAvailable(
 
 /** Presentation access survives reconnect; the chat send/outbox owner still authorizes delivery. */
 export function isHomePanelAvailable(gateway: ApplicationContext["gateway"] | undefined): boolean {
-  return (
-    canPresentGatewayMethod(gateway?.snapshot, "chat.history", "operator.read") &&
-    canPresentGatewayMethod(gateway?.snapshot, "chat.send", "operator.write")
-  );
+  return canPresentGatewayMethod(gateway?.snapshot, "chat.history", "operator.read");
 }

@@ -207,11 +207,15 @@ export function createSlashMenu() {
       resetSlashMenuState(state);
     }
 
-    const caret = host.getTextarea()?.selectionStart ?? value.length;
+    const textarea = host.getTextarea();
+    const caret = textarea?.selectionStart ?? value.length;
     const completion = findInlineSlashCompletion(value, caret);
     // The caret-local token owns completion before a leading command's argument tail.
     const argMatch = value.match(/^\/(\S+)\s(.*)$/);
-    if (argMatch && !completion) {
+    // Selecting into the argument tail must not replace its picker with the command picker.
+    const selectionIncludesArgs =
+      completion && !completion.inline && (textarea?.selectionEnd ?? caret) > completion.end;
+    if (argMatch && (!completion || selectionIncludesArgs)) {
       if (!opts.skipSlashIntent) {
         requestSlashCommandRefresh(host);
       }

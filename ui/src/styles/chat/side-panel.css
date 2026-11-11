@@ -522,10 +522,6 @@ openclaw-chat-detail-panel,
   }
 }
 
-.sidebar-region--desktop .side-panel__header {
-  background: transparent;
-}
-
 .sidebar-region--desktop .side-panel__header--occupied {
   /* Balance the bottom divider so the controls stay on the shared header axis. */
   padding-top: var(--rail-divider-size);
@@ -593,7 +589,7 @@ openclaw-chat-detail-panel,
   corner-shape: superellipse(1.5);
   font-family: var(--font-body);
   font-size: calc(14px * var(--control-ui-text-scale));
-  line-height: calc(20px * var(--control-ui-text-scale));
+  line-height: 20px;
 }
 
 .side-panel-position-menu__label {
