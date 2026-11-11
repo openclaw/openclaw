@@ -64,8 +64,8 @@ function holdInlineCodeSpans(text: string, code: string[]): string {
     // A backtick run at the start of a line (CommonMark allows up to three
     // spaces of indentation) opens a fenced block, which fence stripping
     // removes whole; inline code may span lines, so only line-start runs are
-    // left for the fence pass.
-    const lineStart = /(?:^|\n) *$/.test(text.slice(0, i));
+    // left for the fence pass. Inspect only the current line, not the whole prefix.
+    const lineStart = /^ *$/.test(text.slice(text.lastIndexOf("\n", i - 1) + 1, i));
     if (!m || (lineStart && n >= 3)) {
       // Consume the whole unmatched run so its tail backticks cannot reopen as a
       // narrower span and steal delimiters from a later valid code span.
