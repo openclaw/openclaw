@@ -672,6 +672,7 @@ src/config/sessions/cli-session-binding.ts
 src/config/sessions/session-row-facts.types.ts
 src/state/artifact-preserving-state-reads.ts
 src/state/incognito-session-error.ts
+src/config/sessions/session-model-context-entry.ts
 src/config/sessions/session-model-context-projection.ts
 src/config/sessions/session-model-context-navigation.ts
 src/config/sessions/session-model-context-read.ts
@@ -939,6 +940,7 @@ src/infra/gateway-owner-lease.read.ts
 src/infra/gateway-owner-lease.worker.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
+src/infra/gateway-service-installation-context.ts
 src/infra/gateway-state-owner-directory.ts
 src/infra/gateway-state-owner-heartbeat.runtime.ts
 src/infra/gateway-state-owner-heartbeat.ts
@@ -1936,6 +1938,7 @@ src/state/openclaw-state-schema-preflight.ts
 src/state/openclaw-state-schema-publication.ts
 src/state/openclaw-state-schema.sql
 src/state/openclaw-state-schema.ts
+src/state/openclaw-state-service-installation.ts
 src/state/openclaw-state-worker-context.capture.ts
 src/state/openclaw-state-worker-context.ts
 src/state/openclaw-state-worker-error-identity.ts
