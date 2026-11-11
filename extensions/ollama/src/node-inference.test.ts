@@ -262,30 +262,30 @@ describe("node_inference agent tool", () => {
       ? { provider: "ollama", models: [{ name: "chat:small", loaded: true }] }
       : { provider: "ollama", model: "chat:small", response: "done" };
     const params = discovery ? {} : { model: "chat:small", prompt: "answer fast", maxTokens: 32 };
-    for (const [displayName, query] of [
+    for (const [displayName, query, nodeId = "allowed-node"] of [
       [discovery ? "Desk" : undefined, undefined],
       ["Cafe\u0301 desk", " CAFÉ DESK "],
       ["Dépôt desk", "De\u0301po\u0302t desk"],
       ["ǰ desk", "J\u030c desk"],
-      ["Café desk", "allowed-node"],
+      ["Café desk", "node-e\u0301", "node-e\u0301"],
     ] as const) {
       const invoke = vi.fn(async () => ({ payload }));
       const nodes = [
         nodeRow("denied-node", discovery ? [] : [MODELS], displayName),
-        nodeRow("allowed-node", [MODELS, CHAT], displayName),
+        nodeRow(nodeId, [MODELS, CHAT], displayName),
       ];
       const tool = createOllamaNodeInferenceTool(nodeApi(nodes, invoke));
       const execute = (node?: string) =>
         tool.execute("call-authorized", { action, ...params, node });
       const result = await execute(query);
       expect(invoke).toHaveBeenCalledExactlyOnceWith({
-        nodeId: "allowed-node",
+        nodeId,
         command: discovery ? MODELS : CHAT,
         params: discovery ? params : { ...params, timeoutMs },
         timeoutMs,
         scopes: ["operator.write"],
       });
-      const row = { nodeId: "allowed-node", ...(displayName && { displayName }), ...payload };
+      const row = { nodeId, ...(displayName && { displayName }), ...payload };
       expect(result.details).toEqual(discovery ? { nodes: [{ ...row, ok: true }] } : row);
       if (displayName) {
         nodes.push(nodeRow("duplicate-node", [MODELS, CHAT], displayName.normalize("NFC")));

@@ -311,12 +311,13 @@ export function createOllamaNodeHostCommands(options?: {
 }
 
 function findNode(nodes: NodeSummary[], query: string): NodeSummary {
-  // Normalize after case conversion so equivalent names also share ambiguity checks.
-  const normalized = query.trim().toLowerCase().normalize("NFC");
+  const normalized = query.trim().toLowerCase();
+  // Normalize names after case conversion, without changing opaque node-id matching.
+  const normalizedName = normalized.normalize("NFC");
   const matches = nodes.filter(
     (node) =>
       node.nodeId.toLowerCase() === normalized ||
-      node.displayName?.toLowerCase().normalize("NFC") === normalized,
+      node.displayName?.toLowerCase().normalize("NFC") === normalizedName,
   );
   if (matches.length === 0) {
     throw new Error(`node ${JSON.stringify(query)} is not connected with Ollama inference support`);
