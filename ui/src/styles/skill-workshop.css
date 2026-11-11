@@ -233,7 +233,7 @@
 .sw-detail__title {
   margin: 0;
   color: var(--text-strong);
-  font-size: calc(20px * var(--control-ui-text-scale));
+  font-size: 20px;
   font-weight: 650;
   overflow-wrap: anywhere;
 }
@@ -335,7 +335,7 @@
 }
 
 .sw-markdown.chat-text h1 {
-  font-size: calc(17px * var(--control-ui-text-scale));
+  font-size: 17px;
 }
 
 .sw-version-bar {

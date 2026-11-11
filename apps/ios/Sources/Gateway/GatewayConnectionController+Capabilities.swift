@@ -1,4 +1,3 @@
-import AVFoundation
 import Contacts
 import CoreLocation
 import CoreMotion
@@ -6,7 +5,6 @@ import EventKit
 import Foundation
 import OpenClawKit
 import ReplayKit
-import Speech
 import UIKit
 
 struct GatewayManualTransportPresentation: Equatable {
@@ -59,6 +57,8 @@ extension GatewayConnectionController {
     func observeGatewayRegistration() {
         withObservationTracking {
             _ = self.appModel?.locationAuthorizationSnapshot
+            // Camera, microphone and speech grants from in-app prompts must reach registration too.
+            _ = self.appModel?.mediaAuthorizationSnapshot
             // An attempt can invalidate a sampled refresh without replacing the route (for example, cancellation).
             _ = self.appModel?.gatewayConnectGeneration
             // Startup and target-review resume may install options captured before authorization changed.
@@ -245,9 +245,8 @@ extension GatewayConnectionController {
 
     private func currentPermissions() async -> [String: Bool] {
         var permissions: [String: Bool] = [:]
-        permissions["camera"] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
-        permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        permissions["speechRecognition"] = SFSpeechRecognizer.authorizationStatus() == .authorized
+        let media = self.appModel?.mediaAuthorizationSnapshot ?? .current()
+        permissions.merge(media.permissions) { _, sampled in sampled }
         let locationStatus = self.locationAuthorizationSnapshot.authorizationStatus
         let locationAvailable = await Self.isLocationAvailable(
             status: locationStatus,

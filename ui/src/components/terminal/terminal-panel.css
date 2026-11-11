@@ -85,7 +85,7 @@ openclaw-terminal-panel {
     justify-content: space-between;
     padding: 4px 6px 7px;
     color: var(--text);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     font-weight: 600;
   }
   /* Refreshing the list is not destructive, so it reads as a plain action. */
@@ -131,7 +131,7 @@ openclaw-terminal-panel {
     border-bottom: 1px solid var(--border);
     background: color-mix(in srgb, var(--bg) 55%, var(--bg-elevated));
     color: var(--text);
-    font-size: calc(13px * var(--control-ui-text-scale));
+    font-size: 13px;
     font-weight: 500;
   }
   .tp-session-menu--inline .tp-session-menu__header {
@@ -183,7 +183,7 @@ openclaw-terminal-panel {
     font-weight: 500;
   }
   .tp-rail__identity span {
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     color: var(--muted);
   }
   .tp-rail__action {
@@ -196,7 +196,7 @@ openclaw-terminal-panel {
     background: transparent;
     color: var(--muted);
     font: inherit;
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
   }
   .tp-rail__action:last-child {
     margin-left: auto;
@@ -207,7 +207,7 @@ openclaw-terminal-panel {
   .tp-session-list__heading {
     margin: 0 8px 5px;
     color: var(--muted);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     font-weight: 400;
   }
   .tp-session {
@@ -223,8 +223,8 @@ openclaw-terminal-panel {
     background: transparent;
     color: var(--text);
     text-align: left;
-    font-size: calc(13px * var(--control-ui-text-scale));
-    line-height: calc(20px * var(--control-ui-text-scale));
+    font-size: 13px;
+    line-height: 20px;
   }
   .tp-session + .tp-session::before {
     content: "";
@@ -258,8 +258,8 @@ openclaw-terminal-panel {
   }
   .tp-session__cwd,
   .tp-session__state {
-    font-size: var(--control-ui-text-sm);
-    line-height: calc(18px * var(--control-ui-text-scale));
+    font-size: 12px;
+    line-height: 18px;
     color: var(--muted);
   }
   .tp-session__state {
@@ -280,7 +280,7 @@ openclaw-terminal-panel {
   .tp-session-empty {
     padding: 18px 20px;
     color: var(--muted);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
   }
   .tp:not(.tp--mobile) {
     .tp-session-menu:not(.tp-session-menu--inline) {
@@ -310,11 +310,11 @@ openclaw-terminal-panel {
     }
     .tp-rail__identity strong {
       color: var(--text);
-      line-height: calc(18px * var(--control-ui-text-scale));
+      line-height: 18px;
     }
     .tp-rail__identity span {
-      font-size: var(--control-ui-text-xs);
-      line-height: var(--control-ui-text-md);
+      font-size: 11px;
+      line-height: 14px;
     }
     .tp-rail__identity strong,
     .tp-rail__identity span {
@@ -384,7 +384,7 @@ openclaw-terminal-panel {
     outline-offset: 3px;
     background: transparent;
     color: var(--text);
-    font: var(--control-ui-text-md) var(--mono);
+    font: 14px var(--mono);
   }
   .tp-composer__attach,
   .tp-composer__submit {
@@ -417,7 +417,7 @@ openclaw-terminal-panel {
     padding: 3px 4px 3px 8px;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
   }
   .tp-attachment > svg {
     width: 14px;
@@ -452,7 +452,7 @@ openclaw-terminal-panel {
   .tp--mobile .tp-rail,
   .tp--mobile .tp-session-menu__header {
     min-height: 42px;
-    font-size: var(--control-ui-text-md);
+    font-size: 14px;
   }
   .tp--mobile .tp-rail__icon,
   .tp--mobile .tp-session-refresh {
@@ -460,7 +460,7 @@ openclaw-terminal-panel {
     height: 36px;
   }
   .tp--mobile .tp-composer input {
-    font-size: var(--control-ui-text-lg);
+    font-size: 16px;
   }
   .tp--mobile .tp-session-list {
     padding: 12px 14px;
@@ -497,7 +497,7 @@ openclaw-terminal-panel {
     right: 14px;
     bottom: 14px;
     width: auto;
-    font-size: calc(13px * var(--control-ui-text-scale));
+    font-size: 13px;
     border-radius: var(--radius-lg);
     padding: 12px;
   }
@@ -546,7 +546,7 @@ openclaw-terminal-panel {
     justify-content: space-between;
     gap: 12px;
     padding: 10px 12px;
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     color: var(--danger);
   }
   .tp-error .btn {
@@ -579,7 +579,7 @@ openclaw-terminal-panel {
     border: 1px dashed var(--accent);
     background: color-mix(in srgb, var(--bg) 88%, var(--accent));
     color: var(--text);
-    font-size: calc(13px * var(--control-ui-text-scale));
+    font-size: 13px;
     pointer-events: none;
   }
   .tp-upload-card {
@@ -595,7 +595,7 @@ openclaw-terminal-panel {
     background: color-mix(in srgb, var(--bg) 94%, var(--text));
     box-shadow: var(--overlay-shadow);
     color: var(--text);
-    font-size: var(--control-ui-text-xs);
+    font-size: 11px;
   }
   .tp-upload-card--failed {
     border-color: color-mix(in srgb, var(--danger) 55%, var(--border));

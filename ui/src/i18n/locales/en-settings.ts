@@ -59,6 +59,8 @@ const enSettings = {
     },
     copyId: "Copy ID",
     setDefault: "Set default",
+    accessRestricted:
+      "You do not have access to this agent setting. Ask a Gateway operator for access.",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -631,7 +633,6 @@ const enSettings = {
     enabledSummary: "{enabled}/{total} enabled",
     enableAll: "Enable all",
     disableAll: "Disable all",
-    loadConfig: "Load the config to change tool profiles.",
     explicitAllowlist: "This agent uses a tool allowlist. Manage it in Config:",
     globalAllowlist: "Agent overrides can’t enable tools blocked by the global allowlist:",
     loadingCatalog: "Loading tools…",
@@ -762,10 +763,12 @@ const enSettings = {
       p99Hint: "99% of measured pings completed in this time or less.",
       unit: "ms",
       failed: "Last ping failed. Retrying…",
+      unavailable: "Ping isn’t available for this connection.",
     },
     activity: {
       title: "Gateway activity",
       failed: "Couldn’t refresh activity. Retrying…",
+      unavailable: "Host activity isn’t available for this connection.",
       offline: "Reconnect to see activity.",
     },
     access: {
@@ -2020,7 +2023,8 @@ const enSettings = {
       modelAuto: "auto ({model})",
       modelConfigured: "configured ({model})",
       modelDisabled: "disabled",
-      modelUnavailable: "unavailable (no small model)",
+      modelUnavailable: "Utility model status unavailable",
+      modelNotLoaded: "Utility model status not loaded",
       modelPicker: "Small model",
       modelPickerHint: "Used for observer digests and other short utility tasks.",
       modelCatalogUnavailable: "Explicit model catalog unavailable",
@@ -2034,6 +2038,8 @@ const enSettings = {
       gateway: "Gateway",
       status: "Status",
     },
+    readRestricted: "These settings are managed by Gateway operators.",
+    readDisconnected: "Reconnect to load these Gateway settings.",
     root: "<root>",
     itemCount: "[{count} item]",
     itemCountPlural: "[{count} items]",

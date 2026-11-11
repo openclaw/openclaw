@@ -196,6 +196,9 @@ final class DashboardManager {
                     }
                 }
             }
+        }
+        // Window focus is local UI state, independent of automatic profile and Keychain access.
+        if observeGatewayChanges {
             self.gatewayRefreshObservers += [
                 NSWindow.didBecomeKeyNotification,
                 NSWindow.willCloseNotification,

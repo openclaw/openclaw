@@ -376,7 +376,7 @@ function identityFromReceipt(receipt) {
  * @param {boolean} [options.verifyPublication]
  * @param {unknown} [options.recoveryManifest]
  * @param {string} [options.plugins]
- * @param {Omit<Parameters<typeof executeClawHubRecoveryManifest>[0], "manifest" | "revalidateAuthority"> & {
+ * @param {Omit<Parameters<typeof executeClawHubRecoveryManifest>[0], "manifest" | "revalidateAuthority" | "onProgress"> & {
  *   revalidateAuthority: (manifest: ReturnType<typeof validateClawHubRecoveryManifest>) => void | Promise<void>
  * }} [options.recover]
  */
@@ -746,6 +746,15 @@ export async function verifyClawHubPostpublish({
       ...recover,
       manifest: selectedManifest,
       revalidateAuthority: () => recover.revalidateAuthority(selectedManifest),
+      onProgress: async ({ recovered }) => {
+        for (const record of recovered) {
+          Object.assign(
+            evidence.publicationAttempts.find((entry) => entry.name === record.name),
+            record,
+          );
+        }
+        await save();
+      },
     });
   }
   // One scan worker turn (25 minutes) plus its five-minute scheduled admission.
@@ -948,10 +957,11 @@ async function authenticateClawHubParentRequest({
     },
     "sealed-producer",
   );
+  const currentFullRef = current.path.split("@")[1];
   if (
     current.status !== "in_progress" ||
     current.conclusion !== null ||
-    current.path !== `${PARENT_WORKFLOW}@${env.GITHUB_REF}`
+    (currentFullRef !== undefined && currentFullRef !== env.GITHUB_REF)
   ) {
     throw new Error("ClawHub recovery requires the executing tooling's active parent.");
   }
@@ -968,7 +978,7 @@ async function authenticateClawHubParentRequest({
     parentRunId: inputs.release_publish_run_id,
     parentRunAttempt: inputs.release_publish_run_attempt,
     toolingRef: current.head_branch,
-    toolingFullRef: current.path.split("@")[1],
+    toolingFullRef: env.GITHUB_REF,
     toolingSha: current.head_sha,
     parentStatePolicy: "active",
   };

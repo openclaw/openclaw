@@ -58,6 +58,7 @@ import {
 } from "./member-profiles.js";
 import { createNodeInviteOperations, listNodeInviteViews } from "./node-invites.js";
 import type { OwnerDeviceView } from "./owner-devices-view.js";
+import { createRebindOperations } from "./rebind-operations.js";
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
 
 /** What the local link ceremony signs for: the claw's identity and keys. */
@@ -112,7 +113,7 @@ export type DeviceTokenRef = { deviceId: string; role: string; peerKey: string }
 export function createOpenClawIdAuthority(
   store: {
     read: () => Promise<StoredClaw | undefined>;
-    write: (record: StoredClaw) => Promise<void>;
+    write: (record: StoredClaw, assertCurrent?: () => void) => Promise<void>;
     profiles?: OpenClawIdMemberProfiles;
   } = {
     read: readStoredClaw,
@@ -180,11 +181,12 @@ export function createOpenClawIdAuthority(
     return next;
   };
 
-  const commit = async (candidate: StoredClaw) => {
+  const commit = async (candidate: StoredClaw, assertCurrent?: () => void) => {
     const next = await retainMemberProfiles(record, candidate, profiles);
     const previous = record;
+    assertCurrent?.();
     try {
-      await store.write(next);
+      await store.write(next, assertCurrent);
     } catch (error) {
       // A rejected acknowledgement can follow a durable commit. Withdraw cached authority
       // before reconciliation; no synchronous admission or later write may use a stale row.
@@ -476,6 +478,8 @@ export function createOpenClawIdAuthority(
     },
 
     ...createNodeInviteOperations({ serialize, load, commit }),
+
+    ...createRebindOperations({ serialize, load, commit }),
 
     /** Records an invite redemption from the mailbox as pending (it admits nothing). */
     redeem(
