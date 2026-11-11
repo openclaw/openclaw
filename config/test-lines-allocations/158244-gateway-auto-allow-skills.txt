@@ -1,0 +1,6 @@
+# Gateway-host autoAllowSkills: no-mock proofs that only the executing agent's admitted skills
+# authorize a binary (embedded and CLI loopback grant, including session filter and override
+# exclusions), and that skill authority is rechecked at every launch boundary: inline, detached
+# approval, cron standing grant (without spending the grant) and synchronous native initiation.
+# Exact net growth for PR #158244.
+848
