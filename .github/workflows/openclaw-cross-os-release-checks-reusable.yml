@@ -1192,7 +1192,7 @@ jobs:
 
   scope_semantic_prepare:
     if: ${{ inputs.scope_checks_only }}
-    name: Prepare identical formatted recovery source
+    name: Prepare formatted test and exact obsolete baseline shrink
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
@@ -1221,23 +1221,36 @@ jobs:
           semantic-checks: true
           install-bun: false
           cache-mode: restore
-      - name: Format only the reported test and preserve its patch
+      - name: Setup ripgrep for canonical baseline regeneration
+        uses: ./.github/actions/setup-ripgrep
+      - name: Fetch and verify the pinned pre-fix ratchet base
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=d9751e2ff705fab4c43a078d60a96f1e9682cefd
+          git fetch --no-tags --depth=1 https://github.com/openclaw/openclaw.git "$base"
+          test "$(git rev-parse FETCH_HEAD)" = "$base"
+          git cat-file -e "$base^{tree}"
+      - name: Format test and regenerate only the reviewed obsolete baseline entries
         env:
           INPUT: ${{ runner.temp }}/recovery-scope-input
         shell: bash
         run: |
           set -euo pipefail
           test_file=src/infra/update-recovery-backup-reader.test.ts
-          mkdir -p "$INPUT/src/infra"
+          baseline_file=config/test-mock-exports-baseline.txt
+          mkdir -p "$INPUT/src/infra" "$INPUT/config"
           pnpm exec oxfmt --write --threads=1 "$test_file"
           cp "$test_file" "$INPUT/$test_file"
           git diff --binary -- "$test_file" > "$INPUT/format.patch"
           cp diagnostic-workflow/scripts/diagnostic-recovery-scope.mjs "$INPUT/diagnostic-recovery-scope.mjs"
-          node --import ./scripts/tsx.mjs "$INPUT/diagnostic-recovery-scope.mjs" plan "$INPUT"
+          node --import ./scripts/tsx.mjs "$INPUT/diagnostic-recovery-scope.mjs" prepare "$INPUT"
+          cp "$baseline_file" "$INPUT/$baseline_file"
+          git diff --binary -- "$baseline_file" > "$INPUT/baseline.patch"
           cd "$INPUT"
-          sha256sum "$test_file" format.patch plan.json diagnostic-recovery-scope.mjs > SHA256SUMS
+          sha256sum "$test_file" "$baseline_file" format.patch baseline.patch plan.json diagnostic-recovery-scope.mjs > SHA256SUMS
           cat SHA256SUMS
-      - name: Upload formatted source, patch, hashes and complete plan
+      - name: Upload exact follow-up source, patches, hashes and selected plan
         if: always()
         id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1249,14 +1262,14 @@ jobs:
   scope_semantic_checks:
     if: ${{ inputs.scope_checks_only }}
     needs: scope_semantic_prepare
-    name: Recovery scope semantic (${{ matrix.row }})
+    name: Recovery failed-check follow-up (${{ matrix.row }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      max-parallel: 6
+      max-parallel: 1
       matrix:
-        row: [checks, stripe-1, stripe-2, stripe-3, stripe-4, stripe-5]
+        row: [checks]
     steps:
       - name: Checkout exact prepared source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1277,6 +1290,7 @@ jobs:
           set -euo pipefail
           (cd "$INPUT" && sha256sum --check --strict SHA256SUMS)
           cp "$INPUT/src/infra/update-recovery-backup-reader.test.ts" src/infra/update-recovery-backup-reader.test.ts
+          cp "$INPUT/config/test-mock-exports-baseline.txt" config/test-mock-exports-baseline.txt
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -1295,7 +1309,7 @@ jobs:
           git fetch --no-tags --depth=1 https://github.com/openclaw/openclaw.git "$base"
           test "$(git rev-parse FETCH_HEAD)" = "$base"
           git cat-file -e "$base^{tree}"
-      - name: Execute canonical plan partition and record every result
+      - name: Execute only the two failed owner commands and record every result
         env:
           INPUT: ${{ runner.temp }}/recovery-scope-input
           ROW: ${{ matrix.row }}
@@ -1311,7 +1325,7 @@ jobs:
   scope_semantic_accounting:
     if: ${{ always() && inputs.scope_checks_only }}
     needs: [scope_semantic_prepare, scope_semantic_checks]
-    name: Recovery scope complete command accounting
+    name: Recovery failed-check subset accounting
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
