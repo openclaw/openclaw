@@ -51,25 +51,23 @@ The optional **Create Template** action in the agent's left-sidebar row menu
 still invokes the same skill in that agent's existing main chat. Pinned agents
 keep this action in a focused row menu.
 
-The review modal shows the exact archive files and
-declared skill, plugin, MCP, and automation requirements. The Name field is
-the new agent's display name, defaulted to readable title case; it does not
-change the package slug used as the Template's registry identity. Change the name
-or description and uncheck any optional workspace file or requirement before
-publishing. **Ask for changes** returns to the same chat; review the rebuilt
-package after the agent revises the draft. The package includes only newly
-authored proposal contents; it does not copy the source workspace, memories,
-or raw conversations. Known private paths and credential-like text are
-rejected. Review the remaining text for personal facts and private context.
+The inline review card shows the exact archive files and declared skill, plugin,
+MCP, and automation requirements. Open an item to inspect its contents, or use
+**View all** to inspect the archive files. Review is read-only. To change a name,
+description, file, or requirement, ask the agent to revise its private proposal
+in the same conversation, then inspect the fresh review. The agent's display
+name, ClawHub package slug, and authenticated publisher are separate identities.
+The package includes only newly authored proposal contents; it does not copy the
+source workspace, memories, or raw conversations. Known private paths and
+credential-like text are rejected. Review the remaining text for personal facts
+and private context.
 
-Sign in with `clawhub login` on the Gateway host. **Publish to ClawHub** uploads
-the exact reviewed artifact using that account; changing the selection
-requires another review. The editable Name is the agent display name; the
-ClawHub package slug and authenticated publisher are separate identities. An
-agent turn cannot authorize publication. After submission, a dismissing
-notification confirms that publication is pending security review and links
-to the Template's ClawHub page.
-After ClawHub makes it public, others can discover it and Add it as an ordinary agent.
+Sign in with `clawhub login` on the Gateway host. **Publish** uploads the exact
+reviewed artifact using that account. An agent turn cannot authorize publication.
+The card stays in the conversation and shows **Pending** while ClawHub checks
+the submission; **View submission** opens its ClawHub page. Once the registry
+confirms publication, the card shows **Published** and offers **Copy link**.
+Others can then discover the Template and Add it as an ordinary agent.
 
 ## Author locally
 
