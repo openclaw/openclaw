@@ -21,6 +21,10 @@ import {
   sqliteSessionIdWriteScope,
 } from "../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import {
+  findStartupMaintenanceRequiredError,
+  StartupMaintenanceRequiredError,
+} from "../infra/startup-maintenance-required.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { getBackgroundOwnerLane } from "../process/background-work.js";
 import { isExpectedRunCancellation } from "../process/expected-run-cancellation.js";
@@ -47,6 +51,7 @@ import {
 } from "./session-fork-requester.js";
 import { assertSessionForkRunSucceeded } from "./session-fork-result.js";
 import { SessionManager } from "./sessions/session-manager.js";
+import { assertNoUnmigratedWorkspaceState } from "./workspace-legacy-state.js";
 
 /**
  * A background agent run over a bounded copy of one session's conversation, through one
@@ -170,6 +175,17 @@ export async function prepareSessionFork(params: {
   });
   // A managed-worktree session records its durable workspace for every turn entry point.
   const workspaceDir = entry?.worktree?.canonicalWorkspaceDir ?? params.workspaceDir;
+  try {
+    assertNoUnmigratedWorkspaceState({ workspaceDir });
+  } catch (error) {
+    if (findStartupMaintenanceRequiredError(error)?.kind !== "legacy-workspace") {
+      throw error;
+    }
+    throw new StartupMaintenanceRequiredError(
+      "legacy-workspace",
+      "This agent's workspace needs migration. Ask the gateway operator to run `openclaw doctor --fix`.",
+    );
+  }
   const { policy } = await prepareConversationCapabilityProfile({
     config: params.config,
     sessionKey: params.source.sessionKey,

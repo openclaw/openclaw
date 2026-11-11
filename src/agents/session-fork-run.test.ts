@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
@@ -62,6 +63,24 @@ it("applies wildcard sender restrictions although a fork has no sender", async (
   await expect(
     prepareSessionFork({ config, source, tools, model, workspaceDir: state.workspaceDir }),
   ).resolves.toBeUndefined();
+});
+
+it("refuses a fork from an existing session while its workspace needs repair", async () => {
+  const source = await groupSession();
+  await fs.mkdir(state.workspaceDir, { recursive: true });
+  await fs.writeFile(path.join(state.workspaceDir, "openclaw-workspace-state.json"), "retained");
+  const failure = await prepareSessionFork({
+    config: groupTools([]),
+    source,
+    tools,
+    model,
+    workspaceDir: state.workspaceDir,
+  }).catch((error: unknown) => error);
+  expect(failure).toMatchObject({
+    kind: "legacy-workspace",
+    message: expect.stringContaining("openclaw doctor --fix"),
+  });
+  expect(String(failure)).not.toContain(state.workspaceDir);
 });
 
 describe("assertSessionForkRunSucceeded", () => {

@@ -9,6 +9,7 @@ import { preflightManualSessionCompaction } from "../../agents/sessions/manual-c
 import { sessionManagerOpenCompaction } from "../../agents/sessions/session-manager-core.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import { assertNoUnmigratedWorkspaceState } from "../../agents/workspace-legacy-state.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -17,6 +18,10 @@ import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import { readTranscriptStatsAsync } from "../../config/sessions/session-transcript-stats.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  findStartupMaintenanceRequiredError,
+  StartupMaintenanceRequiredError,
+} from "../../infra/startup-maintenance-required.js";
 import { resolveSessionModelRef } from "../session-utils.js";
 
 type GatewaySessionCompactionParams = {
@@ -124,6 +129,17 @@ export async function runGatewaySessionCompaction(
       workspaceDir: params.entry.spawnedWorkspaceDir,
       cwd: params.entry.spawnedCwd,
     }) ?? resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  try {
+    assertNoUnmigratedWorkspaceState({ workspaceDir });
+  } catch (error) {
+    if (findStartupMaintenanceRequiredError(error)?.kind !== "legacy-workspace") {
+      throw error;
+    }
+    throw new StartupMaintenanceRequiredError(
+      "legacy-workspace",
+      "This agent's workspace needs migration. Ask the gateway operator to run `openclaw doctor --fix`.",
+    );
+  }
   const compactionCliTarget = resolveManualCompactionCliTarget({
     provider: resolvedModel.provider,
     entry: params.entry,

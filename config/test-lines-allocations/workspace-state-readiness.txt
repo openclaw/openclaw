@@ -1,2 +1,2 @@
-628
-# Covers local marker isolation, container activation, retained attestation admission, affected-workspace repair guidance, attachment preparation, native command authorization, operator document saves, chat steering, Side chat, early provisioning, restricted and nested ACP spawning, cross-agent ACP working directories, persisted ACP turns before backend startup, missing inherited cwd markers, damaged sibling claims, and sandbox copy ordering.
+684
+# Covers local marker isolation, container activation, retained attestation admission, affected-workspace repair guidance, attachment preparation, native command authorization, operator document saves, chat steering, Side chat, plugin session forks, manual model compaction, personal instruction saves, early provisioning, restricted and nested ACP spawning, cross-agent ACP working directories, persisted ACP turns before backend startup, missing inherited cwd markers, damaged sibling claims, and sandbox copy ordering.

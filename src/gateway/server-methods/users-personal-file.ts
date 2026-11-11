@@ -16,8 +16,10 @@ import {
 } from "../../agents/tools/gateway-caller-context.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
+import { assertNoUnmigratedWorkspaceState } from "../../agents/workspace-legacy-state.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { root, FsSafeError } from "../../infra/fs-safe.js";
+import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
   hasMultipleResidentSessionSharingIdentities,
@@ -165,6 +167,16 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
     if (getAgentWorkspaceAccess(workspaceDir)) {
       throw new PersonalFileAccessError(
         "Personal instructions editing requires a local agent workspace.",
+      );
+    }
+    try {
+      assertNoUnmigratedWorkspaceState({ workspaceDir });
+    } catch (error) {
+      if (findStartupMaintenanceRequiredError(error)?.kind !== "legacy-workspace") {
+        throw error;
+      }
+      throw new PersonalFileAccessError(
+        "This agent's workspace needs migration. Ask the gateway operator to run `openclaw doctor --fix`.",
       );
     }
   };

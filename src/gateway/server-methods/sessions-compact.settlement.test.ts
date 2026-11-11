@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -22,10 +24,34 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { bindInProcessRequestMutationAuthority } from "./session-mutation-guards.js";
 import * as settlementOwner from "./session-run-settlement.js";
 import { sessionCompactHandlers } from "./sessions-compact.js";
+import { runGatewaySessionCompaction } from "./sessions-compaction-runner.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("refuses model compaction while its workspace needs repair", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await fs.mkdir(state.workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(state.workspaceDir, "openclaw-workspace-state.json"), "retained");
+    const failure = await runGatewaySessionCompaction(
+      {
+        cfg: { agents: { defaults: { workspace: state.workspaceDir } } },
+        entry: { sessionId: "repair-pending", updatedAt: Date.now() },
+        agentId: "main",
+        sessionId: "repair-pending",
+        sessionKey: "agent:main:main",
+        sessionStoreKey: "agent:main:main",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      },
+      { sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined } },
+    ).catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      kind: "legacy-workspace",
+      message: expect.stringContaining("openclaw doctor --fix"),
+    });
+    expect(String(failure)).not.toContain(state.workspaceDir);
+  }));
 
 async function prepareTranscript(state: OpenClawTestState, sessionId: string) {
   const cfg = { agents: { entries: { main: {} } } };

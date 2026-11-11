@@ -547,6 +547,17 @@ describe("personal USER.md self-service", () => {
     });
   });
 
+  it("does not save personal instructions in a workspace awaiting repair", async () => {
+    await fs.writeFile(path.join(workspace, "openclaw-workspace-state.json"), "retained");
+    const result = await save("Private instructions");
+    expect(result).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("openclaw doctor --fix") },
+    });
+    expect(result.error.message).not.toContain(workspace);
+    await expect(fs.readFile(personalPath(), "utf8")).rejects.toThrow();
+  });
+
   it.each(["single-user", "selected-profile", "anonymous", "synthetic", "node", "no-scope"])(
     "rejects personal-file requests for %s before touching files",
     async (kind) => {
