@@ -403,7 +403,7 @@ export async function maybeRepairGatewayServiceConfig(
       message:
         "Gateway service entrypoint does not match the current install." +
         (installationDrift
-          ? ` ${formatGatewayServiceInstallationDrift(installationDrift, serviceInstallEnv)}`
+          ? ` ${formatGatewayServiceInstallationDrift(installationDrift, serviceInstallEnv, { command })}`
           : ""),
       detail: `${serviceLayout?.entrypoint} -> ${runtimeLayout?.entrypoint}`,
       level: "recommended",

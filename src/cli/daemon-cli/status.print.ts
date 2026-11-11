@@ -288,7 +288,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         printWarning(
           terminalText`Warning: this OpenClaw command is version ${status.cli.version}, but the installed Gateway service is version ${serviceInstallVersion}.`,
         );
-        const guidance = resolveDaemonServiceInstallGuidance(status.service.targetRole);
+        const guidance = resolveDaemonServiceInstallGuidance(status.service);
         if (guidance) {
           printWarning(guidance);
         }

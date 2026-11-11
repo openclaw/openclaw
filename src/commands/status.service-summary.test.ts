@@ -29,71 +29,83 @@ function readService(overrides: Partial<GatewayService>, activePackageRoot: stri
   return readGatewayServiceStatusForTest(createService(overrides), activePackageRoot);
 }
 
-it("reports installation facts with usable guidance", async () => {
-  const serviceVersion = "2026.9.4";
-  const root = await fs.realpath(tempDirs.make("openclaw-status-prefix-drift-"));
-  const serviceRoot = path.join(root, "prefix-a", "lib", "node_modules", "openclaw");
-  const activeRoot = path.join(root, "prefix-b", "lib", "node_modules", "openclaw");
-  for (const [fixturePackageRoot, version] of [
-    [serviceRoot, serviceVersion],
-    [activeRoot, "2026.9.17"],
-  ] as const) {
-    await fs.mkdir(path.join(fixturePackageRoot, "dist"), { recursive: true });
-    await fs.writeFile(
-      path.join(fixturePackageRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version }),
+it.each([false, true])(
+  "reports usable installation guidance (launcher override=%s)",
+  async (overridden) => {
+    const serviceVersion = "2026.9.4";
+    const root = await fs.realpath(tempDirs.make("openclaw-status-prefix-drift-"));
+    const serviceRoot = path.join(root, "prefix-a", "lib", "node_modules", "openclaw");
+    const activeRoot = path.join(root, "prefix-b", "lib", "node_modules", "openclaw");
+    for (const [fixturePackageRoot, version] of [
+      [serviceRoot, serviceVersion],
+      [activeRoot, "2026.9.17"],
+    ] as const) {
+      await fs.mkdir(path.join(fixturePackageRoot, "dist"), { recursive: true });
+      await fs.writeFile(
+        path.join(fixturePackageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version }),
+      );
+      await fs.writeFile(path.join(fixturePackageRoot, "dist", "index.js"), "export {};\n");
+    }
+    const service = createService({
+      isLoaded: vi.fn(async () => true),
+      readCommand: vi.fn(async () => ({
+        programArguments: [process.execPath, path.join(serviceRoot, "dist", "index.js"), "gateway"],
+        ...(overridden ? { managedOverrides: { launcher: "command" as const } } : {}),
+      })),
+      readRuntime: vi.fn(async () => ({ status: "running" })),
+    });
+    const accountHome = root;
+    vi.spyOn(os, "homedir").mockReturnValue(accountHome);
+    vi.spyOn(os, "userInfo").mockImplementation(() => ({
+      uid: 1000,
+      gid: 1000,
+      username: "status-fixture",
+      homedir: accountHome,
+      shell: "/bin/sh",
+    }));
+    const summary = await withEnvAsync(
+      {
+        HOME: accountHome,
+        USERPROFILE: accountHome,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_STATE_DIR: undefined,
+        OPENCLAW_CONFIG_PATH: undefined,
+        OPENCLAW_PROFILE: undefined,
+        OPENCLAW_CONTAINER_HINT: undefined,
+        OPENCLAW_NIX_MODE: undefined,
+        OPENCLAW_SUPERVISOR_MODE: undefined,
+        OPENCLAW_LAUNCHD_LABEL: undefined,
+        OPENCLAW_SYSTEMD_UNIT: undefined,
+        OPENCLAW_WINDOWS_TASK_NAME: undefined,
+      },
+      () => readService(service, activeRoot),
     );
-    await fs.writeFile(path.join(fixturePackageRoot, "dist", "index.js"), "export {};\n");
-  }
-  const service = createService({
-    isLoaded: vi.fn(async () => true),
-    readCommand: vi.fn(async () => ({
-      programArguments: [process.execPath, path.join(serviceRoot, "dist", "index.js"), "gateway"],
-    })),
-    readRuntime: vi.fn(async () => ({ status: "running" })),
-  });
-  const accountHome = root;
-  vi.spyOn(os, "homedir").mockReturnValue(accountHome);
-  vi.spyOn(os, "userInfo").mockImplementation(() => ({
-    uid: 1000,
-    gid: 1000,
-    username: "status-fixture",
-    homedir: accountHome,
-    shell: "/bin/sh",
-  }));
-  const summary = await withEnvAsync(
-    {
-      HOME: accountHome,
-      USERPROFILE: accountHome,
-      OPENCLAW_HOME: undefined,
-      OPENCLAW_STATE_DIR: undefined,
-      OPENCLAW_CONFIG_PATH: undefined,
-      OPENCLAW_PROFILE: undefined,
-      OPENCLAW_CONTAINER_HINT: undefined,
-      OPENCLAW_NIX_MODE: undefined,
-      OPENCLAW_SUPERVISOR_MODE: undefined,
-      OPENCLAW_LAUNCHD_LABEL: undefined,
-      OPENCLAW_SYSTEMD_UNIT: undefined,
-      OPENCLAW_WINDOWS_TASK_NAME: undefined,
-    },
-    () => readService(service, activeRoot),
-  );
-  const output = getStatusOverviewRowValue("Gateway service", {
-    gatewayService: summary,
-    gatewayReachable: false,
-    gatewayProbe: { error: "protocol mismatch" },
-    gatewaySelf: null,
-  });
-  expect(output).toContain(`Gateway service's ${serviceVersion} at ${serviceRoot}`);
-  expect(output).toContain(`CLI 2026.9.17 at ${activeRoot}`);
-  expect(output).toContain("openclaw doctor --fix");
-  expect(output).toContain("openclaw gateway install --force");
+    const output = getStatusOverviewRowValue("Gateway service", {
+      gatewayService: summary,
+      gatewayReachable: false,
+      gatewayProbe: { error: "protocol mismatch" },
+      gatewaySelf: null,
+    });
+    expect(output).toContain(`Gateway service's ${serviceVersion} at ${serviceRoot}`);
+    expect(output).toContain(`CLI 2026.9.17 at ${activeRoot}`);
+    if (overridden) {
+      expect(output).toContain("operator-owned launcher override");
+      expect(output).toContain("update or remove");
+      expect(output).not.toContain("openclaw doctor --fix");
+      expect(output).not.toContain("openclaw gateway install --force");
+      expect(output).not.toContain("Run `openclaw update`");
+    } else {
+      expect(output).toContain("openclaw doctor --fix");
+      expect(output).toContain("openclaw gateway install --force");
+    }
 
-  const alias = path.join(root, "active-package");
-  await fs.symlink(serviceRoot, alias, "dir");
-  const aligned = await readService(service, alias);
-  expect(aligned.installationDrift).toBeUndefined();
-});
+    const alias = path.join(root, "active-package");
+    await fs.symlink(serviceRoot, alias, "dir");
+    const aligned = await readService(service, alias);
+    expect(aligned.installationDrift).toBeUndefined();
+  },
+);
 it.each([
   ["running", false, true, "running (externally managed)"],
   ["unknown", true, false, "disabled"],

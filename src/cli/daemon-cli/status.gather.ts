@@ -539,7 +539,11 @@ async function gatherDaemonStatusImpl(
       ...projection.runtimeIntent,
       ...(serviceLayout ? { layout: serviceLayout } : {}),
       ...(installationDrift
-        ? { installationDrift: formatGatewayServiceInstallationDrift(installationDrift) }
+        ? {
+            installationDrift: formatGatewayServiceInstallationDrift(installationDrift, undefined, {
+              command,
+            }),
+          }
         : {}),
       runtime: runtime?.inspectionFailure
         ? {

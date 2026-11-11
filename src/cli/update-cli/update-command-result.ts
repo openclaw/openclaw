@@ -212,7 +212,7 @@ export function prepareUpdateServiceResult(
       params.result,
       serviceEnv,
       `Gateway service still targets ${verdict.root}; the active installation is ${params.result.root ?? params.root}. ` +
-        `Service reconciliation was skipped because restart is disabled or the service is stopped. ${resolveDaemonServiceInstallGuidance(undefined, serviceEnv, { stopped: params.preManagedServiceStop?.running === false, port: params.preManagedServiceStop?.servicePort })}`,
+        `Service reconciliation was skipped because restart is disabled or the service is stopped. ${resolveDaemonServiceInstallGuidance({ stopped: params.preManagedServiceStop?.running === false, port: params.preManagedServiceStop?.servicePort }, serviceEnv)}`,
       params.preManagedServiceStop?.servicePort,
     );
   }
