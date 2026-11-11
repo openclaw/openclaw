@@ -22,7 +22,7 @@
  * intervals are owner pause requests. Native Docker mounts the same projection,
  * executes guest shell calls, and measures heartbeat gaps. Neither qualifies btrfs.
  * Git, agent action, authority, workspace storage, and reconciliation are real.
- * No model, external GitHub, Team state, or 35 GiB database is involved.
+ * Uses synthetic state with no model or external GitHub calls.
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
