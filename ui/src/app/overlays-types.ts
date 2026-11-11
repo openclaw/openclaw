@@ -1,4 +1,7 @@
-import type { SessionApprovalEvent } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionApprovalEvent,
+  UpdateStatusResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
@@ -19,6 +22,7 @@ export type UpdateFailureReportNotice = {
 export type ApplicationUpdateOverlaySnapshot = {
   updateAvailable: UpdateAvailable | null;
   updateSchedule: UpdateScheduleState | null;
+  recoveryCopies?: UpdateStatusResult["recoveryCopies"] | null;
   heldUpdateCampaignId: string | null;
   updateRunning: boolean;
   updateStatusRefreshing: boolean;

@@ -25,6 +25,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { collectHistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
 import { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-inventory.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import {
@@ -140,6 +141,54 @@ function completeRun(run: MigrationRun, target: MigrationTarget) {
 function transcript(id: string, phrase: string) {
   return jsonl({ type: "session", id, version: 3 }, messageEvent(`${id}-user`, "user", phrase));
 }
+
+it("does not replace operator-retired history with a later matching archive", () =>
+  withOpenClawTestState({ label: "doctor-explicit-retirement-discovery" }, async (state) => {
+    const { sessions, target, archiveDir } = discoveryState(state);
+    fs.mkdirSync(archiveDir);
+    const id = "11111111-1111-4111-8111-111111111111";
+    const source = path.join(sessions, `${id}.jsonl`);
+    const bytes = transcript(id, "independent later original");
+    const archives: string[] = [];
+    for (const index of [0, 1]) {
+      fs.writeFileSync(source, bytes);
+      const run = createSessionSqliteMigrationRun(state.env, [target]);
+      const archive = path.join(archiveDir, `${id}.jsonl.imported-${index}`);
+      archives.push(archive);
+      await publishArchive(run, target, source, archive);
+      if (index === 0) {
+        run.manifest.manifestVersion = 5;
+        for (const move of [
+          ...run.manifest.targets[0]!.plannedMoves,
+          ...run.manifest.targets[0]!.completedMoves,
+        ]) {
+          move.retirement = {
+            acceptedAt: "2026-10-30T00:00:00.000Z",
+            backupPath: path.join(state.home, "backup", path.basename(archive)),
+            backupManifestPath: path.join(state.home, "backup", path.basename(run.manifestPath)),
+            backupManifestSha256: "a".repeat(64),
+            previousArtifact: move.artifact,
+          };
+          move.artifact = {
+            ...move.artifact!,
+            classification: "protected",
+            reason: "explicit-history-retirement",
+            disposal: { state: "disposed", disposedAt: "2026-10-30T00:00:00.000Z" },
+          };
+        }
+        fs.unlinkSync(archive);
+      }
+      completeRun(run, target);
+      expect(readManifest(run.manifestPath)).toBeDefined();
+    }
+    const discovery = collectHistoricalArchiveSources({ cfg: {}, env: state.env });
+    expect(discovery.claims).toEqual([]);
+    expect(
+      discovery.sources.get(target.storePath)?.transcripts.map((move) => move.archivePath),
+    ).toEqual([archives[1]]);
+    expect(fs.existsSync(archives[0]!)).toBe(false);
+    expectFiles(bytes, archives[1]!);
+  }));
 
 it("retains growing duplicate archives and the restore refusal without leaking its descriptor", () =>
   withOpenClawTestState({ label: "doctor-restore-growing-archive" }, async (state) => {

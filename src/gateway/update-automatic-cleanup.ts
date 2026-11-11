@@ -1,4 +1,6 @@
 import type { RecoveryCleanupReport } from "../commands/doctor-session-sqlite-recovery-inventory.js";
+import type { RecoveryDiskUsage } from "../commands/recovery-disk-usage.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureStateDatabaseAccess } from "../infra/gateway-state-owner.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
@@ -15,7 +17,7 @@ const pending = new Map<string, Promise<unknown>>();
 
 /** Serving-state cleanup stays with its real owner and off the Gateway main thread. */
 function runGatewayRecoveryCleanup<T>(
-  selection: Pick<AutomaticCleanupInput, "runId" | "dryRun">,
+  selection: Pick<AutomaticCleanupInput, "runId" | "dryRun" | "usageConfig">,
   env: NodeJS.ProcessEnv,
   assertCallerCurrent: () => void,
   settle?: (work: Promise<T>, assertCurrent: () => void) => Promise<T>,
@@ -107,4 +109,19 @@ export function cleanupGatewayRecovery(
   assertCurrent: () => void,
 ): Promise<RecoveryCleanupReport> {
   return runGatewayRecoveryCleanup<RecoveryCleanupReport>({ dryRun }, env, assertCurrent);
+}
+
+/** Descriptive scans share recovery's bounded inventory and existing worker custody. */
+export async function readGatewayRecoveryDiskUsage(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  assertCurrent: () => void,
+): Promise<RecoveryDiskUsage> {
+  const usage = await runGatewayRecoveryCleanup<RecoveryDiskUsage>(
+    { usageConfig: cfg },
+    env,
+    assertCurrent,
+  );
+  assertCurrent();
+  return usage;
 }

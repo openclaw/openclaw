@@ -1,4 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { UpdateStatusResult } from "../../../packages/gateway-protocol/src/index.js";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "../../../src/infra/update-run-legacy-expiry.js";
 import {
   isAcknowledgedAbandonedUpdateRun,
@@ -102,6 +103,7 @@ export type UpdateRestartStatusResponse = {
   } | null;
   updateAvailable?: UpdateAvailable | null;
   schedule?: UpdateScheduleState;
+  recoveryCopies?: UpdateStatusResult["recoveryCopies"];
 };
 
 type UpdateFailureCause = { step: string; detail: string };
@@ -227,7 +229,11 @@ export function createUpdateStatusRefresher(params: {
     try {
       const pending = client.request<UpdateRestartStatusResponse>(
         "update.status",
-        refreshCheckout ? { refreshCheckout: true } : {},
+        refreshCheckout
+          ? { refreshCheckout: true }
+          : mode === "completion"
+            ? { includeRecoveryCopies: true }
+            : {},
         // Checkout discovery uses the Gateway's Git command budgets.
         { timeoutMs: refreshCheckout ? null : 5_000 },
       );
@@ -285,6 +291,9 @@ export function projectUpdateStatusResponse(
     recordedUpdateAttempt,
     ...(Object.hasOwn(response, "updateAvailable")
       ? { updateAvailable: response.updateAvailable ?? null }
+      : {}),
+    ...(Object.hasOwn(response, "recoveryCopies")
+      ? { recoveryCopies: response.recoveryCopies ?? null }
       : {}),
     ...(updateSchedule !== undefined
       ? {

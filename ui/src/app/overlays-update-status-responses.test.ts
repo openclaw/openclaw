@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
-import { flushMicrotasks } from "./overlays-access.test-support.ts";
+import { flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
 import { AUTO_UPDATE_SCHEDULE } from "./overlays-update-campaign.test-support.ts";
 import {
   automaticSchedule,
@@ -22,6 +22,62 @@ afterEach(async () => {
 });
 
 describe("application update status response ownership", () => {
+  it.each(["access", "gateway", "disconnect"])(
+    "retains recovery storage across cheap polls and clears it on %s changes",
+    async (scope) => {
+      const group = {
+        count: 1,
+        logicalBytes: 16,
+        retirable: { count: 0, logicalBytes: 0 },
+        protected: { count: 1, logicalBytes: 16 },
+        unmanifestedOrOrphan: { count: 0, logicalBytes: 0 },
+      };
+      const empty = {
+        ...group,
+        count: 0,
+        logicalBytes: 0,
+        protected: { count: 0, logicalBytes: 0 },
+      };
+      const recoveryCopies = {
+        scope: "local",
+        measurement: "logical",
+        incomplete: false,
+        incompleteReasons: [],
+        total: group,
+        byKind: { migrationOriginals: group, updateCaptures: empty, doctorCaptures: empty },
+        byReason: [
+          { reason: "artifact-metadata-changed", outcome: "blocked", count: 1, logicalBytes: 16 },
+        ],
+      };
+      const request = vi.fn<RequestFn>(async (_method, params) =>
+        (params as { includeRecoveryCopies?: boolean })?.includeRecoveryCopies
+          ? { recoveryCopies }
+          : {},
+      );
+      const { overlays, harness } = gatewayTest(request, updateHello());
+      await flushMicrotasks();
+      await expect(overlays.refreshUpdateStatus()).resolves.toBe(true);
+      expect(overlays.snapshot.recoveryCopies).toEqual(recoveryCopies);
+      const explicitReads = () =>
+        request.mock.calls.filter(
+          ([, params]) => (params as { includeRecoveryCopies?: boolean })?.includeRecoveryCopies,
+        );
+      expect(explicitReads()).toHaveLength(1);
+      await expect(overlays.refreshUpdateStatus("background")).resolves.toBe(true);
+      expect(explicitReads()).toHaveLength(1);
+      expect(overlays.snapshot.recoveryCopies).toEqual(recoveryCopies);
+      if (scope === "access") {
+        harness.setScopes(["operator.read"]);
+      } else if (scope === "gateway") {
+        harness.gateway.connection.gatewayUrl = "ws://another-gateway.test";
+        harness.update({});
+      } else {
+        harness.update({ phase: "reconnecting" });
+      }
+      expect(overlays.snapshot.recoveryCopies).toBeNull();
+    },
+  );
+
   it("keeps newer status when an older response is still formatting its failure", async () => {
     const formatting = pendingReply<updateHelpers.UpdateFailureTriage | null>(null);
     const formattingStarted = pendingReply<void>(undefined);

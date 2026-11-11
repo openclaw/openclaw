@@ -63,6 +63,7 @@ export const ConfigSchemaLookupParamsSchema = closedObject({
 /** Request payload for cached status or an explicit checkout refresh. */
 export const UpdateStatusParamsSchema = closedObject({
   refreshCheckout: Type.Optional(Type.Boolean()),
+  includeRecoveryCopies: Type.Optional(Type.Boolean()),
 });
 
 const UpdateCommitSchema = closedObject({
@@ -236,6 +237,42 @@ export const UpdateScheduleStateSchema = closedObject({
   ),
 });
 
+const RecoveryUsageCountSchema = closedObject({
+  count: Type.Integer({ minimum: 0 }),
+  logicalBytes: Type.Number({ minimum: 0 }),
+});
+const RecoveryUsageGroupSchema = closedObject({
+  ...RecoveryUsageCountSchema.properties,
+  retirable: RecoveryUsageCountSchema,
+  protected: RecoveryUsageCountSchema,
+  unmanifestedOrOrphan: RecoveryUsageCountSchema,
+});
+const RecoveryDiskUsageSchema = closedObject({
+  scope: Type.Literal("local"),
+  measurement: stringLiteralUnion(["partial", "logical"]),
+  incomplete: Type.Boolean(),
+  incompleteReasons: Type.Array(NonEmptyString),
+  total: RecoveryUsageGroupSchema,
+  byKind: closedObject({
+    updateCaptures: RecoveryUsageGroupSchema,
+    doctorCaptures: RecoveryUsageGroupSchema,
+    migrationOriginals: RecoveryUsageGroupSchema,
+  }),
+  byReason: Type.Array(
+    closedObject({
+      ...RecoveryUsageCountSchema.properties,
+      reason: NonEmptyString,
+      outcome: stringLiteralUnion([
+        "candidate",
+        "verification-required",
+        "protected",
+        "blocked",
+        "failed",
+      ]),
+    }),
+  ),
+});
+
 /** Validated response payload for update.status. */
 export const UpdateStatusResultSchema = closedObject({
   sentinel: Type.Unknown(),
@@ -244,6 +281,7 @@ export const UpdateStatusResultSchema = closedObject({
   lastRun: Type.Optional(UpdateRunRecordSchema),
   effectiveChannel: Type.Optional(stringLiteralUnion(["stable", "extended-stable", "beta", "dev"])),
   schedule: Type.Optional(UpdateScheduleStateSchema),
+  recoveryCopies: Type.Optional(RecoveryDiskUsageSchema),
 });
 
 /** Empty request payload for deferring the active update campaign. */

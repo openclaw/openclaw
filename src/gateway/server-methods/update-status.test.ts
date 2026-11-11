@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -10,6 +11,10 @@ import {
 import type { TempHomeEnv } from "../../test-utils/temp-home.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
+let { acquireGatewayLock } = await import("../../infra/gateway-lock.js");
+let { resolveUpdateCaptureRoot } = await import("../../infra/update-capture-paths.js");
+let { UPDATE_CAPTURE_PRIVACY_MARKER } =
+  await import("../../infra/update-capture-privacy-marker.js");
 let snapshots = await import("../../infra/sqlite-readonly-location.js");
 let { UpdateCampaignController } = await import("../../infra/update-campaign.js");
 let { createGatewayUpdateLifecycle } = await import("../../infra/update-check-lifecycle.js");
@@ -29,7 +34,8 @@ let {
   tryBeginGatewaySuspendAdmission,
 } = await import("../../process/gateway-work-admission.js");
 let { createDeferredCore } = await import("../../shared/deferred.js");
-let { openOpenClawStateDatabase } = await import("../../state/openclaw-state-db.js");
+let { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } =
+  await import("../../state/openclaw-state-db.js");
 let { claimOpenClawStateOwnership } =
   await import("../../state/openclaw-state-ownership-operations.js");
 let { createTestGatewayScheduler } = await import("../../test-utils/gateway-scheduler-clock.js");
@@ -46,6 +52,10 @@ let { createLazyCoreHandlers } = await import("./lazy-core-handlers.js");
 let { updateStatusHandlers } = await import("./update-status.js");
 
 async function importUpdateFixtureModules() {
+  ({ acquireGatewayLock } = await import("../../infra/gateway-lock.js"));
+  ({ resolveUpdateCaptureRoot } = await import("../../infra/update-capture-paths.js"));
+  ({ UPDATE_CAPTURE_PRIVACY_MARKER } =
+    await import("../../infra/update-capture-privacy-marker.js"));
   snapshots = await import("../../infra/sqlite-readonly-location.js");
   ({ UpdateCampaignController } = await import("../../infra/update-campaign.js"));
   ({ createGatewayUpdateLifecycle } = await import("../../infra/update-check-lifecycle.js"));
@@ -65,7 +75,8 @@ async function importUpdateFixtureModules() {
     tryBeginGatewaySuspendAdmission,
   } = await import("../../process/gateway-work-admission.js"));
   ({ createDeferredCore } = await import("../../shared/deferred.js"));
-  ({ openOpenClawStateDatabase } = await import("../../state/openclaw-state-db.js"));
+  ({ closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } =
+    await import("../../state/openclaw-state-db.js"));
   ({ claimOpenClawStateOwnership } =
     await import("../../state/openclaw-state-ownership-operations.js"));
   ({ createTestGatewayScheduler } = await import("../../test-utils/gateway-scheduler-clock.js"));
@@ -545,4 +556,43 @@ it("watches a valid active update when newer terminal history is malformed", asy
       expect.stringContaining("update run watcher stopped:"),
     );
   });
+});
+
+it("reads explicit recovery storage off the Gateway thread without changing retained bytes", async () => {
+  const directory = path.join(home.home, ".openclaw", "state");
+  fs.mkdirSync(directory, { recursive: true });
+  const original = path.join(directory, "openclaw.sqlite.pre-startup-migration-old.bak");
+  fs.writeFileSync(original, "retained");
+  expectReply(await read("update.status"), emptyStatus);
+  const run = finishUpdateRun(createUpdateRun({ trigger: "cli" }).runId, { status: "succeeded" });
+  const capture = path.join(resolveUpdateCaptureRoot(path.dirname(directory)), run.runId);
+  fs.mkdirSync(capture, { recursive: true });
+  fs.writeFileSync(path.join(capture, UPDATE_CAPTURE_PRIVACY_MARKER), "");
+  fs.writeFileSync(path.join(capture, "original"), "capture");
+  await closeOpenClawStateDatabaseAsync();
+  const lock = await acquireGatewayLock({ role: "gateway", allowInTests: true });
+  expect(lock).toBeTruthy();
+  const sql = observeMainThreadSql();
+  sql.calibrate();
+  try {
+    const response = await read("update.status", { includeRecoveryCopies: true });
+    sql.expectIdle();
+    expectPartial(response, {
+      recoveryCopies: expect.objectContaining({
+        byReason: expect.arrayContaining([
+          {
+            reason: "unmanifested-recovery-original",
+            outcome: "protected",
+            count: 1,
+            logicalBytes: 8,
+          },
+        ]),
+      }),
+    });
+    expect(fs.readFileSync(original, "utf8")).toBe("retained");
+    expect(fs.readFileSync(path.join(capture, "original"), "utf8")).toBe("capture");
+  } finally {
+    sql.restore();
+    await lock?.release();
+  }
 });

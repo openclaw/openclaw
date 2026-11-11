@@ -46,6 +46,16 @@ const MigrationMoveSchema = z
   .object({
     archivePath: AbsolutePathSchema,
     artifact: MigrationArtifactSchema.optional(),
+    // Explicit disposal binds current bytes separately from the original import evidence.
+    retirement: z
+      .object({
+        acceptedAt: z.string().datetime(),
+        backupPath: AbsolutePathSchema,
+        backupManifestPath: AbsolutePathSchema,
+        backupManifestSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+        previousArtifact: MigrationArtifactSchema.optional(),
+      })
+      .optional(),
     kind: z.enum([
       "legacy-store",
       "transcript",
@@ -58,6 +68,15 @@ const MigrationMoveSchema = z
   })
   .superRefine((move, context) => {
     const disposal = move.artifact?.disposal;
+    if (
+      move.retirement &&
+      (!move.artifact ||
+        move.artifact.classification !== "protected" ||
+        move.artifact.reason !== "explicit-history-retirement" ||
+        disposal?.state === "retained")
+    ) {
+      context.addIssue({ code: "custom", message: "retirement requires explicit disposal intent" });
+    }
     if (
       disposal?.state === "pending-disposal" &&
       (path.dirname(disposal.claimPath) !== path.dirname(move.archivePath) ||
@@ -159,7 +178,13 @@ const MigrationManifestSchema = z
         markdownPath: AbsolutePathSchema,
       })
       .optional(),
-    manifestVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+    manifestVersion: z.union([
+      z.literal(1),
+      z.literal(2),
+      z.literal(3),
+      z.literal(4),
+      z.literal(5),
+    ]),
     openClawVersion: z.string().min(1),
     restore: z
       .object({
@@ -176,15 +201,21 @@ const MigrationManifestSchema = z
     targets: z.array(MigrationTargetSchema),
   })
   .superRefine((manifest, context) => {
-    if (manifest.failureReports?.githubIssue && manifest.manifestVersion !== 4) {
+    if (manifest.failureReports?.githubIssue && manifest.manifestVersion < 4) {
       context.addIssue({
         code: "custom",
-        message: "GitHub issue receipt requires manifest version 4",
+        message: "GitHub issue receipt requires manifest version 4 or later",
         path: ["failureReports", "githubIssue"],
       });
     }
     const targetKeys = new Set<string>();
     for (const target of manifest.targets) {
+      if (
+        manifest.manifestVersion !== 5 &&
+        [...target.plannedMoves, ...target.completedMoves].some((move) => move.retirement)
+      ) {
+        context.addIssue({ code: "custom", message: "retirement requires manifest version 5" });
+      }
       const targetKey = sessionSqliteMigrationTargetKey(target);
       if (targetKeys.has(targetKey)) {
         context.addIssue({ code: "custom", message: "duplicate migration target" });
@@ -533,6 +564,7 @@ function normalizeMigrationMove(move: SessionSqliteMigrationMove): SessionSqlite
   return {
     archivePath: canonicalMigrationFilePath(move.archivePath),
     ...(move.artifact ? { artifact: move.artifact } : {}),
+    ...(move.retirement ? { retirement: move.retirement } : {}),
     kind: move.kind,
     ...(move.sessionKey ? { sessionKey: move.sessionKey } : {}),
     sourcePath: canonicalMigrationFilePath(move.sourcePath),
@@ -639,7 +671,9 @@ function pruneCompletedSessionSqliteMigrationRuns(env: NodeJS.ProcessEnv): void 
         item.manifest.targets.every((target) =>
           uniqueRestoreMoves(target).every(
             (move) =>
-              move.artifact?.disposal.state === "disposed" && !dependencies.has(move.sourcePath),
+              !move.retirement &&
+              move.artifact?.disposal.state === "disposed" &&
+              !dependencies.has(move.sourcePath),
           ),
         ),
     )
