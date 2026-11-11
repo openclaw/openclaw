@@ -148,6 +148,20 @@ export async function readPrAutoFixFeedback(params: {
           apps: [],
         };
   const reopenedFindings = new Set<string>();
+  const observeThread = (finding: Finding, resolved: boolean) => {
+    // Inventory and mandatory fresh reads reconcile the same exact receipts.
+    // A parallel quiet receipt must learn resolution with its judgment receipt.
+    for (const receipts of [dispositions, quietFindings]) {
+      const index = receipts.findIndex((item) => item.revision === finding.revision);
+      const receipt = receipts[index];
+      if (receipt?.threadResolved === true && !resolved) {
+        receipts.splice(index, 1);
+        reopenedFindings.add(finding.id);
+      } else if (receipt && resolved) {
+        receipt.threadResolved = true;
+      }
+    }
+  };
   const addFeedback = (
     value: Record<string, unknown>,
     threadId?: string,
@@ -159,25 +173,7 @@ export async function readPrAutoFixFeedback(params: {
     }
     if (threadId) {
       finding.threadId = threadId;
-    }
-    if (threadId) {
-      const addressed = dispositions.findIndex(
-        (d) =>
-          d.revision === finding.revision && d.threadId === threadId && d.status === "addressed",
-      );
-      const receipt = dispositions[addressed];
-      // Addressed can be publication/path/CI-backed while still unresolved.
-      // Only an actually observed resolved -> unresolved transition reopens it.
-      if (receipt?.threadResolved === true && !threadResolved) {
-        dispositions.splice(addressed, 1);
-        const quiet = quietFindings.findIndex((f) => f.revision === finding.revision);
-        if (quiet >= 0) {
-          quietFindings.splice(quiet, 1);
-        }
-        reopenedFindings.add(finding.id);
-      } else if (receipt) {
-        receipt.threadResolved = threadResolved;
-      }
+      observeThread(finding, threadResolved);
     }
     if (dispositions.some((d) => d.revision === finding.revision)) {
       return;
@@ -513,7 +509,10 @@ export async function readPrAutoFixFeedback(params: {
         check.checkSuite.repository.nameWithOwner === pullRequest.repository &&
         typeof check.checkSuite.app.slug === "string"
       ) {
-        scan.apps.push(check.checkSuite.app.slug + "[bot]");
+        const login = check.checkSuite.app.slug + "[bot]";
+        if (!scan.apps.includes(login)) {
+          scan.apps.push(login);
+        }
       }
       const failed =
         check.__typename === "CheckRun"
@@ -533,24 +532,7 @@ export async function readPrAutoFixFeedback(params: {
       }
     }
 
-    const candidates = [...scan.findings];
-    if (retryable) {
-      for (const item of attemptedFindings) {
-        if (!candidates.some((f) => f.id === item.id)) {
-          const current = freshNodes.find((node) => node.id === item.id);
-          if (current) {
-            const finding = feedback(current, scan.apps, producerId, humanAuthorId);
-            if (finding) {
-              candidates.push({
-                ...finding,
-                ...(typeof item.threadId === "string" ? { threadId: item.threadId } : {}),
-              });
-            }
-          }
-        }
-      }
-    }
-    scan.findings = candidates.flatMap((item) => {
+    const currentFinding = (item: Record<string, unknown>): Finding | undefined => {
       const current = freshNodes.find((node) => node.id === item.id);
       const itemPr = current?.pullRequest ?? current?.issue;
       if (
@@ -560,17 +542,38 @@ export async function readPrAutoFixFeedback(params: {
         !isRecord(itemPr.repository) ||
         itemPr.repository.nameWithOwner !== pullRequest.repository
       ) {
-        return [];
-      }
-      if (
-        item.threadId &&
-        freshNodes.some((node) => node.id === item.threadId && node.isResolved === true)
-      ) {
-        return [];
+        return undefined;
       }
       const finding = feedback(current, scan.apps, producerId, humanAuthorId);
-      return finding ? [{ ...finding, ...(item.threadId ? { threadId: item.threadId } : {}) }] : [];
-    });
+      const thread =
+        typeof item.threadId === "string"
+          ? freshNodes.find((node) => node.id === item.threadId)
+          : undefined;
+      // Only this current PR/comment revision and its captured native thread
+      // qualify a resolution observation; completed fresh pages must agree above.
+      if (
+        finding &&
+        finding.revision === item.revision &&
+        typeof thread?.isResolved === "boolean"
+      ) {
+        observeThread(finding, thread.isResolved);
+      }
+      return finding && thread?.isResolved !== true
+        ? { ...finding, ...(typeof item.threadId === "string" ? { threadId: item.threadId } : {}) }
+        : undefined;
+    };
+    const candidates = [...scan.findings];
+    for (const item of attemptedFindings) {
+      const finding = currentFinding(item);
+      if (
+        finding &&
+        (retryable || reopenedFindings.has(finding.id)) &&
+        !candidates.some((f) => f.id === finding.id)
+      ) {
+        candidates.push(finding);
+      }
+    }
+    scan.findings = candidates.flatMap((item) => currentFinding(item) ?? []);
   }
 
   return { scan, complete, inventoryComplete, freshNodes, exactHeadChecks, reopenedFindings };

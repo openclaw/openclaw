@@ -21,9 +21,11 @@ function finish(result) {
     // revision receipt, not repeated prose, in this condition’s small state.
     state.dispositions[index] = { revision, status, ...(threadId ? { threadId, threadResolved } : {}) };
   }
-  // Exact revision hashes already bind the native item id. Strip redundant ids
-  // from old quiet receipts too, rather than applying a count-based eviction.
-  state.quietFindings = state.quietFindings.map(({ revision }) => ({ revision }));
+  // Revision binds the native comment id; retain observed resolution so reopening
+  // can invalidate even a compacted quiet receipt without replaying unresolved input.
+  state.quietFindings = state.quietFindings.map(({ revision, threadResolved }) => ({
+    revision, ...(threadResolved === true ? { threadResolved: true } : {})
+  }));
   if (bytes() > 14 * 1024) state.receiptCapacityExceeded = true;
   // A bounded state cannot remember arbitrary revisions forever. If exact
   // evidence cannot fit, pause model work instead of replaying forgotten input.

@@ -8,7 +8,7 @@ import {
 } from "./service.pr-automation.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import { runEmbeddedAgentMock } from "./isolated-agent/run.test-harness.js";
 it("observes GitHub before a due autoFix model turn, even when the model does nothing", async () => {
   await using fixture = await createFixture("autoFix", true);
@@ -25,7 +25,7 @@ it("observes GitHub before a due autoFix model turn, even when the model does no
   expect(event?.error).toBeUndefined();
   expect(event).toMatchObject({ jobId: fixture.selected.id, status: "ok" });
   expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-  const observed = fixture.execution.getJob(fixture.selected.id)?.state.triggerState;
+  const observed = fixture.triggerState();
   expect(observed).toMatchObject({
     version: 3,
     blocked: expect.stringContaining("Awaiting verified"),
@@ -53,7 +53,7 @@ it("observes GitHub before a due autoFix model turn, even when the model does no
   fixture.thread.isResolved = true;
   expect(await fixture.tick()).toBeUndefined();
   expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-  const handled = fixture.execution.getJob(fixture.selected.id)?.state.triggerState;
+  const handled = fixture.triggerState();
   expect(
     handled,
     JSON.stringify(fixture.execution.getJob(fixture.selected.id)?.state),
@@ -62,18 +62,18 @@ it("observes GitHub before a due autoFix model turn, even when the model does no
   });
   expect(await fixture.tick()).toBeUndefined();
   expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-  expect(fixture.execution.getJob(fixture.selected.id)?.state.triggerState).toEqual(handled);
+  expect(fixture.triggerState()).toEqual(handled);
   fixture.failRead(true);
   expect(await fixture.tick()).toMatchObject({
     status: "error",
     error: expect.stringContaining("GitHub PR state is unavailable"),
   });
-  expect(fixture.execution.getJob(fixture.selected.id)?.state.triggerState).toEqual(handled);
+  expect(fixture.triggerState()).toEqual(handled);
   expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   expect(fixture.execution.getJob(fixture.selected.id)?.enabled).toBe(true);
   fixture.failRead(false);
   expect(await fixture.tick()).toBeUndefined();
-  expect(fixture.execution.getJob(fixture.selected.id)?.state.triggerState).toEqual(handled);
+  expect(fixture.triggerState()).toEqual(handled);
 });
 
 it("observes edited feedback and CI reruns without replaying feedback for a new head", async () => {
@@ -85,24 +85,19 @@ it("observes edited feedback and CI reruns without replaying feedback for a new 
     "Inspect only the selected PR under the existing task",
   );
   await fixture.execution.update(fixture.selected.id, { enabled: true });
-  runEmbeddedAgentMock.mockImplementation(async (params) => {
-    params.onExecutionPhase?.({ phase: "model_call_started" });
-    await params.onExecutionStarted?.();
-    await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
-    return agentResult();
-  });
+  collectFindingIds(fixture, undefined);
   expect(await fixture.tick()).toMatchObject({ status: "ok" });
-  const initial = fixture.execution.getJob(fixture.selected.id)?.state.triggerState;
+  const initial = fixture.triggerState();
   fixture.finding.body = "Edited review: handle the real failure";
   fixture.finding.updatedAt = "2026-11-10T11:00:00Z";
   expect(await fixture.tick()).toMatchObject({ status: "ok" });
-  expect(fixture.execution.getJob(fixture.selected.id)?.state.triggerState).not.toEqual(initial);
+  expect(fixture.triggerState()).not.toEqual(initial);
   fixture.pr.head.sha = "c".repeat(40);
   fixture.graph.headRefOid = fixture.pr.head.sha;
   expectDefined(fixture.graph.commits.nodes[0], "head commit").commit.oid = fixture.pr.head.sha;
   expect(await fixture.tick()).toBeUndefined();
   expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
-  expect(fixture.execution.getJob(fixture.selected.id)?.state.triggerState).toMatchObject({
+  expect(fixture.triggerState()).toMatchObject({
     head: fixture.pr.head.sha,
   });
   fixture.thread.isResolved = true;
@@ -123,17 +118,7 @@ it("observes edited feedback and CI reruns without replaying feedback for a new 
   ]);
   expect(await fixture.tick()).toBeUndefined();
   expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
-  const check = {
-    __typename: "CheckRun",
-    id: "run-1",
-    name: "unit",
-    status: "COMPLETED",
-    conclusion: "FAILURE",
-    completedAt: "2026-11-10T10:00:00Z",
-  };
-  expectDefined(fixture.graph.commits.nodes[0], "head commit").commit.statusCheckRollup = {
-    contexts: fixture.connection([check]),
-  };
+  const check = fixture.checkRuns();
   expect(await fixture.tick()).toMatchObject({ status: "ok" });
   expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(3);
   check.id = "run-2";
@@ -148,50 +133,44 @@ it("observes edited feedback and CI reruns without replaying feedback for a new 
   expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(5);
 });
 
-it("keeps unchanged failing CI quiet independently of successful unresolved feedback batches", async () => {
-  await using fixture = await createFixture("autoFix");
-  const items = fixture.issueComments(4, (index) => ({ id: "comment-" + index }));
-  const check = {
-    __typename: "CheckRun",
-    id: "run-1",
-    name: "unit",
-    status: "COMPLETED",
-    conclusion: "FAILURE",
-    completedAt: "2026-11-10T10:00:00Z",
-  };
-  expectDefined(fixture.graph.commits.nodes[0], "head commit").commit.statusCheckRollup = {
-    contexts: fixture.connection([check]),
-  };
-  const seen: string[][] = [];
-  runEmbeddedAgentMock.mockImplementation((params) =>
-    fixture.modelTools(params, async () => {
-      seen.push(readObservation(params.prompt).findings.map((f) => f.id));
-      return agentResult();
-    }),
-  );
-  await fixture.execution.update(fixture.selected.id, { enabled: true });
-  for (let tick = 0; tick < 15; tick++) {
-    await fixture.tick();
-  }
-  expect(seen).toEqual([
-    items.slice(0, 3).map((f) => f.id),
-    [expectDefined(items[3], "fourth finding").id],
-  ]);
-  expect(fixture.execution.getJob(fixture.selected.id)?.state.triggerState).toMatchObject({
-    dispositions: [],
-    blocked: expect.stringContaining("unresolved"),
-  });
-  check.id = "run-2";
-  expect(await fixture.tick()).toMatchObject({ status: "ok" });
-  for (let tick = 0; tick < 5; tick++) {
-    await fixture.tick();
-  }
-  expect(seen).toEqual([
-    items.slice(0, 3).map((f) => f.id),
-    [expectDefined(items[3], "fourth finding").id],
-    [],
-  ]);
-});
+it.each([1, 800])(
+  "%s checks: keeps unchanged failing CI quiet independently of successful unresolved feedback batches",
+  async (checkCount) => {
+    await using fixture = await createFixture("autoFix");
+    const items = fixture.issueComments(4, (index) => ({ id: "comment-" + index }));
+    const check = fixture.checkRuns(checkCount);
+    const seen: string[][] = [];
+    collectFindingIds(fixture, undefined, (observation) => {
+      seen.push(observation.findings.map((f) => f.id));
+    });
+    await fixture.execution.update(fixture.selected.id, { enabled: true });
+    expect(await fixture.tick()).toMatchObject({ status: "ok" });
+    const progress = fixture.triggerState();
+    expect(progress).toMatchObject({ scan: { apps: ["github-actions[bot]"], failures: 1 } });
+    if (checkCount === 800) {
+      expect(asRecord(progress).scan).toMatchObject({ source: 0, cursor: "320" });
+    }
+    fixture.execution.stop();
+    await fixture.execution.waitForIdle();
+    await fixture.execution.start();
+    expect(fixture.triggerState()).toEqual(progress);
+    await fixture.expectSuccessfulTicks(14);
+    const batches = [
+      ...(checkCount === 800 ? [[]] : []),
+      items.slice(0, 3).map((f) => f.id),
+      [expectDefined(items[3], "fourth finding").id],
+    ];
+    expect(seen).toEqual(batches);
+    expect(fixture.triggerState()).toMatchObject({
+      dispositions: [],
+      blocked: expect.stringContaining("unresolved"),
+    });
+    check.id = "run-2";
+    expect(await fixture.tick()).toMatchObject({ status: "ok" });
+    await fixture.expectSuccessfulTicks(5);
+    expect(seen).toEqual([...batches, []]);
+  },
+);
 
 it("pauses before replacing an unobserved attempt whose native payload history expired", async () => {
   await using fixture = await createFixture("autoFix");
@@ -200,13 +179,9 @@ it("pauses before replacing an unobserved attempt whose native payload history e
   collectFindingIds(fixture, seen);
   await fixture.execution.update(fixture.selected.id, { enabled: true });
   expect(await fixture.tick()).toMatchObject({ status: "ok" });
-  const attempt = asRecord(
-    fixture.execution.getJob(fixture.selected.id)?.state.triggerState,
-  ).attempt;
+  const attempt = asRecord(fixture.triggerState()).attempt;
   const attemptAtMs = asRecord(attempt).atMs;
-  if (typeof attemptAtMs !== "number") {
-    throw new Error("Missing observed attempt timestamp");
-  }
+  assert(typeof attemptAtMs === "number", "Missing observed attempt timestamp");
   const readHistory = () => fixture.runHistory(`cron:${fixture.selected.id}:${attemptAtMs}`);
   expect(readHistory()).toHaveLength(1);
   await fixture.expireRunHistory();
@@ -214,7 +189,7 @@ it("pauses before replacing an unobserved attempt whose native payload history e
   await fixture.execution.start();
   await fixture.expectQuietTicks(12);
   expect(seen).toEqual(items.slice(0, 3).map((f) => f.id));
-  expect(fixture.execution.getJob(fixture.selected.id)?.state.triggerState).toMatchObject({
+  expect(fixture.triggerState()).toMatchObject({
     attempt,
     dispositions: [],
     blocked: expect.stringContaining("manual review"),
@@ -252,7 +227,7 @@ it("persists consecutive thrown attempts and bounded cooldown before retrying un
       status: "error",
       error: "Session event execution failed",
     });
-    const state = asRecord(fixture.execution.getJob(fixture.selected.id)?.state.triggerState);
+    const state = asRecord(fixture.triggerState());
     const attempt = asRecord(state.attempt);
     expect(attempt.atMs).toEqual(expect.any(Number));
     expect(state.retries).toBe(retry);
@@ -260,9 +235,7 @@ it("persists consecutive thrown attempts and bounded cooldown before retrying un
       fingerprint = attempt.fingerprint;
     }
     expect(attempt.fingerprint).toBe(fingerprint);
-    if (typeof attempt.atMs !== "number") {
-      throw new Error("Missing persisted payload attempt");
-    }
+    assert(typeof attempt.atMs === "number", "Missing persisted payload attempt");
     attempts.push(attempt.atMs);
     expect(fixture.runHistory("cron:" + fixture.selected.id + ":" + attempt.atMs)).toEqual([
       expect.objectContaining({
@@ -281,7 +254,7 @@ it("persists consecutive thrown attempts and bounded cooldown before retrying un
   for (const phaseAfterCooldown of ["verify", "done"]) {
     for (let tick = 1; tick < 12; tick++) {
       expect(await fixture.tick()).toBeUndefined();
-      expect(fixture.execution.getJob(fixture.selected.id)?.state.triggerState).toMatchObject({
+      expect(fixture.triggerState()).toMatchObject({
         retries: phaseAfterCooldown === "verify" ? 3 : 4,
         retryTicks: tick,
         blocked: expect.stringContaining("bounded retry cooldown"),
@@ -293,7 +266,7 @@ it("persists consecutive thrown attempts and bounded cooldown before retrying un
       status: "ok",
       result: { outcome: phase === "verify" ? "blocked" : "done" },
     });
-    expect(fixture.execution.getJob(fixture.selected.id)?.state.triggerState).toMatchObject({
+    expect(fixture.triggerState()).toMatchObject({
       retries: phase === "verify" ? 4 : 5,
       retryTicks: 0,
       attempt: { fingerprint },
@@ -348,61 +321,94 @@ it.each(["ordinary", "replacement", "cancelled"])(
     fixture.execution.stop();
     await fixture.execution.waitForIdle();
     await fixture.execution.start();
-    expect(fixture.execution.getJob(fixture.selected.id)?.state.triggerState).toEqual(
+    expect(fixture.triggerState()).toEqual(
       mode === "replacement" ? { replacement: "current owner" } : previous,
     );
   },
 );
 
-it("persists exact-revision non-actionable judgments without replaying non-thread praise", async () => {
+it.each([
+  "comment",
+  "quiet-thread",
+  "not-actionable-thread",
+  "quiet-cursor",
+  "not-actionable-cursor",
+])("%s: retains exact-revision dedupe but reassesses observed reopened feedback", async (mode) => {
   await using fixture = await createFixture("autoFix");
-  fixture.thread.isResolved = true;
+  const quiet = mode.startsWith("quiet");
+  const paged = mode.endsWith("cursor");
+  if (paged) {
+    const following = structuredClone(fixture.thread);
+    following.id = "thread-2";
+    following.isResolved = true;
+    expectDefined(following.comments.nodes[0], "following comment").id = "review-comment-2";
+    fixture.graph.reviewThreads = fixture.connection([fixture.thread, following]);
+  }
+  fixture.thread.isResolved = mode === "comment";
   fixture.finding.body = "The error path now looks correct. Thanks!";
-  fixture.graph.comments = fixture.connection([fixture.finding]);
-  runEmbeddedAgentMock.mockImplementation((params) =>
-    fixture.modelTools(params, async ({ automation }) => {
-      const observation = readObservation(params.prompt);
-      const finding = expectDefined(observation.findings[0], "observed finding");
-      await recordJudgment({
-        automation,
-        url: fixture.pr.html_url,
-        head: observation.head,
-        attempt: observation.fingerprint,
-        findings: [
-          {
-            id: finding.id,
-            revision: finding.revision,
-            status: "not_actionable",
-            reason:
-              "Reviewer confirms the already-correct error path; this revision requests no change",
-            quote: fixture.finding.body,
-          },
-        ],
-        summary: "Inspected the exact current praise revision",
-      });
-      return agentResult();
-    }),
-  );
+  fixture.graph.comments = fixture.connection(mode === "comment" ? [fixture.finding] : []);
+  collectFindingIds(fixture, undefined, async (observation, automation) => {
+    const finding = expectDefined(observation.findings[0], "observed finding");
+    if (quiet) {
+      return;
+    }
+    await recordJudgment({
+      automation,
+      url: fixture.pr.html_url,
+      head: observation.head,
+      attempt: observation.fingerprint,
+      findings: [
+        {
+          id: finding.id,
+          revision: finding.revision,
+          status: "not_actionable",
+          reason:
+            "Reviewer confirms the already-correct error path; this revision requests no change",
+          quote: fixture.finding.body,
+        },
+      ],
+      summary: "Inspected the exact current praise revision",
+    });
+  });
   await fixture.execution.update(fixture.selected.id, { enabled: true });
   expect(await fixture.tick()).toMatchObject({ status: "ok" });
+  if (paged) {
+    expect(asRecord(fixture.triggerState()).scan).toMatchObject({ cursor: "1" });
+    fixture.thread.isResolved = true;
+  }
   expect(await fixture.tick()).toBeUndefined();
-  expect(fixture.execution.getJob(fixture.selected.id)?.state.triggerState).toMatchObject({
-    dispositions: [
-      expect.objectContaining({
-        id: fixture.finding.id,
-        status: "not_actionable",
-        reason: expect.stringContaining("already-correct"),
-        quote: fixture.finding.body,
-      }),
-    ],
-    disposition: { status: "reviewed" },
+  expect(fixture.triggerState()).toMatchObject({
+    dispositions: quiet
+      ? []
+      : [
+          expect.objectContaining({
+            id: fixture.finding.id,
+            status: "not_actionable",
+            reason: expect.stringContaining("already-correct"),
+            quote: fixture.finding.body,
+          }),
+        ],
+    disposition: { status: quiet ? "blocked" : "reviewed" },
   });
-  await fixture.expectQuietTicks(12);
+  if (!paged) {
+    await fixture.expectQuietTicks(12);
+    fixture.thread.isResolved = true;
+    await fixture.expectQuietTicks(2);
+  }
   expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  if (mode !== "comment") {
+    fixture.execution.stop();
+    await fixture.execution.waitForIdle();
+    await fixture.execution.start();
+    fixture.thread.isResolved = false;
+    expect(await fixture.tick()).toMatchObject({ status: "ok" });
+    await fixture.expectQuietTicks(12);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+  }
   fixture.finding.body = "Correction: the timeout still fails";
   fixture.finding.updatedAt = "2026-11-10T15:00:00Z";
   expect(await fixture.tick()).toMatchObject({ status: "ok" });
-  expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+  expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(mode === "comment" ? 2 : 3);
 });
 
 it("keeps accumulated Unicode disposition evidence within Cron’s real 16KB state budget", async () => {
@@ -412,43 +418,30 @@ it("keeps accumulated Unicode disposition evidence within Cron’s real 16KB sta
     body: "Looks good " + "🦞".repeat(200),
   }));
   const seen: string[] = [];
-  runEmbeddedAgentMock.mockImplementation((params) =>
-    fixture.modelTools(params, async ({ automation }) => {
-      const observation = readObservation(params.prompt);
-      seen.push(...observation.findings.map((f) => f.id));
-      await recordJudgment({
-        automation,
-        url: fixture.pr.html_url,
-        head: observation.head,
-        attempt: observation.fingerprint,
-        findings: observation.findings.map((finding) => ({
-          id: finding.id,
-          revision: finding.revision,
-          status: "not_actionable",
-          reason: "🦞".repeat(240),
-          quote: "🦞".repeat(200),
-        })),
-        summary: "Inspected current praise revisions",
-      });
-      return agentResult();
-    }),
-  );
+  collectFindingIds(fixture, seen, async (observation, automation) => {
+    await recordJudgment({
+      automation,
+      url: fixture.pr.html_url,
+      head: observation.head,
+      attempt: observation.fingerprint,
+      findings: observation.findings.map((finding) => ({
+        id: finding.id,
+        revision: finding.revision,
+        status: "not_actionable",
+        reason: "🦞".repeat(240),
+        quote: "🦞".repeat(200),
+      })),
+      summary: "Inspected current praise revisions",
+    });
+  });
   await fixture.execution.update(fixture.selected.id, { enabled: true });
-  for (let tick = 0; tick < 9; tick++) {
-    const event = await fixture.tick();
-    if (event) {
-      expect(event.status, event.error).toBe("ok");
-    }
-    const job = expectDefined(fixture.execution.getJob(fixture.selected.id), "operational job");
-    expect(job.enabled).toBe(true);
-    expect(Buffer.byteLength(JSON.stringify(job.state.triggerState))).toBeLessThanOrEqual(
-      14 * 1024,
-    );
-  }
+  await fixture.expectSuccessfulTicks(9, () => {
+    expect(fixture.execution.getJob(fixture.selected.id)).toMatchObject({ enabled: true });
+  });
   expect(seen).toEqual(items.map((item) => item.id));
   await fixture.expectQuietTicks(12);
   expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(8);
-  const state = asRecord(fixture.execution.getJob(fixture.selected.id)?.state.triggerState);
+  const state = asRecord(fixture.triggerState());
   expect(state.dispositions).toHaveLength(24);
   expect(state.disposition).toMatchObject({ status: "reviewed" });
 });
@@ -462,17 +455,7 @@ it("retains more than 128 exact Unicode no-op revisions across inventories and h
   const seen: string[] = [];
   collectFindingIds(fixture, seen);
   await fixture.execution.update(fixture.selected.id, { enabled: true });
-  for (let tick = 0; tick < 45; tick++) {
-    const event = await fixture.tick();
-    if (event) {
-      expect(event.status, event.error).toBe("ok");
-    }
-    expect(
-      Buffer.byteLength(
-        JSON.stringify(fixture.execution.getJob(fixture.selected.id)?.state.triggerState),
-      ),
-    ).toBeLessThanOrEqual(14 * 1024);
-  }
+  await fixture.expectSuccessfulTicks(45);
   expect(seen).toEqual(items.map((f) => f.id));
   // Receipt state survives scheduler reload beyond native run-history retention.
   await fixture.expireRunHistory();
@@ -482,9 +465,7 @@ it("retains more than 128 exact Unicode no-op revisions across inventories and h
   await fixture.expectQuietTicks(100);
   expect(seen).toEqual(items.map((f) => f.id));
   expectDefined(items[0], "first finding").updatedAt = "2026-11-10T17:00:00Z";
-  for (let tick = 0; tick < 45; tick++) {
-    await fixture.tick();
-  }
+  await fixture.expectSuccessfulTicks(45);
   expect(seen.slice(132)).toEqual([expectDefined(items[0], "first finding").id]);
 });
 
@@ -495,18 +476,11 @@ it("pauses model work instead of replaying forgotten revisions when exact receip
   collectFindingIds(fixture, seen);
   await fixture.execution.update(fixture.selected.id, { enabled: true });
   let paused = false;
-  for (let tick = 0; tick < 110; tick++) {
-    const event = await fixture.tick();
-    if (event) {
-      expect(event.status, event.error).toBe("ok");
-    }
-    const state = asRecord(fixture.execution.getJob(fixture.selected.id)?.state.triggerState);
-    expect(Buffer.byteLength(JSON.stringify(state))).toBeLessThanOrEqual(14 * 1024);
-    if (String(state.blocked).includes("model work is paused")) {
-      paused = true;
-      break;
-    }
-  }
+  await fixture.expectSuccessfulTicks(110, () => {
+    const state = asRecord(fixture.triggerState());
+    paused = String(state.blocked).includes("model work is paused");
+    return !paused;
+  });
   expect(paused).toBe(true);
   expect(seen.length).toBeGreaterThan(0);
   expect(seen.length).toBeLessThan(320);
@@ -518,9 +492,7 @@ it("pauses model work instead of replaying forgotten revisions when exact receip
   await fixture.execution.start();
   await fixture.expectQuietTicks(12);
   expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(calls);
-  expect(
-    asRecord(fixture.execution.getJob(fixture.selected.id)?.state.triggerState).blocked,
-  ).toContain("manual review, not resolved");
+  expect(asRecord(fixture.triggerState()).blocked).toContain("manual review, not resolved");
   fixture.pr.state = "closed";
   fixture.pr.merged = true;
   await fixture.tick();
@@ -548,14 +520,11 @@ it("admits only the verified selected PR human author outside repository associa
   expect(await fixture.tick()).toBeUndefined();
   expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   fixture.finding.author = { login: "renamed-outside-author", __typename: "User", databaseId: 700 };
-  runEmbeddedAgentMock.mockImplementation((params) =>
-    fixture.modelTools(params, async () => {
-      expect(readObservation(params.prompt).findings).toEqual([
-        expect.objectContaining({ id: fixture.finding.id, author: "renamed-outside-author" }),
-      ]);
-      return agentResult();
-    }),
-  );
+  collectFindingIds(fixture, undefined, (observation) => {
+    expect(observation.findings).toEqual([
+      expect.objectContaining({ id: fixture.finding.id, author: "renamed-outside-author" }),
+    ]);
+  });
   expect(await fixture.tick()).toMatchObject({ status: "ok" });
   expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
 });
@@ -566,17 +535,8 @@ it("admits a repository/head App bot while refusing spelling, identity and integ
   fixture.finding.authorAssociation = "NONE";
   fixture.finding.author = { login: "roboclaw[bot]", __typename: "Bot", databaseId: 900 };
   fixture.graph.comments = fixture.connection([fixture.finding]);
-  const check = {
-    __typename: "CheckRun",
-    id: "app-check",
-    status: "COMPLETED",
-    conclusion: "SUCCESS",
-    checkSuite: { app: { slug: "roboclaw" }, repository: { nameWithOwner: "unrelated/repo" } },
-  };
-  expectDefined(fixture.graph.commits.nodes[0], "head commit").commit.statusCheckRollup = {
-    state: "SUCCESS",
-    contexts: fixture.connection([check]),
-  };
+  const check = fixture.checkRuns(1, "SUCCESS", "roboclaw");
+  check.checkSuite.repository.nameWithOwner = "unrelated/repo";
   await fixture.execution.update(fixture.selected.id, { enabled: true });
   expect(await fixture.tick()).toBeUndefined();
   check.checkSuite.repository.nameWithOwner = "fixture-org/fixture-repo";
@@ -590,14 +550,11 @@ it("admits a repository/head App bot while refusing spelling, identity and integ
   expect(await fixture.tick()).toBeUndefined();
   expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   check.checkSuite.app.slug = "roboclaw";
-  runEmbeddedAgentMock.mockImplementation((params) =>
-    fixture.modelTools(params, async () => {
-      expect(readObservation(params.prompt).findings).toEqual([
-        expect.objectContaining({ id: fixture.finding.id, author: "roboclaw[bot]" }),
-      ]);
-      return agentResult();
-    }),
-  );
+  collectFindingIds(fixture, undefined, (observation) => {
+    expect(observation.findings).toEqual([
+      expect.objectContaining({ id: fixture.finding.id, author: "roboclaw[bot]" }),
+    ]);
+  });
   expect(await fixture.tick()).toMatchObject({ status: "ok" });
   expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
 });
@@ -623,9 +580,7 @@ it("continues nested overflow in bounded batches without losing comments or repl
     expect(observation.findings.length).toBeLessThanOrEqual(3);
   });
   await fixture.execution.update(fixture.selected.id, { enabled: true });
-  for (let tick = 0; tick < 5; tick++) {
-    await fixture.tick();
-  }
+  await fixture.expectSuccessfulTicks(5);
   expect(seen).toEqual([
     ...Array.from({ length: 8 }, (_, index) => "nested-" + index),
     "last-thread",

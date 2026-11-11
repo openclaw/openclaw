@@ -143,6 +143,29 @@ export function createNativeGitHubReadFixture(branch: string, sourceHead: string
     thread,
     reads,
     connection,
+    checkRuns: (count = 1, conclusion = "FAILURE", app = "github-actions") => {
+      const check = {
+        __typename: "CheckRun",
+        id: "run-1",
+        name: "unit",
+        status: "COMPLETED",
+        conclusion,
+        completedAt: "2026-11-10T10:00:00Z",
+        checkSuite: { app: { slug: app }, repository: { nameWithOwner: repository.full_name } },
+      };
+      expectDefined(graph.commits.nodes[0], "head commit").commit.statusCheckRollup = {
+        state: conclusion,
+        contexts: connection([
+          check,
+          ...Array.from({ length: count - 1 }, (_, index) => ({
+            ...check,
+            id: "matrix-" + index,
+            conclusion: "SUCCESS",
+          })),
+        ]),
+      };
+      return check;
+    },
     nativeRead,
     identity,
     failRead: (fail: boolean) => {

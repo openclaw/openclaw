@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { beforeEach, expect, onTestFinished, vi } from "vitest";
+import { assert, beforeEach, expect, onTestFinished, vi } from "vitest";
 import {
   ciAutomationJobSpec,
   type CiAutomationOption,
@@ -180,14 +180,10 @@ export function readRecipeTarget(prompt: string) {
   const { owner, repo, number, sessionKey, sessionId } = asRecord(
     JSON.parse(line.slice(line.indexOf("{"), line.lastIndexOf("}") + 1)),
   );
-  if (
-    typeof owner !== "string" ||
-    typeof repo !== "string" ||
-    typeof number !== "number" ||
-    typeof sessionKey !== "string"
-  ) {
-    throw new Error("Scheduled recipe lost its PR target");
-  }
+  assert(typeof owner === "string", "Scheduled recipe lost its PR target");
+  assert(typeof repo === "string", "Scheduled recipe lost its PR target");
+  assert(typeof number === "number", "Scheduled recipe lost its PR target");
+  assert(typeof sessionKey === "string", "Scheduled recipe lost its PR target");
   return {
     owner,
     repo,
@@ -569,6 +565,7 @@ export async function createFixture(
     target,
     add,
     selected,
+    triggerState: () => execution.getJob(selected.id)?.state.triggerState,
     other,
     execution,
     seed,
@@ -594,6 +591,21 @@ export async function createFixture(
       clock.setTime(clock.clock.now() + 8 * 24 * 60 * 60_000);
       const context = captureOpenClawStateWorkerContext();
       await maintainCronRunHistory(context, context.admission.assertCurrent);
+    },
+    expectSuccessfulTicks: async (count: number, inspect?: () => boolean | void) => {
+      for (let index = 0; index < count; index++) {
+        const event = await tick();
+        if (event) {
+          expect(event.status, event.error).toBe("ok");
+        }
+        const job = expectDefined(execution.getJob(selected.id), "operational job");
+        expect(Buffer.byteLength(JSON.stringify(job.state.triggerState))).toBeLessThanOrEqual(
+          14 * 1024,
+        );
+        if (inspect?.() === false) {
+          break;
+        }
+      }
     },
     expectQuietTicks: async (count: number) => {
       for (let index = 0; index < count; index++) {
@@ -666,14 +678,17 @@ export function readObservation(prompt: string) {
 
 export function collectFindingIds(
   fixture: Awaited<ReturnType<typeof createFixture>>,
-  seen: string[],
-  inspect?: (observation: ReturnType<typeof readObservation>) => void,
+  seen: string[] | undefined,
+  inspect?: (
+    observation: ReturnType<typeof readObservation>,
+    automation: ReturnType<typeof createCronTool>,
+  ) => void | Promise<void>,
 ) {
   runEmbeddedAgentMock.mockImplementation((params) =>
-    fixture.modelTools(params, async () => {
+    fixture.modelTools(params, async ({ automation }) => {
       const observation = readObservation(params.prompt);
-      seen.push(...observation.findings.map((finding) => finding.id));
-      inspect?.(observation);
+      seen?.push(...observation.findings.map((finding) => finding.id));
+      await inspect?.(observation, automation);
       return agentResult();
     }),
   );

@@ -44,7 +44,7 @@ export async function identityFixture(
       ? page.locator(".sessions-table tbody tr", { hasText: original.key })
       : page.locator(`.sidebar-recent-session[data-session-key="${original.key}"]`);
   await row.waitFor({ state: "visible" });
-  const replace = async () => {
+  const replace = async (visibleName = row) => {
     await gateway.setSessionsListResponse(
       sessionsListResponse(kind === "group" ? [replacement, survivor] : [replacement]),
     );
@@ -53,7 +53,7 @@ export async function identityFixture(
       sessionKey: original.key,
       reason: "create",
     });
-    await expect.poll(() => row.textContent()).toContain(replacement.label);
+    await expect.poll(() => visibleName.textContent()).toContain(replacement.label);
   };
   return { original, survivor, replacement, gateway, row, batch, method, replace };
 }

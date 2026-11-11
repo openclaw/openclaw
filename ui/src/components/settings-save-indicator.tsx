@@ -65,7 +65,9 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
   });
   const presentation = createMemo(() => {
     const { retired } = lifetime();
-    const [command, setCommand] = createOptimistic<Command | null>(null);
+    const [command, setCommand] = createOptimistic<{ kind: Command; failure?: Failure } | null>(
+      null,
+    );
     const [saving, setSaving] = createOptimistic(false);
     const needsApply = createMemo(() => props.needsApply);
     return { retired, command, setCommand, saving, setSaving, needsApply };
@@ -81,7 +83,7 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
     view: ReturnType<typeof presentation>,
     pending: Promise<unknown>,
     retired: Promise<void>,
-    command: Command,
+    command: { kind: Command; failure?: Failure },
   ) {
     try {
       if (current(view)) {
@@ -106,6 +108,11 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
     if (busy() || (command === "apply" && props.applyDisabled)) {
       return;
     }
+    // Capture before the owner clears its failure while admitting the retry.
+    const presentedCommand = {
+      kind: command,
+      failure: command === "retry" ? failure() : undefined,
+    };
     const pending =
       command === "retry"
         ? props.onRetry()
@@ -123,7 +130,7 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
               throw error;
             }
           })
-        : Promise.resolve().then(() => present(view, pending, retired, command)),
+        : Promise.resolve().then(() => present(view, pending, retired, presentedCommand)),
     );
   }
   const saving = () => presentation().saving();
@@ -131,7 +138,7 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
   const status = createMemo(() => (props.saving ? "saving" : props.status));
   const state = createMemo(() => {
     const command = presentation().command();
-    if ((saving() && command === "apply") || props.applying) {
+    if ((saving() && command?.kind === "apply") || props.applying) {
       return "applying";
     }
     if (saving() || status() === "saving") {
@@ -150,14 +157,17 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
   });
   // Retry keeps the failure in place until it has an outcome, so the card does not
   // collapse into Saving… and grow back when the same write fails again.
-  const retrying = () => saving() && presentation().command() === "retry";
+  const retrying = () => saving() && presentation().command()?.kind === "retry";
   const failure = createMemo<Failure | undefined>(
-    (previous) => {
+    () => {
+      if (retrying()) {
+        return presentation().command()?.failure;
+      }
       const shown = state();
       if (isFailure(shown)) {
         return { kind: shown, reason: props.lastError?.trim() || null };
       }
-      return retrying() ? previous : undefined;
+      return undefined;
     },
     {
       equals: (previous, next) =>

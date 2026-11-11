@@ -64,7 +64,10 @@ import { preparePersonalModelAccountSelection } from "./users-model-account-acce
 type InferenceCaller = Pick<
   GatewayRequestHandlerOptions,
   "client" | "context" | "signal" | "hasCurrentClientAuthority"
->;
+> & {
+  /** Native workflows may retain their authenticated requester without a creating conversation. */
+  captureIndependentOperatorSource?: true;
+};
 
 /**
  * The entry a job's cron session takes its runtime override from: the target row of a
@@ -397,6 +400,7 @@ export async function captureCronCreatorSession(
     readGatewayDeviceSourceAuthority(caller.hasCurrentClientAuthority) !== undefined;
   const independent = Boolean(
     directControlUi ||
+    caller.captureIndependentOperatorSource ||
     inheritedAuthority?.openclawIdPrincipal ||
     caller.client?.internal?.openclawIdPrincipal ||
     job.operatorSource?.source.kind === "gateway" ||

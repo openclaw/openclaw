@@ -133,7 +133,7 @@ it("cancellation during the native read starts no model and commits no observati
   expect(await fixture.tick()).toMatchObject({ status: "error" });
   expect(fixture.reads).toContain("graphql");
   expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-  expect(fixture.execution.getJob(fixture.selected.id)?.state.triggerState).toBeUndefined();
+  expect(fixture.triggerState()).toBeUndefined();
   expect(fixture.execution.getJob(fixture.selected.id)?.enabled).toBe(false);
 });
 
@@ -149,7 +149,7 @@ it("keeps autoMerge on its independently authorized model route", async () => {
   expect(await fixture.tick()).toMatchObject({ status: "ok" });
   expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   expect(fixture.reads).not.toContain("graphql");
-  expect(fixture.execution.getJob(fixture.selected.id)?.state.triggerState).toBeUndefined();
+  expect(fixture.triggerState()).toBeUndefined();
 });
 
 it("transports direct UI autoFix for only the selected PR across session replacement and disables future effects", async () => {
@@ -306,7 +306,7 @@ it.each([
   const writes: string[][] = [];
   await using fixture = await createFixture("autoFix", true, false, direct);
   const { pr, graph, workspaceDir, nativeRead, connection, finding, thread, identity } = fixture;
-  const triggerState = () => fixture.execution.getJob(fixture.selected.id)?.state.triggerState;
+  const { triggerState } = fixture;
   if (mode === "nonthread-addressed") {
     graph.reviewThreads = connection([]);
     graph.comments = connection([finding]);
