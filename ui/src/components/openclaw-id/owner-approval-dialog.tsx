@@ -14,6 +14,7 @@ import { withPromiseModalHost } from "../promise-modal-host.ts";
 import { IconButton } from "../solid/icon-button.tsx";
 import { OpenClawIdErrorMessage } from "./error-message.tsx";
 import { showOwnerDevicesDialog } from "./owner-devices-dialog.tsx";
+import { createOwnerDialogMotion } from "./owner-dialog-motion.ts";
 
 registerEnglishCatalog(registerOpenClawIdDialogsEnglish);
 registerEnglishCatalog(registerOpenClawIdEnglish);
@@ -34,13 +35,17 @@ function ApprovalRow(props: {
   );
   return (
     <section class="openclaw-id-approval__request">
-      <strong class="openclaw-id-approval__browser">{props.request.label}</strong>
+      <strong class="openclaw-id-approval__browser openclaw-id-owner-enter">
+        {props.request.label}
+      </strong>
       <Show when={!props.request.error && !props.request.expired}>
-        <p class="openclaw-id-devices__description">{t("openclawId.approvalCompare")}</p>
+        <p class="openclaw-id-devices__description openclaw-id-owner-enter">
+          {t("openclawId.approvalCompare")}
+        </p>
       </Show>
       <Show when={error()}>
         {(message) => (
-          <div class="openclaw-id-devices__error" role="alert">
+          <div class="openclaw-id-devices__error openclaw-id-owner-enter" role="alert">
             {message().message}
           </div>
         )}
@@ -56,26 +61,30 @@ function ApprovalRow(props: {
           <Show
             when={props.request.code}
             fallback={
-              <span class="openclaw-id-approval__waiting">
+              <span class="openclaw-id-approval__waiting openclaw-id-owner-enter">
                 <span class="btn__spinner" aria-hidden="true" />
                 {t("openclawId.approvalWaiting")}
               </span>
             }
           >
-            {(code) => <span>{code().replace(/^(\d{3})(\d{3})$/, "$1 $2")}</span>}
+            {(code) => (
+              <span class="openclaw-id-owner-enter">
+                {code().replace(/^(\d{3})(\d{3})$/, "$1 $2")}
+              </span>
+            )}
           </Show>
         </div>
       </Show>
       <Show when={error()?.detail}>
         {(detail) => (
-          <details class="openclaw-id-approval__details">
+          <details class="openclaw-id-approval__details openclaw-id-owner-enter">
             <summary>{t("openclawId.technicalDetails")}</summary>
             <div>{detail()}</div>
           </details>
         )}
       </Show>
       <Show when={!inactive()}>
-        <label class="openclaw-id-approval__expiry">
+        <label class="openclaw-id-approval__expiry openclaw-id-owner-enter">
           <span>
             {t("openclawId.regenExpiry")}
             <small>{t("openclawId.regenExpiryHint")}</small>
@@ -90,7 +99,7 @@ function ApprovalRow(props: {
             disabled={props.request.busy}
           />
         </label>
-        <openclaw-modal-actions class="exec-approval-actions">
+        <openclaw-modal-actions class="exec-approval-actions openclaw-id-owner-enter">
           <button
             type="button"
             class="btn"
@@ -117,7 +126,7 @@ function ApprovalRow(props: {
         </openclaw-modal-actions>
       </Show>
       <Show when={props.request.uncertain}>
-        <openclaw-modal-actions class="exec-approval-actions">
+        <openclaw-modal-actions class="exec-approval-actions openclaw-id-owner-enter">
           <button type="button" class="btn primary" onClick={() => props.onDevices()}>
             {t("openclawId.yourDevices")}
           </button>
@@ -134,6 +143,7 @@ export function showOwnerApprovalDialog(params: { client: GatewayBrowserClient }
   const lifetime = { signal: openClawIdFeatureSignal(), value: undefined };
   return withPromiseModalHost<void>(lifetime, (modal) => {
     modal.render(() => {
+      const motion = createOwnerDialogMotion();
       const projection = owner ? projectOwner(owner, (value) => value.read()) : null;
       return (
         <openclaw-modal-dialog
@@ -141,7 +151,7 @@ export function showOwnerApprovalDialog(params: { client: GatewayBrowserClient }
           label={t("openclawId.approveNewDevice")}
           onModal-cancel={() => modal.finish(undefined)}
         >
-          <div class="exec-approval-card openclaw-id-devices">
+          <div ref={motion.card} class="exec-approval-card openclaw-id-devices">
             <h2 class="openclaw-id-devices__title">{t("openclawId.approveNewDevice")}</h2>
             <IconButton
               class="openclaw-id-devices__close"
@@ -151,11 +161,13 @@ export function showOwnerApprovalDialog(params: { client: GatewayBrowserClient }
               onClick={() => modal.finish(undefined)}
             />
             <Show when={!owner}>
-              <p class="callout info">{t("openclawId.approvalRequiresKey")}</p>
+              <p class="callout info openclaw-id-owner-enter">
+                {t("openclawId.approvalRequiresKey")}
+              </p>
             </Show>
             <Show when={projection?.read().error}>
               {(message) => (
-                <div class="openclaw-id-devices__error" role="alert">
+                <div class="openclaw-id-devices__error openclaw-id-owner-enter" role="alert">
                   <OpenClawIdErrorMessage error={openClawIdUiError(message(), "approval")} />
                   <Show when={!projection?.read().requests.some((request) => request.uncertain)}>
                     <openclaw-modal-actions class="exec-approval-actions">
@@ -170,7 +182,7 @@ export function showOwnerApprovalDialog(params: { client: GatewayBrowserClient }
             <Show
               when={owner && !projection?.read().error && projection?.read().requests.length === 0}
             >
-              <p class="openclaw-id-devices__description openclaw-id-approval__empty">
+              <p class="openclaw-id-devices__description openclaw-id-approval__empty openclaw-id-owner-enter">
                 {t("openclawId.approvalEmpty")}
               </p>
             </Show>

@@ -30,6 +30,7 @@ import { IconButton } from "../solid/icon-button.tsx";
 import { Icon } from "../solid/icon.tsx";
 import { OpenClawIdErrorMessage } from "./error-message.tsx";
 import { showOwnerApprovalDialog } from "./owner-approval-dialog.tsx";
+import { createOwnerDialogMotion } from "./owner-dialog-motion.ts";
 
 registerEnglishCatalog(registerOpenClawIdDialogsEnglish);
 registerEnglishCatalog(registerOpenClawIdEnglish);
@@ -60,6 +61,7 @@ function DeviceRow(props: {
   canRevoke: boolean;
   busy: boolean;
   confirming: boolean;
+  morph: (element: HTMLElement) => void;
   registerElement: (element: HTMLDivElement) => () => void;
   onConfirm: (confirming: boolean) => void;
   onRevoke: () => void;
@@ -87,6 +89,7 @@ function DeviceRow(props: {
     <div
       ref={(element) => {
         rowElement = element;
+        props.morph(element);
       }}
       role="listitem"
       class={[
@@ -129,7 +132,7 @@ function DeviceRow(props: {
             </button>
           }
         >
-          <div class="openclaw-id-devices__confirmation">
+          <div class="openclaw-id-devices__confirmation openclaw-id-owner-enter">
             <div role="note">
               <For each={explanation()}>{(sentence) => <p>{sentence}</p>}</For>
             </div>
@@ -176,6 +179,7 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
       const [securityOpen, setSecurityOpen] = createSignal(false);
       const securityId = createUniqueId();
       const [error, setError] = createSignal<OpenClawIdUiError | null>(null);
+      const motion = createOwnerDialogMotion();
       const rowElements = new Map<string, HTMLDivElement>();
       let revocationPending = false;
       const refresh = async () => {
@@ -188,20 +192,10 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
           setOwnPub((await thisOwnerDevice(next).catch(() => undefined))?.devicePub ?? null);
           setOwnerFp(await ownerFingerprint(next));
           // Only a fresh Gateway listing can start removal, including cascade removals.
-          if (
-            revocationPending &&
-            !modal.settled &&
-            !window.matchMedia("(prefers-reduced-motion: reduce)").matches
-          ) {
+          if (revocationPending && !modal.settled) {
             const remaining = new Set(next.ownerDevices?.map((device) => device.devicePub));
-            await Promise.all(
-              [...rowElements]
-                .filter(([key]) => !remaining.has(key))
-                .map(([, row]) =>
-                  row
-                    .animate([{ opacity: 1 }, { opacity: 0 }], { duration: 180, fill: "forwards" })
-                    .finished.catch(() => {}),
-                ),
+            await motion.collapse(
+              [...rowElements].filter(([key]) => !remaining.has(key)).map(([, row]) => row),
             );
           }
           setLink(next);
@@ -247,7 +241,7 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
           description={t("openclawId.yourDevicesBody")}
           onModal-cancel={() => modal.finish(undefined)}
         >
-          <div class="exec-approval-card openclaw-id-devices">
+          <div ref={motion.card} class="exec-approval-card openclaw-id-devices">
             <h2 class="exec-approval-title openclaw-id-devices__title">
               {t("openclawId.yourDevices")}
             </h2>
@@ -261,13 +255,16 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
             <p class="openclaw-id-devices__description">{t("openclawId.yourDevicesBody")}</p>
             <Show when={error()}>
               {(message) => (
-                <div class="openclaw-id-devices__error" role="alert">
+                <div class="openclaw-id-devices__error openclaw-id-owner-enter" role="alert">
                   <OpenClawIdErrorMessage error={message()} />
                 </div>
               )}
             </Show>
             <div
-              class="list openclaw-id-devices__list"
+              class={[
+                "list openclaw-id-devices__list",
+                { "openclaw-id-owner-enter": devices().length > 0 },
+              ]}
               role="list"
               tabindex={0}
               aria-label={t("openclawId.yourDevices")}
@@ -286,6 +283,7 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
                     canRevoke={Boolean(ownPub())}
                     busy={busy()}
                     confirming={confirming() === device().devicePub}
+                    morph={motion.section}
                     registerElement={(element) => {
                       // The keyed row owns this registration until it unmounts.
                       const initialDevicePub = device().devicePub;
@@ -300,7 +298,12 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
                 )}
               </For>
             </div>
-            <div id={securityId} class="openclaw-id-devices__kit" hidden={!securityOpen()}>
+            <div
+              ref={motion.section}
+              id={securityId}
+              class={["openclaw-id-devices__kit", { "openclaw-id-owner-enter": securityOpen() }]}
+              hidden={!securityOpen()}
+            >
               <Show when={ownerFp()}>
                 {(fp) => (
                   <>
@@ -313,7 +316,7 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
                 )}
               </Show>
             </div>
-            <div class="openclaw-id-devices__footer">
+            <div class="openclaw-id-devices__footer openclaw-id-owner-enter">
               <Show when={ownerFp()}>
                 <button
                   type="button"

@@ -122,6 +122,7 @@
 }
 
 .openclaw-id-approval__browser {
+  display: inline-block;
   font-weight: 500;
   color: var(--text-strong);
   overflow-wrap: anywhere;
@@ -139,6 +140,7 @@
   font: 600 calc(30px * var(--control-ui-text-scale, 1)) / 1 var(--mono);
   letter-spacing: 0.14em;
   white-space: pre-wrap;
+  transition: opacity 0.25s;
 }
 
 .openclaw-id-approval__number > span:not(.openclaw-id-approval__waiting) {
@@ -201,6 +203,7 @@
   color: var(--text-strong);
   font: inherit;
   text-align: center;
+  transition: box-shadow 0.2s;
 }
 
 .openclaw-id-approval__expiry input:focus {
@@ -351,6 +354,14 @@
   font-size: calc(12px * var(--control-ui-text-scale, 1));
 }
 
+/* Keep a zero-height, inaccessible box so closing can animate the section's height. */
+.openclaw-id-devices__kit[hidden] {
+  display: block;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+
 .openclaw-id-devices__kit p {
   margin: 4px 4px 0;
 }
@@ -391,6 +402,9 @@
   font: inherit;
   font-size: calc(12.5px * var(--control-ui-text-scale, 1));
   white-space: nowrap;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .openclaw-id-devices__security {
@@ -401,6 +415,7 @@
 .openclaw-id-devices__security svg {
   width: 13px;
   height: 13px;
+  transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .openclaw-id-devices__security[aria-expanded="true"] svg {
@@ -450,4 +465,46 @@
 .openclaw-id-approval__details > div {
   margin-top: 4px;
   overflow-wrap: anywhere;
+}
+
+.openclaw-id-owner-enter {
+  animation: openclaw-id-owner-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes openclaw-id-owner-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+.openclaw-id-devices__row--gone {
+  transition:
+    opacity 0.2s,
+    height 0.26s cubic-bezier(0.2, 0.8, 0.2, 1),
+    padding 0.26s,
+    margin 0.26s;
+  opacity: 0;
+  padding-block: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .openclaw-id-owner-enter {
+    animation: none;
+  }
+
+  .openclaw-id-devices__row--gone {
+    transition: none;
+  }
+
+  .openclaw-id-devices__revoke,
+  .openclaw-id-devices__security,
+  .openclaw-id-devices__security svg,
+  .openclaw-id-approval__number,
+  .openclaw-id-approval__expiry input {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0.01ms;
+  }
 }

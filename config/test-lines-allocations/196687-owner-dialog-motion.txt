@@ -1,0 +1,3 @@
+207
+# Real-browser proof of height interpolation, stable row content, cascade collapse, and reduced-motion end states.
+# Covers 94 new lines plus this PR's 113 previously unallocated approval regression lines.
