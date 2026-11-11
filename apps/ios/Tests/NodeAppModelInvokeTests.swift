@@ -3886,6 +3886,54 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(!appModel.canAutoReconnect)
     }
 
+    @Test @MainActor func `Talk approval polling resumes pairing pauses but not rate limits`() async throws {
+        let (talkMode, appModel) = makeTalkModel()
+        try appModel.applyGatewayConnectConfig(GatewayConnectConfig(
+            url: #require(URL(string: "ws://127.0.0.1:1")),
+            stableID: "manual|talk-poll|1",
+            tls: nil,
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-ios",
+                clientMode: "node",
+                clientDisplayName: nil)))
+        talkMode.gatewayTalkPermissionState = .missingScope("operator.talk.secrets")
+        defer {
+            appModel.setTalkEnabled(false)
+            appModel.disconnectGateway()
+        }
+        appModel.setTalkEnabled(true)
+        await waitForTalkCondition { talkMode.gatewayTalkPermissionState == .requestingUpgrade }
+
+        let rateLimit = try #require(GatewayConnectionProblemMapper.map(error: GatewayConnectAuthError(
+            message: "too many failed authentication attempts",
+            detailCode: "AUTH_RATE_LIMITED",
+            canRetryWithDeviceToken: false)))
+        appModel.applyOperatorGatewayConnectionProblem(rateLimit, route: nil)
+        await appModel._test_pollTalkPermissionUpgradeNow()
+        #expect(!appModel.canAutoReconnect)
+
+        let pairing = GatewayConnectionProblem(
+            kind: .pairingScopeUpgradeRequired,
+            owner: .gateway,
+            title: "Additional permissions required",
+            message: "Approve the requested permissions on the gateway.",
+            requestId: "req-talk-poll",
+            retryable: false,
+            pauseReconnect: true)
+        appModel.resumeAfterUserAction()
+        appModel.applyOperatorGatewayConnectionProblem(pairing, route: nil)
+        await appModel._test_pollTalkPermissionUpgradeNow()
+        #expect(appModel.canAutoReconnect)
+    }
+
     @Test @MainActor func `stale PTT recognition callback cannot mutate a newer capture`() async throws {
         let talkMode = TalkModeManager(allowSimulatorCapture: true)
         talkMode.updateGatewayConnected(true)

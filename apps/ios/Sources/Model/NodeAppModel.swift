@@ -1639,8 +1639,11 @@ final class NodeAppModel {
             return
         }
         // The operator loop owns handshake retries. Polling only resumes an operator paused for
-        // approval; it must never impose a timeout on an active attempt.
-        guard self.operatorGatewayProblem != nil, self.talkPermissionUpgradeReconnectTask == nil else { return }
+        // approval; a rate limit or rejected credential waits for the user's Retry, and an active
+        // attempt never gets a timeout imposed.
+        guard self.operatorGatewayProblem?.needsPairingApproval == true,
+              self.talkPermissionUpgradeReconnectTask == nil
+        else { return }
         GatewayDiagnostics.log("talk permission approval poll reconnect")
         self.lastTalkPermissionReconnectAttemptAt = now
         self.gatewayAutoReconnectEnabled = true
@@ -9523,6 +9526,14 @@ extension NodeAppModel {
 
     func _test_forceTalkPermissionUpgradeRequest() -> Bool {
         self.forceOperatorTalkPermissionUpgradeRequest
+    }
+
+    /// Runs one Talk approval poll now, after any in-flight Talk reconnect, instead of after the
+    /// timer and its 6 s throttle.
+    func _test_pollTalkPermissionUpgradeNow() async {
+        await self.talkPermissionUpgradeReconnectTask?.value
+        self.lastTalkPermissionReconnectAttemptAt = nil
+        await self.pollTalkPermissionUpgrade()
     }
 
     func _test_admitTalkAfterSessionHydration() async {
