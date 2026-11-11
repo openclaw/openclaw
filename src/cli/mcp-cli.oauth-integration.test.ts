@@ -265,6 +265,7 @@ it("logs in and probes through the CLI with a portless loopback registration", a
           authorizationUrl.resolve(text);
         }
       });
+      vi.spyOn(defaultRuntime, "writeStdout").mockImplementation(defaultRuntime.log);
       const { run, set } = createCli();
       await set(oauthServer(`${fixture.issuer}/mcp`, { redirectUrl }));
       logs.length = 0;
