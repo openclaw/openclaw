@@ -107,6 +107,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
 }) {
   const { attempt, prepareSystemPromptUpdate, clientToolPreparation: clientTools } = input;
   const settingsManager = createPreparedEmbeddedAgentSettingsManager({
+    agentId: input.sessionAgentId,
     sessionId: attempt.sessionId,
     cwd: input.effectiveCwd,
     agentDir: input.agentDir,

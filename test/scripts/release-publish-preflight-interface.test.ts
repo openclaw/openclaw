@@ -76,12 +76,19 @@ it.skipIf(process.platform === "win32")(
       tag: "v2026.9.5",
       npmDistTag: "latest",
       windowsNodeInstallerDigests: installerDigests,
+      retiredLinePublicationReason: installerDigests.replaceAll("\n", " "),
     };
+    expect(() => dispatch({ ...latest, retiredLinePublicationReason: installerDigests })).toThrow(
+      "single-line",
+    );
     const command = dispatch(latest, "2", "456");
     const args = execFileSync("/bin/sh", ["-c", `gh() { printf '%s\\0' "$@"; }\n${command}`], {
       cwd: dir,
       encoding: "utf8",
     }).split("\0");
+    expect(args).toContain(
+      `retired_line_publication_reason=${installerDigests.replaceAll("\n", " ")}`,
+    );
     expect(args).toContain(`windows_node_installer_digests=${installerDigests}`);
     expect(args).toContain("full_release_validation_run_attempt=2");
     expect(args).toContain("openclaw_npm_resume_run_id=456");

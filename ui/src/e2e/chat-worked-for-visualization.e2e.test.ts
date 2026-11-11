@@ -316,6 +316,18 @@ suite.define(() => {
       await workedFor.waitFor();
       await waitForChatScrollIdle(page);
       await captureProof(page, "worked-for-geometry-collapsed");
+      // Completed work is one line: its label and a resting chevron, with no rule below.
+      expect(
+        await workedFor.evaluate((button) => {
+          const chevron = button.querySelector(".chat-inline-disclosure__chevron");
+          return {
+            chevronOpacity: chevron ? getComputedStyle(chevron).opacity : null,
+            trailing:
+              button.parentElement!.getBoundingClientRect().bottom -
+              button.getBoundingClientRect().bottom,
+          };
+        }),
+      ).toEqual({ chevronOpacity: "1", trailing: 0 });
 
       const geometry = await workedFor.evaluate(async (element) => {
         const owner = element.closest("openclaw-chat-pane") as

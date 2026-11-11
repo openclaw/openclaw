@@ -1,0 +1,5 @@
+# Guest Settings readiness regressions at the production page/read-owner boundary.
+# Protect skipped reads, typed denials, honest status, and native pending-control geometry.
+# Exact net regression/test-helper LF growth; no shared scalar increase.
+165
+# Includes accepted-config fixture for pending native Talk edit navigation (+3 LF).
