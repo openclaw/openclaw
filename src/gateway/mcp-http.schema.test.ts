@@ -56,6 +56,26 @@ describe("buildMcpToolSchema", () => {
     ]);
   });
 
+  it("decides required keys per keyword when anyOf and oneOf are siblings", () => {
+    const [entry] = buildMcpToolSchema([
+      {
+        name: "proof_tool",
+        description: "proof",
+        parameters: {
+          anyOf: [
+            { type: "object", properties: { action: { type: "string" } }, required: ["action"] },
+          ],
+          oneOf: [{ type: "object", properties: { mode: { type: "string" } }, required: ["mode"] }],
+        },
+      } as never,
+    ]);
+
+    expect((entry?.inputSchema.required as string[] | undefined)?.toSorted()).toEqual([
+      "action",
+      "mode",
+    ]);
+  });
+
   it("drops an empty top-level union instead of publishing it", () => {
     const [entry] = buildMcpToolSchema([
       {

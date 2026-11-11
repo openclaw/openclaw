@@ -134,6 +134,7 @@ function flattenTopLevelUnionSchema(
       }
     }
   }
+  // SAFETY: JSON Schema `required` is a string list; this mirrors the variant read above.
   const required = new Set<string>(Array.isArray(raw.required) ? (raw.required as string[]) : []);
   for (const keyword of TOOL_INPUT_SCHEMA_TOP_LEVEL_UNION_KEYWORDS) {
     const variants = readSchemaVariants(raw[keyword]);
@@ -144,11 +145,13 @@ function flattenTopLevelUnionSchema(
       `${MCP_LOOPBACK_LOG_PREFIX}: dropping empty top-level "${keyword}" for "${toolName}", native tool schemas reject it`,
     );
   }
-  const alternatives = [
-    ...(readSchemaVariants(raw.anyOf) ?? []),
-    ...(readSchemaVariants(raw.oneOf) ?? []),
-  ];
-  if (alternatives.length > 0) {
+  // Sibling anyOf and oneOf apply together, so each keyword's alternatives decide
+  // their own required keys instead of pooling branches into one alternative set.
+  for (const keyword of ["anyOf", "oneOf"] as const) {
+    const alternatives = readSchemaVariants(raw[keyword]) ?? [];
+    if (alternatives.length === 0) {
+      continue;
+    }
     const requiredSets = mergeVariantsIntoProperties(alternatives, toolName, mergedProps);
     for (const key of requiredSets[0] ?? []) {
       if (requiredSets.every((set) => set.has(key))) {
