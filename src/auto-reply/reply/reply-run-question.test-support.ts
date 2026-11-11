@@ -41,6 +41,10 @@ export async function withQuestionCreator(
       {
         admittedRunContext: await admission.admit("embedded", "question-custody-test"),
         replyOperation: operation,
+        sourceQuestionInput:
+          run.runObservers?.sourceQuestionInput?.mode === "new-task"
+            ? run.runObservers.sourceQuestionInput
+            : undefined,
       },
       {
         ...run.run,

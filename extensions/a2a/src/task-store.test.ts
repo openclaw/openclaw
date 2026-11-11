@@ -105,6 +105,67 @@ describe("A2A task store", () => {
 });
 
 describe("A2A terminal recovery", () => {
+  it.each(
+    [false, true].flatMap((completed) =>
+      [false, true].map((answerKey) => ({ completed, answerKey })),
+    ),
+  )(
+    "preserves the newer reused answer key (completed: $completed, answer: $answerKey)",
+    async ({ completed, answerKey }) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+      try {
+        const durable = createTerminalStoreFixture();
+        const pending = createPendingStoreFixture();
+        vi.spyOn(pending, "delete").mockRejectedValueOnce(new Error("cleanup unavailable"));
+        const store = new A2aTaskStore(durable, pending);
+        const ask = async (id: string, messageId: string) => {
+          await store.requireInput(id, {
+            version: 1,
+            questions: [{ id: "seats", header: "Seats", question: "Seats?" }],
+            expiresAtMs: Date.now() + 60_000,
+            signal: new AbortController().signal,
+          });
+          const task = store.get(id, "alice")!;
+          if (task.status.state !== "TASK_STATE_INPUT_REQUIRED") {
+            throw new Error("Question is missing");
+          }
+          const admission = await store.beginAnswer(
+            id,
+            "alice",
+            messageId,
+            task.status.message.messageId,
+            "100",
+          );
+          await store.recordAnswer(id, admission.receipt, {
+            status: "confirmed",
+            resolutionId: "native-receipt",
+          });
+        };
+        const old = store.create("ctx", "alice", "old-initial");
+        await store.start(old.id);
+        await ask(old.id, "reused-answer");
+        await store.complete(old.id, "old result");
+        clock.mockReturnValue(1_800_000_000_000 + 24 * 60 * 60 * 1000);
+        const current = store.create("ctx", "alice", answerKey ? "new-initial" : "reused-answer");
+        await store.start(current.id);
+        if (answerKey) {
+          await ask(current.id, "reused-answer");
+        }
+        if (completed) {
+          await store.complete(current.id, "current result");
+        }
+        const reopened = new A2aTaskStore(durable, pending);
+        await reopened.restore();
+        expect(reopened.create("ctx", "alice", "reused-answer").id).toBe(current.id);
+        expect(reopened.get(current.id, "alice")?.status.state).toBe(
+          completed ? "TASK_STATE_COMPLETED" : "TASK_STATE_FAILED",
+        );
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
   it.each([false, true])(
     "does not let stale pending cleanup replace a reused message ID (completed: %s)",
     async (completed) => {

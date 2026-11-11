@@ -186,6 +186,58 @@ describe("inbound dispatch", () => {
     }
   });
 
+  it("retains queued source callbacks and exact host question identity until owner retirement", async () => {
+    const { owner, dispatch } = createOwnedInboundFixture();
+    const question = {
+      version: 1 as const,
+      questions: [],
+      expiresAtMs: Date.now() + 60_000,
+      signal: new AbortController().signal,
+    };
+    const published = vi.fn(
+      async (_question: import("../../auto-reply/source-question.types.js").SourceQuestionV1) => {},
+    );
+    const received = vi.fn();
+    dispatchRoutedChannelTurn.mockImplementation(async (turn) => {
+      (turn.turnAdoptionLifecycle ?? turn.replyOptions?.turnAdoptionLifecycle)?.onDeferred?.();
+      return { status: "handled" };
+    });
+    try {
+      await dispatch({
+        sourceQuestionInput: { version: 1, mode: "new-task", onQuestion: published },
+      });
+      const first = dispatchRoutedChannelTurn.mock.calls.at(-1)![0];
+      const source = first.replyOptions!.sourceQuestionInput!;
+      if (source.mode !== "new-task") {
+        throw new Error("Wrong source intent");
+      }
+      await source.onQuestion!(question);
+      expect(published).toHaveBeenCalledExactlyOnceWith(question);
+      expect(published.mock.calls[0]?.[0]).toBe(question);
+      await dispatch({
+        sourceQuestionInput: { version: 1, mode: "answer-only", question, onReceipt: received },
+      });
+      const answer =
+        dispatchRoutedChannelTurn.mock.calls.at(-1)![0].replyOptions!.sourceQuestionInput!;
+      if (answer.mode !== "answer-only") {
+        throw new Error("Wrong source intent");
+      }
+      expect(answer.question).toBe(question);
+      await answer.onReceipt({ status: "confirmed", resolutionId: "confirmed" });
+      expect(received).toHaveBeenCalledOnce();
+      const last = dispatchRoutedChannelTurn.mock.calls.at(-1)![0];
+      await (
+        first.turnAdoptionLifecycle ?? first.replyOptions?.turnAdoptionLifecycle
+      )?.onSettled?.();
+      await (last.turnAdoptionLifecycle ?? last.replyOptions?.turnAdoptionLifecycle)?.onSettled?.();
+      expect(owner.hasRetainedConsumers).toBe(false);
+      expect(() => source.onQuestion!(question)).toThrow();
+      expect(() => answer.onReceipt({ status: "unconfirmed" })).toThrow();
+    } finally {
+      await owner.dispose();
+    }
+  });
+
   it.each([false, true])(
     "preserves prepared lifecycle identity (mismatch=%s)",
     async (mismatch) => {

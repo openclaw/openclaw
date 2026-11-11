@@ -2,6 +2,7 @@ import type {
   QuestionAnswers,
   QuestionRequestQuestion,
 } from "../../../packages/gateway-protocol/src/schema/questions.js";
+import { MessageInjectionRequesterMismatchError } from "../../auto-reply/reply/message-injection-authority.js";
 import type { PreparedSessionEntryWorkerRead } from "../../config/sessions/session-entry-read-runtime.types.js";
 import { isEmbeddedMode } from "../../infra/embedded-mode.js";
 import type { EmbeddedQuestionBroker } from "../../infra/embedded-question-broker.js";
@@ -9,6 +10,7 @@ import type { GatewayQuestionCall } from "../tools/gateway-question-lifecycle.js
 import {
   readQuestionDispatchCapability,
   prepareQuestionInputAuthority,
+  prepareQuestionCallerAuthority,
   type QuestionInputAuthority,
 } from "./host-private-capabilities.js";
 import type {
@@ -40,6 +42,27 @@ export async function prepareQuestionDispatchAuthority(authority: QuestionInputA
     await prepared.prepareCurrent?.();
     return prepared;
   } catch (error) {
+    return refuseQuestionDispatch(error);
+  }
+}
+
+/** Caller preparation and known refusal classification share the dispatch boundary. */
+export async function prepareQuestionCallerDispatch(
+  creator: Parameters<typeof prepareQuestionCallerAuthority>[0],
+  caller: Parameters<typeof prepareQuestionCallerAuthority>[1],
+  assertActive: () => void,
+): Promise<QuestionInputAuthority | "requester-mismatch"> {
+  try {
+    return await prepareQuestionCallerAuthority(creator, caller, assertActive);
+  } catch (error) {
+    if (error instanceof MessageInjectionRequesterMismatchError) {
+      try {
+        assertActive();
+      } catch (stale) {
+        return refuseQuestionDispatch(stale);
+      }
+      return "requester-mismatch";
+    }
     return refuseQuestionDispatch(error);
   }
 }

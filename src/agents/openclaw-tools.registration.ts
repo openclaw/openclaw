@@ -142,7 +142,9 @@ export function shouldIncludePrimarySessionToolForOpenClawTools(
 ): boolean {
   if (
     toolName === "ask_user" &&
-    ((params.questionInputMode !== "native" && params.questionInputMode !== "buttons") ||
+    ((params.questionInputMode !== "native" &&
+      params.questionInputMode !== "buttons" &&
+      params.questionInputMode !== "source") ||
       params.listingClientCaps?.includes(GATEWAY_CLIENT_CAPS.NO_QUESTION_INPUT))
   ) {
     return false;

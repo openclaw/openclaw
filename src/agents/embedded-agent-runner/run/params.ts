@@ -62,6 +62,11 @@ export type RunEmbeddedAgentParams = Pick<
   | "suppressTranscriptOnlyAssistantPersistence"
   | "skillLibraryAuthoring"
 > & {
+  /** Host-private original source; native question ownership remains with the run. */
+  sourceQuestionInput?: Extract<
+    import("../../../auto-reply/source-question.types.js").SourceQuestionInputV1,
+    { mode: "new-task" }
+  >;
   /** Settles the session's initial workspace attribution before tools can act. */
   awaitSessionDiffBaseline?: () => Promise<void>;
   /** Host-minted parent audience inherited by a trusted internal child run. */

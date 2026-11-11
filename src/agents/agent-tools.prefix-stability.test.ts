@@ -19,6 +19,10 @@ import {
   createCodeModeTools,
 } from "./code-mode.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import {
+  createAgentQuestionAnswerAuthority,
+  withAgentQuestionAnswerAuthority,
+} from "./harness/host-private-capabilities.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -369,4 +373,26 @@ it("offers the session's tool definitions and refuses tools outside the replayed
   expect(JSON.stringify(refused.content)).toContain(
     "write is not available during a child-completion turn",
   );
+});
+
+it("keeps source ask_user catalog stable when the current request has no receiver", () => {
+  const sessionKey = "agent:main:source:catalog";
+  const render = (receiver: boolean) =>
+    withAgentQuestionAnswerAuthority(
+      createAgentQuestionAnswerAuthority({
+        sessionKey,
+        fingerprint: "source-catalog",
+        project: () => "source-catalog",
+        assertActive: () => {},
+        sourceQuestionInput: {
+          version: 1,
+          mode: "new-task",
+          ...(receiver ? { onQuestion: async () => {} } : {}),
+        },
+      }),
+      () => createOpenClawTools({ agentSessionKey: sessionKey, questionInputMode: "source" }),
+    );
+  const available = render(true);
+  expect(available.some((tool) => tool.name === "ask_user")).toBe(true);
+  expect(surface(render(false))).toEqual(surface(available));
 });

@@ -104,6 +104,7 @@ export async function tryDispatchAcpReplyHook(
     suppressUserDelivery: event.suppressUserDelivery,
     suppressReplyLifecycle: event.suppressReplyLifecycle === true || event.sendPolicy === "deny",
     sourceReplyDeliveryMode: event.sourceReplyDeliveryMode,
+    sourceQuestionIntent: event.sourceQuestionIntent,
     shouldRouteToOriginating: event.shouldRouteToOriginating,
     originatingChannel: event.originatingChannel,
     originatingTo: event.originatingTo,

@@ -43,6 +43,7 @@ import {
 } from "./peer-authorization.js";
 import {
   A2aProtocolError,
+  A2A_BUSINESS_INPUT_EXTENSION,
   A2aRpcRequestSchema,
   A2aSendMessageParamsSchema,
   A2aTaskRequestParamsSchema,
@@ -282,6 +283,14 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
             capabilities: {
               streaming: false,
               pushNotifications: false,
+              extensions: [
+                {
+                  uri: A2A_BUSINESS_INPUT_EXTENSION,
+                  required: false,
+                  description:
+                    "Non-secret business clarification on the original Task; reply using metadata replyToMessageId and a stable messageId.",
+                },
+              ],
             },
             defaultInputModes: ["text/plain"],
             defaultOutputModes: ["text/plain"],
@@ -321,6 +330,7 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
           async function processRpcRequest(
             input: unknown,
             authorization: A2aPeerAuthorization,
+            businessInputNegotiated: boolean,
           ): Promise<A2aRpcResponse | undefined> {
             const { peerName } = authorization;
             const parsed = A2aRpcRequestSchema.safeParse(input);
@@ -366,8 +376,10 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
                   );
                 }
                 const message = send.data.message;
-                const text = extractA2aMessageText(message.parts);
-                if (!text) {
+                const text = extractA2aMessageText(message.parts, {
+                  allowEmpty: message.taskId !== undefined,
+                });
+                if (text === undefined) {
                   throw new A2aProtocolError(
                     -32602,
                     "Message must contain at least one usable text part",
@@ -387,12 +399,66 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
                       "Message contextId does not match the referenced task",
                     );
                   }
-                  // A context-only follow-up starts new work; a task reference must never
-                  // silently allocate a replacement for an active or terminal task.
-                  throw new A2aProtocolError(
-                    -32004,
-                    "Task continuation is not supported; omit taskId and reuse contextId to start a new task",
+                  const replyBinding = message.metadata?.[A2A_BUSINESS_INPUT_EXTENSION];
+                  if (
+                    !businessInputNegotiated ||
+                    !message.extensions?.includes(A2A_BUSINESS_INPUT_EXTENSION) ||
+                    !message.messageId ||
+                    !isRecord(replyBinding) ||
+                    typeof replyBinding.replyToMessageId !== "string" ||
+                    !replyBinding.replyToMessageId
+                  ) {
+                    throw new A2aProtocolError(
+                      -32004,
+                      "Task answers require the business-input extension, stable messageId and replyToMessageId",
+                    );
+                  }
+                  const admission = await store.beginAnswer(
+                    message.taskId,
+                    peerName,
+                    message.messageId,
+                    replyBinding.replyToMessageId,
+                    text,
                   );
+                  authorization.assertCurrent();
+                  if (admission.question) {
+                    await dispatchA2aInbound({
+                      account,
+                      config,
+                      channelRuntime,
+                      store,
+                      taskId: admission.task.id,
+                      contextId: admission.task.contextId,
+                      messageId: message.messageId,
+                      peerName,
+                      text,
+                      assertAuthority: authorization.assertCurrent,
+                      answer: {
+                        question: admission.question,
+                        onReceipt: (receipt) =>
+                          store.recordAnswer(admission.task.id, admission.receipt, receipt),
+                      },
+                    });
+                  }
+                  const receipt = admission.receipt.result;
+                  if (receipt.status === "refused") {
+                    throw new A2aProtocolError(-32602, `Business input refused: ${receipt.reason}`);
+                  }
+                  if (receipt.status !== "confirmed") {
+                    throw new A2aProtocolError(
+                      -32000,
+                      "Answer outcome is pending or uncertain; inspect the original Task. This message will not be sent again.",
+                    );
+                  }
+                  if (!send.data.configuration?.returnImmediately) {
+                    await store.wait(
+                      admission.task,
+                      a2aConfig.replyTimeoutMs ?? DEFAULT_REPLY_TIMEOUT_MS,
+                    );
+                  }
+                  return notification
+                    ? undefined
+                    : { jsonrpc: "2.0", id, result: { task: admission.task } };
                 }
                 const messageId = message.messageId ?? randomUUID();
                 const task = store.create(
@@ -423,6 +489,9 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
                       peerName,
                       text,
                       assertAuthority: authorization.assertCurrent,
+                      allowBusinessInput:
+                        businessInputNegotiated &&
+                        message.extensions?.includes(A2A_BUSINESS_INPUT_EXTENSION) === true,
                     });
                   })
                     .catch((error: unknown) =>
@@ -545,6 +614,15 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
               return true;
             }
 
+            const extensionsHeader = request.headers["a2a-extensions"];
+            const businessInputNegotiated = (
+              Array.isArray(extensionsHeader)
+                ? extensionsHeader.join(",")
+                : (extensionsHeader ?? "")
+            )
+              .split(",")
+              .map((value) => value.trim())
+              .includes(A2A_BUSINESS_INPUT_EXTENSION);
             let result: A2aRpcResponse | A2aRpcResponse[] | undefined;
             if (Array.isArray(payload)) {
               if (payload.length === 0) {
@@ -567,11 +645,15 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
                 return true;
               }
               const responses = (
-                await Promise.all(payload.map((entry) => processRpcRequest(entry, authorization)))
+                await Promise.all(
+                  payload.map((entry) =>
+                    processRpcRequest(entry, authorization, businessInputNegotiated),
+                  ),
+                )
               ).filter((entry): entry is A2aRpcResponse => entry !== undefined);
               result = responses.length > 0 ? responses : undefined;
             } else {
-              result = await processRpcRequest(payload, authorization);
+              result = await processRpcRequest(payload, authorization, businessInputNegotiated);
             }
             // Blocking waits and sibling batch requests can span credential publication.
             if (!authorization.isCurrent()) {

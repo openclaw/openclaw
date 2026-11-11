@@ -1,0 +1,2 @@
+# Native source question/caller policy, final-effect revocation and receipt reconciliation, ACP takeover intent, explicit empty input, payload-bound replay, stale cleanup key reuse, private observer lifetime, and worker-backed Task recovery. Test-only sibling extraction preserves these cases under per-file growth limits.
+1153

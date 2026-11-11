@@ -163,6 +163,10 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
   return {
     preparedTtsPreferences: turn.opts?.preparedTtsPreferences,
     awaitSessionDiffBaseline: turn.opts?.awaitSessionDiffBaseline,
+    sourceQuestionInput:
+      turn.opts?.sourceQuestionInput?.mode === "new-task"
+        ? turn.opts.sourceQuestionInput
+        : undefined,
     preparedRunAdmission: params.preparedRunAdmission,
     messageActionTurnCapability: params.messageActionTurnCapability,
     trigger: resolveReplyRunTrigger(turn),

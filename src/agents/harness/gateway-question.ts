@@ -1,9 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/schema/questions.js";
-import {
-  MessageInjectionRequesterMismatchError,
-  withQuestionInputAssertion,
-} from "../../auto-reply/reply/message-injection-authority.js";
+import { withQuestionInputAssertion } from "../../auto-reply/reply/message-injection-authority.js";
+import type { SourceQuestionV1 } from "../../auto-reply/source-question.types.js";
 import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -29,14 +27,18 @@ import {
   QuestionDispatchUnsupportedError,
   refuseQuestionDispatch,
   prepareQuestionDispatchAuthority,
+  prepareQuestionCallerDispatch,
   resolveAgentQuestionGatewayCall,
   withQuestionDispatchAuthority,
   type AgentHarnessQuestionGatewayCall,
   type AgentQuestionDispatcher,
 } from "./gateway-question-dispatch.js";
 import {
+  assertSourceQuestionReference,
+  createSourceQuestionPublication,
+} from "./gateway-question-source.js";
+import {
   captureAgentQuestionAnswerAuthority,
-  prepareQuestionCallerAuthority,
   type QuestionInputAuthority,
   bindQuestionDispatchGuard,
   resolveAgentQuestionAnswerAuthority,
@@ -69,6 +71,7 @@ type PendingAgentGatewayQuestion = {
   cancelRequested: boolean;
   onCancel?: (resolvedBy: string) => void;
   resolving: boolean;
+  sourceQuestion?: ReturnType<typeof createSourceQuestionPublication>;
 };
 
 type PendingAgentSecretInput = {
@@ -87,6 +90,7 @@ const pendingAgentQuestions = resolveGlobalMap<string, PendingAgentQuestion>(
     const error = new Error("gateway lifecycle ended before question registration completed");
     for (const state of questions.values()) {
       if (state.kind === "gateway") {
+        state.sourceQuestion?.retire();
         state.rejectRegistration(error);
       } else {
         state.settle();
@@ -97,7 +101,11 @@ const pendingAgentQuestions = resolveGlobalMap<string, PendingAgentQuestion>(
 );
 
 /** One reservation owns dispatch refusal while input is being resolved. */
-function reserveQuestionInput(state: PendingAgentQuestion, authority?: QuestionInputAuthority) {
+function reserveQuestionInput(
+  state: PendingAgentQuestion,
+  authority?: QuestionInputAuthority,
+  assertQuestion?: () => void,
+) {
   let refused = false;
   const refuse = (error: unknown): never => {
     refused = true;
@@ -110,6 +118,7 @@ function reserveQuestionInput(state: PendingAgentQuestion, authority?: QuestionI
       if (pendingAgentQuestions.get(state.sessionKey) !== state) {
         throw new Error("pending question is no longer current");
       }
+      assertQuestion?.();
     } catch (error) {
       // A known pre-dispatch refusal cannot be recovered as someone else's answer.
       refuse(error);
@@ -160,12 +169,7 @@ export function registerPendingAgentQuestion(params: {
   gatewayCall?: AgentHarnessQuestionGatewayCall | AgentQuestionDispatcher;
   answer?: Promise<QuestionWaitAnswerResult>;
   onCancel?: (resolvedBy: string) => void;
-}): {
-  attachRegistration: (promise: Promise<unknown>) => void;
-  setAnswer: (answer: Promise<QuestionWaitAnswerResult>) => void;
-  isCancellationRequested: () => boolean;
-  dispose: () => void;
-} {
+}) {
   const sessionKey = params.sessionKey.trim();
   const answerAuthority = captureAgentQuestionAnswerAuthority(sessionKey);
   const existing = pendingAgentQuestions.get(sessionKey);
@@ -193,15 +197,37 @@ export function registerPendingAgentQuestion(params: {
     cancelRequested: false,
     resolving: false,
   };
+  if (answerAuthority?.sourceQuestionInput && !state.supportsSourceBound) {
+    throw new QuestionDispatchUnsupportedError(
+      "Source questions require the default or version 2 dispatcher",
+    );
+  }
+  state.sourceQuestion = createSourceQuestionPublication({
+    input: answerAuthority?.sourceQuestionInput,
+    questions: params.questions,
+    assertCurrent: () => {
+      answerAuthority?.assertActive();
+      if (pendingAgentQuestions.get(sessionKey) !== state) {
+        throw new QuestionDispatchRefusedError("Source question owner was replaced");
+      }
+    },
+  });
+  const setAnswer = (answer: Promise<QuestionWaitAnswerResult>) => {
+    state.answer = answer;
+    state.sourceQuestion?.trackAnswer(answer);
+  };
+  if (state.answer) {
+    setAnswer(state.answer);
+  }
   const releaseFormResources = reserveMcpFormQuestion({ ...params, sessionKey });
   pendingAgentQuestions.set(sessionKey, state);
   return {
     attachRegistration: state.attachRegistration,
-    setAnswer: (answer) => {
-      state.answer = answer;
-    },
+    setAnswer,
+    ...(state.sourceQuestion ? { publishSourceQuestion: state.sourceQuestion.publish } : {}),
     isCancellationRequested: () => state.cancelRequested,
     dispose: () => {
+      state.sourceQuestion?.retire();
       releaseFormResources();
       if (pendingAgentQuestions.get(sessionKey) === state) {
         pendingAgentQuestions.delete(sessionKey);
@@ -219,6 +245,8 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
   caller: ReplyToolAuthorityOverlay;
   assertSourceCurrent: () => void;
   onAnswerProcessed?: () => void;
+  sourceQuestion?: SourceQuestionV1;
+  onConfirmed?: (resolutionId: string) => void;
 }): Promise<boolean | "requester-mismatch"> {
   const state = params.sessionKey ? pendingAgentQuestions.get(params.sessionKey.trim()) : undefined;
   if (!state || state.resolving) {
@@ -234,23 +262,13 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
       throw new QuestionDispatchRefusedError("pending question is no longer current");
     }
   };
-  let authority: QuestionInputAuthority;
-  try {
-    authority = await prepareQuestionCallerAuthority(
-      state.answerAuthority!,
-      params.caller,
-      assertActive,
-    );
-  } catch (error) {
-    if (error instanceof MessageInjectionRequesterMismatchError) {
-      try {
-        assertActive();
-      } catch (stale) {
-        return refuseQuestionDispatch(stale);
-      }
-      return "requester-mismatch";
-    }
-    return refuseQuestionDispatch(error);
+  const authority = await prepareQuestionCallerDispatch(
+    state.answerAuthority!,
+    params.caller,
+    assertActive,
+  );
+  if (authority === "requester-mismatch") {
+    return authority;
   }
   return claimQuestionAnswer(
     {
@@ -261,6 +279,8 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
       authority,
     },
     params.onAnswerProcessed,
+    undefined,
+    { question: params.sourceQuestion, onConfirmed: params.onConfirmed },
   );
 }
 
@@ -287,12 +307,19 @@ async function claimQuestionAnswer(
   params: Parameters<typeof claimPendingAgentQuestionAnswer>[0],
   onAnswerProcessed?: () => void,
   assertPreparedCurrent?: () => Promise<void>,
+  source?: { question?: SourceQuestionV1; onConfirmed?: (resolutionId: string) => void },
 ): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
   const state = sessionKey ? pendingAgentQuestions.get(sessionKey) : undefined;
   if (!state || state.resolving || (state.kind === "gateway" && state.cancelRequested)) {
     return false;
   }
+  const assertQuestion = () =>
+    assertSourceQuestionReference(
+      state.kind === "gateway" ? state.sourceQuestion : undefined,
+      source?.question,
+    );
+  assertQuestion();
   let authority = params.authority;
   if (authority?.toolAuthorityPreparation || authority?.prepareCurrent) {
     authority = await prepareQuestionDispatchAuthority(authority);
@@ -307,7 +334,7 @@ async function claimQuestionAnswer(
   withQuestionInputAssertion(() => authority?.assertCurrent());
   const sourceRecorder = params.sourceRecorder;
   const stagedSource = sourceRecorder?.getPendingInputMessage?.() !== undefined;
-  const reservation = reserveQuestionInput(state, authority);
+  const reservation = reserveQuestionInput(state, authority, assertQuestion);
   let consumed = false;
   let retainReservation = false;
   try {
@@ -374,7 +401,8 @@ async function claimQuestionAnswer(
       );
       consumed = true;
     } catch (error) {
-      if (reservation.wasRefused()) {
+      // A settled native waiter can prove this effect preceded source retirement.
+      if (reservation.wasRefused() && !state.sourceQuestion?.hasConfirmed(resolutionId)) {
         throw error;
       }
       if (isTerminalQuestionResolveError(error)) {
@@ -408,6 +436,7 @@ async function claimQuestionAnswer(
     }
     if (consumed) {
       onAnswerProcessed?.();
+      source?.onConfirmed?.(resolutionId);
     }
     return consumed;
   } finally {
@@ -543,6 +572,9 @@ async function runScopedAgentHarnessQuestion(
   params: RunAgentHarnessGatewayQuestionParams,
 ): Promise<QuestionWaitAnswerResult> {
   if (params.questions.some((question) => question.isSecret)) {
+    if (captureAgentQuestionAnswerAuthority(params.sessionKey)?.sourceQuestionInput) {
+      throw new QuestionDispatchUnsupportedError("Source questions cannot request secrets");
+    }
     const text = await runAgentHarnessSecretInput(params);
     if (text === undefined) {
       return { status: "cancelled" };
@@ -668,13 +700,15 @@ async function runScopedAgentHarnessQuestion(
         : terminal;
     };
     // A registration-time answer may briefly race the prompt; its terminal signal closes delivery.
-    const delivery = deliverAgentHarnessQuestionPrompt(
-      params.delivery,
-      questionId,
-      params.questions,
-      params.promptOptions,
-      prompt.signal,
-    );
+    const delivery = claim.publishSourceQuestion
+      ? claim.publishSourceQuestion(request.expiresAtMs)
+      : deliverAgentHarnessQuestionPrompt(
+          params.delivery,
+          questionId,
+          params.questions,
+          params.promptOptions,
+          prompt.signal,
+        );
     const deliveryOutcome = delivery.then(
       () => ({ kind: "delivery" as const }),
       (error: unknown) => ({ kind: "delivery-error" as const, error }),

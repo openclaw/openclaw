@@ -100,6 +100,7 @@ export type AcpDispatchAttemptParams = Omit<
   images?: Array<{ data: string; mimeType: string }>;
   extractedFileImages?: ExtractedFileImage[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sourceQuestionIntent?: "new-task";
   shouldSendToolSummaries: () => Promise<boolean>;
   shouldSendFullToolDetails: () => Promise<boolean>;
   bypassForCommand: boolean;

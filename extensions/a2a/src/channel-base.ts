@@ -25,6 +25,7 @@ export const a2aChannelSetupPlugin = {
   id: A2A_CHANNEL_ID,
   meta: a2aChannelRuntimeMeta,
   capabilities: { chatTypes: ["direct"] },
+  agentPrompt: { questionInputMode: "source" },
   reload: { configPrefixes: ["channels.a2a"] },
   configSchema: a2aPluginConfigSchema,
   setupContract: defineChannelSetupContract({

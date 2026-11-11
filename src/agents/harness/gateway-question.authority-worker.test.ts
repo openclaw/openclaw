@@ -1,10 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { runReplyQuestionInput } from "../../auto-reply/reply/agent-runner-question-input.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import {
   createQueueTestRun,
   toolAuthorityOverlay,
 } from "../../auto-reply/reply/reply-tool-authority.test-support.js";
+import type { SourceQuestionV1 } from "../../auto-reply/source-question.types.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   replaceSessionEntry,
@@ -60,6 +62,10 @@ it("leaves image steering with its owner when there is no pending question", asy
 });
 
 it.each([
+  ...(["current", "source-revoked", "post-effect-revoked"] as const).map((change) => ({
+    path: "source-caller" as const,
+    change,
+  })),
   ...(["caller", "prepared-claim", "prepared-cancel"] as const).flatMap((path) =>
     (["current", "policy", "creator-closed"] as const).map((change) => ({ path, change })),
   ),
@@ -106,7 +112,7 @@ it.each([
       sessionKey,
       runtimePolicySessionKey: policyKey,
       agentId: "main",
-      senderIsOwner: true,
+      senderIsOwner: path !== "source-caller",
       config,
     });
     const snapshot = prepareReplyToolAuthority(run);
@@ -121,12 +127,26 @@ it.each([
         run.run,
         assertCurrent,
       );
+    let sourceQuestion: SourceQuestionV1 | undefined;
+    let sourceCurrent = true;
+    const receipt = vi.fn();
     const authority = createAgentQuestionAnswerAuthority({
       sessionKey,
       fingerprint,
       project: (caller) => snapshot.project(caller, run.run),
       prepareCaller,
       assertActive: assertCurrent,
+      ...(path === "source-caller"
+        ? {
+            sourceQuestionInput: {
+              version: 1 as const,
+              mode: "new-task" as const,
+              onQuestion: async (value: SourceQuestionV1) => {
+                sourceQuestion = value;
+              },
+            },
+          }
+        : {}),
     });
     const scheduler = createTestGatewayScheduler();
     const manager = new QuestionManager(scheduler);
@@ -140,7 +160,13 @@ it.each([
       createSecretStoreWriteService({ reloadSecrets: async () => ({ warningCount: 0 }) }),
       scheduler,
     );
-    const resolveQuestion = vi.fn(handlers["question.resolve"]!);
+    const resolveHandler = handlers["question.resolve"]!;
+    const resolveQuestion = vi.fn<typeof resolveHandler>(async (...args) => {
+      await resolveHandler(...args);
+      if (change === "post-effect-revoked") {
+        sourceCurrent = false;
+      }
+    });
     handlers["question.resolve"] = resolveQuestion;
     context.getGatewayMethodRegistry = () =>
       createGatewayMethodRegistry(createCoreGatewayMethodDescriptors(handlers));
@@ -171,6 +197,9 @@ it.each([
       }),
     );
     question.attachRegistration(Promise.resolve());
+    if (path === "source-caller") {
+      await question.publishSourceQuestion!(manager.get(id)!.expiresAtMs);
+    }
     const entered = createDeferredCore();
     const resume = createDeferredCore();
     const originalRead = sessionReads.withSessionEntriesFromStoresInWorker;
@@ -206,35 +235,55 @@ it.each([
     };
     const pending = withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey, gatewayContextResolver: () => context },
-      () =>
-        path === "caller"
-          ? claimPendingAgentQuestionAnswerFromCaller({
+      async () =>
+        path === "source-caller"
+          ? runReplyQuestionInput({
               sessionKey,
-              text: "Continue",
-              caller,
-              assertSourceCurrent: assertCurrent,
+              commandBody: "Continue",
+              followupRun: run,
+              sessionCtx: { Provider: "telegram", SenderId: "alice", SessionKey: sessionKey },
+              opts: {
+                assertChannelAuthority: () => {
+                  if (!sourceCurrent) {
+                    throw new Error("Peer credential revoked");
+                  }
+                },
+                sourceQuestionInput: {
+                  version: 1,
+                  mode: "answer-only",
+                  question: sourceQuestion!,
+                  onReceipt: receipt,
+                },
+              },
             })
-          : path === "prepared-claim" || compatibility
-            ? claimPendingAgentQuestionAnswer({
+          : path === "caller"
+            ? claimPendingAgentQuestionAnswerFromCaller({
                 sessionKey,
                 text: "Continue",
-                authority: inputAuthority,
-                persist: change.startsWith("persist-")
-                  ? async () => {
-                      await replaceSessionEntry(policyTarget, {
-                        ...policyEntry,
-                        ...(change === "persist-generation"
-                          ? { lifecycleRevision: "replacement-generation" }
-                          : { sandboxMode: undefined }),
-                      });
-                    }
-                  : undefined,
+                caller,
+                assertSourceCurrent: assertCurrent,
               })
-            : cancelPendingAgentQuestionForSession({
-                sessionKey,
-                resolvedBy: "image-reply",
-                authority: inputAuthority,
-              }),
+            : path === "prepared-claim" || compatibility
+              ? claimPendingAgentQuestionAnswer({
+                  sessionKey,
+                  text: "Continue",
+                  authority: inputAuthority,
+                  persist: change.startsWith("persist-")
+                    ? async () => {
+                        await replaceSessionEntry(policyTarget, {
+                          ...policyEntry,
+                          ...(change === "persist-generation"
+                            ? { lifecycleRevision: "replacement-generation" }
+                            : { sandboxMode: undefined }),
+                        });
+                      }
+                    : undefined,
+                })
+              : cancelPendingAgentQuestionForSession({
+                  sessionKey,
+                  resolvedBy: "image-reply",
+                  authority: inputAuthority,
+                }),
     );
     const settled = pending.catch((error: unknown) => error);
     try {
@@ -245,18 +294,36 @@ it.each([
           "question claim settled before its final session read",
         );
       }
+      if (change === "source-revoked") {
+        sourceCurrent = false;
+      }
       if (change === "policy") {
         await updateSessionEntry(policyTarget, () => ({ sandboxMode: undefined }));
       } else if (change === "creator-closed") {
         controller.abort(new Error("question creator closed during final read"));
       }
       resume.resolve();
-      expect(await settled).toEqual(
-        change === "current" ? true : expect.any(QuestionDispatchRefusedError),
-      );
-      expect(manager.get(id)?.status).toBe(
-        change === "current" ? (path === "prepared-cancel" ? "cancelled" : "answered") : "pending",
-      );
+      if (path === "source-caller") {
+        expect(await settled).toEqual({ handled: true, payload: undefined });
+        expect(receipt).toHaveBeenCalledExactlyOnceWith(
+          change === "source-revoked"
+            ? { status: "refused", reason: "source-refused" }
+            : { status: "confirmed", resolutionId: expect.any(String) },
+        );
+        expect(manager.get(id)?.status).toBe(change === "source-revoked" ? "pending" : "answered");
+        expect(sourceQuestion?.signal.aborted).toBe(change !== "source-revoked");
+      } else {
+        expect(await settled).toEqual(
+          change === "current" ? true : expect.any(QuestionDispatchRefusedError),
+        );
+        expect(manager.get(id)?.status).toBe(
+          change === "current"
+            ? path === "prepared-cancel"
+              ? "cancelled"
+              : "answered"
+            : "pending",
+        );
+      }
     } finally {
       resume.resolve();
       await settled;

@@ -114,7 +114,7 @@ export type ConversationCapabilityProfileParams = {
 /** Prepare the authoritative inbound surface once for each tool catalog. */
 export function resolveConversationQuestionInputMode(
   params: Pick<ConversationCapabilityProfileParams, "messageChannel" | "messageProvider">,
-): "native" | "buttons" | "none" {
+): "native" | "buttons" | "source" | "none" {
   const channel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
   if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
     return "native";

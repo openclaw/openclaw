@@ -24,3 +24,12 @@ describe("A2A JSON-RPC request contracts", () => {
     expect(resolveA2aRpcMethod("constructor")).toBeUndefined();
   });
 });
+
+it("distinguishes an explicit empty answer from a missing part and an empty new task", () => {
+  expect(extractA2aMessageText([{ text: "" }], { allowEmpty: true })).toBe("");
+  expect(extractA2aMessageText([{ text: "  " }], { allowEmpty: true })).toBe("  ");
+  expect(
+    extractA2aMessageText([{ url: "https://example.test/a" }], { allowEmpty: true }),
+  ).toBeUndefined();
+  expect(extractA2aMessageText([{ text: "" }])).toBeUndefined();
+});

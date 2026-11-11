@@ -179,10 +179,28 @@ function bindChannelDelivery<
   let replyOptions = params.replyOptions;
   let adoption: TurnAdoptionLifecycle | undefined;
   const source = params.turnAdoptionLifecycle ?? replyOptions?.turnAdoptionLifecycle;
-  if (consumer && custody && (source || replyOptions?.onQueuedFollowupReplyBatch)) {
+  if (
+    consumer &&
+    custody &&
+    (source || replyOptions?.onQueuedFollowupReplyBatch || replyOptions?.sourceQuestionInput)
+  ) {
     // Queued observers and source delivery outlive dispatch; settlement releases both.
     adoption = bindChannelAdoption(source, consumer, custody);
     replyOptions = { ...replyOptions, turnAdoptionLifecycle: adoption };
+  }
+  if (consumer && replyOptions?.sourceQuestionInput) {
+    const input = replyOptions.sourceQuestionInput;
+    // Bind only plugin callbacks; the host question must retain its exact identity.
+    replyOptions = {
+      ...replyOptions,
+      sourceQuestionInput:
+        input.mode === "new-task"
+          ? {
+              ...input,
+              ...(input.onQuestion ? { onQuestion: consumer.wrap(input.onQuestion) } : {}),
+            }
+          : { ...input, onReceipt: consumer.wrap(input.onReceipt) },
+    };
   }
   return consumer
     ? {

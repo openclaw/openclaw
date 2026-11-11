@@ -73,6 +73,7 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
     | "trigger"
     | "bindWatchdogAttempt"
     | "joinObservation"
+    | "sourceQuestionInput"
   > & { queueInputAdapter?: ReplyQueueInputAdapter },
   attempt: Attempt,
   narrow: ReplyToolAuthorityNarrow | undefined,
@@ -287,6 +288,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
                   : direct?.project(caller, route),
               assertActive: assertReplyActive,
               admitTranscriptAnswer,
+              sourceQuestionInput: internal.sourceQuestionInput,
             })
           : undefined;
         if (hostCapabilities && questionAuthority) {

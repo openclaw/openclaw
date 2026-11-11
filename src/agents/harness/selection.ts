@@ -447,6 +447,7 @@ export async function runAgentHarnessAttempt(
                 trigger: internalParams.trigger,
                 bindWatchdogAttempt: internalParams.bindWatchdogAttempt,
                 joinObservation: internalParams.joinObservation,
+                sourceQuestionInput: internalParams.sourceQuestionInput,
                 queueInputAdapter,
               };
               copyChannelSourceTurnContext(toolAuthorityParams, internalParams);
@@ -567,6 +568,7 @@ function withoutPluginHarnessPrivateState(
   const {
     admittedRunContext: _admittedRunContext,
     thinkingExplicit: _thinkingExplicit,
+    sourceQuestionInput: _sourceQuestionInput,
     runtimePluginToolGrant: _runtimePluginToolGrant,
     assistantErrorTranscript: _assistantErrorTranscript,
     compactionCountOwner: _compactionCountOwner,

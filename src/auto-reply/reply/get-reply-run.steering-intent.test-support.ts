@@ -13,7 +13,12 @@ import { routeReplyDirectivesForTest } from "./get-reply-directives-routing.test
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { runPreparedReply } from "./get-reply-run.js";
-import { baseParams, createInboundTurn, createSessionTurn } from "./get-reply-run.test-support.js";
+import {
+  baseParams,
+  createInboundTurn,
+  createPreparedReplyTurn,
+  createSessionTurn,
+} from "./get-reply-run.test-support.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import * as modelSelection from "./model-selection.js";
 import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
@@ -115,6 +120,7 @@ export function registerSteeringIntentProducerCases(params: {
   activatePreparedRun: (key?: string) => ReplyOperation;
 }): void {
   const { requireRunReplyAgentCall } = params;
+  registerEmptySourceAnswerCase(params);
   describe("steering intent from authenticated directive ingress", () => {
     it("preserves prompt bytes through authorized directive routing and preparation", async () => {
       const code =
@@ -153,63 +159,75 @@ export function registerSteeringIntentProducerCases(params: {
       expect(produced.followupRun.prompt).toContain(body);
     });
 
-    it.each(["/exec security=deny continue the task", "/elevated off continue the task"])(
-      "keeps %s out of the question probe and active backend",
-      async (body) => {
-        const input = await prepareIngress(body);
-        const claim = vi.spyOn(gatewayQuestion, "claimPendingAgentQuestionAnswerFromCaller");
-        claim.mockImplementation(async () => {
-          throw new Error("Execution settings reached the pending-question claim boundary");
-        });
-        const policy = vi.spyOn(messageJoin, "prepareReplyMessageJoin");
-        policy.mockImplementation(async () => {
-          throw new Error("Execution settings attempted to borrow incumbent policy");
-        });
-        const queueMessage = vi.fn(async () => {});
-        const followup = vi.fn(async () => {});
-        const active = params.activatePreparedRun(input.sessionKey);
-        attachBackend(active, queueMessage);
-        vi.mocked(runReplyAgent).mockImplementationOnce(async (produced) => {
-          expect(produced.steeringIntent).toEqual({ kind: "new-execution" });
-          expect(produced.followupRun.run.elevatedLevel).toBe("off");
-          if (body.startsWith("/exec")) {
-            expect(produced.followupRun.run.execOverrides?.security).toBe("deny");
-            expect(produced.followupRun.prompt).not.toContain("/exec");
-          }
-          await expect(runReplyQuestionInput(produced)).resolves.toEqual({ handled: false });
-          try {
-            await expect(
-              runActiveReplySteer(
-                createSteerParams(produced.queueKey, produced.followupRun, active, {
-                  ...produced,
-                  runFollowup: followup,
-                }),
-              ),
-            ).resolves.toBe("handled");
-            expect(getExistingFollowupQueue(produced.queueKey)?.items).toContain(
-              produced.followupRun,
-            );
-            await expect(
-              produced.followupRun.controllerInput?.injectionOrder.settled,
-            ).resolves.toBe(false);
-            expect(claim).not.toHaveBeenCalled();
-            expect(policy).not.toHaveBeenCalled();
-            expect(queueMessage).not.toHaveBeenCalled();
-            expect(followup).not.toHaveBeenCalled();
-          } finally {
-            clearFollowupQueue(produced.queueKey);
-          }
-          return undefined;
-        });
-        try {
-          await params.runPrepared(input);
-          expect(runReplyAgent).toHaveBeenCalledOnce();
-        } finally {
-          claim.mockRestore();
-          policy.mockRestore();
+    it.each([
+      "/exec security=deny continue the task",
+      "/elevated off continue the task",
+      "new source task",
+    ])("keeps %s out of the question probe and active backend", async (body) => {
+      const input = await prepareIngress(body);
+      if (body === "new source task") {
+        input.opts = {
+          sourceQuestionInput: { version: 1, mode: "new-task", onQuestion: async () => {} },
+        };
+      }
+      const claim = vi.spyOn(gatewayQuestion, "claimPendingAgentQuestionAnswerFromCaller");
+      claim.mockImplementation(async () => {
+        throw new Error("Execution settings reached the pending-question claim boundary");
+      });
+      const policy = vi.spyOn(messageJoin, "prepareReplyMessageJoin");
+      policy.mockImplementation(async () => {
+        throw new Error("Execution settings attempted to borrow incumbent policy");
+      });
+      const queueMessage = vi.fn(async () => {});
+      const followup = vi.fn(async () => {});
+      const active = params.activatePreparedRun(input.sessionKey);
+      attachBackend(active, queueMessage);
+      vi.mocked(runReplyAgent).mockImplementationOnce(async (produced) => {
+        expect(produced.steeringIntent).toEqual({ kind: "new-execution" });
+        if (body === "new source task") {
+          expect(produced.followupRun.disableCollectBatching).toBe(true);
+          expect(produced.followupRun.runObservers?.sourceQuestionInput).toBe(
+            input.opts?.sourceQuestionInput,
+          );
         }
-      },
-    );
+        expect(produced.followupRun.run.elevatedLevel).toBe("off");
+        if (body.startsWith("/exec")) {
+          expect(produced.followupRun.run.execOverrides?.security).toBe("deny");
+          expect(produced.followupRun.prompt).not.toContain("/exec");
+        }
+        await expect(runReplyQuestionInput(produced)).resolves.toEqual({ handled: false });
+        try {
+          await expect(
+            runActiveReplySteer(
+              createSteerParams(produced.queueKey, produced.followupRun, active, {
+                ...produced,
+                runFollowup: followup,
+              }),
+            ),
+          ).resolves.toBe("handled");
+          expect(getExistingFollowupQueue(produced.queueKey)?.items).toContain(
+            produced.followupRun,
+          );
+          await expect(produced.followupRun.controllerInput?.injectionOrder.settled).resolves.toBe(
+            false,
+          );
+          expect(claim).not.toHaveBeenCalled();
+          expect(policy).not.toHaveBeenCalled();
+          expect(queueMessage).not.toHaveBeenCalled();
+          expect(followup).not.toHaveBeenCalled();
+        } finally {
+          clearFollowupQueue(produced.queueKey);
+        }
+        return undefined;
+      });
+      try {
+        await params.runPrepared(input);
+        expect(runReplyAgent).toHaveBeenCalledOnce();
+      } finally {
+        claim.mockRestore();
+        policy.mockRestore();
+      }
+    });
 
     it("keeps the actual /steer command rewrite as ordinary continuation", async () => {
       const body = "/steer continue the task";
@@ -240,5 +258,38 @@ export function registerSteeringIntentProducerCases(params: {
       expect(produced.resolvedQueue.mode).toBe("steer");
       expect(produced.followupRun.prompt).not.toContain("/steer");
     });
+  });
+}
+
+function registerEmptySourceAnswerCase({
+  runPrepared,
+  requireRunReplyAgentCall,
+}: {
+  runPrepared: (input: Partial<Prepared>) => ReturnType<typeof runPreparedReply>;
+  requireRunReplyAgentCall: () => RunReplyAgentParams;
+}): void {
+  it("preserves explicit empty source answers without inventing media text or execution", async () => {
+    const sourceQuestionInput = {
+      version: 1 as const,
+      mode: "answer-only" as const,
+      question: {
+        version: 1 as const,
+        questions: [],
+        expiresAtMs: Date.now() + 60_000,
+        signal: new AbortController().signal,
+      },
+      onReceipt: vi.fn(),
+    };
+    await runPrepared({
+      ...createPreparedReplyTurn(
+        "",
+        {},
+        { Provider: "webchat", Surface: "webchat", ChatType: "direct" },
+      ),
+      opts: { sourceQuestionInput },
+    });
+    const produced = requireRunReplyAgentCall();
+    expect(produced.opts?.sourceQuestionInput).toBe(sourceQuestionInput);
+    expect(produced.transcriptCommandBody).toBe("");
   });
 }

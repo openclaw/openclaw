@@ -9,6 +9,7 @@ import { logVerbose } from "../../globals.js";
 import { beginSessionControllerSourceInjection } from "../../sessions/session-controller.mailbox.js";
 import { isExplicitFollowupCommandTurn } from "../command-turn-context.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import type { SourceQuestionAnswerReceiptV1 } from "../source-question.types.js";
 import type { ReplyPayload } from "../types.js";
 import type { RunReplyAgentParams } from "./agent-runner-core.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
@@ -37,14 +38,28 @@ export async function runReplyQuestionInput(
   | { handled: true; payload: ReplyPayload | undefined }
 > {
   const { followupRun, opts, sessionKey } = params;
+  const source = opts?.sourceQuestionInput;
+  const answerOnly = source?.mode === "answer-only" ? source : undefined;
+  const state = resolveReplyOperationRunState(opts);
+  const finishAnswer = async (receipt: SourceQuestionAnswerReceiptV1) => {
+    if (state) {
+      state.questionInputHandled = true;
+      if (receipt.status !== "confirmed") {
+        state.admission = { status: "skipped", reason: "question-response-refused" };
+      }
+    }
+    await answerOnly?.onReceipt(receipt);
+    return { handled: true as const, payload: undefined };
+  };
+  if (source?.mode === "new-task") {
+    return { handled: false };
+  }
   const external =
     followupRun.run.inputProvenance === undefined ||
     followupRun.run.inputProvenance.kind === "external_user";
-  const text = (
-    params.transcriptCommandBody ??
-    followupRun.transcriptPrompt ??
-    params.commandBody
-  ).trim();
+  const rawText =
+    params.transcriptCommandBody ?? followupRun.transcriptPrompt ?? params.commandBody;
+  const text = answerOnly ? rawText : rawText.trim();
   if (
     !sessionKey ||
     params.steeringIntent?.kind === "new-execution" ||
@@ -52,11 +67,13 @@ export async function runReplyQuestionInput(
     isExplicitFollowupCommandTurn(params.sessionCtx) ||
     opts?.messageInjectionDisposition === "accepted" ||
     !external ||
-    !text ||
+    (!text && !answerOnly) ||
     followupRun.images?.length ||
     followupRun.media?.length
   ) {
-    return { handled: false };
+    return answerOnly
+      ? finishAnswer({ status: "refused", reason: "source-refused" })
+      : { handled: false };
   }
 
   const caller = resolveInboundReplyToolAuthorityOverlay({
@@ -70,12 +87,12 @@ export async function runReplyQuestionInput(
   const sourceAbort = opts?.abortSignal;
   const queuedAbort = resolveFollowupAbortSignal(followupRun);
   const assertSourceCurrent = () => {
+    opts?.assertChannelAuthority?.();
     followupRun.controllerInput?.abortSignal.throwIfAborted();
     sourceAbort?.throwIfAborted();
     queuedAbort?.throwIfAborted();
     followupRun.operatorAuthority?.assertCurrent();
   };
-  const state = resolveReplyOperationRunState(opts);
   const injection =
     followupRun.controllerInput && !followupRun.controllerInput.claim
       ? beginSessionControllerSourceInjection(followupRun.controllerInput, {
@@ -85,11 +102,15 @@ export async function runReplyQuestionInput(
         })
       : undefined;
   let consumed = false;
+  let confirmedResolutionId: string | undefined;
   try {
     if (injection && !(await injection.admit())) {
       // Only a cancelled source is finished here; one whose steer was declined stays queued input.
-      const source = followupRun.controllerInput;
-      return source?.retirementRequested || source?.abortSignal.aborted
+      const controllerSource = followupRun.controllerInput;
+      if (answerOnly) {
+        return finishAnswer({ status: "refused", reason: "source-refused" });
+      }
+      return controllerSource?.retirementRequested || controllerSource?.abortSignal.aborted
         ? { handled: true, payload: undefined }
         : { handled: false };
     }
@@ -101,6 +122,10 @@ export async function runReplyQuestionInput(
         caller,
         assertSourceCurrent,
         sourceRecorder: followupRun.userTurnTranscriptRecorder,
+        sourceQuestion: answerOnly?.question,
+        onConfirmed: (resolutionId) => {
+          confirmedResolutionId = resolutionId;
+        },
         onAnswerProcessed: () => {
           consumed = true;
           injection?.accepted(true);
@@ -110,18 +135,28 @@ export async function runReplyQuestionInput(
         },
       });
       if (claimed === "requester-mismatch") {
-        return { handled: false, requesterMismatch: true };
+        return answerOnly
+          ? finishAnswer({ status: "refused", reason: "source-refused" })
+          : { handled: false, requesterMismatch: true };
       }
       if (!claimed) {
-        return { handled: false };
+        return answerOnly
+          ? finishAnswer({ status: "refused", reason: "stale-question" })
+          : { handled: false };
       }
       outcome = { status: "answered" };
     } catch (error) {
       if (error instanceof QuestionDispatchUnsupportedError) {
+        if (answerOnly) {
+          return finishAnswer({ status: "refused", reason: "unsupported" });
+        }
         assertSourceCurrent();
         return { handled: false };
       }
       if (error instanceof QuestionDispatchRefusedError) {
+        if (answerOnly) {
+          return finishAnswer({ status: "refused", reason: "source-refused" });
+        }
         if (state) {
           state.admission = { status: "skipped", reason: "question-response-refused" };
         }
@@ -136,6 +171,9 @@ export async function runReplyQuestionInput(
       // Validation precedes commitment: keep the question open and explain how to retry.
       const rejection = readQuestionRejection(error);
       if (rejection?.code === "INVALID_REQUEST" && rejection.reason === "QUESTION_INVALID_ANSWER") {
+        if (answerOnly) {
+          return finishAnswer({ status: "refused", reason: "invalid-answer" });
+        }
         const detail = error instanceof Error ? error.message.trim() : "";
         if (state) {
           state.admission = { status: "skipped", reason: "question-response-rejected" };
@@ -153,6 +191,9 @@ export async function runReplyQuestionInput(
         };
       }
       if (!(error instanceof QuestionAnswerUnconfirmedError)) {
+        if (answerOnly) {
+          return finishAnswer({ status: "unconfirmed" });
+        }
         throw error;
       }
       outcome = { status: "indeterminate", errorMessage: error.message };
@@ -173,6 +214,13 @@ export async function runReplyQuestionInput(
       logVerbose(`question input adoption failed after custody transferred: ${String(error)}`);
     } finally {
       completeFollowupRunLifecycle(followupRun, "consumed");
+    }
+    if (answerOnly) {
+      return finishAnswer(
+        confirmedResolutionId
+          ? { status: "confirmed", resolutionId: confirmedResolutionId }
+          : { status: "unconfirmed" },
+      );
     }
     return {
       handled: true,

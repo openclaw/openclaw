@@ -186,6 +186,12 @@ export async function runReplyAgent(
     const activeReplyOperation = controllerInput.mailbox.owner.active;
     const steeringRequesterMismatch =
       isActiveSteer && hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation);
+    // Answer-only sources use their actual caller policy and can never enter steering or execution.
+    if (opts?.sourceQuestionInput?.mode === "answer-only") {
+      const answer = await runReplyQuestionInput(params);
+      typing.cleanup();
+      return answer.handled ? answer.payload : undefined;
+    }
     const collaborationBlocked = messageInjectionDisposition === "collaborative-steering-disabled";
     if (
       collaborationBlocked &&

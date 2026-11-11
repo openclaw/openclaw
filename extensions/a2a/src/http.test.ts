@@ -19,7 +19,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveA2aChannelAccount } from "./accounts.js";
 import { a2aChannelPlugin } from "./channel.js";
 import { createA2aGatewayFixture } from "./gateway.test-support.js";
+import { registerA2aSourceQuestionHttpCases } from "./http.source-question.test-support.js";
 import type { dispatchA2aInbound } from "./inbound.js";
+import { A2A_BUSINESS_INPUT_EXTENSION as U } from "./protocol.js";
 import type { A2aTaskStore } from "./task-store.js";
 import {
   createPendingStoreFixture,
@@ -143,12 +145,14 @@ async function startHttpHarness(options?: {
     endpoint: string;
     body?: string;
     token?: string | null;
+    businessInput?: boolean;
   }) => {
     const request = createMockIncomingRequest(dispatch.body === undefined ? [] : [dispatch.body]);
     request.method = dispatch.method;
     request.url = dispatch.endpoint;
     request.headers = {
       host: "gateway.example.test",
+      ...(dispatch.businessInput ? { "a2a-extensions": U } : {}),
       ...(dispatch.body === undefined
         ? {}
         : {
@@ -188,12 +192,13 @@ async function startHttpHarness(options?: {
     handler,
     onDispatch,
     get: (endpoint: string) => dispatchRequest({ method: "GET", endpoint }),
-    post: (body: unknown, token: string | null = "alpha-secret") =>
+    post: (body: unknown, token: string | null = "alpha-secret", businessInput = false) =>
       dispatchRequest({
         method: "POST",
         endpoint: "/a2a/v1",
         body: typeof body === "string" ? body : JSON.stringify(body),
         token,
+        businessInput,
       }),
   };
 }
@@ -514,7 +519,11 @@ describe("A2A HTTP agent discovery", () => {
           },
         ],
         version: VERSION,
-        capabilities: { streaming: false, pushNotifications: false },
+        capabilities: {
+          streaming: false,
+          pushNotifications: false,
+          extensions: [{ uri: U, required: false, description: expect.any(String) }],
+        },
         defaultInputModes: ["text/plain"],
         defaultOutputModes: ["text/plain"],
         skills: ["writer", "reviewer"].map((id) => ({
@@ -976,4 +985,13 @@ describe("A2A HTTP authentication with unresolved token references", () => {
       expect(dispatched).toEqual(["kept"]);
     });
   });
+});
+
+registerA2aSourceQuestionHttpCases({
+  startHttpHarness,
+  expectReply,
+  rpc,
+  rpcError,
+  taskResult,
+  sendRequest,
 });

@@ -1,7 +1,11 @@
 import { createChannelInboundEnvelopeBuilderAsync } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logError } from "openclaw/plugin-sdk/logging-core";
-import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import type {
+  GetReplyOptions,
+  SourceQuestionV1,
+  SourceQuestionAnswerReceiptV1,
+} from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { filterA2aReplyPayload } from "./reply-payload.js";
@@ -19,13 +23,30 @@ export async function dispatchA2aInbound(params: {
   peerName: string;
   text: string;
   assertAuthority: () => void;
+  allowBusinessInput?: boolean;
+  answer?: {
+    question: SourceQuestionV1;
+    onReceipt: (receipt: SourceQuestionAnswerReceiptV1) => Promise<void>;
+  };
 }): Promise<void> {
   params.assertAuthority();
+  let receiptDelivered = false;
+  const answer = params.answer;
+  const receive = async (receipt: SourceQuestionAnswerReceiptV1) => {
+    if (!answer || receiptDelivered) {
+      return;
+    }
+    receiptDelivered = true;
+    await answer.onReceipt(receipt);
+  };
   const reportPersistenceError = (error: unknown) => {
     logError(`A2A task persistence failed: ${String(error)}`);
   };
   // Peer credentials admit tasks, never user commands (including plugin commands).
   if (params.text.trimStart().startsWith("/")) {
+    if (answer) {
+      return receive({ status: "refused", reason: "invalid-answer" });
+    }
     await params.store.reject(
       params.taskId,
       "A2A peers cannot execute slash commands. Send a task in plain text; only users can issue commands.",
@@ -61,6 +82,9 @@ export async function dispatchA2aInbound(params: {
   });
   params.assertAuthority();
   if (ingress.ingress.admission !== "dispatch") {
+    if (answer) {
+      return receive({ status: "refused", reason: "source-refused" });
+    }
     await params.store.reject(params.taskId, "A2A peer was blocked by channel ingress policy");
     return;
   }
@@ -140,28 +164,51 @@ export async function dispatchA2aInbound(params: {
     ctxPayload,
     delivery: {
       deliver: async (payload, info) => {
-        if (info.kind === "final") {
+        if (!answer && info.kind === "final") {
           await params.store.complete(params.taskId, payload.text);
         }
       },
       onError: (error) => {
-        void params.store.fail(params.taskId, error).catch(reportPersistenceError);
+        void (
+          answer ? receive({ status: "unconfirmed" }) : params.store.fail(params.taskId, error)
+        ).catch(reportPersistenceError);
       },
     },
     // Source replies complete the correlated task; the generic message tool
     // starts a separate outbound message without that task correlation.
     replyOptions: {
       sourceReplyDeliveryMode: "automatic",
-      onQueuedFollowupReplyBatch: deliverQueuedReply,
+      sourceQuestionInput: answer
+        ? { version: 1, mode: "answer-only", question: answer.question, onReceipt: receive }
+        : {
+            version: 1,
+            mode: "new-task",
+            ...(params.allowBusinessInput
+              ? {
+                  onQuestion: async (question: SourceQuestionV1) => {
+                    params.assertAuthority();
+                    await params.store.requireInput(params.taskId, question);
+                    params.assertAuthority();
+                  },
+                }
+              : {}),
+          },
+      ...(!answer ? { onQueuedFollowupReplyBatch: deliverQueuedReply } : {}),
       onAgentRunTerminalOutcome: (outcome) => {
         runCompleted = outcome === "completed";
-        if (outcome === "failed") {
+        if (!answer && outcome === "failed") {
           void params.store.fail(params.taskId, "Agent run failed").catch(reportPersistenceError);
         }
       },
     },
     replyPipeline: {},
   });
+  if (answer) {
+    if (!receiptDelivered) {
+      await receive({ status: "refused", reason: "unsupported" });
+    }
+    return;
+  }
   if (dispatch.admission.kind !== "dispatch") {
     await params.store.reject(
       params.taskId,
