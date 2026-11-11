@@ -17,10 +17,7 @@ import { resolvePersistedSessionStoreOwner } from "../../config/sessions/session
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import {
   hasLegacyAcpMigrationCompletion,
   prepareLegacyAcpMigrationSource,
@@ -47,10 +44,8 @@ import {
   isSameOpenClawAgentDatabasePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
-import {
-  openExistingOpenClawStateDatabaseReadOnly,
-  runOpenClawStateWriteTransaction,
-} from "../../state/openclaw-state-db.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { sanitizeOpenClawStateLeaseRows } from "../../state/openclaw-state-snapshot-sanitizer.js";
 import { captureAcpSessionEntryBinding } from "./session-meta-entry.kernel.js";
@@ -58,7 +53,6 @@ import {
   acpSessionRowMatchesEntry,
   buildAcpDatabaseSessionKey,
   deleteAcpSessionMetaRows,
-  getAcpSessionKysely,
   parseAcpDatabaseSessionKey,
   selectAcpSessionRow,
   selectAcpSessionRows,
@@ -122,18 +116,13 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
     params.authority?.assertCurrent();
     assertExistingDatabaseIdentity(sourcePath, sourceIdentity.key, sourceIdentity.birthtime);
   };
-  const database = await openExistingOpenClawStateDatabaseReadOnly({
-    env: params.env,
-    integrityCheck: params.integrityCheck ?? "quick",
-  });
-  let rows: AcpSessionRow[] = [];
-  if (database) {
-    try {
-      assertSourceCurrent();
-      rows = selectAcpSessionRows(database.db);
-    } finally {
-      database.walMaintenance.close();
-    }
+  const read = await executeExistingOpenClawStateRead(
+    { env: params.env },
+    { type: "acpSessions.list" },
+  );
+  if (read) {
+    assertSourceCurrent();
+    const rows = read.rows;
     const candidateAgentIds = [
       ...new Set([...listAgentIds(params.cfg), ...targets.map((target) => target.agentId)]),
     ];
@@ -264,12 +253,15 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
         assertSourceCurrent();
         if (!result.backups?.length) {
           const backup = await createVerifiedSqliteSnapshot({
-            sourcePath: database.path,
-            targetPath: `${database.path}.pre-acp-key-migration-${randomUUID()}.bak`,
+            sourcePath,
+            targetPath: `${sourcePath}.pre-acp-key-migration-${randomUUID()}.bak`,
             preserveRowIds: true,
             transform: sanitizeOpenClawStateLeaseRows,
             validate: (snapshot) => {
-              if (!isDeepStrictEqual(selectAcpSessionRows(snapshot), rows)) {
+              // Worker replies have plain prototypes; native SQLite rows have null prototypes.
+              if (
+                !isDeepStrictEqual(selectAcpSessionRows(snapshot), rows, { skipPrototype: true })
+              ) {
                 throw new Error("ACP backup does not match the planned metadata; source retained.");
               }
             },
@@ -299,8 +291,10 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
               if (
                 !isDeepStrictEqual(currentOwner, owner) ||
                 !isDeepStrictEqual(currentBinding, binding) ||
-                !isDeepStrictEqual(currentAliases, aliases) ||
-                !isDeepStrictEqual(selectAcpSessionRow(shared.db, destinationKey), destination)
+                !isDeepStrictEqual(currentAliases, aliases, { skipPrototype: true }) ||
+                !isDeepStrictEqual(selectAcpSessionRow(shared.db, destinationKey), destination, {
+                  skipPrototype: true,
+                })
               ) {
                 throw new Error(
                   "ACP ownership or metadata changed during Doctor repair; source retained",
@@ -584,46 +578,35 @@ export async function inspectAcpSessionClaimsForDoctor(
   const claims: PluginDoctorAcpSessionClaim[] = [];
   const incomplete: string[] = [];
   try {
-    const database = await openExistingOpenClawStateDatabaseReadOnly({ env: scope.env });
-    if (!database) {
-      return { claims, incomplete };
-    }
-    try {
-      const rows = executeSqliteQuerySync(
-        database.db,
-        getAcpSessionKysely(database.db)
-          .selectFrom("acp_sessions")
-          .selectAll()
-          .where("backend", "=", scope.pluginId),
-      ).rows;
-      for (const row of rows) {
-        try {
-          const target = parseAcpDatabaseSessionKey(row.session_key);
-          if (
-            !target?.agentId ||
-            buildAcpDatabaseSessionKey(target.storeSessionKey, target.agentId) !== row.session_key
-          ) {
-            throw new Error("ACP metadata key is not in the expected format");
-          }
-          const claimTarget = { agentId: target.agentId, sessionKey: target.storeSessionKey };
-          const binding = readClaimBinding(scope, claimTarget);
-          if (row.session_id == null || !acpSessionRowMatchesEntry(row, binding)) {
-            throw new Error("ACP metadata binding is absent or stale");
-          }
-          const meta = rowToAcpSessionMeta(row);
-          if (
-            (row.identity_json && !meta.identity) ||
-            (row.runtime_options_json && !meta.runtimeOptions)
-          ) {
-            throw new Error("ACP metadata JSON is unreadable");
-          }
-          claims.push({ ...claimTarget, binding, meta });
-        } catch (error) {
-          incomplete.push(`${row.session_key}: ${String(error)}`);
+    const read = await executeExistingOpenClawStateRead(
+      { env: scope.env },
+      { type: "acpSessions.list", backendId: scope.pluginId },
+    );
+    for (const row of read?.rows ?? []) {
+      try {
+        const target = parseAcpDatabaseSessionKey(row.session_key);
+        if (
+          !target?.agentId ||
+          buildAcpDatabaseSessionKey(target.storeSessionKey, target.agentId) !== row.session_key
+        ) {
+          throw new Error("ACP metadata key is not in the expected format");
         }
+        const claimTarget = { agentId: target.agentId, sessionKey: target.storeSessionKey };
+        const binding = readClaimBinding(scope, claimTarget);
+        if (row.session_id == null || !acpSessionRowMatchesEntry(row, binding)) {
+          throw new Error("ACP metadata binding is absent or stale");
+        }
+        const meta = rowToAcpSessionMeta(row);
+        if (
+          (row.identity_json && !meta.identity) ||
+          (row.runtime_options_json && !meta.runtimeOptions)
+        ) {
+          throw new Error("ACP metadata JSON is unreadable");
+        }
+        claims.push({ ...claimTarget, binding, meta });
+      } catch (error) {
+        incomplete.push(`${row.session_key}: ${String(error)}`);
       }
-    } finally {
-      database.walMaintenance.close();
     }
   } catch (error) {
     incomplete.push(String(error));

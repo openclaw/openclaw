@@ -38,6 +38,7 @@ import { resolveSchemaMigrationIntegrityCheck } from "./schema-migration-backup-
 
 export type StateSchemaInspectionInput = {
   pathname: string;
+  doctorSchemaReadAdmission?: true;
   supportedVersion: number;
   requireStartupMigrationReadiness?: boolean;
   verifyCurrentSchemaShape?: boolean;

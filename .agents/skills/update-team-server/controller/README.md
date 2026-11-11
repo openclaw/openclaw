@@ -37,6 +37,8 @@ owners as `openclaw update`. It rejects databases newer than the candidate,
 captures WAL-safe backups and authored configuration before repair, and writes a
 durable receipt before Doctor can migrate. Forward migrations are selected by
 OpenClaw, including crossings that the controller has never seen.
+For declared additive SQLite crossings, the native receipt can select scoped
+checkpoints and forward-only recovery instead of copying whole databases.
 
 After migration, the controller selects the candidate, starts it, and verifies
 readiness and real session continuity through the existing acceptance path.
@@ -46,6 +48,12 @@ verifies the predecessor. Native restore retains the displaced candidate
 databases for diagnosis. If restoration cannot complete, the Gateway stays
 stopped with the journal and backup intact; it never starts an old reader on
 newer state. A retained transaction resumes through `--recover`.
+Forward-only native receipts refuse `update restore` before any state change;
+retain the candidate and its scoped checkpoints and repair forward. Explicit
+`--recover` resumes a stopped scoped candidate with its original native receipt,
+then selects, starts, and verifies that candidate through the existing acceptance
+owner. It leaves an unverified live process untouched. Destructive
+or unsupported migration scopes retain the existing full-backup rollback path.
 
 For a retained native-update transaction, `--recover` first checks whether the
 selected candidate is already the running system Gateway. It binds that

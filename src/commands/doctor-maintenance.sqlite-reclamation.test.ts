@@ -55,7 +55,7 @@ it("drains an admitted custom agent outside the state root and retains original 
       );
       expect(held.db.isOpen).toBe(true);
       await expect(
-        maintenance.enableSqliteReclamation([
+        maintenance.inspectSqliteReclamation([
           {
             agentId: "main",
             path: pathname,
@@ -63,12 +63,12 @@ it("drains an admitted custom agent outside the state root and retains original 
             source: "configured",
           },
         ]),
-      ).resolves.toEqual({ warnings: [] });
+      ).resolves.toEqual({ warnings: [expect.stringContaining("explicit maintenance")] });
       expect(held.db.isOpen).toBe(false);
       expect(unrelated.db.isOpen).toBe(true);
       const observed = openNodeSqliteDatabase(pathname, { readOnly: true });
       try {
-        expect(observed.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum).toBe(2);
+        expect(observed.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum).toBe(0);
         expect(observed.prepare("SELECT value FROM retained").get()?.value).toBe("custom agent");
       } finally {
         observed.close();

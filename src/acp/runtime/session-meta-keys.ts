@@ -114,15 +114,16 @@ export function getAcpSessionKysely(db: EngineConnection) {
   return getNodeSqliteKysely<AcpSessionMetaDatabase>(db);
 }
 
-export function selectAcpSessionRows(db: EngineConnection): AcpSessionRow[] {
-  return executeSqliteQuerySync(
-    db,
-    getAcpSessionKysely(db)
-      .selectFrom("acp_sessions")
-      .selectAll()
-      .orderBy("last_activity_at", "desc")
-      .orderBy("session_key", "asc"),
-  ).rows;
+export function selectAcpSessionRows(db: EngineConnection, backendId?: string): AcpSessionRow[] {
+  let query = getAcpSessionKysely(db)
+    .selectFrom("acp_sessions")
+    .selectAll()
+    .orderBy("last_activity_at", "desc")
+    .orderBy("session_key", "asc");
+  if (backendId !== undefined) {
+    query = query.where("backend", "=", backendId);
+  }
+  return executeSqliteQuerySync(db, query).rows;
 }
 
 export function selectAcpSessionRow(

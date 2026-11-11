@@ -3,9 +3,10 @@ import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-con
 import { readRetainedAgentDeletionsFromDatabase } from "./agent-deletion-journal.read.js";
 import { readAgentDatabasePreflightTargets } from "./openclaw-agent-db-registry.read.js";
 import { inspectOpenClawStateOwnershipFromDatabase } from "./openclaw-state-ownership.js";
-import type {
-  StateSchemaInspection,
-  StateSchemaInspectionInput,
+import {
+  inspectStateDatabaseSchema,
+  type StateSchemaInspection,
+  type StateSchemaInspectionInput,
 } from "./openclaw-state-schema-preflight.js";
 
 export const stateBootstrapReadOperations = {
@@ -14,7 +15,13 @@ export const stateBootstrapReadOperations = {
     ownership: inspectOpenClawStateOwnershipFromDatabase(db, input.pathname),
   }),
   "stateBootstrap.inspect": (input: StateSchemaInspectionInput, db: EngineConnection) => {
-    const version = isPostgresSqlConnection(db) && getPostgresPhysicalFacts(db)?.version;
+    if (!isPostgresSqlConnection(db)) {
+      return {
+        type: "stateBootstrap.inspect" as const,
+        inspection: inspectStateDatabaseSchema(db, input),
+      };
+    }
+    const version = getPostgresPhysicalFacts(db)?.version;
     if (!version) {
       throw new Error("PostgreSQL startup inspection requires an admitted state connection");
     }

@@ -4,7 +4,7 @@ import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/n
 import { invalidateSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { readFiniteSqliteNumber } from "../infra/sqlite-number.js";
-import { SqliteWalCheckpointBusyError, truncateSqliteWal } from "../infra/sqlite-wal-checkpoint.js";
+import { truncateSqliteWal } from "../infra/sqlite-wal-checkpoint.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 
 type DoctorSqliteCompactSnapshot = ReturnType<typeof readCompactSnapshot>;
@@ -15,9 +15,6 @@ type DoctorSqliteCompactResult = {
   integrityCheck: "ok";
   reclaimedBytes: number;
 };
-
-/** The initial checkpoint was busy, before conversion, and the connection has closed. */
-export class DoctorSqliteCompactionDeferredError extends Error {}
 
 /**
  * Compact one SQLite file during an explicit offline doctor operation.
@@ -38,7 +35,6 @@ export function compactDoctorSqliteFile(options: {
     options.requireExisting ? resolveExistingSqliteFileUri(options.sqlitePath) : options.sqlitePath,
   );
   let operationError: unknown;
-  let initialCheckpointBusy = false;
   let result: DoctorSqliteCompactResult | undefined;
   try {
     database.exec(
@@ -57,12 +53,7 @@ export function compactDoctorSqliteFile(options: {
     // Explicit compaction still repacks partially filled pages.
     if (!alreadyCompact) {
       invalidateSqliteDatabaseCleanClose(options.sqlitePath);
-      try {
-        truncateSqliteWal(database, options.sqlitePath);
-      } catch (error) {
-        initialCheckpointBusy = error instanceof SqliteWalCheckpointBusyError;
-        throw error;
-      }
+      truncateSqliteWal(database, options.sqlitePath);
       database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
       // NONE databases need a full rewrite to add pointer maps. Existing auto-vacuum
       // stores can release free pages without repacking; explicit compact still repacks.
@@ -89,7 +80,6 @@ export function compactDoctorSqliteFile(options: {
   try {
     database.close();
   } catch (error) {
-    initialCheckpointBusy = false;
     operationError =
       operationError !== undefined
         ? new AggregateError([operationError, error], "SQLite compaction and close failed.")
@@ -103,11 +93,6 @@ export function compactDoctorSqliteFile(options: {
     }
   }
   if (operationError !== undefined) {
-    if (initialCheckpointBusy && operationError instanceof Error) {
-      throw new DoctorSqliteCompactionDeferredError(operationError.message, {
-        cause: operationError,
-      });
-    }
     throw operationError instanceof Error
       ? operationError
       : new Error("SQLite compaction failed with a non-Error value.");

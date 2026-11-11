@@ -41,7 +41,6 @@ import {
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { createDanglingSkillWorkshopReviewIndex } from "./openclaw-state-db-corruption.test-support.js";
-import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -423,12 +422,36 @@ it("admits a dangling Workshop index only for Doctor without mutating the source
   await expect(
     fixture.inspect({
       scope: "state",
-      openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
+      doctorSchemaReadAdmission: true,
       supportedVersions,
     }),
   ).resolves.toEqual(compatible);
   expectFilesEqual(snapshot(), before);
 });
+
+it.each([false, true])(
+  "inspects an idle WAL state source without a copy (dangling index: %s)",
+  async (danglingIndex) => {
+    const fixture = databaseFixture(tempDirs.make("openclaw-preflight-direct-doctor-"));
+    const pathname = fixture.state().path;
+    closeOpenClawStateDatabaseForTest();
+    if (danglingIndex) {
+      createDanglingSkillWorkshopReviewIndex(pathname);
+    }
+    expect(fs.existsSync(`${pathname}-wal`)).toBe(false);
+    const before = fs.readFileSync(pathname);
+    rejectSnapshot(pathname, "No space for a shared-state snapshot", true);
+    await expect(
+      fixture.inspect({
+        scope: "state",
+        doctorSchemaReadAdmission: true,
+        preserveSourceArtifacts: false,
+        supportedVersions,
+      }),
+    ).resolves.toEqual(compatible);
+    expect(fs.readFileSync(pathname)).toEqual(before);
+  },
+);
 
 it.each([
   {
@@ -574,9 +597,14 @@ it("keeps readiness on the admitted shared-state snapshot and observes changes i
   }
 });
 
-it.each(["DELETE", "WAL"])(
-  "checks committed shared-state metadata without snapshot space (%s)",
-  async (journalMode) => {
+it.each([
+  { journalMode: "DELETE", doctorSchemaReadAdmission: undefined },
+  { journalMode: "WAL", doctorSchemaReadAdmission: undefined },
+  { journalMode: "DELETE", doctorSchemaReadAdmission: true as const },
+  { journalMode: "WAL", doctorSchemaReadAdmission: true as const },
+])(
+  "checks committed shared-state metadata without snapshot space ($journalMode, Doctor: $doctorSchemaReadAdmission)",
+  async ({ journalMode, doctorSchemaReadAdmission }) => {
     const fixture = databaseFixture(tempDirs.make("state-schema-only-"));
     const pathname = fixture.state().path;
     closeOpenClawStateDatabaseForTest();
@@ -587,6 +615,7 @@ it.each(["DELETE", "WAL"])(
       fixture.inspect({
         scope: "state",
         preserveSourceArtifacts: false,
+        doctorSchemaReadAdmission,
         verifyCurrentSchemaShape: true,
       });
     expect(await inspect()).toEqual(compatible);

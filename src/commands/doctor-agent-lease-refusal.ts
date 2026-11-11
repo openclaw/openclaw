@@ -127,7 +127,7 @@ export async function assertDoctorAgentLeaseAdmission(
     const schemas = await preflightOpenClawDatabaseSchemas({
       env,
       scope: "state",
-      openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
+      doctorSchemaReadAdmission: true,
     });
     const unreadable = schemas.indeterminate.find((database) => database.kind === "state");
     if (unreadable) {

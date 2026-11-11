@@ -4,7 +4,7 @@
  * Append `team` to seed arguments for seven-agent scale (35 GiB largest agent,
  * 11.5 GiB shared state, 256 MiB other agents, 62,000 workspace files):
  * ... seed .local/crossing-team 7 1 1429 team
- * Team mode recreates the additive 39→40 crossing on synthetic current schemas.
+ * Team mode recreates the additive 40→41 crossing on synthetic current schemas.
  * Set SCHEMA_CROSSING_TEMP_ROOT to a task-owned secure staging volume when the
  * fixture volume has shared ancestors; recovery backups stay beside the fixture.
  * Build each pinned checkout before measurement so bundled Doctor owners exist.
@@ -183,7 +183,7 @@ if (mode === "seed") {
       }
       if (index > 0) {
         db.exec(
-          "DROP TABLE session_creation_operations; PRAGMA user_version=39; UPDATE schema_meta SET schema_version=39 WHERE meta_key='primary'",
+          "DROP TABLE session_transcript_active_event_facts; PRAGMA user_version=40; UPDATE schema_meta SET schema_version=40 WHERE meta_key='primary'",
         );
       }
       db.exec("COMMIT; PRAGMA wal_checkpoint(TRUNCATE)");
@@ -199,7 +199,7 @@ if (mode === "seed") {
       sessions: agents * sessions,
       archiveMiBPerAgent: archiveMiB,
       databaseBytes: paths.map((pathname) => fs.statSync(pathname).size),
-      sourceAgentSchema: 39,
+      sourceAgentSchema: 40,
       canonicalSessionDelivery: true,
       workspaceFiles: 62000,
       workspaceBytes: 62000 * content.length,

@@ -20,7 +20,7 @@ export type AcpResumeSessionRow = {
 };
 
 export type AcpSessionReadCommand =
-  | { type: "acpSessions.list" }
+  | { type: "acpSessions.list"; backendId?: string }
   | { type: "acpSessions.metadata"; entries: readonly AcpSessionReadInput[] }
   | {
       type: "acpSessions.resume";

@@ -20,6 +20,8 @@ import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
 import { resolveRelativeSessionStoreMigrationTargets } from "./doctor-relative-session-store-paths.js";
 
 export type DoctorDatabasePreflight = OpenClawDatabaseSchemaPreflight & {
+  /** Native migration retains scoped checkpoints and refuses predecessor rollback. */
+  forwardRecoveryOnly?: true;
   /** The native updater already captured these files while holding stopped-state custody. */
   verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
@@ -85,7 +87,7 @@ export async function prepareDoctorDatabasePreflight(
      * open of an idle WAL family rebuilds its WAL index and changes that generation, so
      * those runs read every source through private snapshots instead.
      */
-    preserveSourceArtifacts?: true;
+    preserveSourceArtifacts?: boolean;
   } = {},
 ): Promise<DoctorDatabasePreflight> {
   // Delegated update Doctor enters without CLI boot's process-wide engine selection.
@@ -95,16 +97,10 @@ export async function prepareDoctorDatabasePreflight(
   }
   const { scope, preserveSourceArtifacts } = options;
   const databasePreflight = await import("../state/openclaw-database-preflight.js");
-  const [
-    { createConfigIO },
-    targets,
-    { listAgentIds, resolveAgentDir },
-    { openDoctorStateSchemaReadAdmission },
-  ] = await Promise.all([
+  const [{ createConfigIO }, targets, { listAgentIds, resolveAgentDir }] = await Promise.all([
     import("../config/io.js"),
     import("../config/sessions/targets.js"),
     import("../agents/agent-scope-config.js"),
-    import("../state/openclaw-state-db-doctor-schema.js"),
   ]);
   const snapshot =
     scope === "state" || options.cfg
@@ -120,7 +116,7 @@ export async function prepareDoctorDatabasePreflight(
   const databaseSchemas = await databasePreflight.preflightOpenClawDatabaseSchemas({
     env: process.env,
     scope,
-    openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
+    doctorSchemaReadAdmission: true,
     preserveSourceArtifacts,
     ...(cfg
       ? {

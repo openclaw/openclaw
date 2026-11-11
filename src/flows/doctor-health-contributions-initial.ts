@@ -258,6 +258,7 @@ export function resolveInitialDoctorHealthContributions(params: {
       "doctor:stale-plugin-runtime-symlinks",
       "Stale plugin runtime symlinks",
       {
+        updateWork: { kind: "standalone" },
         healthChecks: {
           description: "Stale plugin-runtime symlinks are represented as findings.",
           defaultEnabled: false,
@@ -267,7 +268,6 @@ export function resolveInitialDoctorHealthContributions(params: {
             return collectStalePluginRuntimeSymlinkHealthFindings();
           },
         },
-        run: async () => {},
       },
     ),
     createDoctorHealthContribution(
@@ -530,29 +530,35 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution(
       "doctor:session-transcript-headers",
       "Session transcript headers",
-      async (ctx) => {
-        const { noteSessionTranscriptHeaderHealth } =
-          await import("../commands/doctor-session-transcript-headers.js");
-        await noteSessionTranscriptHeaderHealth({
-          cfg: ctx.cfg,
-          env: ctx.env ?? process.env,
-          shouldRepair: ctx.prompter.shouldRepair,
-          integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
-        });
+      {
+        updateWork: { kind: "standalone" },
+        async run(ctx) {
+          const { noteSessionTranscriptHeaderHealth } =
+            await import("../commands/doctor-session-transcript-headers.js");
+          await noteSessionTranscriptHeaderHealth({
+            cfg: ctx.cfg,
+            env: ctx.env ?? process.env,
+            shouldRepair: ctx.prompter.shouldRepair,
+            integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
+          });
+        },
       },
     ),
     createDoctorHealthContribution(
       "doctor:session-transcript-labels",
       "Session transcript labels",
-      async (ctx) => {
-        const { noteSessionTranscriptLabelHealth } =
-          await import("../commands/doctor-session-transcript-labels.js");
-        await noteSessionTranscriptLabelHealth({
-          cfg: ctx.cfg,
-          env: ctx.env ?? process.env,
-          shouldRepair: ctx.prompter.shouldRepair,
-          integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
-        });
+      {
+        updateWork: { kind: "standalone" },
+        async run(ctx) {
+          const { noteSessionTranscriptLabelHealth } =
+            await import("../commands/doctor-session-transcript-labels.js");
+          await noteSessionTranscriptLabelHealth({
+            cfg: ctx.cfg,
+            env: ctx.env ?? process.env,
+            shouldRepair: ctx.prompter.shouldRepair,
+            integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
+          });
+        },
       },
     ),
     createDoctorHealthContribution("doctor:session-snapshots", "Session snapshots", {

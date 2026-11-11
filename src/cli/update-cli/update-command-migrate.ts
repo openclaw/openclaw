@@ -2,10 +2,13 @@ import { randomUUID } from "node:crypto";
 import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import type { BackupSqliteSnapshotFact } from "../../commands/backup-resource-inventory.js";
 import { projectHeartbeatConfigForUpdateAdmission } from "../../commands/doctor-automatic-heartbeat-repair.js";
 import { prepareDoctorDatabasePreflight } from "../../commands/doctor-database-preflight.js";
+import { canUseDoctorScopedForwardRecovery } from "../../commands/doctor-schema-migrations.js";
+import { DOCTOR_SQLITE_NOCOW_REPAIR_ENV } from "../../commands/doctor/shared/update-phase.js";
 import {
   assertConfigFileWritePathSnapshot,
   captureConfigFileWritePathProof,
@@ -19,6 +22,7 @@ import {
   requireDirectorySync,
   syncDirectory,
 } from "../../infra/directory-durability.js";
+import { isTruthyEnvValue } from "../../infra/env.js";
 import { ignoreMissingPath } from "../../infra/errno.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
@@ -38,7 +42,11 @@ import {
 import { createUpdateRun, recordUpdateRunDiagnostic } from "../../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
-import { withArtifactPreservingStateReads } from "../../state/artifact-preserving-state-reads.js";
+import {
+  withArtifactPreservingStateReads,
+  withLiveStateReads,
+} from "../../state/artifact-preserving-state-reads.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { VERSION } from "../../version.js";
 import { measureGatewayBootstrapStep } from "../startup-trace.js";
 import {
@@ -59,7 +67,7 @@ const ReceiptSchema = z.object({
   stateDir: z.string(),
   configPath: z.string(),
   status: z.enum(["backed-up", "migrated", "failed", "restoring-config", "restored", "finished"]),
-  backup: UpdateDatabaseBackupSchema,
+  backup: z.union([UpdateDatabaseBackupSchema, z.literal("scoped")]),
   databases: z.array(z.string()),
   databaseIdentities: z.record(z.string(), z.object({ dev: z.number(), ino: z.number() })),
   configIdentity: z.object({ path: z.string(), dev: z.number(), ino: z.number() }).nullable(),
@@ -100,9 +108,9 @@ function receiptPath(backupRoot: string): string {
   return `${path.resolve(backupRoot)}.receipt.json`;
 }
 
-async function readReceipt(backupRoot: string) {
+async function readReceipt(backupRoot: string, saved?: unknown) {
   const file = receiptPath(backupRoot);
-  const receipt = ReceiptSchema.parse(await readJsonIfExists(file));
+  const receipt = ReceiptSchema.parse(saved ?? (await readJsonIfExists(file)));
   if (receipt.stateDir !== resolveStateDir() || receipt.configPath !== resolveConfigPath()) {
     throw new Error("Update migration receipt belongs to another state directory or config.");
   }
@@ -111,7 +119,7 @@ async function readReceipt(backupRoot: string) {
     await fs.realpath(path.dirname(normalized)),
     `${path.basename(normalized)}.databases`,
   );
-  if (receipt.backup.directory !== canonicalBackup) {
+  if (receipt.backup !== "scoped" && receipt.backup.directory !== canonicalBackup) {
     throw new Error("Update migration receipt belongs to another backup root.");
   }
   return { file, receipt };
@@ -164,7 +172,12 @@ export async function updateMigrateCommand(
       true,
     );
   const file = receiptPath(backupRoot);
-  if ((await readJsonIfExists(file)) !== null) {
+  const saved = await readJsonIfExists(file);
+  const retained = saved === null ? undefined : (await readReceipt(backupRoot, saved)).receipt;
+  if (
+    retained &&
+    (retained.backup !== "scoped" || !["backed-up", "failed", "migrated"].includes(retained.status))
+  ) {
     throw new Error(
       `Update migration receipt already exists: ${file}. Restore it or choose a new backup root.`,
     );
@@ -179,16 +192,20 @@ export async function updateMigrateCommand(
       }),
     ),
   );
-  const preflight = await measure("schema-preflight", () => prepareDoctorDatabasePreflight());
+  const preflight = await measure("schema-preflight", () =>
+    prepareDoctorDatabasePreflight({ preserveSourceArtifacts: false }),
+  );
   if (hasSchemaRefusal(preflight)) {
     throw new Error(formatSchemaRefusalLines(preflight).join("\n"));
   }
-  const lock = await acquireGatewayLock({
-    env,
-    role: "sqlite-maintenance",
-    allowInTests: true,
-    timeoutMs: 0,
-  });
+  const lock = await withLiveStateReads(() =>
+    acquireGatewayLock({
+      env,
+      role: "sqlite-maintenance",
+      allowInTests: true,
+      timeoutMs: 0,
+    }),
+  );
   if (!lock) {
     throw new Error("Update migration requires the Gateway to be stopped.");
   }
@@ -196,6 +213,25 @@ export async function updateMigrateCommand(
   let verifiedSnapshots: BackupSqliteSnapshotFact[];
   try {
     ({ receipt, verifiedSnapshots } = await lock.run(async () => {
+      if (retained) {
+        const identities = toReceiptIdentities(await readIdentities(retained.databases));
+        lock.assertCurrent();
+        if (!isDeepStrictEqual(identities, retained.databaseIdentities)) {
+          throw new Error(
+            "Forward recovery source identities changed; retain the original scoped checkpoints and inspect the replaced databases before retrying.",
+          );
+        }
+        if (
+          isTruthyEnvValue(env[DOCTOR_SQLITE_NOCOW_REPAIR_ENV]) ||
+          (preflight.pendingMigrations?.length &&
+            !canUseDoctorScopedForwardRecovery(preflight, env))
+        ) {
+          throw new Error(
+            "Forward recovery requires the candidate's additive migration scope; retain the original checkpoints and use the matching candidate.",
+          );
+        }
+        return { receipt: retained, verifiedSnapshots: [] };
+      }
       await fs.mkdir(path.dirname(backupRoot), { recursive: true, mode: 0o700 });
       lock.assertCurrent();
       const config = await captureUpdateConfigSnapshot(resolveConfigPath(env), env);
@@ -210,18 +246,30 @@ export async function updateMigrateCommand(
         path.basename(normalized),
       );
       lock.assertCurrent();
-      const backup = await measure("database-backup", () =>
-        createUpdateDatabaseBackup({
-          backupRoot: canonicalRoot,
-          stateDir: resolveStateDir(env),
-          config: source.config,
-          env,
-          stopped: true,
-        }),
-      );
+      const backup = canUseDoctorScopedForwardRecovery(preflight, env)
+        ? ("scoped" as const)
+        : await measure("database-backup", () =>
+            createUpdateDatabaseBackup({
+              backupRoot: canonicalRoot,
+              stateDir: resolveStateDir(env),
+              config: source.config,
+              env,
+              stopped: true,
+            }),
+          );
       lock.assertCurrent();
       const databases = [
-        ...new Set([...backup.databases.map((entry) => entry.path), ...backup.missingPaths]),
+        ...new Set(
+          backup === "scoped"
+            ? [
+                resolveOpenClawStateSqlitePath(env),
+                ...(preflight.agentDatabaseMigrationDiscovery?.discovery.schemaTargets.map(
+                  (target) => target.path,
+                ) ?? []),
+                ...(preflight.pendingMigrations?.map((migration) => migration.path) ?? []),
+              ]
+            : [...backup.databases.map((entry) => entry.path), ...backup.missingPaths],
+        ),
       ];
       const databaseIdentities = await readIdentities(databases);
       lock.assertCurrent();
@@ -250,7 +298,7 @@ export async function updateMigrateCommand(
       };
       await saveReceipt(file, capturedReceipt);
       lock.assertCurrent();
-      const snapshots = (backup.databaseOwners ?? []).flatMap(
+      const snapshots = (backup === "scoped" ? [] : (backup.databaseOwners ?? [])).flatMap(
         (owner): BackupSqliteSnapshotFact[] => {
           const identity = databaseIdentities[owner.path];
           if (!identity) {
@@ -264,7 +312,7 @@ export async function updateMigrateCommand(
   } finally {
     await lock.release();
   }
-  // Update mode reuses this capture instead of creating a second standalone Doctor archive.
+  // Full rollback images are reused; forward-only crossings retain Doctor's scoped checkpoints.
   // The supervisor retains service ownership and its admission fence through verification.
   const doctorEnv = {
     OPENCLAW_SERVICE_REPAIR_POLICY: "external",
@@ -279,18 +327,21 @@ export async function updateMigrateCommand(
   Object.assign(env, doctorEnv);
   try {
     preflight.verifiedSnapshots = verifiedSnapshots;
+    preflight.forwardRecoveryOnly = receipt.backup === "scoped" ? true : undefined;
     await captureUpdateDoctorConfigWrites(receipt.configPath, async (capture) => {
       try {
-        await runDoctorHealthFlow(
-          defaultRuntime,
-          {
-            repair: true,
-            nonInteractive: true,
-            workspaceSuggestions: false,
-            fullIntegrityCheck: options.fullIntegrityCheck,
-          },
-          undefined,
-          preflight,
+        await withLiveStateReads(() =>
+          runDoctorHealthFlow(
+            defaultRuntime,
+            {
+              repair: true,
+              nonInteractive: true,
+              workspaceSuggestions: false,
+              fullIntegrityCheck: options.fullIntegrityCheck,
+            },
+            undefined,
+            preflight,
+          ),
         );
       } catch (error) {
         if (!(error instanceof ExitError) || error.code !== 0) {
@@ -300,7 +351,9 @@ export async function updateMigrateCommand(
       receipt.deferredInspectionCheckIds = capture.deferredInspectionCheckIds;
       receipt.warnings = capture.warnings;
     });
-    const migrated = await measure("schema-verification", () => prepareDoctorDatabasePreflight());
+    const migrated = await measure("schema-verification", () =>
+      prepareDoctorDatabasePreflight({ preserveSourceArtifacts: false }),
+    );
     if (hasSchemaRefusal(migrated) || migrated.pendingMigrations?.length) {
       throw new Error(
         "Doctor did not complete the candidate database migrations; the recovery backup was retained.",
@@ -309,6 +362,7 @@ export async function updateMigrateCommand(
     receipt.status = "migrated";
     receipt.databaseIdentities = toReceiptIdentities(await readIdentities(receipt.databases));
     receipt.configIdentity = await readConfigIdentity(receipt.configPath);
+    delete receipt.error;
     await saveReceipt(file, receipt);
   } catch (error) {
     receipt.status = "failed";
@@ -337,6 +391,11 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
   const { file, receipt } = await readReceipt(backupRoot);
   if (receipt.status === "finished") {
     throw new Error("The accepted update's rollback backup has been retired.");
+  }
+  if (receipt.backup === "scoped") {
+    throw new Error(
+      "This additive migration requires forward recovery with the candidate. Keep its scoped migration backups and repair the candidate; automatic predecessor restore is unavailable.",
+    );
   }
   if (receipt.status !== "restored") {
     if (receipt.status !== "restoring-config") {
@@ -471,13 +530,11 @@ export async function updateFinishCommand(backupRoot: string): Promise<void> {
   receipt.status = "finished";
   receipt.configFiles = [];
   await saveReceipt(file, receipt);
-  const removed = await removePackageUpdatePath(receipt.backup.directory);
-  const warnings = [
-    ...(receipt.warnings ?? []),
-    ...(removed
-      ? []
-      : [`Backup cleanup remains pending at ${receipt.backup.directory}; retry update finish.`]),
-  ];
+  const cleanupWarnings =
+    receipt.backup !== "scoped" && !(await removePackageUpdatePath(receipt.backup.directory))
+      ? [`Backup cleanup remains pending at ${receipt.backup.directory}; retry update finish.`]
+      : [];
+  const warnings = [...(receipt.warnings ?? []), ...cleanupWarnings];
   // Cleanup retires rollback originals only after a later update succeeds. Starting the
   // run at migration keeps originals from this update's own Doctor run protected; a
   // receipt without its start time cannot prove that ordering and is not recorded.

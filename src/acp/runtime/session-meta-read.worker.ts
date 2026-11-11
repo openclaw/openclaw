@@ -152,7 +152,7 @@ export function readAcpSessionCommand(
   command: AcpSessionReadCommand,
 ): AcpSessionReadResult {
   if (command.type === "acpSessions.list") {
-    return { type: command.type, rows: selectAcpSessionRows(db) };
+    return { type: command.type, rows: selectAcpSessionRows(db, command.backendId) };
   }
   if (command.type === "acpSessions.resume") {
     return { type: command.type, rows: selectAcpResumeSessions(db, command) };

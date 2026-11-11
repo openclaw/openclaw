@@ -7,6 +7,7 @@ import * as databaseEngine from "../../commands/doctor-database-engine.js";
 import * as doctorUi from "../../commands/doctor-ui.js";
 import * as doctor from "../../flows/doctor-health.js";
 import * as jsonFiles from "../../infra/json-files.js";
+import * as sqliteSnapshots from "../../infra/sqlite-snapshot-source.js";
 import * as coldNavigation from "../../infra/state-migrations.cold-navigation.js";
 import { recordUpdateDoctorDeferredInspectionChecks } from "../../infra/update-doctor-result.js";
 import * as updateHistory from "../../infra/update-run-ledger.js";
@@ -31,6 +32,92 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 const readText = (file: string) => fs.readFile(file, "utf8");
+
+it("uses only the scoped checkpoint for an additive crossing and fences predecessor restore", async () => {
+  await withOpenClawTestState(
+    {
+      scenario: "minimal",
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_SUPERVISOR_MODE: "external" },
+    },
+    async (state) => {
+      vi.spyOn(doctorUi, "maybeRepairUiProtocolFreshness").mockResolvedValue();
+      const shared = openOpenClawStateDatabase({ env: state.env });
+      const agentPath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+      openOpenClawAgentDatabase({ agentId: "main", path: agentPath, env: state.env });
+      await closeOpenClawAgentDatabasesAsync(state.stateDir);
+      await closeOpenClawStateDatabaseAsync();
+      {
+        using database = new DatabaseSync(agentPath);
+        database.exec(`
+          DROP TABLE session_transcript_active_event_facts;
+          PRAGMA user_version=40;
+          UPDATE schema_meta SET schema_version=40 WHERE meta_key='primary';
+          CREATE TABLE update_witness(value TEXT);
+          INSERT INTO update_witness VALUES ('retained');
+        `);
+      }
+      const backupRoot = state.path("additive-recovery", "native");
+      vi.spyOn(sqliteSnapshots, "prepareSqliteReadOnlyLocationAwaited").mockRejectedValue(
+        new Error("Native additive migration must inspect the stopped database directly."),
+      );
+      const write = jsonFiles.writeJsonAtomic;
+      let failPublication = true;
+      vi.spyOn(jsonFiles, "writeJsonAtomic").mockImplementation(async (file, value, options) => {
+        if (
+          file === `${backupRoot}.receipt.json` &&
+          failPublication &&
+          typeof value === "object" &&
+          value !== null &&
+          "status" in value &&
+          value.status === "migrated"
+        ) {
+          failPublication = false;
+          throw new Error("synthetic post-migration publication failure");
+        }
+        return write(file, value, options);
+      });
+      await expect(updateMigrateCommand(backupRoot)).rejects.toThrow(
+        "synthetic post-migration publication failure",
+      );
+      const receipt = JSON.parse(await readText(`${backupRoot}.receipt.json`));
+      expect(receipt).toMatchObject({ status: "failed", backup: "scoped" });
+      await expect(fs.stat(`${backupRoot}.databases`)).rejects.toMatchObject({ code: "ENOENT" });
+      const archives = (await fs.readdir(path.dirname(agentPath))).filter((name) =>
+        name.includes(".pre-startup-migration-"),
+      );
+      expect(archives).toHaveLength(1);
+      expect(archives[0]).toMatch(/\.scoped\.bak$/u);
+      expect(
+        (await fs.readdir(path.dirname(shared.path))).filter((name) => name.endsWith(".bak")),
+      ).toEqual([]);
+      const checkpoint = path.join(path.dirname(agentPath), archives[0]!);
+      const originalCheckpoint = await fs.readFile(checkpoint);
+      const originalAgent = `${agentPath}.original`;
+      await fs.rename(agentPath, originalAgent);
+      await fs.copyFile(originalAgent, agentPath);
+      await expect(updateMigrateCommand(backupRoot)).rejects.toThrow("source identities changed");
+      await fs.rm(agentPath);
+      await fs.rename(originalAgent, agentPath);
+      await updateMigrateCommand(backupRoot);
+      expect(JSON.parse(await readText(`${backupRoot}.receipt.json`))).toMatchObject({
+        status: "migrated",
+        backup: "scoped",
+        runId: receipt.runId,
+        configFiles: receipt.configFiles,
+      });
+      expect(JSON.parse(await readText(`${backupRoot}.receipt.json`))).not.toHaveProperty("error");
+      expect(await fs.readFile(checkpoint)).toEqual(originalCheckpoint);
+      await expect(updateRestoreCommand(backupRoot)).rejects.toThrow("forward recovery");
+      using migrated = new DatabaseSync(agentPath, { readOnly: true });
+      expect(migrated.prepare("PRAGMA user_version").get()?.user_version).toBe(41);
+      expect(migrated.prepare("SELECT value FROM update_witness").get()?.value).toBe("retained");
+      expect(
+        migrated.prepare("SELECT count(*) AS n FROM session_transcript_active_event_facts").get()
+          ?.n,
+      ).toBe(0);
+    },
+  );
+});
 
 it("preserves a recoverable cold-navigation deadline in native update receipts", async () => {
   await withOpenClawTestState(

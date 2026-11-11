@@ -26,6 +26,7 @@ function nativeReceipt(f) {
 
 function fixture(t, fault = "", sourceState = 17, targetState = sourceState, sourceAgent = 23, targetAgent = sourceAgent, offlineDoctor = false) {
   const f = makeReleaseFixture(t);
+  const scoped = fault.startsWith("scoped-");
   const library = readFileSync(f.library, "utf8");
   f.library = join(f.root, "release-lib.mjs");
   writeFileSync(f.library, library.replace(
@@ -63,7 +64,7 @@ case "\${2:-}" in
       is-active) printf 'inactive\\n'; exit 3 ;;
     esac ;;
 esac
-if [[ ${quote(fault)} == activation-failed && "$1" == start && "$2" == openclaw-gateway.service && ! -e ${quote(join(f.state, "candidate-start-failed"))} ]]; then
+if [[ ${quote(fault)} == *activation-failed && "$1" == start && "$2" == openclaw-gateway.service && ! -e ${quote(join(f.state, "candidate-start-failed"))} ]]; then
   [[ -f ${quote(f.permit)} ]] || { printf 'candidate start lacked its published permit\\n' >&2; exit 73; }
   : >${quote(join(f.state, "candidate-start-failed"))}
   printf 'service.system.start\\nfixture.candidate-start-failed\\n' >>${quote(f.eventlog)}
@@ -112,7 +113,7 @@ if(process.argv[2]==='update') {
     if(!['migrated','finished'].includes(completed.status)) reject('native update cleanup lacks an accepted receipt');
     completed.status='finished';fs.writeFileSync(root+'.receipt.json',JSON.stringify(completed));
     event('native.update.finish');
-    fs.rmSync(root+'.databases',{recursive:true});
+    fs.rmSync(root+'.databases',{recursive:true,force:true});
     process.exit(0);
   }
   if(read('system')!=='inactive'||read('pid')!=='0'||read('listener-pid')!=='0')
@@ -132,14 +133,17 @@ if(process.argv[2]==='update') {
   const files=[${JSON.stringify(f.config)},${JSON.stringify(f.databasePath)},${JSON.stringify(f.agentDatabasePath)}];
   const identity=file=>{const info=fs.statSync(file);return {dev:info.dev,ino:info.ino};};
   const receipt=status=>fs.writeFileSync(root+'.receipt.json',JSON.stringify({schemaVersion:1,status,
+    ...(${scoped}?{backup:'scoped'}:{}),
     configPath:files[0],stateDir:${JSON.stringify(f.root)},databases:files.slice(1),
     databaseIdentities:Object.fromEntries(files.slice(1).map(file=>[file,identity(file)])),
     configIdentity:{path:files[0],...identity(files[0])}}),{mode:0o600});
   if(action==='migrate') {
-    if(fs.realpathSync(${JSON.stringify(join(f.serving, "current"))})!==${JSON.stringify(f.initial)})
+    if(![${JSON.stringify(f.initial)},...(${scoped}?[${JSON.stringify(f.candidate)}]:[])].includes(fs.realpathSync(${JSON.stringify(join(f.serving, "current"))})))
       reject('candidate selected before migration');
-    fs.mkdirSync(root+'.databases',{mode:0o700});
-    for(let i=0;i<files.length;i++)fs.copyFileSync(files[i],path.join(root+'.databases',String(i)));
+    if(!${scoped}) {
+      fs.mkdirSync(root+'.databases',{mode:0o700});
+      for(let i=0;i<files.length;i++)fs.copyFileSync(files[i],path.join(root+'.databases',String(i)));
+    }
     receipt('backed-up');
     for(const [file,version] of [[files[1],${targetState}],[files[2],${targetAgent}]]) {
       const db=new DatabaseSync(file);
@@ -149,8 +153,13 @@ if(process.argv[2]==='update') {
     if(['migration-failed','restore-failed'].includes(${JSON.stringify(fault)})) {
       receipt('failed');reject('synthetic native migration failed after backup');
     }
+    if(${JSON.stringify(fault)}==='scoped-migration-failed'&&!fs.existsSync(root+'.interrupted')) {
+      fs.writeFileSync(root+'.interrupted','once');
+      receipt('failed');reject('synthetic scoped migration interrupted after commit');
+    }
     receipt('migrated');
   } else {
+    if(${scoped})reject('native scoped migration requires forward recovery');
     if(${JSON.stringify(fault)}==='restore-failed')reject('synthetic native restore failed');
     for(let i=0;i<files.length;i++) {
       const replacement=files[i]+'.restored';
@@ -299,6 +308,29 @@ for (const fault of ["migration-failed", "activation-failed", "restore-failed"])
     assert.equal(readFileSync(join(f.state, "system"), "utf8"), "inactive");
     assert.equal(JSON.parse(readFileSync(f.journal)).phase, "ROLLBACK_FAILED");
   }
+});
+
+for (const fault of ["scoped-migration-failed", "scoped-activation-failed"]) test(`explicit recovery resumes ${fault} through the candidate owner`, t => {
+  const f = fixture(t, fault, 20, 20, 40, 41);
+  const interrupted = runOwner(f, f.args);
+  assert.ifError(interrupted.error);
+  assert.notEqual(interrupted.status, 0);
+  assert.equal(JSON.parse(readFileSync(f.journal)).phase, "ROLLBACK_FAILED");
+  assert.equal(readFileSync(join(f.state, "system"), "utf8"), "inactive");
+  const { backupRoot } = nativeReceipt(f);
+  assert.equal(existsSync(`${backupRoot}.databases`), false);
+  const recovery = runOwner(f, ["--recover"]);
+  assert.ifError(recovery.error);
+  assert.equal(recovery.status, 0, recovery.stderr + events(f));
+  assert.match(recovery.stdout, /action=resumed-scoped-candidate-forward/);
+  assert.equal(readlinkSync(join(f.serving, "current")), f.candidate);
+  assert.equal(existsSync(f.journal), false);
+  assert.equal(nativeReceipt(f).receipt.status, "finished");
+  const log = events(f);
+  assert.equal(log.split("native.update.migrate\n").length - 1, 2);
+  assert.equal(log.split("native.update.restore\n").length - 1, 1);
+  assert.doesNotMatch(log, /service\.system\.restart/);
+  assert.match(log, /native\.update\.migrate[\s\S]*service\.system\.start[\s\S]*gateway gateway call sessions\.list[\s\S]*native\.update\.finish/);
 });
 
 test("continues the original same-schema sealed cut through ordinary activation after main advances", t => {

@@ -156,6 +156,7 @@ export async function backupDoctorMigrationDatabases(params: {
   verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
   /** Only the version-phase owner may select a table-scoped checkpoint. */
   versionMigrationsOnly?: boolean;
+  forwardRecoveryOnly?: true;
   check?: "quick" | "full";
   repair?: { key: string; validate?: (database: DatabaseSync) => void };
 }): Promise<
@@ -255,8 +256,12 @@ export async function backupDoctorMigrationDatabases(params: {
     };
   }
   const migrationTables = new Map<string, readonly string[]>();
-  // Shipped updater checkpoints and general Doctor repairs keep full images.
-  if (params.versionMigrationsOnly && !isStatePostgres() && !isUpdateDoctorLintPass(params.env)) {
+  // Shipped rollback updaters and general Doctor repairs keep full images.
+  if (
+    params.versionMigrationsOnly &&
+    !isStatePostgres() &&
+    (params.forwardRecoveryOnly || !isUpdateDoctorLintPass(params.env))
+  ) {
     for (const pathname of pending) {
       const migration = params.pendingMigrations?.find((entry) => entry.path === pathname);
       const tables = migration && resolveSchemaMigrationBackupTables(migration);
@@ -267,7 +272,11 @@ export async function backupDoctorMigrationDatabases(params: {
       migrationTables.set(realpathSync.native(pathname), tables);
     }
     // Agent migration receipts and registry changes are outside an agent's scope.
-    if ([...pending].some((pathname) => pathname !== sharedPath) && existsSync(sharedPath)) {
+    if (
+      !params.forwardRecoveryOnly &&
+      [...pending].some((pathname) => pathname !== sharedPath) &&
+      existsSync(sharedPath)
+    ) {
       migrationTables.delete(realpathSync.native(sharedPath));
     }
   }
@@ -304,6 +313,7 @@ export async function backupDoctorMigrationDatabases(params: {
       pendingDatabasePaths: [...pending],
       authority: { assertCurrent: () => maintenance.assertAdmission() },
       migrationTables: migrationTables.size > 0 ? migrationTables : undefined,
+      forwardRecoveryOnly: params.forwardRecoveryOnly,
       integrityChecks,
     });
   };
@@ -357,6 +367,7 @@ export async function backupDoctorSqliteDatabases(params: {
   migrationTables?: ReadonlyMap<string, readonly string[]>;
   integrityChecks?: ReadonlyMap<string, SqliteIntegrityCheckOptions>;
   stateFamilyBackedUp?: true;
+  forwardRecoveryOnly?: true;
   /** Recovery must retain its own verified originals, including on disposable rehearsals. */
   requireSnapshots?: true;
 }): Promise<MigrationMessages & { snapshots?: readonly { sourcePath: string; path: string }[] }> {
@@ -366,7 +377,7 @@ export async function backupDoctorSqliteDatabases(params: {
   }
   // The registry and migration receipts must roll back with their agent databases.
   const sharedPath = resolveOpenClawStateSqlitePath(params.env);
-  if (existsSync(sharedPath)) {
+  if (!params.forwardRecoveryOnly && existsSync(sharedPath)) {
     if (isStatePostgres() && !params.stateFamilyBackedUp) {
       throw new Error(
         "PostgreSQL state requires an exact state-family backup before native database repairs. Run the Doctor migration backup phase first.",
@@ -382,9 +393,9 @@ export async function backupDoctorSqliteDatabases(params: {
     ? undefined
     : createDoctorRehearsalDatabaseCoverage(params.env);
   disposable?.admit([...pending, ...params.databasePaths]);
-  const retainedPaths = [...new Set([...pending, ...params.databasePaths])].filter(
-    (pathname) => !disposable?.excludes(pathname),
-  );
+  const retainedPaths = [
+    ...new Set([...pending, ...(params.forwardRecoveryOnly ? [] : params.databasePaths)]),
+  ].filter((pathname) => !disposable?.excludes(pathname));
   if (retainedPaths.length === 0) {
     disposable?.assertCurrent();
     return { changes: [], warnings: [] };

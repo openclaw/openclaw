@@ -80,6 +80,7 @@ export async function runDoctorHealthFlow(
           () =>
             guardUpdateDoctorSchemaUpgrade({
               schemas: preparedPreflight,
+              forwardRecoveryOnly: databasePreflight?.forwardRecoveryOnly,
               runtime,
               json: options.json,
               statePublicationOnly: preCaptureRehearsalRoot !== undefined,
@@ -302,6 +303,7 @@ async function runDoctorHealthFlowWithResult(
       await measure("doctor.schema-admission", () =>
         guardUpdateDoctorSchemaUpgrade({
           schemas,
+          forwardRecoveryOnly: databasePreflight?.forwardRecoveryOnly,
           runtime: doctorRuntime,
           json: options.json,
           postCoreSchemaRepair: writeAuthority?.postCoreSchemaRepair,
@@ -349,6 +351,7 @@ async function runDoctorHealthFlowWithResult(
           check: options.fullIntegrityCheck ? "full" : "quick",
           verifiedSnapshots,
           automaticRepair: Boolean(automaticHeartbeatRepair),
+          forwardRecoveryOnly: databasePreflight?.forwardRecoveryOnly,
           runtime: effectiveRuntime,
           measure,
         });
@@ -523,7 +526,7 @@ async function runDoctorHealthFlowWithResult(
         ) {
           const agents = sqliteReclamationAgents;
           await measure("doctor.sqlite-reclamation", () =>
-            activeMaintenance.enableSqliteReclamation(agents),
+            activeMaintenance.inspectSqliteReclamation(agents),
           );
         }
         await measure("doctor.retained-runtimes", () =>

@@ -16,7 +16,7 @@ export function createDoctorMaintenanceFixture(overrides: Partial<DoctorMaintena
     run: <T>(operation: () => T): T => operation(),
     releaseState: vi.fn(async () => {}),
     repairSqliteNoCow: vi.fn(async () => {}),
-    enableSqliteReclamation: vi.fn(async () => {}),
+    inspectSqliteReclamation: vi.fn(async () => {}),
     cleanupRetainedRuntimes: vi.fn(async () => {}),
     release: vi.fn(async () => {}),
     finish: vi.fn(async () => {}),
