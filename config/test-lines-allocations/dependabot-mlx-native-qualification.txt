@@ -1,4 +1,5 @@
 # MLX native/cache and settings proof, CI routing, and UI/transcript regression coverage.
 # Includes SDK full-validation routing and timeout regression coverage.
 # Includes released-producer fallback and stable goal DOM/current-ID regressions.
-3272
+# Reconciles 3282 net test lines + 7 inherited fixed-baseline debt; no headroom.
+3289
