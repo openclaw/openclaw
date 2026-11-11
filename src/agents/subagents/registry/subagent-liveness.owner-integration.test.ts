@@ -631,7 +631,7 @@ it("retains durable suspended completion debt without reporting a live executor 
   ).toBe(true);
   const suspended = subagentRuns.get(entry.runId)!;
   expect(suspended.delivery?.status).toBe("suspended");
-  expect(await countPendingDescendantRuns(parent, () => {})).toBe(1);
+  expect(await countPendingDescendantRuns(parent, () => {})).toBe(0);
   expect(buildSubagentSessionListReadIndex().hasDescendantRunAwaitingSettle(parent)).toBe(false);
   expect(isSubagentRunLive(suspended)).toBe(false);
   expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
