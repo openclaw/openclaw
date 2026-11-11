@@ -12,6 +12,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
 import { repairLegacySubagentRetainedResults } from "./openclaw-state-db-legacy-backfills.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import { withLegacyWorkspaceBootstrapDeferral } from "./openclaw-state-db-schema-v40-workspace-bootstrap.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const FAILURE_DESTINATION_COLUMNS = [
@@ -101,9 +102,12 @@ function rebuildJsonCanonicalTable(db: DatabaseSync, tableName: string): void {
   if (tableExists(db, migrationTable)) {
     throw new Error(`OpenClaw v13 migration table already exists: ${migrationTable}`);
   }
-  const migrationSchema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, tableName, {
-    errorMessage: `Canonical ${tableName} schema block is missing`,
-  }).replace(`CREATE TABLE IF NOT EXISTS ${tableName} (`, `CREATE TABLE ${migrationTable} (`);
+  // Later versioned columns belong to their own migration, not this v13 rebuild.
+  const migrationSchema = extractSqliteTableSchema(
+    withLegacyWorkspaceBootstrapDeferral(OPENCLAW_STATE_SCHEMA_SQL),
+    tableName,
+    { errorMessage: `Canonical ${tableName} schema block is missing` },
+  ).replace(`CREATE TABLE IF NOT EXISTS ${tableName} (`, `CREATE TABLE ${migrationTable} (`);
   db.exec(migrationSchema);
   const columns = db
     .prepare(`PRAGMA table_xinfo(${migrationTable})`)

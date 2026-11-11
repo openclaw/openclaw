@@ -226,14 +226,15 @@ all incompatibilities without modifying the source files.
 
 Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
 
-Template setup adds a bare nullable `workspace_setup_state.bootstrap_deferred INTEGER`
-column through the startup-additive owner. A value of `1` keeps package bootstrap
-seeding with the initializer across restarts and failed dependency setup; normal
-workspace preparation does not seed defaults or mark setup complete. Successful
-package seeding clears the flag. Existing milestones and attestation hashes are
-unchanged, and existing rows need no backfill. Older builds ignore the column and
-do not resume this new Template setup flow; downgrading is not a setup retry.
-The numeric schema version and backup policy are unchanged.
+Template setup stores `workspace_setup_state.bootstrap_deferred INTEGER` as a
+[schema-40](/reference/database-schemas/state-schema-history#state-schema-40)
+column rather than a first-use column: PostgreSQL stores have no first-use
+columns, so a same-version addition there would be refused as schema drift.
+A value of `1` keeps package bootstrap seeding with the initializer across
+restarts and failed dependency setup; normal workspace preparation does not seed
+defaults or mark setup complete. Successful package seeding clears the flag.
+Existing milestones and attestation hashes are unchanged, and existing rows need
+no backfill.
 
 Session-window preview caching adds bare nullable `row_transcript_json TEXT` and
 `row_transcript_updated_at INTEGER` columns without a numeric version bump.

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -57,7 +58,7 @@ function sql(statement: string) {
   return openOpenClawStateDatabase().db.prepare(statement);
 }
 
-it("adds deferred bootstrap custody only at the workspace writer on existing databases", async () => {
+it("migrates v39 databases without deferred bootstrap custody before the workspace writer", async () => {
   await seed();
   await attest(1000, [["AGENTS.md", "a".repeat(64)]]);
   const before = await read(dir);
@@ -66,6 +67,7 @@ it("adds deferred bootstrap custody only at the workspace writer on existing dat
   {
     using legacy = new DatabaseSync(pathname);
     legacy.exec("ALTER TABLE workspace_setup_state DROP COLUMN bootstrap_deferred");
+    legacy.exec("PRAGMA user_version = 39");
   }
   // Offline replacement must acquire a new physical admission, not reuse cached schema facts.
   fs.copyFileSync(pathname, `${pathname}.legacy`);
@@ -77,7 +79,10 @@ it("adds deferred bootstrap custody only at the workspace writer on existing dat
         "SELECT name FROM pragma_table_info('workspace_setup_state') WHERE name = 'bootstrap_deferred'",
       )
       .get(),
-  ).toBeUndefined();
+  ).toEqual({ name: "bootstrap_deferred" });
+  expect(db.prepare("PRAGMA user_version").get()).toEqual({
+    user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+  });
   expect(await read(dir)).toEqual(before);
   await mergeWorkspaceSetupState(dir, { bootstrapDeferred: true }, 2000);
   await closeOpenClawStateDatabaseAsync();

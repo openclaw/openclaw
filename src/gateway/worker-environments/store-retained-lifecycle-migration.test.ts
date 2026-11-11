@@ -68,7 +68,7 @@ it.each(["runtime", "doctor"] as const)(
       using scope = new DatabaseSync(pathname);
       await assertSqliteMigrationScopePreserved(
         scope,
-        ["worker_environments", "schema_meta", "config_machine_state"],
+        ["worker_environments", "workspace_setup_state", "schema_meta", "config_machine_state"],
         () => {
           if (owner === "doctor") {
             expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
@@ -96,7 +96,7 @@ it.each(["runtime", "doctor"] as const)(
             purpose: "runtime",
           }),
         ).schemas.incompatible,
-      ).toMatchObject([{ foundVersion: 39, supportedVersion: 38 }]);
+      ).toMatchObject([{ foundVersion: OPENCLAW_STATE_SCHEMA_VERSION, supportedVersion: 38 }]);
       const store = await createWorkerEnvironmentStore({ database });
       expect(store.get("environment")).toMatchObject({ resourceReceipt: receipt, retention: null });
       await closeOpenClawStateDatabaseAsync();

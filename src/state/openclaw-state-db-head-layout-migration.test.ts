@@ -150,6 +150,7 @@ it.each(["runtime", "doctor"] as const)(
           "session_repository_workspaces",
           "worker_workspace_pending_results",
           "worker_environments",
+          "workspace_setup_state",
           "acp_replay_events",
           "skill_usage",
           "state_leases",

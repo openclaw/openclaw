@@ -61,10 +61,31 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 37      | Immutable provider resource receipts retained with worker environments through terminal cleanup                                                                                                                                                                                                                                                | Unreleased          |
 | 38      | Repository disk authority and the original authority of pending workspace results                                                                                                                                                                                                                                                              | Unreleased          |
 | 39      | Immutable retained-worker acquisition policy, pending pause/resume operations, and provider observations                                                                                                                                                                                                                                       | Unreleased          |
+| 40      | Deferred Template bootstrap seeding recorded on workspace setup rows ([#196966](https://github.com/openclaw/openclaw/issues/196966))                                                                                                                                                                                                           | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 40
+
+Schema 40 makes `workspace_setup_state.bootstrap_deferred`, introduced for
+Template setup, a versioned column. As a first-use column it could not reach
+PostgreSQL: the generated PostgreSQL DDL declares it, so an existing PostgreSQL
+store sealed without it was refused by update admission and Doctor preflight
+with "schema drift detected against generated DDL"
+([#196966](https://github.com/openclaw/openclaw/issues/196966)).
+
+SQLite and PostgreSQL add one nullable integer column (`INTEGER` and `bigint`)
+without a row rewrite, backfill, new index, or scan. A SQLite store that already
+gained the column from the former first-use writer keeps it unchanged. Existing
+rows read as not deferred. The verified table-scoped backup and integrity check
+cover `workspace_setup_state` plus schema publication metadata.
+
+The column and schema/content markers publish atomically. Package metadata and
+the native shared-state reader ceiling advance to 40; older builds refuse the
+newer schema. Downgrade restores the verified pre-upgrade backup with its
+matching binary. No schema-39 migration is rewritten.
 
 ### State schema 39
 
