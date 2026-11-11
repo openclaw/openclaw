@@ -41,11 +41,20 @@ async function run(argv) {
 
   // Reads all rows in time order. Splits on \n only: message text may contain U+2028, which readline treats as a line break.
   async function readRows(filename) {
-    const rows = new TextDecoder("utf-8", { fatal: true })
-      .decode(await readFile(filename))
-      .split("\n")
-      .filter((line) => line.trim())
-      .map((line) => JSON.parse(line));
+    const rows = [];
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(await readFile(filename));
+    // Number physical lines (before skipping blanks) so a bad row points at its true location.
+    const lines = text.split("\n");
+    for (let index = 0; index < lines.length; index++) {
+      if (!lines[index].trim()) {
+        continue;
+      }
+      try {
+        rows.push(JSON.parse(lines[index]));
+      } catch {
+        throw new Error("Row " + (index + 1) + " of the export is not valid JSON");
+      }
+    }
     // Ignore fractional padding without losing nanoseconds or changing the original timestamps.
     const timeKey = (row) => {
       const [seconds, fraction = ""] = row.occurred_at.slice(0, -1).split(".");
@@ -271,4 +280,9 @@ async function run(argv) {
   );
 }
 
-await run(process.argv.slice(2));
+try {
+  await run(process.argv.slice(2));
+} catch (error) {
+  console.error(error.message);
+  process.exitCode = 1;
+}
