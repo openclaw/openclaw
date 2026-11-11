@@ -257,9 +257,12 @@ export function retainDeliveredMediaReferences(
   if (textIndex === -1) {
     return [{ type: "text", text: referenceText }, ...retained];
   }
-  return retained.map((block, index) =>
-    index === textIndex && isRecord(block) && typeof block.text === "string"
-      ? { ...block, text: block.text.length ? `${block.text}\n${referenceText}` : referenceText }
-      : block,
-  );
+  return retained.map((block, index) => {
+    if (index === textIndex && isRecord(block) && typeof block.text === "string") {
+      return Object.assign({}, block, {
+        text: block.text.length ? `${block.text}\n${referenceText}` : referenceText,
+      });
+    }
+    return block;
+  });
 }
