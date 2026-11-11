@@ -14,7 +14,7 @@
 }
 .template-reference-card strong {
   display: block;
-  font-size: calc(15px * var(--control-ui-text-scale));
+  font-size: 15px;
 }
 .template-reference-card small {
   display: block;
@@ -23,7 +23,7 @@
 }
 .template-reference-card p {
   margin: 16px 0;
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   line-height: 1.6;
 }
 .template-reference-card__art {

@@ -318,7 +318,7 @@ export function buildAnthropicCliBackend(
             : {}),
           ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
           ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
-          ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
+          ...resolveClaudeCliThinkingEnv(context.thinkingLevel),
           ...authInput?.env,
         };
         return {

@@ -445,7 +445,7 @@ describe("release validation no-push transport", () => {
         (candidate) => candidate.name === "Report release runner routing",
       );
       expect(notice?.if).toBe("vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'");
-      expect(notice?.run).toContain("QA Lab runtime-pair stays pinned to Blacksmith");
+      expect(notice?.run).toContain("QA Lab runtime-pair stays on its dedicated runtime backend");
     },
   );
 
@@ -1311,18 +1311,28 @@ describe("release validation no-push transport", () => {
     const dispatch = step(job(full, "summary"), "Request release evidence update");
 
     expect(verify.run).toBe('node "$RELEASE_STATE_SCRIPT" verify');
-    const stateScript = job(full, "release_decision").env?.RELEASE_STATE_SCRIPT;
+    const stateScript = job(full, "summary").env?.RELEASE_STATE_SCRIPT;
     expect(stateScript).toContain("qualificationAdmission != null");
     expect(stateScript).toContain(
       "qualification-verifier/scripts/full-release-validation-state.mjs",
     );
-    for (const name of ["release_decision", "diagnostic_drain", "summary"]) {
+    for (const name of ["summary"]) {
       const stateJob = job(full, name);
       expect(stateJob.env?.RELEASE_STATE_SCRIPT).toBe(stateScript);
       expect(step(stateJob, "Checkout admitted qualification verifier").with).toMatchObject({
         ref: "${{ fromJSON(needs.resolve_target.outputs.source_admission_json).qualificationAdmission.workflowSha }}",
         path: "qualification-verifier",
       });
+    }
+    const watcher = job(readWorkflow(".github/workflows/full-release-state-watcher.yml"), "watch");
+    expect(step(watcher, "Checkout admitted qualification verifier").with).toMatchObject({
+      ref: "${{ inputs.qualification_workflow_sha }}",
+      path: "qualification-verifier",
+    });
+    for (const name of ["release_decision", "diagnostic_drain"]) {
+      expect(job(full, name).with?.qualification_workflow_sha).toContain(
+        "qualificationAdmission.workflowSha",
+      );
     }
     expect(dispatch.run).not.toContain('GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"');
     expect(dispatch.run).toContain("reused green product evidence from chain-root run");

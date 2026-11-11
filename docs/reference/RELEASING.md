@@ -293,6 +293,13 @@ separately; a local green check is not a hosted release receipt.
 
 ## Packages and apps can become available at different times
 
+Selected official npm plugins publish successfully before core npm. ClawHub
+registry publication starts at its existing dispatch point and runs independently
+thereafter. ClawHub planning, authorization, dispatch, publication, verification,
+and recovery never block core npm, GitHub release finalization, main closeout,
+or the release retrospective PR. Pending or failed ClawHub work remains visible
+with its own owner and follow-up; a core release does not claim it is complete.
+
 A published Gateway release does not mean every native app is ready. Signing and publishing the apps can
 finish separately from npm, Docker, and the GitHub release.
 

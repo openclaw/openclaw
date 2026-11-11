@@ -121,6 +121,10 @@ imports only the new Git objects, and checks out the source delta before reinsta
 into its retained dependencies.
 Repeat installation still runs repository lifecycle scripts when manifests and
 lockfiles are unchanged.
+Preparation logs distinguish native snapshot cloning (`templateClone`), installer
+shutdown (`templateRetire`), and publication validation (`templateValidateOutput`).
+The `snapshot` phase measures the content manifest, not the native filesystem clone.
+Nested phase durations are inclusive; do not add them to their parent duration.
 Concurrent requests for that commit share the refresh. Lockfile or attribute changes
 build a fresh template. Refresh never changes the source generation, including while
 another session is cloning it. Each
@@ -303,6 +307,9 @@ Lease acquisition appears separately as `allocationWait` for global slot admissi
 These durations also appear in slow-chat diagnostics under `worktree.<kind>`.
 `reservation` measures the protected allocation work after acquisition. Phases
 can overlap, so their sum is not the total preparation duration.
+
+`provisionEstimate` measures included-file discovery and byte estimation before checkout;
+`provisionInspect` measures fresh selection before copying, after source custody is reacquired.
 
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
 
