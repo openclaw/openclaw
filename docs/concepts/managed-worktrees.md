@@ -512,6 +512,12 @@ without retaining the promisor marker, then expire the original promisor pack.
 
 On Linux, maintenance also removes up to 256 abandoned temporary pack files (`tmp_pack_*`, `tmp_idx_*`, and other `tmp_*_` files Git leaves when interrupted) per pass once they are older than 24 hours. An isolated native helper must obtain an exclusive Linux file lease, which detects open users across user IDs and blocks new opens through deletion. It rechecks each file's identity, size, and timestamps before unlinking it. A live user, unsupported filesystem lease, or changed file preserves that temporary file. Other platforms retain temporary packs. Installing an update requires no migration or immediate repack; the next ordinary maintenance pass applies these bounds.
 
+An interrupted fetch can leave a temporary pack even after graceful termination.
+Exec cleanup stops the process tree but does not delete unidentified packs from
+an object store that other fetches may still be using. The maintenance policy
+above also covers registered empty-workspace sources; cleanup is deferred,
+not part of the fetch timeout.
+
 Transient fetch failures, including an incomplete object transfer, retry once after one second within the original fetch timeout. Cancellation and expired workspace authority stop recovery; a second failure surfaces the Git error. See [Retry policy](/concepts/retry#managed-git-operations).
 
 If a fetch finds a ref tip in the commit graph but not in the object store,

@@ -161,6 +161,28 @@ Concurrent publishers and replacement of private recovery files are unsupported;
 this protocol does not promise power-loss durability. After successful publication,
 cleanup failures warn with retained paths without reporting the pair as unpublished.
 
+The generator also refuses catalogs that released clients would misread:
+
+- An unknown key anywhere under a model's `inference` fails publication, as unknown
+  row, provider, and pricing fields already do. Readers would drop it silently.
+- When every auth choice a plugin declares for a provider names only non-chat
+  `onboardingScopes` (such as `image-generation`), each of that provider's rows must
+  set `inference.chat: false`. Every reader treats a row without `inference` as chat.
+- Each output warns above 90% of the 4 MiB client limit and fails above it. With
+  `--skip-oversized-v1`, an oversized v1 is not written (the served v1 stays as it
+  was) and v2/v3 still publish.
+- `--previous <v1-file>`, `--previous-v2 <file>` and `--previous-v3 <file>` name the
+  last published file of each feed. Publication fails when a feed loses more than 5%
+  of its rows or any provider against it, unless `--allow-shrink` is given. A missing
+  previous file is reported and not compared.
+
+Before deploying, `pnpm catalog:compare-released --check --candidate <next> --baseline <published>`
+runs the latest, extended-stable and beta releases that read the candidate's wire
+version against it. It fails when a release rejects the file or keeps fewer rows than
+the publisher wrote, beyond the loss the same release already had on the published
+file. `--allow-row-loss <n>` accepts an intended loss for one publish. Releases
+without a reader for that version are listed as skipped.
+
 Model fields:
 
 | Field                  | Type                                                           | What it means                                                                        |
