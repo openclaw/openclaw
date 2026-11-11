@@ -77,27 +77,6 @@ describe("readTelegramWidgetQuery", () => {
   });
 });
 
-describe("formatTelegramWidgetRequestText", () => {
-  it("names the widget and its current state so the agent keeps the state shape", async () => {
-    const { formatTelegramWidgetRequestText } = await import("./widget-query-router.js");
-    const text = formatTelegramWidgetRequestText("vote:v", { title: "Poll", state: '{"v":0}' });
-    expect(text).toMatch(/^widget_request: vote:v\n/);
-    expect(text).toContain('the widget "Poll"');
-    expect(text).toContain(JSON.stringify('{"v":0}'));
-  });
-
-  it("includes short widget code so a later session can keep the state shape", async () => {
-    const { formatTelegramWidgetRequestText } = await import("./widget-query-router.js");
-    const source = "<script>draw(JSON.parse(TelegramWidget.chatData).done)</script>";
-    expect(formatTelegramWidgetRequestText("done:1", { title: "Today", source })).toContain(
-      `Widget code:\n${source}`,
-    );
-    expect(
-      formatTelegramWidgetRequestText("done:1", { title: "Today", source: "x".repeat(9_000) }),
-    ).not.toContain("Widget code:");
-  });
-});
-
 describe("widget query router", () => {
   runtimeConfig.current = { channels: { telegram: { botToken: "123:abc", widgets: true } } };
   const query = {
@@ -108,7 +87,9 @@ describe("widget query router", () => {
     data: "vote:v",
   };
   const createRouter = (
-    processMessageWithReplyChain: (...args: unknown[]) => Promise<unknown> = vi.fn(),
+    processMessageWithReplyChain: Parameters<
+      typeof createTelegramWidgetQueryRouter
+    >[0]["message"]["processMessageWithReplyChain"] = vi.fn(),
     authorized = true,
   ) =>
     createTelegramWidgetQueryRouter({
@@ -155,8 +136,46 @@ describe("widget query router", () => {
   it("records a retryable dispatch outcome for the ingress owner", async () => {
     recordResult.mockClear();
     lookupTelegramSentWidget.mockResolvedValueOnce(undefined);
-    const failure = { kind: "failed-retryable", error: new Error("session busy") };
+    const failure = { kind: "failed-retryable" as const, error: new Error("session busy") };
     await createRouter(async () => failure).route(ctx, vi.fn());
     expect(recordResult).toHaveBeenCalledWith(failure);
+  });
+  const dispatchText = async (
+    data: string,
+    widget: { title: string; state?: string; source?: string },
+  ) => {
+    lookupTelegramSentWidget.mockResolvedValueOnce(widget);
+    const process = vi.fn<
+      Parameters<
+        typeof createTelegramWidgetQueryRouter
+      >[0]["message"]["processMessageWithReplyChain"]
+    >(async () => ({ kind: "completed" }));
+    await createRouter(process).route(
+      {
+        update: { update_id: 1, widget_query: { ...query, data } },
+        me: { id: 1 },
+        getFile: vi.fn(),
+      } as never,
+      vi.fn(),
+    );
+    expect(process).toHaveBeenCalledOnce();
+    return process.mock.calls[0]?.[0].msg.text;
+  };
+
+  it("names the widget and its current state so the agent keeps the state shape", async () => {
+    const text = await dispatchText("vote:v", { title: "Poll", state: '{"v":0}' });
+    expect(text).toMatch(/^widget_request: vote:v\n/);
+    expect(text).toContain('the widget "Poll"');
+    expect(text).toContain(JSON.stringify('{"v":0}'));
+  });
+
+  it("includes short widget code so a later session can keep the state shape", async () => {
+    const source = "<script>draw(JSON.parse(TelegramWidget.chatData).done)</script>";
+    expect(await dispatchText("done:1", { title: "Today", source })).toContain(
+      `Widget code:\n${source}`,
+    );
+    expect(
+      await dispatchText("done:1", { title: "Today", source: "x".repeat(9_000) }),
+    ).not.toContain("Widget code:");
   });
 });

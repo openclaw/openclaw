@@ -1,0 +1,3 @@
+# Exact 19-line net growth moves existing widget formatting assertions through authorized router dispatch.
+# Retains all formatting/state/source-budget assertions and adds dispatch observation.
+19
