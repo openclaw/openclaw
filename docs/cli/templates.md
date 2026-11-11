@@ -65,17 +65,19 @@ apply. Paths refer to directories on the Gateway host, not the caller's machine.
 
 ## Import a Template archive in the Control UI
 
-With Templates enabled, open **Pages → Templates**, click **+ Import**, and select
-a `.tgz` built with `openclaw templates build`. The file is read from your
+With Templates enabled, open **Pages → Templates**, click **+ Import** (the Import
+icon in the header on mobile), and select a `.tgz` built with
+`openclaw templates build`. The file is read from your
 browser's computer, not from a path on the Gateway. Uploads are limited to 1 MiB
 compressed, 8 MiB extracted, and 4,096 archive entries. Unsafe paths, links,
 malformed archives, and invalid projects are rejected before installation.
 
 The native file picker opens on your computer. After selecting an archive,
 review its filename, proposed agent, actions, dependency capabilities, and trust
-warnings in the review dialog, then confirm Add. Choosing a file does not install it. The exact archive bytes bind the review to installation through
-the existing live Add owner; no publication or restart is needed. Local uploads
-are not ClawHub-scanned. Current operator-admin authority is required. Canceling,
+warnings in the review dialog, then confirm **Import template**. Choosing a file
+does not install it. The exact archive bytes bind the review to installation
+through the existing live Add owner; no publication or restart is needed. The
+origin and ClawHub scan status of a local file are unverified. Current operator-admin authority is required. Canceling,
 leaving the page, or changing the connection drops the browser's pending archive.
 After an uncertain installation result, inspect the agent before uploading again.
 

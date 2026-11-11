@@ -246,6 +246,50 @@ export function TemplatePlanDisclosures(props: { plan: TemplateAddReviewPlan }) 
   );
 }
 
+/** Shared package grants and risk acknowledgements for every install surface. */
+export function TemplatePackageConsent(props: { plan: TemplateAddReviewPlan }) {
+  return (
+    <>
+      <For each={props.plan.pluginReviews.filter((item) => item.ownerAction === "install")}>
+        {(item) => (
+          <div class="templates-add-consent__item">
+            <strong>{item.ref}</strong>
+            <span>{t("templatesCatalog.version", { version: item.version })}</span>
+            <strong>{t("pluginConsent.grantsTitle")}</strong>
+            <ul>
+              <For each={grantSummary(item.capabilityGrants)}>{(grant) => <li>{grant}</li>}</For>
+            </ul>
+            <For
+              each={Object.entries(item.capabilityGrantsByPluginId).filter(
+                ([id]) => id !== item.pluginId,
+              )}
+            >
+              {([id, grants]) => (
+                <>
+                  <strong>{id}</strong>
+                  <ul>
+                    <For each={grantSummary(grants)}>{(grant) => <li>{grant}</li>}</For>
+                  </ul>
+                </>
+              )}
+            </For>
+            <Show when={item.riskWarning}>{renderTemplateTrustWarning(item.riskWarning!)}</Show>
+          </div>
+        )}
+      </For>
+      <For each={props.plan.skillReviews}>
+        {(item) => (
+          <div class="templates-add-consent__item">
+            <strong>{item.ref}</strong>
+            <span>{t("templatesCatalog.version", { version: item.version })}</span>
+            {renderTemplateTrustWarning(item.riskWarning)}
+          </div>
+        )}
+      </For>
+    </>
+  );
+}
+
 export function ReviewWarning(props: {
   view: Pick<
     TemplatesCatalogViewProps,
@@ -258,46 +302,7 @@ export function ReviewWarning(props: {
         <h3>{t("templatesCatalog.reviewTitle")}</h3>
         <p>{t("templatesCatalog.reviewDescription")}</p>
         <TemplatePlanDisclosures plan={props.view.reviewPlan!} />
-        <For
-          each={props.view.reviewPlan?.pluginReviews.filter(
-            (item) => item.ownerAction === "install",
-          )}
-        >
-          {(item) => (
-            <div class="templates-add-consent__item">
-              <strong>{item.ref}</strong>
-              <span>{t("templatesCatalog.version", { version: item.version })}</span>
-              <strong>{t("pluginConsent.grantsTitle")}</strong>
-              <ul>
-                <For each={grantSummary(item.capabilityGrants)}>{(grant) => <li>{grant}</li>}</For>
-              </ul>
-              <For
-                each={Object.entries(item.capabilityGrantsByPluginId).filter(
-                  ([id]) => id !== item.pluginId,
-                )}
-              >
-                {([id, grants]) => (
-                  <>
-                    <strong>{id}</strong>
-                    <ul>
-                      <For each={grantSummary(grants)}>{(grant) => <li>{grant}</li>}</For>
-                    </ul>
-                  </>
-                )}
-              </For>
-              <Show when={item.riskWarning}>{renderTemplateTrustWarning(item.riskWarning!)}</Show>
-            </div>
-          )}
-        </For>
-        <For each={props.view.reviewPlan?.skillReviews}>
-          {(item) => (
-            <div class="templates-add-consent__item">
-              <strong>{item.ref}</strong>
-              <span>{t("templatesCatalog.version", { version: item.version })}</span>
-              {renderTemplateTrustWarning(item.riskWarning)}
-            </div>
-          )}
-        </For>
+        <TemplatePackageConsent plan={props.view.reviewPlan!} />
         <openclaw-modal-actions class="templates-add-consent__actions">
           <button
             type="button"

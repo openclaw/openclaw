@@ -136,7 +136,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByText("upload-proof.tgz", { exact: true }).isVisible())
         .toBe(true);
-      const confirm = page.getByRole("button", { name: "Add anyway", exact: true });
+      const confirm = page.getByRole("button", { name: "Import template", exact: true });
       await expect.poll(() => confirm.isVisible()).toBe(true);
       await capture("review.png", confirm);
       await confirm.click();
