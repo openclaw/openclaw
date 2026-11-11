@@ -1,2 +1,0 @@
-# Telegram topic label recovery after reset: command preservation, keep/replace outcomes, manual-name precedence and session metadata writes.
-219

@@ -9,7 +9,6 @@ import {
 import {
   getTopicCreatorUserId,
   getTopicName,
-  getTopicLabelState,
   resolveTelegramDirectTopicNameCacheScope,
   updateTopicName,
 } from "./topic-name-cache.js";
@@ -44,27 +43,6 @@ describe("topic-name-cache", () => {
     await expect(getTopicName(-100123, 42)).resolves.toBe("CI/CD");
     await expect(getTopicCreatorUserId(-100123, 42)).resolves.toBe(7);
     await expect(getTopicName(-100123, 43)).resolves.toBeUndefined();
-  });
-
-  it("retains a pending reset review across reopen and retires it after a manual rename", async () => {
-    await updateTopicName(123, 42, {
-      name: "Invoices",
-      nameSource: "generated",
-      labelPending: true,
-    });
-    resetTelegramTopicNameCacheForTest();
-    resetPluginStateStoreForTests();
-    expect(await getTopicLabelState(123, 42)).toMatchObject({
-      name: "Invoices",
-      nameSource: "generated",
-      labelPending: true,
-    });
-    await updateTopicName(123, 42, { name: "Manual title" });
-    expect(await getTopicLabelState(123, 42)).toMatchObject({
-      name: "Manual title",
-      nameSource: "manual",
-      labelPending: false,
-    });
   });
 
   it("retains active topics and evicts the inactive oldest topic across database reopen", async () => {
