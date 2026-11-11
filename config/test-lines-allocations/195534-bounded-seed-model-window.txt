@@ -1,0 +1,2 @@
+# One table case and model fixture proving a seed without a budget is bounded by the model window.
+22
