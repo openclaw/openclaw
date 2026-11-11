@@ -1,10 +1,12 @@
 import { expect, it } from "vitest";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { createToolResultPromptProjectionState } from "../embedded-agent-runner/session-prompt-state.js";
+import { installToolResultContextGuard } from "../embedded-agent-runner/tool-result-context-guard.js";
 import {
   pruneExpiredCacheTtlToolResults,
   truncateOversizedToolResultsInMessages,
 } from "../embedded-agent-runner/tool-result-truncation.js";
+import type { AgentMessage } from "../runtime/index.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { convertToLlm } from "../sessions/messages.js";
 import { projectSessionModelContextEntries } from "../sessions/session-manager-codec.js";
@@ -93,7 +95,31 @@ for (const deferred of [false, true]) {
         const modelMessages = projectSessionModelContextEntries(session.getBranch()).flatMap(
           (entry) => (entry.type === "message" ? [entry.message] : []),
         );
-        projected = truncateOversizedToolResultsInMessages(modelMessages, 50_000, 16_000).messages;
+        const agent = { transformContext: async (messages: AgentMessage[]) => messages };
+        const dispose = installToolResultContextGuard({ agent, contextWindowTokens: 50_000 });
+        try {
+          const fresh = await agent.transformContext([
+            {
+              role: "toolResult",
+              toolCallId: "fresh-read",
+              toolName: tool.name,
+              ...produced,
+              isError: false,
+              timestamp: 1,
+            },
+          ]);
+          expect(fresh[0]).toHaveProperty("details.contentPolicy", "whole");
+          expect(JSON.stringify(fresh[0]?.content)).toContain(
+            "Skill instructions cannot be partially served:",
+          );
+          projected = truncateOversizedToolResultsInMessages(
+            await agent.transformContext(modelMessages),
+            50_000,
+            16_000,
+          ).messages;
+        } finally {
+          dispose();
+        }
       }
       if (scenario === "cache TTL") {
         const original = structuredClone(context);

@@ -209,6 +209,25 @@ describe("installToolResultContextGuard", () => {
     expect(await applyGuardToContext(makeGuardableAgent(), messages)).toBe(messages);
   });
 
+  it.each(["toolResult", "tool"] as const)(
+    "refuses whole string instructions for %s without private details",
+    async (role) => {
+      const source = castAgentMessage({
+        ...makeReadToolResult("whole-string", ""),
+        role,
+        content: "Complete skill instructions. ".repeat(1_000),
+        details: { contentPolicy: "whole", privateReference: "fixture" },
+      });
+      const original = structuredClone(source);
+      const projected = expectDefined((await project([source], 50_000))[0], "whole string result");
+      expect(getAllToolResultText(projected)).toMatch(
+        /^Skill instructions cannot be partially served:/,
+      );
+      expect(projected).toHaveProperty("details", { contentPolicy: "whole" });
+      expect(source).toEqual(original);
+    },
+  );
+
   it("truncates legacy string tool outputs", async () => {
     const [result] = await project([makeLegacyToolResult("legacy", "y".repeat(5_000))]);
     const text = getAllToolResultText(expectDefined(result, "legacy result"));

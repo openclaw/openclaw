@@ -6,6 +6,7 @@ import type {
 } from "../../context-engine/types.js";
 import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
 import { mapArrayIfChanged } from "../../shared/map-array-if-changed.js";
+import { projectToolResultDetailsForModel } from "../../shared/model-context-message.js";
 import { resolveEffectiveCompactionReserveTokens } from "../agent-compaction-constants.js";
 import type { Agent, AgentMessage } from "../runtime/index.js";
 import { createFreshLlmBoundaryTokenEstimator } from "../sessions/context-token-pressure.js";
@@ -26,6 +27,7 @@ import { truncateToolResultMessage, truncateToolResultText } from "./tool-result
 function replaceToolResultContent(
   msg: AgentMessage,
   replacement: string | unknown[],
+  metadata: unknown = "details" in msg ? msg.details : undefined,
 ): AgentMessage {
   const content = (msg as { content?: unknown }).content;
   const result = {
@@ -35,7 +37,12 @@ function replaceToolResultContent(
         ? [{ type: "text", text: replacement }]
         : replacement,
   } as AgentMessage;
-  Reflect.deleteProperty(result, "details");
+  const details = projectToolResultDetailsForModel(metadata);
+  if (details) {
+    Object.assign(result, { details });
+  } else {
+    Reflect.deleteProperty(result, "details");
+  }
   return result;
 }
 
@@ -52,7 +59,12 @@ function truncateToolResultToChars(
   if (estimatedChars <= maxChars) {
     return msg;
   }
-  const content = (msg as { content?: unknown }).content;
+  const rawContent = (msg as { content?: unknown }).content;
+  const details = projectToolResultDetailsForModel("details" in msg ? msg.details : undefined);
+  const content =
+    typeof rawContent === "string" && details?.contentPolicy === "whole"
+      ? [{ type: "text", text: rawContent }]
+      : rawContent;
   if (Array.isArray(content)) {
     const isImage = (block: unknown) =>
       Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "image";
@@ -72,16 +84,23 @@ function truncateToolResultToChars(
         ...retainedContent.filter((block) => !isText(block)),
         ...notice,
       ]);
+      const replacement = { ...msg, content: retainedContent } as AgentMessage;
       const bounded = truncateToolResultMessage(
-        replaceToolResultContent(msg, retainedContent),
+        details?.contentPolicy === "whole" && replacement.role !== "toolResult"
+          ? { ...replacement, role: "toolResult" }
+          : replacement,
         Math.max(0, maxChars - reservedChars),
         { minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE },
       );
-      return replaceToolResultContent(msg, [
-        // SAFETY: Array input is preserved or mapped to another array by truncateToolResultMessage.
-        ...(bounded as { content: unknown[] }).content,
-        ...notice,
-      ]);
+      return replaceToolResultContent(
+        msg,
+        [
+          // SAFETY: Array input is preserved or mapped to another array by truncateToolResultMessage.
+          ...(bounded as { content: unknown[] }).content,
+          ...notice,
+        ],
+        "details" in bounded ? bounded.details : undefined,
+      );
     };
 
     // Image cost alone rules out larger prefixes. The allocator still reserves
