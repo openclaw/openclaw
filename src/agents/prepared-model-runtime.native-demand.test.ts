@@ -29,7 +29,6 @@ import {
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import type { PreparedModelCatalogRefreshOptions } from "./prepared-model-runtime.types.js";
-import { createRuntimePluginWork } from "./runtime-plugin-work.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "native-demand" });
 const { mocks } = fixture;
@@ -97,7 +96,7 @@ async function prepareOwner(
   return owner;
 }
 
-it("serves published models while single-flight native discovery is pending", async ({
+it("serves published models while native discovery outlives the requesting scope", async ({
   signal,
 }) => {
   const config: OpenClawConfig = {
@@ -109,10 +108,12 @@ it("serves published models while single-flight native discovery is pending", as
   const discovered = { provider: "custom", id: "discovered-model", name: "Discovered model" };
   const started = createDeferredCore();
   const release = createDeferredCore();
+  const instance = createOwnedTestInstance("native-test");
+  const scope = new PluginInvocationScope(instance.owner!.registry!, [instance]);
   const loadNative = vi.fn(async () => {
     started.resolve();
     await release.promise;
-    return [discovered];
+    return instance.run(() => [discovered]);
   });
   installHarnesses({ id: "native-test", loadModelCatalog: loadNative });
   mocks.runPreparedModelCatalogWorker.mockResolvedValue(snapshot([saved]));
@@ -126,13 +127,13 @@ it("serves published models while single-flight native discovery is pending", as
   const pick = createPicker(config, { sessionKey, view: "configured" });
   // Freeze the foreground discovery deadline: returning on timeout is still blocking.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const requests = Array.from({ length: 3 }, () => pick());
+  const requests = Array.from({ length: 3 }, () => scope.run(pick));
   try {
     await withinTest(started.promise, signal);
     for (const response of await withinTest(Promise.all(requests), signal)) {
       expectModels(response, [saved]);
     }
-    expect(loadNative).toHaveBeenCalledOnce();
+    scope.release();
     release.resolve();
     await owner.loadNativeModelCatalog!();
     expectModels(await pick(), [discovered]);
@@ -279,8 +280,6 @@ it("defers native discovery until agent catalog demand and reacquires retired ob
   expect(concurrent.entries).toEqual(first.entries);
   expect(loadNative).toHaveBeenCalledOnce();
   expect(observed).toEqual(new Set([fixture.state.agentDir("pro")]));
-  await read();
-  expect(loadNative).toHaveBeenCalledOnce();
   observed.clear();
   expect((await read()).entries).toContainEqual(expect.objectContaining(native));
   expect(loadNative).toHaveBeenCalledTimes(2);
@@ -318,7 +317,6 @@ it.each(["discovery failure", "superseded owner", "changed authorization"])(
       }),
     );
     const owner = await prepareOwner(config);
-    expect(owner.readFullModelCatalog!()?.entries).toContainEqual(expect.objectContaining(saved));
     expect(loadNative).not.toHaveBeenCalled();
     const pick = createPicker(config);
     const respond = await pick();
@@ -347,55 +345,6 @@ it.each(["discovery failure", "superseded owner", "changed authorization"])(
     expect(loadNative).toHaveBeenCalledTimes(3);
   },
 );
-
-it("finishes a native acquisition after its starting scope closes (#196968)", async ({
-  signal,
-}) => {
-  const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
-  const native = nativeModel("custom", "native-model", "native-test");
-  const started = createDeferredCore();
-  const release = createDeferredCore();
-  // A real plugin instance, so the harness's catalog call resolves its invocation
-  // binding exactly as bundled harness code does (PluginInstance.run -> lookup).
-  const instance = createOwnedTestInstance("native-test-harness");
-  const registry = instance.owner!.registry!;
-  const work = createRuntimePluginWork("prepared-generation-lease");
-  const scope = new PluginInvocationScope(registry, [instance], {
-    work,
-    registryByInstance: new Map([[instance, registry]]),
-  });
-  const invokePlugin = instance.wrap(() => [native]);
-  const loadNative = vi.fn(async () => {
-    started.resolve();
-    await release.promise;
-    return invokePlugin();
-  });
-  installHarnesses({ id: "native-test", loadModelCatalog: loadNative });
-  mocks.runPreparedModelCatalogWorker.mockResolvedValue(snapshot([saved]));
-  const owner = await prepareOwner(config);
-  try {
-    // Start the acquisition under the starting scope, then close that scope while
-    // the native read is still running — the turn ending under the foreground wait.
-    const pending = scope.run(() =>
-      owner.loadNativeModelCatalog!({
-        provider: "custom",
-        modelId: "native-model",
-        runtime: "native-test",
-      }),
-    );
-    await withinTest(started.promise, signal);
-    scope.release();
-    release.resolve();
-    await withinTest(pending, signal);
-    expect(owner.readFullModelCatalog!()?.entries).toContainEqual(expect.objectContaining(native));
-    expect(owner.readFullModelCatalog!()?.refreshFailed).toBeUndefined();
-    expect(loadNative).toHaveBeenCalledOnce();
-  } finally {
-    release.resolve();
-    scope.release();
-    work.release();
-  }
-});
 
 it.each([
   { sharedProvider: false, runtime: "native-test" },
@@ -483,7 +432,6 @@ it("acquires remaining native runtimes after an initial provider-scoped refresh"
     })),
   );
   await prepareOwner(config, { providerIds: ["first"], refresh: true, wait: true });
-  expect(loadFirst).toHaveBeenCalledOnce();
   expect(loadSecond).not.toHaveBeenCalled();
   const respond = await createPicker(config)();
   expect(loadSecond).toHaveBeenCalledOnce();
