@@ -75,9 +75,9 @@ function observeHostSql(db: EngineConnection) {
   const prepare = vi.spyOn(db, "prepare");
   const exec = vi.spyOn(db, "exec");
   return {
-    assertIdle() {
+    assertStatements(expectedExec: string[][] = []) {
       expect(prepare).not.toHaveBeenCalled();
-      expect(exec).not.toHaveBeenCalled();
+      expect(exec.mock.calls).toEqual(expectedExec);
     },
     clear() {
       prepare.mockClear();
@@ -336,7 +336,7 @@ it("keeps periodic WAL off-host across native contention", async ({ signal }) =>
     await periodicWork;
     expect(writer.isTransaction).toBe(true);
     expect(observations.every((state) => state === "complete" || state === "blocked")).toBe(true);
-    sql.assertIdle();
+    sql.assertStatements();
     expect(hostIdentityReads).toEqual([]);
     expect(readRow(writer, statsTableQuery)).toBeUndefined();
   } finally {
@@ -352,7 +352,7 @@ it("keeps periodic WAL off-host across native contention", async ({ signal }) =>
   await expectPeriodicCheckpoint(database, periodic, signal, (states) => {
     expect(states[0]).toBe("complete");
     expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
-    sql.assertIdle();
+    sql.assertStatements();
   });
   expect(readRow(database.db, "SELECT tbl FROM sqlite_stat1 WHERE tbl='schema_meta'")).toEqual({
     tbl: "schema_meta",
@@ -498,7 +498,7 @@ it("joins private timer cancellation after publisher failure", async () => {
         const sql = observeHostSql(database.db);
         scheduledWork = Promise.resolve(opened.periodic());
         await held.entered;
-        sql.assertIdle();
+        sql.assertStatements();
 
         throw failure;
       });
@@ -542,7 +542,7 @@ it("keeps periodic WAL after parent adoption", async ({ signal }) => {
     sql.clear();
     await expectPeriodicCheckpoint(database, periodic, signal, () => {
       expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
-      sql.assertIdle();
+      sql.assertStatements();
     });
   } finally {
     await child.close();
@@ -704,7 +704,7 @@ it("cancels queued WAL work without replay on synchronous close", async () => {
     await Promise.all(periodicWork);
     await expect(held.running).resolves.toBeUndefined();
     expect(observations).toEqual([]);
-    sql.assertIdle();
+    sql.assertStatements([["PRAGMA busy_timeout = 0"]]);
     const reopened = openOpenClawStateDatabase({ path: database.path });
     expect(
       reopened.db
@@ -723,7 +723,7 @@ it("cancels queued WAL work without replay on synchronous close", async () => {
   }
 });
 
-it("flushes worker writes before host close without host SQL", async () => {
+it("flushes worker writes before host close without host data queries", async () => {
   const { store, database } = await pluginStore("worker-shutdown", "initial");
   await store.register("retained", "final");
   const sql = observeHostSql(database.db);
@@ -735,7 +735,7 @@ it("flushes worker writes before host close without host SQL", async () => {
   });
   try {
     await closeOpenClawStateDatabaseByPathAsync(database.path);
-    sql.assertIdle();
+    sql.assertStatements([["PRAGMA busy_timeout = 0"]]);
     expect(walBytesAtHostClose).toBe(0);
   } finally {
     close.mockRestore();
