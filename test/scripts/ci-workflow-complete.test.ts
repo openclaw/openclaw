@@ -51,14 +51,15 @@ function expectAdmission(
 }
 
 describe("complete CI failure reporting", () => {
-  it("runs the PG16 Gateway smoke on one PR shard after test failure, with successful setup", () => {
+  it("runs the PG16 Gateway smoke on its own PR row after failure, with successful setup", () => {
     const smoke = ciStep("postgres-conformance", "Run PostgreSQL 16 Gateway cron smoke");
     const admitted = {
       ...failedContext,
-      matrix: { shard: "1/3" },
+      matrix: { shard: "pg16-smoke" },
       steps: { node_setup: { outputs: {}, outcome: "success" as const } },
     };
     expectAdmission(smoke.if, admitted, [
+      { ...admitted, matrix: { shard: "1/3" } },
       { ...admitted, matrix: { shard: "2/3" } },
       { ...admitted, matrix: { shard: "3/3" } },
       { ...admitted, eventName: "workflow_dispatch" },
