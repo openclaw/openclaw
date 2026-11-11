@@ -8,7 +8,9 @@ import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-sig
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import * as mediaStore from "../media/store.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import * as sessionLifecycle from "../sessions/session-controller.lifecycle.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   observeGatewayRunExecution,
   waitForAgentCommandCall,
@@ -397,3 +399,68 @@ describe("gateway server agent", () => {
     await expectNoNewInboundMedia(inboundBefore);
   });
 });
+
+test.each([
+  { mode: "idle", owner: "running" },
+  { mode: "daily", owner: "running" },
+  { mode: "idle", owner: "queued" },
+  { mode: "idle", owner: "stale" },
+] as const)(
+  "handles automatic $mode Gateway rollover with a $owner owner",
+  async ({ mode, owner }) => {
+    const sessionKey = `agent:main:rollover-probe-${mode}-${owner}`;
+    const sessionId = `rollover-held-writer-${mode}`;
+    const requestId = `rollover-probe-request-${mode}-${owner}`;
+    const expiredAt = Date.now() - 48 * 60 * 60_000;
+    testState.sessionConfig = {
+      reset: mode === "idle" ? { mode, idleMinutes: 1 } : { mode, atHour: 4 },
+    };
+    await setTestSessionStore({
+      [sessionKey]: {
+        sessionId,
+        lifecycleRevision: "before-expiry",
+        updatedAt: expiredAt,
+        sessionStartedAt: expiredAt,
+        lastInteractionAt: expiredAt,
+      },
+    });
+    const started = createDeferredCore<AbortSignal>();
+    const release = createDeferredCore();
+    const aborted = createDeferredCore();
+    const writer = withSessionTurn(
+      sessionTarget(owner === "stale" ? "old-transcript" : sessionId, sessionKey),
+      async (operation, signal) => {
+        if (!operation) {
+          throw new Error("missing actual writer");
+        }
+        operation.setPhase(owner === "queued" ? "queued" : "running");
+        signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+        started.resolve(signal);
+        await release.promise;
+      },
+    );
+    let incoming: ReturnType<typeof agentRequest> | undefined;
+    try {
+      const signal = await started.promise;
+      incoming = agentRequest(requestId, { sessionKey });
+      await Promise.race([aborted.promise, incoming]);
+      if (owner === "running") {
+        expect(signal.aborted).toBe(false);
+      }
+      const stored = await loadSessionEntryAsync(sessionKey);
+      if (owner === "running") {
+        expect(stored.entry?.lifecycleRevision).toBe("before-expiry");
+      } else {
+        expect(stored.entry?.lifecycleRevision).not.toBe("before-expiry");
+      }
+      release.resolve();
+      await writer;
+      const response = await incoming;
+      expect(response.ok).toBe(true);
+      await waitForAgentCommandCall(requestId);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([writer, ...(incoming ? [incoming] : [])]);
+    }
+  },
+);

@@ -14,6 +14,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -141,6 +143,7 @@ it.each([
   { mode: "daily", rejection: undefined },
   { mode: "idle", rejection: "superseded" },
   { mode: "idle", rejection: "denied" },
+  { mode: "daily", rejection: "owner-settled" },
 ] as const)("handles a $mode Gateway reset (rejection: $rejection)", ({ mode, rejection }) =>
   withPersistFixture(
     { sessions: { others: "view" }, agents: ["main"], scopes: [] },
@@ -183,7 +186,25 @@ it.each([
           visibleRequest: true,
           touchInteraction: true,
         });
-      params.initialPatchBuild = await params.buildSessionPatch(entry);
+      if (rejection === "owner-settled") {
+        const started = createDeferredCore();
+        const release = createDeferredCore();
+        const writer = withSessionTurn(target, async (operation) => {
+          operation?.setPhase("running");
+          started.resolve();
+          await release.promise;
+        });
+        try {
+          await started.promise;
+          params.initialPatchBuild = await params.buildSessionPatch(entry);
+          expect(params.initialPatchBuild.automaticResetReason).toBeUndefined();
+        } finally {
+          release.resolve();
+          await writer;
+        }
+      } else {
+        params.initialPatchBuild = await params.buildSessionPatch(entry);
+      }
       if (rejection === "superseded") {
         await replaceSessionEntry(target, { ...entry, lifecycleRevision: "newer-reset" });
       } else if (rejection === "denied") {
@@ -197,7 +218,7 @@ it.each([
           false,
           undefined,
           expect.objectContaining({
-            code: rejection === "superseded" ? "UNAVAILABLE" : "INVALID_REQUEST",
+            code: rejection === "denied" ? "INVALID_REQUEST" : "UNAVAILABLE",
           }),
         );
         expect(
@@ -205,6 +226,9 @@ it.each([
             (event) => isRecord(event) && event.type === "reset",
           ),
         ).toEqual([]);
+        if (rejection === "owner-settled") {
+          expect(loadSessionEntry(target)).toMatchObject(entry);
+        }
         return;
       }
       expect(result?.sessionEntry).toMatchObject({
