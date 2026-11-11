@@ -185,3 +185,39 @@ it("keeps discard recovery below the full warning on mobile", async () => {
     await page.viewport(previous.width, previous.height);
   }
 });
+
+it("contains mobile default-model recovery help and long action labels", async () => {
+  const viewport = { width: innerWidth, height: innerHeight };
+  await page.viewport(400, 900);
+  const switchModel = vi.fn(async () => true);
+  const view = mountSolid(() => (
+    <ChatComposerNoticesContent
+      messages={[]}
+      defaultModelRecovery={() => ({
+        modelLabel: "Configured default with a very long model name " + "LongModelName".repeat(12),
+        switchModel,
+      })}
+    />
+  ));
+  try {
+    await waitForSolid(() =>
+      expect(view.container.querySelector(".chat-model-recovery")).not.toBeNull(),
+    );
+    const notice = view.container.querySelector<HTMLElement>(".chat-model-recovery")!;
+    const action = notice.querySelector<HTMLButtonElement>("button")!;
+    const help = box(notice, ".chat-composer-neighbor-card__copy");
+    const bounds = notice.getBoundingClientRect();
+    const button = action.getBoundingClientRect();
+    expect(help.width).toBeGreaterThan(200);
+    expect(button.top).toBeGreaterThanOrEqual(help.bottom);
+    expect(button.left).toBeGreaterThanOrEqual(bounds.left);
+    expect(button.right).toBeLessThanOrEqual(bounds.right);
+    expect(action.scrollWidth).toBeLessThanOrEqual(action.clientWidth);
+    expect(notice.scrollWidth).toBeLessThanOrEqual(notice.clientWidth);
+    action.click();
+    expect(switchModel).toHaveBeenCalledOnce();
+  } finally {
+    view.unmount();
+    await page.viewport(viewport.width, viewport.height);
+  }
+});

@@ -511,6 +511,17 @@ openclaw-pending-session-create {
 }
 
 @media (max-width: 640px) {
+  .chat-model-recovery {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .chat-model-recovery .chat-error__refresh {
+    grid-column: 2;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
   .chat-composer-neighbor-card.chat-workspace-conflict-notice {
     width: calc(100% - 8px);
   }
