@@ -41,7 +41,11 @@ beforeEach(() => {
   state.client = { request } as unknown as SkillsState["client"];
   state.runtimeConfig = {
     state: { configSnapshot: configSnapshot({}) },
-    runExternalMutation: async (task) => {
+    runExternalMutation: async (task, options) => {
+      // As executeConfigExternalMutation: canDispatch is checked right before the task runs.
+      if (options?.canDispatch?.() === false) {
+        return { ok: false, reason: "unavailable", error: options.dispatchError ?? "refused" };
+      }
       try {
         return {
           ok: true,
@@ -395,18 +399,13 @@ describe("skill mutations", () => {
     });
   });
 
-  it.each([
-    ["a SecretRef", { source: "env", provider: "default", id: "SKILL_KEY" }, false],
-    ["a ${VAR}", "${SKILL_KEY}", false],
-    ["plaintext", "old-key-not-real", true],
-  ])("only replaces a stored API key written as plaintext: %s", async (_name, apiKey, replaced) => {
-    request.mockResolvedValue({});
+  function skillKeySnapshot(apiKey: unknown): ConfigSnapshot {
     const authored = { skills: { entries: { github: { apiKey } } } };
     const resolved = resolveConfigEnvVars(authored, {
       SKILL_KEY: "env-key-not-real",
     }) as OpenClawConfig;
     // SAFETY: the Gateway's own redaction produces the config.get payload the UI types as ConfigSnapshot.
-    const snapshot = redactConfigSnapshot(
+    return redactConfigSnapshot(
       {
         path: "/fixture/openclaw.json",
         exists: true,
@@ -424,13 +423,45 @@ describe("skill mutations", () => {
       },
       buildConfigSchemaCore().uiHints,
     ) as unknown as ConfigSnapshot;
-    state.runtimeConfig = { ...state.runtimeConfig, state: { configSnapshot: snapshot } };
+  }
+  const secretRef = { source: "env", provider: "default", id: "SKILL_KEY" };
+
+  it.each([
+    ["a SecretRef", secretRef, false],
+    ["a ${VAR}", "${SKILL_KEY}", false],
+    ["plaintext", "old-key-not-real", true],
+  ])("only replaces a stored API key written as plaintext: %s", async (_name, apiKey, replaced) => {
+    request.mockResolvedValue({});
+    state.runtimeConfig = {
+      ...state.runtimeConfig,
+      state: { configSnapshot: skillKeySnapshot(apiKey) },
+    };
     state.skillEdits.github = "new-key-not-real";
 
     await saveSkillApiKey(state, "github");
 
     expect(request.mock.calls.some(([method]) => method === "skills.update")).toBe(replaced);
     expect(state.skillMessages.github?.kind).toBe(replaced ? "success" : "error");
+  });
+
+  it("rechecks the stored API key right before dispatch", async () => {
+    request.mockResolvedValue({});
+    const runtimeState = { configSnapshot: skillKeySnapshot("old-key-not-real") };
+    const run = state.runtimeConfig.runExternalMutation;
+    state.runtimeConfig = {
+      state: runtimeState,
+      // A queued Settings draft lands a SecretRef while the save waits its turn.
+      runExternalMutation: (task, options) => {
+        runtimeState.configSnapshot = skillKeySnapshot(secretRef);
+        return run(task, options);
+      },
+    };
+    state.skillEdits.github = "new-key-not-real";
+
+    await saveSkillApiKey(state, "github");
+
+    expect(request.mock.calls.some(([method]) => method === "skills.update")).toBe(false);
+    expect(state.skillMessages.github?.kind).toBe("error");
   });
 
   it("does not clear an existing API key when its replacement is blank", async () => {

@@ -622,6 +622,7 @@ async function runSkillConfigUpdate(
   patch: { enabled: boolean } | { apiKey: string },
   message: string,
   canDispatch: () => boolean,
+  dispatchError = "Access changed before the skill update started.",
 ) {
   await runSkillMutation(state, { kind: "skill", skillKey }, async (client) => {
     const configPatch = { skillKey, ...patch };
@@ -631,25 +632,25 @@ async function runSkillConfigUpdate(
       state.runtimeConfig,
       client,
       (current) => current.request("skills.update", configPatch),
-      { canDispatch, dispatchError: "Access changed before the skill update started." },
+      { canDispatch, dispatchError },
     );
     return { kind: "success", message: refreshError ? `${message}\n${refreshError}` : message };
   });
 }
 
 /**
- * Where a skill's stored API key comes from: null when none is stored, undefined until the config
- * snapshot loads. Only a plain value in the file may be typed over; saving over a SecretRef or
- * ${VAR} would replace the reference with plaintext in openclaw.json.
+ * A skill API key's stored source: null when unset, undefined while the snapshot is unusable.
+ * Saving over a SecretRef or ${VAR} would store the key as plaintext in openclaw.json.
  */
 export function storedSkillApiKeySource(
   snapshot: ConfigSnapshot | null | undefined,
   skillKey: string,
 ): StoredSecretSource | null | undefined {
-  if (!snapshot) {
+  const config = resolveEditableSnapshotConfig(snapshot);
+  if (!config || snapshot?.valid === false) {
     return undefined;
   }
-  const skills = resolveEditableSnapshotConfig(snapshot)?.skills;
+  const skills = config.skills;
   const entry = isRecord(skills) && isRecord(skills.entries) ? skills.entries[skillKey] : undefined;
   if (!isRecord(entry) || entry.apiKey === undefined) {
     return null;
@@ -667,11 +668,15 @@ export async function saveSkillApiKey(
   if (!apiKey) {
     return;
   }
-  const source = storedSkillApiKeySource(state.runtimeConfig.state.configSnapshot, skillKey);
-  if (source !== null && source?.kind !== "literal") {
+  const source = () => storedSkillApiKeySource(state.runtimeConfig.state.configSnapshot, skillKey);
+  const replaceable = () => source() === null || source()?.kind === "literal";
+  if (!replaceable()) {
     setSkillMessage(state, skillKey, {
       kind: "error",
-      message: `API key not saved — skills.entries.${skillKey}.apiKey is set by a SecretRef or environment variable. Change it in openclaw.json.`,
+      message:
+        source() === undefined
+          ? "API key not saved — the configuration hasn't loaded yet. Try again."
+          : `API key not saved — skills.entries.${skillKey}.apiKey is set by a SecretRef or environment variable. Change it in openclaw.json.`,
     });
     return;
   }
@@ -680,7 +685,9 @@ export async function saveSkillApiKey(
     skillKey,
     { apiKey },
     `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
-    canDispatch,
+    // Rechecked right before dispatch: a flushed Settings draft may have stored a reference.
+    () => canDispatch() && replaceable(),
+    "Access or the stored API key changed before the skill update started.",
   );
 }
 
