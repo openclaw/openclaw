@@ -10,6 +10,9 @@ scratch="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/openclaw-attachments.XXXXX
 fixture_pid=""
 simulator=""
 before_checkout=""
+# Only the workflow-owned current tree can consume its successful app preparation.
+prepared_current=false
+if [[ "${IOS_TEST_BUILD_PREPARED:-}" == true ]]; then prepared_current=true; fi
 cleanup() {
   if [[ -n "$fixture_pid" ]]; then kill "$fixture_pid" 2>/dev/null || true; wait "$fixture_pid" || true; fi
   if [[ -n "$simulator" ]]; then
@@ -45,7 +48,9 @@ export TEST_RUNNER_OPENCLAW_IOS_ATTACHMENT_FIXTURE_URL=http://127.0.0.1:19876
 run_test() {
   local tree="$1" stage="$2" suite="$3" expected_marker="$4"
   local scheme=OpenClaw result="$output/Attachment-${stage}-${suite}.xcresult"
-  local log="$output/Attachment-${stage}-${suite}.log" status=0
+  local log="$output/Attachment-${stage}-${suite}.log" status=0 action=test
+  local project_args=(-project "$tree/apps/ios/OpenClaw.xcodeproj"
+    -clonedSourcePackagesDirPath "$tree/apps/ios/build/SourcePackages")
   local tests=(-only-testing:OpenClawTests/ManagedDocumentEnvelopeTests)
   if [[ "$suite" == ui ]]; then
     scheme=OpenClawUITests
@@ -53,11 +58,27 @@ run_test() {
   elif [[ "$stage" == after ]]; then
     tests+=(-only-testing:OpenClawTests/IOSMediaArtifactLoaderTests -only-testing:OpenClawTests/OpenClawTypographyTests)
   fi
+  if [[ "$tree" == "$root" && "$stage" == after && "$prepared_current" == true ]]; then
+    if [[ "$suite" == ui && "${IOS_UI_TEST_BUILD_PREPARED:-}" != true ]]; then
+      # App preparation does not produce the separate UI test scheme.
+      local preparation_log="$output/Attachment-UI-build.log"
+      xcodebuild "${project_args[@]}" -scheme OpenClawUITests \
+        -configuration Debug -destination "generic/platform=iOS Simulator" \
+        -parallel-testing-enabled NO build-for-testing > "$preparation_log" 2>&1 || status=$?
+      tail -c 8192 "$preparation_log"
+      [[ "$status" -eq 0 ]] || return "$status"
+      export IOS_UI_TEST_BUILD_PREPARED=true
+      if [[ -n "${GITHUB_ENV:-}" ]]; then
+        echo "IOS_UI_TEST_BUILD_PREPARED=true" >> "$GITHUB_ENV"
+      fi
+    fi
+    action=test-without-building
+  fi
   # Keep Actions log backpressure outside the simulator, retaining complete logs and xcresults.
-  xcodebuild -project "$tree/apps/ios/OpenClaw.xcodeproj" -scheme "$scheme" \
+  xcodebuild "${project_args[@]}" -scheme "$scheme" \
     -configuration Debug -destination "platform=iOS Simulator,id=$simulator" \
     -testLanguage en -testRegion US -parallel-testing-enabled NO \
-    -resultBundlePath "$result" "${tests[@]}" test > "$log" 2>&1 || status=$?
+    -resultBundlePath "$result" "${tests[@]}" "$action" > "$log" 2>&1 || status=$?
   tail -c 8192 "$log"
   [[ -d "$result" ]] || return 1
   xcrun xcresulttool get test-results summary --path "$result" --compact > "$result.summary.json"
@@ -82,13 +103,15 @@ run_revision() {
   xcrun simctl boot "$simulator"
   xcrun simctl bootstatus "$simulator" -b
   xcrun simctl status_bar "$simulator" override --time 09:41 --batteryState charged --batteryLevel 100
-  (
-    cd "$tree"
-    ./scripts/ios-configure-signing.sh
-    ./scripts/ios-write-version-xcconfig.sh
-    node scripts/ios-write-swift-filelist.mjs
-    xcodegen generate --spec apps/ios/project.yml --project apps/ios
-  )
+  if [[ "$tree" != "$root" || "$stage" != after || "$prepared_current" != true ]]; then
+    (
+      cd "$tree"
+      ./scripts/ios-configure-signing.sh
+      ./scripts/ios-write-version-xcconfig.sh
+      node scripts/ios-write-swift-filelist.mjs
+      xcodegen generate --spec apps/ios/project.yml --project apps/ios
+    )
+  fi
   node "$root/scripts/test-ios-shell-gateway.mjs" --attachments > "$output/Attachment-$stage-gateway.log" 2>&1 &
   fixture_pid=$!
   if [[ "$stage" == before ]]; then

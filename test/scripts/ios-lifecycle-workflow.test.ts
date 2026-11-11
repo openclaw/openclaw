@@ -54,6 +54,7 @@ const voiceStep = findStep("Run focused iOS voice cleanup simulator tests");
 const iosStep = findStep("Run focused iOS lifecycle simulator tests");
 const prepareStep = findStep("Prepare iOS simulator");
 const buildStep = findStep("Build iOS app");
+const attachmentStep = findStep("Prove native managed document download and export");
 const configureStep = findStep("Configure iOS build and report simulator selection");
 const configuredSteps = [configureStep, prepareStep, buildStep];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -80,7 +81,7 @@ function runSimulatorStep(mode = "ready", steps = [watchStep], env: Record<strin
   writeFileSync(
     runner,
     String.raw`
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 const [tool, ...args] = process.argv.slice(2);
 const root = process.env.WATCH_FIXTURE_ROOT;
@@ -89,21 +90,34 @@ appendFileSync(path.join(root, "commands.jsonl"), JSON.stringify({
   tool, args, destination: process.env.IOS_DEST,
   settings: process.env.XCODE_XCCONFIG_FILE ? readFileSync(process.env.XCODE_XCCONFIG_FILE, "utf8") : undefined,
 }) + "\n");
-if (tool === "installer") {
+if (tool === "git") {
+  if (args[0] === "rev-parse") console.log("a".repeat(40));
+  if (args[0] === "cat-file" && args[2]?.includes(":")) process.exit(1);
+  if (args[0] === "worktree" && args[1] === "add") {
+    cpSync(path.join(root, "scripts"), path.join(args[3], "scripts"), { recursive: true });
+    mkdirSync(path.join(args[3], "apps/ios/UITests"), { recursive: true });
+  }
+} else if (tool === "installer") {
   mkdirSync(args[0], { recursive: true });
   copyFileSync(path.join(root, "bin", "simslim"), path.join(args[0], "simslim"));
 } else if (tool === "uname") {
   console.log("arm64");
 } else if (tool === "xcrun") {
-  if (args[1] === "list" && args[2] === "pairs") {
+  if (args[0] === "xcresulttool") {
+    const before = args.some((arg) => arg.includes("Attachment-before-"));
+    console.log(JSON.stringify({ result: before ? "Failed" : "Passed", failedTests: before ? 1 : 0, passedTests: before ? 0 : 1 }));
+  } else if (args[1] === "create") {
+    console.log("attachment-fixture");
+  } else if (args[1] === "list" && args[2] === "pairs") {
     console.log(JSON.stringify({ pairs: mode === "unpaired" ? {} : {
       unrelated: { watch: { udid: "other-watch" }, phone: { udid: "other-phone" } },
       selected: { watch: { udid: "watch-fixture" }, phone: { udid: "companion-fixture" } }
     } }));
   } else if (args[1] === "list") {
     console.log(JSON.stringify({ devices: { watch: [
-      { name: mode.startsWith("voice") ? "iPhone fixture" : "Apple Watch fixture", isAvailable: true,
-        udid: mode.includes("slim") ? "11111111-2222-3333-4444-555555555555" : "watch-fixture" }
+      { name: (mode.startsWith("voice") || mode.startsWith("attachments")) ? "iPhone fixture" : "Apple Watch fixture", isAvailable: true,
+        udid: mode.includes("slim") ? "11111111-2222-3333-4444-555555555555" : "watch-fixture" },
+      ...(mode.startsWith("attachments") ? [{ name: "Apple Watch fixture", isAvailable: true, udid: "watch-fixture" }] : [])
     ] } }));
   } else if (args[1] === "bootstatus" && mode.endsWith("boot-failed")) {
     console.error("Intentional simulator boot failure");
@@ -111,6 +125,8 @@ if (tool === "installer") {
   } else if (args[1] === "install" && !existsSync(args[3])) {
     process.exit(24);
   }
+} else if (tool === "xcodebuild" && args.includes("build-for-testing") && mode.endsWith("build-failed")) {
+  process.exit(26);
 } else if (args.includes("-showBuildSettings")) {
   const product = {
     target: "OpenClawWatchApp",
@@ -122,13 +138,52 @@ if (tool === "installer") {
   const other = { target: "OtherTarget", buildSettings: { TARGET_BUILD_DIR: "/wrong", FULL_PRODUCT_NAME: "Wrong.app" } };
   console.log(JSON.stringify(mode === "missing-product" ? [other] :
     mode === "ambiguous-product" ? [product, product] : [other, product]));
+} else if (tool === "xcodebuild" && args.includes("-resultBundlePath") && mode.startsWith("attachments")) {
+  const result = args[args.indexOf("-resultBundlePath") + 1];
+  mkdirSync(result, { recursive: true });
+  if (result.includes("Attachment-before-")) {
+    console.log(result.includes("-ui.") ? "MANAGED_DOCUMENT_DOWNLOAD_MISSING" : "MANAGED_DOCUMENT_METADATA_LOST");
+    process.exit(1);
+  }
 } else if (args.some((arg) => arg === "test" || arg === "test-without-building") && mode === "voice-tests-failed") {
   process.exit(25);
 }
 `,
   );
+  if (mode.startsWith("attachments")) {
+    const scripts = path.join(root, "scripts");
+    mkdirSync(scripts, { recursive: true });
+    copyFileSync(
+      "scripts/test-ios-chat-attachments.sh",
+      path.join(scripts, "test-ios-chat-attachments.sh"),
+    );
+    for (const name of ["ios-configure-signing.sh", "ios-write-version-xcconfig.sh"]) {
+      writeFileSync(path.join(scripts, name), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    }
+    writeFileSync(path.join(scripts, "ios-write-swift-filelist.mjs"), "");
+    writeFileSync(
+      path.join(scripts, "test-ios-shell-gateway.mjs"),
+      "process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1000);",
+    );
+    const fixtures = path.join(root, "apps/ios/Tests/Fixtures");
+    mkdirSync(fixtures, { recursive: true });
+    writeFileSync(path.join(fixtures, "managed-document-message.json"), "{}");
+    writeFileSync(path.join(fixtures, "../ManagedDocumentEnvelopeTests.swift"), "");
+    mkdirSync(path.join(root, "apps/ios/UITests"), { recursive: true });
+    writeFileSync(path.join(root, "apps/ios/UITests/OpenClawSnapshotUITests.swift"), "");
+  }
   // Exercise the restart helper itself below; this fixture checks workflow ordering.
-  for (const tool of ["xcrun", "xcodebuild", "pnpm", "uname", "sysctl", "installer", "simslim"]) {
+  for (const tool of [
+    "xcrun",
+    "xcodebuild",
+    "pnpm",
+    "uname",
+    "sysctl",
+    "installer",
+    "simslim",
+    "git",
+    "xcodegen",
+  ]) {
     const executable = path.join(bin, tool);
     writeFileSync(executable, `#!/bin/sh\nexec '${process.execPath}' '${runner}' '${tool}' "$@"\n`);
     chmodSync(executable, 0o755);
@@ -175,29 +230,35 @@ exec '${pythonExecutable}' "$@"
       return `${step.run}\nset -a\nsource "$GITHUB_ENV"\nset +a`;
     })
     .join("\n");
-  const result = spawnSync("/bin/bash", ["--noprofile", "--norc", "-c", script], {
-    cwd: root,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
-      RUNNER_TEMP: root,
-      CI: "true",
-      OPENCLAW_CI_SIMSLIM_BINARY: "",
-      WATCH_FIXTURE_ROOT: root,
-      WATCH_FIXTURE_MODE: mode,
-      GITHUB_ENV: environmentFile,
-      GITHUB_STEP_SUMMARY: summaryFile,
-      IOS_SIMULATOR_SELECTION: JSON.stringify(resolveIosSimulatorTestSelection(null)),
-      IOS_CI_PHASE: "smoke",
-      IOS_MAIN_TIER: "false",
-      IOS_FROZEN_TARGET: "false",
-      HISTORICAL_TARGET: "false",
-      IOS_DEST: "",
-      XCODE_XCCONFIG_FILE: "",
-      ...env,
+  const result = spawnSync(
+    "/bin/bash",
+    ["--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+    {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        RUNNER_TEMP: root,
+        CI: "true",
+        OPENCLAW_CI_SIMSLIM_BINARY: "",
+        WATCH_FIXTURE_ROOT: root,
+        WATCH_FIXTURE_MODE: mode,
+        GITHUB_ENV: environmentFile,
+        GITHUB_STEP_SUMMARY: summaryFile,
+        IOS_SIMULATOR_SELECTION: JSON.stringify(resolveIosSimulatorTestSelection(null)),
+        IOS_CI_PHASE: "smoke",
+        IOS_MAIN_TIER: "false",
+        IOS_FROZEN_TARGET: "false",
+        HISTORICAL_TARGET: "false",
+        IOS_DEST: "",
+        XCODE_XCCONFIG_FILE: "",
+        IOS_TEST_BUILD_PREPARED: "",
+        IOS_UI_TEST_BUILD_PREPARED: "",
+        ...env,
+      },
     },
-  });
+  );
   const trace = path.join(root, "commands.jsonl");
   const commands: Command[] = existsSync(trace)
     ? readFileSync(trace, "utf8")
@@ -210,6 +271,7 @@ exec '${pythonExecutable}' "$@"
     commands,
     product,
     summary: readFileSync(summaryFile, "utf8"),
+    environment: readFileSync(environmentFile, "utf8"),
   };
 }
 
@@ -332,6 +394,136 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     const restart = commands.findIndex((command) => command.tool === "python3");
     expect(restart).toBeGreaterThan(commands.indexOf(tests[0]!));
     expect(restart).toBeLessThan(commands.indexOf(tests[1]!));
+  });
+});
+
+describe.skipIf(process.platform === "win32")("full iOS prepared products", () => {
+  it("prepares three schemes once and consumes them throughout the full sequence", () => {
+    const { result, commands, environment } = runSimulatorStep(
+      "attachments",
+      [...configuredSteps, attachmentStep, voiceStep, iosStep, watchStep],
+      { IOS_CI_PHASE: "tests", BASELINE_SHA: "" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const builds = commands.filter(
+      ({ tool, args }) => tool === "xcodebuild" && args.includes("build-for-testing"),
+    );
+    expect(builds.map(({ args }) => args[args.indexOf("-scheme") + 1])).toEqual([
+      "OpenClaw",
+      "OpenClawUITests",
+      "OpenClawWatchApp",
+    ]);
+    for (const build of builds.slice(0, 2)) {
+      expect(build.args).toContain("generic/platform=iOS Simulator");
+      expect(build.settings).toBeUndefined();
+    }
+    expect(commands.filter(({ tool }) => tool === "xcodegen")).toHaveLength(0);
+    const tests = commands.filter(isTestCommand);
+    expect(tests).toHaveLength(6);
+    for (const command of tests) {
+      expect(command.args).toContain("test-without-building");
+    }
+    expect(environment).toContain("IOS_TEST_BUILD_PREPARED=true");
+    expect(environment).toContain("IOS_UI_TEST_BUILD_PREPARED=true");
+  });
+
+  it.each([true, false])(
+    "keeps attachment preparation scoped to the current workflow tree (%s)",
+    (prepared) => {
+      const { result, commands, environment } = runSimulatorStep("attachments", [attachmentStep], {
+        BASELINE_SHA: "",
+        IOS_TEST_BUILD_PREPARED: String(prepared),
+        IOS_CI_PHASE: "tests",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(commands.filter(({ tool }) => tool === "xcodegen")).toHaveLength(prepared ? 0 : 1);
+      const builds = commands.filter(
+        ({ tool, args }) => tool === "xcodebuild" && args.includes("build-for-testing"),
+      );
+      expect(builds).toHaveLength(prepared ? 1 : 0);
+      if (prepared) {
+        expectArgs(builds[0]?.args, ["OpenClawUITests", "generic/platform=iOS Simulator"]);
+        expect(environment).toContain("IOS_UI_TEST_BUILD_PREPARED=true");
+      }
+      for (const command of commands.filter(isTestCommand)) {
+        expect(command.args.at(-1)).toBe(prepared ? "test-without-building" : "test");
+        const packageIndex = command.args.indexOf("-clonedSourcePackagesDirPath");
+        expect(packageIndex).toBeGreaterThan(0);
+        expect(command.args[packageIndex + 1]?.endsWith("/apps/ios/build/SourcePackages")).toBe(
+          true,
+        );
+      }
+    },
+  );
+
+  it("never borrows current preparation for the historical attachment worktree", () => {
+    const { result, commands } = runSimulatorStep("attachments", [attachmentStep], {
+      BASELINE_SHA: "b".repeat(40),
+      IOS_TEST_BUILD_PREPARED: "true",
+      IOS_CI_PHASE: "tests",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(commands.filter(({ tool }) => tool === "xcodegen")).toHaveLength(1);
+    const tests = commands.filter(isTestCommand);
+    expect(tests.map(({ args }) => args.at(-1))).toEqual([
+      "test",
+      "test",
+      "test-without-building",
+      "test-without-building",
+    ]);
+    for (const test of tests.slice(0, 2)) {
+      expect(
+        test.args[test.args.indexOf("-clonedSourcePackagesDirPath") + 1]?.endsWith(
+          "/before/apps/ios/build/SourcePackages",
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("does not publish failed UI preparation or run UI tests", () => {
+    const { result, commands, environment } = runSimulatorStep(
+      "attachments-build-failed",
+      [attachmentStep],
+      {
+        BASELINE_SHA: "",
+        IOS_TEST_BUILD_PREPARED: "true",
+        IOS_CI_PHASE: "tests",
+      },
+    );
+    expect(result.status).not.toBe(0);
+    expect(environment).not.toContain("IOS_UI_TEST_BUILD_PREPARED=true");
+    expect(commands.filter(isTestCommand)).toHaveLength(1);
+  });
+
+  it.each(["IOS_FROZEN_TARGET", "HISTORICAL_TARGET"])(
+    "retains build-capable fallback for %s",
+    (flag) => {
+      const { result, commands, environment } = runSimulatorStep(
+        "voice",
+        [...configuredSteps, voiceStep, iosStep],
+        {
+          IOS_CI_PHASE: "tests",
+          [flag]: "true",
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(argsFor(commands, "pnpm")).toContainEqual(["ios:build"]);
+      expect(environment).not.toContain("BUILD_PREPARED=true");
+      for (const command of commands.filter(isTestCommand)) {
+        expect(command.args).toContain("test");
+      }
+    },
+  );
+
+  it("does not publish failed app preparation", () => {
+    const { result, commands, environment } = runSimulatorStep(
+      "voice-build-failed",
+      configuredSteps,
+      { IOS_CI_PHASE: "tests" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(environment).not.toContain("IOS_TEST_BUILD_PREPARED=true");
+    expect(commands.filter(isTestCommand)).toHaveLength(0);
   });
 });
 
@@ -657,6 +849,12 @@ describe("iOS Access process restart proof", () => {
     }
     expect(environment.TEST_RUNNER_OPENCLAW_ACCESS_RESTART_DEVICE).toBe("simulator-fixture");
     expect(environment).not.toHaveProperty("TEST_RUNNER_OPENCLAW_ACCESS_RESTART_PHASE");
+    const settings = commands.find((args) => args.includes("-showBuildSettings"));
+    expect(
+      settings?.[settings.indexOf("-clonedSourcePackagesDirPath") + 1]?.endsWith(
+        "/apps/ios/build/SourcePackages",
+      ),
+    ).toBe(true);
     const invocations = commands.filter((args) => args.includes("test-without-building"));
     expect(invocations).toHaveLength(1);
     expectArgs(invocations[0], [
