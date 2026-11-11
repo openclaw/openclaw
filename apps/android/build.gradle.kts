@@ -15,7 +15,10 @@ subprojects {
       maxHeapSize = "1g"
       if (project.path == ":app" && System.getenv("CI_RUNNER_BACKEND") == "blacksmith") {
         // Separate JVMs keep Robolectric sandboxes isolated while other classes await sockets.
-        val processors = Runtime.getRuntime().availableProcessors()
+        // Bound Boat test workers without constraining the Gradle build JVM.
+        val processors = Runtime.getRuntime().availableProcessors().let {
+          if (System.getenv("BOAT_TEST_RUNNER") == "true") minOf(2, it) else it
+        }
         maxParallelForks = minOf(4, processors)
         // Give each JVM its CPU share instead of sizing every GC and worker pool for the whole runner.
         jvmArgs("-XX:ActiveProcessorCount=${maxOf(1, processors / maxParallelForks)}")

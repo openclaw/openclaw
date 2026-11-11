@@ -67,7 +67,7 @@ it.each(routes)("runs $name Node tests through the correct permission boundary",
   ]);
 });
 
-it.each(routes)("preserves the Android CPU budget for $name", (route) => {
+it.each(routes)("preserves Android build JVM options for $name", (route) => {
   const root = dirs.make("openclaw-boat-android-step-");
   const android = path.join(root, "apps/android");
   mkdirSync(android, { recursive: true });
@@ -114,9 +114,7 @@ it.each(routes)("preserves the Android CPU budget for $name", (route) => {
     },
   });
   expect(result.status, result.stderr).toBe(0);
-  expect(readFileSync(calls, "utf8").trim()).toBe(
-    route.boat ? "-Dfixture=true -XX:ActiveProcessorCount=2" : "-Dfixture=true",
-  );
+  expect(readFileSync(calls, "utf8").trim()).toBe("-Dfixture=true");
 });
 
 it.each(["push", "pull_request", "workflow_dispatch"] as const)(

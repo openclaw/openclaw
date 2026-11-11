@@ -6678,10 +6678,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$BOAT_TEST_RUNNER" == "true" && "$CI_RUNNER_BACKEND" == "blacksmith" ]]; then
-            # Preserve the two-CPU test budget when Boat supplies four physical CPUs.
-            export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-XX:ActiveProcessorCount=2"
-          fi
           source ../../.ci-harness/scripts/ci-collect-checks.sh
           android_build_metadata=()
           if [ "$RUN_LINT" = "true" ] || [ -n "$APP_LINT" ]; then
