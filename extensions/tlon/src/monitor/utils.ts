@@ -264,8 +264,8 @@ function renderListing(value: unknown, depth: number, omitCode: boolean): string
   const items = Array.isArray(list.items) ? list.items : [];
   const children = items.map((item, index) => {
     const text = renderListing(item, depth + 1, omitCode);
-    const marker = list.type === "ordered" ? `${index + 1}.` : "-";
-    return text ? `${marker} ${text.replace(/\n/g, "\n  ")}` : "";
+    const marker = list.type === "ordered" ? `${index + 1}. ` : "- ";
+    return text ? `${marker}${text.replace(/\n/g, `\n${" ".repeat(marker.length)}`)}` : "";
   });
   return [contents, ...children].filter(Boolean).join("\n");
 }

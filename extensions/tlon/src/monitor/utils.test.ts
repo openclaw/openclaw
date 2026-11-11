@@ -31,6 +31,7 @@ it.each([
 it.each([
   "- buy **milk**\n- buy bread",
   "1. first\n2. second",
+  "1. parent\n   - child",
   "- [ ] todo\n- [x] done",
   "~zod please summarize:\n- buy milk\n- buy bread",
   "- parent\n  1. child\n  2. sibling\n- last",
