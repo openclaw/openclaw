@@ -1106,12 +1106,14 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     window by default; no `params.context1m: true` needed.
   </Accordion>
 
-  <Accordion title="Claude Code native subagents on managed turns">
+  <Accordion title="Claude Code native subagents and web search on managed turns">
     `plugins.entries.anthropic.config.managedNativeTools` keeps selected Claude
-    Code orchestration tools on `claude-cli` turns that OpenClaw manages. It is
-    off by default. `default` applies to every agent; `agents.<id>` replaces it
-    for one agent, and `[]` opts that agent out. Accepted values: `Agent`,
-    `Workflow`.
+    Code orchestration tools and native web search on `claude-cli` turns that
+    OpenClaw manages. It is off by default. `default` applies to every agent;
+    `agents.<id>` replaces it for one agent, and `[]` opts that agent out.
+    Accepted values: `Agent`, `Workflow`, `WebSearch`. `WebSearch` uses Claude Code's
+    server-side search, billed to the Claude login, so no OpenClaw search provider is needed; it
+    is kept only while the agent's tool policy allows `web_search`.
 
     ```json5
     {
@@ -1119,7 +1121,10 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
         entries: {
           anthropic: {
             config: {
-              managedNativeTools: { default: ["Agent", "Workflow"], agents: { ops: [] } },
+              managedNativeTools: {
+                default: ["Agent", "Workflow", "WebSearch"],
+                agents: { ops: [] },
+              },
             },
           },
         },
