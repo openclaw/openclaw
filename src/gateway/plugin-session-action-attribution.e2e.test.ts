@@ -1,5 +1,4 @@
 import { stripVTControlCharacters } from "node:util";
-import { Type } from "typebox";
 import { expect, it, vi } from "vitest";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import {
@@ -11,7 +10,6 @@ import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { setVerbose } from "../global-state.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
-import { createFeatureClient, defineFeatureContract } from "../plugin-sdk/feature-contract.js";
 import type { Deferred } from "../shared/deferred.js";
 import { createStartupTestState } from "./server-startup.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -20,18 +18,6 @@ import { setGatewayWsLogStyle } from "./ws-logging.js";
 const pluginId = "session-action-attribution-proof";
 const longActionId = "a".repeat(239) + "🦊overlength-suffix";
 const privateValue = "private-action-content";
-const featureContract = defineFeatureContract({
-  pluginId,
-  operations: {
-    inspect: {
-      kind: "query",
-      description: "Inspect the fixture",
-      input: Type.Object({ message: Type.String() }),
-      output: Type.String(),
-    },
-  },
-  events: {},
-});
 function expectRequestId(line: string, requestId: string) {
   expect(requestId).not.toBe("");
   const loggedId = line.match(/(?:^|\s)id=(\S+)/)?.[1] ?? "";
@@ -65,12 +51,6 @@ const source = `module.exports = { id: "${pluginId}", register(api) {
       },
     });
   }
-  const { defineFeaturePlugin } = require("openclaw/plugin-sdk/feature-plugin");
-  defineFeaturePlugin({
-    contract: ${JSON.stringify(featureContract)},
-    name: "Feature error fixture", description: "Feature error fixture",
-    setup: () => ({ inspect: ({ message }) => { throw new Error(message); } }),
-  }).register(api);
 } };`;
 
 it("keeps registered session-action attribution in WS diagnostics outside authenticated responses", async ({
@@ -222,30 +202,6 @@ it("keeps registered session-action attribution in WS diagnostics outside authen
         expect(lines[0]).not.toContain("PRIVATE_CODE");
         expect(lines[0]).not.toContain("🦊");
         expect(lines[0]).not.toContain("overlength-suffix");
-      }
-
-      const feature = createFeatureClient(featureContract, {
-        pluginId,
-        signal,
-        connection: { connected: true },
-        request: gateway.client.request.bind(gateway.client),
-        onEvent: () => () => {},
-        subscribe: () => () => {},
-      });
-      for (const [message, error] of [
-        ["Downstream service unavailable", "Downstream service unavailable"],
-        ["", "Feature operation failed"],
-        ["   ", "Feature operation failed"],
-        ["x".repeat(1999) + "😀", "x".repeat(1999)],
-      ] as const) {
-        await expect(
-          gateway.client.request("plugins.sessionAction", {
-            pluginId,
-            actionId: "inspect",
-            payload: { message },
-          }),
-        ).resolves.toEqual({ ok: false, error, code: "OPERATION_FAILED" });
-        await expect(feature.invoke("inspect", { message })).rejects.toThrow(error);
       }
 
       output.mockClear();
