@@ -58,7 +58,8 @@ export function isBotMentioned(
 
   const normalizedBotShip = normalizeShip(botShipName);
   const escapedShip = escapeRegExp(normalizedBotShip);
-  const mentionPattern = new RegExp(`(^|\\s)${escapedShip}(?=\\s|$)`, "i");
+  // Bold, italic and strike render as *, ** and ~~ around the ship.
+  const mentionPattern = new RegExp(`(^|[\\s*~])${escapedShip}(?=$|[\\s*~,.!?;:])`, "i");
   if (mentionPattern.test(messageText)) {
     return true;
   }
@@ -177,7 +178,7 @@ export function isGroupInviteAllowed(
 // call stack overflows; legitimate inline markup never approaches this bound.
 const MAX_INLINE_DEPTH = 100;
 
-function renderInlineItem(item: unknown, topLevel = false, depth = 0): string {
+function renderInlineItem(item: unknown, topLevel = false, depth = 0, omitCode = false): string {
   if (typeof item === "string") {
     return item;
   }
@@ -203,7 +204,7 @@ function renderInlineItem(item: unknown, topLevel = false, depth = 0): string {
   }
   const code = readStringField(record, "inline-code") || readStringField(record, "code");
   if (code) {
-    return `\`${code}\``;
+    return omitCode ? " " : `\`${code}\``;
   }
   const link = asNullableRecord(record.link);
   const linkHref = link ? readStringField(link, "href") : undefined;
@@ -222,7 +223,7 @@ function renderInlineItem(item: unknown, topLevel = false, depth = 0): string {
   if (depth >= MAX_INLINE_DEPTH) {
     return "";
   }
-  const inner = extractInlineText(nested, depth + 1);
+  const inner = extractInlineText(nested, depth + 1, omitCode);
   if (bold) {
     return `**${inner}**`;
   }
@@ -235,11 +236,11 @@ function renderInlineItem(item: unknown, topLevel = false, depth = 0): string {
   return `> ${inner}`;
 }
 
-function extractInlineText(items: readonly unknown[], depth = 0): string {
-  return items.map((item) => renderInlineItem(item, false, depth)).join("");
+function extractInlineText(items: readonly unknown[], depth: number, omitCode: boolean): string {
+  return items.map((item) => renderInlineItem(item, false, depth, omitCode)).join("");
 }
 
-export function extractMessageText(content: unknown): string {
+export function extractMessageText(content: unknown, omitCode = false): string {
   if (!Array.isArray(content)) {
     return "";
   }
@@ -252,7 +253,7 @@ export function extractMessageText(content: unknown): string {
       }
 
       if (Array.isArray(verseRecord.inline)) {
-        return verseRecord.inline.map((item) => renderInlineItem(item, true)).join("");
+        return verseRecord.inline.map((item) => renderInlineItem(item, true, 0, omitCode)).join("");
       }
 
       const block = asNullableRecord(verseRecord.block);
@@ -269,7 +270,7 @@ export function extractMessageText(content: unknown): string {
         }
 
         const codeBlock = asNullableRecord(block.code);
-        if (codeBlock) {
+        if (codeBlock && !omitCode) {
           const lang = readStringField(codeBlock, "lang") ?? "";
           const code = readStringField(codeBlock, "code") ?? "";
           let fenceLength = 3;

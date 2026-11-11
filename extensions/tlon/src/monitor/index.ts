@@ -731,7 +731,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
           isOwner,
           botShipName,
           botNickname,
-          rawText,
+          messageContent: content.content,
           messageSeal: asRecord(messageSet?.seal),
           isThreadReply,
           hasParticipatedInThread: participatedThreads.has,

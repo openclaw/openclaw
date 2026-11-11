@@ -64,6 +64,20 @@ it.each([
   expect(isBotMentioned(text, ship, nick)).toBe(expected);
 });
 
+const zod = { ship: "~zod" };
+it.each([
+  [[["@ALL uppercase"], [zod, ", hi"], [{ bold: [zod] }, " hi"], [{ strike: [zod] }, "?"]], true],
+  [[["nimbus, hello"], ["say ", { italics: [zod] }, "."], ["Are you there, ", zod, "?"]], true],
+  [[[{ "inline-code": "a`b" }, " ", zod, " hi ", { "inline-code": "c" }]], true],
+  [[["~zod-extra"], ["my~zodfriend"], [{ "inline-code": "ping ~zod, now" }], ["nimbusy"]], false],
+  [[["https://tlon.io/~zod"], ["prenimbus"], [], { block: { code: { code: "~zod, hi" } } }], false],
+] as const)("detects mentions in Story %j", (stories, expected) => {
+  for (const story of stories) {
+    const content = Array.isArray(story) ? [{ inline: story }] : [story];
+    expect(isBotMentioned(extractMessageText(content, true), "~zod", "nimbus")).toBe(expected);
+  }
+});
+
 it.each([false, true])("admits thread follow-up with explicit mention: %s", async (explicit) => {
   const { mentionDecision } = await prepareTlonGroupAdmission({
     cfg: explicit
@@ -76,7 +90,7 @@ it.each([false, true])("admits thread follow-up with explicit mention: %s", asyn
     isOwner: () => false,
     botShipName: "~zod",
     botNickname: null,
-    rawText: explicit ? "~zod follow up" : "follow up",
+    messageContent: [{ inline: [explicit ? "~zod follow up" : "follow up"] }],
     messageSeal: { "parent-id": "1234" },
     isThreadReply: true,
     hasParticipatedInThread: (parentId) => parentId === "1234",

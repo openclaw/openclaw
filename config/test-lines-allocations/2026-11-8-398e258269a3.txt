@@ -1,0 +1,3 @@
+14
+# Source 398e258269a37d4883477aa60702704e92f8ae23; Recognize Tlon bot ship mentions next to punctuation and inline styles through existing text extraction/mention helpers while excluding code content. Runtime scope: extensions/tlon/src/monitor/index.ts, extensions/tlon/src/monitor/mentions.ts, extensions/tlon/src/monitor/utils.ts. Include corresponding focused regression tests only.
+# Exact net LF growth of independently justified retained regressions against frozen LOCAL11.8 baseline; no removed assertions or scalar change.
