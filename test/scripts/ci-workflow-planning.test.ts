@@ -121,12 +121,17 @@ describe("PostgreSQL conformance selection", () => {
   it("runs three balanced shards independently under the existing aggregate gate", () => {
     const workflow = readCiWorkflow();
     const job = workflow.jobs["postgres-conformance"];
-    expect(job.strategy).toEqual({
-      "fail-fast": false,
-      "max-parallel": 3,
-      matrix: { shard: ["1/3", "2/3", "3/3"] },
-    });
-    expect(job["timeout-minutes"]).toBe(30);
+    expect(job.strategy["fail-fast"]).toBe(false);
+    expect(job.strategy["max-parallel"]).toBe(3);
+    expect(job.strategy.matrix.shard).toEqual(["1/3", "2/3", "3/3", "pg16-smoke"]);
+    expect(evaluateWorkflow(job.strategy.matrix.exclude)).toEqual([]);
+    for (const eventName of ["push", "schedule", "workflow_dispatch"] as const) {
+      expect(evaluateWorkflow(job.strategy.matrix.exclude, { eventName })).toEqual([
+        { shard: "pg16-smoke" },
+      ]);
+    }
+    expect(evaluateWorkflow(job["timeout-minutes"], { matrix: { shard: "1/3" } })).toBe(30);
+    expect(evaluateWorkflow(job["timeout-minutes"], { matrix: { shard: "pg16-smoke" } })).toBe(15);
     expect(evaluateWorkflow(job["runs-on"])).toBe("ubuntu-24.04");
     const conformance = requiredWorkflowStep(job.steps, "Run PostgreSQL conformance");
     expect(conformance.uses).toBe("./.ci-harness/.github/actions/postgres-conformance");
@@ -136,10 +141,7 @@ describe("PostgreSQL conformance selection", () => {
       shard: "${{ matrix.shard }}",
     });
     expect(workflow.jobs["ci-gate"].needs).toContain("postgres-conformance");
-    const smokeJob = workflow.jobs["postgres-gateway-smoke"];
-    expect(smokeJob["timeout-minutes"]).toBe(15);
-    expect(workflow.jobs["ci-gate"].needs).toContain("postgres-gateway-smoke");
-    const smoke = requiredWorkflowStep(smokeJob.steps, "Run PostgreSQL 16 Gateway cron smoke");
+    const smoke = requiredWorkflowStep(job.steps, "Run PostgreSQL 16 Gateway cron smoke");
     expect(smoke.uses).toBe(conformance.uses);
     expect(smoke.with).toEqual({
       image:
@@ -3365,8 +3367,7 @@ describe("ci workflow guards", () => {
         },
         { eventName: "pull_request" },
       );
-      expect(rows.filter((name) => name === "postgres-conformance")).toHaveLength(3);
-      expect(rows.filter((name) => name === "postgres-gateway-smoke")).toHaveLength(1);
+      expect(rows.filter((name) => name === "postgres-conformance")).toHaveLength(4);
       expect(Number(result.outputs.hybrid_hosted_base_rows)).toBe(rows.length);
     });
 

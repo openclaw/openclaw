@@ -2104,9 +2104,9 @@ if (hybridHostedEligible) {
     ),
     "check-additional-shard": count(manifest.run_check_additional, hostedAdditionalRows),
     "check-docs": count(manifest.run_check_docs),
-    "postgres-conformance": count(manifest.run_postgres_conformance, 3),
-    "postgres-gateway-smoke": count(
-      manifest.run_postgres_conformance && workflowEventName === "pull_request",
+    "postgres-conformance": count(
+      manifest.run_postgres_conformance,
+      workflowEventName === "pull_request" ? 4 : 3,
     ),
     "skills-python": count(manifest.run_skills_python_job),
     "checks-windows": count(
