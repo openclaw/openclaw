@@ -5,6 +5,7 @@ import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { defaultRuntime } from "../runtime.js";
 import type { SecretsApplyPlan } from "../secrets/plan.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { formatCliCommand } from "./command-format.js";
 import { rethrowExpectedCliError } from "./failure-output.js";
@@ -142,49 +143,60 @@ export function registerSecretsCli(program: Command): void {
     )
     .option("--json", "Output JSON", false)
     .action(async (opts: { check?: boolean; json?: boolean; allowExec?: boolean }) => {
-      const { report, exitCode } = await runSecretsCommand(
-        opts.json,
-        async () => {
-          const { resolveSecretsAuditExitCode, runSecretsAudit } =
-            await import("../secrets/audit.js");
-          const auditReport = await runSecretsAudit({
-            allowExec: Boolean(opts.allowExec),
-          });
-          return {
-            report: auditReport,
-            exitCode: resolveSecretsAuditExitCode(auditReport, Boolean(opts.check)),
-          };
-        },
-        (err) => {
-          defaultRuntime.error(
-            danger(
-              terminalText`Secrets audit failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw doctor")} to inspect config and credential state.`,
-            ),
-          );
-        },
-        2,
-        (outcome) => outcome.report,
-      );
-      if (!opts.json) {
-        defaultRuntime.log(
-          terminalText`Secrets audit: ${report.status}. plaintext=${report.summary.plaintextCount}, unresolved=${report.summary.unresolvedRefCount}, shadowed=${report.summary.shadowedRefCount}, storeResidue=${report.summary.storeResidueCount}, legacy=${report.summary.legacyResidueCount}.`,
+      const signal = getAsyncWorkSignal();
+      try {
+        const { report, exitCode } = await runSecretsCommand(
+          opts.json,
+          async () => {
+            const { resolveSecretsAuditExitCode, runSecretsAudit } =
+              await import("../secrets/audit.js");
+            const { withCommandProcessScope } = await import("../process/exec-spawn.js");
+            const auditReport = await withCommandProcessScope(
+              () => runSecretsAudit({ allowExec: Boolean(opts.allowExec) }),
+              signal,
+            );
+            return {
+              report: auditReport,
+              exitCode: resolveSecretsAuditExitCode(auditReport, Boolean(opts.check)),
+            };
+          },
+          (err) => {
+            defaultRuntime.error(
+              danger(
+                terminalText`Secrets audit failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw doctor")} to inspect config and credential state.`,
+              ),
+            );
+          },
+          2,
+          (outcome) => outcome.report,
+          signal,
         );
-        for (const finding of report.findings.slice(0, 20)) {
+        signal?.throwIfAborted();
+        if (!opts.json) {
           defaultRuntime.log(
-            terminalText`- [${finding.code}] ${finding.file}:${finding.jsonPath} ${finding.message}`,
+            terminalText`Secrets audit: ${report.status}. plaintext=${report.summary.plaintextCount}, unresolved=${report.summary.unresolvedRefCount}, shadowed=${report.summary.shadowedRefCount}, storeResidue=${report.summary.storeResidueCount}, legacy=${report.summary.legacyResidueCount}.`,
           );
+          for (const finding of report.findings.slice(0, 20)) {
+            defaultRuntime.log(
+              terminalText`- [${finding.code}] ${finding.file}:${finding.jsonPath} ${finding.message}`,
+            );
+          }
+          if (report.findings.length > 20) {
+            defaultRuntime.log(`... ${report.findings.length - 20} more finding(s).`);
+          }
+          if (report.resolution.skippedExecRefs > 0) {
+            defaultRuntime.log(
+              `Audit note: skipped ${report.resolution.skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during audit.`,
+            );
+          }
         }
-        if (report.findings.length > 20) {
-          defaultRuntime.log(`... ${report.findings.length - 20} more finding(s).`);
+        if (exitCode !== 0) {
+          exitCliAfterOutput(defaultRuntime, exitCode);
         }
-        if (report.resolution.skippedExecRefs > 0) {
-          defaultRuntime.log(
-            `Audit note: skipped ${report.resolution.skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during audit.`,
-          );
+      } catch (error) {
+        if (!signal?.aborted) {
+          throw error;
         }
-      }
-      if (exitCode !== 0) {
-        exitCliAfterOutput(defaultRuntime, exitCode);
       }
     });
 
