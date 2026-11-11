@@ -1,3 +1,4 @@
 # Cross-provider target-model catalog regression plus relay-preservation UI case (PR 195156).
 # OAuth-only Platform-auth projection, error handling, and provider/model/default routing: 71 new lines, 31 existing headroom.
-132
+# CI merge-tree reconciliation: job 130265258692 reports an additional 38-line shortfall.
+170
