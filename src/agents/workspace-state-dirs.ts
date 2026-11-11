@@ -135,9 +135,10 @@ export async function assertConfiguredWorkspaceStateReady(params: {
     }
   }
   // Sandbox code can write its copy (and, with shared scope, the whole sandbox
-  // root), so files there must not refuse every agent. ensureSandboxWorkspace
-  // still refuses that copy; genuine legacy copies also carry a state-dir
-  // attestation, which keeps them Gateway-wide. Doctor still inspects everything.
+  // root), so files there must not refuse every agent. Genuine legacy copies
+  // also carry a state-dir attestation, which keeps them Gateway-wide. Copy
+  // preparation refuses a file present at its first check in this process; the
+  // per-turn check caches clean results, so a later write waits for a restart.
   const configuredDirs = new Set(listAgentWorkspaceDirs(params.cfg, env));
   const sandboxWritableDirs =
     params.operation === "doctor"

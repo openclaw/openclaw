@@ -119,7 +119,7 @@ it("does not let sandbox-written files in the sandbox root refuse the Gateway", 
   fs.writeFileSync(`${copy}.attested`, `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n`);
   closeOpenClawAgentDatabasesForTest();
   await expect(state.ready()).resolves.toBeUndefined();
-  // The copy's own preparation still refuses it before a sandboxed turn uses it.
+  // The copy's first preparation in this process still refuses it.
   expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: copy })).toThrow(
     "Legacy workspace setup state requires migration",
   );
