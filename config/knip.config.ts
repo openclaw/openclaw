@@ -32,6 +32,7 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
   "scripts/boat-release-runner.mjs!",
+  "scripts/build-iroh.mjs!",
   "scripts/perf/agent-deletion-cancellation-measure.ts",
   "scripts/perf/template-retirement-measure.mts",
   "scripts/windows-release-promotion.mjs!",

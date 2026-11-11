@@ -147,9 +147,10 @@ job must pass, and FRV itself must conclude success before publication. See the
 Native platform publication remains independent and follows its own gates.
 All-group cross-OS qualification requires all nine Linux/Windows/macOS
 install/upgrade pairs. Focused recovery may select individual lanes but does
-not itself qualify publication. Exact live-provider/Telegram failures may use
-only the [checked-in release-tooling policy](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers),
-evaluated within FRV. Hard gates and soak cannot be waived.
+not itself qualify publication. Eligible failures and explicit not-run exemptions
+may use only the [checked-in release-tooling policy](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers),
+evaluated within FRV under the grant’s exact scope. Hard gates and soak cannot
+be waived.
 
 ## Postpublish confidence
 
