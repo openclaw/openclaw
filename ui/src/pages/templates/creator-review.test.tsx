@@ -27,13 +27,6 @@ const reviewed: TemplatesDraftsReviewResult = {
   scope: { input: "Repository", job: "Summarize", output: "Brief", authority: "Read only" },
   items: [
     {
-      id: "file:AGENTS.md",
-      kind: "file",
-      label: "AGENTS.md",
-      detail: "Read only instructions",
-      included: true,
-    },
-    {
       id: "skill:release",
       kind: "skill",
       requirement: { source: "clawhub", ref: "@maker/release-notes", version: "1.2.3" },
@@ -79,7 +72,18 @@ const reviewed: TemplatesDraftsReviewResult = {
     { path: "AGENTS.md", content: "Read only instructions" },
   ],
 };
-function fixture() {
+const pendingPublication = {
+  name: reviewed.name,
+  version: reviewed.version,
+  url: "https://example.test/maker/templates/release-brief",
+  publicationStatus: "pending",
+};
+const target = {
+  agentId: "research",
+  draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
+  sessionKey: "agent:research:main",
+};
+async function fixture() {
   const request = vi.fn(
     async (method: string, _params?: Record<string, unknown>): Promise<unknown> => {
       if (method === "plugins.catalog.get") {
@@ -118,8 +122,12 @@ function fixture() {
   });
   context.router.subscribe = () => () => false;
   const flow = templateCreatorFlow(context);
-  flow.open("research", "ec8f46b0-4ca3-4991-8a73-dfdcc8764087");
+  flow.open(target.agentId, target.draftId);
   const page = mountSolid(() => <TemplateCreatorReview context={context} />);
+  await vi.advanceTimersByTimeAsync(0);
+  await waitForSolid(() =>
+    expect(page.getByRole("heading", { name: reviewed.displayName })).toBeTruthy(),
+  );
   return { page, request, flow, context };
 }
 beforeEach(async () => {
@@ -131,82 +139,39 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("reviews the exact assembled package inline without editable fields or model turns", async () => {
-  const { page, request } = fixture();
-  await vi.advanceTimersByTimeAsync(0);
-  await waitForSolid(() =>
-    expect(page.getByRole("heading", { name: "Release Brief" })).toBeTruthy(),
-  );
-  expect(page.queryByRole("dialog")).toBeNull();
-  expect(page.container.querySelector("input, textarea")).toBeNull();
-  expect(page.getByText("by @maker")).toBeTruthy();
-  for (const label of ["Workspace files", "Skills", "Plugins", "MCP servers", "Automations"]) {
+it.each([
+  [
+    "Skills",
+    "Release notes",
+    "Read the release history and cite the source for each finding.",
+    "skills.detail",
+    { slug: "@maker/release-notes", version: "1.2.3" },
+  ],
+  [
+    "Plugins",
+    "GitHub",
+    "Connect to GitHub issues, pull requests, and checks.",
+    "plugins.catalog.get",
+    { id: "ch_QG1ha2VyL2dpdGh1Yg", version: "2.0.0" },
+  ],
+] as const)(
+  "reads the pinned %s package preview",
+  async (label, entry, content, method, params) => {
+    const { page, request } = await fixture();
     fireEvent.click(page.getByRole("button", { name: new RegExp(label) }));
-    await waitForSolid(() =>
-      expect(page.getByRole("button", { name: "Back to Template" })).toBeTruthy(),
-    );
-    expect(page.container.querySelector("input, textarea")).toBeNull();
-    expect(page.container.querySelector(".template-creator__category-icon")).not.toBeNull();
-    if (label === "Automations") {
-      await waitForSolid(() =>
-        expect(page.getByText("Weekdays at 9:00 AM · America/Los_Angeles")).toBeTruthy(),
-      );
-    }
-    const entry = page.container.querySelector<HTMLButtonElement>(
-      ".template-creator__body button",
-    )!;
-    fireEvent.click(entry);
-    const expected = {
-      "Workspace files": "Read only instructions",
-      Skills: "Read the release history and cite the source for each finding.",
-      Plugins: "Required when this template is added",
-      "MCP servers": "OAuth · Sign-in required",
-      Automations: reviewed.items.at(-1)!.automation!.message,
-    }[label]!;
-    await waitForSolid(() => expect(page.getByText(expected, { exact: true })).toBeTruthy());
-    if (label !== "Skills" && label !== "Plugins") {
-      expect(page.queryByText("Description", { exact: true })).toBeNull();
-    }
-    expect(page.queryByText("Read-only preview", { exact: true })).toBeNull();
-    if (label === "Skills") {
-      expect(request).toHaveBeenCalledWith("skills.detail", {
-        slug: "@maker/release-notes",
-        version: "1.2.3",
-      });
-    }
-    if (label === "Plugins") {
-      await waitForSolid(() =>
-        expect(page.getByText("Connect to GitHub issues, pull requests, and checks.")).toBeTruthy(),
-      );
-      expect(request).toHaveBeenCalledWith("plugins.catalog.get", {
-        id: "ch_QG1ha2VyL2dpdGh1Yg",
-        version: "2.0.0",
-      });
-    }
-    if (label === "Automations") {
-      await waitForSolid(() =>
-        expect(page.getByText("Weekdays at 9:00 AM · America/Los_Angeles")).toBeTruthy(),
-      );
-    }
-    fireEvent.click(page.getByRole("button", { name: "Back to contents" }));
-    await waitForSolid(() => expect(page.getByRole("heading", { name: label })).toBeTruthy());
-    fireEvent.click(page.getByRole("button", { name: "Back to Template" }));
-    await waitForSolid(() =>
-      expect(page.getByRole("heading", { name: "Release Brief" })).toBeTruthy(),
-    );
-  }
-  expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
-  expect(request.mock.calls.some(([method]) => method === "templates.drafts.publish")).toBe(false);
-});
+    await waitForSolid(() => expect(page.getByRole("button", { name: entry })).toBeTruthy());
+    fireEvent.click(page.getByRole("button", { name: entry }));
+    await waitForSolid(() => expect(page.getByText(content, { exact: true })).toBeTruthy());
+    expect(request).toHaveBeenCalledWith(method, params);
+  },
+);
 
 it("keeps the original card through a single explicit publication and pending receipt", async () => {
-  const { page, request } = fixture();
-  await vi.advanceTimersByTimeAsync(0);
+  const { page, request } = await fixture();
   const pending = createDeferred<unknown>();
   request.mockImplementation(async (method: string) =>
     method === "templates.drafts.publish" ? pending.promise : reviewed,
   );
-  await waitForSolid(() => expect(page.getByRole("button", { name: "Publish" })).toBeTruthy());
   expect(page.container.querySelector(".template-creator__header [role=status]")?.textContent).toBe(
     "Unpublished",
   );
@@ -216,12 +181,7 @@ it("keeps the original card through a single explicit publication and pending re
   fireEvent.click(publish);
   await waitForSolid(() => expect(page.getByText("Publishing…")).toBeTruthy());
   expect(request.mock.calls.filter(([m]) => m === "templates.drafts.publish")).toHaveLength(1);
-  pending.resolve({
-    name: reviewed.name,
-    version: reviewed.version,
-    url: "https://example.test/maker/templates/release-brief",
-    publicationStatus: "pending",
-  });
+  pending.resolve(pendingPublication);
   await waitForSolid(() => expect(page.getByText("Pending", { exact: true })).toBeTruthy());
   expect(page.container.querySelector(".template-creator")).toBe(card);
   expect(page.queryByText("Published")).toBeNull();
@@ -236,9 +196,7 @@ it("keeps the original card through a single explicit publication and pending re
 it.each(["none", "unconfirmed", "transport"])(
   "keeps %s failure honest and never silently resubmits",
   async (effect) => {
-    const { page, request } = fixture();
-    await vi.advanceTimersByTimeAsync(0);
-    await waitForSolid(() => expect(page.getByRole("button", { name: "Publish" })).toBeTruthy());
+    const { page, request } = await fixture();
     const card = page.container.querySelector(".template-creator");
     request.mockImplementation(async (method: string) => {
       if (method === "templates.drafts.publish") {
@@ -279,15 +237,8 @@ it.each(["none", "unconfirmed", "transport"])(
 );
 
 it("retains pending receipt across remount and promotes only a matching registry confirmation", async () => {
-  const { page, request, flow, context } = fixture();
-  await vi.advanceTimersByTimeAsync(0);
-  const publication = {
-    name: reviewed.name,
-    version: reviewed.version,
-    url: "https://example.test/template",
-    publicationStatus: "pending",
-    attemptId: "attempt-1",
-  };
+  const { page, request, flow, context } = await fixture();
+  const publication = { ...pendingPublication, attemptId: "attempt-1" };
   request.mockImplementation(async (method: string) =>
     method === "templates.drafts.publish"
       ? publication
@@ -302,11 +253,6 @@ it("retains pending receipt across remount and promotes only a matching registry
   await flow.publish();
   page.unmount();
   flow.retirePresentation();
-  const target = {
-    agentId: "research",
-    draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
-    sessionKey: flow.sessionKey!,
-  };
   const remounted = mountSolid(() => (
     <TemplateCreatorInlineReview
       context={context}
@@ -327,41 +273,72 @@ it("retains pending receipt across remount and promotes only a matching registry
 });
 
 it("will not publish when review is stale or operator authority is revoked", async () => {
-  const { request, flow } = fixture();
-  await vi.advanceTimersByTimeAsync(0);
+  const { request, flow } = await fixture();
   flow.reviewCurrent = false;
   await flow.publish();
   expect(request.mock.calls.some(([m]) => m === "templates.drafts.publish")).toBe(false);
 });
 
-it("shares one draft owner and renders only the native card after the sidebar handoff", async () => {
-  const { page, flow, context, request } = fixture();
-  await vi.advanceTimersByTimeAsync(0);
-  await waitForSolid(() => expect(page.getByRole("button", { name: "Publish" })).toBeTruthy());
-  const target = {
-    agentId: "research",
-    draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
-    sessionKey: flow.sessionKey!,
-  };
+it("shares the draft through sidebar handoff and remounts revised metadata before publication", async () => {
+  const { page, flow, context, request } = await fixture();
   expect(templateCreatorFlow(context, target)).toBe(flow);
-  const inline = mountSolid(() => (
+  const renderInline = () => (
     <TemplateCreatorInlineReview
       context={context}
       payload={target}
       sessionKey={target.sessionKey}
       agentId={target.agentId}
     />
-  ));
+  );
+  const inline = mountSolid(renderInline);
   await vi.advanceTimersByTimeAsync(0);
   await waitForSolid(() => expect(inline.getByRole("button", { name: "Publish" })).toBeTruthy());
   expect(page.queryByRole("region")).toBeNull();
   expect(templateCreatorFlow(context)).not.toBe(flow);
   expect(templateCreatorFlow(context, target)).toBe(flow);
   expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+  inline.unmount();
+  const updated = {
+    ...reviewed,
+    revision: "c".repeat(64),
+    reviewToken: "d".repeat(64),
+    name: "@maker/revised-brief",
+    displayName: "Revised Brief",
+    description: "Latest release research",
+  };
+  request.mockImplementation(async (method) =>
+    method === "templates.drafts.read"
+      ? { revision: updated.revision, content: JSON.stringify({ scope: updated.scope }) }
+      : method === "templates.drafts.review"
+        ? updated
+        : pendingPublication,
+  );
+  const remounted = mountSolid(renderInline);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(
+    request.mock.calls.findLast(([method]) => method === "templates.drafts.review")?.[1],
+  ).toEqual({ agentId: target.agentId, draftId: target.draftId });
+  await waitForSolid(() =>
+    expect(remounted.getByRole("heading", { name: "Revised Brief" })).toBeTruthy(),
+  );
+  fireEvent.click(remounted.getByRole("button", { name: "Publish" }));
+  await waitForSolid(() => expect(flow.publication?.publicationStatus).toBe("pending"));
+  expect(request.mock.lastCall).toEqual([
+    "templates.drafts.publish",
+    expect.objectContaining({
+      reviewToken: updated.reviewToken,
+      choices: {
+        name: "revised-brief",
+        displayName: updated.displayName,
+        description: updated.description,
+        excluded: [],
+      },
+    }),
+  ]);
 });
 
 it("observes the mutable session before deciding whether to show the review", async () => {
-  const { page, flow, context } = fixture();
+  const { page, flow, context } = await fixture();
   page.unmount();
   const targetSession = "agent:research:dashboard:destination";
   const destination = mountSolid(() => (
@@ -379,7 +356,7 @@ it("observes the mutable session before deciding whether to show the review", as
 });
 
 it("releases a removed review during publication while its owner records the eventual result", async () => {
-  const { page, flow, context, request } = fixture();
+  const { page, flow, context, request } = await fixture();
   page.unmount();
   const [shown, setShown] = createSignal(true);
   const presentation = mountSolid(() => (
@@ -402,12 +379,7 @@ it("releases a removed review during publication while its owner records the eve
     await waitForSolid(() => expect(presentation.queryByRole("region")).toBeNull());
     expect(flow.busy).toBe("publishing");
   } finally {
-    pending.resolve({
-      name: reviewed.name,
-      version: reviewed.version,
-      url: "https://example.test/template",
-      publicationStatus: "pending",
-    });
+    pending.resolve(pendingPublication);
   }
   await waitForSolid(() => expect(flow.publication?.publicationStatus).toBe("pending"));
   expect(

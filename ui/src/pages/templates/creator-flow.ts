@@ -271,7 +271,6 @@ export class TemplateCreatorFlow implements TemplateCreator {
       if (this.publication || this.publicationIssue) {
         void this.checkPublication();
       } else {
-        this.seenRevision = null;
         this.schedulePoll(this.target!, this.generation, 0);
       }
       return;
@@ -564,7 +563,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
         bytesToBase64(new TextEncoder().encode(ref))
           .replaceAll("+", "-")
           .replaceAll("/", "_")
-          .replace(/=+$/u, "");
+          .replace(/[=]+$/u, "");
       const result = await target.client.request<{
         plugin: { catalog: { summary?: string } };
         detail: {
