@@ -1,5 +1,9 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getTelegramRuntime } from "../runtime.js";
+
+const log = createSubsystemLogger("telegram/widgets");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -50,10 +54,16 @@ export async function recordTelegramSentWidget(params: {
   messageId: number;
   widget: TelegramSentWidget;
 }): Promise<void> {
-  await openStores().sent.register(
-    sentKey(params.accountId, params.chatId, params.messageId),
-    params.widget,
-  );
+  // Called after Telegram accepted the widget: the user already sees it, so a bookkeeping failure
+  // must not turn into a failed send that the model retries. Taps on it then send new widgets.
+  try {
+    await openStores().sent.register(
+      sentKey(params.accountId, params.chatId, params.messageId),
+      params.widget,
+    );
+  } catch (error) {
+    log.warn(`widget record failed for message ${params.messageId}: ${formatErrorMessage(error)}`);
+  }
 }
 
 export async function lookupTelegramSentWidget(params: {
