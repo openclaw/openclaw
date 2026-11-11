@@ -107,14 +107,29 @@ start before this original-byte batch is verified. Ordinary releases retain thei
 existing authorization placement after core startup; both paths use the same
 transaction authorization owner.
 
-The existing parent prefetch and child preview/load report the first and last
-allowlisted response quota headers using their own workflow token, without an
-extra request. The `fetch-metadata-only` counts separate fixed from per-package
-metadata reads; they exclude `gh` authority/evidence calls, archive redirects, and
-registry traffic. They are not a complete dispatch budget. Select a batch only
-from observed remaining capacity and measured total costs, including parent and
-ClawHub work; static request estimates alone do not justify a retry. Resume after
-the observed reset with fresh parent authorization.
+Prepared npm preview checks the current workflow token's REST core allowance
+before emitting its publisher matrix. It budgets 512 requests per selected
+package (256 each for `consume` and `authorize`) and leaves 1,024 requests of
+headroom for final authority checks and surrounding workflow work. Each command
+enforces its own ceiling across `gh` and artifact HTTP transports, including
+explicit pagination, retries, and archive API requests. Preview itself is bounded
+to 1,024 requests. Exhaustion fails closed; it never skips authority or byte
+verification. Command accounting reports the actual attempted requests, not just
+metadata fetches. The earlier `fetch-metadata-only` telemetry remains partial.
+
+An oversized selection fails before matrix or evidence-handoff output and reports
+the supported smaller selection and quota reset time. For example, 98 packages
+require an allowance of 51,200 under these ceilings; a token with 5,000 remaining
+can admit at most seven. This is admission, not a claim that the existing
+per-package authentication now uses fewer requests or that all 98 packages can
+finish in one hour. Resume smaller selections after the observed reset with fresh
+parent authorization; original bytes and per-package receipts remain unchanged.
+
+The allowance is an observation, not a global reservation. Other workflows,
+parent/ClawHub work, action-internal requests, and manual retries can consume the
+same installation quota. The headroom is not an enforced budget for those owners;
+coordinate their capacity separately. A later quota failure still requires
+original-attempt reconciliation, not blind re-publication.
 
 <a id="publication-waivers" />
 

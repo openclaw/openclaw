@@ -394,8 +394,8 @@ div.chat-thread:where(.chat-thread--annotations) {
   -webkit-user-select: none;
 }
 
-/* Desktop chat and panel chrome reveal one continuous shell canvas. Mobile
-   keeps its own reading surface. */
+/* The desktop chat header reveals the shell canvas. Side-panel headers and
+   mobile chat keep their own reading surfaces. */
 .sidebar-region--desktop .chat-pane__header {
   background: transparent;
 }
@@ -1161,7 +1161,8 @@ openclaw-chat-sidebar-region,
   display: contents;
 }
 
-.side-panel__panel {
+.side-panel__panel,
+.side-panel__empty-body {
   background: var(--bg);
 }
 
