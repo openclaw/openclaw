@@ -351,10 +351,10 @@ export async function quiesceLocalWorkspace(params: {
     let startedAt = observedAt;
     let phase: LocalWorkspacePausePhase = "pause";
     let phaseStartedAt = startedAt;
-    const durations = new Map<LocalWorkspacePausePhase, number>();
+    const durations: Partial<Record<LocalWorkspacePausePhase, number>> = {};
     const observePhase = (next: LocalWorkspacePausePhase) => {
       const now = performance.now();
-      durations.set(phase, (durations.get(phase) ?? 0) + now - phaseStartedAt);
+      durations[phase] = (durations[phase] ?? 0) + now - phaseStartedAt;
       phase = next;
       phaseStartedAt = now;
     };
@@ -420,10 +420,10 @@ export async function quiesceLocalWorkspace(params: {
       }
       if (phaseObservers.delete(observePhase)) {
         observePhase("resume");
-        let dominantPhase: LocalWorkspacePausePhase = "pause";
+        let dominantPhase = "pause";
         let dominantPhaseMs = 0;
-        const phaseDurationsMs: Partial<Record<LocalWorkspacePausePhase, number>> = {};
-        for (const [name, ms] of durations) {
+        const phaseDurationsMs: Record<string, number> = {};
+        for (const [name, ms] of Object.entries(durations)) {
           if (ms > dominantPhaseMs) {
             dominantPhase = name;
             dominantPhaseMs = ms;
