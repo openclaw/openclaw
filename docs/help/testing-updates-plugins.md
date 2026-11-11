@@ -82,7 +82,8 @@ tag against this checkout. If an SDK export or a required argument that runtime
 used has changed, it fails and asks for a higher floor. An unreleased floor is
 skipped only when it matches the release candidate's version; a missing tag for
 an older floor fails because compatibility cannot be verified. A floor above the
-release version fails because it would refuse the matching runtime.
+release version admits no older runtime: it is skipped when the release also admits
+its own runtime version, and fails when the release would refuse that runtime.
 
 For a Plugin SDK change, compare the exact commits separately:
 

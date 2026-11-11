@@ -14,6 +14,7 @@ import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
 export type RuntimeFloorPlan =
   | { pluginId: string; floor: string; action: "check"; tag: string }
   | { pluginId: string; floor: string; action: "skip-unreleased" }
+  | { pluginId: string; floor: string; action: "skip-above-release" }
   | { pluginId: string; floor: string; action: "fail"; reason: string };
 
 /** Decides, per version-bound runtime, whether its floor can and must be type-checked. */
@@ -26,6 +27,8 @@ export function planRuntimeFloorChecks(params: {
   }[];
   isReleased: (tag: string) => boolean;
   hasSource: (pluginId: string) => boolean;
+  /** Whether the checked release admits its own-version runtime below this floor (#195255). */
+  admitsMatchingRuntime: (floor: string) => boolean;
 }): RuntimeFloorPlan[] {
   const plans: RuntimeFloorPlan[] = [];
   for (const candidate of params.candidates) {
@@ -33,9 +36,14 @@ export function planRuntimeFloorChecks(params: {
     if (!candidate.versionBoundToOpenClaw || !floor || !params.hasSource(candidate.pluginId)) {
       continue;
     }
-    // A floor above this release would refuse the runtime published alongside it.
+    // A floor above this release admits no older runtime. Releases that also admit their own
+    // version leave nothing to check; older releases would refuse the runtime published with them.
     const floorComparedToHost = compareOpenClawReleaseVersions(floor, params.hostVersion);
     if ((floorComparedToHost ?? 0) > 0) {
+      if (params.admitsMatchingRuntime(floor)) {
+        plans.push({ pluginId: candidate.pluginId, floor, action: "skip-above-release" });
+        continue;
+      }
       plans.push({
         pluginId: candidate.pluginId,
         floor,
@@ -203,6 +211,27 @@ export async function loadRuntimeFloorCandidates(
   return candidates as RuntimeFloorCandidates;
 }
 
+/** Reads the checked release's own admission rule; releases before #195255 have none. */
+async function loadMatchingRuntimeAdmission(
+  rootDir: string,
+  hostVersion: string,
+): Promise<(floor: string) => boolean> {
+  const semverPath = path.join(rootDir, "src", "infra", "semver.ts");
+  if (!existsSync(semverPath)) {
+    return () => false;
+  }
+  const semver = await importToolingTypeScript(pathToFileURL(semverPath).href, import.meta.url);
+  if (typeof semver.isRuntimeAdmissibleForFloor !== "function") {
+    return () => false;
+  }
+  const admit = semver.isRuntimeAdmissibleForFloor as (
+    runtime: string,
+    host: string,
+    minimum: string,
+  ) => boolean | null;
+  return (floor) => admit(hostVersion, hostVersion, floor) === true;
+}
+
 /**
  * Throws when a version-bound runtime's floor no longer works with the checkout at rootDir. The
  * release workflow runs trusted tooling against the release checkout, so the floors come from there.
@@ -223,6 +252,7 @@ export async function checkOfficialRuntimeFloors(rootDir = process.cwd()): Promi
     candidates,
     isReleased: (tag) => isReleasedTag(rootDir, tag),
     hasSource: (pluginId) => existsSync(path.join(rootDir, "extensions", pluginId, "package.json")),
+    admitsMatchingRuntime: await loadMatchingRuntimeAdmission(rootDir, hostVersion),
   });
   const failures: string[] = [];
   for (const plan of plans) {
@@ -231,6 +261,10 @@ export async function checkOfficialRuntimeFloors(rootDir = process.cwd()): Promi
     } else if (plan.action === "skip-unreleased") {
       console.log(
         `official-runtime-floor: ${plan.pluginId} floor ${plan.floor} is unreleased; nothing older is admitted.`,
+      );
+    } else if (plan.action === "skip-above-release") {
+      console.log(
+        `official-runtime-floor: SKIP ${plan.pluginId} floor ${plan.floor} is above OpenClaw ${hostVersion}; no older runtime is admitted and the matching version is exempt.`,
       );
     } else {
       const errors = typecheckFloorSource(rootDir, plan);

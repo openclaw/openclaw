@@ -22,34 +22,28 @@ function plan(params: Partial<Parameters<typeof planRuntimeFloorChecks>[0]> = {}
     candidates: [codex],
     isReleased: () => true,
     hasSource: () => true,
+    admitsMatchingRuntime: () => false,
     ...params,
   });
 }
 
 describe("planRuntimeFloorChecks", () => {
-  it("type-checks a released floor", () => {
-    expect(plan()).toEqual([
-      { pluginId: "codex", floor: "2026.10.6", action: "check", tag: "v2026.10.6" },
-    ]);
-  });
-
-  it("skips an unreleased floor because nothing older can be admitted", () => {
+  it.each([
+    ["2026.10.7", "2026.10.6", true, false, "check"],
+    ["2026.10.10-beta.4", "2026.10.10-beta.4", false, false, "skip-unreleased"],
+    ["2026.10.6", "2026.10.7", true, false, "fail"],
+    ["2026.10.6", "2026.10.7", true, true, "skip-above-release"],
+  ] as const)("host %s, floor %s, released %s, own version admitted %s: %s", (...row) => {
+    const [hostVersion, floor, released, admits, action] = row;
+    const candidates = [{ ...codex, minimumCompatibleVersion: floor }];
     expect(
       plan({
-        hostVersion: "2026.10.10-beta.4",
-        candidates: [{ ...codex, minimumCompatibleVersion: "2026.10.10-beta.4" }],
-        isReleased: () => false,
+        hostVersion,
+        candidates,
+        isReleased: () => released,
+        admitsMatchingRuntime: () => admits,
       }),
-    ).toEqual([{ pluginId: "codex", floor: "2026.10.10-beta.4", action: "skip-unreleased" }]);
-  });
-
-  it("fails a floor above the release, which would refuse the matching runtime", () => {
-    expect(
-      plan({
-        hostVersion: "2026.10.6",
-        candidates: [{ ...codex, minimumCompatibleVersion: "2026.10.7" }],
-      }),
-    ).toEqual([expect.objectContaining({ pluginId: "codex", action: "fail" })]);
+    ).toEqual([expect.objectContaining({ pluginId: "codex", floor, action })]);
   });
 
   it("ignores runtimes that are not version-bound, have no floor or no source here", () => {

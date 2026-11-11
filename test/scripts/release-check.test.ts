@@ -195,6 +195,17 @@ describe("release-check", () => {
       const compatible = await run();
       expectExit(compatible, 1, ["not-packed.tgz"], ["minimumCompatibleVersion"]);
       expect(compatible.stdout).toContain("codex 2026.10.6 type-checks against OpenClaw 2026.10.7");
+
+      // A release that admits its own version skips a floor above it; one that does not still fails.
+      setFloor("2026.10.8");
+      expectExit(await run(), 1, ["is newer than OpenClaw"], ["not-packed.tgz"]);
+      writeFiles(root, {
+        "src/infra/semver.ts":
+          "export const isRuntimeAdmissibleForFloor = (runtime: string, host: string) => runtime === host;\n",
+      });
+      const exempt = await run();
+      expectExit(exempt, 1, ["not-packed.tgz"], ["is newer than OpenClaw"]);
+      expect(exempt.stdout).toContain("SKIP codex floor 2026.10.8 is above OpenClaw 2026.10.7");
     });
   });
 
