@@ -169,6 +169,7 @@ sidebarTitle: "Voice and speech"
           providers: {
             openai: {
               apiKey: "${REALTIME_API_KEY}",
+              apiKeyHeader: "x-api-key",
               baseUrl: "wss://voice.example.com/custom/realtime?realtime=true",
             },
           },
@@ -176,6 +177,15 @@ sidebarTitle: "Voice and speech"
       },
     }
     ```
+
+    The default custom-endpoint header is `Authorization: Bearer <apiKey>`. Set
+    `talk.realtime.providers.openai.apiKeyHeader: "x-api-key"` to send the
+    configured key in the `x-api-key` header without a Bearer prefix. This
+    option accepts only `x-api-key` and requires a custom `baseUrl`; omit it
+    to keep the default Bearer header. Voice Call can use the same option at
+    `plugins.entries.voice-call.config.realtime.providers.openai.apiKeyHeader`.
+    It only changes Realtime WebSocket authentication; standard TTS/STT
+    authentication remains unchanged.
 
     The default is `wss://api.openai.com/v1/realtime`. The URL's path and
     query parameters are preserved; OpenClaw sets the `model` query parameter
