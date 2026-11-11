@@ -603,13 +603,9 @@ function FramedMessageGroup(props: {
                   when={frame().sendStatus}
                   fallback={
                     <MessageMeta
-                      timestamp={
-                        frame().normalizedRole === "user"
-                          ? frame().preparedMessages[frame().lastMessageIndex]!.source
-                              .normalizedMessage.timestamp
-                          : props.group.timestamp
-                      }
+                      timestamp={frame().footerTimestamp}
                       meta={frame().meta}
+                      durationMs={frame().turnDurationMs}
                     />
                   }
                 >

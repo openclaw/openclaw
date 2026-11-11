@@ -477,7 +477,7 @@ export type GatewayRequestContext = GatewayKernelContext &
     /** Entry-only access; the kernel owns closure. Absent in embedded-only contexts. */
     requestEntryLifetime?: Pick<
       import("../server-request-entry.js").GatewayRequestEntryLifetime,
-      "enter" | "signal"
+      "enter" | "signal" | "retainedSignal"
     >;
   };
 

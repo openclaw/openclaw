@@ -211,7 +211,13 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
           {props.taskProgressNotice}
         </RootGroup>
       </Show>
-      <Show when={props.subagents && props.subagents.rows.length > 0 && props.subagents}>
+      <Show
+        when={
+          props.subagents &&
+          props.subagents.rows.some((row) => row.listed !== false) &&
+          props.subagents
+        }
+      >
         {(subagents) => (
           <section
             class="chat-details-mobile-root__section"

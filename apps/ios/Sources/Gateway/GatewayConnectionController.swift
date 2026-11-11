@@ -49,13 +49,13 @@ final class GatewayConnectionController {
     private var localNetworkAccessRequested: Bool
     private(set) var currentScenePhase: ScenePhase = .inactive
     private var didAutoConnect = false
-    private var pendingServiceResolvers: [String: BonjourServiceResolver<(host: String, port: Int)>] = [:]
+    private var pendingServiceResolvers: [UUID: BonjourServiceResolver<(host: String, port: Int)>] = [:]
     private var pendingTrustConnect: GatewayPendingTrustConnect?
     private var preconnectRetryContext: PreconnectRetryContext?
     private var trustProbeGeneration: UInt64 = 0
     private var connectAttemptGeneration: UInt64 = 0
     private var autoConnectSuppression: AutoConnectSuppressionLease?
-    @ObservationIgnored private var pendingAutoConnectTask: Task<Void, Never>?
+    @ObservationIgnored private(set) var pendingAutoConnectTask: Task<Void, Never>?
     @ObservationIgnored var operatorFleetReconcileTask: Task<Void, Never>?
     private var pendingAutoConnectGeneration: UInt64?
     @ObservationIgnored private var pendingAutoConnectSuppressionGeneration: UInt64?
@@ -114,6 +114,7 @@ final class GatewayConnectionController {
 
         self.updateFromDiscovery()
         self.observeDiscovery()
+        self.observeGatewayRegistration()
 
         if self.discoveryEnabled, self.localNetworkAccessRequested {
             self.discovery.start()
@@ -1489,7 +1490,9 @@ extension GatewayConnectionController {
             return await serviceEndpointResolver(endpoint)
         }
         guard case let .service(name, type, domain, _) = endpoint else { return nil }
-        let key = "\(domain)|\(type)|\(name)"
+        // One resolver per call: callers resolving the same service at once (Settings connect and
+        // the background fleet) each keep their resolver alive until it finishes.
+        let key = UUID()
         return await withCheckedContinuation { continuation in
             let resolver = BonjourServiceResolver(
                 name: name,

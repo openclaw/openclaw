@@ -55,12 +55,12 @@ export function formatModelContextMeta(
   const maximum = option.contextWindow;
   if (active && maximum && active < maximum) {
     return translate("chat.modelControls.contextActiveAndMax", {
-      active: formatContextTokenCapacity(active),
-      maximum: formatContextTokenCapacity(maximum),
+      active: formatContextTokenCapacity(active, 0),
+      maximum: formatContextTokenCapacity(maximum, 0),
     });
   }
   const capacity = active || maximum;
-  return capacity ? formatContextTokenCapacity(capacity) : "";
+  return capacity ? formatContextTokenCapacity(capacity, 0) : "";
 }
 
 /** Owners omit completed empty groups; a published group has rows or an active receipt. */

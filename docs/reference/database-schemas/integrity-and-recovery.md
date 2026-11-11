@@ -207,6 +207,18 @@ incompatible identities report `feature-mismatch`, `schema-mismatch`, or
 `policy-mismatch`. A simultaneous runtime change cannot mask those mismatches.
 Legacy seals report `identity-mismatch` when their combined identity differs.
 
+Shared-state startup reports the admission owner's refusal as
+`stateIntegrityReason` on `cli.bootstrap.admission.database-readiness` whenever
+it runs integrity verification. `schema-mismatch` can follow a clean shutdown:
+canonical SQL changes, including same-version additive columns, change the seal
+identity even when the numeric schema version stays unchanged. The first startup
+under that schema verifies the database; a successful runtime open and clean
+close publishes compatible proof for subsequent restarts. Read-only preflight
+does not reseal the database, so repeating preflight alone repeats verification.
+`startup-not-ready` means no refusal was recorded but reusable startup admission
+was unavailable; `maintenance` identifies explicit maintenance inspection.
+These diagnostics do not weaken integrity checks or change the seal lifetime.
+
 Worker admission checks current authority after lease cleanup and before opening
 the native agent database. A refusal at that boundary releases its unopened lease
 without revoking an earlier clean-close seal. Once native opening begins, failed
@@ -1315,6 +1327,11 @@ SQLite handles writer contention directly with a zero busy timeout; maintenance
 does not wait on a separate coordination database. Explicit synchronous
 checkpoint and close operations retain their synchronous contract. These changes
 require no state migration.
+
+Shared-state retirement, including an agent worker's shared-state borrow, uses a
+zero busy timeout for its final checkpoint. Peer readers can keep their snapshot
+and WAL without delaying retirement by the normal write timeout. Clean-close proof
+still requires a completed checkpoint, native close, and empty journals.
 
 The warning includes observed WAL and database sizes, checkpointed and total WAL
 frames, the last observed complete checkpoint, the consecutive blocked count,

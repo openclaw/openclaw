@@ -50,7 +50,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
     | typeof import("../config/sessions/session-accessor.sqlite-maintenance-transaction.js")
     | undefined;
   let replacements:
-    | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
+    | typeof import("../config/sessions/session-accessor.sqlite-replacement-publication.js")
     | undefined;
   const releasePreparation = () => {
     if (preparation) {
@@ -210,7 +210,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
     prepare() {
       return Promise.all([
         import("../config/sessions/session-accessor.sqlite-maintenance-transaction.js"),
-        import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
+        import("../config/sessions/session-accessor.sqlite-replacement-publication.js"),
       ]).then(([metadata, replacement]) => {
         maintenance = metadata;
         replacements = replacement;

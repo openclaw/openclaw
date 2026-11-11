@@ -1,0 +1,2 @@
+# Exact net regression-test growth for PR #196862: preserve provider hook receiver/scope and MCP output contracts while removing obsolete export paths.
+21

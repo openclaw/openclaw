@@ -32,12 +32,14 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/agents-settings-delete.e2e.test.ts",
   "ui/src/e2e/background-work.real-gateway.e2e.test.ts",
   "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
+  "ui/src/e2e/browser-pair-code.real-gateway.e2e.test.ts",
   "ui/src/e2e/build-info-unicode.e2e.test.ts",
   "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-completed-assistant.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-daybreak.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-files-refresh.e2e.test.ts",
   "ui/src/e2e/chat-html-csp.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-html-publication.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-incognito-send.real-gateway.e2e.test.ts",
@@ -72,6 +74,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
   "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
   "ui/src/e2e/gateway-fresh-visit.real-gateway.e2e.test.ts",
+  "ui/src/e2e/guest-owner-filter.real-gateway.e2e.test.ts",
   "ui/src/e2e/initial-connect-splash.e2e.test.ts",
   "ui/src/e2e/locale-offline-retry.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
@@ -120,6 +123,7 @@ export const uiE2eProductionArtifactTestFiles = [
   "ui/src/e2e/gateway-fresh-visit.http.e2e.test.ts",
   "ui/src/e2e/service-worker-update.e2e.test.ts",
   "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
+  "ui/src/e2e/template-chat-review.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
 
 const uiE2eStandaloneTestFiles = [

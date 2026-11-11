@@ -78,13 +78,22 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
       return "";
     }
     if ("schedule" in item) {
-      return item.schedule + " · " + item.timezone;
+      return (
+        item.schedule +
+        " · " +
+        item.timezone +
+        " · " +
+        t(item.enabled ? "templatesCatalog.automationEnabled" : "templatesCatalog.automationPaused")
+      );
+    }
+    if ("source" in item && item.source === "bundled") {
+      return t("templatesCatalog.dependencyBundled");
+    }
+    if ("ref" in item) {
+      return t("templatesCatalog.dependencyClawHub", { version: item.version });
     }
     if ("kind" in item) {
-      return (
-        (item.kind === "plugin" ? t("tabs.plugin") : t("tabs.mcp")) +
-        (item.version ? " · " + item.version : "")
-      );
+      return t("tabs.mcp");
     }
     return "";
   };
@@ -141,19 +150,13 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
         </button>
       </header>
       <div ref={(element) => (body = element)} class="template-preview__body">
-        <For each={[props.view.detailRequest ?? props.view.catalogRequest]}>
+        <For each={[props.view.detailRequest]}>
           {() => (
             <Errored
               fallback={(error) => (
                 <InlineAlert tone="danger" role="alert">
                   {formatUiError(error())}
-                  <button
-                    type="button"
-                    class="btn"
-                    onClick={() =>
-                      props.view.selected ? props.view.onRetryDetail() : props.view.onRetryCatalog()
-                    }
-                  >
+                  <button type="button" class="btn" onClick={() => props.view.onRetryDetail()}>
                     {t("common.retry")}
                   </button>
                 </InlineAlert>
@@ -166,9 +169,6 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                   </p>
                 }
               >
-                <Show when={props.view.readEntries().length === 0}>
-                  <span />
-                </Show>
                 <Show when={contents()}>
                   <Show
                     when={category()}
@@ -220,13 +220,25 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                     <span>
                                       <strong>{item.name}</strong>
                                       <small>
-                                        {"excerpt" in item
-                                          ? item.excerpt
-                                          : "schedule" in item
-                                            ? item.schedule + " · " + item.timezone
-                                            : "version" in item
-                                              ? item.version
-                                              : ""}
+                                        {"source" in item && item.source === "bundled"
+                                          ? t("templatesCatalog.dependencyBundled")
+                                          : "ref" in item
+                                            ? t("templatesCatalog.dependencyClawHub", {
+                                                version: item.version,
+                                              })
+                                            : "excerpt" in item
+                                              ? item.excerpt
+                                              : "schedule" in item
+                                                ? item.schedule +
+                                                  " · " +
+                                                  item.timezone +
+                                                  " · " +
+                                                  t(
+                                                    item.enabled
+                                                      ? "templatesCatalog.automationEnabled"
+                                                      : "templatesCatalog.automationPaused",
+                                                  )
+                                                : ""}
                                       </small>
                                     </span>
                                     <Icon name="chevronRight" />
@@ -313,7 +325,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
               !props.view.canAdd ||
               !props.view.detail ||
               props.view.applying ||
-              Boolean(props.view.consentWarning || props.view.reviewPlan || props.view.addedAgentId)
+              Boolean(props.view.consentWarning || props.view.reviewPlan)
             }
             onClick={() => void props.view.onConfirm()}
           >

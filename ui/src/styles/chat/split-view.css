@@ -156,7 +156,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   padding: 3px 5px;
   margin-inline: -5px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   text-align: left;
 }

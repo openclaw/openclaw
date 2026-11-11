@@ -160,7 +160,7 @@ function ChatPaneHeaderChrome(
         "chat-pane__header",
         {
           "chat-pane__header--mobile": props.mergedChrome,
-          "chat-pane__header--agent": Boolean(props.agent),
+          "chat-pane__header--agent": Boolean(props.agent) && props.mergedChrome,
           "chat-pane__header--closable": props.onClosePane !== undefined,
           "chat-pane__header--stacked-status":
             props.narrow &&
@@ -185,8 +185,7 @@ function ChatPaneHeaderChrome(
             />
           </openclaw-tooltip>
         </Show>
-        {/* Roster mode has no session crumbs beside the agent pill; rename still edits inline. */}
-        <Show when={!props.agent || props.editing}>
+        <Show when={!props.agent || !props.mergedChrome || props.editing}>
           <IdentityCrumbs {...props} />
         </Show>
         <Show when={!props.mergedChrome}>
@@ -261,7 +260,7 @@ function ChatPaneHeaderChrome(
           {(placement) => <ChatPanePlacement {...placement()} />}
         </Show>
       </div>
-      <Show when={props.agent}>
+      <Show when={props.mergedChrome ? props.agent : undefined}>
         {(agent) => (
           <div class="chat-pane__header-agent">
             <AgentCrumb {...props} agent={agent()} />

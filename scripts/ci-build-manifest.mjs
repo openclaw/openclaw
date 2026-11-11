@@ -8,6 +8,7 @@ import {
   formatIosSimulatorSelectionSummary,
   resolveIosSimulatorTestSelection,
 } from "./lib/ci-ios-smoke-plan.mjs";
+import { resolveBoatNodeTestCapacity } from "./lib/ci-node-test-capacity.mts";
 import { resolveSkillsPythonTargets } from "./lib/ci-skills-python-plan.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
@@ -146,6 +147,17 @@ const createPluginContractTestShards =
       ];
 const createMatrix = (include) => ({
   include: include.map((row) => {
+    // Project before serialization so direct and late-planned matrices agree.
+    const capacity =
+      process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat"
+        ? resolveBoatNodeTestCapacity(row.runner, row.check_name, undefined, [
+            ...(row.includePatterns ?? []),
+            ...(row.groups ?? []).flatMap((group) => group.includePatterns ?? []),
+          ])
+        : undefined;
+    if (capacity) {
+      return { ...row, runner: capacity.runner, runner_label: capacity.runner };
+    }
     const label = row.runner_label ?? blacksmithRunnerLabel(row.runner);
     return label ? { ...row, runner_label: label } : row;
   }),
@@ -370,6 +382,21 @@ const pluginContractShards =
     : [];
 const channelContractShards =
   !runtimePullRequest && runNodeFull && !releaseFastLane ? createChannelContractTestShards() : [];
+// Reuse releaseGate's existing exact-SHA/PR admission; never acquire a backend
+// or download models for ordinary PR, push, schedule, or unrelated dispatches.
+const mlxNativeProofScope =
+  workflowEventName === "workflow_dispatch" && releaseGate && !frozenTarget && !compatibilityTarget
+    ? await importTargetPlan("./scripts/ci-changed-scope.mjs")
+    : null;
+const runMlxNativeProof =
+  workflowEventName === "workflow_dispatch" &&
+  releaseGate &&
+  isCanonicalRepository &&
+  !frozenTarget &&
+  !compatibilityTarget &&
+  releaseScope === "full" &&
+  typeof mlxNativeProofScope?.hasMlxNativeProofInputs === "function" &&
+  mlxNativeProofScope.hasMlxNativeProofInputs(changedPaths);
 const runMacos =
   !ordinaryPullRequest &&
   !nativeGeneratedOnly &&
@@ -391,7 +418,7 @@ const supportsCurrentMacosSwiftCi =
   existsSync("scripts/lint-swift.sh") &&
   existsSync("scripts/format-swift.sh");
 const runMacosSwift =
-  runMacos &&
+  (runMacos || runMlxNativeProof) &&
   !deferMacosSwift &&
   (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi);
 const supportsIosBuild = hasPackageScript("ios:build");
@@ -971,6 +998,7 @@ if (runCheckPlan && proposedCheckScope?.types) {
 }
 const fullCoreLintStripes =
   runnerProfile === "hybrid" &&
+  nodeRunnerBackend !== "boat" &&
   !frozenTarget &&
   ((!releaseGate && ["push", "pull_request"].includes(eventName)) ||
     nodeRunnerBackend === "runson" ||
@@ -1075,6 +1103,8 @@ if (
 }
 const { isPostgresConformanceTestTarget } = postgresConformancePlan;
 const postgresConformancePaths = [
+  "package.json",
+  "pnpm-lock.yaml",
   ".github/actions/postgres-conformance/**",
   "**/*.postgres.test.ts",
   "src/state/openclaw-agent-*",
@@ -1122,6 +1152,7 @@ const postgresConformancePaths = [
   "src/cron/store/row-codec.ts",
   "src/cron/store/runtime-rows.kernel.ts",
   "src/cron/store/run-finalization.worker.ts",
+  "src/cron/store/run-queue.worker.ts",
   "src/cron/service.ts",
   "src/cron/service/ops-run.ts",
   "src/infra/database-engine/**",
@@ -1387,6 +1418,34 @@ const shardRequiresTests = (shard, tests, fallback) =>
       ? patterns.some((pattern) => tests.some((test) => matchesGlob(test, pattern)))
       : fallback(plan);
   });
+const workerPresetOwner =
+  frozenTarget || !existsSync("./scripts/lib/vitest-runtime-selection.mts")
+    ? undefined
+    : await importTargetPlan("./scripts/lib/vitest-runtime-selection.mts");
+const workerCachePreset = (shard) => {
+  if (
+    shard.requiresDist ||
+    shard.pretestBuildMode ||
+    !workerPresetOwner?.resolveCiVitestWorkerPreset
+  ) {
+    return undefined;
+  }
+  const plans = shard.targets?.length
+    ? shard.targets.map((target) => ({ target }))
+    : (shard.groups ?? [shard]).map((group) =>
+        Object.assign({}, group, { env: { ...shard.env, ...group.env } }),
+      );
+  // Unknown flags keep the full archive; the runtime recomputes the decision.
+  const hasExtraArgs = [shard, ...plans].some((plan) => {
+    const args = plan.env?.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON;
+    return (
+      args !== undefined &&
+      (typeof args !== "string" || (args.trim() !== "" && args.trim() !== "[]"))
+    );
+  });
+  const preset = workerPresetOwner.resolveCiVitestWorkerPreset(plans, hasExtraArgs);
+  return preset === "full" ? undefined : preset;
+};
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
 const packedNodeTestRows = [];
 const nodeTestShards = targetNodeTestShards
@@ -1396,6 +1455,10 @@ const nodeTestShards = targetNodeTestShards
       (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0),
   )
   .map((shard) => {
+    const minTotalMemoryBytes = Math.max(
+      0,
+      ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0),
+    );
     const groups =
       shard.groups?.map(projectNodeTestGroup) ??
       (nodeTestGroupsCodec && shard.configs?.length && !shard.targets?.length
@@ -1411,6 +1474,13 @@ const nodeTestShards = targetNodeTestShards
         : undefined);
     const packedGroups =
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
+    const capacity =
+      process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat"
+        ? resolveBoatNodeTestCapacity(shard.runner, shard.checkName, minTotalMemoryBytes, [
+            ...(shard.includePatterns ?? []),
+            ...(shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
+          ])
+        : undefined;
     const row = {
       check_name: shard.checkName,
       test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
@@ -1431,19 +1501,18 @@ const nodeTestShards = targetNodeTestShards
       configs: packedGroups ? undefined : shard.configs,
       env: shard.env,
       includePatterns: packedGroups ? undefined : shard.includePatterns,
+      worker_cache_preset: workerCachePreset(shard),
       pretest_build_mode: shard.pretestBuildMode,
       git_commits: resolveTestGitCommits(shard),
       requires_dist: shard.requiresDist,
-      runner: shard.runner,
-      runner_label: blacksmithRunnerLabel(
-        shard.runner,
-        Math.max(0, ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0)),
-      ),
+      runner: capacity?.runner ?? shard.runner,
+      runner_label: capacity?.runner ?? blacksmithRunnerLabel(shard.runner, minTotalMemoryBytes),
       timeout_minutes:
         !shard.requiresDist && testRuntimeMode === "dual-all"
           ? 2 * (shard.timeoutMinutes ?? 60)
           : shard.timeoutMinutes,
       plan_concurrency: shard.planConcurrency,
+      cpu_budget: capacity?.cpuBudget ?? shard.cpuBudget,
       predicted_seconds: shard.predictedTestSeconds ?? shard.predictedSeconds,
       targets: shard.targets,
       requires_go: shardRequiresTests(shard, ["test/scripts/docs-i18n.test.ts"], (plan) => {
@@ -1904,6 +1973,7 @@ const manifest = {
       : [],
   ),
   run_macos_swift: runMacosSwift,
+  run_mlx_native_proof: runMlxNativeProof,
   run_openclawkit_tests: runMacos && !deferMacosSwift && supportsOpenClawKitTests,
   run_ios_build: runIosBuild,
   run_ios_voice_cleanup_tests: iosSimulatorSelection.voice.selected,
@@ -1989,7 +2059,7 @@ if (hybridHostedEligible) {
         "runtime-topology-architecture",
         "plugin-sdk-api-diff",
         "dependencies",
-      ].includes(row.group) || !row.runner.startsWith("blacksmith-"),
+      ].includes(row.group) || row.runner === "ubuntu-24.04",
   ).length;
   const hostedPlanner =
     process.env.OPENCLAW_CI_RUNNER_BACKEND === "runson" || nodeRunnerBackend === "runson";
@@ -2050,14 +2120,19 @@ if (hybridHostedEligible) {
     ),
     "check-additional-shard": count(manifest.run_check_additional, hostedAdditionalRows),
     "check-docs": count(manifest.run_check_docs),
-    "postgres-conformance": count(manifest.run_postgres_conformance, 3),
+    "postgres-conformance": count(
+      manifest.run_postgres_conformance,
+      workflowEventName === "pull_request" ? 4 : 3,
+    ),
     "skills-python": count(manifest.run_skills_python_job),
     "checks-windows": count(
       manifest.run_checks_windows,
       manifest.checks_windows_matrix.include.length,
     ),
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
-    "macos-swift": count(manifest.run_macos_swift, 2),
+    // Eligible profiles emit one app test row plus packages and mlx; settings
+    // and release rows require a different dispatch admission.
+    "macos-swift": count(manifest.run_macos_swift, 3),
     "ios-build": count(manifest.run_ios_build),
     "ios-screenshot-capture": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 1),
     "ios-screenshot-evidence": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS)),

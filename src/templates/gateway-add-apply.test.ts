@@ -4,6 +4,7 @@ import type {
   TemplateLifecyclePlanResult,
 } from "../../packages/gateway-protocol/src/schema/templates.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { StatelessTemplateAddOptions } from "./add-stateless.js";
 import { TemplateAddMutationError } from "./add.js";
 import type { ClawHubTemplateTrust, withResolvedClawHubSource } from "./clawhub-source.js";
 import {
@@ -19,11 +20,14 @@ const mocks = vi.hoisted(() => ({
   lease: vi.fn(),
   pluginLease: vi.fn(),
   policyReader: vi.fn(),
+  readPolicy: vi.fn(),
   build: vi.fn(),
   project: vi.fn(),
   plansMatch: vi.fn(),
   consent: vi.fn(),
   apply: vi.fn(),
+  retain: vi.fn(),
+  fail: vi.fn(),
   persist: vi.fn(),
   owned: vi.fn(),
   configuredAccess: vi.fn(),
@@ -40,6 +44,7 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
 vi.mock("../config/io.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/io.runtime.js")>()),
   withCurrentConfigPolicyReader: mocks.policyReader,
+  readCurrentConfigForPolicyCheckAsync: mocks.readPolicy,
 }));
 // mock-isolation: The reviewed plan is a fixture so apply drift can be tested independently.
 vi.mock("./gateway-add-plan.js", () => ({
@@ -55,15 +60,7 @@ vi.mock("./gateway-disclosure.js", () => ({
 // mock-isolation: Consent decisions are varied without invoking installer prompts.
 vi.mock("./gateway-plugin-consent.js", () => ({ bindTemplatePluginInstallConsent: mocks.consent }));
 // mock-isolation: The real Add mutates shared state; these tests observe handoff decisions.
-vi.mock("./add-stateless.js", () => ({
-  stageTemplateAddHostRequirementsStateless: async (plan: unknown, options: unknown) => ({
-    kind: "ready",
-    stageAgent: async () => ({
-      kind: "ready",
-      finish: async () => await mocks.apply(plan, options),
-    }),
-  }),
-}));
+vi.mock("./add-stateless.js", () => ({ applyTemplateAddPlanStateless: mocks.apply }));
 
 const coordinate = { packageName: "@openclaw/workflow-operator", version: "1.0.0" };
 const source = {
@@ -120,6 +117,7 @@ const projected: TemplateLifecyclePlanResult = {
 };
 const skillReview = {
   actionId: "skill:@community/triage",
+  source: "clawhub" as const,
   ref: "@community/triage",
   version: "1.0.0",
   integrity: "sha256:artifact",
@@ -144,6 +142,7 @@ function applyInput(overrides: Partial<ApplyInput> = {}) {
 const applyReviewed = () => applyTemplateAddForGateway(applyInput());
 
 function usePolicy(getCurrentConfig: () => OpenClawConfig) {
+  mocks.readPolicy.mockImplementation(async () => getCurrentConfig());
   mocks.policyReader.mockImplementation(
     async (_options: unknown, run: (get: typeof getCurrentConfig) => Promise<unknown>) =>
       run(getCurrentConfig),
@@ -449,9 +448,9 @@ describe("Gateway Template Add application", () => {
     let onDisk = config;
     usePolicy(() => onDisk);
     mocks.apply.mockImplementation(
-      async (_plan: TemplateAddPlan, options: { getCurrentConfig: () => OpenClawConfig }) => {
+      async (_plan: TemplateAddPlan, options: StatelessTemplateAddOptions) => {
         onDisk = labsOff;
-        options.getCurrentConfig();
+        await options.prepareEffect?.();
       },
     );
 
@@ -541,6 +540,7 @@ describe("Gateway Template Add application", () => {
     const input = applyInput();
     const acknowledgement = {
       actionId: skillReview.actionId,
+      source: "clawhub" as const,
       ref: skillReview.ref,
       reviewToken: skillReview.reviewToken,
       acknowledgeRiskWarning: true as const,

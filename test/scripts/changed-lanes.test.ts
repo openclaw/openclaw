@@ -860,7 +860,9 @@ describe("scripts/changed-lanes", () => {
         .split("\n")
         .filter((line) => line.includes(lintPrefix))
         .map((line) => line.slice(line.indexOf(lintPrefix) + lintPrefix.length).split(" "));
-      expect(batches.map((batch) => batch.length)).toEqual(count === 9 ? [8, 1] : [1]);
+      expect(batches.map((batch) => batch.length)).toEqual(
+        count === 9 && process.platform === "win32" ? [8, 1] : [count],
+      );
       expect(batches.flat()).toEqual(targets);
     },
   );
@@ -957,7 +959,36 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
-  it.each(["win32"] as const)(
+  it.each(["linux", "darwin", "win32"] as const)(
+    "batches root-test lint without changing its selected files on %s",
+    (platform) => {
+      const targets = [
+        "changed-lanes",
+        "check-changed-cancellation",
+        "check-changed-delegation",
+        "ci-run-node-test-shard",
+        "ci-node-test-plan",
+        "test-projects",
+        "run-vitest",
+        "test-extension",
+        "extension-test-plan",
+      ]
+        .map((name) => `test/scripts/${name}.test.ts`)
+        .toSorted();
+      const commands = createChangedCheckPlan(detectChangedLanes(targets), {
+        platform,
+      }).commands.filter((command) => command.name.startsWith("lint test root changed"));
+      expect(commands.map((command) => command.args.length - 3)).toEqual(
+        platform === "win32" ? [8, 1] : [9],
+      );
+      expect(commands.flatMap((command) => command.args.slice(3))).toEqual(targets);
+      expect(
+        commands.every((command) => command.args[2] === "test/tsconfig/tsconfig.test.root.json"),
+      ).toBe(true);
+    },
+  );
+
+  it.each(["linux", "darwin", "win32"] as const)(
     "preserves core/UI lint coverage and platform batching for 83 targets on %s",
     (platform) => {
       const targets = Array.from(
@@ -1022,7 +1053,7 @@ describe("scripts/changed-lanes", () => {
         { PATH: "/usr/bin" },
         { fileExists: () => true, platform: "linux" },
       ),
-    ).toThrow("Core lint target exceeds the command-line budget");
+    ).toThrow("Targeted lint target exceeds the command-line budget");
   });
 
   it("falls back to full extension lint for broad extension diffs", () => {

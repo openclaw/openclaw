@@ -110,7 +110,7 @@
 .chat-group.tool {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
   display: block;
-  padding-inline-start: calc(var(--chat-group-inset-start) + var(--chat-avatar-gutter));
+  padding-inline-start: calc(var(--chat-group-inset) + var(--chat-avatar-gutter));
 }
 
 /* Tool activity, completed work and live narration are blocks inside a turn,
@@ -1248,7 +1248,7 @@ button.chat-reply-attribution__target {
   padding: 2px 3px;
   margin: -2px -3px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: none;
   color: inherit;
   font: inherit;
@@ -1807,6 +1807,7 @@ button.chat-reply-attribution__target:disabled {
 }
 
 .msg-meta__time,
+.msg-meta__duration,
 .msg-meta__tokens,
 .msg-meta__cache,
 .msg-meta__cost,
@@ -2196,10 +2197,6 @@ button.chat-reply-attribution__target:disabled {
   margin-block-start: 8px;
 }
 
-.chat-activity-group--bubble > .chat-work-group__separator {
-  display: none;
-}
-
 .chat-bubble-dots {
   display: inline-flex;
   align-items: center;
@@ -2254,7 +2251,7 @@ button.chat-reply-attribution__target:disabled {
   gap: 8px;
   min-height: 32px;
   padding-block: 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   list-style: none;
   cursor: default;
 }

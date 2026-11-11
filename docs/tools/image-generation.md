@@ -21,6 +21,9 @@ not post the same images again.
 
 You can send a follow-up while the completion agent is still working. The new
 turn waits for the completion and its delivery to settle before starting.
+On an external channel, the generated files are sent once the turn that
+requested them has finished, even while later turns in that chat are still
+running.
 
 In WebChat and the macOS app, generated attachments stay on the completion
 reply instead of appearing again in a separate image-only message. An interactive

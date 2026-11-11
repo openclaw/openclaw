@@ -58,6 +58,13 @@ those tool calls through the same cleanup path. The queued message keeps its
 place and is delivered once when the run can accept it or the next turn starts.
 The action never targets a later run. Unsupported tools keep the wait explanation.
 
+Queued follow-ups show **Queued behind the current turn** in the Control UI,
+including messages whose steering attempt fell back to the queue. Use **Stop**
+to stop the current turn, or the available **Steer** / **Send now** action to
+redirect it. Slow-send logs distinguish admission waits with
+`detail.reply.admission.active_run_wait`, `mailbox_wait`, `inputs_wait`,
+`followup_barrier_wait`, and `successor_barrier_wait` timings under the same prefix.
+
 A steered channel reply carries that message's quoted or forwarded context into
 the model input. Quoted content stays conversation data; commands and answers to
 pending questions use the literal incoming text. Text-only transcript entries
@@ -208,6 +215,8 @@ interrupted input follows the existing recovery rules.
 Messages waiting for a followup turn appear in the queue above the composer,
 including when the Gateway queues a message that could not be steered. They stay
 there across reconnects until consumed or canceled, without being sent again.
+This also covers messages waiting for a turn during reply initialization, including
+command-bearing messages. Slow-send diagnostics attribute these admission waits to `queued`.
 
 The `runId` returned by `chat.send` remains that input's public identity when
 steering falls back to a followup. Queue admission does not complete it. Its
