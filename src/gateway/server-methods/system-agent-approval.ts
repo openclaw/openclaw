@@ -1,7 +1,7 @@
 // Owns delegated system-agent authorization and exact-proposal completion.
 import { randomUUID } from "node:crypto";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import { parseConfigSetValue } from "../../cli/config-cli-path.js";
+import { parseConfigSetPath, parseConfigSetValue } from "../../cli/config-cli-path.js";
 import {
   getActiveAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
@@ -33,24 +33,54 @@ import { persistSystemAgentEngineHistory } from "./system-agent-chat-turn.js";
 import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import type { GatewayRequestContext } from "./types.js";
 
-// Exact closed-enum leaves only; parent and plugin-defined writes can activate commands.
-const AUTO_APPLY_CONFIG_PATHS = new Set([
-  "logging.level",
-  "logging.consoleLevel",
-  "logging.consoleStyle",
-  "ui.prefs.theme",
-  "ui.prefs.themeMode",
-]);
+// Exact presentation and bounded housekeeping leaves; parent and plugin-defined writes can change command authority.
+const AUTO_APPLY_CONFIG_PATHS = new Set(
+  [
+    "logging.level",
+    "logging.consoleLevel",
+    "logging.consoleStyle",
+    "logging.maxFileBytes",
+    "ui.seamColor",
+    "ui.prefs.theme",
+    "ui.prefs.themeMode",
+    "ui.prefs.accent",
+    "ui.prefs.locale",
+    "ui.prefs.chatShowThinking",
+    "ui.prefs.chatShowToolCalls",
+    "ui.prefs.chatPersistCommentary",
+    "ui.prefs.chatSendShortcut",
+    "ui.prefs.chatFollowUpMode",
+    "ui.prefs.sidebarEntries",
+    "messages.visibleReplies",
+    "messages.responsePrefix",
+    "messages.ackReaction",
+    "messages.ackReactionScope",
+    "messages.statusReactions.enabled",
+    "messages.groupChat.visibleReplies",
+    "attachments.ttlHours",
+  ].map((path) => JSON.stringify(path.split("."))),
+);
+
+function isAutoApplyConfigValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return !value.includes("${");
+  }
+  return Array.isArray(value)
+    ? value.every(isAutoApplyConfigValue)
+    : value === null || typeof value !== "object";
+}
 
 function canAutoApplyDelegatedOperation(operation: SystemAgentOperation): boolean {
-  if (operation.kind === "config-unset") {
-    return AUTO_APPLY_CONFIG_PATHS.has(operation.path);
-  }
-  if (operation.kind !== "config-set" || !AUTO_APPLY_CONFIG_PATHS.has(operation.path)) {
+  if (operation.kind !== "config-set" && operation.kind !== "config-unset") {
     return false;
   }
   try {
-    return typeof parseConfigSetValue(operation.value, false) === "string";
+    if (!AUTO_APPLY_CONFIG_PATHS.has(JSON.stringify(parseConfigSetPath(operation.path)))) {
+      return false;
+    }
+    return operation.kind === "config-unset"
+      ? true
+      : isAutoApplyConfigValue(parseConfigSetValue(operation.value, false));
   } catch {
     return false;
   }

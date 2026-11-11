@@ -1,2 +1,2 @@
-292
-# Covers delegated policy, spawned Gateway approval, fixture support, and owner-grant persistence after approval.
+323
+# Covers delegated policy, benign and command-capable spawned Gateway approval, fixture support, and owner-grant persistence after approval.

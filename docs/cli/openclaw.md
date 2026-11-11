@@ -119,10 +119,12 @@ In direct OpenClaw chat, persistent operations require conversational approval (
 
 Changes delegated by a regular agent, including requests from messaging channels,
 follow the requesting run's effective [session permission policy](/gateway/permission-modes).
-Full Access applies log level, console style, and theme selection changes automatically,
-including when Full Access comes from the configured default. Other persistent
-changes, including MCP servers, plugins, hooks, exec settings, model selection,
-and Gateway lifecycle, wait for approval even if the run can use `exec`.
+Full Access automatically applies reviewed display and reply settings, including
+log level, theme selection, and acknowledgement reactions. Changes that can run
+or load commands, or change who can invoke or approve them, wait for approval
+even if the run can use `exec`. These include MCP servers, plugins, hooks, exec
+settings, model selection, and Gateway lifecycle. Unreviewed or plugin-defined
+settings also wait for approval.
 Restricted runs from messaging channels ask for approval in the chat that
 made the request: channels with native approval cards show **Allow once** and
 **Deny** buttons, and other messaging chats receive the change summary with a

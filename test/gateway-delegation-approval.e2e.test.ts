@@ -16,10 +16,14 @@ import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js"
 import { createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
-it.each([false, true])(
-  "uses the spawned Gateway entry point for delegated config with exec granted=%s",
+it.each([
+  { scenario: "benign-exec-denied", allowExec: false, needsApproval: false },
+  { scenario: "command-exec-denied", allowExec: false, needsApproval: true },
+  { scenario: "command-exec-allowed", allowExec: true, needsApproval: true },
+] as const)(
+  "uses the spawned Gateway entry point for delegated config: $scenario",
   { timeout: 180_000 },
-  async (allowExec) => {
+  async ({ scenario, allowExec, needsApproval }) => {
     const signal = AbortSignal.timeout(160_000);
     const failed = createDeferred<never>();
     void failed.promise.catch(() => {});
@@ -41,9 +45,9 @@ it.each([false, true])(
               "delegate-entry",
               "openclaw",
               {
-                message: allowExec
+                message: needsApproval
                   ? "config set mcp.servers.demo.command node"
-                  : "config set logging.level debug",
+                  : "config set messages.ackReaction eyes",
               },
               current,
             );
@@ -60,7 +64,7 @@ it.each([false, true])(
       `http://127.0.0.1:${reservation.claim.port}/v1`,
     );
     const instance = await createOpenClawTestInstance({
-      name: `gateway-delegation-entry-${allowExec}`,
+      name: `gateway-delegation-entry-${scenario}`,
       signal,
       startTimeoutMs: 120_000,
       env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
@@ -97,20 +101,20 @@ it.each([false, true])(
         await client.request(
           "chat.send",
           {
-            sessionKey: `agent:main:delegation-entry-${allowExec}`,
-            message: allowExec
+            sessionKey: `agent:main:delegation-entry-${scenario}`,
+            message: needsApproval
               ? "DELEGATED_CONFIG_ENTRY: Add a local MCP server command."
-              : "DELEGATED_CONFIG_ENTRY: Set the log level to debug.",
-            idempotencyKey: `delegation-entry-${allowExec}`,
+              : "DELEGATED_CONFIG_ENTRY: Set the acknowledgement reaction to eyes.",
+            idempotencyKey: `delegation-entry-${scenario}`,
           },
           { expectFinal: false },
         );
-        if (!allowExec) {
+        if (!needsApproval) {
           await race(
             vi.waitFor(
               async () => {
                 const config = JSON.parse(await readFile(instance.configPath, "utf8"));
-                expect(config.logging?.level).toBe("debug");
+                expect(config.messages?.ackReaction).toBe("eyes");
               },
               { timeout: 45_000 },
             ),

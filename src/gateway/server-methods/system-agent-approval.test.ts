@@ -230,8 +230,13 @@ describe("Full Access delegated chat", () => {
 
   it.each([
     "config set mcp.servers.demo.command node",
+    'config set mcp["servers"].demo.command node',
     'config set mcp {"servers":{"demo":{"command":"node"}}}',
+    'config set channels.telegram.allowFrom ["other-user"]',
+    'config set messages {"ackReaction":"eyes","groupChat":{"unmentionedInbound":"user_request"}}',
     'config set logging.level {"$include":"/tmp/level.json"}',
+    "config set messages.responsePrefix ${SECRET}",
+    "config set-ref messages.ackReaction file /tmp/secret",
   ])("asks before a Full Access delegated write: %s", async (message) => {
     const fixture = await createDelegatedChatFixture(createTestGatewayScheduler());
     const call = fixture.callChat(message, { fullPermission: true });
@@ -247,6 +252,28 @@ describe("Full Access delegated chat", () => {
       expect(await fixture.manager.resolve(record.id, "deny", "operator")).toBe(true);
       expectReplyParts((await call).payload, "Denied");
       expect(fixture.runConfigSet).not.toHaveBeenCalled();
+    } finally {
+      for (const record of await fixture.manager.listPendingRecords()) {
+        await fixture.manager.resolve(record.id, "deny", "cleanup");
+      }
+      await call;
+    }
+  });
+
+  it("automatically applies a harmless message setting with Full Access", async () => {
+    const fixture = await createDelegatedChatFixture(createTestGatewayScheduler());
+    const call = fixture.callChat("config set messages.ackReaction eyes", {
+      fullPermission: true,
+    });
+    try {
+      expect(
+        await Promise.race([
+          fixture.requested.promise.then(() => "approval"),
+          call.then(() => "applied"),
+        ]),
+      ).toBe("applied");
+      expect(fixture.runConfigSet).toHaveBeenCalledOnce();
+      expect(await fixture.manager.listPendingRecords()).toEqual([]);
     } finally {
       for (const record of await fixture.manager.listPendingRecords()) {
         await fixture.manager.resolve(record.id, "deny", "cleanup");
