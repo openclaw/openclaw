@@ -20,7 +20,6 @@ it.each([
   ["high", "high"],
   ["xhigh", "high"],
   ["max", "max"],
-  ["ultra", "max"],
 ] as const)("maps DeepSeek %s effort and reasoning replay", async (thinkingLevel, effort) => {
   expect.hasAssertions();
   const provider = buildDeepSeekProvider();

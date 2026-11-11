@@ -14,7 +14,7 @@ export function createDeepSeekV4ThinkingWrapper(
       if (level === "minimal" || level === "low") {
         return "low";
       }
-      return level === "max" || level === "ultra" ? "max" : "high";
+      return level === "max" ? "max" : "high";
     },
   });
 }
