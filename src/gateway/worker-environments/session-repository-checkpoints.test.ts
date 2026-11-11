@@ -282,14 +282,6 @@ it.for([
         return result;
       },
     );
-    const runExec = processExec.runExec;
-    vi.spyOn(processExec, "runExec").mockImplementation(async (...args) => {
-      const result = await runExec(...args);
-      if (boundary === "import" && args[0] === "git" && args[1].includes("fast-import")) {
-        await pause();
-      }
-      return result;
-    });
     let finalPrepared: Awaited<ReturnType<typeof stage>> | undefined;
     let refInputHeld = false;
     const run = processExec.runCommandWithTimeout;
@@ -304,7 +296,11 @@ it.for([
         await pause();
       }
       // Keep the real runner and its beforeInput authority check.
-      return run(...args);
+      const result = await run(...args);
+      if (boundary === "import" && args[0][0] === "git" && args[0].includes("fast-import")) {
+        await pause();
+      }
+      return result;
     });
     const pending = stage("publication-authority", {
       ...(publication ? input : {}),
@@ -371,17 +367,17 @@ it("reuses accepted blobs while preserving cumulative provenance, deletions and 
   const large = Buffer.alloc(256 * 1024, 137);
   await fs.writeFile(path.join(f.remote, "first.bin"), large);
   const importBytes: number[] = [];
-  const execute = processExec.runExec;
-  vi.spyOn(processExec, "runExec").mockImplementation(async (command, args, options) => {
+  const execute = processExec.runCommandWithTimeout;
+  vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
     if (
-      command === "git" &&
-      args.includes("fast-import") &&
+      argv[0] === "git" &&
+      argv.includes("fast-import") &&
       typeof options === "object" &&
       options.stdinFileDescriptor !== undefined
     ) {
       importBytes.push(fstatSync(options.stdinFileDescriptor).size);
     }
-    return execute(command, args, options);
+    return execute(argv, options);
   });
   const first = await f.stage("incremental-first");
   expect((await f.current())?.checkpointRef).toBeNull();

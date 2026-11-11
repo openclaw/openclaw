@@ -167,13 +167,13 @@ describe("repository workspace result ownership", () => {
       let assertMutationCurrent: (() => void) | undefined;
       let queueOwner: Promise<void> | undefined;
       let saving: Promise<string> | undefined;
-      const imports = vi.spyOn(processExec, "runExec");
+      const imports = vi.spyOn(processExec, "runCommandWithTimeout");
       const writes = vi.spyOn(fs, "writeFile");
       const temporary = vi.spyOn(fs, "mkdtemp");
       const fastImports = () =>
         imports.mock.calls.filter(
-          ([command, args]) =>
-            command === "git" && args.includes(artifactRoot) && args.includes("fast-import"),
+          ([argv]) =>
+            argv[0] === "git" && argv.includes(artifactRoot) && argv.includes("fast-import"),
         );
       const publicationWrites = () =>
         writes.mock.calls.filter(
@@ -301,7 +301,7 @@ describe("repository workspace result ownership", () => {
           await expect(fs.stat(importRoot)).rejects.toMatchObject({ code: "ENOENT" });
         }
         for (const call of fastImports()) {
-          expect(call[2]).toMatchObject({ stdinFileDescriptor: expect.any(Number) });
+          expect(call[1]).toMatchObject({ stdinFileDescriptor: expect.any(Number) });
         }
         expect(importRoots).toHaveLength(1);
         expect(await candidates()).toEqual([]);
