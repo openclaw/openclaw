@@ -1,7 +1,4 @@
-import type {
-  AgentInternalEventStatus,
-  AgentRunDisposition,
-} from "../internal-event-contract.js";
+import type { AgentInternalEventStatus, AgentRunDisposition } from "../internal-event-contract.js";
 
 export type SubagentRunOutcome = {
   status: AgentInternalEventStatus;

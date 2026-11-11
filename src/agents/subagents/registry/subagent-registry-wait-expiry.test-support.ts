@@ -188,10 +188,12 @@ export function registerSubagentWaitExpiryTests(params: {
         task: "do not let the retired waiter publish into the new Gateway generation",
         runTimeoutSeconds: 1,
       });
-      // Settle the wait without advancing the grace timer: the same live row
-      // survives the in-process restart while the wait's owner retires.
-      await vi.advanceTimersByTimeAsync(0);
-      expect(mocks.callGateway).toHaveBeenCalled();
+      // Settle the wait without running out the grace timer: the same live row
+      // survives the in-process restart while the wait's owner retires. The
+      // registry reaches its wait across several awaited steps, so poll for it
+      // instead of assuming one turn is enough; the mocked wait answers on the
+      // first poll, which leaves the rotation inside the grace window.
+      await waitForFast(() => expect(mocks.callGateway).toHaveBeenCalled());
       if (rotationPhase === "grace") {
         mocks.lifecycleGeneration = "rotated-generation";
       }
@@ -264,9 +266,14 @@ export function registerSubagentWaitExpiryTests(params: {
       });
 
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+      // The provisional notice is published across the grace timer, the
+      // observation commit and the announce call, so read the settled row
+      // rather than the one that exists on the first turn after the expiry.
+      await waitForFast(() => {
+        expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+        expect(findRequesterRun(runId)?.waitExpiryAnnouncedAt).toEqual(expect.any(Number));
+      });
       const run = findRequesterRun(runId);
-      expect(run?.waitExpiryAnnouncedAt).toEqual(expect.any(Number));
       expect(run?.execution.status).toBe("running");
       expect(run?.execution.endedAt).toBeUndefined();
       expect(run?.completion?.resultText).toBeUndefined();

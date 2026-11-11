@@ -172,6 +172,7 @@ function createWaitManager(params: {
   const runs = new Map([[params.entry.runId, params.entry]]);
   const options = {
     runs,
+    getChildSessionCandidates: () => runs.values(),
     getRunsForChildSession: () => runs.values(),
     resumedRuns: new Set<object>(),
     acquireTerminalCompletionLock: async () => () => {},

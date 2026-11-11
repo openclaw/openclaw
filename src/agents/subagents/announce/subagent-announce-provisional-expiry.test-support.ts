@@ -3,6 +3,7 @@
 import { expect, it, vi } from "vitest";
 import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
 import type { sendMessage as runtimeSendMessage } from "../../../infra/outbound/message.js";
+import { MISSING_REPLY_NOTICE_TEXT } from "../../reply-completion.js";
 import {
   expectRecordFields,
   mockCallArg,
@@ -41,7 +42,12 @@ export function registerProvisionalExpiryDeliveryTests(params: {
     "distinguishes provisional expiry from terminal failure for $response / $disposition",
     async ({ response, disposition, failedChild }) => {
       const requesterError = "requester synthesis unavailable";
-      const callGateway = createGatewayMock({ result: { payloads: [{ text: "NO_REPLY" }] } });
+      // Exact silence is published as `meta.terminalReply`; it is no longer
+      // inferred from a `NO_REPLY` payload, so state the parent's silence the
+      // way the runtime states it.
+      const callGateway = createGatewayMock({
+        result: { payloads: [], meta: { terminalReply: { disposition: "silent" } } },
+      });
       if (response === "synthesis error") {
         vi.mocked(callGateway).mockRejectedValue(new Error(requesterError));
       }
@@ -68,9 +74,7 @@ export function registerProvisionalExpiryDeliveryTests(params: {
       expect(callGateway).toHaveBeenCalledOnce();
       if (failedChild) {
         expect(sendMessage).toHaveBeenCalledOnce();
-        expect(mockCallArg(sendMessage, 0, 0).content).toBe(
-          "A delegated task failed before it could report a result. Please retry the task.",
-        );
+        expect(mockCallArg(sendMessage, 0, 0).content).toBe(MISSING_REPLY_NOTICE_TEXT);
         expectRecordFields(result, { delivered: true, path: "direct" });
       } else {
         expect(sendMessage).not.toHaveBeenCalled();
