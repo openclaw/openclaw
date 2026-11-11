@@ -7,6 +7,7 @@ import {
   type CiAutomationOption,
   type CiAutomationTarget,
 } from "../../ui/src/lib/session-pr-automation-spec.js";
+import { resolveAdmittedRunActiveAssertion } from "../agents/admitted-run-context.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
@@ -18,11 +19,16 @@ import {
 import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import {
+  git,
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
 } from "../agents/worktrees/service.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureGatewayAuthPolicy } from "../gateway/auth-policy.js";
+import { invalidateGatewayDeviceRevocation } from "../gateway/device-revocation.js";
+import { NodeRegistry } from "../gateway/node-registry.js";
+import { createAdminMemberRoleConfig } from "../gateway/operator-role.test-support.js";
 import { captureGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
 import { pairedOperator, persistDevices } from "../gateway/operator-run-recovery.test-support.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
@@ -57,12 +63,18 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import {
+  setCanonicalUserProfileRole,
+  syncCanonicalGitHubIdentity,
+} from "../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { resolveCronJobConfigRevision } from "./config-revision.js";
 import {
   ensureAgentWorkspaceMock,
   loadRunCronIsolatedAgentTurn,
@@ -74,6 +86,7 @@ import {
   resolveCronSessionMock,
   runEmbeddedAgentMock,
 } from "./isolated-agent/run.test-harness.js";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { cronTestDeps } from "./service.fixture-builders.test-support.js";
 import type { CronEvent } from "./service.js";
 import { createNativeGitHubReadFixture } from "./service.pr-automation-github.test-support.js";
@@ -82,6 +95,9 @@ import { resolveCronOperatorExecutionRevision } from "./service/jobs-tool-policy
 import { onTimer } from "./service/timer.test-support.js";
 import { runCronSessionTurn } from "./session-run.js";
 import { resolveCronSessionTargetSessionKey } from "./session-target.js";
+import { loadCronJobsStore, saveCronJobsStore } from "./store.js";
+import { cronStoreKey } from "./store/key.js";
+import { maintainCronRunHistory } from "./store/run-history.js";
 import { createCronScriptRuntime } from "./trigger-script.js";
 
 const sessionRunner = vi.hoisted(() => ({
@@ -161,21 +177,23 @@ export function readRecipeTarget(prompt: string) {
     prompt.split("\n").find((value) => value.includes("for this exact target: ")),
     "recipe target line",
   );
-  const target = asRecord(JSON.parse(line.slice(line.indexOf("{"), line.lastIndexOf("}") + 1)));
+  const { owner, repo, number, sessionKey, sessionId } = asRecord(
+    JSON.parse(line.slice(line.indexOf("{"), line.lastIndexOf("}") + 1)),
+  );
   if (
-    typeof target.owner !== "string" ||
-    typeof target.repo !== "string" ||
-    typeof target.number !== "number" ||
-    typeof target.sessionKey !== "string"
+    typeof owner !== "string" ||
+    typeof repo !== "string" ||
+    typeof number !== "number" ||
+    typeof sessionKey !== "string"
   ) {
     throw new Error("Scheduled recipe lost its PR target");
   }
   return {
-    owner: target.owner,
-    repo: target.repo,
-    number: target.number,
-    sessionKey: target.sessionKey,
-    sessionId: typeof target.sessionId === "string" ? target.sessionId : undefined,
+    owner,
+    repo,
+    number,
+    sessionKey,
+    sessionId: typeof sessionId === "string" ? sessionId : undefined,
   };
 }
 
@@ -199,19 +217,19 @@ export async function createFixture(
     now: Date.now(),
   });
   const workspaceDir = worktree.path;
-  const {
-    repository,
-    pr,
-    graph,
-    finding,
-    thread,
-    reads,
-    connection,
-    nativeRead,
-    identity,
-    failRead,
-  } = createNativeGitHubReadFixture(worktree.branch);
-  const config = {
+  const github = createNativeGitHubReadFixture(
+    worktree.branch,
+    await git(workspaceDir, "rev-parse", "HEAD"),
+  );
+  const { pr } = github;
+  const bindingSide = ({ repo, ref, sha }: typeof pr.head) => ({
+    repository: repo.full_name,
+    repositoryId: repo.id,
+    branch: ref,
+    commit: sha,
+  });
+  const config: OpenClawConfig = {
+    gateway: direct ? createAdminMemberRoleConfig().gateway : undefined,
     agents: {
       defaults: { skipBootstrap: true, workspace: workspaceDir, model: "openai/gpt-4.1" },
       entries: { main: { workspace: workspaceDir } },
@@ -246,19 +264,10 @@ export async function createFixture(
         githubPullRequest: {
           url: pr.html_url,
           host: "github.com",
+          preparedHeadCommit: pr.head.sha,
           number: 41,
-          base: {
-            repository: repository.full_name,
-            repositoryId: repository.id,
-            branch: "main",
-            commit: pr.base.sha,
-          },
-          head: {
-            repository: repository.full_name,
-            repositoryId: repository.id,
-            branch: worktree.branch,
-            commit: pr.head.sha,
-          },
+          base: bindingSide(pr.base),
+          head: bindingSide(pr.head),
         },
       },
     });
@@ -272,7 +281,10 @@ export async function createFixture(
   const client = Object.assign(
     createOperatorWsClient(),
     profile
-      ? createOperatorClient({ profileId: profile.id, scopes: ["operator.write", "operator.cron"] })
+      ? createOperatorClient({
+          profileId: profile.id,
+          scopes: direct ? ["operator.admin"] : ["operator.write", "operator.cron"],
+        })
       : createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] }),
   );
   if (profile) {
@@ -286,12 +298,8 @@ export async function createFixture(
   const device = pairedOperator();
   if (direct && profile) {
     persistDevices(stateDir, [device], "both");
-    const browser = createOperatorWsClient({
-      clientInfo: { id: "openclaw-control-ui", mode: "webchat" },
-      // The direct CI toggle uses cron.add’s existing administration gate.
-      scopes: ["operator.admin"],
-    });
-    Object.assign(client, browser);
+    client.connect.client.id = "openclaw-control-ui";
+    client.connect.client.mode = "webchat";
     client.authenticatedUserProfile = dispatchProfile(profile.id);
     client.connectionSignal = new AbortController().signal;
     client.isDeviceTokenAuth = true;
@@ -320,8 +328,17 @@ export async function createFixture(
       signedAt: 1,
       nonce: "synthetic",
     };
+    await setCanonicalUserProfileRole(profile.id, "admin");
+    await prepareUserProfileCatalog();
     prepareGatewayConnectOperatorAccess(client);
   }
+  creator.context.nodeRegistry = new NodeRegistry();
+  creator.context.invalidateClientsForDevice = (deviceId, options) => {
+    invalidateGatewayDeviceRevocation(creator.context, deviceId, options?.role);
+    if (deviceId === client.connect.device?.id) {
+      client.invalidated = true;
+    }
+  };
   const dispatch = createDispatchTestHarness({ buildRequestContext: () => creator.context });
   const original =
     profile && !direct
@@ -350,6 +367,13 @@ export async function createFixture(
     client,
     isWebchatConnect: () => false,
   });
+  let requestSequence = 0;
+  const requestFromUi = async (method: string, params: Record<string, unknown>) => {
+    const id = `${method}-${++requestSequence}`;
+    await dispatch.dispatcher.dispatch({ type: "req", id, method, params }, client);
+    // A revoked browser receives no further frame; dispatch completion still joins its work.
+    return asRecord(dispatch.send.mock.calls.find(([frame]) => asRecord(frame).id === id)?.[0]);
+  };
   const add = async (selected: CiAutomationTarget) => {
     const definition = {
       ...ciAutomationJobSpec(selected, option),
@@ -360,13 +384,7 @@ export async function createFixture(
         : {}),
     };
     if (direct) {
-      const id = `direct-create-${selected.number}`;
-      await dispatch.dispatcher.dispatch(
-        { type: "req", id, method: "cron.add", params: definition },
-        client,
-      );
-      const response = await dispatch.awaitResponseFrame(id);
-      expect(response, JSON.stringify(response)).toMatchObject({ ok: true });
+      expect(await requestFromUi("cron.add", definition)).toMatchObject({ ok: true });
     } else if (original) {
       const runId = `recipe-creator-${selected.number}`;
       const captured = expectDefined(admission(runId, client), "creator admission");
@@ -425,6 +443,14 @@ export async function createFixture(
   }
   const other = await add({ ...target, number: 42 });
   expect(other.id).not.toBe(selected.id);
+  if (legacy && direct) {
+    // Model a historical row before source capture existed, persisted before a fresh scheduler loads.
+    const store = await loadCronJobsStore(creator.context.cronStorePath);
+    for (const job of store.jobs) {
+      delete job.operatorSource;
+    }
+    await saveCronJobsStore(creator.context.cronStorePath, store);
+  }
   const wallNow = Date.now.bind(Date);
   const clock = createGatewaySchedulerClock(Date.now());
   const now = vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
@@ -520,19 +546,25 @@ export async function createFixture(
   };
   return {
     creator,
-    config,
     workspaceDir,
     profile,
-    pr,
-    graph,
-    finding,
-    thread,
-    reads,
-    connection,
-    nativeRead,
-    identity,
-    failRead,
+    deviceId: device.deviceId,
+    ...github,
     rpc,
+    requestFromUi,
+    updateFromUi: async (enabled: boolean) =>
+      expect(
+        await requestFromUi("cron.update", {
+          id: selected.id,
+          expectedConfigRevision: resolveCronJobConfigRevision(
+            expectDefined(execution.getJob(selected.id), "current job"),
+          ),
+          patch: {
+            enabled,
+            ...(enabled ? { trigger: ciAutomationJobSpec(target, option).trigger } : {}),
+          },
+        }),
+      ).toMatchObject({ ok: true }),
     sessionRef,
     target,
     add,
@@ -541,6 +573,33 @@ export async function createFixture(
     execution,
     seed,
     tick,
+    issueComments: (count: number, item: (index: number) => Partial<typeof github.finding>) => {
+      github.thread.isResolved = true;
+      const comments = Array.from({ length: count }, (_, index) => ({
+        ...github.finding,
+        ...item(index),
+      }));
+      github.graph.comments = github.connection(comments);
+      return comments;
+    },
+    runHistory: (runId?: string) =>
+      readCronRunHistoryPageForTests({
+        storeKey: cronStoreKey(path.join(stateDir, "cron", "jobs.json")),
+        jobId: selected.id,
+        runId,
+      }).entries,
+    expireRunHistory: async () => {
+      execution.stop();
+      await execution.waitForIdle();
+      clock.setTime(clock.clock.now() + 8 * 24 * 60 * 60_000);
+      const context = captureOpenClawStateWorkerContext();
+      await maintainCronRunHistory(context, context.admission.assertCurrent);
+    },
+    expectQuietTicks: async (count: number) => {
+      for (let index = 0; index < count; index++) {
+        expect(await tick()).toBeUndefined();
+      }
+    },
     advanceTime: (ms: number) => clock.setTime(clock.clock.now() + ms),
     withWallClock: async <T>(run: () => Promise<T>) => {
       let value!: T;
@@ -562,6 +621,7 @@ export async function createFixture(
         params.preparedRunAdmission,
         "scheduled admission",
       ).admit("gateway", params.runId);
+      expectDefined(resolveAdmittedRunActiveAssertion(admitted), "active admission assertion")();
       params.onExecutionPhase?.({ phase: "model_call_started" });
       await params.onExecutionStarted?.();
       await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
@@ -602,4 +662,40 @@ export function readObservation(prompt: string) {
     findings: { id: string; revision: string; body: string }[];
     previewIncomplete: boolean;
   };
+}
+
+export function collectFindingIds(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  seen: string[],
+  inspect?: (observation: ReturnType<typeof readObservation>) => void,
+) {
+  runEmbeddedAgentMock.mockImplementation((params) =>
+    fixture.modelTools(params, async () => {
+      const observation = readObservation(params.prompt);
+      seen.push(...observation.findings.map((finding) => finding.id));
+      inspect?.(observation);
+      return agentResult();
+    }),
+  );
+}
+
+export async function recordJudgment({
+  automation,
+  summary,
+  ...prAutoFix
+}: Record<string, unknown> & {
+  automation: ReturnType<typeof createCronTool>;
+  summary: string;
+}) {
+  const scratch = await automation.execute("judgment-read", { action: "scratch_get" });
+  await automation.execute("judgment-write", {
+    action: "scratch_set",
+    expectedRevision: asRecord(scratch.details).currentRevision,
+    content: JSON.stringify({ prAutoFix }),
+  });
+  await automation.execute("judgment-outcome", {
+    action: "record_result",
+    outcome: "done",
+    summary,
+  });
 }

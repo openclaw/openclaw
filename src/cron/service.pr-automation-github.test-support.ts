@@ -1,10 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { onTestFinished, vi } from "vitest";
+import { commandResult } from "../agents/github-identity.test-support.js";
 import * as publicationIdentity from "../agents/github-tool-identity.js";
 import * as publicationTransport from "../gateway/github-publication-git-transport.js";
 
-export function createNativeGitHubReadFixture(branch: string) {
+export function createNativeGitHubReadFixture(branch: string, sourceHead: string) {
   const repository = {
     id: 10,
     full_name: "fixture-org/fixture-repo",
@@ -18,19 +19,19 @@ export function createNativeGitHubReadFixture(branch: string) {
   const pr = {
     number: 41,
     node_id: "PR_fixture_41",
-    title: "Repair fixture",
-    body: "",
     mergeable: true,
     mergeable_state: "clean",
     merge_commit_sha: null,
+    title: "Repair fixture",
+    body: "",
     html_url: "https://github.com/fixture-org/fixture-repo/pull/41",
     user: { id: 42, login: "publisher", type: "User" },
     state: "open",
     draft: false,
     merged: false,
     maintainer_can_modify: true,
-    base: { repo: repository, ref: "main", sha: "b".repeat(40) },
-    head: { repo: repository, ref: branch, sha: "a".repeat(40) },
+    base: { repo: repository, ref: "main", sha: sourceHead },
+    head: { repo: repository, ref: branch, sha: sourceHead },
   };
   const connection = <T>(values: T[], cursor: string | null = null, first = values.length) => {
     const start = cursor === null ? 0 : Number(cursor);
@@ -70,118 +71,57 @@ export function createNativeGitHubReadFixture(branch: string) {
   const nativeRead = vi
     .spyOn(publicationTransport, "runPublicationCommand")
     .mockImplementation(async (argv, options) => {
+      options?.beforeRun?.();
       const endpoint = expectDefined(argv[argv.indexOf("--method") + 2], "GitHub endpoint");
       reads.push(endpoint);
-      const value =
-        endpoint === "repos/fixture-org/fixture-repo"
-          ? repository
-          : endpoint.endsWith("/pulls/41") || endpoint.endsWith("/pulls/42")
-            ? {
-                ...pr,
-                number: Number(endpoint.split("/").at(-1)),
-                html_url:
-                  "https://github.com/fixture-org/fixture-repo/pull/" + endpoint.split("/").at(-1),
-              }
-            : endpoint === "graphql"
-              ? (() => {
-                  const input =
-                    typeof options?.input === "function" ? options.input() : options?.input;
-                  const { query, variables } = JSON.parse(input?.toString() ?? "{}");
-                  const page = <T>(field: string, nodes: T[]) => {
-                    const first = Number(
-                      query.match(new RegExp(field + "\\(first: (\\d+)"))?.[1] ?? nodes.length,
-                    );
-                    return connection(nodes, variables.cursor ?? null, first);
-                  };
-                  if (query?.includes("node(id:")) {
-                    const selectedThread = graph.reviewThreads.nodes.find(
-                      (t) => t.id === variables.id,
-                    );
-                    return {
-                      data: {
-                        node: selectedThread
-                          ? {
-                              ...selectedThread,
-                              comments: page("comments", selectedThread.comments.nodes),
-                            }
-                          : null,
-                      },
-                    };
-                  }
-                  const nodes = query?.includes("nodes(ids:")
-                    ? {
-                        nodes: variables.ids.map((id: string) => {
-                          if (id === thread.id) {
-                            return { id, isResolved: thread.isResolved };
-                          }
-                          const selectedThread = graph.reviewThreads.nodes.find((t) => t.id === id);
-                          if (selectedThread) {
-                            return { id, isResolved: selectedThread.isResolved };
-                          }
-                          const item = [
-                            ...graph.comments.nodes,
-                            ...graph.reviews.nodes,
-                            ...graph.reviewThreads.nodes.flatMap((t) => t.comments.nodes),
-                          ].find((candidate) => candidate.id === id);
-                          return item
-                            ? {
-                                id: item.id,
-                                body: item.body,
-                                updatedAt: item.updatedAt,
-                                authorAssociation: item.authorAssociation,
-                                author: item.author,
-                                pullRequest: {
-                                  number: pr.number,
-                                  repository: { nameWithOwner: repository.full_name },
-                                },
-                              }
-                            : null;
-                        }),
-                      }
-                    : {};
-                  const commit = expectDefined(graph.commits.nodes[0], "head commit").commit;
-                  const checks = commit.statusCheckRollup;
-                  return {
-                    data: {
-                      ...nodes,
-                      repository: {
-                        pullRequest: {
-                          ...graph,
-                          commits: {
-                            nodes: [
-                              {
-                                commit: {
-                                  ...commit,
-                                  statusCheckRollup:
-                                    isRecord(checks) &&
-                                    isRecord(checks.contexts) &&
-                                    Array.isArray(checks.contexts.nodes)
-                                      ? {
-                                          ...checks,
-                                          contexts: page("contexts", checks.contexts.nodes),
-                                        }
-                                      : checks,
-                                },
-                              },
-                            ],
-                          },
-                          comments: page("comments", graph.comments.nodes),
-                          reviews: page("reviews", graph.reviews.nodes),
-                          reviewThreads: page("reviewThreads", graph.reviewThreads.nodes),
-                        },
-                      },
-                    },
-                  };
-                })()
-              : undefined;
-      return {
-        code: readError || value === undefined ? 1 : 0,
-        stdout: Buffer.from(value === undefined ? "" : JSON.stringify(value)),
-        stderr: Buffer.alloc(0),
-        signal: null,
-        killed: false,
-        termination: "exit",
+      const respond = (value: unknown, replacer?: (key: string, value: unknown) => unknown) =>
+        commandResult(JSON.stringify(value, replacer), readError || value === undefined ? 1 : 0);
+      if (endpoint === "repos/fixture-org/fixture-repo") {
+        return respond(repository);
+      }
+      if (endpoint.endsWith("/pulls/41") || endpoint.endsWith("/pulls/42")) {
+        const number = Number(endpoint.split("/").at(-1));
+        return respond({
+          ...pr,
+          number,
+          html_url: "https://github.com/fixture-org/fixture-repo/pull/" + number,
+        });
+      }
+      if (endpoint !== "graphql") {
+        return respond(undefined);
+      }
+      const input = typeof options?.input === "function" ? options.input() : options?.input;
+      const { query, variables } = JSON.parse(input?.toString() ?? "{}");
+      const nodes = [
+        ...graph.reviewThreads.nodes,
+        thread,
+        ...graph.comments.nodes,
+        ...graph.reviews.nodes,
+        ...graph.reviewThreads.nodes.flatMap((t) => t.comments.nodes),
+      ];
+      const pullRequest = {
+        number: pr.number,
+        repository: { nameWithOwner: repository.full_name },
       };
+      const lookup = (id: string) => {
+        const node = nodes.find((candidate) => candidate.id === id);
+        return node ? Object.assign({}, node, { pullRequest }) : null;
+      };
+      const selected = query.includes("node(id:") ? lookup(variables.id) : graph;
+      const data =
+        selected === graph
+          ? { nodes: (variables.ids ?? []).map(lookup), repository: { pullRequest: graph } }
+          : { node: selected };
+      // Outer and nested comments have independent cursors. Only the selected
+      // owner (or the query's sole check rollup) receives the requested page.
+      return respond({ data }, function (this: unknown, key, value: unknown) {
+        const first =
+          (this === selected || key === "contexts") &&
+          query.match(new RegExp(key + "\\(first: (\\d+), after: \\$cursor"))?.[1];
+        return first && isRecord(value) && Array.isArray(value.nodes) && isRecord(value.pageInfo)
+          ? connection(value.nodes, variables.cursor ?? null, Number(first))
+          : value;
+      });
     });
   const identity = vi
     .spyOn(publicationIdentity, "prepareGitHubPublicationIdentity")

@@ -3,17 +3,13 @@ import {
   createFixture,
   agentResult,
   readObservation,
+  collectFindingIds,
+  recordJudgment,
 } from "./service.pr-automation.test-support.js";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
-import { stateDir } from "../gateway/server-methods/requester-cron-authority.test-support.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runEmbeddedAgentMock } from "./isolated-agent/run.test-harness.js";
-import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
-import { cronStoreKey } from "./store/key.js";
-import { maintainCronRunHistory } from "./store/run-history.js";
 it("observes GitHub before a due autoFix model turn, even when the model does nothing", async () => {
   await using fixture = await createFixture("autoFix", true);
   runEmbeddedAgentMock.mockImplementation(async (params) => {
@@ -34,9 +30,7 @@ it("observes GitHub before a due autoFix model turn, even when the model does no
     version: 3,
     blocked: expect.stringContaining("Awaiting verified"),
   });
-  for (let tick = 0; tick < 12; tick++) {
-    expect(await fixture.tick()).toBeUndefined();
-  }
+  await fixture.expectQuietTicks(12);
   expect(fixture.execution.getJob(fixture.selected.id)).toMatchObject({
     enabled: true,
     state: {
@@ -54,9 +48,7 @@ it("observes GitHub before a due autoFix model turn, even when the model does no
   fixture.failRead(true);
   expect(await fixture.tick()).toMatchObject({ status: "error" });
   fixture.failRead(false);
-  for (let tick = 0; tick < 3; tick++) {
-    expect(await fixture.tick()).toBeUndefined();
-  }
+  await fixture.expectQuietTicks(3);
   expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   fixture.thread.isResolved = true;
   expect(await fixture.tick()).toBeUndefined();
@@ -158,12 +150,7 @@ it("observes edited feedback and CI reruns without replaying feedback for a new 
 
 it("keeps unchanged failing CI quiet independently of successful unresolved feedback batches", async () => {
   await using fixture = await createFixture("autoFix");
-  fixture.thread.isResolved = true;
-  const items = Array.from({ length: 4 }, (_, index) => ({
-    ...fixture.finding,
-    id: "comment-" + index,
-  }));
-  fixture.graph.comments = fixture.connection(items);
+  const items = fixture.issueComments(4, (index) => ({ id: "comment-" + index }));
   const check = {
     __typename: "CheckRun",
     id: "run-1",
@@ -208,19 +195,9 @@ it("keeps unchanged failing CI quiet independently of successful unresolved feed
 
 it("pauses before replacing an unobserved attempt whose native payload history expired", async () => {
   await using fixture = await createFixture("autoFix");
-  fixture.thread.isResolved = true;
-  const items = Array.from({ length: 4 }, (_, index) => ({
-    ...fixture.finding,
-    id: "comment-" + index,
-  }));
-  fixture.graph.comments = fixture.connection(items);
+  const items = fixture.issueComments(4, (index) => ({ id: "comment-" + index }));
   const seen: string[] = [];
-  runEmbeddedAgentMock.mockImplementation((params) =>
-    fixture.modelTools(params, async () => {
-      seen.push(...readObservation(params.prompt).findings.map((f) => f.id));
-      return agentResult();
-    }),
-  );
+  collectFindingIds(fixture, seen);
   await fixture.execution.update(fixture.selected.id, { enabled: true });
   expect(await fixture.tick()).toMatchObject({ status: "ok" });
   const attempt = asRecord(
@@ -230,23 +207,12 @@ it("pauses before replacing an unobserved attempt whose native payload history e
   if (typeof attemptAtMs !== "number") {
     throw new Error("Missing observed attempt timestamp");
   }
-  const readHistory = () =>
-    readCronRunHistoryPageForTests({
-      storeKey: cronStoreKey(path.join(stateDir, "cron", "jobs.json")),
-      jobId: fixture.selected.id,
-      runId: `cron:${fixture.selected.id}:${attemptAtMs}`,
-    }).entries;
+  const readHistory = () => fixture.runHistory(`cron:${fixture.selected.id}:${attemptAtMs}`);
   expect(readHistory()).toHaveLength(1);
-  fixture.execution.stop();
-  await fixture.execution.waitForIdle();
-  fixture.advanceTime(8 * 24 * 60 * 60_000);
-  const context = captureOpenClawStateWorkerContext();
-  await maintainCronRunHistory(context, context.admission.assertCurrent);
+  await fixture.expireRunHistory();
   expect(readHistory()).toEqual([]);
   await fixture.execution.start();
-  for (let tick = 0; tick < 12; tick++) {
-    expect(await fixture.tick()).toBeUndefined();
-  }
+  await fixture.expectQuietTicks(12);
   expect(seen).toEqual(items.slice(0, 3).map((f) => f.id));
   expect(fixture.execution.getJob(fixture.selected.id)?.state.triggerState).toMatchObject({
     attempt,
@@ -298,13 +264,7 @@ it("persists consecutive thrown attempts and bounded cooldown before retrying un
       throw new Error("Missing persisted payload attempt");
     }
     attempts.push(attempt.atMs);
-    expect(
-      readCronRunHistoryPageForTests({
-        storeKey: cronStoreKey(path.join(stateDir, "cron", "jobs.json")),
-        jobId: fixture.selected.id,
-        runId: "cron:" + fixture.selected.id + ":" + attempt.atMs,
-      }).entries,
-    ).toEqual([
+    expect(fixture.runHistory("cron:" + fixture.selected.id + ":" + attempt.atMs)).toEqual([
       expect.objectContaining({
         runAtMs: attempt.atMs,
         triggerFired: true,
@@ -342,9 +302,7 @@ it("persists consecutive thrown attempts and bounded cooldown before retrying un
   expect(revisions).toHaveLength(2);
   expect(revisions[1]).toBe(revisions[0]);
   const calls = runEmbeddedAgentMock.mock.calls.length;
-  for (let tick = 0; tick < 12; tick++) {
-    expect(await fixture.tick()).toBeUndefined();
-  }
+  await fixture.expectQuietTicks(12);
   expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(calls);
   expect(fixture.execution.getJob(fixture.selected.id)).toMatchObject({
     enabled: true,
@@ -404,33 +362,22 @@ it("persists exact-revision non-actionable judgments without replaying non-threa
   runEmbeddedAgentMock.mockImplementation((params) =>
     fixture.modelTools(params, async ({ automation }) => {
       const observation = readObservation(params.prompt);
-      const scratch = await automation.execute("scratch-read", { action: "scratch_get" });
-      const currentRevision = asRecord(scratch.details).currentRevision;
       const finding = expectDefined(observation.findings[0], "observed finding");
-      await automation.execute("judgment", {
-        action: "scratch_set",
-        expectedRevision: currentRevision,
-        content: JSON.stringify({
-          prAutoFix: {
-            url: fixture.pr.html_url,
-            head: observation.head,
-            attempt: observation.fingerprint,
-            findings: [
-              {
-                id: finding.id,
-                revision: finding.revision,
-                status: "not_actionable",
-                reason:
-                  "Reviewer confirms the already-correct error path; this revision requests no change",
-                quote: fixture.finding.body,
-              },
-            ],
+      await recordJudgment({
+        automation,
+        url: fixture.pr.html_url,
+        head: observation.head,
+        attempt: observation.fingerprint,
+        findings: [
+          {
+            id: finding.id,
+            revision: finding.revision,
+            status: "not_actionable",
+            reason:
+              "Reviewer confirms the already-correct error path; this revision requests no change",
+            quote: fixture.finding.body,
           },
-        }),
-      });
-      await automation.execute("outcome", {
-        action: "record_result",
-        outcome: "done",
+        ],
         summary: "Inspected the exact current praise revision",
       });
       return agentResult();
@@ -450,9 +397,7 @@ it("persists exact-revision non-actionable judgments without replaying non-threa
     ],
     disposition: { status: "reviewed" },
   });
-  for (let tick = 0; tick < 12; tick++) {
-    expect(await fixture.tick()).toBeUndefined();
-  }
+  await fixture.expectQuietTicks(12);
   expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   fixture.finding.body = "Correction: the timeout still fails";
   fixture.finding.updatedAt = "2026-11-10T15:00:00Z";
@@ -462,40 +407,27 @@ it("persists exact-revision non-actionable judgments without replaying non-threa
 
 it("keeps accumulated Unicode disposition evidence within Cron’s real 16KB state budget", async () => {
   await using fixture = await createFixture("autoFix");
-  fixture.thread.isResolved = true;
-  const items = Array.from({ length: 24 }, (_, index) => ({
-    ...fixture.finding,
+  const items = fixture.issueComments(24, (index) => ({
     id: "praise-" + index,
     body: "Looks good " + "🦞".repeat(200),
   }));
-  fixture.graph.comments = fixture.connection(items);
   const seen: string[] = [];
   runEmbeddedAgentMock.mockImplementation((params) =>
     fixture.modelTools(params, async ({ automation }) => {
       const observation = readObservation(params.prompt);
       seen.push(...observation.findings.map((f) => f.id));
-      const scratch = await automation.execute("read", { action: "scratch_get" });
-      await automation.execute("write", {
-        action: "scratch_set",
-        expectedRevision: asRecord(scratch.details).currentRevision,
-        content: JSON.stringify({
-          prAutoFix: {
-            url: fixture.pr.html_url,
-            head: observation.head,
-            attempt: observation.fingerprint,
-            findings: observation.findings.map((f) => ({
-              id: f.id,
-              revision: f.revision,
-              status: "not_actionable",
-              reason: "🦞".repeat(240),
-              quote: "🦞".repeat(200),
-            })),
-          },
-        }),
-      });
-      await automation.execute("outcome", {
-        action: "record_result",
-        outcome: "done",
+      await recordJudgment({
+        automation,
+        url: fixture.pr.html_url,
+        head: observation.head,
+        attempt: observation.fingerprint,
+        findings: observation.findings.map((finding) => ({
+          id: finding.id,
+          revision: finding.revision,
+          status: "not_actionable",
+          reason: "🦞".repeat(240),
+          quote: "🦞".repeat(200),
+        })),
         summary: "Inspected current praise revisions",
       });
       return agentResult();
@@ -514,9 +446,7 @@ it("keeps accumulated Unicode disposition evidence within Cron’s real 16KB sta
     );
   }
   expect(seen).toEqual(items.map((item) => item.id));
-  for (let tick = 0; tick < 12; tick++) {
-    expect(await fixture.tick()).toBeUndefined();
-  }
+  await fixture.expectQuietTicks(12);
   expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(8);
   const state = asRecord(fixture.execution.getJob(fixture.selected.id)?.state.triggerState);
   expect(state.dispositions).toHaveLength(24);
@@ -525,20 +455,12 @@ it("keeps accumulated Unicode disposition evidence within Cron’s real 16KB sta
 
 it("retains more than 128 exact Unicode no-op revisions across inventories and history expiry", async () => {
   await using fixture = await createFixture("autoFix");
-  fixture.thread.isResolved = true;
-  const items = Array.from({ length: 132 }, (_, index) => ({
-    ...fixture.finding,
+  const items = fixture.issueComments(132, (index) => ({
     id: "🦞".repeat(20) + index,
     body: "Unresolved review " + index,
   }));
-  fixture.graph.comments = fixture.connection(items);
   const seen: string[] = [];
-  runEmbeddedAgentMock.mockImplementation((params) =>
-    fixture.modelTools(params, async () => {
-      seen.push(...readObservation(params.prompt).findings.map((f) => f.id));
-      return agentResult();
-    }),
-  );
+  collectFindingIds(fixture, seen);
   await fixture.execution.update(fixture.selected.id, { enabled: true });
   for (let tick = 0; tick < 45; tick++) {
     const event = await fixture.tick();
@@ -553,22 +475,11 @@ it("retains more than 128 exact Unicode no-op revisions across inventories and h
   }
   expect(seen).toEqual(items.map((f) => f.id));
   // Receipt state survives scheduler reload beyond native run-history retention.
-  fixture.execution.stop();
-  await fixture.execution.waitForIdle();
-  fixture.advanceTime(8 * 24 * 60 * 60_000);
-  const context = captureOpenClawStateWorkerContext();
-  await maintainCronRunHistory(context, context.admission.assertCurrent);
-  expect(
-    readCronRunHistoryPageForTests({
-      storeKey: cronStoreKey(path.join(stateDir, "cron", "jobs.json")),
-      jobId: fixture.selected.id,
-    }).entries,
-  ).toEqual([]);
+  await fixture.expireRunHistory();
+  expect(fixture.runHistory()).toEqual([]);
   await fixture.execution.start();
   // Successful no-op receipts suppress unchanged feedback, not claim resolution.
-  for (let tick = 0; tick < 100; tick++) {
-    expect(await fixture.tick()).toBeUndefined();
-  }
+  await fixture.expectQuietTicks(100);
   expect(seen).toEqual(items.map((f) => f.id));
   expectDefined(items[0], "first finding").updatedAt = "2026-11-10T17:00:00Z";
   for (let tick = 0; tick < 45; tick++) {
@@ -579,20 +490,9 @@ it("retains more than 128 exact Unicode no-op revisions across inventories and h
 
 it("pauses model work instead of replaying forgotten revisions when exact receipt state is full", async () => {
   await using fixture = await createFixture("autoFix");
-  fixture.thread.isResolved = true;
-  fixture.graph.comments = fixture.connection(
-    Array.from({ length: 320 }, (_, index) => ({
-      ...fixture.finding,
-      id: "feedback-" + index,
-    })),
-  );
+  fixture.issueComments(320, (index) => ({ id: "feedback-" + index }));
   const seen: string[] = [];
-  runEmbeddedAgentMock.mockImplementation((params) =>
-    fixture.modelTools(params, async () => {
-      seen.push(...readObservation(params.prompt).findings.map((f) => f.id));
-      return agentResult();
-    }),
-  );
+  collectFindingIds(fixture, seen);
   await fixture.execution.update(fixture.selected.id, { enabled: true });
   let paused = false;
   for (let tick = 0; tick < 110; tick++) {
@@ -616,9 +516,7 @@ it("pauses model work instead of replaying forgotten revisions when exact receip
   await fixture.execution.waitForIdle();
   fixture.advanceTime(8 * 24 * 60 * 60_000);
   await fixture.execution.start();
-  for (let tick = 0; tick < 12; tick++) {
-    expect(await fixture.tick()).toBeUndefined();
-  }
+  await fixture.expectQuietTicks(12);
   expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(calls);
   expect(
     asRecord(fixture.execution.getJob(fixture.selected.id)?.state.triggerState).blocked,
@@ -721,14 +619,9 @@ it("continues nested overflow in bounded batches without losing comments or repl
     ]),
   });
   const seen: string[] = [];
-  runEmbeddedAgentMock.mockImplementation((params) =>
-    fixture.modelTools(params, async () => {
-      const observation = readObservation(params.prompt);
-      seen.push(...observation.findings.map((f) => f.id));
-      expect(observation.findings.length).toBeLessThanOrEqual(3);
-      return agentResult();
-    }),
-  );
+  collectFindingIds(fixture, seen, (observation) => {
+    expect(observation.findings.length).toBeLessThanOrEqual(3);
+  });
   await fixture.execution.update(fixture.selected.id, { enabled: true });
   for (let tick = 0; tick < 5; tick++) {
     await fixture.tick();
@@ -737,9 +630,7 @@ it("continues nested overflow in bounded batches without losing comments or repl
     ...Array.from({ length: 8 }, (_, index) => "nested-" + index),
     "last-thread",
   ]);
-  for (let tick = 0; tick < 12; tick++) {
-    expect(await fixture.tick()).toBeUndefined();
-  }
+  await fixture.expectQuietTicks(12);
   expect(new Set(seen).size).toBe(9);
   expect(fixture.execution.getJob(fixture.selected.id)).toMatchObject({
     enabled: true,
