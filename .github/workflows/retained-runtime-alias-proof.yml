@@ -4,13 +4,27 @@ name: Retained runtime alias proof
 on:
   push:
     branches: [diagnostic/release-2026.11.4-cleanup-alias-20261111]
+    paths:
+      - src/infra/update-retained-runtime.ts
+      - src/infra/update-retained-runtime-imports.ts
+      - src/infra/update-retained-runtime-imports.process.test.ts
   workflow_dispatch:
+    inputs:
+      static_only:
+        description: Run bounded Linux proof without repeating Windows alias proof.
+        type: boolean
+        default: false
+      source_sha:
+        description: Exact product source commit, independent of this workflow harness.
+        type: string
+        default: 0f48a2cba06b806b61d136f19d9b8d0593552a75
 
 permissions:
   contents: read
 
 jobs:
   alias-proof:
+    if: ${{ !inputs.static_only }}
     runs-on: windows-2025
     timeout-minutes: 20
     strategy:
@@ -30,6 +44,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           install-bun: "false"
+          cache-mode: "off"
       - name: Record exact source and runtime
         shell: pwsh
         run: |
@@ -82,3 +97,149 @@ jobs:
           path: .artifacts/retained-alias/
           if-no-files-found: warn
           retention-days: 7
+
+  static-plan:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.static_only }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: &static_source
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: &static_harness
+          ref: ${{ github.sha }}
+          path: .harness
+          persist-credentials: false
+      - name: Bind source and harness
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          mkdir -p .artifacts/alias-static
+          git rev-parse HEAD > .artifacts/alias-static/source.txt
+          git -C .harness rev-parse HEAD > .artifacts/alias-static/harness.txt
+          cp .harness/.github/workflows/retained-runtime-alias-proof.yml .github/workflows/
+      - uses: ./.harness/.github/actions/setup-node-env
+        with:
+          semantic-checks: "true"
+          cache-mode: "off"
+      - name: Materialize canonical formatting and exact bytes
+        run: |
+          files=(src/infra/update-retained-runtime.ts src/infra/update-retained-runtime-imports.ts src/infra/update-retained-runtime-imports.process.test.ts docs/install/updating.md .github/workflows/retained-runtime-alias-proof.yml)
+          pnpm exec oxfmt --write --threads=1 "${files[@]}"
+          git diff --binary -- "${files[@]}" > .artifacts/alias-static/formatted.patch
+          sha256sum "${files[@]}" > .artifacts/alias-static/formatted.sha256
+          node --version > .artifacts/alias-static/node.txt
+          bun --version > .artifacts/alias-static/bun.txt
+      - name: Plan canonical production and test graphs once
+        id: plan
+        run: |
+          node --import ./scripts/tsx.mjs --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { createChangedCiTypeCheckPlan } from "./scripts/run-tsgo-core-test-shards.mts";
+          // Only the product TS delta selects compiler consumers; docs/harness cannot widen it.
+          const paths = ["src/infra/update-retained-runtime.ts", "src/infra/update-retained-runtime-imports.ts", "src/infra/update-retained-runtime-imports.process.test.ts"];
+          const plan = await createChangedCiTypeCheckPlan(paths);
+          if (!plan.graphs.some(graph => graph.name === "core") || !plan.graphs.some(graph => graph.name.startsWith("core-test-"))) throw new Error("Missing production/test compiler ownership");
+          fs.writeFileSync(".artifacts/alias-static/type-plan.json", JSON.stringify({ paths, ...plan }, null, 2) + "\n");
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, "matrix=" + JSON.stringify({ include: plan.graphs.map(graph => ({ graph: graph.name })) }) + "\n");
+          NODE
+      - name: Upload formatted source and compiler plan even on failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: alias-static-input-${{ github.run_attempt }}
+          path: .artifacts/alias-static/
+          if-no-files-found: error
+          retention-days: 7
+
+  static-checks:
+    needs: static-plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps: &static_consumer_steps
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: *static_source
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: *static_harness
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: alias-static-input-${{ github.run_attempt }}
+          path: .artifacts/alias-static
+      - name: Apply and verify exact formatted inputs
+        run: |
+          test "$(git rev-parse HEAD)" = "$(cat .artifacts/alias-static/source.txt)"
+          test "$(git -C .harness rev-parse HEAD)" = "$(cat .artifacts/alias-static/harness.txt)"
+          git apply .artifacts/alias-static/formatted.patch
+          sha256sum -c .artifacts/alias-static/formatted.sha256
+      - uses: ./.harness/.github/actions/setup-node-env
+        with:
+          semantic-checks: "true"
+          cache-mode: "off"
+      - name: Run selected proof
+        env:
+          GRAPH: ${{ matrix.graph || '' }}
+          LANE: ${{ github.job }}
+        run: |
+          set -euo pipefail
+          case "$LANE" in
+            static-types)
+              node scripts/run-tsgo-core-test-shards.mjs --ci-graphs-json "[\"$GRAPH\"]" --concurrency 1 2>&1 | tee .artifacts/alias-static/result.log
+              ;;
+            static-tests)
+              # The process owner suite runs both Node and installed Bun itself.
+              node scripts/run-vitest.mjs \
+                src/infra/update-retained-runtime-imports.process.test.ts \
+                src/infra/update-retained-runtime.test.ts \
+                src/infra/update-retained-runtime.backups.test.ts \
+                src/infra/update-retained-runtime-tree.test.ts \
+                src/infra/update-retained-runtime-exit.test.ts \
+                src/infra/runtime-worker-generation.test.ts \
+                src/cli/run-main.cleanup.test.ts \
+                src/cli/one-shot-exit.cleanup.process.test.ts \
+                src/cli/runtime-cleanup-scope.retirement.test.ts \
+                src/cli/runtime-cleanup-scope.workers.test.ts \
+                src/cli/update-cli/update-command-runtime-retained-preparation.test.ts \
+                src/cli/update-cli/update-command-runtime-retained-execution.test.ts \
+                src/cli/update-cli/update-command-retained-cleanup.test.ts \
+                --maxWorkers=1 --reporter=verbose 2>&1 | tee .artifacts/alias-static/result.log
+              ;;
+            static-checks)
+              {
+                pnpm exec oxfmt --check src/infra/update-retained-runtime.ts src/infra/update-retained-runtime-imports.ts src/infra/update-retained-runtime-imports.process.test.ts docs/install/updating.md .github/workflows/retained-runtime-alias-proof.yml
+                node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/infra/update-retained-runtime.ts src/infra/update-retained-runtime-imports.ts src/infra/update-retained-runtime-imports.process.test.ts
+                node scripts/check-docs-mdx.mjs docs/install/updating.md
+                pnpm check:workflows
+                git diff --check
+              } 2>&1 | tee .artifacts/alias-static/result.log
+              ;;
+          esac
+      - name: Upload selected proof log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: alias-${{ github.job }}-${{ matrix.graph || 'all' }}-${{ github.run_attempt }}
+          path: .artifacts/alias-static/
+          if-no-files-found: warn
+          retention-days: 7
+
+  static-types:
+    needs: static-plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.static-plan.outputs.matrix) }}
+    steps: *static_consumer_steps
+
+  static-tests:
+    needs: static-plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps: *static_consumer_steps
