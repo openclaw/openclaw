@@ -555,8 +555,9 @@ type GatewayCase = {
   update?: Record<string, unknown>;
   /** Config or credential changes between create and the update. */
   beforeUpdate?: (cfg: OpenClawConfig) => void | Promise<void>;
-  expectAccount: { profileId: string; source: "user" | "auto" };
-  expectKey: string;
+  /** null: no backup account may be recorded, and the run must send nothing to backup. */
+  expectAccount: { profileId: string; source: "user" | "auto" } | null;
+  expectKey: string | null;
   /** The update recorded a new authorization for the same profile. */
   expectReauthorized?: boolean;
 };
@@ -654,6 +655,23 @@ const gatewayCases: GatewayCase[] = [
     expectAccount: { profileId: "backup:main", source: "auto" },
     expectKey: "Bearer key-backup",
   },
+  {
+    // A model-only edit onto another provider never adopts an account for the new primary; the
+    // job keeps refusing it until the owner names one with `--model <model>@<profileId>`.
+    name: "no account for a requested primary on another provider",
+    payload: { fallbacks: [] },
+    update: { model: "backup/gpt-4.1" },
+    expectAccount: null,
+    expectKey: null,
+  },
+  {
+    // A fallback account recorded for that provider doesn't become the new primary's account.
+    name: "no account for a requested primary that was a recorded fallback",
+    payload: {},
+    update: { model: "backup/gpt-4.1", fallbacks: [] },
+    expectAccount: null,
+    expectKey: null,
+  },
 ];
 
 it.each(gatewayCases)("Gateway records the $name and the run uses it", async (testCase) => {
@@ -737,9 +755,15 @@ it.each(gatewayCases)("Gateway records the $name and the run uses it", async (te
         });
       }
       const [stored] = (await loadCronJobsStore(storePath)).jobs;
-      expect(stored?.inferenceBinding?.fallbackAccounts).toMatchObject([
-        { provider: "backup", ...testCase.expectAccount },
-      ]);
+      if (testCase.expectAccount) {
+        expect(stored?.inferenceBinding?.fallbackAccounts).toMatchObject([
+          { provider: "backup", ...testCase.expectAccount },
+        ]);
+      } else {
+        expect(
+          stored?.inferenceBinding?.fallbackAccounts?.some((a) => a.provider === "backup"),
+        ).not.toBe(true);
+      }
       // The primary account is never changed by fallback capture.
       if (testCase.expectReauthorized !== undefined) {
         expect(
@@ -751,8 +775,14 @@ it.each(gatewayCases)("Gateway records the $name and the run uses it", async (te
       const { fallbackAccounts: _before, ...primaryBefore } = before!.inferenceBinding!;
       expect(primaryAfter).toEqual(primaryBefore);
       await expect(cron.run(id, "force")).resolves.toEqual({ ok: true, ran: true });
-      expect(finished[0]?.status, finished[0]?.error).toBe("ok");
-      expect(hits.backup).toEqual([testCase.expectKey]);
+      if (testCase.expectKey) {
+        expect(finished[0]?.status, finished[0]?.error).toBe("ok");
+        expect(hits.backup).toEqual([testCase.expectKey]);
+      } else {
+        expect(finished[0]?.status).toBe("error");
+        expect(finished[0]?.error).toContain("incompatible with its recorded inference account");
+        expect(hits.backup).toEqual([]);
+      }
     } finally {
       cron.stop();
       await cron.waitForIdle();

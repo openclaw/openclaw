@@ -373,10 +373,12 @@ export async function resolveCronFallbackProviderModels(
     inheritDefaultFallbacksForAgentStringModel: primary.inheritDefaultFallbacksForAgentStringModel,
     sessionModelOverrideSource,
   });
-  const seen = new Set([params.primaryProvider]);
+  // The requested primary is never a fallback: its provider runs only on the recorded primary
+  // account, so a model edit can't adopt an account for it without an explicit `@profile`.
+  const seen = new Set([params.primaryProvider, primary.provider]);
   const models: CronFallbackCandidate[] = [];
   for (const candidate of chain) {
-    if (!seen.has(candidate.provider)) {
+    if (candidate.routeOrigin !== "requested" && !seen.has(candidate.provider)) {
       seen.add(candidate.provider);
       const profileId = candidate.configuredAuthProfileId;
       models.push({
