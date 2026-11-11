@@ -1,0 +1,2 @@
+# Required method advertisements in six existing UI E2E fixtures; no new tests.
+40

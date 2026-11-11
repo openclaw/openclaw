@@ -22,7 +22,11 @@ export type { PersistedTemplateCronRef } from "./cron-records.js";
 export type TemplateCronGateway = {
   add: (
     input: Record<string, unknown>,
-    options?: { commitGuard?: () => void; existingRef?: PersistedTemplateCronRef },
+    options?: {
+      commitGuard?: () => void;
+      existingRef?: PersistedTemplateCronRef;
+      captureOwnerProfileId?: (ownerProfileId: string | undefined) => void;
+    },
   ) => Promise<unknown>;
   get?: (schedulerJobId: string) => Promise<unknown>;
   list?: (agentId: string) => Promise<unknown>;
@@ -95,7 +99,7 @@ function templateCronGatewayInput(agentId: string, ref: PersistedTemplateCronRef
     declarationKey: ref.declarationKey,
     ...(job.name ? { displayName: job.name } : {}),
     owner: { agentId },
-    enabled: true,
+    enabled: job.enabled ?? true,
     agentId,
     schedule: {
       kind: "cron",
@@ -148,6 +152,7 @@ export function templateCronGatewayJobMatchesRef(
   applyDefaultCronToolsAllow(comparableLive);
   const expectedWithPolicy = {
     ...expected,
+    ...ref.nativeOwnership,
     ...(comparableLive.scheduledToolPolicy
       ? { scheduledToolPolicy: createTrustedCronScheduledToolPolicy() }
       : {}),
@@ -327,6 +332,9 @@ export async function installTemplateCronJobsStateless(
         result = templateCronSchedulerJobFromResult(
           await options.gateway.add(templateCronGatewayInput(plan.agent.finalId, ref), {
             commitGuard: assertCurrent,
+            captureOwnerProfileId: (ownerProfileId) => {
+              ref = { ...ref, nativeOwnership: { ownerProfileId } };
+            },
           }),
         );
         assertCurrent();
@@ -340,7 +348,11 @@ export async function installTemplateCronJobsStateless(
               await options.gateway.list(plan.agent.finalId),
               ref.declarationKey,
             );
-            if (listed && templateCronGatewayJobMatchesRef(plan.agent.finalId, ref, listed)) {
+            if (
+              ref.nativeOwnership &&
+              listed &&
+              templateCronGatewayJobMatchesRef(plan.agent.finalId, ref, listed)
+            ) {
               result = listed;
             }
           } catch {
@@ -395,7 +407,7 @@ export async function installTemplateCronJobsStateless(
         declarationId: action.id,
         schedulerJobId: result.id,
         name: "automation" in job ? job.automation.name : (job.name ?? job.id),
-        enabled: "automation" in job ? job.automation.enabled : true,
+        enabled: "automation" in job ? job.automation.enabled : (job.enabled ?? true),
       });
       publishingOutcome = false;
       assertCurrent();
