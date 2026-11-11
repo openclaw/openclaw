@@ -188,8 +188,8 @@ Discovery grants no tool execution authority. Discovered calls still pass throug
 OpenClaw's MCP policy and approvals. Tool-free turns do not receive `ToolSearch`.
 Reading a schema does not require permission to execute a shell command.
 
-Operators who want Claude Code's native subagents or workflows can opt in per
-agent, or for every agent, through the Anthropic plugin config:
+Operators who want Claude Code's native subagents, workflows, or web search can
+opt in per agent, or for every agent, through the Anthropic plugin config:
 
 ```json5
 {
@@ -198,7 +198,7 @@ agent, or for every agent, through the Anthropic plugin config:
       anthropic: {
         config: {
           managedNativeTools: {
-            default: ["Agent", "Workflow"],
+            default: ["Agent", "Workflow", "WebSearch"],
             agents: { ops: [] }, // per-agent list replaces the default
           },
         },
@@ -208,10 +208,13 @@ agent, or for every agent, through the Anthropic plugin config:
 }
 ```
 
-Only `Agent` and `Workflow` are accepted in this opt-in: they add orchestration without
-granting file, shell, or network authority, so descendants act through the same
-policy-filtered OpenClaw tools as the parent. File and shell tools stay with
-OpenClaw. `Skill` is not offered because managed turns load no Claude skills.
+Only `Agent`, `Workflow`, and `WebSearch` are accepted in this opt-in. `Agent` and
+`Workflow` add orchestration without granting file, shell, or network authority, so
+descendants act through the same policy-filtered OpenClaw tools as the parent.
+`WebSearch` is Claude Code's server-side search, billed to the Claude login; it gives the agent the `web_search` capability without an OpenClaw search
+provider. File and shell tools stay with OpenClaw. `WebFetch` is not offered: it
+fetches URLs from the Gateway host, outside `web_fetch`'s network guards. `Skill` is
+not offered because managed turns load no Claude skills.
 Managed turns also load no user or project settings, so `Agent` offers Claude
 Code's built-in subagent types only; custom subagents in `~/.claude/agents/` or
 a project's `.claude/agents/` are not loaded.
@@ -227,6 +230,15 @@ a project's `.claude/agents/` are not loaded.
   `tools.fs.workspaceOnly` still receive no native execution tools. Read-only
   discovery can remain available for their authorized MCP tools. A capped turn in an
   opted-in session therefore launches with different tool definitions.
+- `WebSearch` is kept only while the agent's tool policy allows `web_search`
+  (tool profiles, `tools.allow`/`tools.deny` including `group:web`, per-agent,
+  group, sender, and sandbox policy) and `tools.web.search` is enabled without a
+  pinned `tools.web.search.provider`; a pinned provider keeps search on OpenClaw's
+  `web_search`. A session that turns web search off drops it from its next turn.
+  Verified child completions keep the definition but refuse `WebSearch` calls,
+  because a completion's requester cap is checked per OpenClaw tool call and a
+  native call has no such check. `before_tool_call` sees these calls as
+  `web_search`.
 - Each native call still passes `before_tool_call` and exec policy: ask
   `on-miss` or `always` routes it through approval, and exec security `deny`,
   or `allowlist` with ask `off`, refuses it. Under those two settings the
@@ -474,7 +486,7 @@ and sandboxing. Use a [paired node](/nodes) or the embedded runtime with
 
 Claude Code can drive a Chrome browser through the [Claude in Chrome extension](https://code.claude.com/docs/en/chrome), including [1Password for Claude](/gateway/1password#browser-sign-in-with-1password-for-claude) credential autofill. The bundled backend does not enable it. Register a [CLI backend plugin](/plugins/cli-backend-plugins) that appends `--chrome` to the launch args of a `claude-stream-json`-dialect backend. OpenClaw preserves a configured `--chrome` on normal runs and always forces `--no-chrome` on runs with a restricted tool policy, such as side questions. The Chrome window, the extension, and any 1Password approval prompts live on the Gateway host. Someone must be at that machine to approve credential use.
 
-The backend maps OpenClaw `/think` levels to Claude Code's native `--effort` flag: `minimal`/`low` -> `low`, `medium` -> `medium`, and `high`/`xhigh`/`max` pass through directly. For models that allow fixed thinking budgets, it also launches Claude Code with `MAX_THINKING_TOKENS`: `off=0`, `minimal=1024`, `low=2048`, `medium=8192`, `high`/`xhigh=16384`, and `max=32768`. Positive fixed budgets disable adaptive thinking. Models that require adaptive thinking omit the fixed budget and continue to use `--effort`. `adaptive` removes configured effort flags and fixed-budget environment overrides, so Claude Code resolves effective thinking from its own environment, settings, and model defaults. Other CLI backends need their owning plugin to map the selected level before `/think` affects the spawned CLI.
+The backend maps OpenClaw `/think` levels to Claude Code's native `--effort` flag: `minimal`/`low` -> `low`, `medium` -> `medium`, and `high`/`xhigh`/`max` pass through directly. For models that allow fixed thinking budgets, it also launches Claude Code with `MAX_THINKING_TOKENS`: `off=0`, `minimal=1024`, `low=2048`, `medium=8192`, `high`/`xhigh=16384`, and `max=32768`. Positive fixed budgets disable adaptive thinking. Claude Code decides per model whether those budgets apply; models that only support adaptive thinking ignore them and use `--effort`. When fast mode is on, the backend also passes `--fast-mode on`; Claude Code ignores it for models without fast mode. `adaptive` removes configured effort flags and fixed-budget environment overrides, so Claude Code resolves effective thinking from its own environment, settings, and model defaults. Other CLI backends need their owning plugin to map the selected level before `/think` affects the spawned CLI.
 
 For native login, sign in to Claude Code on the Gateway host:
 
@@ -654,10 +666,12 @@ hand payloads to consumers without retaining them, so those payloads do not coun
 toward the output budget; IDs, metadata, padding, and frames still do. Mixed user
 records and cumulative snapshots still count. Forwarded subagent assistant
 messages and tool-result messages that the parser discards are charged a fixed
-allowance for their parent progress id.
-Child attribution alone does not earn that discount: retained stream-event text
-still counts toward the same 8 MiB output limit. Single-line limits and bounded
-frame counts remain active.
+allowance for their parent progress id. Child attribution alone does not earn
+that discount: retained stream-event text still counts toward the same 8 MiB
+output limit. Discarded stream control frames (thinking signatures and progress
+ticks, block and message stops, message deltas) are charged a fixed allowance,
+and progress ticks and stops also skip the frame count like partial-message
+envelopes. Single-line limits and bounded frame counts remain active.
 
 Input modes:
 
@@ -753,7 +767,7 @@ For CLIs that emit provider-specific JSONL events, set `jsonlDialect` on that ba
 
 Some CLI backends run an agent that compacts its own transcript. OpenClaw must not run its safeguard summarizer against them. Doing so fights the backend's own compaction and can hard-fail the turn.
 
-`claude-cli` has no harness endpoint (Claude Code compacts internally), so it declares `ownsNativeCompaction: true`. Automatic OpenClaw compaction defers to Claude Code, while an explicit `/compact` resumes the bound Claude Code session and sends its native `/compact` command. OpenClaw passes the run's effective context budget through Claude Code's documented [`CLAUDE_CODE_AUTO_COMPACT_WINDOW`](https://code.claude.com/docs/en/env-vars), keeping native auto-compaction aligned with configured Anthropic `contextTokens` limits. Native-harness sessions such as Codex keep routing to their harness compaction endpoint instead.
+`claude-cli` has no harness endpoint (Claude Code compacts internally), so it declares `ownsNativeCompaction: true`. Automatic OpenClaw compaction defers to Claude Code, while an explicit `/compact` resumes the bound Claude Code session and sends its native `/compact` command. OpenClaw passes the run's effective context budget through Claude Code's documented [`CLAUDE_CODE_AUTO_COMPACT_WINDOW`](https://code.claude.com/docs/en/env-vars), keeping native auto-compaction aligned with configured Anthropic `contextTokens` limits. Each Claude Code `compact_boundary` record ends one native compaction: it advances the session's `compactionCount` (shown as Compactions in `/status`), and the `compaction` agent event's `end` phase carries its `trigger` (`auto` or `manual`) plus `tokensBefore` and `tokensAfter`. A manual `/compact` reply reports the same sizes. Native-harness sessions such as Codex keep routing to their harness compaction endpoint instead.
 
 Manual `/compact` omits policy-derived bypass permissions so root-run Gateways can compact. Explicit `--permission-mode` arguments are preserved; ordinary turns continue to follow the configured OpenClaw exec policy.
 

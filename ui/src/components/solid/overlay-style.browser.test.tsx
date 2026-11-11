@@ -220,6 +220,51 @@ describe("native overlay presentation", () => {
     },
   );
 
+  it.each(["bottom-end", "top-start"] as const)(
+    "keeps %s when it fits, flips before clipping, and scrolls when neither side fits",
+    async (placement) => {
+      await page.viewport(800, 600);
+      mountMenu({ placement, items: entries("Action", 24) });
+      surface().style.setProperty("--oc-overlay-max-height", "126px");
+      positionTrigger({ left: "350px", top: "280px" });
+      await openMenu();
+      const preferred = expectWithinViewport(surface());
+      const anchor = trigger().getBoundingClientRect();
+      if (placement === "bottom-end") {
+        expect(preferred.top).toBeGreaterThanOrEqual(anchor.bottom);
+      } else {
+        expect(preferred.bottom).toBeLessThanOrEqual(anchor.top);
+      }
+      await userEvent.keyboard("{Escape}");
+      positionTrigger({ top: placement === "bottom-end" ? "550px" : "20px" });
+      await openMenu();
+      const flipped = expectWithinViewport(surface());
+      expect(flipped.height).toBe(preferred.height);
+      expect(surface().scrollHeight).toBeGreaterThan(surface().clientHeight);
+      const edge = trigger().getBoundingClientRect();
+      if (placement === "bottom-end") {
+        expect(flipped.bottom).toBeLessThanOrEqual(edge.top);
+      } else {
+        expect(flipped.top).toBeGreaterThanOrEqual(edge.bottom);
+      }
+      await userEvent.keyboard("{End}");
+      expect(document.activeElement).toBe(item("Action 24"));
+      expectItemVisible(item("Action 24"), surface());
+
+      await userEvent.keyboard("{Escape}");
+      surface().style.removeProperty("--oc-overlay-max-height");
+      await page.viewport(390, 200);
+      positionTrigger({ left: "150px", top: "80px" });
+      await openMenu();
+      expectWithinViewport(surface());
+      expect(surface().scrollHeight).toBeGreaterThan(surface().clientHeight);
+      await userEvent.keyboard("{End}");
+      expectItemVisible(item("Action 24"), surface());
+      await userEvent.keyboard("{Home}");
+      expectItemVisible(item("Action 1"), surface());
+    },
+  );
+
   it("uses high-contrast borders and focus in forced colors", async () => {
     await emulateOverlayMedia({ forcedColors: "active" });
     expect(matchMedia("(forced-colors: active)").matches).toBe(true);

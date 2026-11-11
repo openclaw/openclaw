@@ -64,6 +64,40 @@ const buildPlan = (
 ) => buildGatewayTemplateAddPlan(source, { config, agentId, sourceMcpServers: {} });
 
 describe("Gateway Template Add plan", () => {
+  it("does not load host MCP configuration for a Template with no MCP declarations", async () => {
+    const source = await readGatewayPackageFixture();
+    source.manifest = { ...source.manifest, mcpServers: {} };
+    const loadMcp = vi.fn(async () => ({}));
+    const plan = await buildGatewayTemplateAddPlan(source, {
+      config: { agents: { entries: {} } },
+      sourceMcpServers: loadMcp,
+    });
+    expect(plan.blockers).toEqual([]);
+    expect(loadMcp).not.toHaveBeenCalled();
+  });
+
+  it("loads current authored MCP configuration when the Template declares MCP", async () => {
+    const source = await readGatewayPackageFixture();
+    source.manifest = {
+      ...source.manifest,
+      mcpServers: { fixture: { command: "fixture-server" } },
+    };
+    const loadMcp = vi.fn(async () => ({ fixture: { command: "fixture-server" } }));
+    const plan = await buildGatewayTemplateAddPlan(source, {
+      config: { agents: { entries: {} } },
+      sourceMcpServers: loadMcp,
+    });
+    expect(loadMcp).toHaveBeenCalledTimes(1);
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "mcpServer",
+        id: "fixture",
+        action: "configure",
+        details: { command: "fixture-server", expectedState: "present-exact", prerequisites: [] },
+      }),
+    );
+  });
+
   it("compares relocated plan paths without treating sibling paths as source contents", () => {
     const previewRoot = path.resolve("preview-template");
     const persistedRoot = path.resolve("persisted-template");
@@ -120,6 +154,21 @@ describe("Gateway Template Add plan", () => {
     expect(pinned.planIntegrity).toBe(plan.planIntegrity);
   });
 
+  it.each([
+    ["its identity name", { identity: { name: "Workspace" } }, "Workspace 2"],
+    ["no name", {}, undefined],
+  ] as const)("names a copy of a Template without agent.name from %s", async (_, naming, name) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-templates-unnamed-copy-"));
+    const fixture = await readFixture();
+    const source = {
+      ...fixture,
+      manifest: { ...fixture.manifest, agent: { id: "workspace-agent", ...naming } },
+    };
+    const plan = await buildPlan(source, { agents: { entries: { "workspace-agent": {} } } });
+    expect(plan.agent.finalId).toBe("workspace-agent-2");
+    expect(plan.agent.config.name).toBe(name);
+  });
+
   it("uses the canonical planner and keeps source paths out of reviewed facts", async () => {
     const source = await readGatewayPackageFixture();
     const config = { agents: { entries: {} } };
@@ -171,7 +220,7 @@ describe("Gateway Template Add plan", () => {
     expect(preflightTemplatePackage).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "plugin" }),
       expect.any(String),
-      { config },
+      { config, packageRoot: source.source.packageRoot },
     );
   });
 
@@ -367,6 +416,7 @@ describe("Gateway Template Add plan", () => {
           action: "schedule",
           blocked: false,
           proposed: {
+            enabled: true,
             schedule: { everyMs: 1_800_000 },
             session: "isolated",
             delivery: "owner",
@@ -379,6 +429,7 @@ describe("Gateway Template Add plan", () => {
           action: "schedule",
           blocked: false,
           proposed: {
+            enabled: true,
             schedule: { cron: "0 * * * *", timezone: "UTC" },
             session: "isolated",
             delivery: "last-channel",

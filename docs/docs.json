@@ -2897,6 +2897,7 @@
                       "cli/channels",
                       "cli/directory",
                       "cli/pairing",
+                      "cli/pair",
                       "cli/qr",
                       "cli/users",
                       "cli/voicecall"
@@ -2910,6 +2911,7 @@
                       "cli/cron",
                       "cli/connect",
                       "cli/devices",
+                      "cli/id",
                       "cli/node",
                       "cli/nodes",
                       "cli/sandbox",
@@ -3266,6 +3268,8 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.11.3",
+                  "releases/2026.11.2",
                   "releases/2026.11.1",
                   "releases/2026.10.10",
                   "releases/2026.10.9",

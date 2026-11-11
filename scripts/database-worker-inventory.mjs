@@ -474,15 +474,19 @@ const reviewedOperations = new Map([
         evidence:
           "Only captureAuthoritativeMemoryEvents supplies readOnly: true, through readSessionMemoryCapture dispatched by session-history-read-operation.worker.ts or openclaw-agent-execution-operations.ts. Native SessionManager open/reload, loadTranscriptEventsSync, and transcript-commit.kernel.ts omit this option and return before this opener; their shared SQL remains T1.",
       },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-export-read.ts",
+    [
       {
         tier: "W",
         operations: [
-          "readTranscriptExportSnapshotReadOnlySync",
-          "readTranscriptExportSnapshotReadOnlySync.transaction",
+          "transcriptExportSliceSource.transaction",
           "readTranscriptExportSnapshotsFromDatabase",
         ],
         evidence:
-          "Transcript hydration, memory-entry export, and reset-recall dispatch run in transcript workers. Main-thread buildSessionEntry supplies a worker snapshot for SQLite; its in-process branch has no SQLite identity. Actor projection also receives a supplied snapshot. Other readers retain native SDK callers.",
+          "Memory-entry export (session-memory-entry.worker.ts) and reset-recall dispatch (session-reset-recall-read.worker.ts) run in transcript workers. Main-thread buildSessionEntry and streamSessionEntry receive rendered pages from that worker; their in-process branch renders archive files without a SQLite identity. Actor projection receives a supplied snapshot. The session-accessor re-export retains native SDK callers.",
       },
     ],
   ],
@@ -1606,6 +1610,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/config/sessions/session-accessor.sqlite-canonical-read.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["readExactSessionEntryRowForCanonicalRepair"],
+        evidence:
+          "Exact-row reader extracted unchanged from canonical-repair.ts; worker-only legacy comparison and Doctor import/projection callers retain the same database custody and malformed-row contract without importing cold restoration.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
     [
       {
@@ -1614,7 +1629,6 @@ const reviewedOperations = new Map([
           "ensureSqliteTranscriptGenerationsForCanonicalRepair",
           "rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch",
           "copySqliteSessionOwnedStateForRepair",
-          "readExactSessionEntryRowForCanonicalRepair",
         ],
         evidence:
           "Doctor canonical-key repair/import and worker-only legacy comparison in session-retirement-read.worker.ts; native full claims run only after detect returns, and allowCanonicalRepair is supplied only by Doctor canonical-key repair",
@@ -1893,7 +1907,7 @@ const reviewedOperations = new Map([
           "hasSessionStateWatchersInDatabase",
           "isSessionStateUpstreamCurrentInDatabase",
         ],
-        evidence: "session-state-events.worker.ts and session-upstream-links.worker.ts",
+        evidence: "session-state-events-record.worker.ts and session-upstream-links.worker.ts",
       },
       {
         tier: "W",
@@ -1909,13 +1923,13 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["readCursor", "readMaterialCursors", "updateMaterialCursor"],
         evidence:
-          "Watch commands and event recording execute only in session-state-events.worker.ts and subagent-registry.store.worker.ts",
+          "Watch/record workers and subagent-registry.store.worker.ts execute these queries",
       },
       {
         tier: "W",
         operations: ["recordSessionStateEventsInDatabase"],
         evidence:
-          "All producers await sessionState.record; the only direct production kernel callers are session-state-events.worker.ts and subagent-registry.store.worker.ts",
+          "sessionState.record dispatches to session-state-events-record.worker.ts; subagent-registry.store.worker.ts is the other direct caller",
       },
     ],
   ],
@@ -3515,6 +3529,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/config/sessions/session-transcript-replay.kernel.ts", // Only session-history-read-operation.worker.ts and openclaw-agent-execution-transcript.worker.ts import and call this reader.
   "src/plugins/installed-plugin-snapshot-candidates.kernel.ts", // Only plugins/state.worker.ts mutates the journal; installed-index commits transfer ownership inside that worker's transaction.
   "src/config/sessions/session-accessor.sqlite-compaction.ts", // Only session-manager-metadata.worker.ts calls the required-worker entry point; the async facade imports its type only.
   "src/agents/sandbox/persistent-exec-store.kernel.ts", // Mutations and registry removal checks run in persistent-exec-store.worker.ts and registry-write.worker.ts; reads dispatch through openclaw-state-read-operation-registry.ts in the read worker.

@@ -21,6 +21,11 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
 
+function readPublishedChildRuntime(includeSensitive: boolean) {
+  const viability = readChildRuntimeViability();
+  return includeSensitive ? viability : { execPath: "[redacted]", available: viability.available };
+}
+
 function cachedLifecycleDiffersFromRuntime(
   cached: ChannelHealthSummary | undefined,
   runtime: ChannelAccountSnapshot,
@@ -106,7 +111,7 @@ export const healthHandlers: GatewayRequestHandlers = {
             ? { configReload: { hotReloadStatus: configReloadHotReloadStatus } }
             : {}),
           // Live check. The cache must not keep a path that disappeared after it was stored.
-          childRuntime: readChildRuntimeViability(),
+          childRuntime: readPublishedChildRuntime(includeSensitive),
           recentCrashes: getGatewayRecentCrashes(),
         },
         undefined,
@@ -127,7 +132,7 @@ export const healthHandlers: GatewayRequestHandlers = {
           ...snap,
           coreReady: context.getReadiness?.().coreReady,
           modelRuntime: getPreparedModelRuntimeStartupStatus(),
-          childRuntime: readChildRuntimeViability(),
+          childRuntime: readPublishedChildRuntime(includeSensitive),
           recentCrashes: getGatewayRecentCrashes(),
         },
         undefined,
@@ -136,9 +141,10 @@ export const healthHandlers: GatewayRequestHandlers = {
   },
   status: async ({ respond, client, params, context }) => {
     const scopes = client?.connect.scopes ?? [];
+    const includeSensitive = scopes.includes(ADMIN_SCOPE);
     const hostDesktopStatus = await context.hostDesktopService?.status();
     const prepared = await prepareStatusSummary({
-      includeSensitive: scopes.includes(ADMIN_SCOPE),
+      includeSensitive,
       includeChannelSummary: params.includeChannelSummary !== false,
       includeCliProjection: params.includeCliProjection === true,
       sessionRowProjection: getSessionRowProjection(context),
@@ -167,7 +173,7 @@ export const healthHandlers: GatewayRequestHandlers = {
         workerPools,
         pid: process.pid,
         shutdownBudget: shutdownStatus,
-        childRuntime: readChildRuntimeViability(),
+        childRuntime: readPublishedChildRuntime(includeSensitive),
         recentCrashes: getGatewayRecentCrashes(),
         pluginReload: context.getPluginReloadStatus?.(),
       },

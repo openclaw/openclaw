@@ -1,0 +1,2 @@
+# Regressions: retained hooks drop assembled history; owned completed attempts drop loaded transcript payloads only after accepted writes and terminal listeners settle, preserving caller-owned managers.
+175

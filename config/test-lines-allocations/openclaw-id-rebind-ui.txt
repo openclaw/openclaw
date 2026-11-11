@@ -1,0 +1,2 @@
+783
+# Browser re-bind signing/confirmation and dialog settlement, real account replacement/sign-out custody, late-code publication refusal and existing screenshot e2e coverage, and scoped sidebar key warnings with recovery/Labs retirement.

@@ -50,7 +50,8 @@ final class ScreenRecordService: @unchecked Sendable {
             recorder.startCapture(handler: handler, completionHandler: completion)
         },
         stopReplayKitCaptureAction: @escaping StopCaptureAction = { completion in
-            RPScreenRecorder.shared().stopCapture { error in completion(error) }
+            // A closure literal here would inherit @MainActor; ReplayKit may call it off-main.
+            RPScreenRecorder.shared().stopCapture(handler: completion)
         })
     {
         self.recordQueue = recordQueue

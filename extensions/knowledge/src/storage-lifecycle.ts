@@ -2,6 +2,7 @@ import path from "node:path";
 import { Check } from "typebox/value";
 import type { VaultAccess } from "./access.js";
 import { inspectEvidence } from "./evidence-files.js";
+import { hashMatches } from "./hash-fence.js";
 import { lifecycleRecord, assertLifecycleTarget } from "./lifecycle.js";
 import { planMerge, planUnmerge, type MergeReport } from "./merge-write.js";
 import { mergeRedirects, referenceIds } from "./merge.js";
@@ -67,9 +68,6 @@ export class StorageLifecycle extends StorageEdits {
         data = await vault.scan();
       const previous = assertLifecycleTarget(data.records, input, false);
       const record = lifecycleRecord(previous, "withdrawn", input, actor);
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during validation.");
-      }
       return { record, previous, artifacts: {}, data, snapshot, lifecycle: input };
     });
     return this.accept(input.requestId, intent, prepared, access, actor);
@@ -102,9 +100,6 @@ export class StorageLifecycle extends StorageEdits {
         eligible(data, withdrawnIds(db, this.retrievalBinding(access)), false),
       );
       const plan = planSupersede(data, current, input, actor);
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during validation.");
-      }
       const [first, ...rest] = plan.changes;
       return {
         previous: first!.before,
@@ -178,7 +173,7 @@ export class StorageLifecycle extends StorageEdits {
         !merged ||
         !merged.valid ||
         merged.lifecycle !== "merged" ||
-        merged.hash !== input.merged.expectedHash ||
+        !hashMatches(merged.hash, input.merged.expectedHash) ||
         merged.revision !== input.merged.expectedRevision
       ) {
         throw new Error(
@@ -251,7 +246,7 @@ export class StorageLifecycle extends StorageEdits {
       !page.valid ||
       page.kind !== "page" ||
       page.lifecycle !== "active" ||
-      page.hash !== fence.expectedHash ||
+      !hashMatches(page.hash, fence.expectedHash) ||
       page.revision !== fence.expectedRevision
     ) {
       throw new Error(
@@ -317,9 +312,6 @@ export class StorageLifecycle extends StorageEdits {
                 .join("; "),
           );
         }
-      }
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during validation.");
       }
       return {
         previous: planned.survivor,

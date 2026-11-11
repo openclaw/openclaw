@@ -109,3 +109,34 @@ export async function installUsageOverviewGateway(
     },
   };
 }
+
+export async function openUsageFilter(page: Page, field?: string) {
+  const trigger = page.locator(".usage-filter-menu__trigger");
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+    await trigger.click();
+  }
+  if (!field) {
+    return page.locator(".usage-filter-menu__query input");
+  }
+  const submenu = page.getByRole("menuitem", { name: field, exact: true });
+  await submenu.click();
+  return page.locator(`[id="${await submenu.getAttribute("aria-controls")}"]`);
+}
+
+export async function applyUsageQuery(page: Page, value: string) {
+  const input = await openUsageFilter(page);
+  await input.fill(value);
+  await input.press("Enter");
+  await page.locator(".usage-filter-menu__trigger").click();
+}
+
+export async function selectUsageTimeZone(page: Page, timeZone: "local" | "utc") {
+  await page.getByRole("button", { name: "Display", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Time zone", exact: true }).click();
+  const option = page.getByRole("menuitemradio", {
+    name: timeZone === "utc" ? "UTC" : "Local",
+    exact: true,
+  });
+  await option.click();
+  await option.waitFor({ state: "hidden" });
+}

@@ -177,6 +177,10 @@ suite.define(() => {
                 );
               expect(landed.length).toBeGreaterThan(0);
               expect(
+                landed.every((row) => Math.abs(row.height - row.size) <= 0.5),
+                JSON.stringify(result),
+              ).toBe(true);
+              expect(
                 landed.every((row) => Math.abs(row.y - landed.at(-1)!.y) <= 1),
                 JSON.stringify(result),
               ).toBe(true);
