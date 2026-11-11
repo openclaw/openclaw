@@ -45,15 +45,15 @@ const retainedSourceLoaders: Readonly<Record<string, RetainedSourceLoader>> = {
 /** Keep module identity and import.meta.url while loading the retained generation's bytes. */
 export function retainUpdateRuntimeImports(
   relocations: readonly RuntimeRelocation[],
-  files: Iterable<string>,
+  files: Iterable<{ sourcePath: string; identityPath: string }>,
 ): void {
   const prepared = prepareRuntimeRelocations(relocations);
   const forward = new Map<string, string>();
   const reverse = new Map<string, string>();
   const loads = new Map<string, string>();
   for (const file of files) {
-    const original = pathToFileURL(file).href;
-    const retained = pathToFileURL(relocateRuntimePath(file, prepared)).href;
+    const original = pathToFileURL(file.identityPath).href;
+    const retained = pathToFileURL(relocateRuntimePath(file.sourcePath, prepared)).href;
     forward.set(original, retained);
     reverse.set(retained, original);
   }

@@ -106,6 +106,7 @@ for (const runtime of ["node", "bun", "node-short-path", "node-junction"] as con
        await fs.writeFile(path.join(root, "dist/late-new-hash.mjs"), 'export const value = "new build";');
        await fs.writeFile(path.join(root, "dist/shared.mjs"), 'throw new Error("new singleton loaded by old updater");');
        await fs.writeFile(path.join(root, "dist/tool-dependency.mjs"), 'export const value = "new tooling";');
+       await fs.writeFile(path.join(root, "dist/untracked.mjs"), 'export { value } from "./tool-dependency.mjs";');
        await fs.rm(path.join(root, "node_modules/fixture/index.js"));
        await fs.writeFile(path.join(root, "node_modules/fixture/index.js"), 'export default "new dependency";');
        await fs.rm(path.join(root, "node_modules/fixture-cjs/index.cjs"));
@@ -138,6 +139,8 @@ for (const runtime of ["node", "bun", "node-short-path", "node-junction"] as con
          assert.equal(queried.url, late.url + "?variant=1#x");
          assert.equal((await updater.absolute()).value, "old absolute");
          assert.equal((await import(pathToFileURL(path.join(root, "tooling.mjs")).href)).value, "new tooling");
+         assert.equal((await import(pathToFileURL(path.join(importRoot, "tooling.mjs")).href)).value, "new tooling");
+         assert.equal((await import(pathToFileURL(path.join(importRoot, "dist/untracked.mjs")).href)).value, "new tooling");
        };
        if (!${alias}) await verify();
        return verify;

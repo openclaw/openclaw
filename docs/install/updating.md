@@ -160,6 +160,10 @@ maintenance refusal. The updater performing the stop must contain this fix.
 This retention covers Node and Bun late imports, including CommonJS dependencies
 and JSON. Module state already loaded by the updater stays shared through cleanup;
 imports outside that retained generation continue using the active installation.
+The retained inventory preserves the running updater's Windows short-path
+spelling so its late imports keep their original module identity after package
+replacement. This requires the installed updater to contain the repair; a newer
+candidate cannot change an older updater that is already running.
 
 Native pnpm package swaps preserve platform-filtered optional dependencies as
 absent. On Windows, a dangling link declared in its owner's

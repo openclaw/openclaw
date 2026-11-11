@@ -239,9 +239,19 @@ async function runWithRetainedUpdateRuntime<T>(
           bind(resolve);
           // Workers and the parent must use the same generation after activation
           // replaces dist; preserving URLs also preserves already-loaded singletons.
+          // Inventory uses physical paths; module identity uses the running updater
+          // spelling. Rebase only inventoried files, never an entire import prefix.
+          const importIdentities = prepareRuntimeRelocations([
+            { sourceRoot, destinationRoot: root },
+          ]);
           retainUpdateRuntimeImports(
             relocations.rules,
-            plan.entries.filter((entry) => entry.kind === "file").map((entry) => entry.path),
+            plan.entries
+              .filter((entry) => entry.kind === "file")
+              .map((entry) => ({
+                sourcePath: entry.path,
+                identityPath: relocateRuntimePath(entry.path, importIdentities),
+              })),
           );
           prepared = true;
           return {
