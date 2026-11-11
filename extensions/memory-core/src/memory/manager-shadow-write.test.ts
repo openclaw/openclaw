@@ -1,3 +1,4 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -289,6 +290,8 @@ describe("private session source staging", () => {
 
   it("preserves the published index when an accepted transfer fails without replaying inline", async () => {
     const { manager, db } = await setup();
+    const opened = vi.spyOn(syncFs, "openSync");
+    const closed = vi.spyOn(syncFs, "closeSync");
     await fs.writeFile(
       path.join(fixture.paths.memory, "transfer.md"),
       "Violet transfer source.\n".repeat(30_000),
@@ -318,6 +321,12 @@ describe("private session source staging", () => {
     rejectedTransfer.mockRestore();
     await manager.sync({ reason: "retry", force: true });
     expect(snapshot(db)).toEqual(before);
+    // Successful and failed rebuilds must release their private file before unlinking it.
+    const shadows = opened.mock.results.filter((_, call) =>
+      String(opened.mock.calls[call]![0]).includes(".memory-reindex-"),
+    );
+    expect(shadows).not.toHaveLength(0);
+    expect(closed.mock.calls.flat()).toEqual(expect.arrayContaining(shadows.map((r) => r.value)));
     const databasePath = db.location()!;
     await manager.close();
     const entries = await fs.readdir(path.dirname(databasePath));
