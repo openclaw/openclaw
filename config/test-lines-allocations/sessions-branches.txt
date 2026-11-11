@@ -1,0 +1,3 @@
+# Net test-line growth from the `sessions branches` CLI surface: new
+# sessions-branches.test.ts plus register.status-health-sessions.test.ts additions.
+166

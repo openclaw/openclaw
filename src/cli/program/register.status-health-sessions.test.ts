@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   tail: vi.fn(),
   compact: vi.fn(),
   lifecycle: vi.fn(),
+  branches: vi.fn(),
   exportTrajectory: vi.fn(),
   ownerLoaded: vi.fn(),
   setVerbose: vi.fn(),
@@ -38,6 +39,11 @@ vi.mock("../../commands/sessions-tail.js", () => {
 vi.mock("../../commands/sessions-compact.js", () => {
   mocks.ownerLoaded();
   return { sessionsCompactCommand: mocks.compact };
+});
+// mock-isolation: Capture lazy loading without reading session state.
+vi.mock("../../commands/sessions-branches.js", () => {
+  mocks.ownerLoaded();
+  return { sessionsBranchesCommand: mocks.branches };
 });
 vi.mock("../../commands/sessions-lifecycle.js", async (importOriginal) => {
   mocks.ownerLoaded();
@@ -214,4 +220,46 @@ it("documents retained delete archives and local memory cleanup", () => {
   expect(help).toContain("openclaw memory forget --agent <agent-id> --session <id-or-key>");
   expect(help).toContain("on the Gateway host or container using its state and configuration");
   expect(help).toContain("including for global keys");
+});
+
+it.each([
+  [
+    `sessions --store /tmp/other.sqlite --all-agents --limit 25 --verbose branches ${key}`,
+    "`sessions branches` does not support the parent `sessions` options --store, --all-agents, --limit, --verbose; the gateway resolves the target store from <key> and --agent.",
+  ],
+  [`sessions branches ${key} --timeout 0 --json`, timeoutError],
+] as const)("rejects %s before loading the branches owner", async (args, message) => {
+  const execution = run(args);
+  await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
+  await expect(execution).rejects.toMatchObject({ message });
+  expectNoCalls(mocks.branches, mocks.ownerLoaded, mocks.runtime.error, mocks.runtime.exit);
+});
+
+it("forwards branches key with inherited scope and RPC options", async () => {
+  await run(
+    `sessions --agent work --json branches ${key} --url ws://gateway.test --token test-token --password test-password --timeout 45000`,
+  );
+  expectOptions(mocks.branches, {
+    key,
+    agent: "work",
+    url: "ws://gateway.test",
+    token: "test-token",
+    password: "test-password",
+    timeout: "45000",
+    json: true,
+  });
+});
+
+it("branches inherits parent agent and JSON options", async () => {
+  await run(`sessions --agent work --json branches ${key}`);
+  expectOptions(mocks.branches, { key, agent: "work", json: true });
+});
+
+it("documents branches RPC backing and empty-list behavior", () => {
+  const sessions = program().commands.find((command) => command.name() === "sessions");
+  const command = sessions?.commands.find((child) => child.name() === "branches");
+  let help = "";
+  command?.configureOutput({ writeOut: (text) => (help += text) }).outputHelp();
+  expect(help).toContain("sessions.branches.list gateway RPC");
+  expect(help).toContain("report an empty list");
 });
