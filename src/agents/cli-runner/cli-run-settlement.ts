@@ -724,5 +724,6 @@ export function buildCliRunResult(params: {
     ...(output.acceptedSessionSpawns?.length
       ? { acceptedSessionSpawns: output.acceptedSessionSpawns }
       : {}),
+    ...(output.successfulCronAdds ? { successfulCronAdds: output.successfulCronAdds } : {}),
   };
 }

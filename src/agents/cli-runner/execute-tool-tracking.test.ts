@@ -182,3 +182,74 @@ describe("CLI conversation delivery evidence", () => {
     },
   );
 });
+
+// Regression for #193958: a successful automations add over MCP must count toward
+// successfulCronAdds so the reminder guard does not append a false "I did not schedule"
+// note. The embedded runtime already counted these via isAutomationsToolName; the CLI
+// runtime must mirror the same contract.
+describe("CLI scheduler add evidence", () => {
+  it.each([
+    ["mcp__openclaw__automations", "automations"],
+    ["mcp__openclaw__cron", "cron"],
+  ] as const)("counts a successful %s add toward successfulCronAdds", (name, toolName) => {
+    const tracking = createTracking();
+    const args = { action: "add", job: { name: "reminder", schedule: { kind: "at", atMs: 1 } } };
+    tracking.handleCliToolUseStart({
+      toolCallId: "automations-call",
+      name,
+      kind: "mcp_tool_use",
+      args,
+    });
+    const capture = markMcpLoopbackToolCallStarted({ captureKey: "deadline-test", toolName, args });
+    if (!capture) {
+      throw new Error("expected captured automations call");
+    }
+    try {
+      recordMcpLoopbackToolCallResult({
+        captureHandle: capture,
+        toolName,
+        args,
+        outcome: "completed",
+      });
+      tracking.handleCliToolResult({ toolCallId: "automations-call", name, isError: false });
+      const result = tracking.withExecutionEvidence({ text: "On it." });
+      expect(result.successfulCronAdds).toBe(1);
+    } finally {
+      markMcpLoopbackToolCallFinished(capture);
+      tracking.finalizeCapture(() => {});
+    }
+  });
+
+  it.each([
+    ["list", "automations"],
+    ["get", "cron"],
+  ] as const)("does not count non-add %s calls (action %s)", (action, toolName) => {
+    const tracking = createTracking();
+    const args = { action };
+    const name = `mcp__openclaw__${toolName}`;
+    tracking.handleCliToolUseStart({
+      toolCallId: "automations-call",
+      name,
+      kind: "mcp_tool_use",
+      args,
+    });
+    const capture = markMcpLoopbackToolCallStarted({ captureKey: "deadline-test", toolName, args });
+    if (!capture) {
+      throw new Error("expected captured automations call");
+    }
+    try {
+      recordMcpLoopbackToolCallResult({
+        captureHandle: capture,
+        toolName,
+        args,
+        outcome: "completed",
+      });
+      tracking.handleCliToolResult({ toolCallId: "automations-call", name, isError: false });
+      const result = tracking.withExecutionEvidence({ text: "On it." });
+      expect(result.successfulCronAdds).toBeUndefined();
+    } finally {
+      markMcpLoopbackToolCallFinished(capture);
+      tracking.finalizeCapture(() => {});
+    }
+  });
+});

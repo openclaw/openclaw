@@ -85,6 +85,8 @@ export type CliOutput = {
   toolTrustedLocalMedia?: boolean;
   /** Child sessions accepted by the turn-scoped loopback tool capture. */
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
+  /** Successful scheduler (automations/cron) adds this turn, for the reminder guard. */
+  successfulCronAdds?: number;
   yielded?: true;
   yieldAcknowledgment?: string;
 };
