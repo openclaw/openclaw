@@ -22,10 +22,7 @@ it.each([
   ],
   [
     "annotated CRLF frontmatter delimiter",
-    ('---\ntitle: Example\ndescription: "{"\n... # end\n' + component).replaceAll(
-      "\n",
-      "\r\n",
-    ),
+    ('---\ntitle: Example\ndescription: "{"\n... # end\n' + component).replaceAll("\n", "\r\n"),
     null,
   ],
   ["YAML document-end delimiter", "---\ntitle: Example\n...\n" + component, null],
