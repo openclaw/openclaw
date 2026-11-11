@@ -60,17 +60,35 @@ jobs:
         run: |
           node scripts/run-vitest.mjs src/cli/runtime-cleanup-scope.retirement.test.ts --maxWorkers=1 -t "after node retained-update composition" 2>&1 | Tee-Object .artifacts/cli-composition/baseline-canonical.log
           exit $LASTEXITCODE
-      - name: Require pre-fix short-path owner failure
+      - name: Require pre-fix admitted alias cleanup failure
         shell: pwsh
         run: |
           node scripts/run-vitest.mjs src/cli/runtime-cleanup-scope.retirement.test.ts --maxWorkers=1 -t "after node-short-path retained-update composition" 2>&1 | Tee-Object .artifacts/cli-composition/baseline-alias.log
           $status = $LASTEXITCODE
-          $log = Get-Content -Raw .artifacts/cli-composition/baseline-alias.log
           if ($status -eq 0) { throw "Pre-fix short-path composition unexpectedly passed" }
-          if ($log -notmatch 'cli-composition-admitted' -or $log -notmatch 'CLI cleanup failed: agent-harnesses' -or $log -notmatch 'ERR_MODULE_NOT_FOUND|Cannot find module') {
-            throw "Pre-fix failure did not establish the intended admitted alias cleanup-import boundary"
+          $lines = @(Get-Content .artifacts/cli-composition/baseline-alias.log | ForEach-Object { $_ -replace '\x1b\[[0-9;]*m', '' })
+          $admissions = @($lines | Where-Object { $_.StartsWith('{"phase":"cli-composition-admitted"') } | ForEach-Object { $_ | ConvertFrom-Json })
+          if ($admissions.Count -ne 1) { throw "Expected exactly one parsed alias admission" }
+          $admission = $admissions[0]
+          if ($admission.requested -isnot [string] -or $admission.observed -isnot [string] -or $admission.physical -isnot [string] -or
+              $admission.requested -cne $admission.observed -or $admission.observed -ceq $admission.physical) {
+            throw "Pre-fix failure did not admit the requested nonphysical alias"
           }
-          "Expected admitted short-path owner failure, exit=$status" | Set-Content .artifacts/cli-composition/baseline-disposition.txt
+          $cleanupUri = [uri]$admission.observed
+          if (-not $cleanupUri.IsFile -or $cleanupUri.AbsolutePath -cnotmatch '/cli/runtime-cleanup\.js$') {
+            throw "Alias admission did not identify the cleanup module"
+          }
+          $cleanupPath = $cleanupUri.LocalPath.Replace('\', '/')
+          $errorsPath = $cleanupPath -creplace '/cli/runtime-cleanup\.js$', '/infra/errors.js'
+          $diagnostics = (($lines | Where-Object { $_.StartsWith('[openclaw] ') }) -join "`n").Replace('\', '/')
+          $missingReporter = '(?m)^\[openclaw\] Error \[ERR_MODULE_NOT_FOUND\]: Cannot find module ''' + [regex]::Escape($errorsPath) + ''' imported from ' + [regex]::Escape($cleanupPath) + '$'
+          $zeroDisposal = '(?m)^\[openclaw\] AssertionError \[ERR_ASSERTION\]: real CLI finalizer did not dispose the retained harness\n\[openclaw\] 0 !== 1\n\[openclaw\] +at Object\.finalize \([^\n]*/cli/runtime-cleanup-retained\.test-support\.js:[0-9]+:[0-9]+\)$'
+          if ($diagnostics -cnotmatch $missingReporter -or $diagnostics -cnotmatch $zeroDisposal) {
+            throw "Pre-fix failure lacked the admitted cleanup reporter import and exact zero-disposal assertion"
+          }
+          # runCliDisposer imports its error formatter before logging the caught error.
+          # This reporter failure masks the original disposer error/name; neither is observed.
+          "Expected admitted alias cleanup reporter failure and zero disposal; original disposer error/name unobserved; exit=$status" | Set-Content .artifacts/cli-composition/baseline-disposition.txt
           exit 0
       - name: Upload source-bound proof including failures
         if: ${{ always() }}
