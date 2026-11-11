@@ -366,10 +366,7 @@ export class ShellGatewayOwner {
       return;
     }
     if (command.kind === "agent-github-settings") {
-      // Rare reconnect request: keep the destination out of the boot bundle.
-      void import("../features/github-connections/open-github-accounts.ts").then((module) =>
-        module.openGitHubAccounts(context),
-      );
+      void (async () => (await import("./github-accounts.ts")).openGitHubAccounts(context))();
       return;
     }
     if (command.kind === "sidebar") {
