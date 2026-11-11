@@ -1,0 +1,14 @@
+# Exact net test-line growth from the #196508 fix (DREAMS.md in-place fallback
+# reusing the MEMORY.md writer, with live mutation-authority revalidation and
+# offset-zero restore): regression coverage for the fallback, revoked-authority
+# rejection, and exact-byte recovery after a partial write. Plus the re-review
+# follow-up: the revoked-rejection regression now also asserts the request
+# performs no write or truncation, and the exact-mode assertion is guarded on
+# Windows.
+#
+# 168 lines: the PR's net test-line delta. No base-debt reconciliation: main is
+# under its own test-line ceiling at the current base (slack 17 at 3d6699cb9),
+# so the ratchet's allocation-credit check caps the grant at exactly the delta;
+# a larger grant fails that check (verified by replaying
+# check-test-lines-ratchet on the merge tree).
+168
