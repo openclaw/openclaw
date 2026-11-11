@@ -374,19 +374,33 @@ export function findLatestCompactionUserMessage(
   );
 }
 
+const CREDENTIAL_PATTERNS = [
+  /\b(?:sk|pk|rk|ghp|gho|ghu|ghs|github_pat|xox[abprs]|glpat|AKIA|AIza)[-_A-Za-z0-9]{16,}/g,
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}/g,
+  /\b(?:api[_-]?key|token|secret|password|passwd|authorization|bearer)\b\s*[:=]\s*["']?[^\s"']{8,}/gi,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+];
+
+/**
+ * Text quoted verbatim into compaction artifacts. Summaries are persisted and replayed
+ * on every later request, so credential shapes are redacted here, before any caller
+ * clips an excerpt that could leave a fragment. The transcript itself stays raw.
+ */
 export function extractCompactionMessageText(message: AgentMessage): string {
   const content = Reflect.get(message, "content");
-  if (typeof content === "string") {
-    return content.trim();
-  }
-  return Array.isArray(content)
-    ? content
-        .flatMap((block) => {
-          const text = block && typeof block === "object" ? Reflect.get(block, "text") : undefined;
-          return typeof text === "string" && text.trim() ? [text.trim()] : [];
-        })
-        .join("\n")
-    : "";
+  const text =
+    typeof content === "string"
+      ? content.trim()
+      : Array.isArray(content)
+        ? content
+            .flatMap((block) => {
+              const value =
+                block && typeof block === "object" ? Reflect.get(block, "text") : undefined;
+              return typeof value === "string" && value.trim() ? [value.trim()] : [];
+            })
+            .join("\n")
+        : "";
+  return CREDENTIAL_PATTERNS.reduce((value, pattern) => value.replace(pattern, "[redacted]"), text);
 }
 
 /** Legacy producers cannot search past an independent input for a pending ask. */
