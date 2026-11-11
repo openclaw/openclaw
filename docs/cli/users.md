@@ -31,6 +31,11 @@ openclaw users list --json
 Requires `operator.read`. Human output lists each profile's ID, display name, and
 email aliases. Use the durable IDs when linking or merging profiles.
 
+Ctrl-C or SIGTERM cancels a pending list read without printing a late result or
+failure document. The CLI exits with status 130 or 143, respectively. Email-link
+and profile-merge mutations already sent to the Gateway still wait for their
+receipts during cleanup; interruption does not undo them.
+
 ## Link an email alias
 
 ```bash
