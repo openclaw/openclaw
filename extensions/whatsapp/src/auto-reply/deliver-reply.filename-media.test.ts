@@ -21,11 +21,22 @@ vi.mock("openclaw/plugin-sdk/web-media", async (importOriginal) => ({
   loadWebMedia: vi.fn(),
 }));
 
+// Ogg identification prefixes from synthetic FFmpeg Opus and Vorbis audio.
+const opus = Buffer.from(
+  "4f676753000200000000000000009f942946000000001863d23601134f707573486561640102380180bb0000000000",
+  "hex",
+);
+const vorbis = Buffer.from(
+  "4f676753000200000000000000002429c44500000000676e74b8011e01766f72626973000000000244ac0000000000",
+  "hex",
+);
+
 describe("WhatsApp filename-only media delivery", () => {
   it.each([
     ["photo.png", undefined, "image/png", "image", "filename-only-media"],
     ["clip.mp4", undefined, "video/mp4", "video", "filename-only-media"],
-    ["voice.ogg", undefined, "audio/ogg; codecs=opus", "audio", "filename-only-media"],
+    ["voice.ogg", undefined, "audio/ogg; codecs=opus", "audio", opus, opus],
+    ["voice.ogg", "audio/ogg", "audio/ogg; codecs=opus", "audio", "opus-output", vorbis],
     ["voice.mp3", undefined, "audio/ogg; codecs=opus", "audio", "opus-output"],
     ["report.pdf", undefined, "application/pdf", "document", "filename-only-media"],
     ["unknown.bin", undefined, "application/octet-stream", "document", "filename-only-media"],
@@ -33,14 +44,21 @@ describe("WhatsApp filename-only media delivery", () => {
     ["photo.png", "application/pdf", "application/pdf", "document", "filename-only-media"],
   ] as const)(
     "delivers %s with %s as native %s",
-    async (fileName, contentType, mimetype, payloadKey, expectedBuffer) => {
+    async (
+      fileName,
+      contentType,
+      mimetype,
+      payloadKey,
+      expectedBuffer,
+      buffer = Buffer.from("filename-only-media"),
+    ) => {
       vi.clearAllMocks();
       hoisted.transcodeAudioBufferToOpus.mockResolvedValue(Buffer.from("opus-output"));
       vi.mocked(loadWebMedia).mockResolvedValueOnce({
-        buffer: Buffer.from("filename-only-media"),
+        buffer,
         contentType,
         fileName,
-        kind: contentType ? "document" : undefined,
+        kind: contentType === "audio/ogg" ? "audio" : contentType ? "document" : undefined,
       });
       const sendMedia = vi
         .fn<AdmittedWebInboundMessage["platform"]["sendMedia"]>()
@@ -73,7 +91,8 @@ describe("WhatsApp filename-only media delivery", () => {
       expect(sendMedia).toHaveBeenCalledOnce();
       const mediaPayload = sendMedia.mock.calls[0]?.[0];
       expect(mediaPayload).toMatchObject({
-        [payloadKey]: Buffer.from(expectedBuffer),
+        [payloadKey]:
+          typeof expectedBuffer === "string" ? Buffer.from(expectedBuffer) : expectedBuffer,
         mimetype,
       });
       if (payloadKey === "audio") {

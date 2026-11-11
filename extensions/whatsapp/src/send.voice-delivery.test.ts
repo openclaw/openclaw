@@ -75,8 +75,13 @@ it.each(["ogg", "m4a"])("delivers %s voice and caption in one activity scope", a
       throw new Error("gateway caption producer repeated logical delivery bookkeeping");
     }
   });
-  const voice = Buffer.from("gateway-voice");
   const native = format === "ogg";
+  const voice = native
+    ? Buffer.from(
+        "4f676753000200000000000000009f942946000000001863d23601134f707573486561640102380180bb0000000000",
+        "hex",
+      )
+    : Buffer.from("gateway-voice");
   const caption = native ? "voice caption" : "voice note";
   const fileName = native ? "gateway-voice.ogg" : "voice.m4a";
   loadWebMediaMock.mockResolvedValueOnce({

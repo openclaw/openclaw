@@ -50,7 +50,8 @@ const mediaFixture = (
   fileName: string,
   contentType: string,
   bytes: string,
-) => ({ kind, fileName, contentType, buffer: Buffer.from(bytes) });
+  encoding: BufferEncoding = "utf8",
+) => ({ kind, fileName, contentType, buffer: Buffer.from(bytes, encoding) });
 
 function installChunkSender(prefix: string) {
   const sendMessage = vi.fn<ActiveWebListener["sendMessage"]>();
@@ -201,7 +202,13 @@ it("preserves accepted receipts and callback order after caption failure", async
   const mediaReadFile = vi.fn(async () => Buffer.from("legacy-read"));
   const media = {
     "fixture://forced.png": mediaFixture("image", "forced.png", "image/png", "png"),
-    "fixture://voice.ogg": mediaFixture("audio", "voice.ogg", "audio/ogg", "ogg"),
+    "fixture://voice.ogg": mediaFixture(
+      "audio",
+      "voice.ogg",
+      "audio/ogg",
+      "4f676753000200000000000000009f942946000000001863d23601134f707573486561640102380180bb0000000000",
+      "hex",
+    ),
   } as const;
   mocks.loadOutboundMediaFromUrl.mockImplementation(async (url: string) => {
     const fixture = media[url as keyof typeof media];
