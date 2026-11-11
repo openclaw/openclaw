@@ -55,7 +55,7 @@ const ownerOptions = (root: Element) =>
   ].map((label) => label.textContent!.trim());
 
 async function mountFilters(width: number, teammates = 0, otherOwner = "Bob") {
-  const { page, userEvent } = await import("vitest/browser");
+  const { page, server, userEvent } = await import("vitest/browser");
   const role = (kind: Parameters<typeof page.getByRole>[0], name: string | RegExp) =>
     page.getByRole(kind, { name, exact: true });
   await page.viewport(width, 560);
@@ -95,8 +95,10 @@ async function mountFilters(width: number, teammates = 0, otherOwner = "Bob") {
     await role("button", label).click();
     await role("option", value).click();
   };
-  const tabTo = async (kind: Parameters<typeof role>[0], name: string) => {
-    await userEvent.tab();
+  const nativeOptionTab = server.browser === "webkit" && server.platform === "darwin";
+  const tabTo = async (kind: Parameters<typeof role>[0], name: string, shift = false) => {
+    const key = shift ? "{Shift>}{Tab}{/Shift}" : "{Tab}";
+    await userEvent.keyboard(nativeOptionTab ? `{Alt>}${key}{/Alt}` : key);
     await expect.element(role(kind, name)).toHaveFocus();
   };
   return { ...mounted, sessions, page, userEvent, role, query, choose, tabTo };
@@ -379,7 +381,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     const grouping = query("#sidebar-sessions-group")!;
     grouping.focus();
     await tabTo("button", "Sort by: Last updated");
-    await userEvent.tab({ shift: true });
+    await tabTo("button", "Group by: Custom groups", true);
     await expect.element(grouping).toHaveFocus();
     await role("heading", "Filters").click();
     const automation = role("switch", "Show automation sessions");
