@@ -447,6 +447,16 @@ describe("AgentSession compaction", () => {
     expect(manualRequestState).toBeUndefined();
   });
 
+  it("drops the floor when it cannot fit the window without a foreground budget", async () => {
+    const { session } = await createTestSession({
+      model: { ...testModel, contextWindow: 40 },
+      sessionManager: oldHistory(),
+      settingsManager: compactionSettings(),
+      extension: createResultHandlers("short summary"),
+    });
+    await expect(session.compact()).resolves.toMatchObject({ summary: "short summary" });
+  });
+
   it("replaces the core summary floor at each compaction instead of carrying it forward", async () => {
     const sessionManager = oldHistory();
     const prompts: string[] = [];

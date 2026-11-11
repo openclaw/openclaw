@@ -506,7 +506,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
 
     const completedCompaction = {
       ...compactionResult,
-      summary: commitCompactionSummary(compactionResult, preparation, withoutSummary),
+      summary: commitCompactionSummary(compactionResult, preparation, withoutSummary, {
+        contextWindow: model.contextWindow,
+        retainedMessages: projectReplacement(compactionResult, ""),
+      }),
     };
 
     // Custom hooks may choose a different retained boundary. Validate their

@@ -1,5 +1,6 @@
 /** Model-free record of a compacted region: the whole record without a summary, an appendix beside one. */
 import type { AgentMessage } from "../../types.js";
+import { estimateTokens } from "./compaction-cut-point.js";
 import { parseCompactionDetails } from "./compaction-details.js";
 import {
   capCompactionSummary,
@@ -195,26 +196,37 @@ function appendSummaryFloor(
 
 /**
  * The committed summary of every producer: capped at the summary ceiling, then followed by
- * the floor. No-summary artifacts already carry their floor inside the ceiling.
+ * the floor. No-summary artifacts already carry their floor inside the ceiling. Without a
+ * foreground budget, the floor still has to fit the window beside the retained context.
  */
 export function commitCompactionSummary(
   result: Pick<CompactionResult, "summary" | "details">,
   preparation: Pick<
     CompactionPreparation,
     "messagesToSummarize" | "turnPrefixMessages" | "summaryTokenBudget"
-  > & { settings: { maxSummaryChars?: number } },
+  > & { settings: { maxSummaryChars?: number; reserveTokens?: number } },
   withoutSummary: boolean,
+  window?: { contextWindow?: number; retainedMessages: readonly AgentMessage[] },
 ): string {
-  const { maxSummaryChars } = preparation.settings;
+  const { maxSummaryChars, reserveTokens = 0 } = preparation.settings;
   const summary = capCompactionSummary(result.summary, maxSummaryChars);
-  return withoutSummary || parseCompactionDetails(result.details)?.summaryRefused
-    ? summary
-    : appendSummaryFloor(
-        summary,
-        [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages],
-        maxSummaryChars,
-        preparation.summaryTokenBudget,
-      );
+  if (withoutSummary || parseCompactionDetails(result.details)?.summaryRefused) {
+    return summary;
+  }
+  // Accepted edge case: with an unknown window the floor is bounded only by its own budget.
+  const windowTokens =
+    window?.contextWindow && window.contextWindow > 0
+      ? window.retainedMessages.reduce(
+          (left, message) => left - estimateTokens(message),
+          window.contextWindow - reserveTokens,
+        )
+      : undefined;
+  return appendSummaryFloor(
+    summary,
+    [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages],
+    maxSummaryChars,
+    preparation.summaryTokenBudget ?? windowTokens,
+  );
 }
 
 /** A carried summary drops its old floor; the next compaction builds one for its own region. */
