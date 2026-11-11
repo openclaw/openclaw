@@ -11,6 +11,7 @@ import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairin
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import {
+  NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
@@ -31,6 +32,7 @@ type QrCliOptions = {
   password?: string;
   limited?: boolean;
   voiceNode?: boolean;
+  nodeOnly?: boolean;
 };
 
 const LIMITED_TRANSPORT_WARNING =
@@ -75,6 +77,7 @@ export function registerQrCli(program: Command) {
     .option("--password <password>", "Override gateway password for setup payload")
     .option("--limited", "Pair with limited operator access (omit operator.admin)", false)
     .option("--voice-node", "Pair a voice node with node, read, and Talk access only", false)
+    .option("--node-only", "Pair a node without granting operator access", false)
     .option("--setup-code-only", "Print only the setup code", false)
     .option("--no-ascii", "Skip ASCII QR rendering")
     .option("--json", "Output JSON", false)
@@ -85,6 +88,10 @@ export function registerQrCli(program: Command) {
         }
         if (opts.limited && opts.voiceNode) {
           throw new Error("Use either --limited or --voice-node, not both.");
+        }
+
+        if (opts.nodeOnly && (opts.limited || opts.voiceNode)) {
+          throw new Error("Use --node-only without --limited or --voice-node.");
         }
 
         const token = trimToUndefined(opts.token) ?? "";
@@ -164,14 +171,17 @@ export function registerQrCli(program: Command) {
         }
 
         const explicitUrl = trimToUndefined(opts.url) ?? trimToUndefined(opts.publicUrl);
+        const bootstrapProfile = opts.nodeOnly
+          ? NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE
+          : opts.voiceNode
+            ? VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE
+            : opts.limited
+              ? PAIRING_SETUP_BOOTSTRAP_PROFILE
+              : undefined;
         const resolved = await resolvePairingSetupFromConfig(cfg, {
           publicUrl: explicitUrl,
           preferRemoteUrl: wantsRemote,
-          ...(opts.voiceNode
-            ? { bootstrapProfile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE }
-            : opts.limited
-              ? { bootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE }
-              : {}),
+          ...(bootstrapProfile ? { bootstrapProfile } : {}),
           runCommandWithTimeout: async (argv, runOpts) =>
             await runCommandWithTimeout(argv, {
               timeoutMs: runOpts.timeoutMs,
@@ -196,6 +206,9 @@ export function registerQrCli(program: Command) {
             auth: resolved.authLabel,
             urlSource: resolved.urlSource,
             access: resolved.access,
+            ...(opts.nodeOnly
+              ? { setupId: resolved.setupId, expiresAtMs: resolved.expiresAtMs }
+              : {}),
             ...(resolved.accessDowngraded ? { accessDowngraded: true } : {}),
           });
           return;
@@ -211,7 +224,9 @@ export function registerQrCli(program: Command) {
 
         const lines: string[] = [
           theme.heading("Pairing QR"),
-          "Scan this with the OpenClaw mobile app (Onboarding -> Scan QR).",
+          opts.nodeOnly
+            ? "Use this setup code to pair the node with the Gateway."
+            : "Scan this with the OpenClaw mobile app (Onboarding -> Scan QR).",
           "",
         ];
 
@@ -230,7 +245,7 @@ export function registerQrCli(program: Command) {
           ...(resolved.accessDowngraded ? [theme.warn(LIMITED_TRANSPORT_WARNING)] : []),
           `${theme.muted("Source:")} ${resolved.urlSource}`,
           "",
-          "Approve after scan with:",
+          opts.nodeOnly ? "If the node requests approval:" : "Approve after scan with:",
           `  ${theme.command(formatCliCommand("openclaw devices list"))}`,
           `  ${theme.command(formatCliCommand("openclaw devices approve <requestId>"))}`,
         );
