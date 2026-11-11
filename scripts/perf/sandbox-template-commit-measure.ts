@@ -421,11 +421,9 @@ try {
     }
   }
   if (values.contract) {
+    const concurrentRef = values.divergent ? "fixture-base" : "fixture-source-two";
     const before = installs;
-    await Promise.all([
-      clone("waiter-a", "fixture-source-two"),
-      clone("waiter-b", "fixture-source-two"),
-    ]);
+    await Promise.all([clone("waiter-a", concurrentRef), clone("waiter-b", concurrentRef)]);
     assert.equal(installs - before, 1, "Concurrent callers must share one install");
     await clone("lock-change", "fixture-lock");
   }
