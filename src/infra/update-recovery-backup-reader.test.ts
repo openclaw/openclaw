@@ -89,8 +89,8 @@ async function expectRetained(fixture: Awaited<ReturnType<typeof retainedBaselin
   expect([recorded.dev, recorded.ino]).toEqual([selected.dev, selected.ino]);
   expect(await fixture.read()).toEqual({ ref: fixture.ref, manifest: fixture.manifest });
   expect(await fs.readFile(fixture.ref.manifestPath, "utf8")).toBe(fixture.raw);
-  expect((await fs.readdir(fixture.ref.directory)).sort()).toEqual(
-    [UPDATE_CAPTURE_PRIVACY_MARKER, "manifest.json"].sort(),
+  expect((await fs.readdir(fixture.ref.directory)).toSorted()).toEqual(
+    [UPDATE_CAPTURE_PRIVACY_MARKER, "manifest.json"].toSorted(),
   );
 }
 
