@@ -604,6 +604,43 @@ Example truncate response (`--max-lines 200`):
 }
 ```
 
+## Read pending session suggestions
+
+Shared sessions can carry composer suggestions: a teammate or an agent queues a
+suggested next message and it waits on the session until someone sends, queues,
+edits, or dismisses it. `openclaw sessions suggestions <key>` is the CLI wrapper
+around the `session.suggestions.list` Gateway RPC and requires a running Gateway.
+
+```bash
+openclaw sessions suggestions "agent:main:main"
+openclaw sessions suggestions "agent:work:main" --agent work --json
+```
+
+- One line per suggestion: id, state (`pending` / `accepted` / `dismissed`),
+  author label, creation time, and single-line text.
+- `--agent <id>`: agent that owns the session; required for `global` keys.
+- `--json`: print the raw RPC payload (`{ suggestions, role }`).
+- A session without recorded suggestions reports an empty set and exits zero.
+  Text output escapes terminal control characters.
+- The command exits non-zero when the Gateway is unreachable, so crons and
+  scripts never mistake a failed read for an empty queue.
+
+`session.suggestions.add` and `session.suggestions.resolve` remain composer
+writes and are intentionally not exposed here.
+
+The generic Gateway CLI already reads the same queue through the same authorized
+reader, so scripts that need the raw envelope do not have to depend on this
+wrapper's row format:
+
+```bash
+openclaw gateway call session.suggestions.list \
+  --params '{"sessionKey":"agent:main:main"}' --json
+```
+
+`sessions suggestions` adds discovery and readable rows on top of that path
+rather than introducing a new policy owner; both routes send the request with
+read-only client state.
+
 ## Related
 
 - [Session config](/gateway/config-agents/sessions#session)

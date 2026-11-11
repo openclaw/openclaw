@@ -454,6 +454,64 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       },
     );
 
+  addSessionsGatewayOptions(sessionsCmd.command("suggestions <key>"))
+    .description("List the pending composer suggestions recorded for one session")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            'openclaw sessions suggestions "agent:main:main"',
+            "List suggestions waiting in the session composer.",
+          ],
+          [
+            'openclaw sessions suggestions "agent:work:main" --agent work --json',
+            "Target one agent's session and emit the raw RPC envelope.",
+          ],
+        ])}\n\n${theme.muted(
+          "Backed by the session.suggestions.list gateway RPC; sessions without recorded suggestions report an empty set.",
+        )}`,
+    )
+    .action(async (key: string, opts, command) => {
+      // Preserve parent agent/JSON options, but reject selectors the Gateway cannot honor.
+      // SAFETY: commander parent opts() returns an untyped record narrowed to the sessions parent option shape.
+      const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
+      rejectUnsupportedSessionsParentOptions(
+        "suggestions",
+        parentOpts,
+        ["store", "allAgents", "active", "limit", "verbose"],
+        "the gateway resolves the target store from <key> and --agent",
+      );
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
+      if (opts.timeout !== undefined && timeoutMs === undefined) {
+        throwExpectedCliError("--timeout must be a positive integer (milliseconds).");
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsSuggestionsCommand } =
+          await import("../../commands/sessions-suggestions.js");
+        // SAFETY: commander action opts are untyped; the sessions parent declares the shared string options below.
+        const agent = (opts.agent as string | undefined) ?? parentOpts?.agent;
+        // SAFETY: --url is the string option addSessionsGatewayOptions declares.
+        const url = opts.url as string | undefined;
+        // SAFETY: --token is the string option addSessionsGatewayOptions declares.
+        const token = opts.token as string | undefined;
+        // SAFETY: --password is the string option addSessionsGatewayOptions declares.
+        const password = opts.password as string | undefined;
+        await sessionsSuggestionsCommand(
+          {
+            key,
+            agent,
+            timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
+            url,
+            token,
+            password,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
   addSessionsGatewayOptions(sessionsCmd.command("compact <key>"))
     .description("Compact a stored session transcript via the running gateway")
     .option(
