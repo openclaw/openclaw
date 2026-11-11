@@ -188,9 +188,7 @@ under `gateway.auth.trustedProxy` when that private transport is configured:
 {
   userHeader: "x-occ-identity",
   delegation: {
-    authority: "oce",
     credentialFile: "/var/run/openclaw/browser-delegation/browser-key",
-    subjectPrefix: "oce:v1:",
   },
 }
 ```
@@ -203,8 +201,9 @@ trusted-source, required-header, and browser-origin checks still apply. Ingress
 must strip client-supplied headers; only the private OCE browser route may assert
 a reserved OCE subject and revision credential.
 
-The `oce:v1:` subject contains 64 lowercase hexadecimal characters derived by
-OCE from its Installation and Principal. It resolves to a durable Gateway-local
+The `oce` authority and `oce:v1:` subject prefix are fixed protocol values, not
+configuration settings. The subject contains 64 lowercase hexadecimal characters
+derived by OCE from its Installation and Principal. It resolves to a durable Gateway-local
 profile through an external identity binding, separate from email aliases.
 Native linking and merges cannot change that binding. An OCE account with
 multiple linked sign-in methods keeps one profile. Display-name changes do not

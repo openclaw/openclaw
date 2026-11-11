@@ -5,6 +5,7 @@ import type { GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
+  delegatedProfileAuthority,
   isDelegatedUserSubject,
   type DelegatedUserIdentity,
 } from "../state/user-profile-delegation.js";
@@ -73,7 +74,8 @@ export function hasGatewayDelegationClaim(req?: IncomingMessage, userHeader?: st
     req &&
     (getHeader(req, "x-occ-browser-key") !== undefined ||
       ["x-occ-identity", userHeader].some(
-        (header) => header && getHeader(req, header)?.trim().startsWith("oce:"),
+        (header) =>
+          header && getHeader(req, header)?.trim().startsWith(`${delegatedProfileAuthority}:`),
       )),
   );
 }
@@ -88,8 +90,6 @@ export function authorizeGatewayDelegation(
   const key = getHeader(req, "x-occ-browser-key");
   if (
     !delegation ||
-    delegation.authority !== "oce" ||
-    delegation.subjectPrefix !== "oce:v1:" ||
     !isAbsolute(delegation.credentialFile) ||
     !isDelegatedUserSubject(user) ||
     (scope !== "operator.admin" && scope !== "operator.sessions.write") ||
@@ -103,8 +103,9 @@ export function authorizeGatewayDelegation(
     return undefined;
   }
   const generation = owner.generation;
+  const identity: DelegatedUserIdentity = { authority: delegatedProfileAuthority, subject: user };
   return Object.freeze({
-    identity: { authority: "oce" as const, subject: user },
+    identity,
     scopes: Object.freeze([scope]),
     credentialFile: delegation.credentialFile,
     isCurrent: () => owner.generation === generation && owner.value !== undefined,
@@ -120,8 +121,6 @@ export function isGatewayDelegationCurrent(
   return (
     grant.isCurrent() &&
     auth?.mode === "trusted-proxy" &&
-    delegation?.authority === grant.identity.authority &&
-    delegation.subjectPrefix === "oce:v1:" &&
-    delegation.credentialFile === grant.credentialFile
+    delegation?.credentialFile === grant.credentialFile
   );
 }

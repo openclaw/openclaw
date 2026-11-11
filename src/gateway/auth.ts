@@ -8,6 +8,7 @@ import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/typ
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayIngressPrincipal } from "../plugins/gateway-ingress.types.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { delegatedProfileAuthority } from "../state/user-profile-delegation.js";
 import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 import { getHeader } from "./http-header-value.js";
@@ -421,7 +422,8 @@ async function authorizeGatewayConnect(
   const { auth } = params;
   const delegationClaim = hasGatewayDelegationClaim(params.req, auth.trustedProxy?.userHeader);
   const finish = (result: GatewayAuthResult): GatewayAuthResult =>
-    (delegationClaim || result.user?.startsWith("oce:")) && !result.delegation
+    (delegationClaim || result.user?.startsWith(`${delegatedProfileAuthority}:`)) &&
+    !result.delegation
       ? { ok: false, reason: GATEWAY_DELEGATION_DENIED }
       : result;
   if (delegationClaim && auth.mode !== "trusted-proxy") {

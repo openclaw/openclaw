@@ -1,6 +1,7 @@
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
+  delegatedProfileAuthority,
   delegatedProfileProvider,
   isDelegatedUserSubject,
   type DelegatedUserIdentity,
@@ -41,7 +42,7 @@ export function ensureDelegatedUserProfile(
   input: DelegatedUserIdentity,
   options: UserProfileMutationOptions,
 ) {
-  if (input.authority !== "oce" || !isDelegatedUserSubject(input.subject)) {
+  if (input.authority !== delegatedProfileAuthority || !isDelegatedUserSubject(input.subject)) {
     throw new Error("Invalid delegated user identity");
   }
   ensureUserProfilesSchema(options);
