@@ -327,15 +327,14 @@ export function getSubagentSessionListRunByChildSessionKey(
 export async function countPendingDescendantRuns(
   rootSessionKey: string,
   assertCurrent: () => void,
+  options?: { excludeSuspendedDelivery?: boolean },
 ): Promise<number> {
   assertCurrent();
   await prepareSubagentSessionListReadCache();
   assertCurrent();
-  // A suspended descendant has settled its own delivery; like admission, the
-  // announce and cleanup gates must not wait for it to age out of retention.
   return buildSubagentSessionListReadIndex(Date.now(), [rootSessionKey]).countPendingDescendantRuns(
     rootSessionKey,
-    { excludeSuspendedDelivery: true },
+    options,
   );
 }
 

@@ -352,7 +352,7 @@ describe("subagent registry scoped reads", () => {
     });
     const suspendedRun = row("suspended", {
       requesterSessionKey: parent,
-      delivery: { status: "suspended", disposition: "permanent_failure", suspendedAt: now - 1_000 },
+      delivery: { status: "suspended", disposition: "permanent_failure" },
       execution: { status: "terminal", startedAt: now - 1_500, endedAt: now - 1_100 },
     });
     const snapshot = runMap(
@@ -381,7 +381,7 @@ describe("subagent registry scoped reads", () => {
       ),
     ).toEqual([2, 1]);
     mocks.readSnapshot = snapshot;
-    expect(await mod.countPendingDescendantRuns(root, () => {})).toBe(3);
+    expect(await mod.countPendingDescendantRuns(root, () => {})).toBe(4);
     expect(
       buildScopedSubagentRunReadIndexFromRuns(snapshot, root).hasDescendantRunAwaitingSettle(
         root,
