@@ -11,6 +11,7 @@ import { createChannelMessage, createThread } from "./internal/api.messages.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import { prepareDiscordOutboundText } from "./outbound-text.js";
+import { resolvePendingDiscordAutoThreadChannel } from "./pending-auto-thread.js";
 import {
   createReusableDiscordReplyReference,
   type DiscordReplyReference,
@@ -42,6 +43,7 @@ import type {
   DiscordSendResult,
 } from "./send.types.js";
 import { parseAndResolveDiscordTarget } from "./target-resolver.js";
+
 type DiscordSendOpts = Omit<DiscordReactOpts, "timeoutMs"> &
   DiscordOutboundMediaOpts & {
     mediaUrl?: string;
@@ -117,7 +119,13 @@ export async function sendMessageDiscord(
       { cfg, accountId: accountInfo.accountId },
       { defaultKind: "channel" },
     );
-    const { channelId } = await resolveChannelId(rest, recipient, request);
+    const { channelId: resolvedChannelId } = await resolveChannelId(rest, recipient, request);
+
+    // Resolve deferred auto-thread creation using the current Discord account.
+    const channelId = await resolvePendingDiscordAutoThreadChannel(
+      accountInfo.accountId,
+      resolvedChannelId,
+    );
 
     // Forum/Media channels reject POST /messages; auto-create a thread post instead.
     const channel = await resolveDiscordChannel(rest, channelId);
@@ -336,7 +344,7 @@ async function sendDiscordStructuredMessage(
       { cfg, accountId: account.accountId },
       { defaultKind: "channel" },
     );
-    const { channelId } = await resolveChannelId(rest, recipient, request);
+    const { channelId: resolvedChannelId } = await resolveChannelId(rest, recipient, request);
     const content = opts.content?.trim()
       ? rewriteDiscordKnownMentions(opts.content, {
           accountId: account.accountId,
@@ -348,6 +356,11 @@ async function sendDiscordStructuredMessage(
       override: opts.suppressEmbeds,
     });
     const payload = buildPayload();
+    // Open an autoThread "on-first-message" thread only after the payload validated.
+    const channelId = await resolvePendingDiscordAutoThreadChannel(
+      account.accountId,
+      resolvedChannelId,
+    );
     const flags = resolveDiscordMessageFlags({ silent: opts.silent, suppressEmbeds });
     const body = {
       content: content || undefined,

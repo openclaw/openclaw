@@ -80,6 +80,7 @@ export function createDiscordDraftPreviewController(params: {
   let currentChannelId = params.deliverChannelId;
   const createDraftStream = () =>
     createDiscordDraftStream({
+      accountId: params.accountId,
       rest: params.deliveryRest,
       channelId: currentChannelId,
       maxChars: draftMaxChars,

@@ -91,6 +91,7 @@ failed chunk may have been delivered, so inspect the thread before retrying.
     - Discord threads route as channel sessions and inherit parent channel config unless overridden.
     - Thread sessions inherit the parent channel's session-level `/model` selection as a model-only fallback; thread-local `/model` selections take precedence, and parent transcript history is not copied unless transcript inheritance is enabled.
     - `channels.discord.thread.inheritParent` (default `false`) opts new auto-threads into seeding from the parent transcript. Per-account override: `channels.discord.accounts.<id>.thread.inheritParent`.
+    - `guilds.<guild>.channels.<channel>.autoThread: true` creates a thread under each new message as soon as it is admitted. Set `"on-first-message"` instead to keep the same per-message session but create the thread only when the first progress draft, reply, or message-tool send goes out, so the thread never sits empty. If that thread cannot be created (for example missing `Create Public Threads`), the message is delivered in the parent channel. A turn that sends nothing (for example `NO_REPLY`) never opens a thread.
     - Message-tool reactions can resolve `user:<id>` DM targets.
     - `guilds.<guild>.channels.<channel>.requireMention: false` is preserved during reply-stage activation fallback.
 

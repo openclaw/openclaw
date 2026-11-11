@@ -2,8 +2,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
+import { resolvePendingDiscordAutoThreadChannel } from "../pending-auto-thread.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
-import { maybeCreateDiscordAutoThread } from "./threading.js";
+import {
+  maybeCreateDiscordAutoThread,
+  planDeferredDiscordAutoThread,
+  resolveDiscordAutoThreadReplyPlan,
+} from "./threading.js";
 type AutoThreadParams = Parameters<typeof maybeCreateDiscordAutoThread>[0];
 
 const { generateConversationLabelMock } = vi.hoisted(() => ({
@@ -28,6 +33,7 @@ const mockMessage = {
 
 function createBaseParams(overrides: Partial<AutoThreadParams> = {}): AutoThreadParams {
   return {
+    accountId: "account-1",
     client: mockClient,
     message: mockMessage,
     messageChannelId: "text1",
@@ -242,5 +248,45 @@ describe("generated auto-thread title normalization", () => {
       await flushAsyncWork();
       expect(patchMock).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe("autoThread on-first-message", () => {
+  const deferred = (overrides: Partial<AutoThreadParams> = {}) => ({
+    ...createBaseParams({
+      channelConfig: { allowed: true, autoThread: "on-first-message" },
+      ...overrides,
+    }),
+    replyToMode: "off" as const,
+    parentSessionKey: "agent:main:discord:channel:text1",
+  });
+
+  it("keys the session by the future thread id and creates the thread on the first send", async () => {
+    const plan = await resolveDiscordAutoThreadReplyPlan(deferred());
+    expect(postMock).not.toHaveBeenCalled();
+    expect(plan.deliverTarget).toBe("channel:1001");
+    expect(plan.autoThreadContext).toMatchObject({ createdThreadId: "1001", To: "channel:1001" });
+
+    mockThreadCreation();
+    expect(await resolvePendingDiscordAutoThreadChannel("account-1", "1001")).toBe("thread1");
+    expect(postMock.mock.calls[0]?.[0]).toContain("/channels/text1/messages/1001/threads");
+  });
+
+  it("reuses an existing thread and returns undefined when none can be created", async () => {
+    getMock.mockResolvedValueOnce({ thread: { id: "1001" } });
+    expect(await planDeferredDiscordAutoThread(deferred())?.create()).toBe("1001");
+    expect(postMock).not.toHaveBeenCalled();
+
+    getMock.mockResolvedValue({});
+    postMock.mockRejectedValueOnce(new Error("Missing Permissions"));
+    expect(await planDeferredDiscordAutoThread(deferred())?.create()).toBeUndefined();
+  });
+
+  it("keeps bot-authored messages on the immediate path so an existing thread is reused", async () => {
+    getMock.mockResolvedValueOnce({ thread: { id: "bot-thread" } });
+    const message = { id: "1001", author: { bot: true } } as unknown as AutoThreadParams["message"];
+    const plan = await resolveDiscordAutoThreadReplyPlan(deferred({ message }));
+    expect(plan.pendingAutoThread).toBeUndefined();
+    expect(plan.autoThreadContext?.createdThreadId).toBe("bot-thread");
   });
 });

@@ -49,6 +49,10 @@ export const discordChannelConfigUiHints = {
     label: "Require Mention in Bot-Created Threads",
     help: "Override mention gating only in threads owned by this bot. False allows unmentioned follow-ups; true requires a mention even with autoThread enabled. Omitted preserves existing behavior. Sender and channel access rules still apply.",
   },
+  "guilds.*.channels.*.autoThread": {
+    label: "Auto-Create Threads",
+    help: 'Create a thread under each new message in this channel. true creates it when the message is admitted; "on-first-message" creates it when the first progress draft or reply is sent, so the thread never appears empty. Both keep one session per thread.',
+  },
   "guilds.*.channels.*.requireMentionInBotThreads": {
     label: "Require Mention in Bot-Created Threads",
     help: "Override the guild setting for this channel. Applies only when Discord identifies this bot as the thread owner; unknown or other owners keep ordinary mention rules. Unmentioned messages require Message Content Intent.",

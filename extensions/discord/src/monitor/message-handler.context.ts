@@ -354,6 +354,7 @@ export async function buildDiscordMessageProcessContext(params: {
   }
   const replyPlan = await resolveDiscordAutoThreadReplyPlan({
     client,
+    accountId,
     message,
     messageChannelId,
     isGuildMessage,

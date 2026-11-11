@@ -36,6 +36,7 @@ import { DiscordError, RateLimitError } from "./internal/discord.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { readDiscordMessage, readRetryAfter } from "./internal/rest-errors.js";
 import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
+import { resolvePendingDiscordAutoThreadChannel } from "./pending-auto-thread.js";
 import { classifyDiscordDeliveryFailure, recordDiscordMessageCreateAmbiguity } from "./retry.js";
 import { createDiscordMessageNonce } from "./send.message-request.js";
 import type { sendMessageDiscord } from "./send.outbound.js";
@@ -331,6 +332,11 @@ export async function sendVoiceMessageDiscord(
           if (!token) {
             throw new Error("Discord bot token is required for voice message upload");
           }
+          // An autoThread "on-first-message" thread opens only once the audio is known to be sendable.
+          channelId = await resolvePendingDiscordAutoThreadChannel(
+            accountInfo.accountId,
+            resolvedChannelId,
+          );
           const { upload_filename } = await request(async () => {
             let uploadUrlResponse: UploadUrlResponse;
             const uploadApiBaseUrl =

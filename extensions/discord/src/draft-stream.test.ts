@@ -2,6 +2,7 @@ import { MessageFlags, Routes } from "discord-api-types/v10";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createDiscordDraftStream } from "./draft-stream.js";
+import { registerPendingDiscordAutoThread } from "./pending-auto-thread.js";
 
 function createHarness(
   options: Partial<Omit<Parameters<typeof createDiscordDraftStream>[0], "rest">> = {},
@@ -19,6 +20,7 @@ function createHarness(
   const rest = { post, patch: vi.fn(async () => undefined), delete: remove };
   const stream = createDiscordDraftStream({
     rest: rest as never,
+    accountId: "account-1",
     channelId: "c1",
     ...options,
   });
@@ -35,6 +37,24 @@ function previewBody(content: string, extra = {}) {
 }
 
 describe("createDiscordDraftStream", () => {
+  it.each([
+    ["thread-9", "thread-9", async () => "thread-9"],
+    ["thread-10", "parent", async () => undefined],
+  ])(
+    "sends the first draft of deferred autoThread %s into %s",
+    async (threadId, target, create) => {
+      registerPendingDiscordAutoThread({
+        accountId: "account-1",
+        threadId,
+        parentChannelId: "parent",
+        create,
+      });
+      const { rest, stream } = createHarness({ channelId: threadId }, ["2001"]);
+      await flushText(stream, "working");
+      expect(rest.post).toHaveBeenCalledWith(`/channels/${target}/messages`, expect.anything());
+    },
+  );
+
   it("moves the visible draft to a newly adopted thread", async () => {
     const { rest, stream } = createHarness({ channelId: "parent" }, ["1101", "1102"]);
 
