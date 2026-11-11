@@ -345,8 +345,7 @@ private func makeAgentDeepLinkURL(
     message: String,
     deliver: Bool = false,
     to: String? = nil,
-    channel: String? = nil,
-    key: String? = nil) -> URL
+    channel: String? = nil) -> URL
 {
     var components = URLComponents()
     components.scheme = "openclaw"
@@ -360,9 +359,6 @@ private func makeAgentDeepLinkURL(
     }
     if let channel {
         queryItems.append(URLQueryItem(name: "channel", value: channel))
-    }
-    if let key {
-        queryItems.append(URLQueryItem(name: "key", value: key))
     }
     components.queryItems = queryItems
     return components.url!
@@ -9451,7 +9447,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(coalescedPrompt.messagePreview.contains("second prompt"))
     }
 
-    @Test @MainActor func `handle deep link strips delivery fields when unkeyed`() async throws {
+    @Test @MainActor func `handle deep link strips delivery fields before confirmation`() async throws {
         let appModel = NodeAppModel()
         appModel.gatewayConnected = true
         let url = makeAgentDeepLinkURL(
@@ -9467,7 +9463,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(prompt.request.channel == nil)
     }
 
-    @Test @MainActor func `handle deep link rejects long unkeyed message when connected`() async {
+    @Test @MainActor func `handle deep link rejects long message when connected`() async {
         let appModel = NodeAppModel()
         appModel.gatewayConnected = true
         let message = String(repeating: "x", count: 241)
@@ -9478,17 +9474,37 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Rejected") == true)
     }
 
-    @Test @MainActor func `handle deep link bypasses prompt with valid key`() async {
+    @Test @MainActor func `handle deep link with retired stored key still requires confirmation`() async throws {
+        let retiredKeyName = "deeplink.agent.key"
+        UserDefaults.standard.set("retired-demo-key", forKey: retiredKeyName)
+        defer { UserDefaults.standard.removeObject(forKey: retiredKeyName) }
         let appModel = NodeAppModel()
         appModel.gatewayConnected = true
-        appModel.testAgentRequestHandler = { _ in }
-        let key = NodeAppModel.expectedDeepLinkKey()
-        let url = makeAgentDeepLinkURL(message: "trusted request", key: key)
+        var sent: [AgentDeepLink] = []
+        appModel.testAgentRequestHandler = { sent.append($0) }
+        let url = try #require(URL(
+            string: "openclaw://agent?message=keyed&deliver=1&to=123456&channel=telegram&key=retired-demo-key"))
 
         await appModel.handleDeepLink(url: url)
+        #expect(appModel.pendingAgentDeepLinkPrompt != nil)
+        #expect(sent.isEmpty)
+
+        appModel.declinePendingAgentDeepLinkPrompt()
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
-        #expect(appModel.openChatRequestID == 1)
-        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Sent to gateway") == true)
+        #expect(sent.isEmpty)
+
+        // A fresh model skips the 5 s prompt throttle without waiting on it.
+        let approvingModel = NodeAppModel()
+        approvingModel.gatewayConnected = true
+        approvingModel.testAgentRequestHandler = { sent.append($0) }
+        await approvingModel.handleDeepLink(url: url)
+        #expect(sent.isEmpty)
+        await approvingModel.approvePendingAgentDeepLinkPrompt()
+        #expect(sent.count == 1)
+        let request = try #require(sent.first)
+        #expect(request.deliver == false)
+        #expect(request.to == nil)
+        #expect(request.channel == nil)
     }
 
     @Test @MainActor func `stored operator scopes request permissions without granting disconnected authority`() throws {

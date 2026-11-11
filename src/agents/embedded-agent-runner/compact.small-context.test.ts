@@ -16,6 +16,7 @@ import { useCompactHooksSessionFixture } from "./compact.hooks.fixture.test-supp
 import {
   attemptServerEndpointCompactionMock,
   buildConfiguredAgentSystemPromptMock,
+  createOpenClawCodingToolsMock,
   limitHistoryTurnsMock,
   loadCompactHooksHarness,
   resolveContextWindowInfoMock,
@@ -50,12 +51,18 @@ beforeEach(async () => {
   compactEndpoint.mockReset();
 });
 
-it("summarizes with the model window instead of a smaller session token budget", async () => {
+it("summarizes with the model window and fits the floor beside the sent tools", async () => {
   const { guardSessionManager } = await import("../session-tool-result-guard-wrapper.js");
   const { createAgentSession } = await import("../sessions/sdk.js");
   const { resolveEmbeddedAgentStream } = await import("./stream-resolution.js");
   const model = { ...testModel, contextWindow: 32_768, maxTokens: 1_024 };
   const manager = SessionManager.inMemory(prepared.workspaceDir);
+  const sent = { name: "tool_search", description: "Search deferred tools.", parameters: {} };
+  await manager.appendCustomEntryAsync("openclaw.system-prompt", { tools: [sent] });
+  // About 40k tokens of deferred definitions: registered, but never sent to the provider.
+  const deferred = { ...sent, description: "d".repeat(3_000), label: "", execute: vi.fn() };
+  const registry = Array.from({ length: 40 }, (_, index) => ({ ...deferred, name: `d${index}` }));
+  createOpenClawCodingToolsMock.mockReturnValueOnce([sent, ...registry] as never);
   for (let turn = 0; turn < 8; turn++) {
     manager.appendMessage({
       role: "user",
@@ -72,8 +79,13 @@ it("summarizes with the model window instead of a smaller session token budget",
   resolveModelMock.mockImplementation(() => ({ ...createCompactHooksResolvedModel(), model }));
   limitHistoryTurnsMock.mockImplementation((messages) => messages);
   vi.mocked(guardSessionManager).mockReturnValue(manager);
-  vi.mocked(createAgentSession).mockImplementation((options) =>
-    createTestSession({ model: options.model, sessionManager: manager, settingsManager }),
+  vi.mocked(createAgentSession).mockImplementation(({ model: activeModel, customTools }) =>
+    createTestSession({
+      model: activeModel,
+      customTools,
+      sessionManager: manager,
+      settingsManager,
+    }),
   );
   const summary = "The code word is copper. Eight source documents were acknowledged.";
   const summaryStream = vi.fn((activeModel: Model) =>
@@ -102,7 +114,7 @@ it("summarizes with the model window instead of a smaller session token budget",
   expect(result, result.reason).toMatchObject({ ok: true, compacted: true });
   expect(manager.buildSessionContext().messages[0]).toMatchObject({
     role: "compactionSummary",
-    summary: expect.stringContaining(summary),
+    summary: expect.stringContaining(`${summary}\n\n---\n\n## Deterministic record`),
   });
 });
 
