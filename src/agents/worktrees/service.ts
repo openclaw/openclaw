@@ -167,7 +167,7 @@ export class ManagedWorktreeService {
   private readonly orphanCleanupFailures: Parameters<
     typeof collectRetiredWorktreeArtifacts
   >[0]["orphanFailures"] = new Map();
-  private readonly maintainGit: ReturnType<typeof createWorktreeGitMaintenance>;
+  readonly maintainGit: ReturnType<typeof createWorktreeGitMaintenance>;
 
   constructor(options: ServiceOptions = {}) {
     this.env = options.env ?? process.env;
