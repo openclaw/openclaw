@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { readDevicePairingNodeSnapshot } from "../infra/device-pairing-store-readonly.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { isGatewayCompletionWaitActive } from "../infra/gateway-suspend-coordinator.js";
 import { loadGatewayTlsServerRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
@@ -475,7 +476,8 @@ export async function prepareGatewayKernelState(params: {
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
     getStartupPendingReason: () => startupState.pendingReason,
-    getGatewayDraining: () => lifecycle.closePreludeStarted || isGatewayDraining(),
+    getGatewayDraining: () =>
+      lifecycle.closePreludeStarted || (!isGatewayCompletionWaitActive() && isGatewayDraining()),
   };
   const getStartup = createStartupChecker(startupCheckerDeps, listAgentDatabaseAdmissionRefusals);
   const getReadiness = createReadinessChecker({

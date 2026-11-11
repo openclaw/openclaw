@@ -52,6 +52,7 @@ type HeldGatewaySuspension = {
   requestId: string;
   terminalPolicy: GatewaySuspendTerminalPolicy;
   drain: boolean;
+  completion?: { deadlineMs: number; monotonicDeadlineMs: number };
   suspensionId: string;
   expiresAtMs: number;
   deadlineAtMs: number;
@@ -131,6 +132,11 @@ function currentSuspension(): HeldGatewaySuspension | null {
   return current ? normalizeExpiredHeldSuspension(current) : null;
 }
 
+/** Existing work and the lease owner still need routing while new work is refused. */
+export function isGatewayCompletionWaitActive(): boolean {
+  return !isGatewayRestartDraining() && currentSuspension()?.completion !== undefined;
+}
+
 function resumeSchedulingBeforeReopen(params: {
   resumeScheduling: () => void;
   reopenAdmission: (reason?: string) => boolean;
@@ -164,9 +170,17 @@ function armExpiry(entry: HeldGatewaySuspension): HeldGatewaySuspension {
 }
 
 function renewHeldSuspension(held: HeldGatewaySuspension, nowMs: number): void {
-  held.expiresAtMs = nowMs + GATEWAY_SUSPEND_TTL_MS;
-  held.deadlineAtMs = performance.now() + GATEWAY_SUSPEND_TTL_MS;
-  scheduleResume(held, GATEWAY_SUSPEND_TTL_MS);
+  const monotonicNow = performance.now();
+  const ttlMs = held.completion
+    ? Math.min(
+        GATEWAY_SUSPEND_TTL_MS,
+        held.completion.deadlineMs - nowMs,
+        held.completion.monotonicDeadlineMs - monotonicNow,
+      )
+    : GATEWAY_SUSPEND_TTL_MS;
+  held.expiresAtMs = nowMs + ttlMs;
+  held.deadlineAtMs = monotonicNow + ttlMs;
+  scheduleResume(held, ttlMs);
 }
 
 function suspensionReady(drain: boolean, snapshot: GatewayActiveWorkSnapshot): boolean {
@@ -207,11 +221,12 @@ function heldPrepareResult(
     : { status: "draining", ...result, retryAfterMs: GATEWAY_SUSPEND_DRAIN_POLL_MS };
 }
 
-/** Freeze only idle work; drain preparation leaves running work for committed shutdown. */
+/** Completion waits retain admission while work finishes; custody drains may interrupt work. */
 export function prepareGatewaySuspend(params: {
   requestId: string;
   terminalPolicy?: GatewaySuspendTerminalPolicy;
   drain?: boolean;
+  completionDeadlineMs?: number;
   pauseScheduling: () => void;
   resumeScheduling: () => void;
   inspect?: Partial<GatewayActiveWorkInspectors>;
@@ -226,14 +241,26 @@ export function prepareGatewaySuspend(params: {
     ignoreTerminalSessions: terminalPolicy === "terminate",
   };
   const nowMs = (params.nowMs ?? Date.now)();
-  const ttlMs = drain ? GATEWAY_SUSPEND_DRAIN_BUDGET_MS : GATEWAY_SUSPEND_TTL_MS;
+  const completion =
+    params.completionDeadlineMs === undefined
+      ? undefined
+      : {
+          deadlineMs: params.completionDeadlineMs,
+          monotonicDeadlineMs: performance.now() + params.completionDeadlineMs - nowMs,
+        };
+  const ttlMs = completion
+    ? Math.min(GATEWAY_SUSPEND_TTL_MS, completion.deadlineMs - nowMs)
+    : drain
+      ? GATEWAY_SUSPEND_DRAIN_BUDGET_MS
+      : GATEWAY_SUSPEND_TTL_MS;
   const deadlineAtMs = performance.now() + ttlMs;
   const existing = currentSuspension();
   if (existing) {
     if (
       existing.requestId !== params.requestId ||
       existing.terminalPolicy !== terminalPolicy ||
-      existing.drain !== drain
+      existing.drain !== drain ||
+      existing.completion?.deadlineMs !== completion?.deadlineMs
     ) {
       return { status: "conflict", expiresAtMs: existing.expiresAtMs };
     }
@@ -274,7 +301,7 @@ export function prepareGatewaySuspend(params: {
       owner: params.requestId,
       leaseId: suspensionId,
       caller: params.caller ?? "in-process",
-      reason: drain ? "drain" : "freeze",
+      reason: completion ? "completion-wait" : drain ? "drain" : "freeze",
     },
   );
   if (!admission) {
@@ -305,7 +332,7 @@ export function prepareGatewaySuspend(params: {
     if ((params.nowMs ?? Date.now)() >= nowMs + ttlMs || performance.now() >= deadlineAtMs) {
       throw new Error("gateway suspension expired during preparation");
     }
-    if (!snapshot.idle && !drain) {
+    if (!snapshot.idle && !drain && !completion) {
       resume();
       schedulingPaused = false;
       return {
@@ -329,6 +356,7 @@ export function prepareGatewaySuspend(params: {
       requestId: params.requestId,
       terminalPolicy,
       drain,
+      completion,
       suspensionId,
       expiresAtMs,
       deadlineAtMs,
@@ -409,6 +437,9 @@ function handoffRefusal(
   const snapshot = createGatewayActiveWorkSnapshot(held.inspect, {
     ignoreTerminalSessions: held.terminalPolicy === "terminate",
   });
+  if (held.completion && !snapshot.idle) {
+    return { message: "gateway admitted work or delivery is still pending" };
+  }
   if (snapshot.counts.terminalPersistence > 0) {
     const terminalPersistence = {
       count: snapshot.counts.terminalPersistence,

@@ -65,6 +65,51 @@ afterEach(() => {
 });
 
 describe("gateway suspend coordinator", () => {
+  it("keeps admission closed until admitted tasks and their delivery finish", () => {
+    let tasks = 1;
+    let replies = 1;
+    const params = {
+      completionDeadlineMs: 1_801_000,
+      nowMs: () => 1_000,
+      inspect: {
+        getAgentRuns: () => tasks,
+        getPendingReplies: () => replies,
+        getTerminalPersistence: () => 0,
+      },
+    };
+    expect(prepare(params)).toMatchObject({ status: "draining", activeCount: 2 });
+    expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+    tasks = 0;
+    expect(getGatewaySuspendStatus(LEASE)).toMatchObject({ status: "draining", activeCount: 1 });
+    replies = 0;
+    expect(getGatewaySuspendStatus(LEASE).status).toBe("ready");
+    expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+    // A late delivery invalidates completion even if the earlier poll said ready.
+    replies = 1;
+    expect(
+      armGatewaySuspendHandoff({ suspensionId: LEASE, owner: { isCurrent: () => true } }).ok,
+    ).toBe(false);
+    expect(resumeGatewaySuspend(LEASE)).toEqual(resumed);
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  });
+
+  it("renews a completion lease without extending its fixed cutoff", () => {
+    vi.useFakeTimers();
+    let now = 1_000;
+    const params = {
+      completionDeadlineMs: 181_000,
+      nowMs: () => now,
+      inspect: { getAgentRuns: () => 1 },
+    };
+    expect(prepare(params)).toMatchObject({ status: "draining", expiresAtMs: 121_000 });
+    now = 101_000;
+    expect(prepare(params)).toMatchObject({ status: "draining", expiresAtMs: 181_000 });
+    expect(prepare({ ...params, completionDeadlineMs: 281_000 }).status).toBe("conflict");
+    now = 181_000;
+    expect(getGatewaySuspendStatus(LEASE)).toEqual({ status: "running" });
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  });
+
   it.each([false, true])(
     "lifecycle reset resumes a held scheduler before admission is cleared (drain: %s)",
     (drain) => {

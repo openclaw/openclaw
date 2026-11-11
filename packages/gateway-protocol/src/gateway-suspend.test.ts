@@ -83,6 +83,15 @@ describe("gateway suspension protocol", () => {
     );
   });
 
+  it("accepts a completion deadline separately from custody draining", () => {
+    const params = { requestId: "planned-update", completionDeadlineMs: 1_800_000 };
+    validation(validateGatewaySuspendPrepareParams).accepts(params);
+    validation(validateGatewaySuspendPrepareParams).rejects(
+      { ...params, completionDeadlineMs: -1 },
+      { ...params, completionDeadlineMs: "later" },
+    );
+  });
+
   it("accepts legacy terminal blockers in closed draining and busy prepare results", () => {
     const draining = {
       ...drainingResult("terminal-session"),

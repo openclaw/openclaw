@@ -1568,7 +1568,7 @@ var External = [
     /(^startedAt$|^endedAt$|^stopReason$|^yielded$|^timeoutPhase$|^providerStarted$|^aborted$|^toolErrorSummary$|^livenessState$|^replayInvalid$|^phase$|^error$)/u,
     /(^startedAt$|^endedAt$|^stopReason$|^yielded$|^timeoutPhase$|^providerStarted$|^aborted$|^toolErrorSummary$|^livenessState$|^replayInvalid$|^phase$)/u,
     /(^startedAt$|^endedAt$|^stopReason$|^yielded$|^timeoutPhase$|^providerStarted$|^aborted$|^toolErrorSummary$|^livenessState$|^replayInvalid$|^phase$|^error$|^fallbackExhaustedFailure$)/u,
-    /(^requestId$|^terminalPolicy$|^drain$)/u,
+    /(^requestId$|^terminalPolicy$|^drain$|^completionDeadlineMs$)/u,
     /(^status$|^reason$|^retryAfterMs$|^activeCount$|^blockers$|^writeCustody$)/u,
     /(^kind$|^count$|^message$)/u,
     /(^phase$|^count$)/u,
@@ -18688,7 +18688,10 @@ var External = [
     (value.terminalPolicy === void 0 ||
       !("terminalPolicy" in value) ||
       check_2778(value.terminalPolicy)) &&
-    (value.drain === void 0 || !("drain" in value) || check_181(value.drain)),
+    (value.drain === void 0 || !("drain" in value) || check_181(value.drain)) &&
+    (value.completionDeadlineMs === void 0 ||
+      !("completionDeadlineMs" in value) ||
+      check_192(value.completionDeadlineMs)),
   check_2778 = (value) => check_2779(value) || check_2780(value),
   check_2779 = (value) => typeof value == "string" && value === "preserve",
   check_2780 = (value) => typeof value == "string" && value === "terminate",
