@@ -43,9 +43,22 @@ function createLevelDirectiveExtractor<T, Field extends string>(
       const start = match.index;
       const directiveEnd = start + match[0].length;
       const prefixEnd = directiveEnd + skipDirectiveArgPrefix(body.slice(directiveEnd));
-      const argument = (options?.strict ? /^\s*(\S+)/ : /^\s*([\w-]+)/).exec(body.slice(prefixEnd));
-      const end = prefixEnd + (argument?.[0].length ?? 0);
-      const candidate = argument?.[1];
+      const remainder = body.slice(prefixEnd);
+      const argument = (options?.strict ? /^\s*(\S+)/ : /^\s*([\w-]+)/).exec(remainder);
+      let end = prefixEnd + (argument?.[0].length ?? 0);
+      let candidate = argument?.[1];
+      // Documented multi-word aliases ("/think extra high") normalize only as a
+      // pair, so consume the second word only when the joined spelling is known.
+      const words = (options?.strict ? /^\s*(\S+)\s+(\S+)/ : /^\s*([\w-]+)\s+([\w-]+)/).exec(
+        remainder,
+      );
+      if (words && (candidate === undefined || normalize(candidate) === undefined)) {
+        const joined = `${words[1]} ${words[2]}`;
+        if (normalize(joined) !== undefined) {
+          candidate = joined;
+          end = prefixEnd + words[0].length;
+        }
+      }
       if (
         candidate !== undefined &&
         (options?.strict ||

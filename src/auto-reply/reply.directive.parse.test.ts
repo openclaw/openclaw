@@ -2,7 +2,10 @@ import { expect, it } from "vitest";
 import type { ModelAliasIndex } from "../agents/model-selection-shared.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { parseInlineSessionDirectives as parse } from "./reply/directive-handling.parse.js";
+import {
+  isModelIndependentDirectiveCommand,
+  parseInlineSessionDirectives as parse,
+} from "./reply/directive-handling.parse.js";
 import { resolveModelDirectiveSelection } from "./reply/model-selection-directive.js";
 
 it("preserves bytes without directives", () => {
@@ -87,6 +90,35 @@ it("preserves prose after a thinking directive", () => {
   expect(result.command).toBeUndefined();
   expect(result.cleaned).toBe("about my deployment plan");
 });
+it.each([
+  ["/think extra high", "extra high", ""],
+  ["/think extra high plan the release", "extra high", "plan the release"],
+  ["/think extra-high plan the release", "extra-high", "plan the release"],
+])("accepts the documented spaced think level: %s", (body, rawThinkLevel, cleaned) => {
+  expect(parse(body)).toMatchObject({
+    hasThinkDirective: true,
+    thinkLevel: "xhigh",
+    rawThinkLevel,
+    cleaned,
+  });
+});
+it("consumes a spaced think level in native command arguments", () => {
+  expect(
+    parse("/think extra high ship it", { command: { kind: "native", name: "think" } }),
+  ).toMatchObject({
+    hasThinkDirective: true,
+    thinkLevel: "xhigh",
+    rawThinkLevel: "extra high",
+    cleaned: "ship it",
+    command: { name: "think", unconsumedArguments: "ship it" },
+  });
+});
+it.each(["xhigh", "extra-high", "extra_high", "extra high"])(
+  "admits a documented think spelling as model independent: %s",
+  (level) => {
+    expect(isModelIndependentDirectiveCommand("think", level)).toBe(true);
+  },
+);
 it.each([
   ["/fast ultrafast", "ultrafast", ""],
   ["/fast ultra", "ultra", ""],
