@@ -65,10 +65,7 @@ export function install(buffer, root) {
   DatabaseSync.prototype.exec = function (sql) {
     return measure(this, kind(sql), () => exec.call(this, sql));
   };
-  DatabaseSync.prototype.prepare = function (sql) {
-    const statement = measure(this, 1, () => prepare.call(this, sql));
-    // oxlint-disable-next-line unicorn/no-this-assignment -- Statement wrappers need both receivers.
-    const db = this;
+  const observeStatement = (db, statement, sql) => {
     for (const method of ["get", "all", "run"]) {
       const original = statement[method];
       statement[method] = function (...args) {
@@ -76,6 +73,10 @@ export function install(buffer, root) {
       };
     }
     return statement;
+  };
+  DatabaseSync.prototype.prepare = function (sql) {
+    const statement = measure(this, 1, () => prepare.call(this, sql));
+    return observeStatement(this, statement, sql);
   };
   DatabaseSync.prototype.close = function () {
     return measure(this, 9, () => close.call(this));
