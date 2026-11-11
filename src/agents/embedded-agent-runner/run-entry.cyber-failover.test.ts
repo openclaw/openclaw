@@ -3,6 +3,10 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  prepareSystemAgentRunAdmission,
+} from "../admitted-run-context.js";
 import { recordModelFallbackStop } from "../failover-error.js";
 import { resetFallbackSkipCacheForTest } from "../fallback-skip-cache.test-support.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
@@ -101,6 +105,50 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
   });
   afterEach(clearRuntimeConfigSnapshot);
 
+  it.each([
+    { scope: "operator.admin", grants: undefined, allowed: true },
+    { scope: "operator.write", grants: undefined, allowed: false },
+    { scope: "operator.admin", grants: [] as const, allowed: false },
+    { scope: "operator.write", grants: ["daybreak_blue"] as const, allowed: true },
+  ])(
+    "honors $scope authority and ceiling $grants for automatic fallback",
+    async ({ scope, grants, allowed }) => {
+      const authority = createAdmittedRunOperatorAuthority({
+        profileId: "fallback-role",
+        scopes: [scope],
+        assertCurrent() {},
+        rolePolicy: {
+          sessionAccessCap: "none",
+          sandboxRequired: false,
+          agents: "*",
+          ...(grants ? { accessPrograms: { cyber: grants } } : {}),
+        },
+      });
+      const admission = prepareSystemAgentRunAdmission(
+        {},
+        "cyber-test",
+        "main",
+        "test",
+        undefined,
+        authority,
+      );
+      const candidate = vi.fn<EntryParams["runCandidate"]>(async (provider, model, options) =>
+        options.isFallbackRetry
+          ? makeResult({ provider, model })
+          : makeRefusalResult(provider, model),
+      );
+      try {
+        await runEntry(candidate, { preparedRunAdmission: admission });
+        expect(candidate).toHaveBeenCalledTimes(allowed ? 2 : 1);
+        if (allowed) {
+          expect(candidate.mock.calls[1]?.[2].cyberAccessProgram).toBe("daybreak_blue");
+        }
+      } finally {
+        admission.close();
+      }
+    },
+  );
+
   it.each([{ fallbacksOverride: undefined }, { fallbacksOverride: [] as string[] }])(
     "retries the same model with Blue access even for a strict selection (%j)",
     async ({ fallbacksOverride }) => {
@@ -147,6 +195,16 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
       expect(runCandidate).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("does not escalate an explicit Standard selection", async () => {
+    const runCandidate = vi.fn<EntryParams["runCandidate"]>(async (provider, model) =>
+      makeRefusalResult(provider, model),
+    );
+    await runEntry(runCandidate, {
+      selection: { cfg: {}, provider: "openai", model: "gpt-5.6", cyberAccessProgram: "standard" },
+    });
+    expect(runCandidate).toHaveBeenCalledTimes(1);
+  });
 
   it("retries a replay-safe OpenAI cyber refusal once with Blue Access without changing selection", async () => {
     const reconcile = vi.fn(async () => {});

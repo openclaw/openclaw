@@ -36,7 +36,7 @@ vi.mock("../../tts/tts.runtime.js", () => ({
 const MAIN_SESSION_KEY = "agent:main:main";
 const discordOrigin = { provider: "discord", from: "discord:operator" };
 
-describe("outbound mirror route ordering", () => {
+describe("confirmed outbound route and transcript ownership", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-mirror-order-");
   let storePath: string;
   let cfg: OpenClawConfig;
@@ -117,7 +117,7 @@ describe("outbound mirror route ordering", () => {
     expect(mainSessionOrigin()).toMatchObject(discordOrigin);
   });
 
-  it("persists the outbound mirror route after a successful send", async () => {
+  it("persists the outbound route after a successful send", async () => {
     handleAction.mockResolvedValue(jsonResult({ ok: true, messageId: "m1" }));
 
     const result = await send();
@@ -127,8 +127,9 @@ describe("outbound mirror route ordering", () => {
   });
 
   it.each(["plugin", "core"] as const)(
-    "retains distinct media identities through %s sends with matching mirror text",
+    "records each confirmed %s media send once in its destination",
     async (handledBy) => {
+      cfg = { ...cfg, session: { ...cfg.session, dmScope: "per-channel-peer" } };
       handleAction.mockResolvedValue(
         handledBy === "plugin" ? jsonResult({ ok: true, messageId: "media-send" }) : null,
       );
@@ -138,19 +139,36 @@ describe("outbound mirror route ordering", () => {
         const result = await send({ target: "user:12345", message: "Chart", media });
         expect(result.handledBy).toBe(handledBy);
       }
-      const events = loadTranscriptEventsSync(transcriptScope());
-      expect(events).toEqual([
-        expect.objectContaining({ type: "session", id: "main-session" }),
-        ...mediaUrls.map((mediaUrl) =>
-          expect.objectContaining({
-            type: "message",
-            message: expect.objectContaining({
-              content: [{ type: "text", text: "Chart\nchart.png" }],
-              openclawDelivery: { mediaUrls: [mediaUrl] },
-            }),
-          }),
+      const destinationKey = "agent:main:testchat:direct:12345";
+      const destination = loadExactSessionEntry({
+        ...transcriptScope(),
+        sessionKey: destinationKey,
+      });
+      const rows = loadTranscriptEventsSync({
+        ...transcriptScope(),
+        sessionKey: destinationKey,
+        sessionId: destination!.entry.sessionId,
+      }).filter((event) => isCanonicalSessionTranscriptEntry(event) && event.type === "message");
+      // Three visible sends are three conversation rows, even when their text matches.
+      expect(rows).toHaveLength(3);
+      for (const row of rows) {
+        expect(row).toMatchObject({
+          message: {
+            model: "automation-result",
+            content: [{ type: "text", text: "Chart\nchart.png" }],
+          },
+        });
+      }
+      expect(
+        new Set(rows.map((row) => JSON.stringify(row).match(/"idempotencyKey":"([^"]+)"/)?.[1]))
+          .size,
+      ).toBe(3);
+      // The producing conversation gains no copy of the sends.
+      expect(
+        loadTranscriptEventsSync(transcriptScope()).filter(
+          (event) => isCanonicalSessionTranscriptEntry(event) && event.type === "message",
         ),
-      ]);
+      ).toEqual([]);
       expect(handledBy === "plugin" ? handleAction : sendMedia).toHaveBeenCalledTimes(3);
     },
   );
@@ -208,7 +226,7 @@ describe("outbound mirror route ordering", () => {
       executionMode = "local";
     });
 
-    it("mirrors a send after the destination turn, outside the source writer", async ({
+    it("records a send during the destination turn, outside the source writer", async ({
       signal,
     }) => {
       const target = {
@@ -234,16 +252,16 @@ describe("outbound mirror route ordering", () => {
         expect(sent.result.handledBy).toBe("plugin");
         expect(gatewayRequest).toHaveBeenCalledOnce();
         expect(handleAction).not.toHaveBeenCalled();
-        expect(transcriptMessages(OTHER_SESSION_KEY)).toEqual([]);
-        turnGate.release();
-        await withinTest(turn, signal);
-        await withinTest(drained, signal);
+        // The destination's active turn does not delay its confirmed history.
         expect(transcriptMessages(OTHER_SESSION_KEY)).toEqual([
           expect.objectContaining({
             message: expect.objectContaining({ content: [{ type: "text", text: "card details" }] }),
           }),
         ]);
         expect(transcriptMessages(MAIN_SESSION_KEY)).toEqual([]);
+        turnGate.release();
+        await withinTest(turn, signal);
+        await withinTest(drained, signal);
       } finally {
         turnGate.release();
         await Promise.allSettled([turn, drained]);
@@ -253,7 +271,6 @@ describe("outbound mirror route ordering", () => {
     it.each([
       { name: "current source", input: { sessionKey: OTHER_SESSION_KEY } },
       { name: "source-reply override", input: { sourceReplySessionKey: OTHER_SESSION_KEY } },
-      { name: "suppressed mirror", input: { suppressTranscriptMirror: true } },
       { name: "suppressed send", receipt: { status: "suppressed" } },
       { name: "failed send", receipt: { ok: false, error: "send failed", messageId: "attempt" } },
       { name: "dry-run receipt", receipt: { dryRun: true, messageId: "preview" } },
@@ -261,7 +278,7 @@ describe("outbound mirror route ordering", () => {
         name: "partial delivery",
         receipt: { deliveryStatus: "partial_failed", sentBeforeError: true, messageId: "partial" },
       },
-    ])("does not add a destination mirror for $name", async ({ input, receipt }) => {
+    ])("does not add destination history for $name", async ({ input, receipt }) => {
       if (receipt) {
         gatewayRequest.mockResolvedValueOnce(receipt);
       }

@@ -71,11 +71,19 @@ it("keeps first-match configured precedence and last-entry aggregate precedence"
     baseUrl: "https://last.example.invalid/v1",
     models: [model("shared-model", "Last entry")],
   };
-  const prepared = await prepareProviderStaticCatalog({
-    providers: [first, last].map((config, index) =>
-      staticProvider(provider, config, `Owner ${index}`),
-    ),
+  const providers = [first, last].map((config, index) =>
+    staticProvider(provider, config, `Owner ${index}`),
+  );
+  let traversals = 0;
+  const iterate = providers[Symbol.iterator].bind(providers);
+  Object.defineProperty(providers, Symbol.iterator, {
+    value: () => {
+      traversals++;
+      return iterate();
+    },
   });
+  const prepared = await prepareProviderStaticCatalog({ providers });
+  expect(traversals).toBe(1);
   const configured = reader.read(prepared, [{ provider, modelId: "shared-model" }]);
   expect(configured).toMatchObject([
     {
@@ -206,4 +214,31 @@ it("shares a workspace catalog across configured and implicit agent reads", asyn
     })),
   );
   expect(resolvePreparedProviderStaticConfigs(prepared)).toEqual({ [providerId]: providerConfig });
+});
+
+it("skips a failing static catalog and keeps healthy providers", async () => {
+  const healthyConfig: ModelProviderConfig = {
+    api: "openai-completions",
+    baseUrl: "https://healthy.example.invalid/v1",
+    models: [model("healthy-model", "Healthy")],
+  };
+  const run = vi.fn(async (): Promise<{ provider: ModelProviderConfig }> => {
+    throw new Error("static catalog bug");
+  });
+  const providers = [
+    { id: "broken", label: "broken", auth: [], staticCatalog: { run } },
+    staticProvider("healthy", healthyConfig),
+  ];
+
+  const prepared = await prepareProviderStaticCatalog({ providers });
+  expect(resolvePreparedProviderStaticConfigs(prepared)).toEqual({ healthy: healthyConfig });
+
+  const controller = new AbortController();
+  run.mockImplementationOnce(async () => {
+    controller.abort();
+    throw new Error("request cancelled");
+  });
+  await expect(
+    prepareProviderStaticCatalog({ providers, signal: controller.signal }),
+  ).rejects.toThrow("request cancelled");
 });

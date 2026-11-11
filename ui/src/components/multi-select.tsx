@@ -2,6 +2,7 @@ import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/stri
 import { For, Show, createMemo, createSignal, merge, onSettled } from "solid-js";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { ModelProviderIcon } from "../lib/reactive/provider-presentation.tsx";
 import type { ModelPickerOption } from "./model-picker-options.ts";
 import { createOverlayAnchor } from "./overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
@@ -9,8 +10,8 @@ import { Icon } from "./solid/icon.tsx";
 import { useMenuMachine } from "./solid/menu-machine.ts";
 import { MenuNavigationError } from "./solid/menu-navigation-error.tsx";
 import { useOverlayControl } from "./solid/overlay-control.ts";
-import { ProviderBrandIcon } from "./solid/provider-icon.tsx";
 import "./solid/overlay.css";
+import "../styles/select-picker.css";
 import "../styles/multi-select.css";
 
 type MultiSelectProps = {
@@ -66,7 +67,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
     const taken = new Set(props.value.map((value) => props.getValueKey(value)));
     const custom = query().trim();
     const customKey = props.getValueKey(custom);
-    const search = custom.toLowerCase();
+    const search = custom.toLowerCase().normalize("NFC");
     const result: MultiSelectRow[] = [];
     let exact: MultiSelectRow | undefined;
     for (const option of props.options) {
@@ -78,8 +79,8 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
         exact = option;
       } else if (
         !search ||
-        [option.label, option.value, option.provider, option.detail].some((text) =>
-          text?.toLowerCase().includes(search),
+        [option.label, option.value, option.provider, option.description].some((text) =>
+          text?.toLowerCase().normalize("NFC").includes(search),
         )
       ) {
         result.push(option);
@@ -224,7 +225,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
               <span class="chip multi-select__chip" data-value={value} title={value}>
                 <Show when={provider()}>
                   {(name) => (
-                    <ProviderBrandIcon provider={name()} class="multi-select__chip-icon" />
+                    <ModelProviderIcon provider={name()} class="multi-select__chip-icon" />
                   )}
                 </Show>
                 <span class="multi-select__chip-label">{chipLabel()}</span>
@@ -297,7 +298,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
               >
                 <Show when={row.provider}>
                   {(provider) => (
-                    <ProviderBrandIcon provider={provider()} class="multi-select__option-icon" />
+                    <ModelProviderIcon provider={provider()} class="multi-select__option-icon" />
                   )}
                 </Show>
                 <span class="picker-select__copy">
@@ -306,8 +307,8 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
                       ? t("common.multiSelect.addCustom", { value: row.value })
                       : row.label}
                   </span>
-                  <Show when={row.detail}>
-                    <span class="picker-select__description">{row.detail}</span>
+                  <Show when={row.description}>
+                    <span class="picker-select__description">{row.description}</span>
                   </Show>
                 </span>
               </div>

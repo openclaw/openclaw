@@ -21,6 +21,7 @@ export function createAgentCronPresenter(deps: {
   publish: () => void;
 }) {
   let retirement = Promise.withResolvers<void>();
+  let status: AgentCronRead | null = null;
   let summary: AgentCronRead | null = null;
   let jobs: AgentCronRead | null = null;
   let refresh: AgentCronRead | null = null;
@@ -42,6 +43,8 @@ export function createAgentCronPresenter(deps: {
 
   function read(task: (scope: CronState) => Promise<string | null | void>, append = false) {
     const scope = deps.currentState();
+    scope.canRefresh = () =>
+      deps.currentState() === scope && deps.canCall("cron.list", "operator.read");
     const completion = Promise.race([
       runTask(scope, task).then((error) => {
         if (error) {
@@ -55,12 +58,12 @@ export function createAgentCronPresenter(deps: {
     return { scope, completion, append };
   }
 
-  async function loadJobs(scope: CronState, append = false) {
-    await loadCronJobsPage(scope, { append, tableFilters: true });
+  async function loadJobs(scope: CronState, append = false, force = false) {
+    await loadCronJobsPage(scope, { append, tableFilters: true, refresh: force });
     return scope.cronJobsError;
   }
 
-  function onRefresh() {
+  function onRefresh(force = true) {
     const scope = deps.currentState();
     if (
       !scope.connected ||
@@ -70,19 +73,21 @@ export function createAgentCronPresenter(deps: {
     ) {
       return;
     }
-    summary = read(async (current) => {
-      const [error] = await Promise.all([loadCronStatus(current), loadCronScopeStats(current)]);
-      return error;
-    });
+    status = read(loadCronStatus);
+    summary = read((current) => loadCronScopeStats(current, { refresh: force }));
     if (scope.cronJobsLoadingMore) {
       // The admitted append also awaits the queued page-zero recovery.
       void runTask(scope, (current) => loadCronJobsPage(current, { tableFilters: true }));
     } else {
-      jobs = read(loadJobs);
+      jobs = read((current) => loadJobs(current, false, force));
     }
     refresh = {
       scope,
-      completion: Promise.allSettled([summary.completion, jobs?.completion]).then((results) => {
+      completion: Promise.allSettled([
+        status.completion,
+        summary.completion,
+        jobs?.completion,
+      ]).then((results) => {
         for (const result of results) {
           if (result.status === "rejected") {
             throw result.reason;
@@ -108,6 +113,18 @@ export function createAgentCronPresenter(deps: {
     deps.publish();
   }
 
+  function onRuntime(event: unknown) {
+    const scope = deps.currentState();
+    if (!scope.connected || !scope.client || !deps.canCall("cron.list", "operator.read")) {
+      return;
+    }
+    jobs = read(async (current) => {
+      await loadCronJobsPage(current, { tableFilters: true, event });
+      return current.cronJobsError;
+    });
+    deps.publish();
+  }
+
   function onRunNow(jobId: string) {
     const scope = deps.currentState();
     if (
@@ -117,7 +134,7 @@ export function createAgentCronPresenter(deps: {
     ) {
       return undefined;
     }
-    command = summary = null;
+    command = status = summary = null;
     const admitted = read((current) => runCronJob(current, jobId, "force"));
     const receipt = {
       ...admitted,
@@ -138,10 +155,12 @@ export function createAgentCronPresenter(deps: {
   return {
     onRefresh,
     onLoadMore,
+    onRuntime,
     onRunNow,
     read(this: void) {
       const scope = deps.readState();
       return {
+        status: status?.scope === scope ? status : null,
         summary: summary?.scope === scope ? summary : null,
         jobs: jobs?.scope === scope ? jobs : null,
         refresh: refresh?.scope === scope ? refresh : null,
@@ -151,7 +170,7 @@ export function createAgentCronPresenter(deps: {
     retire() {
       retirement.resolve();
       retirement = Promise.withResolvers<void>();
-      summary = jobs = refresh = command = null;
+      status = summary = jobs = refresh = command = null;
     },
   };
 }

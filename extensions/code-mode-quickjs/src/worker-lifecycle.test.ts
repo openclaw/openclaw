@@ -408,6 +408,19 @@ describe("Code Mode worker lifecycle", () => {
     },
   );
 
+  it("keeps diagnostic getters inside the guest deadline and recovers", async () => {
+    const result = await run({
+      ...input(`text("before diagnostics");
+        throw Object.defineProperty(new Error("fixture failure"), "stack", {
+          get() { while (true) {} },
+        });`),
+      executionTimeoutMs: 250,
+    });
+    expectFailed(result, "timeout", { failurePhase: "guest" });
+    expect(completeOutput(result.output)).toEqual([{ type: "text", text: "before diagnostics" }]);
+    expectCompleted(await run(input("return 42;")), { kind: "complete", json: "42" });
+  });
+
   it.each(
     (["exec", "resume"] as const).flatMap((kind) =>
       [1, -1].map((clockDirection) => ({ kind, clockDirection })),

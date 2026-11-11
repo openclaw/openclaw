@@ -5,6 +5,7 @@ import {
 } from "../../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveRunProjectRequester } from "../../../gateway/project-access.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveAgentDir } from "../../agent-scope-config.js";
@@ -29,6 +30,7 @@ import { resolveSubagentModelAndThinkingPlan } from "./subagent-spawn-plan.js";
 import {
   resolveRequesterFastMode,
   resolveRequesterPreferences,
+  resolveSubagentCyberAccessProgram,
 } from "./subagent-spawn-requester-prefs.js";
 import {
   normalizeDeliveryContext,
@@ -51,7 +53,11 @@ export async function resolveSubagentChildPlan(params: {
    * status so durable-lineage key substitution does not weaken sandbox admission. */
   requesterSandboxed?: boolean;
   /** Captured by the trusted caller before any spawn preparation awaits. */
-  creatorProfileId?: string;
+  spawnedBy?: {
+    profileId?: string;
+    /** Effective scopes of the admitted operator run, including membership caps. */
+    operatorScopes?: readonly string[];
+  };
 }) {
   const requestedCwd = normalizeOptionalString(params.request.cwd);
   const senderRestricted = params.ctx.inheritedToolPolicySource === "sender";
@@ -116,7 +122,7 @@ export async function resolveSubagentChildPlan(params: {
   );
   creationPolicy.actor = attributeDelegatedSessionCreator(
     creationPolicy.actor,
-    params.creatorProfileId,
+    params.spawnedBy?.profileId,
     params.requesterAgentId,
   );
   // A fresh child has no stored row yet; admission must include its inherited isolation.
@@ -186,6 +192,7 @@ export async function resolveSubagentChildPlan(params: {
         ? (params.ctx.requesterModel ?? requesterPreferences?.model)
         : undefined,
     fastMode: params.request.fastMode,
+    cyberAccessProgram: params.request.cyberAccessProgram,
     workspaceDir: spawnedWorkspaceDir,
     requiresTools: params.request.outputSchema !== undefined,
   });
@@ -232,6 +239,16 @@ export async function resolveSubagentChildPlan(params: {
       modelPlan.initialSessionPatch.fastMode = fastMode;
     }
   }
+  const cyberAccessProgram = resolveSubagentCyberAccessProgram({
+    ...params,
+    requested: params.request.cyberAccessProgram,
+    requesterModel: params.ctx.requesterModel,
+    childModel: resolvedModel,
+  });
+  if (cyberAccessProgram !== undefined) {
+    modelPlan.initialSessionPatch.cyberAccessProgram = cyberAccessProgram;
+  }
+  const resolvedModelMetadata = { resolvedModel, resolvedProvider: modelPlan.modelRef.provider };
   const launchAuthorization: SubagentLaunchAuthorization | undefined = params.request.model?.trim()
     ? { modelOverride: modelPlan.modelRef }
     : undefined;
@@ -257,11 +274,16 @@ export async function resolveSubagentChildPlan(params: {
       childRuntimeSandboxed,
       creationPolicy,
       targetAgentDir,
+      // projectId and inherited checkouts are bounded by the creator's live role.
+      projectRequester: resolveRunProjectRequester(params.cfg, params.spawnedBy ?? {}),
       modelPlan,
       launchAuthorization,
-      resolvedModelMetadata: {
-        resolvedModel,
-        resolvedProvider: modelPlan.modelRef.provider,
+      resolvedModelMetadata,
+      // Model facts echoed on the accepted spawn result.
+      acceptedModelFields: {
+        ...resolvedModelMetadata,
+        modelApplied: modelPlan.modelApplied || undefined,
+        cyberAccessProgram,
       },
     },
   };

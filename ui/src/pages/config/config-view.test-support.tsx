@@ -1,6 +1,6 @@
 import { createRouter } from "@openclaw/uirouter";
 import { createSignal, onCleanup } from "solid-js";
-import { beforeAll, vi } from "vitest";
+import { beforeAll, vi, expect } from "vitest";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationTheme } from "../../app/context-types.ts";
@@ -101,6 +101,7 @@ export const baseProps = () => ({
   onRawChange: vi.fn(),
   onFormModeChange: vi.fn(),
   onViewStateChange: vi.fn(),
+  secretFields: undefined,
   onFormPatch: vi.fn(),
   onFormRemove: vi.fn(),
   onSectionChange: vi.fn(),
@@ -176,7 +177,6 @@ export const baseProps = () => ({
   resetChatFollowUpMode: vi.fn(),
   catalogOpenTarget: "viewer" as const,
   gatewayUrl: "",
-  assistantName: "OpenClaw",
 });
 
 export function renderConfigView(overrides: Partial<ConfigProps> = {}): {
@@ -199,4 +199,17 @@ export function renderAppearance(overrides: Partial<ConfigProps> = {}) {
     includeSections: ["__appearance__"],
     ...overrides,
   });
+}
+
+export function requiredConfigElement<T extends Element>(
+  container: HTMLElement,
+  selector: string,
+  constructor: new () => T,
+): T {
+  const element = container.querySelector(selector);
+  expect(element).toBeInstanceOf(constructor);
+  if (!(element instanceof constructor)) {
+    throw new Error(`Expected element matching "${selector}"`);
+  }
+  return element;
 }

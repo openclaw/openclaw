@@ -26,6 +26,7 @@ import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { readPidFile } from "../test-utils/process-tree.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
+import { hasCommandProcessCleanupError } from "./exec-result.js";
 import * as execSpawn from "./exec-spawn.js";
 import { resolveCommandEnv } from "./exec-spawn.js";
 import {
@@ -127,6 +128,22 @@ describe("runCommandWithTimeout", () => {
           await waitForDead(descendant, signal);
         }
       }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "reports confirmed process-tree extinction after a child-requested signal",
+    async () => {
+      const result = await runNode("process.kill(process.pid, 'SIGTERM')", {
+        killProcessTree: true,
+        requireProcessTreeExtinction: true,
+      });
+      expect(result).toMatchObject({
+        code: null,
+        signal: "SIGTERM",
+        termination: "signal",
+        cleanup: "normal",
+      });
     },
   );
 
@@ -237,7 +254,7 @@ describe("runCommandWithTimeout", () => {
     ],
     [
       "does not treat combined overflow as selected-stream overflow",
-      "process.stderr.write('abcdefgh'); setImmediate(() => process.stdout.write('x'))",
+      "process.stdout.write('abcdefghx')",
       {
         maxCombinedOutputBytes: 8,
         maxOutputBytes: 16,
@@ -246,8 +263,8 @@ describe("runCommandWithTimeout", () => {
       },
       {
         termination: "exit",
-        stdout: "",
-        stderr: "abcdefgh",
+        stdout: "abcdefgh",
+        stderr: "",
         outputLimitExceeded: undefined,
       },
     ],
@@ -320,6 +337,13 @@ describe("runCommandWithTimeout", () => {
 describe("runCommandBuffered", () => {
   it.each([
     {
+      name: "preserves ordinary nonzero exit and output",
+      source: "process.stdout.write('out'); process.stderr.write('err'); process.exitCode = 7",
+      options: {},
+      expected: { code: 7, signal: null, termination: "exit" },
+      output: ["out", "err"],
+    },
+    {
       name: "caps stdout and stderr under one aggregate budget",
       source: "process.stdout.write('abcd'); setImmediate(() => process.stderr.write('efgh'))",
       options: { maxCombinedOutputBytes: 6, maxOutputBytes: 8 },
@@ -337,6 +361,7 @@ describe("runCommandBuffered", () => {
     const result = await bufferNode(source, options);
     expect(result).toMatchObject(expected);
     expect([result.stdout, result.stderr]).toEqual(output.map((text) => Buffer.from(text)));
+    expect(result.error).toBeUndefined();
   });
 
   it("maps timeout and pre-aborted signals without throwing", async () => {
@@ -503,14 +528,16 @@ describe("runCommandBuffered", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "preserves a child-requested signal in buffered results",
+    "preserves cleanup uncertainty alongside a child-requested signal and buffered output",
     async () => {
-      const result = await bufferNode("process.kill(process.pid, 'SIGTERM')", {
-        timeoutMs: 2_000,
-      });
+      const result = await bufferNode(
+        "require('node:fs').writeSync(1, 'out'); require('node:fs').writeSync(2, 'err'); process.kill(process.pid, 'SIGTERM')",
+        { timeoutMs: 2_000 },
+      );
 
       expect(result).toMatchObject({ code: null, signal: "SIGTERM", termination: "signal" });
-      expect(result.error).toBeUndefined();
+      expect([result.stdout, result.stderr]).toEqual([Buffer.from("out"), Buffer.from("err")]);
+      expect(hasCommandProcessCleanupError(result.error)).toBe(true);
     },
   );
 

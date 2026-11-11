@@ -452,7 +452,6 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
 
 const FEISHU_TRACE_SCENARIOS: readonly DeliveryTraceScenarioName[] = [
   "streaming-happy",
-  "final-only",
   "cancel-mid-stream",
   "rate-limit-during-preview",
   "overflow-pagination",

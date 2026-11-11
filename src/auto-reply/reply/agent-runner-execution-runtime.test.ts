@@ -48,7 +48,7 @@ it("forwards turn context and tool policy for the concrete Codex runtime", async
 
   const result = await runTurn({
     followupRun,
-    opts: { forceRestartSafeTools: true, forceCodeModeTools: true, toolsAllow: ["message"] },
+    opts: { toolsAllow: ["message"] },
     getActiveSessionEntry: () => ({
       sessionId: "session",
       updatedAt: 1,
@@ -58,8 +58,6 @@ it("forwards turn context and tool policy for the concrete Codex runtime", async
 
   expect(result.kind).toBe("success");
   expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded thinking params", {
-    forceRestartSafeTools: true,
-    forceCodeModeTools: true,
     toolsAllow: ["message"],
     extraSystemPrompt: "Current conversation.\n\nPersistent policy.",
     extraSystemPromptTurnContext: turnContext,
@@ -91,6 +89,27 @@ it.each([
       sessionKey,
       chatType: expected,
     });
+  },
+);
+
+// Codex CLI runs OpenAI models and cannot carry Daybreak; other CLI models run as Standard.
+it.each([
+  ["codex-cli", "gpt-5.4", "standard", true],
+  ["codex-cli", "gpt-5.4", "daybreak_blue", false],
+  ["codex-cli", "gpt-5.4", "daybreak_red", false],
+  ["claude-cli", "opus", "daybreak_blue", true],
+  ["claude-cli", "opus", "daybreak_red", true],
+] as const)(
+  "gates Access for a %s/%s chat CLI turn (%s)",
+  async (provider, model, cyberAccessProgram, runs) => {
+    state.isCliProviderMock.mockReturnValue(true);
+    selectFallback(provider, model);
+    state.runCliAgentMock.mockResolvedValueOnce(createRunResult("final"));
+    const result = await runTurn({
+      followupRun: createFollowupRun({ provider, model, cyberAccessProgram }),
+    });
+    expect(result.kind).toBe(runs ? "success" : "final");
+    expect(state.runCliAgentMock).toHaveBeenCalledTimes(runs ? 1 : 0);
   },
 );
 

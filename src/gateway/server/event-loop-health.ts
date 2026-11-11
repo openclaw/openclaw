@@ -1,3 +1,4 @@
+import { closeSync, openSync, readFileSync, readSync } from "node:fs";
 import { cpus, type CpuInfo } from "node:os";
 import { monitorEventLoopDelay, performance, type ELDHistogram } from "node:perf_hooks";
 import { isMainThread, Worker } from "node:worker_threads";
@@ -33,6 +34,9 @@ const IDLE_SAMPLE_INTERVAL_MS = 10_000;
 const WORKER_CPU_SAMPLE_BUDGET_MS = 100;
 const CPU_USAGE_ORIGIN = { user: 0, system: 0 };
 const HOST_CPU_TIME_KEYS = ["user", "nice", "sys", "idle", "irq"] as const;
+// Ten uint64 counters and their separators fit in one bounded synchronous read.
+const HOST_CPU_STAT_BUFFER = Buffer.alloc(256);
+type HostCpuTimes = { count: number; cpus: Pick<CpuInfo, "times">[] };
 const log = createSubsystemLogger("gateway/event-loop");
 
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
@@ -75,27 +79,66 @@ function isValidCpuUsage(usage: NodeJS.CpuUsage | undefined): usage is NodeJS.Cp
   return cpuUsageDelta(usage, CPU_USAGE_ORIGIN) !== undefined;
 }
 
-function readHostCpuTimes(): CpuInfo["times"][] | undefined {
+function readHostCpuTimes(): HostCpuTimes | undefined {
   try {
-    const times = cpus().map((cpu) => cpu.times);
-    return times.length ? times : undefined;
+    if (process.platform === "linux") {
+      const fd = openSync("/proc/stat", "r");
+      let bytes: number;
+      try {
+        bytes = readSync(fd, HOST_CPU_STAT_BUFFER, 0, HOST_CPU_STAT_BUFFER.length, 0);
+      } finally {
+        closeSync(fd);
+      }
+      const lineEnd = HOST_CPU_STAT_BUFFER.indexOf(10);
+      if (lineEnd < 0 || lineEnd >= bytes) {
+        return undefined;
+      }
+      const fields = HOST_CPU_STAT_BUFFER.toString("ascii", 0, lineEnd).split(/\s+/);
+      if (fields[0] !== "cpu" || fields.length < 7) {
+        return undefined;
+      }
+      // Match libuv: exclude iowait, softirq and steal; guest is already in
+      // user/nice. USER_HZ vs milliseconds cancels in the utilization ratio.
+      const times = {
+        user: Number(fields[1]),
+        nice: Number(fields[2]),
+        sys: Number(fields[3]),
+        idle: Number(fields[4]),
+        irq: Number(fields[6]),
+      };
+      if (HOST_CPU_TIME_KEYS.some((key) => !Number.isFinite(times[key]) || times[key] < 0)) {
+        return undefined;
+      }
+      // availableParallelism reports affinity, not host CPUs. Read the online
+      // topology each time so hotplug still invalidates the sampling window.
+      let count = 0;
+      for (const range of readFileSync("/sys/devices/system/cpu/online", "utf8")
+        .trim()
+        .split(",")) {
+        const [first, last = first] = range.split("-").map(Number);
+        count += last! - first! + 1;
+      }
+      return count > 0 ? { count, cpus: [{ times }] } : undefined;
+    }
+    const times = cpus();
+    return times.length ? { count: times.length, cpus: times } : undefined;
   } catch {
     return undefined;
   }
 }
 
 function hostCpuUtilization(
-  current: CpuInfo["times"][] | undefined,
-  previous: CpuInfo["times"][] | undefined,
+  current: HostCpuTimes | undefined,
+  previous: HostCpuTimes | undefined,
 ): number | undefined {
-  if (!current || !previous || current.length !== previous.length) {
+  if (!current || !previous || current.count !== previous.count) {
     return undefined;
   }
   let total = 0;
   let idle = 0;
-  for (let index = 0; index < current.length; index++) {
-    const cpu = current[index]!;
-    const before = previous[index]!;
+  for (let index = 0; index < current.cpus.length; index++) {
+    const cpu = current.cpus[index]!.times;
+    const before = previous.cpus[index]!.times;
     for (const key of HOST_CPU_TIME_KEYS) {
       const delta = cpu[key] - before[key];
       if (delta < 0) {
@@ -373,7 +416,7 @@ export function createGatewayEventLoopHealthMonitor(deps: {
           ? {}
           : { mainThreadCoreRatio: roundMetric(mainThreadDelta / (intervalMs * 1_000)) }),
         ...(hostUtilization === undefined ? {} : { hostUtilization }),
-        ...(hostCpuTimes ? { hostCpuCount: hostCpuTimes.length } : {}),
+        ...(hostCpuTimes ? { hostCpuCount: hostCpuTimes.count } : {}),
       },
     };
 

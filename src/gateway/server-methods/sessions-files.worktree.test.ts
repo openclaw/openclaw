@@ -17,6 +17,8 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { prepareSessionFileWorkspace } from "../session-file-workspace.js";
+import * as workspaceRoots from "../session-workspace-roots.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   createSessionFileDownloadClient,
@@ -25,19 +27,18 @@ import {
 import type { GatewayClient } from "./types.js";
 
 const hooks = vi.hoisted(() => ({
-  duringSettlement: undefined as (() => Promise<void>) | undefined,
+  duringReadPreparation: undefined as (() => Promise<void>) | undefined,
 }));
 
-// Real settlement; the hook changes session state or cache residency while it is in progress.
-vi.mock("../worker-environments/local-workspace-projection.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../worker-environments/local-workspace-projection.js")>();
+// Real read preparation; change session state or cache residency across its await.
+vi.mock("./session-file-read.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-file-read.js")>();
   return {
     ...actual,
-    withSettledLocalWorkspacePath: (async (params, operation) => {
-      await hooks.duringSettlement?.();
-      return await actual.withSettledLocalWorkspacePath(params, operation);
-    }) satisfies typeof actual.withSettledLocalWorkspacePath,
+    prepareSessionFileReadPath: (async (params) => {
+      await hooks.duringReadPreparation?.();
+      return await actual.prepareSessionFileReadPath(params);
+    }) satisfies typeof actual.prepareSessionFileReadPath,
   };
 });
 
@@ -48,7 +49,7 @@ const expectedHash = createHash("sha256").update(preview).digest("hex");
 const file = (root: string) => path.join(root, "preview.html");
 const readPreview = (root: string) => fs.readFileSync(file(root), "utf8");
 afterEach(() => {
-  hooks.duringSettlement = undefined;
+  hooks.duringReadPreparation = undefined;
 });
 
 function successful(response: Awaited<ReturnType<typeof dispatch>>) {
@@ -153,6 +154,34 @@ function seedReplicaPressure(env: NodeJS.ProcessEnv) {
 }
 
 describe("sessions.files for managed-worktree sessions", () => {
+  it("derives one current workspace policy per admission and revalidation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const entry = await seedWorktreeSession(state.workspaceDir);
+      const cfg = {
+        agents: { defaults: { sandbox: { workspaceRoot: state.path("sandboxes") } } },
+      };
+      using roots = vi.spyOn(workspaceRoots, "resolveSessionWorkspaceRoots");
+      const workspace = await prepareSessionFileWorkspace(cfg, "main", key, entry);
+      expect(workspace).toMatchObject({ root: entry.spawnedCwd, historical: false });
+      expect(roots).toHaveBeenCalledOnce();
+      roots.mockClear();
+      workspace.assertCurrent(cfg, entry);
+      expect(roots).toHaveBeenCalledOnce();
+
+      cfg.agents.defaults.sandbox.workspaceRoot = state.path("replacement-sandboxes");
+      expect(() => workspace.assertCurrent(cfg, entry)).toThrow(
+        "Session workspace changed during file access",
+      );
+      cfg.agents.defaults.sandbox.workspaceRoot = state.path("sandboxes");
+      expect(() =>
+        workspace.assertCurrent(cfg, {
+          ...entry,
+          worktree: { ...entry.worktree, id: "replacement-worktree" },
+        }),
+      ).toThrow("Session workspace changed during file access");
+    });
+  });
+
   it("refuses a changed file lookup root inside the same managed workspace", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const entry = await seedWorktreeSession(state.workspaceDir);
@@ -168,6 +197,19 @@ describe("sessions.files for managed-worktree sessions", () => {
       expect(opened.mock.calls[0]?.[1]).toMatchObject({
         source,
         file: { content: preview },
+      });
+      fs.writeFileSync(path.join(entry.spawnedCwd, "oversized.log"), "x".repeat(300 * 1024));
+      const oversized = await dispatch("sessions.files.get", "oversized.log");
+      expect(oversized.mock.calls[0]?.[0]).toBe(false);
+      expect(oversized.mock.calls[0]?.[2]).toMatchObject({
+        code: "INVALID_REQUEST",
+        details: {
+          type: "session_file_too_large",
+          maxPreviewBytes: 256 * 1024,
+          size: 300 * 1024,
+          root: state.workspaceDir,
+          source,
+        },
       });
       const replacement = path.join(state.workspaceDir, "replacement");
       fs.mkdirSync(replacement);
@@ -259,12 +301,12 @@ describe("sessions.files for managed-worktree sessions", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const evict = seedReplicaPressure(state.env);
       await seedWorktreeSession(state.workspaceDir);
-      hooks.duringSettlement = async () => {
-        hooks.duringSettlement = undefined;
+      hooks.duringReadPreparation = async () => {
+        hooks.duringReadPreparation = undefined;
         await evict();
       };
       const response = await dispatch("sessions.files.get", "preview.html");
-      expect(hooks.duringSettlement).toBeUndefined();
+      expect(hooks.duringReadPreparation).toBeUndefined();
       expect(successful(response)).toMatchObject({ file: { content: preview } });
     });
   });
@@ -293,11 +335,11 @@ describe("sessions.files for managed-worktree sessions", () => {
     });
   });
 
-  it("refuses the read when the session moves to another worktree during settlement", async () => {
+  it("refuses the read when the session moves to another worktree during read preparation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const entry = await seedWorktreeSession(state.workspaceDir);
-      hooks.duringSettlement = async () => {
-        hooks.duringSettlement = undefined;
+      hooks.duringReadPreparation = async () => {
+        hooks.duringReadPreparation = undefined;
         await sessions.upsertSessionEntryCore(scope, {
           ...entry,
           updatedAt: 2,
@@ -305,7 +347,7 @@ describe("sessions.files for managed-worktree sessions", () => {
         });
       };
       const response = await dispatch("sessions.files.get", "preview.html");
-      expect(hooks.duringSettlement).toBeUndefined();
+      expect(hooks.duringReadPreparation).toBeUndefined();
       expect(response).toHaveBeenCalledOnce();
       expect(response.mock.calls[0]?.[0]).toBe(false);
       expect(response.mock.calls[0]?.[2]).toMatchObject({

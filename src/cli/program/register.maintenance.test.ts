@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   dashboardCommand: vi.fn(),
   runtime: { log: vi.fn(), error: vi.fn(), writeJson: vi.fn(), exit: vi.fn() },
   runDoctorLintCli: vi.fn(),
+  requestOneShotSettledExitWatchdog: vi.fn(),
 }));
 
 const { doctorCommand, triageCommand, dashboardCommand, runtime } = mocks;
@@ -40,6 +41,11 @@ vi.mock("../../commands/doctor-lint.js", async (importOriginal) => ({
 vi.mock("../../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
+}));
+
+vi.mock("../one-shot-exit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../one-shot-exit.js")>()),
+  requestOneShotSettledExitWatchdog: mocks.requestOneShotSettledExitWatchdog,
 }));
 
 function jsonFailure(message: string) {
@@ -90,6 +96,32 @@ afterEach(() => {
 });
 
 describe("registered maintenance commands", () => {
+  it("bounds a leaked handle only for the executable's Doctor", async () => {
+    const { withCliProcessScope } = await import("../runtime-cleanup-scope.js");
+    await runCli("doctor --fix --non-interactive");
+    expectNoCalls(mocks.requestOneShotSettledExitWatchdog);
+    await withCliProcessScope(() => runCli("doctor --fix --non-interactive"));
+    expect(mocks.requestOneShotSettledExitWatchdog).toHaveBeenCalledOnce();
+  });
+
+  const mapping = JSON.stringify({
+    from: "openai/gpt-daybreak-blue-latest",
+    to: "openai/gpt-6.1-sol",
+    accessProgram: "daybreak_blue",
+  });
+  it("passes explicit model replacements only to repair", async () => {
+    await runCli("doctor --fix --non-interactive --replace-model " + mapping);
+    expectDoctorOptions({ modelReplacements: [JSON.parse(mapping)] });
+  });
+  it.each(["", "--lint", "--post-upgrade", "--session-sqlite inspect"])(
+    "rejects model choices without repair: %s",
+    async (options) => {
+      await runCli("doctor " + options + " --replace-model " + mapping);
+      expectNoCalls(doctorCommand);
+      expectFailure("--replace-model requires", false);
+    },
+  );
+
   it("keeps plain doctor read-only on unsupported Node", async () => {
     vi.stubGlobal("process", {
       ...process,
@@ -127,13 +159,13 @@ describe("registered maintenance commands", () => {
     ["--fix", false],
     ["--repair", true],
   ] as const)(
-    "dispatches only client credential preparation with %s (json=%s)",
+    "dispatches native credential and runtime-intent preparation with %s (json=%s)",
     async (repair, json) => {
       await runCli(
         `doctor --client-credentials ${repair} --non-interactive ${json ? "--json" : ""}`,
       );
       expect(mocks.prepareStartupClientCredentials.mock.calls).toEqual([
-        [{ env: process.env, runtime }],
+        [{ env: process.env, runtime, prepareRuntimePins: true }],
       ]);
       expectNoCalls(doctorCommand, runDoctorLintCli, runtime.log, runtime.error);
       if (json) {
@@ -304,5 +336,42 @@ describe("registered maintenance commands", () => {
     await runCli(`triage ${args}`);
     expectNoCalls(triageCommand);
     expectFailure(message, json);
+  });
+
+  // Other commands keep the default disposition; Node already resets an inherited ignore.
+  it.each([
+    {
+      case: "triage drains cleanup and exits 129",
+      args: "triage",
+      command: triageCommand,
+      code: 129,
+    },
+    {
+      case: "dashboard leaves it alone",
+      args: "dashboard",
+      command: dashboardCommand,
+      code: undefined,
+    },
+  ])("on a closed terminal's hangup, $case", async ({ args, command, code }) => {
+    const signals = await import("../signal-exit-barrier.js");
+    const { withCliProcessScope } = await import("../runtime-cleanup-scope.js");
+    const exitCode = process.exitCode;
+    const drained = vi.fn();
+    const releaseSignals = signals.installCliSignalExitHandlers();
+    const releaseBarrier = signals.registerSignalExitBarrier(drained);
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    command.mockImplementation(async () => {
+      process.emit("SIGHUP", "SIGHUP");
+    });
+    try {
+      await withCliProcessScope(() => runCli(args));
+      expect(command).toHaveBeenCalledOnce();
+      expect(await signals.waitForCliSignalExit()).toBe(code);
+      expect(drained).toHaveBeenCalledTimes(code ? 1 : 0);
+    } finally {
+      releaseBarrier();
+      releaseSignals();
+      process.exitCode = exitCode;
+    }
   });
 });

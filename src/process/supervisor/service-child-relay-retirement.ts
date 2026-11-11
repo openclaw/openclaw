@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { toErrorObject } from "../../infra/errors.js";
 import type { ProcessCleanupResult } from "./types.js";
 
@@ -42,6 +43,7 @@ export function createServiceChildRelayRetirement(params: {
     signalError = signalError
       ? new AggregateError([signalError, failure], "service child retirement signals failed")
       : failure;
+    materializeErrorStack(signalError);
   };
   const reconcile = () => {
     if (!requested || exit || !params.canRetire()) {
@@ -110,4 +112,24 @@ export function createServiceChildRelayRetirement(params: {
         : undefined;
     },
   };
+}
+
+/** Join startup cleanup without letting its failure replace the anchor's startup failure. */
+export async function joinStartupFailureCleanup(
+  startupError: unknown,
+  acknowledgement: Promise<void> | undefined,
+  cleanup: Promise<void>,
+): Promise<unknown> {
+  // A failed acknowledgement already loses identity, so the cleanup result reports it.
+  await acknowledgement?.catch(() => {});
+  const cleanupError = await cleanup.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  return cleanupError === undefined || cleanupError === startupError
+    ? startupError
+    : new AggregateError(
+        [startupError, cleanupError],
+        toErrorObject(startupError, "service child startup failed").message,
+      );
 }

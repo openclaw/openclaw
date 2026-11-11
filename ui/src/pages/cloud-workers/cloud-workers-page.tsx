@@ -13,6 +13,7 @@ import {
 } from "solid-js";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   DocsLink,
@@ -28,7 +29,7 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod, canPresentGatewayMethod } from "../../lib/gateway-methods.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
@@ -609,23 +610,36 @@ export function CloudWorkersPage() {
           machines={() => (
             <>
               <Show when={!hasManageAccess()}>
-                <div class="callout warning" role="note">
-                  {t("cloudWorkersPage.adminRequired")}
-                </div>
+                <InlineAlert tone="warning" role="note">
+                  {t(
+                    !gateway.connected
+                      ? "cloudWorkersPage.reconnectRequired"
+                      : canPresentGatewayMethod(
+                            gateway.snapshot,
+                            "config.patch",
+                            "operator.admin",
+                            {
+                              requireAdvertisement: false,
+                            },
+                          )
+                        ? "cloudWorkersPage.unavailableAccess"
+                        : "cloudWorkersPage.adminRequired",
+                  )}
+                </InlineAlert>
               </Show>
               <Errored
                 fallback={(error) => (
-                  <div class="callout warning" role="status">
+                  <InlineAlert tone="warning" role="status">
                     {t("cloudWorkersPage.catalogFailed", { error: formatUiError(error()) })}
-                  </div>
+                  </InlineAlert>
                 )}
               >
                 <Loading on={catalogLoad()}>{catalogCompletion()}</Loading>
               </Errored>
               <Show when={saveState().error && !view.editor}>
-                <div class="callout warning" role="alert">
+                <InlineAlert tone="warning" role="alert">
                   {saveState().error}
-                </div>
+                </InlineAlert>
               </Show>
               <Show when={saveState().notice}>
                 <div class="callout" role="status">

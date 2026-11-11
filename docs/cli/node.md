@@ -69,11 +69,58 @@ Disable it on the node if needed:
 }
 ```
 
+## Join with OpenClaw ID
+
+Use an `openclaw-node://` invitation from the Gateway owner's browser to enroll
+without an account on the node or a Gateway token:
+
+```bash
+openclaw node join "openclaw-node://join#<invitation>" \
+  --discovery-url https://discovery.example --display-name "Build Node"
+```
+
+Keep the full link quoted: its fragment contains a single-use secret. The node
+generates its own private key locally, submits a signed description of its name,
+platform, commands, and capabilities, and waits for approval. Compare **all six
+digits** shown in the terminal with the owner's approval dialog. The owner must
+review the advertised surface and explicitly click **Approve**. Deny the request
+if the codes differ; opening the dialog alone does not approve anything.
+
+Pairing assumes the invitation remains secret. The six-digit comparison does not
+protect against wrong-node approval when an attacker has stolen the invitation
+and can observe and control Discovery's pairing-message delivery. If the link
+is exposed, do not approve requests made with that invitation.
+
+After approval, the node verifies and saves the OpenClaw ID target and runs in
+the foreground. Add `--service` to install and run it as a user service instead.
+The invitation is not a reconnect credential: use `openclaw node run` or the
+installed service for later connections. `node join` refuses a node that is
+still admitted and leaves the new invitation unused; to change its commands,
+the owner removes the node on the Access page and sends a new link.
+
+Options:
+
+- `--service`: Install and run the node host as an OS service after approval.
+- `--discovery-url <url>`: Discovery API origin, separate from the invitation.
+  An explicit value overrides the saved target's Discovery origin. There is no
+  default origin; provide this flag when none is saved. Use HTTPS (HTTP is
+  permitted only for localhost testbeds), without credentials, path, query, or
+  fragment. OpenClaw never infers Discovery from the claw hostname or relay URL.
+- `--display-name <name>`: Set the self-reported node name shown during approval.
+- `--commands <ids>`: Select exact comma-separated command IDs (repeatable), with
+  the same restrictions as `node run`. Omitting it preserves the saved allowlist.
+- `--all-commands`: Forget the saved command allowlist and advertise the full
+  default surface. Cannot be combined with `--commands`.
+
+[`openclaw connect <openclaw-node-link>`](/cli/connect#openclaw-id-invitations)
+uses the same enrollment flow. Neither flow supports `--ephemeral` or
+`--session-host` for OpenClaw ID invitations.
+
 ## Run (foreground)
 
-For one-paste onboarding, use [`openclaw connect`](/cli/connect). It accepts a
-single-use join URL or the same setup code forms as `--pair`, then runs this
-node-host runtime.
+For one-paste onboarding, use [`openclaw connect`](/cli/connect). It accepts an
+OpenClaw ID invitation, a single-use Gateway join URL, or the same setup code
+forms as `--pair`, then runs this node-host runtime.
 
 ```bash
 openclaw node run --host <gateway-host> --port 18789
@@ -84,6 +131,9 @@ Or paste a short-lived node setup link from the Control UI Devices page:
 ```bash
 openclaw node run --pair "oc-pair://<setup-code>"
 ```
+
+Stopping a foreground node also cancels startup. If termination arrives before
+the Gateway connection is ready, the node drains its prepared resources and exits.
 
 Options:
 
@@ -209,7 +259,7 @@ Options:
 - `--all-commands`: Advertise the full default command surface and forget any saved `--commands` allowlist. Cannot be combined with `--commands`.
 - `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
 - `--no-share-installed-apps`: Disable installed application sharing
-- `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4.3+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
+- `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 - `--runtime-path <path>`: Pin an absolute Node/Bun executable that passes runtime capability checks.
 - `--auth-from-env`: Persist environment Gateway credentials and select them explicitly on service restarts
 - `--force`: Reinstall/overwrite if already installed
@@ -452,5 +502,62 @@ created are rejected instead of changing what the node executes.
 ## Related
 
 - [CLI reference](/cli)
-- [Connect a machine](/cli/connect)
+- [Connect a device](/cli/connect)
 - [Nodes](/nodes)
+
+## Labs: OpenClaw ID tunnel targets
+
+An OpenClaw ID node target connects through `openclaw/tunnel/1` over iroh instead
+of a LAN address, Tailscale, or SSH. This is a Labs transport; enroll with
+[`openclaw node join`](#join-with-openclaw-id).
+After enrollment has saved an OpenClaw ID target, `openclaw node run` without
+Gateway endpoint flags resumes that target. Explicit `--host` / `--port` options
+continue to select the existing WebSocket transport.
+
+The saved target contains the claw id, root fingerprint, highest verified binding
+sequence and Gateway key, signed ServerBinding, newest verified membership snapshot
+marker, and relay hint. Before each dial or periodic connection probe, the node
+fetches a descriptor with its node key and verifies the binding, snapshot freshness,
+and its own membership. Stronger verified facts are saved before dialing, including
+facts that require refusal, so reconnects and restarts cannot roll back trust.
+A replacement server key closes the old connection. Missing, stale, invalid, or
+replayed evidence refuses the tunnel; a failed tunnel never falls back to a direct WebSocket.
+An invalid relay hint from Discovery also refuses the tunnel, but the signed facts in that
+response are still saved.
+IP transports remain enabled so iroh can establish a direct encrypted path.
+
+The public target requires `discoveryUrl`, the deployment-selected Discovery
+API origin for enrollment and descriptor refresh. A preview target saved without
+it does not connect: ask the owner to remove the node on the Access page, then re-join
+with a new link and `--discovery-url`, which keeps the target's verified trust. The origin is never inferred from
+the claw hostname or relay URL. Enrollment saves the selected origin; an explicit
+`--discovery-url` overrides a saved origin. There is no default Discovery origin.
+The origin must use HTTPS (HTTP is allowed
+only for localhost testbeds), without credentials, a path, query, or fragment.
+
+The node's iroh secret key is generated locally and stored separately at
+`$OPENCLAW_STATE_DIR/node-openclaw-id/endpoint.key` (32 bytes, mode `0600`). It is
+not a Gateway token and is never written into configuration or worker descriptors.
+Do not delete or copy that key to another node: a new key requires new enrollment.
+
+The main WebSocket, worker WebSocket, desktop and portal attachment streams,
+worker bundle downloads, and workspace transfers share the authenticated tunnel through an owner-only Unix socket
+(`0600` inside a `0700` directory). There is no localhost TCP proxy. This preview
+supports Unix hosts and native-process workers; Windows and container-isolated
+workers require a separate transport integration.
+
+Saved OpenClaw ID targets do not inherit Cloudflare Access or Gateway bearer
+credentials from the installing shell; the service resumes its enrolled key.
+
+The transport sends QUIC keep-alives, periodically refreshes authority and probes connections, and backs off
+when the relay denies admission. A removed or unadmitted node key stops the host
+with **“re-join this node”** rather than retrying indefinitely. If Discovery
+refuses to serve the node's descriptor, for example after a restart once the owner
+removed it, that refusal is not signed. The host then keeps retrying without dialing,
+and prints once how to re-join. Ordinary Gateway
+pairing-pending responses retain the existing wait-and-retry behavior.
+
+Node is the qualified runtime for this preview. The native addon loads and binds
+on Linux Bun 1.4.4, but streaming HTTP integration under the pinned Bun runtime
+stalled and the tunnel child missed health pings; Bun transport qualification is
+still pending.

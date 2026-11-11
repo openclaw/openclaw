@@ -14,7 +14,7 @@ const queueModes = new Map<string, QueueMode>([
   ["collect", "collect"],
   ["coalesce", "collect"],
 ]);
-const persistedQueueModes = new Map<string, QueueMode>([
+const persistedQueueModes = /* @__PURE__ */ new Map<string, QueueMode>([
   ...queueModes,
   ["queue", "steer"],
   ["queued", "steer"],

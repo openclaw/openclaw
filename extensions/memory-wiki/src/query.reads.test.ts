@@ -3,6 +3,8 @@ import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
+import { loadMemoryWikiCompiledCache } from "./compiled-cache.js";
+import { buildDigestCandidatePaths } from "./query-scoring.js";
 import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
@@ -57,6 +59,56 @@ async function createReadVault() {
 }
 
 describe("wiki query page reads", () => {
+  it.each(["NFC", "NFD"] as const)(
+    "matches canonically equivalent %s text in live pages and compiled metadata",
+    async (form) => {
+      const { page, config } = await createVault({
+        initialize: true,
+        config: {
+          search: { backend: "local", corpus: "wiki" },
+          render: { createDashboards: false },
+        },
+      });
+      const search = (query: string) => searchMemoryWiki({ config, query });
+      const text = "Café 한국어".normalize(form);
+      const query = "한국어 CAFÉ".normalize(form === "NFC" ? "NFD" : "NFC");
+      const paths = ["title", "alias", "claim", "body"].map((field) => `entities/${field}.md`);
+      for (const field of ["title", "alias", "claim", "body"]) {
+        await page(
+          `entities/${field}.md`,
+          {
+            pageType: "entity",
+            id: `entity.${field}`,
+            title: field === "title" ? text : "Neutral",
+            ...(field === "alias" ? { aliases: [text] } : {}),
+            ...(field === "claim"
+              ? { claims: [{ id: "claim.observation", text, status: "supported" }] }
+              : {}),
+          },
+          `# Neutral\n\n${field === "body" ? text : "Ordinary context."}\n`,
+        );
+      }
+      const live = await search(query);
+      expect(sortedPaths(live)).toEqual(paths.toSorted());
+      expect(live.find((result) => result.path === "entities/title.md")?.title).toBe(text);
+      for (const field of ["claim", "body"]) {
+        expect(live.find((result) => result.path === `entities/${field}.md`)?.snippet).toBe(text);
+      }
+
+      await compileMemoryWikiVault(config);
+      const snapshot = await loadMemoryWikiCompiledCache(config);
+      if (!snapshot) {
+        throw new Error("Expected a compiled Wiki snapshot");
+      }
+      expect(
+        buildDigestCandidatePaths({ snapshot, query, maxResults: 10, mode: "auto" }).toSorted(),
+      ).toEqual(paths.filter((candidate) => candidate !== "entities/body.md").toSorted());
+      await expect(search(query)).resolves.toEqual(live);
+      await expect(search("Ordinary context")).resolves.toHaveLength(3);
+      await expect(search("NeverRecordedNebula")).resolves.toEqual([]);
+    },
+  );
+
   it.each(["large", "hardlinked"] as const)(
     "keeps exact, basename and ID reads equivalent for a %s page",
     async (kind) => {

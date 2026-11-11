@@ -1,5 +1,5 @@
 import { INVALID_PROJECT_ANNOTATION_KEY } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   mergeHybridResults,
   scoreExactPathTieForTemporalDecay,
@@ -58,6 +58,31 @@ const select = (
 ) => selectHybridSearchResults({ merged, keyword, vectorCandidates, maxResults, minScore });
 
 describe("memory hybrid helpers", () => {
+  it("sorts private ranking tiers without copying them or mutating inputs", async () => {
+    const keyword = [0, 1, 2, 3].flatMap((specificity) =>
+      ["z", "a"].map((name) =>
+        keywordHit(`${specificity}-${name}`, 0.5, {
+          exactPathSpecificity: specificity as 0 | 1 | 2 | 3,
+        }),
+      ),
+    );
+    const before = structuredClone(keyword);
+    keyword.forEach(Object.freeze);
+    Object.freeze(keyword);
+    const copies = vi.spyOn(Array.prototype, "toSorted");
+    let copyCount: number;
+    let result: Awaited<ReturnType<typeof merge>>;
+    try {
+      result = await merge({ keyword });
+      copyCount = copies.mock.calls.length;
+    } finally {
+      copies.mockRestore();
+    }
+    expectPaths(result, "3-a", "3-z", "2-a", "2-z", "1-a", "1-z", "0-a", "0-z");
+    expect(keyword).toEqual(before);
+    expect(copyCount).toBe(0);
+  });
+
   it("bm25RankToScore is monotonic and clamped", () => {
     expect(bm25RankToScore(0)).toBeCloseTo(1);
     expect(bm25RankToScore(1)).toBeCloseTo(0.5);

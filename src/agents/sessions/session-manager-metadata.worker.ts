@@ -66,7 +66,7 @@ import {
 import { executeSessionMaintenance } from "./session-manager-maintenance.worker.js";
 import { runWithMetadataMessageAdmission } from "./session-manager-message-admission.worker.js";
 import type { SessionManagerAuthorityPublication } from "./session-manager-publication.js";
-import { readSessionManagerReload } from "./session-manager-reload.js";
+import { readSessionManagerReload } from "./session-manager-reload.kernel.js";
 
 /** Borrow the canonical actor's connection; this domain never opens or closes a database. */
 export function bindSqliteWorkerBackend(

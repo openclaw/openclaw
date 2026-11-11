@@ -55,6 +55,38 @@ function assignments(values) {
   );
 }
 
+function readEnvironmentFiles(files) {
+  const environment = {};
+  for (const { filename, optional } of files) {
+    let content;
+    try {
+      content = fs.readFileSync(filename, "utf8");
+    } catch (error) {
+      if (optional && error.code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+    for (const line of content.split(/\r?\n/)) {
+      if (!line.trim() || line.startsWith("#")) {
+        continue;
+      }
+      const separator = line.indexOf("=");
+      if (separator <= 0) {
+        fail();
+      }
+      const raw = line.slice(separator + 1);
+      // Match serializeSystemdEnvironmentFile; shell evaluation would expand credentials.
+      const value =
+        raw.startsWith('"') && raw.endsWith('"')
+          ? raw.slice(1, -1).replace(/\\(["\\`$])/g, "$1")
+          : raw;
+      Object.assign(environment, assignments([`${line.slice(0, separator)}=${value}`]));
+    }
+  }
+  return environment;
+}
+
 function parseUnit(content) {
   const directives = new Map();
   let section = "";
@@ -131,8 +163,16 @@ function parseUnit(content) {
     "SuccessExitStatus",
     "OOMPolicy",
     "KillMode",
+    "Delegate",
+    "DelegateSubgroup",
   ]);
   if ([...directives.keys()].some((key) => !supported.has(key))) {
+    fail();
+  }
+  if (
+    !["", "yes"].includes(single("Delegate")) ||
+    !["", "gateway"].includes(single("DelegateSubgroup"))
+  ) {
     fail();
   }
   // Generated units use whole seconds. Missing policy follows systemd's 90s
@@ -501,6 +541,46 @@ function recordCaller(file, parentPid, action) {
 
 function run() {
   const [operation, ...args] = process.argv.slice(2);
+  if (operation === "handoff-launch") {
+    const flags = [
+      "--user",
+      "--pipe",
+      "--wait",
+      "--service-type=exec",
+      "--slice=app-openclaw-update.slice",
+      "--property=KillMode=control-group",
+      "--property=OOMPolicy=stop",
+    ];
+    if (
+      args.length !== 14 ||
+      !flags.every((flag, index) => args[index] === flag) ||
+      args[9] !== "--collect" ||
+      !path.isAbsolute(args[11]) ||
+      fs.realpathSync(args[11]) !== fs.realpathSync(process.execPath)
+    ) {
+      fail();
+    }
+    const params = JSON.parse(fs.readFileSync(args[13], "utf8"));
+    if (
+      !path.isAbsolute(params.cwd) ||
+      args[8] !== `--working-directory=${params.cwd}` ||
+      args[7] !== `--property=EnvironmentFile=${params.environmentPath}` ||
+      args[10] !== `--unit=${params.scopeUnit}` ||
+      params.action !== "update" ||
+      args[13] !== path.join(params.cwd, "handoff.json") ||
+      !params.sensitivePaths.includes(args[12])
+    ) {
+      fail();
+    }
+    const environment = readEnvironmentFiles([
+      { filename: params.environmentPath, optional: false },
+    ]);
+    process.chdir(params.cwd);
+    // This container adapter preserves the real process, pipes and lease identity.
+    // It does not claim systemd unit/cgroup custody; the Gateway fixture owns its group separately.
+    process.execve(args[11], args.slice(11), { ...process.env, ...environment });
+    return;
+  }
   if (operation === "begin-start" && !args.length) {
     const file = `${runtimePaths().daemonLog}.runtime.json`;
     const claim = `${file}.start`;
@@ -544,6 +624,18 @@ function run() {
         `ExecMainStatus=${runtime.exitStatus}\nExecMainCode=${runtime.exitCode === 1 ? "exited" : "killed"}`,
       );
     }
+    return;
+  }
+  if (operation === "handoff-runtime" && !args.length) {
+    const unit = readUnit(false, true);
+    const runtime = nativeRuntime();
+    console.log(
+      `Id=${unitName}\nLoadState=${unit ? "loaded" : "not-found"}\nActiveState=${runtime.active}\nMainPID=${runtime.pid}`,
+    );
+    // A settled unit has no execution generation; publishing stop must not invent a new one.
+    console.log(
+      `ExecMainStartTimestampMonotonic=${runtime.pid ? runtime.generation : 0}\nInvocationID=${runtime.pid ? runtime.invocationId : ""}\nFragmentPath=${unit ? unitPath : ""}`,
+    );
     return;
   }
   if (operation === "record-caller" && args.length === 3) {
@@ -613,34 +705,7 @@ function run() {
     if (!unit) {
       fail("Cannot launch an absent fixture unit.");
     }
-    const environment = { ...unit.environment };
-    for (const { filename, optional } of unit.environmentFiles) {
-      let content;
-      try {
-        content = fs.readFileSync(filename, "utf8");
-      } catch (error) {
-        if (optional && error.code === "ENOENT") {
-          continue;
-        }
-        throw error;
-      }
-      for (const line of content.split(/\r?\n/)) {
-        if (!line.trim() || line.startsWith("#")) {
-          continue;
-        }
-        const separator = line.indexOf("=");
-        if (separator <= 0) {
-          fail();
-        }
-        const raw = line.slice(separator + 1);
-        // serializeSystemdEnvironmentFile escapes exactly these four characters.
-        const value =
-          raw.startsWith('"') && raw.endsWith('"')
-            ? raw.slice(1, -1).replace(/\\(["\\`$])/g, "$1")
-            : raw;
-        Object.assign(environment, assignments([`${line.slice(0, separator)}=${value}`]));
-      }
-    }
+    const environment = { ...unit.environment, ...readEnvironmentFiles(unit.environmentFiles) };
     const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
     const command = [
       "env",
@@ -725,6 +790,11 @@ function run() {
 try {
   run();
 } catch (error) {
-  console.error(error.message);
+  // Handoff inputs contain private paths and metadata; parse errors can quote their bytes.
+  console.error(
+    process.argv[2] === "handoff-launch"
+      ? "Survivor handoff launch failed; inspect the private fixture inputs."
+      : error.message,
+  );
   process.exitCode = 1;
 }

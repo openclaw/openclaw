@@ -1,7 +1,7 @@
 import type { CronJob, CronJobsListResult } from "../api/types.ts";
-import { cronJobsListResponse } from "../lib/cron/cron.test-support.ts";
+import { cronJobsListResponse } from "../test-helpers/cron.ts";
 
-export { createCronRunsResult as cronRuns } from "../lib/cron/cron.test-support.ts";
+export { createCronRunsResult as cronRuns } from "../test-helpers/cron.ts";
 
 export function cronJob(id: string, name: string, overrides: Partial<CronJob> = {}): CronJob {
   return {

@@ -8,10 +8,7 @@ import {
   type SqliteWalPeriodicRequest,
   type SqliteWalPeriodicResult,
 } from "../infra/sqlite-wal-write-admission.js";
-import {
-  assertExistingDatabaseIdentity,
-  type DatabasePathIdentity,
-} from "../infra/sqlite-worker-identity.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   getOpenClawDatabaseMaintenanceResourceScope,
@@ -76,6 +73,7 @@ export function createStateDatabaseWalOwner(
       const capturedContext = captureOpenClawStateWorkerContextWithAdmission(
         { path: database.path, env },
         () => admission,
+        asyncResources.knownIdentity,
       );
       const controller = new AbortController();
       let pending: Promise<SqliteWalPeriodicResult | undefined> | undefined;
@@ -116,7 +114,6 @@ export function createStateDatabaseWalOwner(
               "Shared-state WAL maintenance owner changed",
             );
           }
-          assertExistingDatabaseIdentity(database.path, identity.key, identity.birthtime);
         };
         let releaseIdle: (() => void) | undefined;
         let operationStarted = false;
@@ -138,6 +135,11 @@ export function createStateDatabaseWalOwner(
               assertCurrent,
               createAdmission: () => ({
                 nativeLocations: [database.path, identity.canonicalPath],
+                databaseIdentity: {
+                  databasePath: database.path,
+                  key: identity.key,
+                  birthtime: identity.birthtime,
+                },
                 admission: createSqliteWorkerOperationAdmission((_request, grant) => {
                   assertCurrent();
                   if (!grant()) {

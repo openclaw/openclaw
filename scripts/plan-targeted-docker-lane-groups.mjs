@@ -1,5 +1,6 @@
 // Plans grouped targeted Docker lane matrix entries without installed dependencies.
 import { fileURLToPath } from "node:url";
+import { expandInstalledRecoveryLanes } from "./e2e/lib/upgrade-survivor/installed-recovery-cases.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { compareReleaseVersions, parseReleaseVersion } from "./lib/release-version.mjs";
 import { expandUpdateFirstHopCompatLanes } from "./lib/update-first-hop-lanes.mjs";
@@ -67,7 +68,9 @@ export function planTargetedDockerLaneGroups({
   upgradeSurvivorScenarios = "",
 } = {}) {
   // Each recorded first-hop source becomes its own job.
-  const selectedLanes = expandUpdateFirstHopCompatLanes(splitTokens(lanes));
+  const selectedLanes = expandInstalledRecoveryLanes(
+    expandUpdateFirstHopCompatLanes(splitTokens(lanes)),
+  );
   if (selectedLanes.length === 0) {
     throw new Error("docker_lanes is required when planning targeted Docker lane groups.");
   }

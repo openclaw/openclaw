@@ -111,6 +111,35 @@ function append(
 }
 
 describe("actor transcript context replica", () => {
+  it.each([false, true])("shares selected frozen payloads when truncated=%s", (truncated) => {
+    const { hot, prepared } = fixture();
+    prepared.snapshot.truncated = truncated;
+    const retained = seed(undefined, hot, prepared, limits);
+    const rows = retained?.context?.rows ?? retained?.context?.window?.rows;
+    expect(rows).toHaveLength(3 - Number(truncated));
+    const event = rows?.find((row) => isRecord(row.event) && row.event.id === "user")?.event;
+    expect(event).toBe(prepared.snapshot.events[1]);
+    expect(readContext(retained, hot, limits)?.snapshot.events[1]).toBe(event);
+  });
+
+  it("shares one immutable exact snapshot across seed and repeated readers", () => {
+    const { hot, prepared } = fixture();
+    delete prepared.residentRows;
+    prepared.snapshot.firstKeptRanges.set("reply", { startIndex: 1, endIndex: 2 });
+    const retained = seed(undefined, hot, prepared, limits);
+    const first = readContext(retained, hot, limits);
+    expect(first?.snapshot).toBe(prepared.snapshot);
+    expect(readContext(retained, hot, limits)).toBe(first);
+    expect(() => {
+      first!.snapshot = structuredClone(prepared.snapshot);
+    }).toThrow(TypeError);
+    expect(() => {
+      prepared.snapshot.firstKeptRanges.get("reply")!.startIndex = 0;
+    }).toThrow(TypeError);
+    expect(() => prepared.snapshot.parents.set("reply", null)).toThrow(TypeError);
+    expect(() => prepared.snapshot.parents.delete("reply")).toThrow(TypeError);
+  });
+
   it("advances a complete linear path using the receipt's stored byte sizes", () => {
     const { hot, prepared } = fixture();
     const retained = seed(undefined, hot, prepared, limits);
@@ -185,7 +214,7 @@ describe("actor transcript context replica", () => {
   });
 
   it.each(["complete", "window", "exact"])(
-    "isolates %s context payloads and navigation",
+    "rejects mutation of shared %s context payloads and navigation",
     (mode) => {
       const { hot, prepared } = fixture();
       if (mode !== "complete") {
@@ -200,10 +229,17 @@ describe("actor transcript context replica", () => {
       const retained = seed(undefined, hot, prepared, limits);
       const first = prepared.snapshot.events[1];
       assert(isRecord(first) && isRecord(first.message), "Expected a message fixture");
-      first.id = "mutated-input";
-      first.message.role = "mutated-input";
-      prepared.snapshot.events.length = 0;
-      prepared.snapshot.parents.clear();
+      const firstMessage = first.message;
+      expect(() => {
+        first.id = "mutated-input";
+      }).toThrow(TypeError);
+      expect(() => {
+        firstMessage.role = "mutated-input";
+      }).toThrow(TypeError);
+      expect(() => {
+        prepared.snapshot.events.length = 0;
+      }).toThrow(TypeError);
+      expect(() => prepared.snapshot.parents.clear()).toThrow(TypeError);
       const read = readContext(retained, hot, limits);
       if (mode !== "complete") {
         expect(read).toEqual(expected);
@@ -212,10 +248,16 @@ describe("actor transcript context replica", () => {
       expect(read?.snapshot.parents.get("reply")).toBe("user");
       const returned = read?.snapshot.events[1];
       assert(isRecord(returned) && isRecord(returned.message), "Expected a retained message");
-      returned.id = "mutated-output";
-      returned.message.role = "mutated-output";
-      read?.snapshot.events.splice(0);
-      read?.snapshot.parents.clear();
+      const returnedMessage = returned.message;
+      expect(returned).toBe(first);
+      expect(() => {
+        returned.id = "mutated-output";
+      }).toThrow(TypeError);
+      expect(() => {
+        returnedMessage.role = "mutated-output";
+      }).toThrow(TypeError);
+      expect(() => read?.snapshot.events.splice(0)).toThrow(TypeError);
+      expect(() => read?.snapshot.parents.clear()).toThrow(TypeError);
       if (mode !== "complete") {
         expect(readContext(retained, hot, limits)).toEqual(expected);
       }

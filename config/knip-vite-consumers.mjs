@@ -31,7 +31,7 @@ export function compileViteConfigConsumers(source, filePath) {
     const viteSource =
       vitePath === controlUiVitePath ? controlUiViteSource : fs.readFileSync(vitePath, "utf8");
     for (const [, alias, specifier] of viteSource.matchAll(
-      /\bconst\s+\{\s*module(?:\s*:\s*(\w+))?(?:\s*,\s*dependencies)?\s*\}\s*=\s*await\s+runnerImport<\s*typeof import\("([^"\r\n]+)"\)\s*>/gu,
+      /\bconst\s+\{\s*module(?:\s*:\s*(\w+))?(?:\s*,\s*dependencies(?:\s*:\s*\w+)?)?\s*\}\s*=\s*await\s+runnerImport<\s*typeof import\("([^"\r\n]+)"\)\s*>/gu,
     )) {
       if (specifier !== moduleSpecifier) {
         continue;

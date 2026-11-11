@@ -30,6 +30,7 @@ import {
 } from "./session-controller.identity.js";
 import * as controllerStorage from "./session-controller.storage.js";
 import { sessionTargetOwnersMatch, type SessionTarget } from "./session-controller.target.js";
+import { emitSessionLifecycleEvent } from "./session-lifecycle-events.js";
 
 export {
   sessionControllers,
@@ -387,8 +388,18 @@ export function isReplyOperationPreBackendPhase(phase: ReplyOperationPhase): boo
 }
 
 export function markReplyOperationExecutionStarted(operation: ReplyOperation): void {
+  if (controllerStorage.executionStartedOperations.has(operation)) {
+    return;
+  }
   controllerStorage.executionStartedOperations.add(operation);
   notifyGatewayWorkMetricsChanged();
+  // Roster liveness must not wait for transcript preparation or first model activity.
+  emitSessionLifecycleEvent({
+    sessionKey: operation.key,
+    agentId: operation.agentId,
+    reason: "agent.run.started",
+    scope: "runtime",
+  });
 }
 export function hasReplyOperationExecutionStarted(operation: ReplyOperation): boolean {
   return controllerStorage.executionStartedOperations.has(operation);

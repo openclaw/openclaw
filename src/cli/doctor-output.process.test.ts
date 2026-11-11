@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { writeJsonFile as writeJson } from "../../test/helpers/temp-repo.js";
 import {
   createBuiltRuntime,
   runBuiltRuntime,
@@ -15,7 +16,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { spawnNodeEvalSync } from "../test-utils/node-process.js";
+import { resolveTestNodeExecPath, spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { cliRecoveryEntrypoints, doctorOutputEntrypoints } from "./cli-entrypoint.test-support.js";
 import { getCliProcessTestTimeout } from "./cli-process-child.test-helpers.js";
 import { cliChildEnv, cliOutputScript } from "./cli-process-fixture.test-support.js";
@@ -74,11 +75,6 @@ function runDoctor(root: string, repair = false) {
     { maxBuffer: 4 * 1024 * 1024 },
   );
   return tempDirs.track(runtimeDirs.track(child));
-}
-
-function writeJson(filename: string, value: unknown) {
-  fs.mkdirSync(path.dirname(filename), { recursive: true });
-  fs.writeFileSync(filename, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function fixture(label: string) {
@@ -267,7 +263,7 @@ it.each([
   });
   const result = spawnNodeEvalSync(script, {
     env: cliChildEnv(root, {
-      PATH: path.dirname(process.execPath),
+      PATH: path.dirname(resolveTestNodeExecPath()),
       NO_COLOR: "1",
     }),
     maxBuffer: 2 * 1024 * 1024,

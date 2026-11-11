@@ -1,6 +1,7 @@
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/payload.js";
 import { escapeRegExp } from "../regexp.js";
 import { findCodeRegions, isInsideCode, stripLinesOutsideCode } from "./code-ranges.js";
+import { createQuotedStringScanner, parseXmlTagAt } from "./xml-tag-at.js";
 
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
@@ -55,7 +56,10 @@ const INTERNAL_TRACE_HEAD_RE = new RegExp(
  * Minimax sometimes embeds tool calls as XML in text blocks instead of
  * proper structured tool calls.
  */
-export function stripMinimaxToolCallXml(text: string): string {
+export function stripMinimaxToolCallXml(
+  text: string,
+  options?: { recoverUnclosed?: boolean },
+): string {
   const encodedTransportBoundaryRe = /\]?<\]minimax\[>\[/g;
   const encodedToolCallOpenRe = /\]?<\]minimax\[>\[<tool_call>/g;
   const encodedToolCallCloseRe = /\]?<\]minimax\[>\[<\/tool_call>/g;
@@ -99,29 +103,65 @@ export function stripMinimaxToolCallXml(text: string): string {
   }
 
   const codeRegions = findCodeRegions(normalized);
-  const minimaxToolXmlRe = /<invoke\b[^>]*>[\s\S]*?<\/invoke>|<\/?minimax:tool_call>/gi;
+  const minimaxToolXmlRe = /(<invoke\b[^>]*>)|<\/?minimax:tool_call>/gi;
   let result = "";
   let cursor = 0;
   for (const match of normalized.matchAll(minimaxToolXmlRe)) {
-    const start = match.index ?? 0;
-    if (isInsideCode(start, codeRegions)) {
+    const start = match.index;
+    if (start < cursor || isInsideCode(start, codeRegions)) {
       continue;
     }
+    let end = start + match[0].length;
+    if (match[1]) {
+      const tag = parseXmlTagAt(normalized, start);
+      if (!tag || tag.isTruncated) {
+        continue;
+      }
+      // Literal closers in JSON arguments or code do not end the invocation.
+      const isInsideQuote = /^\s*[{[]/.test(normalized.slice(tag.end))
+        ? createQuotedStringScanner(normalized, tag.end)
+        : undefined;
+      const closeRe = /<\/invoke>/gi;
+      closeRe.lastIndex = tag.end;
+      let close = closeRe.exec(normalized);
+      const recoveryClose = close;
+      while (
+        close &&
+        (isInsideQuote ? isInsideQuote(close.index) : isInsideCode(close.index, codeRegions))
+      ) {
+        close = closeRe.exec(normalized);
+      }
+      // Only terminal text can recover the legacy boundary when no unquoted close remains.
+      if (!close && isInsideQuote && options?.recoverUnclosed !== false) {
+        close = recoveryClose;
+      }
+      if (!close) {
+        continue;
+      }
+      end = close.index + close[0].length;
+    }
     result += normalized.slice(cursor, start);
-    cursor = start + match[0].length;
+    cursor = end;
   }
   result += normalized.slice(cursor);
   return result;
 }
 
-export function stripLegacyBracketToolCallBlocks(text: string): string {
-  if (!text || !LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE.test(text)) {
-    return text;
-  }
+export type LegacyBracketBlockScan = {
+  text: string;
+  /** An unclosed candidate can still change what the next append hides. */
+  pending: boolean;
+};
 
-  const codeRegions = findCodeRegions(text);
+export function scanLegacyBracketToolCallBlocks(
+  text: string,
+  codeRegions: ReturnType<typeof findCodeRegions>,
+): LegacyBracketBlockScan {
   let result = "";
   let cursor = 0;
+  // An unfinished header can cross a Markdown checkpoint before its closing bracket.
+  const pendingStart = text.lastIndexOf("[");
+  let pending = pendingStart > text.lastIndexOf("]") && !isInsideCode(pendingStart, codeRegions);
   for (const openMatch of text.matchAll(/\[\s*TOOL_(CALL|RESULT)\s*\]/gi)) {
     const openStart = openMatch.index;
     if (openStart < cursor || isInsideCode(openStart, codeRegions)) {
@@ -142,6 +182,8 @@ export function stripLegacyBracketToolCallBlocks(text: string): string {
         /\b(?:tool|result|output|content)\s*:/i.test(payload)
       : /\btool\s*=>\s*["'][A-Za-z_][A-Za-z0-9_.:-]{0,119}["']/i.test(payload) &&
         /\bargs\s*=>/i.test(payload);
+    // A later close can complete the hidden payload or the payload test.
+    pending ||= !closeMatch;
     if (!isToolPayload) {
       continue;
     }
@@ -151,7 +193,14 @@ export function stripLegacyBracketToolCallBlocks(text: string): string {
       break;
     }
   }
-  return result + text.slice(cursor);
+  return { text: result + text.slice(cursor), pending };
+}
+
+export function stripLegacyBracketToolCallBlocks(text: string): string {
+  if (!text || !LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE.test(text)) {
+    return text;
+  }
+  return scanLegacyBracketToolCallBlocks(text, findCodeRegions(text)).text;
 }
 
 export function stripRelevantMemoriesTags(text: string): string {
@@ -166,7 +215,7 @@ export function stripRelevantMemoriesTags(text: string): string {
   let inMemoryBlock = false;
 
   for (const match of text.matchAll(MEMORY_TAG_RE)) {
-    const idx = match.index ?? 0;
+    const idx = match.index;
     if (isInsideCode(idx, codeRegions)) {
       continue;
     }

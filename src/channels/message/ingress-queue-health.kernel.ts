@@ -2,6 +2,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { INGRESS_CLAIM_LEASE_MS } from "./ingress-claim-owner.js";
+import { INGRESS_QUEUE_CAP_DROP_REASONS } from "./ingress-queue-cap-drop.js";
 import type {
   ChannelIngressFailedHealth,
   ChannelIngressPressureSnapshot,
@@ -25,6 +26,12 @@ export function countFailedChannelIngressQueueEntriesInDatabase(
         eb.fn.min<number>("failed_at").as("oldestFailedAt"),
       ])
       .where("status", "=", "failed")
+      .where((eb) =>
+        eb.or([
+          eb("failed_reason", "is", null),
+          eb("failed_reason", "not in", INGRESS_QUEUE_CAP_DROP_REASONS),
+        ]),
+      )
       .groupBy(["channel_id", "account_id"])
       .orderBy("channel_id", "asc")
       .orderBy("account_id", "asc"),

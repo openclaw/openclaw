@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { reloadDismissingUnloadPrompt } from "../test-helpers/browser-page.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -7,6 +8,14 @@ const suite = createControlUiE2eSuite({
   startServer: () => startControlUiE2eServer(undefined, { source: true }),
   startServerBeforeBrowser: true,
 });
+
+const savedConfig = {
+  config: { logging: { level: "info" } },
+  raw: '{"logging":{"level":"info"}}',
+  hash: "original",
+  valid: true,
+  issues: [],
+};
 
 suite.define(() => {
   it("config.set adopts Raw saves while the JSON5 parser is unavailable", async () => {
@@ -17,15 +26,7 @@ suite.define(() => {
         await route.abort();
       });
       const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "config.get": {
-            config: { logging: { level: "info" } },
-            raw: '{"logging":{"level":"info"}}',
-            hash: "original",
-            valid: true,
-            issues: [],
-          },
-        },
+        methodResponses: { "config.get": savedConfig },
       });
       await page.goto(`${suite.server.baseUrl}settings/advanced`);
       await page.getByRole("button", { name: "Raw", exact: true }).click();
@@ -34,6 +35,8 @@ suite.define(() => {
       for (const [index, level] of ["debug", "warn"].entries()) {
         const getsBeforeSave = (await gateway.getRequests("config.get")).length;
         await raw.fill(`{ logging: { level: "${level}" } }`);
+        expect(await reloadDismissingUnloadPrompt(page)).toBe("beforeunload");
+        expect(await raw.inputValue()).toBe(`{ logging: { level: "${level}" } }`);
         await save.click();
         const request = await gateway.waitForRequest("config.set", { after: index });
         expect(request.params).toMatchObject({
@@ -46,7 +49,7 @@ suite.define(() => {
       }
       await expect.poll(() => save.isEnabled()).toBe(false);
       expect(parserRequests).toBeGreaterThan(0);
-      await page.reload();
+      expect(await reloadDismissingUnloadPrompt(page)).toBeUndefined();
       await page.getByRole("button", { name: "Raw", exact: true }).click();
       await expect.poll(() => raw.inputValue()).toContain('"warn"');
     });

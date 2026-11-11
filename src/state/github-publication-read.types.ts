@@ -58,13 +58,21 @@ export type GitHubSessionReceiptIdentities = Record<
 >;
 
 export type SharedGitHubPublicationReadInput = {
+  /** Indexed child discovery narrows candidates; immutable requester origins authorize disclosure. */
+  originSources?: Array<{
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision: string | null;
+  }>;
   session: {
     agentId: string;
     sessionKey: string;
     sessionId: string;
     lifecycleRevision?: string | null;
   };
-  selector: { requestId: string } | { idempotencyKey?: string; status?: "published" };
+  selector:
+    | { requestId: string }
+    | { idempotencyKey?: string; status?: "published"; authorEligibilityOnly?: true };
   entry: {
     archivedAt?: number;
     repositoryWorkspaceId?: string;

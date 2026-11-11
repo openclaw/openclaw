@@ -8,7 +8,7 @@ const { serve, unavailable } = vi.hoisted(() => ({
 // mock-isolation: Capture the worker handler without opening a real worker message port.
 vi.mock("openclaw/plugin-sdk/worker-task-server", () => ({ serveWorkerTasks: serve }));
 // mock-isolation: Throw on storage import so this test detects eager session-storage loading.
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", () => {
+vi.mock("openclaw/plugin-sdk/memory-core-host-transcript-stats", () => {
   throw unavailable;
 });
 

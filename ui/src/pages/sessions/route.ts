@@ -29,12 +29,13 @@ export const page = defineSolidPage<"sessions", ApplicationContext, SessionsRout
       return `${options.expandedSessionKey ?? ""}\u0000${options.statusFilter}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
     },
     loader: (context: ApplicationContext, { location, cause }): SessionsRouteData => {
-      // Config decorates the page; it is not a prerequisite for the session roster.
-      void context.runtimeConfig.ensureLoaded().catch(() => undefined);
       const options = routeOptions(location);
-      // Intent fills the same managed window the page subscribes to. Ordinary
-      // navigation still leaves issuance to the page's current search/filter intent.
-      if (cause === "preload") {
+      // Entering navigation fills the managed window while the view imports.
+      // Same-route search and filter changes stay with the mounted page.
+      if (
+        cause === "preload" ||
+        (cause === "navigation" && context.router.getState().matches[0]?.routeId !== "sessions")
+      ) {
         void context.sessions.refreshList(
           buildSessionsListQuery(
             context.agentSelection.state.scopeId,

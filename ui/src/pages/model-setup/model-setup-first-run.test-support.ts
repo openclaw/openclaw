@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   ModelCatalogEntry,
@@ -197,7 +197,7 @@ export function mountDetection(
 
 export function modalButton(page: ParentNode, label: string) {
   return [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
-    (button) => button.textContent?.trim() === label,
+    (button) => (button.getAttribute("aria-label") ?? button.textContent?.trim()) === label,
   );
 }
 

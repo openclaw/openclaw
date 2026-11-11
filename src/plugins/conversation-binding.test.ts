@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  createDeferred,
+  nextEventLoopTurn as flushMicrotasks,
+} from "../../test/helpers/promise.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { captureConversationRef } from "../infra/outbound/session-binding-normalization.js";
 import type {
   ConversationRef,
   SessionBindingAdapter,
@@ -13,10 +17,10 @@ import {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
-import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { drainGlobalSingletonLifecycleState as drainLifecycle } from "../shared/global-singleton.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseAsync as closeState,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -25,12 +29,12 @@ import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   buildPluginBindingApprovalCustomId,
-  getCurrentPluginConversationBinding,
+  getCurrentPluginConversationBinding as currentBinding,
   hasShownPluginBindingFallbackNotice,
   markPluginBindingFallbackNoticeShown,
   parsePluginBindingApprovalCustomId,
-  requestPluginConversationBinding,
-  resolvePluginConversationBindingApproval,
+  requestPluginConversationBinding as requestBinding,
+  resolvePluginConversationBindingApproval as resolveApproval,
 } from "./conversation-binding.js";
 import {
   createDiscordCodexBindRequest,
@@ -39,7 +43,7 @@ import {
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
-import { bindPluginSessionConversation } from "./session-conversation-binding.js";
+import { bindPluginSessionConversation as bindSession } from "./session-conversation-binding.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -48,27 +52,18 @@ const previousStateDir = process.env.OPENCLAW_STATE_DIR;
 
 type PluginBindingApprovalsDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_binding_approvals">;
 
-const sessionBindingState = vi.hoisted(() => {
+const sessionBindingState = (() => {
   const records = new Map<string, SessionBindingRecord>();
   let nextId = 1;
 
-  function normalizeRef(ref: ConversationRef): ConversationRef {
-    return {
-      channel: ref.channel.trim().toLowerCase(),
-      accountId: ref.accountId.trim() || "default",
-      conversationId: ref.conversationId.trim(),
-      parentConversationId: ref.parentConversationId?.trim() || undefined,
-    };
-  }
-
   function toKey(ref: ConversationRef): string {
-    return JSON.stringify(normalizeRef(ref));
+    return JSON.stringify(captureConversationRef(ref));
   }
 
   return {
     bind: vi.fn(async (input: SessionBindingBindInput) => {
       input.assertCurrent?.();
-      const normalized = normalizeRef(input.conversation);
+      const normalized = captureConversationRef(input.conversation);
       const record: SessionBindingRecord = {
         bindingId: `binding-${nextId++}`,
         targetSessionKey: input.targetSessionKey,
@@ -101,7 +96,7 @@ const sessionBindingState = vi.hoisted(() => {
       records.set(toKey(record.conversation), record);
     },
   };
-});
+})();
 
 const pluginRuntimeState = vi.hoisted<{ registry: PluginRegistry | null }>(() => ({
   registry: null,
@@ -119,15 +114,13 @@ vi.mock("./runtime.js", async () => {
   };
 });
 
-type PluginBindingRequestInput = Parameters<typeof requestPluginConversationBinding>[0];
-type PluginBindingDecision = Parameters<
-  typeof resolvePluginConversationBindingApproval
->[0]["decision"];
+type PluginBindingRequestInput = Parameters<typeof requestBinding>[0];
+type PluginBindingDecision = Parameters<typeof resolveApproval>[0]["decision"];
 
 const expectExpired = (approvalId: string) =>
   expect(approveBindingRequest(approvalId, "allow-once")).resolves.toEqual({ status: "expired" });
 const expectBound = (input: PluginBindingRequestInput) =>
-  expect(requestPluginConversationBinding(input)).resolves.toMatchObject({ status: "bound" });
+  expect(requestBinding(input)).resolves.toMatchObject({ status: "bound" });
 
 function createAdapter(channel: string, accountId: string): SessionBindingAdapter {
   return {
@@ -143,7 +136,7 @@ function createAdapter(channel: string, accountId: string): SessionBindingAdapte
 }
 
 afterAll(async () => {
-  await closeOpenClawStateDatabaseAsync();
+  await closeState();
   closeOpenClawStateDatabaseForTest();
   if (previousStateDir == null) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -154,12 +147,12 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
-  await drainGlobalSingletonLifecycleState();
+  await drainLifecycle();
   vi.useRealTimers();
 });
 
 async function requestPendingBinding(input: PluginBindingRequestInput) {
-  const request = await requestPluginConversationBinding(input);
+  const request = await requestBinding(input);
   assert(request.status === "pending", "expected pending bind request");
   return request;
 }
@@ -183,9 +176,9 @@ const controlUiConversation = {
 };
 const bindControlUi = (
   data: Record<string, unknown>,
-  afterBind?: Parameters<typeof bindPluginSessionConversation>[0]["afterBind"],
+  afterBind?: Parameters<typeof bindSession>[0]["afterBind"],
 ) =>
-  bindPluginSessionConversation({
+  bindSession({
     pluginId: "codex",
     pluginRoot: "/codex",
     sessionKey: controlUiConversation.conversationId,
@@ -193,22 +186,11 @@ const bindControlUi = (
     afterBind,
   });
 
-async function approveBindingRequest(
+const approveBindingRequest = (
   approvalId: string,
   decision: PluginBindingDecision,
   senderId = "user-1",
-) {
-  return await resolvePluginConversationBindingApproval({
-    approvalId,
-    decision,
-    senderId,
-  });
-}
-
-const flushMicrotasks = () =>
-  new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+) => resolveApproval({ approvalId, decision, senderId });
 
 function bindingRecord(
   conversation: ConversationRef,
@@ -247,8 +229,8 @@ function readPluginBindingApprovalRows() {
 
 describe("plugin conversation binding approvals", () => {
   beforeEach(async () => {
-    await drainGlobalSingletonLifecycleState();
-    await closeOpenClawStateDatabaseAsync();
+    await drainLifecycle();
+    await closeState();
     closeOpenClawStateDatabaseForTest();
     process.env.OPENCLAW_STATE_DIR = tempRoot;
     clearPluginBindingApprovalRows();
@@ -325,7 +307,7 @@ describe("plugin conversation binding approvals", () => {
   });
 
   it("fails closed when a pending bind approval reaches its 30-minute deadline", async () => {
-    await closeOpenClawStateDatabaseAsync();
+    await closeState();
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const request = await pendingDiscord("channel:ttl");
@@ -335,12 +317,12 @@ describe("plugin conversation binding approvals", () => {
     await expectExpired(request.approvalId);
     expect(sessionBindingState.bind).not.toHaveBeenCalled();
     // Retire storage's independent idle timer before counting approval timers.
-    await closeOpenClawStateDatabaseAsync();
+    await closeState();
     expect(vi.getTimerCount()).toBe(0);
   });
 
   it("evicts the oldest pending bind approval after 512 requests", async () => {
-    await closeOpenClawStateDatabaseAsync();
+    await closeState();
     vi.useFakeTimers();
     const requests = [];
     for (let index = 0; index < 513; index += 1) {
@@ -348,7 +330,7 @@ describe("plugin conversation binding approvals", () => {
     }
 
     // Pending approvals outlive database actors; count only their owned timers.
-    await closeOpenClawStateDatabaseAsync();
+    await closeState();
     expect(vi.getTimerCount()).toBe(512);
     const oldest = requests[0];
     const newest = requests[512];
@@ -417,7 +399,7 @@ describe("plugin conversation binding approvals", () => {
   it("expires pending approvals when their Gateway lifecycle closes", async () => {
     const request = await pendingTelegram("79");
 
-    await drainGlobalSingletonLifecycleState();
+    await drainLifecycle();
 
     await expectExpired(request.approvalId);
   });
@@ -529,7 +511,7 @@ describe("plugin conversation binding approvals", () => {
         ownerCurrent = false;
         return result;
       });
-      const result = requestPluginConversationBinding({
+      const result = requestBinding({
         ...input,
         binding: { summary: "replacement binding" },
         assertCurrent: () => {
@@ -540,13 +522,13 @@ describe("plugin conversation binding approvals", () => {
       });
       if (revokeAt === "before-commit") {
         await expect(result).rejects.toThrow("Command owner was revoked");
-        await expect(getCurrentPluginConversationBinding(input)).resolves.toEqual(original);
+        await expect(currentBinding(input)).resolves.toEqual(original);
       } else {
         await expect(result).resolves.toMatchObject({
           status: "bound",
           binding: { summary: "replacement binding" },
         });
-        await expect(getCurrentPluginConversationBinding(input)).resolves.toMatchObject({
+        await expect(currentBinding(input)).resolves.toMatchObject({
           summary: "replacement binding",
         });
       }
@@ -554,7 +536,7 @@ describe("plugin conversation binding approvals", () => {
   );
 
   it("keeps the actual approval and reopen flow off the application SQLite thread", async () => {
-    await closeOpenClawStateDatabaseAsync();
+    await closeState();
     requireNodeSqlite();
     const sql = observeMainThreadSql({ includeClose: true });
     try {
@@ -562,8 +544,8 @@ describe("plugin conversation binding approvals", () => {
       expect((await approveBindingRequest(pending.approvalId, "allow-always")).status).toBe(
         "approved",
       );
-      await drainGlobalSingletonLifecycleState();
-      await closeOpenClawStateDatabaseAsync();
+      await drainLifecycle();
+      await closeState();
       registerSessionBindingAdapter(createAdapter("discord", "isolated"));
       await expectBound(bindRequest("channel:worker-reopen"));
       sql.expectIdle();
@@ -583,9 +565,7 @@ describe("plugin conversation binding approvals", () => {
         decision: "allow-always" as PluginBindingDecision,
         senderId: "user-1",
       };
-      const result = pending
-        ? resolvePluginConversationBindingApproval(resolutionParams)
-        : requestPluginConversationBinding(input);
+      const result = pending ? resolveApproval(resolutionParams) : requestBinding(input);
       const observed = observe<Awaited<typeof result>>(result);
       try {
         await expectHeld(entered.promise, observed);
@@ -607,7 +587,7 @@ describe("plugin conversation binding approvals", () => {
           expect(outcome).toMatchObject({
             value: { status: "error", message: expect.stringContaining("core routing") },
           });
-          await expect(requestPluginConversationBinding(input)).resolves.toEqual({
+          await expect(requestBinding(input)).resolves.toEqual({
             status: "error",
             message:
               "This conversation is already bound by core routing and cannot be claimed by a plugin.",
@@ -646,7 +626,7 @@ describe("plugin conversation binding approvals", () => {
           expect(sessionBindingState.bind).not.toHaveBeenCalled();
         }
         let finished = false;
-        resetting = drainGlobalSingletonLifecycleState().then(() => {
+        resetting = drainLifecycle().then(() => {
           finished = true;
         });
         await flushMicrotasks();
@@ -665,7 +645,7 @@ describe("plugin conversation binding approvals", () => {
         if (stage === "write") {
           expect(sessionBindingState.bind).not.toHaveBeenCalled();
           gate.spy.mockRestore();
-          await closeOpenClawStateDatabaseAsync();
+          await closeState();
           registerSessionBindingAdapter(createAdapter("discord", "isolated"));
           await expectBound(bindRequest("channel:after-reset"));
         }

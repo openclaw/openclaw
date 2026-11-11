@@ -6,19 +6,44 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
+import { ensureHeartbeatMonitorJobs } from "../commands/doctor-heartbeat-cadence-migration.js";
+import { retireHeartbeatWithDoctor } from "../commands/doctor-heartbeat-retirement.js";
+import * as doctorMaintenance from "../commands/doctor-maintenance.js";
 import { runDoctorSessionSqlite } from "../commands/doctor-session-sqlite.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { cronRunLogEntryToDetail } from "../cron/run-history-detail.js";
+import { CronService } from "../cron/service.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
+import { readCronQuarantinedJobsInDatabase } from "../cron/store/quarantine.kernel.js";
+import {
+  loadedCronStoreFromRows,
+  loadCronRows,
+  upsertCronJobRow,
+} from "../cron/store/row-codec.js";
+import {
+  readCronRunRecordsInDatabase,
+  recordCronRunInDatabase,
+} from "../cron/store/run-history.kernel.js";
+import { replaceCronRuntimeAuthorityRows } from "../cron/store/runtime-authority-store.js";
+import { getCronStoreKysely } from "../cron/store/schema.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { seedCompletedRuntimePinMigration } from "../daemon/test-helpers/service-audit-runtime-pin.js";
 import * as legacyGatewayLock from "../infra/gateway-lock-legacy.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import * as packageJson from "../infra/package-json.js";
 import * as builtRuntime from "../infra/update-git-runtime.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
-const { mocks, createDoctorRuntime, stubDoctorEnv, withDoctorState } =
+const { mocks, createDoctorRuntime, createDoctorConfig, stubDoctorEnv, withDoctorState } =
   await import("./doctor-health.test-support.js");
 const candidateVersion = "2026.9.4";
 const candidateBuildId = "2026.9.4-synthetic-candidate";
@@ -107,7 +132,8 @@ function managedService(state: OpenClawTestState, events: string[] = []) {
     }),
     readLoadState: async () => ({ status: running ? "loaded" : "not-loaded" }),
     isLoaded: async () => running,
-    isEnabled: async () => running,
+    // Stopping the process leaves the native autostart policy unchanged.
+    isEnabled: async () => true,
     stop,
     restart,
   };
@@ -167,6 +193,247 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+
+it.each([
+  "stopped",
+  "live",
+  "unproved",
+  "notification",
+  "notification-disabled",
+  "notification-resume-disabled",
+] as const)(
+  "keeps update Doctor successful with a %s heartbeat runtime owner",
+  async (ownership) => {
+    await resultState(async (state, resultPath) => {
+      const cfg: OpenClawConfig = createDoctorConfig(state);
+      await state.writeConfig(cfg);
+      const configBefore = fs.readFileSync(state.configPath);
+      const storePath = resolveCronJobsStorePathFromConfig(cfg, state.env);
+      const runningAtMs = Date.now() - 1_000;
+      const disabledDuringConversion =
+        ownership === "notification-disabled" || ownership === "notification-resume-disabled";
+      const startupNotification = ownership === "notification" || disabledDuringConversion;
+      const offline = ownership === "stopped" || startupNotification;
+      const storeKey = runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          const key = resolveCronStoreKeyInDatabase(db, storePath, state.env);
+          const job = upsertCronJobRow(
+            db,
+            key,
+            {
+              id: "interrupted-monitor",
+              name: "Heartbeat",
+              agentId: "main",
+              declarationKey: "heartbeat:main",
+              enabled: true,
+              createdAtMs: runningAtMs,
+              updatedAtMs: runningAtMs,
+              schedule: { kind: "every", everyMs: 900_000, anchorMs: runningAtMs },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: { kind: "systemEvent", text: "legacy placeholder" },
+              state: { runningAtMs, ...(startupNotification ? { consecutiveErrors: 9 } : {}) },
+            },
+            0,
+          );
+          replaceCronRuntimeAuthorityRows({ db, storeKey: key, jobs: [job] });
+          const row = loadCronRows(db, key)[0]!;
+          // Reproduce the discriminator written by the published heartbeat owner.
+          executeSqliteQuerySync(
+            db,
+            getCronStoreKysely(db)
+              .updateTable("cron_jobs")
+              .set({
+                payload_kind: "heartbeat",
+                job_json: JSON.stringify({
+                  ...JSON.parse(row.job_json),
+                  payload: { kind: "heartbeat" },
+                }),
+              })
+              .where("store_key", "=", key),
+          );
+          if (startupNotification) {
+            recordCronRunInDatabase(db, {
+              storeKey: key,
+              jobId: job.id,
+              runId: `cron:${job.id}:${runningAtMs}`,
+              agentId: "main",
+              startedAt: runningAtMs,
+              endedAt: runningAtMs + 500,
+              status: "failed",
+              error: "synthetic provider failure",
+              detail: cronRunLogEntryToDetail(
+                {
+                  ts: runningAtMs + 500,
+                  jobId: job.id,
+                  action: "finished",
+                  status: "error",
+                  completionStatus: "failed",
+                  error: "synthetic provider failure",
+                  runAtMs: runningAtMs,
+                  durationMs: 500,
+                },
+                { storeKey: key },
+              ),
+            });
+          }
+          return key;
+        },
+        { env: state.env },
+      );
+      const read = () =>
+        withExistingOpenClawStateDatabaseReadOnly(
+          ({ db }) => ({
+            rows: loadCronRows(db, storeKey),
+            history: readCronRunRecordsInDatabase(db),
+          }),
+          { env: state.env },
+        )!;
+      const before = read();
+      await seedCompletedRuntimePinMigration(state.env);
+      let live: Awaited<ReturnType<typeof acquireGatewayLock>> | undefined;
+      try {
+        if (!offline) {
+          // Admission has its own live-writer refusal coverage. Reach the migration
+          // guard here with a real live owner or no established offline custody.
+          vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue(undefined);
+          if (ownership === "live") {
+            live = await acquireGatewayLock({
+              env: state.env,
+              role: "gateway",
+              allowInTests: true,
+            });
+          }
+          await expect(retireHeartbeatWithDoctor(cfg, state.env)).rejects.toThrow(
+            "is running or its runtime owner is unproved",
+          );
+        }
+        const service = managedService(state);
+        mocks.config.mockReturnValue(cfg);
+        mocks.runContributions.mockImplementation(async () => {
+          if (offline) {
+            expect(await service.readRuntime()).toMatchObject({ status: "stopped" });
+          }
+          if (ownership === "notification-resume-disabled") {
+            // Reproduce a durable pending receipt left by an interrupted Doctor
+            // after payload conversion, before config retirement disabled it.
+            await ensureHeartbeatMonitorJobs(cfg, storePath, state.env);
+          }
+          await retireHeartbeatWithDoctor(
+            disabledDuringConversion
+              ? { ...cfg, agents: { ...cfg.agents, defaults: { heartbeat: { every: "0m" } } } }
+              : cfg,
+            state.env,
+          );
+        });
+        const runtime = createDoctorRuntime();
+        await expect(runDoctor(runtime)).resolves.toBeUndefined();
+        expect(runtime.exit).not.toHaveBeenCalledWith(1);
+        const after = read();
+        if (startupNotification) {
+          expectResult(resultPath, { status: "ok" });
+          expect(loadedCronStoreFromRows(after.rows).store.jobs[0]).toMatchObject({
+            payload: { kind: "agentTurn" },
+            enabled: !disabledDuringConversion,
+            state: { runningAtMs, consecutiveErrors: 9 },
+          });
+          expect(after.history).toEqual(before.history);
+          const notified = Promise.withResolvers<void>();
+          const enqueueSessionEvent = vi.fn(async () => {
+            notified.resolve();
+            return { ok: true as const };
+          });
+          const cron = new CronService({
+            scheduler: createTestGatewayScheduler(),
+            storePath,
+            cronEnabled: true,
+            defaultAgentId: "main",
+            nowMs: () => runningAtMs + 1_000,
+            log: { debug() {}, info() {}, warn() {}, error() {} },
+            enqueueSystemEvent: vi.fn(),
+            enqueueSessionEvent,
+            runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+          });
+          const gateway = await acquireGatewayLock({
+            env: state.env,
+            role: "gateway",
+            allowInTests: true,
+          });
+          try {
+            await gateway!.run(() => cron.start());
+            if (!disabledDuringConversion) {
+              await notified.promise;
+              expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
+                expect.stringContaining("10 consecutive run failures"),
+                expect.objectContaining({ agentId: "main", jobId: "interrupted-monitor" }),
+              );
+            } else {
+              // An operator-disabled job needs result settlement, not a new
+              // auto-disable transition or its notification.
+              expect(enqueueSessionEvent).not.toHaveBeenCalled();
+            }
+            const settled = read();
+            const recovered = loadedCronStoreFromRows(settled.rows).store.jobs[0]!;
+            expect(recovered).toMatchObject({
+              payload: { kind: "agentTurn" },
+              enabled: false,
+              state: {
+                consecutiveErrors: 10,
+                lastRunAtMs: runningAtMs,
+                lastRunStatus: "error",
+                lastError: "synthetic provider failure",
+                lastDurationMs: 500,
+              },
+            });
+            if (!disabledDuringConversion) {
+              expect(recovered.state.autoDisabled?.reason).toBe("consecutive-failures");
+            }
+            expect(recovered.state.runningAtMs).toBeUndefined();
+            expect(settled.history).toEqual(after.history);
+            expect(settled.history).toHaveLength(1);
+            expect(
+              withExistingOpenClawStateDatabaseReadOnly(
+                ({ db }) => readCronQuarantinedJobsInDatabase(db, storeKey),
+                { env: state.env },
+              ),
+            ).toEqual([]);
+          } finally {
+            cron.stop();
+            await cron.waitForIdle();
+            await gateway?.release();
+          }
+        } else if (ownership === "stopped") {
+          expectResult(resultPath, { status: "ok" });
+          expect(after.rows[0]?.payload_kind).toBe("agentTurn");
+          expect(JSON.parse(after.rows[0]!.state_json)).toMatchObject({
+            lastRunAtMs: runningAtMs,
+            lastRunStatus: "error",
+          });
+          expect(JSON.parse(after.rows[0]!.state_json).runningAtMs).toBeUndefined();
+          expect(after.history).toEqual([
+            expect.objectContaining({
+              jobId: "interrupted-monitor",
+              status: "failed",
+              startedAt: runningAtMs,
+            }),
+          ]);
+        } else {
+          expect(after).toEqual(before);
+          expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
+          expectResult(resultPath, {
+            status: "ok",
+            warnings: [expect.stringContaining("Heartbeat migration deferred")],
+          });
+          expect(runtime.error).toHaveBeenCalledWith(
+            expect.stringContaining("Heartbeat migration deferred"),
+          );
+        }
+      } finally {
+        await live?.release();
+      }
+    });
+  },
+);
 
 it("imports retained legacy sessions after verified stop and before any candidate RPC", async () => {
   await withDoctorState(async (state) => {

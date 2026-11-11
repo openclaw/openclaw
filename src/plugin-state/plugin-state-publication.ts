@@ -5,7 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../infra/sql-connection.js";
-import type { SqliteCommitReceipt } from "../infra/sqlite-commit-receipt.js";
+import type { SqliteCommitReceipt, SqliteCommittedFact } from "../infra/sqlite-commit-receipt.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../infra/sqlite-worker-contract.js";
 import {
   deferSqliteWorkerCommitReceipt,
@@ -25,6 +25,31 @@ type PluginStateRow = Selectable<DB["plugin_state_entries"]>;
 type EntryKey = Pick<PluginStateRow, "plugin_id" | "namespace" | "entry_key">;
 type Receipt = SqliteCommitReceipt<PluginStateRow>;
 type PluginStateChange = StateDomainChange<PluginStateRow>;
+type SubmittedFact = { kind: "submitted"; value: Omit<PluginStateRow, "value_json"> };
+
+function resolveSubmittedReceipt(
+  receipt: unknown,
+  submitted: ReadonlyMap<string, string> | undefined,
+): unknown {
+  if (!isRecord(receipt) || !(receipt.facts instanceof Map)) {
+    return receipt;
+  }
+  const facts: ReadonlyMap<unknown, unknown> = receipt.facts;
+  let resolved: Map<unknown, unknown> | undefined;
+  for (const [key, fact] of facts) {
+    if (!isRecord(fact) || fact.kind !== "submitted") {
+      continue;
+    }
+    const valueJson = typeof key === "string" ? submitted?.get(key) : undefined;
+    if (valueJson === undefined || !isRecord(fact.value)) {
+      // Finished admissions release their inputs; late references cannot publish partial rows.
+      return undefined;
+    }
+    resolved ??= new Map(facts);
+    resolved.set(key, { kind: "postimage", value: { ...fact.value, value_json: valueJson } });
+  }
+  return resolved ? { ...receipt, facts: resolved } : receipt;
+}
 
 export type PluginStatePublicationScope = {
   pluginId: string;
@@ -32,7 +57,14 @@ export type PluginStatePublicationScope = {
   /** Omitted when the write can affect any live entry in the namespace. */
   key?: string;
 };
-type PendingPublication = { scope?: PluginStatePublicationScope };
+/** Possible effects derived from the serialized command, never supplied by plugin callers. */
+export type PluginStatePublicationEffect =
+  | { readonly kind: "unchanged" }
+  | { readonly kind: "postimage"; readonly valueJson: string };
+type PendingPublication = {
+  scope?: PluginStatePublicationScope;
+  effect?: PluginStatePublicationEffect;
+};
 
 /** Descriptive read dependencies; these snapshots never grant mutation authority. */
 export type PluginStateReadDependency = {
@@ -212,13 +244,27 @@ export function capturePluginStateReceipt<T>(db: EngineConnection, write: () => 
 /** Capture the whole native transaction before COMMIT, including keys changed by retention. */
 export function withPluginStateWorkerReceipt<T>(
   db: EngineConnection,
+  submitted: ReadonlyMap<string, string> | undefined,
   write: () => T,
   additionalFacts?: (result: T) => Record<string, unknown>,
 ): T {
   const { result, receipt: captured } = capturePluginStateReceipt(db, write);
   // Empty receipts distinguish a confirmed no-op from missing commit evidence.
   const metadata = additionalFacts?.(result);
-  const receipt = { ...metadata, ...captured };
+  const facts = submitted
+    ? new Map<string, SqliteCommittedFact<PluginStateRow> | SubmittedFact>(
+        [...captured.facts].map(([key, fact]) => {
+          if (fact.kind === "postimage") {
+            const { value_json, ...value } = fact.value;
+            if (submitted.get(key) === value_json) {
+              return [key, { kind: "submitted", value }];
+            }
+          }
+          return [key, fact];
+        }),
+      )
+    : captured.facts;
+  const receipt = { ...metadata, ...captured, facts };
   // Publication cannot make a previously valid large clear/import fail to commit.
   // Unbounded retained namespaces may exceed the transport even with keys alone.
   deferSqliteWorkerCommitReceipt(
@@ -253,18 +299,58 @@ export function assertPluginStatePublicationSettled(
   if (state.unavailable.has(identity)) {
     throw new Error("Plugin state authority is unavailable");
   }
+  if (hasPendingPluginStatePublication(identity, scope)) {
+    throw new Error("Plugin state authority is unavailable");
+  }
+}
+
+/** Descriptive views may reload after unknown settlement; authority remains unavailable. */
+export function hasPendingPluginStatePublication(
+  identity: string,
+  scope?: PluginStatePublicationScope,
+): boolean {
   for (const pending of state.pending.get(identity) ?? []) {
     const write = pending.scope;
-    if (
-      !scope ||
-      !write ||
-      (scope.pluginId === write.pluginId &&
-        scope.namespace === write.namespace &&
-        (scope.key === undefined ||
-          write.key === undefined ||
-          toUSVString(scope.key) === toUSVString(write.key)))
-    ) {
+    if (publicationScopesOverlap(scope, write)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function publicationScopesOverlap(
+  scope: PluginStatePublicationScope | undefined,
+  write: PluginStatePublicationScope | undefined,
+): boolean {
+  return (
+    !scope ||
+    !write ||
+    (scope.pluginId === write.pluginId &&
+      scope.namespace === write.namespace &&
+      (scope.key === undefined ||
+        write.key === undefined ||
+        toUSVString(scope.key) === toUSVString(write.key)))
+  );
+}
+
+/** A predicate may survive a pending change; the caller must also validate committed truth. */
+export function assertPluginStatePublicationPreserves(
+  identity: string,
+  scope: PluginStatePublicationScope,
+  assertValueCurrent: (value: unknown) => void,
+): void {
+  if (state.unavailable.has(identity)) {
+    throw new Error("Plugin state authority is unavailable");
+  }
+  for (const pending of state.pending.get(identity) ?? []) {
+    if (!publicationScopesOverlap(scope, pending.scope)) {
+      continue;
+    }
+    if (!pending.effect) {
       throw new Error("Plugin state authority is unavailable");
+    }
+    if (pending.effect.kind === "postimage") {
+      assertValueCurrent(JSON.parse(pending.effect.valueJson));
     }
   }
 }
@@ -274,9 +360,10 @@ export function beginPluginStatePublication(
   identity: () => string | symbol,
   assertCurrent?: () => void,
   scope?: PluginStatePublicationScope,
+  effect?: PluginStatePublicationEffect,
 ) {
   const pendingIdentity = identity();
-  const hold = { scope };
+  const hold = { scope, effect };
   const holds = state.pending.get(pendingIdentity) ?? new Set<PendingPublication>();
   holds.add(hold);
   state.pending.set(pendingIdentity, holds);
@@ -313,9 +400,12 @@ export function beginPluginStatePublication(
 export function withPluginStatePublication(
   createAdmission: SqliteWorkerAdmissionFactory,
   context: OpenClawStateWorkerContext,
+  values: ReadonlyMap<string, string> | undefined,
   onCommitted?: (facts: unknown) => void,
   scope?: PluginStatePublicationScope,
+  effect?: PluginStatePublicationEffect,
 ): SqliteWorkerAdmissionFactory {
+  let submitted = values;
   return (operation) => {
     const owner = createAdmission(operation);
     let pending: ReturnType<typeof beginPluginStatePublication>;
@@ -324,6 +414,7 @@ export function withPluginStatePublication(
         () => context.admission.identity.key,
         context.assertPublicationCurrent ?? context.admission.assertCurrent,
         scope,
+        effect,
       );
     } catch (error) {
       owner.admission.finish();
@@ -331,6 +422,7 @@ export function withPluginStatePublication(
     }
     let installed = false;
     observeSqliteWorkerAdmissionFinish(owner.admission, () => {
+      submitted = undefined;
       const settlement = owner.admission.settlement;
       // A completed rollback has no receipt; a committed write must publish before denial ends.
       pending.finish(
@@ -340,9 +432,14 @@ export function withPluginStatePublication(
       );
     });
     observeSqliteWorkerCommittedFacts(owner.admission, ({ facts }) => {
-      pending.install(facts);
+      const resolved = resolveSubmittedReceipt(facts, submitted);
+      if (resolved === undefined) {
+        pending.finish("unknown");
+        return;
+      }
+      pending.install(resolved);
       installed = true;
-      onCommitted?.(facts);
+      onCommitted?.(resolved);
     });
     return owner;
   };

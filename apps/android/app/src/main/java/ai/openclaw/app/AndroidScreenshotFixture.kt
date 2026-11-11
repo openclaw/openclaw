@@ -897,7 +897,8 @@ internal object AndroidScreenshotFixture {
             role = "assistant",
             content =
               "The Android release is close. Two review follow-ups and one localization pass remain; once those land, " +
-                "the changelog can be reviewed and the tag can go out.",
+                "the changelog can be reviewed and the tag can go out.\n\n" +
+                "A small release workflow:\n\n```mermaid\nflowchart TD\n  Draft --> Review\n  Review --> Ship\n```",
             timestamp = 1_783_555_320_000,
             marker = buildJsonObject { put("id", "screenshot-message-1783555320000") },
             provider = "openai",

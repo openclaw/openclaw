@@ -4,6 +4,7 @@ import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-s
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { retainOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { Message } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -37,6 +38,7 @@ type EmbeddedSessionPromptState = {
   systemPrompt?: SystemPromptSeries;
   pendingSystemPrompt?: SystemPromptSeries;
   systemPromptRouteKey?: string;
+  historyBoundary?: { count: number; id: string | null };
   toolSurface?: ToolSurface;
   pendingToolSurface?: ToolSurface;
   removedRuntimeContextKeys?: Set<string>;
@@ -118,7 +120,31 @@ type ToolSurface = {
 };
 
 function describeTool(tool: AnyAgentTool): ToolDefinition {
+  // Published schemas are detached, frozen JSON; checkpointing must not copy them per session.
+  if (getPublishedRuntimeToolInputSchema(tool.parameters)) {
+    retainOwnedTranscriptPayload(tool.parameters);
+  }
   return { name: tool.name, description: tool.description, parameters: tool.parameters };
+}
+
+function resolvePromptHistoryId(params: {
+  state: EmbeddedSessionPromptState;
+  entries: SessionEntry[];
+  historyBoundaryCount?: number;
+}): string | null {
+  // Bounded reloads can omit a compaction's payload without changing history.
+  // The manager's boundary count, not its visible window, invalidates this run's fact.
+  const previous = params.state.historyBoundary;
+  if (previous && previous.count === params.historyBoundaryCount) {
+    return previous.id;
+  }
+  const id =
+    params.entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ??
+    null;
+  if (params.historyBoundaryCount !== undefined) {
+    params.state.historyBoundary = { count: params.historyBoundaryCount, id };
+  }
+  return id;
 }
 
 function sameToolParameters(left: unknown, right: unknown): boolean {
@@ -144,30 +170,16 @@ export function prepareSessionToolSurface(params: {
   routeKey: string;
   toolPolicy: string;
   entries: SessionEntry[];
+  historyBoundaryCount?: number;
   tools: AnyAgentTool[];
 }): AnyAgentTool[] {
-  const historyId =
-    params.entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ??
-    null;
+  const historyId = resolvePromptHistoryId(params);
   const restored = (): ToolSurface | undefined => {
-    const markerIndex = params.entries.findLastIndex(
-      (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
-    );
-    const entry = params.entries[markerIndex];
-    const data = entry?.type === "custom" ? entry.data : undefined;
-    return isRecord(data) &&
-      Array.isArray(data.tools) &&
-      data.routeKey === params.routeKey &&
-      data.historyId === historyId &&
-      data.toolPolicy === params.toolPolicy &&
-      !params.entries.slice(markerIndex + 1).some((later) => later.type === "model_change")
-      ? {
-          routeKey: params.routeKey,
-          historyId,
-          toolPolicy: params.toolPolicy,
-          // SAFETY: only this module writes `tools`, as ToolDefinition entries matched to this route and policy.
-          tools: data.tools as ToolDefinition[],
-        }
+    const pin = readToolSurfaceCheckpoint(params.entries);
+    return pin?.routeKey === params.routeKey &&
+      pin.historyId === historyId &&
+      pin.toolPolicy === params.toolPolicy
+      ? { routeKey: params.routeKey, historyId, toolPolicy: params.toolPolicy, tools: pin.tools }
       : undefined;
   };
   const candidate = params.state.pendingToolSurface ?? params.state.toolSurface ?? restored();
@@ -185,6 +197,10 @@ export function prepareSessionToolSurface(params: {
   let changed = !known;
   const tools = params.tools.map((tool) => {
     const pin = pinned.get(tool.name);
+    // Computer discovery supplies live execution facts, not a new session definition.
+    if (pin && tool.name === "computer") {
+      return copyAgentToolMetadata(tool, { ...tool, ...pin });
+    }
     if (changed && pin?.description === tool.description) {
       return tool;
     }
@@ -206,15 +222,44 @@ export function prepareSessionToolSurface(params: {
       tools: [...current, ...retained].sort((a, b) => a.name.localeCompare(b.name)),
     };
   }
-  return [
-    ...tools,
-    ...retained.map((tool) =>
-      gateAgentToolExecution(
-        { ...tool, label: tool.name, execute: async () => ({ content: [], details: {} }) },
-        `${tool.name} is not available in this turn. Do not retry ${tool.name}.`,
-      ),
-    ),
-  ];
+  return [...tools, ...retained.map(refusePinnedTool)];
+}
+
+function refusePinnedTool(tool: ToolDefinition): AnyAgentTool {
+  return gateAgentToolExecution(
+    { ...tool, label: tool.name, execute: async () => ({ content: [], details: {} }) },
+    `${tool.name} is not available in this turn. Do not retry ${tool.name}.`,
+  );
+}
+
+/** The latest checkpointed pin, unless a later model change retired it. */
+function readToolSurfaceCheckpoint(entries: SessionEntry[]) {
+  const markerIndex = entries.findLastIndex(
+    (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
+  );
+  const entry = entries[markerIndex];
+  const data = entry?.type === "custom" ? entry.data : undefined;
+  return isRecord(data) &&
+    Array.isArray(data.tools) &&
+    !entries.slice(markerIndex + 1).some((later) => later.type === "model_change")
+    ? {
+        routeKey: data.routeKey,
+        historyId: data.historyId,
+        toolPolicy: data.toolPolicy,
+        // SAFETY: only this module writes `tools`, as the ToolDefinition entries a turn sent.
+        tools: data.tools as ToolDefinition[],
+      }
+    : undefined;
+}
+
+/**
+ * The tool definitions this session last sent to the provider, or undefined before its
+ * first pin. Compaction estimates its replacement request with these: deferred catalog
+ * tools stay registered but never reach the provider. Accepted edge case: a history or
+ * tool policy change since the pin is counted from the next turn's pin.
+ */
+export function readSessionSentTools(entries: SessionEntry[]): AnyAgentTool[] | undefined {
+  return readToolSurfaceCheckpoint(entries)?.tools.map(refusePinnedTool);
 }
 
 /** Unsent preparation belongs to its attempt; an incapable route rebuilds the full prompt. */
@@ -222,17 +267,18 @@ export function beginSessionSystemPrompt(params: {
   state: EmbeddedSessionPromptState;
   routeKey: string;
   enabled: boolean;
-  entries: SessionEntry[];
+  getEntries: () => SessionEntry[];
 }): boolean {
   params.state.pendingSystemPrompt = undefined;
+  params.state.historyBoundary = undefined;
   if (params.enabled) {
     return false;
   }
   params.state.systemPrompt = undefined;
   params.state.systemPromptRouteKey = params.routeKey;
-  const previous = params.entries.findLast(
-    (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
-  );
+  const previous = params
+    .getEntries()
+    .findLast((entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt");
   return (
     previous?.type === "custom" &&
     isRecord(previous.data) &&
@@ -273,12 +319,11 @@ export function prepareSessionSystemPrompt(params: {
   routeKey: string;
   systemPrompt: string;
   entries: SessionEntry[];
+  historyBoundaryCount?: number;
 }) {
   const { permissionNotice, systemPrompt } = extractAttemptPermissionNotice(params.systemPrompt);
   const renderedPrefix = shareSystemPromptPrefix(systemPrompt);
-  const historyId =
-    params.entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ??
-    null;
+  const historyId = resolvePromptHistoryId(params);
   const markerIndex = params.entries.findLastIndex(
     (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
   );

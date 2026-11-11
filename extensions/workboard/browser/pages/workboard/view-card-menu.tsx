@@ -73,7 +73,7 @@ export function WorkboardCardMenus(props: {
   workboard: WorkboardProps;
   cards: WorkboardCard[];
   // The caller keeps this stable surface inside its existing inert boundary.
-  children: (panel: JSX.Element) => JSX.Element;
+  children: (panel: JSX.Element, selectedCardId: () => string | undefined) => JSX.Element;
 }) {
   const id = `workboard-card-menu-${createUniqueId()}`;
   let panel!: HTMLDivElement;
@@ -128,6 +128,7 @@ export function WorkboardCardMenus(props: {
             {(current) => <CardMenuContent workboard={props.workboard} card={current()} />}
           </Show>
         </div>,
+        selectedId,
       )}
     </CardMenuContext>
   );

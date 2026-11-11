@@ -34,6 +34,7 @@ import {
   readSessionEntryReadOnlyInWorker as readOnlyEntry,
 } from "./session-entry-read-runtime.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
+import { promptReport } from "./system-prompt-report.test-support.js";
 
 let state: OpenClawTestState;
 const noop = () => {};
@@ -162,6 +163,47 @@ it.for(["warm", "cold"] as const)(
     await expect(readOnlyEntry(scope, noop, reader)).resolves.toMatchObject({
       label: "committed update",
     });
+  },
+);
+
+it.each(["standalone", "admitted"] as const)(
+  "keeps requested snapshots separate across cold and retained %s entry reads",
+  async (route) => {
+    const { scope, entry, database } = fixture(`projected-${route}`);
+    const snapshots = {
+      skillsSnapshot: { prompt: "Saved instructions", skills: [] },
+      systemPromptReport: promptReport(1, 1, 0),
+      sessionDiffBaseline: {
+        version: 1 as const,
+        sessionId: entry.sessionId,
+        root: "/synthetic",
+        files: [],
+      },
+    };
+    seed(scope, { ...entry, ...snapshots });
+    const reader = route === "admitted" ? (await admitCohort(scope)).reader : undefined;
+    // Native writes invalidate retained facts, forcing the first read through the worker.
+    database.db
+      .prepare("UPDATE session_nodes SET entry_json = entry_json WHERE session_key = ?")
+      .run(scope.sessionKey);
+    const read = (projection?: "full" | "list" | readonly ["skillsSnapshot"]) =>
+      readEntry({ ...scope, projection }, noop, undefined, undefined, reader);
+    for (const projection of ["list", ["skillsSnapshot"], "full", "list"] as const) {
+      const selected = await read(projection);
+      expect(selected).toMatchObject(entry);
+      for (const field of [
+        "skillsSnapshot",
+        "systemPromptReport",
+        "sessionDiffBaseline",
+      ] as const) {
+        expect(selected?.[field]).toEqual(
+          projection === "full" || (typeof projection !== "string" && field === "skillsSnapshot")
+            ? snapshots[field]
+            : undefined,
+        );
+      }
+    }
+    await expect(read()).resolves.toMatchObject({ ...entry, ...snapshots });
   },
 );
 

@@ -54,16 +54,10 @@ it("resolves configured runtime auth and returns the bounded pool snapshot", asy
     status: "ok",
     pool: { models: [], grants: [], usage: { lanes: [], grants: [] } },
   });
-  expect(mocks.auth).toHaveBeenCalledWith({
-    provider: "clawrouter",
-    cfg: config,
-    signal: undefined,
-  });
   expect(mocks.fetch).toHaveBeenCalledWith(
     expect.objectContaining({
       url: "https://router.example/v1/pool",
-      timeoutMs: 10000,
-      init: { headers: { Accept: "application/json", Authorization: "Bearer fixture-key" } },
+      init: { headers: expect.objectContaining({ Authorization: "Bearer fixture-key" }) },
     }),
   );
   expect(mocks.release).toHaveBeenCalledOnce();

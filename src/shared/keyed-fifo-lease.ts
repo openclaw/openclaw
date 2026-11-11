@@ -6,18 +6,14 @@ export type KeyedFifoLease = {
   release(): void;
 };
 
-type KeyedFifoLeaseState = {
-  tails: Map<string, Promise<void>>;
-  releases: Set<() => void>;
-};
-
-type KeyedFifoLeaseRegistry = {
-  reserve(keys: readonly string[]): KeyedFifoLease | undefined;
-};
-
 /** Creates a close-owned FIFO registry shared by every runtime chunk using globalKey. */
-export function createKeyedFifoLeaseRegistry(globalKey: symbol): KeyedFifoLeaseRegistry {
-  const state = resolveGlobalSingleton<KeyedFifoLeaseState>(
+export function createKeyedFifoLeaseRegistry(globalKey: symbol): {
+  reserve(keys: readonly string[]): KeyedFifoLease | undefined;
+} {
+  const state = resolveGlobalSingleton<{
+    tails: Map<string, Promise<void>>;
+    releases: Set<() => void>;
+  }>(
     globalKey,
     () => ({ tails: new Map(), releases: new Set() }),
     (current) => {

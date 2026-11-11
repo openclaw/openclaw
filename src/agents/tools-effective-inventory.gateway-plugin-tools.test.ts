@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as logger from "../logger.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import * as pluginLoader from "../plugins/loader.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -162,9 +163,12 @@ module.exports = {
         cache: false,
       });
       expect(pluginIds(root)).toEqual([providerPluginId, toolPluginId]);
+      const toolInstance = getPluginInstance(root.plugins.find(({ id }) => id === toolPluginId)!)!;
       const owner = createPluginRegistryOwner(root, state.workspaceDir);
       lifecycle.close = owner.close;
       const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+      const loadRegistry = vi.spyOn(pluginLoader, "loadPluginRegistryHandle");
+      const loadPlugins = vi.spyOn(pluginLoader, "loadOpenClawPlugins");
       const inventoryParams = {
         agentId: "main",
         agentDir: state.agentDir(),
@@ -178,7 +182,7 @@ module.exports = {
             cfg: inventoryConfig,
             ...inventoryParams,
           });
-          return await acquired.run((runtime) =>
+          const toolInventory = await acquired.run((runtime) =>
             resolveEffectiveToolInventory({
               cfg: inventoryConfig,
               ...inventoryParams,
@@ -188,15 +192,28 @@ module.exports = {
               runtimeModel: normalizeProvider ? runtime.runtimeModel : undefined,
             }).then((inventory) => inventory.groups.flatMap((group) => group.tools)),
           );
+          // Projection released its inventory hold; the model lease still owns resolved tools.
+          expect(toolInstance.retainedWorkCount).toBe(
+            toolInventory.some(({ id }) => id === toolName) ? 1 : 0,
+          );
+          return toolInventory;
         });
       try {
         const inventory = await resolveInventory(config);
+        expect(toolInstance.retainedWorkCount).toBe(0);
         expect(inventory).toContainEqual(
           expect.objectContaining({ id: toolName, source: "plugin", pluginId: toolPluginId }),
         );
         expect(warn.mock.calls.some(([message]) => message.includes("unknown entries"))).toBe(
           false,
         );
+        for (let repeat = 0; repeat < 2; repeat++) {
+          expect(await resolveInventory(config)).toContainEqual(
+            expect.objectContaining({ id: toolName, source: "plugin", pluginId: toolPluginId }),
+          );
+        }
+        expect(loadRegistry).not.toHaveBeenCalled();
+        expect(loadPlugins).not.toHaveBeenCalled();
 
         const disabledConfig: OpenClawConfig = {
           ...config,
@@ -221,6 +238,8 @@ module.exports = {
         expect(closing).toBeDefined();
         await closing;
       } finally {
+        loadRegistry.mockRestore();
+        loadPlugins.mockRestore();
         warn.mockRestore();
         await owner.close();
       }
@@ -230,7 +249,8 @@ module.exports = {
         generation: [providerPluginId],
         gateway: [providerPluginId, toolPluginId],
         ownerCurrent: [providerPluginId, toolPluginId],
-        retainedWork: 1,
+        // The inventory scope and selected-model lease each retain the resolved tool.
+        retainedWork: 2,
       });
       expect(probes.find((probe) => probe.event === "normalize")).toMatchObject({
         generation: [providerPluginId],

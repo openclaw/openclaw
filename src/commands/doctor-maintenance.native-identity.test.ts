@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForGatewayHealthyRestart } from "../cli/daemon-cli/restart-health.js";
+import { nativeExit } from "../daemon/systemd-exec.test-support.js";
 import { getSelfAndAncestorPidsSync } from "../infra/restart-stale-pids.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -138,13 +139,14 @@ async function repair(scenario: Scenario) {
       if (reads[method]) {
         return [reads[method]];
       }
-      if (["ResetFailedUnit", "StartUnit", "RestartUnit"].includes(method)) {
+      if (["ResetFailedUnit", "StartUnit", "RestartUnit", "StopUnit"].includes(method)) {
         expect(args[1]).toBe(":1.42");
-        effects.push(method);
+        effects.push(method === "StopUnit" ? "stop" : method);
         if (method === "ResetFailedUnit") {
           return [];
         }
-        running = true;
+        stopped ||= method === "StopUnit";
+        running = method !== "StopUnit";
         return [{ type: "o", data: ["/org/freedesktop/systemd1/job/7"] }];
       }
     }
@@ -199,19 +201,16 @@ async function repair(scenario: Scenario) {
       diagnosticFailure = false;
       return { code: 1, termination: "exit", stdout: "", stderr: "Failed to connect to bus" };
     }
-    return {
-      code: 0,
-      termination: "exit",
-      stdout: reply(args)
-        .map((property) => JSON.stringify(property))
-        .join("\n"),
-      stderr: "",
-    };
+    const lines = reply(args).map((property) => JSON.stringify(property));
+    return nativeExit(lines.join("\n"));
   });
   native.systemctl.mockImplementation(async (args) => {
     const action = args[0];
     if (!action) {
       throw new Error("Missing systemctl action in fixture query");
+    }
+    if (action === "show") {
+      return nativeExit("LoadState=loaded\nTimeoutStopUSec=330s\n");
     }
     if (action !== "is-enabled") {
       // A missing pinned identity must fail visibly if it reaches unbound activation.

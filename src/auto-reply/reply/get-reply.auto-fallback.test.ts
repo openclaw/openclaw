@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveModelRefFromString } from "../../agents/model-selection-shared.js";
+import { makeConfiguredModel } from "../../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
@@ -10,7 +11,6 @@ import { emptyAliasIndex, withFastReplyConfig } from "./get-reply-fast-path.test
 import * as fixtures from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
-import { makeConfiguredModel } from "./model-selection.inputs.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   resolveReplyDirectives: vi.fn(),
@@ -70,8 +70,8 @@ function makeReasoningModelConfig(
           baseUrl: "https://api.anthropic.test/v1",
           models: [
             makeConfiguredModel({
-              id: "claude-fallback",
-              name: "Claude Fallback",
+              id: "fallback-model",
+              name: "Fallback",
               reasoning: false,
               maxTokens: 8192,
             }),
@@ -90,7 +90,7 @@ function setupFallback(resolvedReasoningLevel?: "off" | "on") {
     sessionId: "fallback-session",
     updatedAt: Date.now(),
     providerOverride: "anthropic",
-    modelOverride: "claude-fallback",
+    modelOverride: "fallback-model",
     modelOverrideSource: "auto",
     modelOverrideFallbackOriginProvider: "openai",
     modelOverrideFallbackOriginModel: "gpt-5.5",
@@ -119,7 +119,7 @@ function setupFallback(resolvedReasoningLevel?: "off" | "on") {
       senderIsOwner: true,
       resetHookTriggered: false,
       provider: "anthropic",
-      model: "claude-fallback",
+      model: "fallback-model",
       resolvedReasoningLevel,
     }),
   );
@@ -225,7 +225,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     const catalogRuntime = await import("../../agents/model-catalog.runtime.js");
     const catalog = [
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5", reasoning: true },
-      { provider: "anthropic", id: "claude-fallback", name: "Claude Fallback", reasoning: false },
+      { provider: "anthropic", id: "fallback-model", name: "Fallback", reasoning: false },
     ];
     vi.mocked(catalogRuntime.loadPreparedModelCatalogSnapshot).mockResolvedValueOnce({
       entries: catalog,
@@ -233,7 +233,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       authoritative: true,
     });
     await expectRun(cfg, {
-      modelState: { provider: "anthropic", model: "claude-fallback" },
+      modelState: { provider: "anthropic", model: "fallback-model" },
       provider: "openai",
       model: "gpt-5.5",
       resolvedThinkLevel: "off",

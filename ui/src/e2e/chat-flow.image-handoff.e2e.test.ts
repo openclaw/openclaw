@@ -73,7 +73,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
       await page.locator(".agent-chat__file-input").setInputFiles({
         name: "stable-preview.png",

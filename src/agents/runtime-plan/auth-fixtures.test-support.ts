@@ -1,24 +1,19 @@
 import { expect } from "vitest";
 import type { Model } from "../../llm/types.js";
 import { createNativeOpenAIResponsesModel } from "../../plugin-sdk/test-helpers/agents/schema-normalization-runtime-contract.js";
-import type { AuthProfileStore } from "../auth-profiles.js";
+import type { AuthProfileStore as Store } from "../auth-profiles.js";
 import {
   createApiKeyCredential,
   createOAuthRefreshCredential,
 } from "../auth-profiles/credential-fixtures.test-support.js";
-import { providerConfig } from "../model-auth.fixtures.test-support.js";
+import { createPlatformAuthRoute, providerConfig } from "../model-auth.fixtures.test-support.js";
 import type { prepareAgentRuntimeAuth } from "./prepare-auth.js";
-import type { AgentRuntimeAuthPlan } from "./types.js";
+import type { AgentRuntimeAuthPlan as Plan } from "./types.js";
+
+type PrepareAuth = typeof prepareAgentRuntimeAuth;
 
 export const authProvider = { providerForAuth: "openai", authProfileProviderForAuth: "openai" };
-export const platformRoute = {
-  provider: "openai",
-  modelId: "gpt-5.5",
-  api: "openai-responses",
-  baseUrl: "https://api.openai.com/v1",
-  authRequirement: "api-key",
-  requestTransportOverrides: "none",
-} as const;
+export const platformRoute = createPlatformAuthRoute();
 export const subscriptionRoute = {
   ...platformRoute,
   api: "openai-chatgpt-responses",
@@ -33,11 +28,7 @@ export const platformModel: Model = {
   contextWindow: 128_000,
   maxTokens: 8_000,
 };
-export const subscriptionModel: Model = {
-  ...platformModel,
-  api: subscriptionRoute.api,
-  baseUrl: subscriptionRoute.baseUrl,
-};
+export const subscriptionModel: Model = authModel({ modelRoute: subscriptionRoute });
 export const platform = {
   provider: "openai",
   modelId: "gpt-5.5",
@@ -61,62 +52,48 @@ export const oauth = createOAuthRefreshCredential;
 export const openAIConfig = providerConfig.bind(null, "openai");
 export const apiRoute = { api: "openai-responses", authRequirement: "api-key" } as const;
 
-export function profilePlan(
-  profileId: string,
-  overrides: Partial<AgentRuntimeAuthPlan> = {},
-): AgentRuntimeAuthPlan {
-  return {
-    ...authProvider,
-    forwardedAuthProfileId: profileId,
-    forwardedAuthProfileSource: "auto",
-    forwardedAuthProfileCandidateIds: [profileId],
-    ...overrides,
-  };
-}
+export const profilePlan = (profileId: string, overrides: Partial<Plan> = {}): Plan => ({
+  ...authProvider,
+  forwardedAuthProfileId: profileId,
+  forwardedAuthProfileSource: "auto",
+  forwardedAuthProfileCandidateIds: [profileId],
+  ...overrides,
+});
 
-export function subscriptionPlan(
-  overrides: Partial<AgentRuntimeAuthPlan> = {},
-): AgentRuntimeAuthPlan {
-  return {
-    ...authProvider,
-    forwardedAuthProfileId: "openai:subscription",
-    selectedAuthMode: "token",
-    modelRoute: { ...subscriptionRoute },
-    ...overrides,
-  };
-}
+export const subscriptionPlan = (overrides: Partial<Plan> = {}): Plan => ({
+  ...authProvider,
+  forwardedAuthProfileId: "openai:subscription",
+  selectedAuthMode: "token",
+  modelRoute: { ...subscriptionRoute },
+  ...overrides,
+});
 
-export function authStore(
-  profiles: AuthProfileStore["profiles"],
-  order?: AuthProfileStore["order"],
-): AuthProfileStore {
-  return { version: 1, profiles, ...(order ? { order } : {}) };
-}
-export function oneProfile(id: string, credential: AuthProfileStore["profiles"][string]) {
-  return { [id]: credential };
-}
-export function token(value = "subscription-token", expires?: number) {
-  return {
-    type: "token" as const,
-    provider: "openai",
-    token: value,
-    ...(expires === undefined ? {} : { expires }),
-  };
-}
+export const authStore = (profiles: Store["profiles"], order?: Store["order"]): Store => ({
+  version: 1,
+  profiles,
+  ...(order ? { order } : {}),
+});
+export const oneProfile = (id: string, credential: Store["profiles"][string]) => ({
+  [id]: credential,
+});
+export const token = (value = "subscription-token", expires?: number) => ({
+  type: "token" as const,
+  provider: "openai",
+  token: value,
+  ...(expires === undefined ? {} : { expires }),
+});
 export function setProfileCooldown(
-  store: AuthProfileStore,
+  store: Store,
   profileId: string,
-  details: Omit<NonNullable<AuthProfileStore["usageStats"]>[string], "cooldownUntil"> = {},
+  details: Omit<NonNullable<Store["usageStats"]>[string], "cooldownUntil"> = {},
 ) {
   store.usageStats = { [profileId]: { cooldownUntil: Date.now() + 60_000, ...details } };
 }
-type FixtureParams = Partial<Parameters<typeof prepareAgentRuntimeAuth>[0]> & {
-  profiles?: AuthProfileStore["profiles"];
-  order?: AuthProfileStore["order"];
+type FixtureParams = Partial<Parameters<PrepareAuth>[0]> & {
+  profiles?: Store["profiles"];
+  order?: Store["order"];
 };
-export function createPreparationFixture(
-  prepareAuthFixture: typeof import("./prepare-auth.test-support.js").prepareAuthFixture,
-) {
+export function createPreparationFixture(prepareAuthFixture: PrepareAuth) {
   const prepare = ({ profiles = {}, order, ...params }: FixtureParams) =>
     prepareAuthFixture({
       provider: "openai",
@@ -131,7 +108,7 @@ export function createPreparationFixture(
     expectAuthError: (params: FixtureParams) => expect(() => prepare(params)),
   };
 }
-export function authModel(plan: AgentRuntimeAuthPlan): Model {
+export function authModel(plan: Pick<Plan, "modelRoute">): Model {
   const { api = platformRoute.api, baseUrl = platformRoute.baseUrl } = plan.modelRoute ?? {};
   return { ...platformModel, api, baseUrl };
 }

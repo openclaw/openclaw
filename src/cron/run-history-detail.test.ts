@@ -20,6 +20,7 @@ it.each([
   const entry = cronRunLogEntryFromEvent(
     { jobId: BASE.jobId, action: "finished", status: "ok", result },
     100,
+    undefined,
   );
   expect(entry.result).toEqual(result);
   expect(cronRunRecordToRunLogEntry(recordFromEntry(entry))?.result).toEqual(result);
@@ -83,24 +84,13 @@ it("allowlists legacy wire fields and retains row fallbacks", () => {
 });
 
 it.each([
-  ["error", undefined, undefined, "failed"],
-  ["ok", undefined, "delivered", "succeeded"],
-  ["ok", true, undefined, "succeeded"],
-  ["ok", undefined, "not-requested", "succeeded"],
-  ["ok", undefined, "not-delivered", "unknown"],
-] as const)(
-  "derives legacy %s/%s/%s completion as %s",
-  (status, delivered, deliveryStatus, expected) => {
-    expect(
-      parse({
-        status,
-        completionStatus: "partial",
-        ...(delivered === undefined ? {} : { delivered }),
-        ...(deliveryStatus === undefined ? {} : { deliveryStatus }),
-      })?.completionStatus,
-    ).toBe(expected);
-  },
-);
+  ["ok", "delivered", "succeeded"],
+  ["ok", "not-delivered", "unknown"],
+] as const)("derives legacy %s/%s completion as %s", (status, deliveryStatus, expected) => {
+  expect(parse({ status, completionStatus: "partial", deliveryStatus })?.completionStatus).toBe(
+    expected,
+  );
+});
 
 it("keeps quiet-trigger recovery detail out of run history", () => {
   const record = recordFromEntry({ ...BASE, status: "ok" });
@@ -144,7 +134,7 @@ it.each([
   },
 );
 
-it("authors failure reasons on write and trusts stored values on read", () => {
+it("preserves prepared failure reasons through history storage", () => {
   const entry = cronRunLogEntryFromEvent(
     {
       jobId: BASE.jobId,
@@ -154,6 +144,7 @@ it("authors failure reasons on write and trusts stored values on read", () => {
       provider: "anthropic",
     },
     1,
+    "overloaded",
   );
   expect(entry.errorReason).toBe("overloaded");
   expect(parseCronRunLogEntryObject(entry)?.errorReason).toBe("overloaded");

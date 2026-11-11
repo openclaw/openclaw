@@ -50,12 +50,18 @@ function registryPath(agentDir: string, env?: NodeJS.ProcessEnv, registering = f
     close: () => observations.forEach((observation) => observation.close()),
   };
   preparedPaths.set(pathname, prepared);
+  let observedThisTurn = false;
   // Each lexical ancestor can be a symlink replaced independently of the leaf.
   for (let child = pathname; path.dirname(child) !== child; child = path.dirname(child)) {
     const basename = path.basename(child);
     observations.push(
       observeOwnedDirectory(path.dirname(child), (filename) => {
-        if (filename === undefined || filename === basename) {
+        if (!observedThisTurn && (filename === undefined || filename === basename)) {
+          // One synchronous recovery sweep notifies every ancestor of this path.
+          observedThisTurn = true;
+          queueMicrotask(() => {
+            observedThisTurn = false;
+          });
           if (resolveIdentityPathViaExistingAncestorSync(pathname) === key) {
             return;
           }

@@ -6,12 +6,18 @@ import {
   errorShape,
   missingScopeErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import { DEDUPE_MAX } from "../server-constants.js";
 import { projectSessionFastModeEntryResult } from "../session-fast-mode-presentation.js";
 import type { GatewayInflightResult } from "./inflight.js";
 import { respondError } from "./response.js";
 import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestContext, GatewayRequestHandler, RespondFn } from "./types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandler,
+  GatewayRequestHandlerOptions,
+  RespondFn,
+} from "./types.js";
 
 type SessionCreateAuthorization = { role: string | null; scopes: readonly string[] };
 type SessionCreateEntry = {
@@ -28,7 +34,13 @@ const sessionCreatesByContext = new WeakMap<
   Map<string, Map<string, SessionCreateEntry>>
 >();
 
-export function idempotentSessionCreate(handler: GatewayRequestHandler): GatewayRequestHandler {
+export function idempotentSessionCreate(
+  handler: GatewayRequestHandler,
+  replay?: (
+    request: GatewayRequestHandlerOptions,
+    result: GatewayInflightResult,
+  ) => Promise<GatewayInflightResult>,
+): GatewayRequestHandler {
   return async (request) => {
     const respond: RespondFn = (...args) => {
       if (args[0] && args.length > 1) {
@@ -60,11 +72,7 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
       return;
     }
     const owner = principal ? `principal:${principal}` : `device:${deviceId}`;
-    let entriesByOwner = sessionCreatesByContext.get(request.context);
-    if (!entriesByOwner) {
-      entriesByOwner = new Map();
-      sessionCreatesByContext.set(request.context, entriesByOwner);
-    }
+    const entriesByOwner = getOrCreateWeakOwnerMap(sessionCreatesByContext, request.context);
     const now = Date.now();
     let retainedEntryCount = 0;
     for (const [entryOwner, ownerEntries] of entriesByOwner) {
@@ -117,8 +125,11 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
         );
         return;
       }
-      const result =
+      let result =
         existing.state.kind === "completed" ? existing.state.result : await existing.state.work;
+      if (replay && result.ok) {
+        result = await replay(request, result);
+      }
       respond(result.ok, result.payload, result.error, {
         ...result.meta,
         cached: true,

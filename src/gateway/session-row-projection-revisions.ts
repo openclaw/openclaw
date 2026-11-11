@@ -23,6 +23,7 @@ export function createSessionRowProjectionRevisions(
   let sharing: object | undefined;
   let selection: object | undefined;
   let taskPublication: object | undefined;
+  let changeScope: string | undefined;
   const selectionListeners = new Set<(change: SelectionChange) => void>();
   const factsListeners = new Set<(change: FactsChange) => void>();
   const publishFacts = (row?: Pick<Row, "key">) => {
@@ -51,7 +52,9 @@ export function createSessionRowProjectionRevisions(
           id: identity(row),
           key: row.key,
           agentId: row.agentId,
+          storePath: row.storeTarget.storePath,
           row: removed ? undefined : selectionRow(row),
+          ...(changeScope === undefined ? {} : { scope: changeScope }),
         }
       : { kind: "reset" };
     // Failed derived updates retire orders without interrupting accepted row maintenance.
@@ -60,6 +63,15 @@ export function createSessionRowProjectionRevisions(
     );
   };
   return {
+    withChangeScope<T>(scope: string | undefined, publish: () => T): T {
+      const previous = changeScope;
+      changeScope = scope;
+      try {
+        return publish();
+      } finally {
+        changeScope = previous;
+      }
+    },
     onSelectionChange(this: void, listener: (change: SelectionChange) => void) {
       selectionListeners.add(listener);
     },

@@ -1,0 +1,2 @@
+# Native PowerShell coverage for option terminators and required/optional operands.
+72

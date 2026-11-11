@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { sendDurableMessageBatch } from "../../plugin-sdk/channel-outbound.js";
 import { drainPendingDeliveries } from "../../plugin-sdk/delivery-queue-runtime.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -31,7 +32,6 @@ import {
   enqueuePreparedDeliveryOnce as publishPrepared,
   failDeliveryAfterPlatformSend as failAfterSend,
   findDeliveryIntentOwner,
-  findDeliveryIntentOwners,
   loadPendingDelivery,
   markDeliveryPlatformSendDispatched as markDispatched,
   reserveDeliveryAttempt,
@@ -220,7 +220,23 @@ describe("delivery queue entry state", () => {
 
       vi.stubEnv("OPENCLAW_HOME", originalDirectory);
       const context = claimRoot(originalRoot);
-      await enqueue(originalRoot);
+      const generation = {
+        agentId: "main",
+        storePath: path.join(originalRoot, "agent-sessions.json"),
+        sessionKey: "agent:main:dashboard:queued",
+        sessionId: "queued-session",
+        lifecycleRevision: "queued-lifecycle",
+      };
+      await replaceSessionEntry(generation, {
+        sessionId: generation.sessionId,
+        lifecycleRevision: generation.lifecycleRevision,
+        updatedAt: 1,
+      });
+      await enqueueDeliveryOnce(
+        { ...payload, sessionGeneration: generation },
+        queueId,
+        originalRoot,
+      );
       const duringSend = (input: object) => {
         expectPublicInput(input);
         ambient(otherState());
@@ -318,7 +334,13 @@ describe("delivery queue entry state", () => {
       await ackDelivery(id, undefined, { expectedPlatformSendAttemptId: claimId }, context);
       const mainSql = observeMainThreadSql();
       try {
-        expect(await findDeliveryIntentOwners([id, "missing", id], undefined, context)).toEqual([
+        expect(
+          await Promise.all(
+            [id, "missing", id].map((intentId) =>
+              findDeliveryIntentOwner(intentId, undefined, context),
+            ),
+          ),
+        ).toEqual([
           expect.objectContaining({ status: "completed" }),
           null,
           expect.objectContaining({ status: "completed" }),

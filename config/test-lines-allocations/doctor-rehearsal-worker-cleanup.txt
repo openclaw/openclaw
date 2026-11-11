@@ -1,0 +1,2 @@
+22
+# Join rehearsal fixture native resources before removing their temporary namespace.

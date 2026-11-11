@@ -132,7 +132,8 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 ## Runtime model
 
 - The gateway owns the WhatsApp socket and reconnect loop.
-- A watchdog tracks two signals independently: raw WhatsApp Web transport activity and application-message activity. A quiet-but-connected session is not restarted just because no message arrived recently; it forces reconnect only when transport frames stop arriving for a fixed internal window (not user-configurable) or application messages stay silent past 4x the normal message timeout. Right after a reconnect for a recently active session, that first window uses the shorter normal message timeout instead of the 4x window. OpenClaw can auto-reply to offline messages that Baileys delivers early in that reconnect, bounded by the inbound message-ID dedupe lifetime; initial startup keeps the short stale-history guard.
+- During reconnect or shutdown, pending last-route writes have up to 15 seconds to finish before connection teardown continues with a warning. The deadline does not cancel the writes.
+- A watchdog tracks two signals independently: raw WhatsApp Web transport activity and application-message activity. A quiet-but-connected session is not restarted just because no message arrived recently; it forces reconnect only when transport frames stop arriving for a fixed internal window (not user-configurable) or application messages stay silent past 4x the normal message timeout. Right after a reconnect for a recently active session, that first window uses the shorter normal message timeout instead of the 4x window. Established linked sessions can auto-reply to offline messages after startup or reconnect when they are at most 20 minutes old. The age cap also applies to later offline deliveries; completed message IDs are deduplicated across restarts, and normal DM/group access and mention rules still apply. Newly linked sessions keep the short stale-history guard until their next connection after the initial sync.
 - Outbound sends require an active WhatsApp listener for the target account; sends fail fast otherwise.
 - Group sends attach native mention metadata for `@+<digits>` and `@<digits>` tokens (in text and media captions) when the token matches current participant metadata, including LID-backed groups.
 - Status and broadcast chats (`@status`, `@broadcast`) are ignored.
@@ -621,6 +622,21 @@ openclaw channels status
 
   </Accordion>
 
+  <Accordion title="Connection remains locked after a crash">
+    An interrupted lock acquisition can leave an empty or malformed `<authDir>.lock` next to the account's auth directory. WhatsApp reports `whatsapp_connection_owner_busy`; `openclaw doctor` identifies locks without a valid owner PID and prints recovery guidance.
+
+    Doctor leaves ambiguous locks in place, including with `--fix`: an empty file can still belong to a suspended live process. Its age and the absence of an open file handle do not prove that it is abandoned.
+
+    For offline recovery:
+
+    1. Stop every process using that auth directory, including Gateways, login commands, standalone lookups, and processes on other hosts sharing the directory. Disable automatic restarts while repairing it, and verify that no owner remains running or suspended.
+    2. Move only the exact `.lock` sidecar reported by Doctor to a backup location outside the auth directory. Keep the account directory and its credentials unchanged. If you cannot establish that all owners have stopped, leave the lock in place.
+    3. Start one Gateway and run `openclaw channels status --probe` to check reconnection. Re-linking is not required solely to clear an orphaned ownership lock.
+
+    This is an explicit offline repair; OpenClaw does not reclaim empty locks automatically or by age.
+
+  </Accordion>
+
   <Accordion title="QR login times out behind a proxy">
     Symptom: `openclaw channels login --channel whatsapp` fails before showing a usable QR with `status=408 Request Time-out` or a TLS socket disconnect.
 
@@ -647,7 +663,7 @@ openclaw channels status
   </Accordion>
 
   <Accordion title="Bun runtime warning">
-    Node remains the primary and recommended Gateway runtime. Bun 1.4.3+ builds with WAL-reset-safe `node:sqlite` are supported as an explicit opt-in; doctor migrates only unsupported Bun services to Node.
+    Node remains the primary and recommended Gateway runtime. Bun 1.4.4+ builds with WAL-reset-safe `node:sqlite` are supported as an explicit opt-in; doctor migrates only unsupported Bun services to Node.
   </Accordion>
 </AccordionGroup>
 

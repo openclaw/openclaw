@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { callGateway } from "../../../gateway/call.js";
-import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { getAgentRunContext, hasLiveAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
@@ -185,6 +185,7 @@ export function registerArchiveCancellationTests({
   it("retains newly rearmed requester custody while superseded cleanup is awaiting", async () => {
     const mod = getRegistry();
     vi.mocked(getAgentRunContext).mockReturnValue({} as never);
+    vi.mocked(hasLiveAgentRunContext).mockReturnValue(true);
     const now = Date.now();
     const runId = "superseded-new-wake";
     const successorRunId = "superseded-new-wake-successor";

@@ -90,6 +90,9 @@ Each series lazily retains its rendered bytes; removing gauges or resetting the
 store releases their blocks. Changed series use a growing scratch buffer and refill
 their block when its length is unchanged, otherwise replacing it with an exact-size
 block. Every scrape copies the blocks into a fresh response buffer.
+Family HELP/TYPE bytes share the exporter-owned prefix chunks. One header per
+metric name is reused while its winning series' help and type stay unchanged;
+clearing gauges evicts that family's header, and reset clears all headers.
 Report the additional retained blocks alongside allocation savings.
 `scrape.bufferByteLength` records the transient response allocation; it is not
 included in sampled V8 heap allocation. After consuming a render in an owner phase,

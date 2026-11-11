@@ -49,7 +49,9 @@ type TalkTranscriptionRelayEvent = TalkTranscriptionRelayEventPayload & {
 type TranscriptionRelaySession = {
   id: string;
   connId: string;
+  sessionKey?: string;
   context: GatewayRequestContext;
+  assertCurrent: () => void;
   sttSession:
     | ReturnType<RealtimeTranscriptionProviderPlugin["createSession"]>
     | ReturnType<typeof createTalkFileTranscriptionSession>;
@@ -58,17 +60,21 @@ type TranscriptionRelaySession = {
   cleanupTimer: ReturnType<typeof setTimeout>;
   receivedAudio: boolean;
   draining: boolean;
+  releaseAuthority?: () => void;
 };
 
 type CreateTalkTranscriptionRelaySessionParams = {
   context: GatewayRequestContext;
   connId: string;
+  sessionKey?: string;
+  assertCurrent: () => void;
+  releaseAuthority?: () => void;
 } & (
   | {
       provider: RealtimeTranscriptionProviderPlugin;
       providerConfig: RealtimeTranscriptionProviderConfig;
     }
-  | { file: TalkFileTranscriptionConfig; assertCurrent: () => void }
+  | { file: TalkFileTranscriptionConfig }
 );
 
 const transcriptionSessions = new Map<string, TranscriptionRelaySession>();
@@ -109,7 +115,7 @@ function assertRelayInputAudioConfig(providerConfig: RealtimeTranscriptionProvid
 }
 
 function broadcastToOwner(
-  session: Pick<TranscriptionRelaySession, "id" | "context" | "connId" | "talk">,
+  session: Pick<TranscriptionRelaySession, "id" | "context" | "connId" | "talk" | "sessionKey">,
   event: TalkTranscriptionRelayEvent,
   talkEvent?: TalkEventInput,
 ): void {
@@ -121,7 +127,10 @@ function broadcastToOwner(
       ...(talkEvent ? { talkEvent: session.talk.emit(talkEvent) } : {}),
     },
     new Set([session.connId]),
-    { dropIfSlow: event.type === "inputAudio" || event.type === "partial" },
+    {
+      dropIfSlow: event.type === "inputAudio" || event.type === "partial",
+      ...(session.sessionKey ? { sessionKeys: [session.sessionKey] } : {}),
+    },
   );
 }
 
@@ -153,6 +162,7 @@ function closeTranscriptionSession(
   } finally {
     // Provider teardown may throw, but the owner-visible terminal event must
     // still complete so disconnect cleanup cannot leave ambiguous state.
+    session.releaseAuthority?.();
     broadcastToOwner(session, {
       type: "close",
       reason,
@@ -162,6 +172,15 @@ function closeTranscriptionSession(
         final: true,
       }),
     });
+  }
+}
+
+function assertTranscriptionAuthority(session: TranscriptionRelaySession): void {
+  try {
+    session.assertCurrent();
+  } catch (error) {
+    closeTranscriptionSession(session, "error");
+    throw error;
   }
 }
 
@@ -224,14 +243,30 @@ export function createTalkTranscriptionRelaySession(
     id: transcriptionSessionId,
     context: params.context,
     connId: params.connId,
+    sessionKey: params.sessionKey,
     talk,
   };
   const emit = (event: TalkTranscriptionRelayEvent, talkEvent?: TalkEventInput) =>
     broadcastToOwner(eventOwner, event, talkEvent);
   const relayRef: { current?: TranscriptionRelaySession } = {};
+  const assertCurrent = () => {
+    const relay = relayRef.current;
+    if (!relay || transcriptionSessions.get(transcriptionSessionId) !== relay) {
+      throw new Error("Transcription Talk session is no longer active");
+    }
+    params.assertCurrent();
+  };
   const getActiveRelay = (): TranscriptionRelaySession | undefined => {
     const relay = relayRef.current;
-    return relay && transcriptionSessions.get(relay.id) === relay ? relay : undefined;
+    if (!relay || transcriptionSessions.get(relay.id) !== relay) {
+      return undefined;
+    }
+    try {
+      assertTranscriptionAuthority(relay);
+      return relay;
+    } catch {
+      return undefined;
+    }
   };
   const onTranscript = (text: string, final: boolean) => {
     const relay = getActiveRelay();
@@ -258,6 +293,7 @@ export function createTalkTranscriptionRelaySession(
     }
   };
   const callbacks = {
+    assertCurrent,
     onSpeechStart: () => {
       const relay = getActiveRelay();
       if (!relay || relay.draining) {
@@ -277,7 +313,7 @@ export function createTalkTranscriptionRelaySession(
   };
   const sttSession =
     "file" in params
-      ? createTalkFileTranscriptionSession(params.file, callbacks, params.assertCurrent)
+      ? createTalkFileTranscriptionSession(params.file, callbacks, assertCurrent)
       : params.provider.createSession({
           cfg: params.context.getRuntimeConfig(),
           providerConfig: params.providerConfig,
@@ -286,7 +322,9 @@ export function createTalkTranscriptionRelaySession(
   const relay: TranscriptionRelaySession = {
     id: transcriptionSessionId,
     connId: params.connId,
+    sessionKey: params.sessionKey,
     context: params.context,
+    assertCurrent,
     sttSession,
     talk,
     expiresAtMs,
@@ -298,6 +336,7 @@ export function createTalkTranscriptionRelaySession(
     }, TRANSCRIPTION_SESSION_TTL_MS).unref(),
     receivedAudio: false,
     draining: false,
+    releaseAuthority: params.releaseAuthority,
   };
   relayRef.current = relay;
   transcriptionSessions.set(transcriptionSessionId, relay);
@@ -307,7 +346,7 @@ export function createTalkTranscriptionRelaySession(
   sttSession
     .connect()
     .then(() => {
-      if (transcriptionSessions.get(transcriptionSessionId) !== relay || relay.draining) {
+      if (getActiveRelay() !== relay || relay.draining) {
         return;
       }
       emit({ type: "ready" }, { type: "session.ready", payload: null });
@@ -362,6 +401,7 @@ export function sendTalkTranscriptionRelayAudio(params: {
   }
   const session = getTranscriptionSession(params.transcriptionSessionId, params.connId);
   const audio = decodeTalkRelayAudioBase64(params.audioBase64, "Transcription Talk");
+  assertTranscriptionAuthority(session);
   const turnId = ensureTranscriptionTurn(session);
   try {
     session.sttSession.sendAudio(audio);
@@ -401,6 +441,7 @@ export function stopTalkTranscriptionRelaySession(params: {
     closeTranscriptionSession(session, "completed");
     return;
   }
+  assertTranscriptionAuthority(session);
   if (turnId) {
     broadcastToOwner(session, {
       type: "transcript",

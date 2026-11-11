@@ -1,10 +1,13 @@
 // Capture and first-read runtime/source plugin policy with 40 plugins per snapshot.
 // Build each reviewed revision: node scripts/perf/plugin-config-publication-measure.mjs --build ROOT BUNDLE
-// Measure: node --expose-gc scripts/perf/plugin-config-publication-measure.mjs BUNDLE timing|allocation [2000] [capture|sdk|mixed]
+// Measure: node --expose-gc scripts/perf/plugin-config-publication-measure.mjs BUNDLE timing|allocation [2000] [capture|sdk|mixed|frozen-source]
+// Without a build: node --expose-gc --import ./scripts/tsx.mjs scripts/perf/plugin-config-publication-measure.mjs --source ROOT timing 2000 frozen-source
 // Each operation includes capture/cloning, then the selected core and SDK reads
 // for both frozen revisions (default mixed). Compare alternating baseline/candidate
 // runs, separating allocation instrumentation from timing; this is owner-level proof,
 // not a whole-Gateway latency measurement. Keep HOME/state isolated on benchmark hosts.
+// frozen-source repeatedly captures one already-frozen authored source; publication
+// and the first capture run before measurement, as they do before warm loader reads.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -26,6 +29,7 @@ if (process.argv[2] === "--build") {
         export { createPluginActivationSource } from './src/plugins/config-state.js';
         export { captureRuntimeConfigWithSource, getRuntimeConfigCapture } from './src/config/runtime-config-capture-state.js';
         export { resolvePluginConfigObject } from './src/plugin-sdk/plugin-config-runtime.js';
+        export { freezeJsonSnapshot } from './src/shared/immutable-data.js';
       `,
       resolveDir: root,
       loader: "ts",
@@ -41,17 +45,31 @@ if (process.argv[2] === "--build") {
   process.exit(0);
 }
 
-const [bundle, mode, count = "2000", workload = "mixed"] = process.argv.slice(2);
+const fromSource = process.argv[2] === "--source";
+const [bundle, mode, count = "2000", workload = "mixed"] = process.argv.slice(fromSource ? 3 : 2);
 assert(
   bundle && ["timing", "allocation"].includes(mode),
-  "Usage: BUNDLE timing|allocation [2000] [capture|sdk|mixed]",
+  "Usage: BUNDLE | --source ROOT timing|allocation [2000] [capture|sdk|mixed|frozen-source]",
 );
-assert(["capture", "sdk", "mixed"].includes(workload));
+assert(["capture", "sdk", "mixed", "frozen-source"].includes(workload));
 assert(global.gc, "Run with --expose-gc");
 assert(!process.execArgv.some((arg) => arg.startsWith("--trace-gc")), "Use untraced runs");
 const operations = Number(count);
 assert(Number.isSafeInteger(operations) && operations > 0);
-const owner = await import(pathToFileURL(path.resolve(bundle)).href);
+const entrypoints = [
+  "src/plugins/config-state.ts",
+  "src/config/runtime-config-capture-state.ts",
+  "src/plugin-sdk/plugin-config-runtime.ts",
+  "src/shared/immutable-data.ts",
+];
+const owner = fromSource
+  ? Object.assign(
+      {},
+      ...(await Promise.all(
+        entrypoints.map((file) => import(pathToFileURL(path.resolve(bundle, file)).href)),
+      )),
+    )
+  : await import(pathToFileURL(path.resolve(bundle)).href);
 const configFor = (revision) => ({
   plugins: {
     allow: Array.from({ length: 40 }, (_, i) => `plugin-${i}`),
@@ -70,8 +88,19 @@ const configFor = (revision) => ({
 });
 const sourceConfig = configFor(1);
 const runtimeConfig = configFor(2);
+if (workload === "frozen-source") {
+  owner.freezeJsonSnapshot(sourceConfig);
+  const captured = owner.captureRuntimeConfigWithSource(sourceConfig, sourceConfig);
+  assert.equal(owner.getRuntimeConfigCapture(captured).source, captured);
+  assert.deepEqual(captured, sourceConfig);
+}
 let checksum = 0;
 function operation() {
+  if (workload === "frozen-source") {
+    const captured = owner.captureRuntimeConfigWithSource(sourceConfig, sourceConfig);
+    checksum += captured.plugins.entries[" PLUGIN-0 "].config.revision;
+    return;
+  }
   const captured = owner.captureRuntimeConfigWithSource(runtimeConfig, sourceConfig);
   const capturedSource = owner.getRuntimeConfigCapture(captured).source;
   if (workload === "capture") {
@@ -93,7 +122,7 @@ function operation() {
       Number(source.entries["plugin-0"].config === sourcePayload);
   }
 }
-const expectedPerOp = workload === "mixed" ? 24 : 21;
+const expectedPerOp = workload === "frozen-source" ? 1 : workload === "mixed" ? 24 : 21;
 for (let i = 0; i < 100; i++) {
   operation();
 }
@@ -142,13 +171,29 @@ const gcMs = gc.reduce((total, entry) => total + entry.duration, 0);
 const cpuMs = (cpu.user + cpu.system) / 1000;
 console.log(
   JSON.stringify({
-    bundle: path.resolve(bundle),
-    bundleSha256: createHash("sha256").update(readFileSync(bundle)).digest("hex"),
+    ...(fromSource
+      ? {
+          sourceRoot: path.resolve(bundle),
+          entrypointSha256: Object.fromEntries(
+            entrypoints.map((file) => [
+              file,
+              createHash("sha256")
+                .update(readFileSync(path.resolve(bundle, file)))
+                .digest("hex"),
+            ]),
+          ),
+        }
+      : {
+          bundle: path.resolve(bundle),
+          bundleSha256: createHash("sha256").update(readFileSync(bundle)).digest("hex"),
+        }),
     mode,
     workload,
     operations,
-    captures: operations * 2,
-    policyReads: operations * (workload === "capture" ? 0 : workload === "sdk" ? 2 : 4),
+    captures: operations * (workload === "frozen-source" ? 1 : 2),
+    policyReads:
+      operations *
+      (workload === "capture" || workload === "frozen-source" ? 0 : workload === "sdk" ? 2 : 4),
     checksum,
     wallMs: endedAt - startedAt,
     cpuMs,

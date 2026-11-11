@@ -1,8 +1,6 @@
 import { vi } from "vitest";
-import {
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-} from "../chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "../chat-application-context.test-support.ts";
+import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import type { SessionWorkspaceHost } from "./chat-session-workspace-types.ts";
 
 export function createSessionWorkspaceHost(
@@ -10,6 +8,7 @@ export function createSessionWorkspaceHost(
 ): SessionWorkspaceHost {
   return {
     sessionKey: "agent:main:files",
+    sessionWorkspaceReadDisabledReason: null,
     connectionEpoch: 1,
     connected: true,
     client: overrides.client ?? createGatewayBrowserClientFixture(),

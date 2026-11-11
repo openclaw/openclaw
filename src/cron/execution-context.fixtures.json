@@ -38,6 +38,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
         "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -85,6 +87,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
         "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -154,6 +158,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
         "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -223,6 +229,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "equal",
         "automations": "equal",
+        "automationsCli": "loss",
+        "requesterYield": "loss",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -287,6 +295,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
         "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -347,6 +357,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
         "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -394,6 +406,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
         "automations": "equal",
+        "automationsCli": "equal",
+        "requesterYield": "equal",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -463,6 +477,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
         "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -518,6 +534,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
         "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -566,6 +584,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "equal",
         "automations": "equal",
+        "automationsCli": "loss",
+        "requesterYield": "loss",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -613,6 +633,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "equal",
         "automations": "equal",
+        "automationsCli": "loss",
+        "requesterYield": "loss",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -660,6 +682,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "equal",
         "automations": "equal",
+        "automationsCli": "loss",
+        "requesterYield": "loss",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -715,6 +739,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "equal",
         "automations": "equal",
+        "automationsCli": "loss",
+        "requesterYield": "loss",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -792,6 +818,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "equal",
         "automations": "equal",
+        "automationsCli": "loss",
+        "requesterYield": "loss",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -834,6 +862,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
         "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -881,6 +911,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
         "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -949,6 +981,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
         "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -1018,6 +1052,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
         "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -1093,6 +1129,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
         "automations": "equal",
+        "automationsCli": "equal",
+        "requesterYield": "equal",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -1168,6 +1206,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
         "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -1242,6 +1282,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
         "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -1309,6 +1351,8 @@
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
         "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "equal",
@@ -1396,7 +1440,9 @@
         "admissionSource": "equal",
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
-        "automations": "gain-intended",
+        "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "retarget",
         "eventTarget": "retarget",
         "memory": "gain-intended",
@@ -1484,7 +1530,9 @@
         "admissionSource": "equal",
         "ownerEmbedded": "equal",
         "ownerCli": "equal",
-        "automations": "gain-intended",
+        "automations": "equal",
+        "automationsCli": "loss",
+        "requesterYield": "loss",
         "board": "equal",
         "eventTarget": "equal",
         "memory": "gain-intended",
@@ -1571,7 +1619,9 @@
         "admissionSource": "equal",
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
-        "automations": "gain-intended",
+        "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "retarget",
         "eventTarget": "retarget",
         "memory": "gain-intended",
@@ -1658,7 +1708,9 @@
         "admissionSource": "equal",
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
-        "automations": "gain-intended",
+        "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "retarget",
         "eventTarget": "retarget",
         "memory": "gain-intended",
@@ -1745,7 +1797,9 @@
         "admissionSource": "equal",
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
-        "automations": "gain-intended",
+        "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "retarget",
         "eventTarget": "retarget",
         "memory": "gain-intended",
@@ -1797,7 +1851,9 @@
         "admissionSource": "equal",
         "ownerEmbedded": "equal",
         "ownerCli": "gain-intended",
-        "automations": "gain-intended",
+        "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "retarget",
         "eventTarget": "retarget",
         "memory": "gain-intended",
@@ -1880,6 +1936,8 @@
         "ownerEmbedded": "loss",
         "ownerCli": "equal",
         "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
         "board": "retarget",
         "eventTarget": "retarget",
         "memory": "gain-intended",
@@ -1893,6 +1951,293 @@
       "archived": false,
       "sandboxRequired": false,
       "chatType": "direct"
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-30",
+      "agentId": "main",
+      "name": "fixture 30",
+      "enabled": true,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "current",
+      "sessionKey": "agent:main:dashboard:session-1",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture"
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "inferenceBinding": {
+        "version": 1,
+        "provider": "anthropic",
+        "profileId": "provider:profile",
+        "authorizationId": "authorization",
+        "authRequirement": "api-key",
+        "source": "auto"
+      }
+    },
+    "inferenceRuntimes": {
+      "legacy": "claude-cli"
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "operator",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "ownerCli": "gain-intended",
+        "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal",
+        "inference": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-31",
+      "agentId": "main",
+      "name": "fixture 31",
+      "enabled": true,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "current",
+      "sessionKey": "agent:main:dashboard:session-1",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture"
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "inferenceBinding": {
+        "version": 1,
+        "provider": "anthropic",
+        "profileId": "provider:profile",
+        "authorizationId": "authorization",
+        "authRequirement": "api-key",
+        "source": "auto",
+        "runtime": "claude-cli"
+      }
+    },
+    "inferenceRuntimes": {
+      "legacy": "openclaw"
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "operator",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "ownerCli": "gain-intended",
+        "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal",
+        "inference": "retarget"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-32",
+      "agentId": "main",
+      "name": "fixture 32",
+      "enabled": true,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "current",
+      "sessionKey": "agent:main:dashboard:session-1",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture"
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "inferenceBinding": {
+        "version": 1,
+        "provider": "anthropic",
+        "profileId": "provider:profile",
+        "authorizationId": "authorization",
+        "authRequirement": "api-key",
+        "source": "auto",
+        "runtime": "claude-cli"
+      }
+    },
+    "inferenceRuntimes": {
+      "legacy": "claude-cli"
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "operator",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "ownerCli": "gain-intended",
+        "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal",
+        "inference": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-33",
+      "agentId": "main",
+      "name": "fixture 33",
+      "enabled": true,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "current",
+      "sessionKey": "agent:main:dashboard:session-1",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture"
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "inferenceBinding": {
+        "version": 1,
+        "provider": "anthropic",
+        "profileId": "provider:profile",
+        "authorizationId": "authorization",
+        "authRequirement": "api-key",
+        "source": "auto",
+        "runtime": "claude-cli"
+      }
+    },
+    "inferenceRuntimes": {
+      "legacy": "claude-cli",
+      "models": {
+        "legacy": "anthropic/claude-opus-4-6",
+        "context": "anthropic/claude-opus-4-6"
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "operator",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "ownerCli": "gain-intended",
+        "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal",
+        "inference": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-34",
+      "agentId": "main",
+      "name": "fixture 34",
+      "enabled": true,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "current",
+      "sessionKey": "agent:main:dashboard:session-1",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture"
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "inferenceBinding": {
+        "version": 1,
+        "provider": "anthropic",
+        "profileId": "provider:profile",
+        "authorizationId": "authorization",
+        "authRequirement": "api-key",
+        "source": "auto",
+        "runtime": "claude-cli"
+      }
+    },
+    "inferenceRuntimes": {
+      "legacy": "claude-cli",
+      "models": {
+        "legacy": "anthropic/claude-sonnet-4-6",
+        "context": "anthropic/claude-opus-4-6"
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "operator",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "ownerCli": "gain-intended",
+        "automations": "equal",
+        "automationsCli": "gain-intended",
+        "requesterYield": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal",
+        "inference": "retarget"
+      }
     }
   }
 ]

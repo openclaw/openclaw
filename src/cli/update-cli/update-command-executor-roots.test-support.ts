@@ -40,7 +40,9 @@ export function registerExecutorRootOwnershipTests(
       let mutated = false;
       const work = withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(root, { serviceRoot });
-        expect(captureUpdateCommandExecutorAuthority(fence).installKey).toBe(root);
+        const authority = captureUpdateCommandExecutorAuthority(fence);
+        expect(authority.installKey).toBe(root);
+        expect(Object.isFrozen(authority)).toBe(true);
         for (const admitted of [root, serviceRoot]) {
           expect(store.acquire(admitted, "contender", { kind: "update" }).kind).toBe("busy");
         }

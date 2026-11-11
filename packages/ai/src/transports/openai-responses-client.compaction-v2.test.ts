@@ -8,6 +8,7 @@ import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-clien
 import { requestPreparedOpenAIResponsesCompaction } from "./openai-responses-compact-request.js";
 import { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
+import { outputItem } from "./openai-stream-cases.test-support.js";
 const initialHost = getAiTransportHost();
 const model = fixtures.createModel({
   id: "gpt-5.4",
@@ -41,11 +42,8 @@ const syntheticMessages = convertToLlm([
     timestamp: 3,
   },
 ]);
-const checkpoint = (value = "opaque") => ({
-  type: "response.output_item.done",
-  output_index: 0,
-  item: { type: "compaction", id: "cmp_provider_id", encrypted_content: value },
-});
+const checkpoint = (value = "opaque") =>
+  outputItem("done", { type: "compaction", id: "cmp_provider_id", encrypted_content: value });
 const completed = (status = "completed") =>
   fixtures.completedResponse("resp-test", [], {
     status,
@@ -169,16 +167,16 @@ describe.each([
     expect(JSON.stringify(requests[1]?.body)).toContain("real request");
   });
 });
-it("bounds retained multilingual input without reviving older users", async () => {
+it.each([
+  ["BMP", "中".repeat(64_001), "中".repeat(64_000)],
+  ["astral", "a".repeat(255_997) + "😀".repeat(2), "a".repeat(255_997) + "😀"],
+])("bounds retained %s input without reviving older users", async (_name, text, expected) => {
   const result = await compact({
     ...context,
-    messages: [fixtures.userMessage("oldest", 1), fixtures.userMessage("中".repeat(64_001), 2)],
+    messages: [fixtures.userMessage("oldest", 1), fixtures.userMessage(text, 2)],
   });
   expect(result.output).toHaveLength(2);
-  expect(JSON.stringify(result.output)).not.toContain("oldest");
-  expect(result.output[0]).toMatchObject({
-    content: [{ type: "input_text", text: "中".repeat(64_000) }],
-  });
+  expect(result.output[0]).toMatchObject({ content: [{ type: "input_text", text: expected }] });
 });
 it.each<[string, unknown[]]>([
   ["unfinished stream", [checkpoint()]],

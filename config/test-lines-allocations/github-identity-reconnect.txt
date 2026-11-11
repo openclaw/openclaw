@@ -1,0 +1,4 @@
+# PR #180200: capability-negotiated GitHub reconnect regression coverage.
+# Covers stable tool listings versus live policy, legacy/mobile clients,
+# Gateway action negotiation, and requester-only settings navigation.
+250

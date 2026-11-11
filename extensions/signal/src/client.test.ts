@@ -80,6 +80,59 @@ it.each([
   }
 });
 
+it.each(["", 'event: receive\ndata: {"envelope":{}}\n\n'])(
+  "reports a cleanly closed HTTP event stream as a lost connection (%j)",
+  async (body) => {
+    const abort = new AbortController();
+    const runtime = createRuntimeSpies();
+    const statusSink = vi.fn<SignalStatusSink>((patch) => {
+      if (patch.lifecycle === "recovering") {
+        abort.abort();
+      }
+    });
+    await runSignalSseLoop({
+      baseUrl: await sse(body),
+      abortSignal: abort.signal,
+      runtime,
+      onEvent: vi.fn(),
+      statusSink,
+    });
+
+    expect(statusSink).toHaveBeenLastCalledWith({
+      lifecycle: "recovering",
+      connected: false,
+      lastError: expect.stringContaining("Signal daemon closed the event stream"),
+    });
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Signal connection lost"));
+  },
+);
+
+it("keeps an idle HTTP stream quiet through intentional shutdown", async () => {
+  const abort = new AbortController();
+  const runtime = createRuntimeSpies();
+  const statusSink = vi.fn<SignalStatusSink>((patch) => {
+    if (patch.lifecycle === "ready") {
+      abort.abort();
+    }
+  });
+  const baseUrl = await withSignalServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.flushHeaders();
+  });
+  await runSignalSseLoop({
+    baseUrl,
+    abortSignal: abort.signal,
+    runtime,
+    onEvent: vi.fn(),
+    statusSink,
+  });
+
+  expect(statusSink).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ lifecycle: "ready", connected: true }),
+  );
+  expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("connection lost"));
+});
+
 describe("signalRpcRequest", () => {
   it.each([false, true])(
     "prepares the HTTP handoff and rechecks its caller after waiting (revoked=%s)",

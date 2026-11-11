@@ -34,7 +34,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const textarea = page.locator(".agent-chat__composer-combobox > textarea");
       await textarea.waitFor();
       await waitForChatScrollIdle(page);

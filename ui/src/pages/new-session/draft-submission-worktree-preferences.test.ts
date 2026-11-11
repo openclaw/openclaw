@@ -56,13 +56,24 @@ it.each([
     });
     controls.onThinkingSelect?.("high", controls.sessionKey);
     controls.onFastModeSelect?.(fastMode === true ? "on" : fastMode, controls.sessionKey);
-    const selected = { model: "openai/gpt-5.6-sol", thinkingLevel: "high", fastMode };
+    controls.onAccessProgramSelect?.("daybreak_red", controls.sessionKey);
+    const selected = {
+      model: "openai/gpt-5.6-sol",
+      thinkingLevel: "high",
+      fastMode,
+      ...(identified ? { cyberAccessProgram: "daybreak_red" } : {}),
+    };
     await expectSaved(prefs, selected);
     admitted.resolve(acceptedWorktreeSession);
     await submitting;
     expectWorktreeName(next.place);
     expect(prefs.stored()).toMatchObject({ ...selected, worktree: true, baseRef: "main" });
-    expect(control).toMatchObject({ selected: selected.model, thinkingLevel: "high", fastMode });
+    expect(control).toMatchObject({
+      selected: selected.model,
+      thinkingLevel: "high",
+      fastMode,
+      cyberAccessProgram: "daybreak_red",
+    });
   },
 );
 
@@ -494,6 +505,7 @@ it.each(["accepted clear", "ordinary edit"] as const)(
       await Promise.all(writes.mock.results.map((result) => result.value));
       expect(first.context.sessions.createResult).not.toHaveBeenCalled();
       expect(warning).toHaveBeenCalledExactlyOnceWith({
+        severity: "error",
         message:
           "Saving your new-session choices could not be confirmed. Check them before starting a session.",
       });

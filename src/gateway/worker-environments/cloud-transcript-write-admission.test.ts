@@ -93,8 +93,7 @@ describe("cloud transcript write admission", () => {
       const environment = launcher.attachedEnvironment();
       const tunnel = launcher.createWorkerTurnTunnel({
         launchTurn: launch,
-        quiesceWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(launcher.reconcileUnchangedLocalWorkspace),
       });
       const provider = launcher.createWorkerSessionTurnPlacementProvider({
         placements,

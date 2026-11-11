@@ -14,6 +14,7 @@ import {
   testModel,
 } from "../sessions/agent-session-loop-correctness.test-support.js";
 import { createCompactionRequestBudget } from "../sessions/compaction/request-budget.js";
+import { createFreshLlmBoundaryTokenEstimator } from "../sessions/context-token-pressure.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
@@ -639,7 +640,11 @@ describe("recoverEmbeddedRunOverflow", () => {
       if (!session.isCompacting) {
         expect(JSON.stringify(context.messages)).not.toContain(oversized);
         expect(JSON.stringify(context.messages)).toContain("copper");
-        expect(Math.ceil(JSON.stringify(context).length / 4)).toBeLessThan(contextWindow - 10_000);
+        // Prepared system-prompt copies are a derived cache, not additional provider input.
+        const estimateTokens = createFreshLlmBoundaryTokenEstimator(context);
+        expect(estimateTokens({ messages: context.messages, prompt: "" })).toBeLessThan(
+          contextWindow - 10_000,
+        );
       }
       return createAssistantResultStream(createAssistant(model, [{ type: "text", text }]));
     });

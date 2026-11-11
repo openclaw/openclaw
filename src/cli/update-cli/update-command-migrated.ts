@@ -88,6 +88,7 @@ export async function inspectActivatedUpdateState(
       nodeRunner: params.packageUpdateNodeRunner,
       timeoutMs: params.timeoutMs,
       includeRetainedAgentPaths: true,
+      preserveSourceArtifacts: true,
       onInventory: (files) => {
         for (const database of files.values()) {
           if (
@@ -357,13 +358,22 @@ export async function continueMigratedUpdateInFreshProcess(
     if (pendingStderr.byteLength > 0) {
       process.stderr.write(pendingStderr);
     }
-    const response = JSON.parse(
-      await fs.readFile(resultPath, "utf8"),
-    ) as MigratedUpdateFinalizationResult; // SAFETY: Only the candidate worker launched above writes this private artifact.
+    const unconfirmed = "Update finalization did not confirm the admitted run's terminal outcome";
+    // A failed worker may never write its result; report its exit, not the missing file.
+    if (child.termination !== "exit" || child.code !== 0 || child.cleanup !== "normal") {
+      throw new Error(
+        `${unconfirmed}: worker termination=${child.termination}, code=${child.code}, signal=${child.signal}, cleanup=${child.cleanup ?? "unknown"}.`,
+      );
+    }
+    let response: MigratedUpdateFinalizationResult;
+    try {
+      response = JSON.parse(
+        await fs.readFile(resultPath, "utf8"),
+      ) as MigratedUpdateFinalizationResult; // SAFETY: Only the candidate worker launched above writes this private artifact.
+    } catch (cause) {
+      throw new Error(`${unconfirmed}: the worker exited without a readable result.`, { cause });
+    }
     if (
-      child.termination !== "exit" ||
-      child.code !== 0 ||
-      child.cleanup !== "normal" ||
       (executorFence && response.executorDelegation !== "pid-start-v1") ||
       (response.terminalRunId !== run.runId &&
         !(
@@ -375,7 +385,7 @@ export async function continueMigratedUpdateInFreshProcess(
       response.result.runId !== run.runId ||
       !Number.isInteger(response.exitCode)
     ) {
-      throw new Error("Update finalization did not confirm the admitted run's terminal outcome.");
+      throw new Error(`${unconfirmed}.`);
     }
     const finalization = {
       result: response.result,

@@ -521,6 +521,47 @@ describe("prepared model runtime scoped refresh", () => {
     containsEntries(published(config).readFullModelCatalog!()?.entries, unrelated);
   });
 
+  it.each([undefined, ["demo"]])(
+    "defers headless inventory until its first request and keeps reloads scoped (%j)",
+    async (providerIds) => {
+      mocks.configuredAgentIds = ["pro"];
+      mocks.authStorage.getAll.mockReturnValue({
+        demo: { type: "api_key", key: "startup-synthetic-credential" },
+      });
+      const config: OpenClawConfig = {
+        ...proConfig,
+        gateway: { controlUi: { enabled: false } },
+      };
+      const unrelated = entry("unrelated", "found", "Found");
+      serveCatalog(makeCatalog([entry("demo", "learned", "Learned"), unrelated]));
+      await refreshPreparedModelRuntimeSnapshots(config, gatewayOptions);
+      expect(catalogWorker).not.toHaveBeenCalled();
+
+      await published(config).loadFullModelCatalog!(
+        providerIds ? { refresh: true, wait: true, providerIds } : { changedOnly: true },
+      );
+      await vi.waitFor(() => expect(catalogWorker).toHaveBeenCalledExactlyOnceWith(providerIds));
+      if (providerIds) {
+        expect(published(config).readFullModelCatalog!()?.entries).not.toContainEqual(unrelated);
+        await published(config).loadFullModelCatalog!({ changedOnly: true });
+        await vi.waitFor(() => expect(catalogWorker).toHaveBeenLastCalledWith(undefined));
+      }
+      await vi.waitFor(() =>
+        containsEntries(published(config).readFullModelCatalog!()?.entries, unrelated),
+      );
+      const acquisitions = catalogWorker.mock.calls.length;
+      containsEntries(published(config).readFullModelCatalog!()?.entries, unrelated);
+
+      mocks.authStorage.getAll.mockReturnValue({
+        demo: { type: "api_key", key: "replacement-synthetic-credential" },
+      });
+      await refreshPreparedModelRuntimeSnapshots(config, gatewayOptions);
+      await vi.waitFor(() => expect(catalogWorker).toHaveBeenCalledTimes(acquisitions + 1));
+      expect(catalogWorker).toHaveBeenLastCalledWith(["demo"]);
+      containsEntries(published(config).readFullModelCatalog!()?.entries, unrelated);
+    },
+  );
+
   it.each(["endpoint", "plugin", "prepared-credential"] as const)(
     "invalidates retained discovery after the %s identity changes",
     async (change) => {

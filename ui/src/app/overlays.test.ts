@@ -45,7 +45,7 @@ const successfulRequest = () =>
 const isDecision = (method: string) => method.endsWith(".resolve");
 const replyRequest = (response: Promise<unknown>) =>
   vi.fn<RequestFn>((method) => (method.endsWith(".list") ? Promise.resolve([]) : response));
-const reviewOnly = "You don’t have permission to approve.";
+const reviewOnly = "You need approval access to approve.";
 const failed = "Approval failed: gateway unavailable";
 function pendingRequests(matches: string | ((method: string) => boolean)) {
   const first = deferred<unknown>();

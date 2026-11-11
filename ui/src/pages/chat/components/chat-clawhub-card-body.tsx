@@ -5,7 +5,11 @@ import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-re
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerPluginManagementEnglish } from "../../../i18n/locales/en-plugin-management.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
-import { loadPluginDiscoveryDetail } from "../../../lib/plugins/index.ts";
+import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
+import {
+  loadPluginDiscoveryDetail,
+  type PluginsInspectResult,
+} from "../../../lib/plugins/index.ts";
 import { useApplication } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ClawHubSkillDetail } from "../../../lib/skills/index.ts";
@@ -26,7 +30,12 @@ type CardPresentation = Pick<
   author?: string;
   official: boolean;
 };
-type CardStatus = CardPresentation & { installed: boolean; canInstall: boolean };
+type CardStatus = CardPresentation & {
+  installed: boolean;
+  canInstall: boolean;
+  /** An installed plugin still has an account this operator can sign in to. */
+  needsSignIn: boolean;
+};
 type StatusRead =
   | { status: "empty" }
   | { status: "ready"; result: CardStatus }
@@ -162,6 +171,17 @@ export function ChatClawHubCardBody(
             if (card.kind === "plugin") {
               const { plugin } = await loadPluginDiscoveryDetail(client, card.id, signal);
               signal.throwIfAborted();
+              const pluginId = plugin.local.installed ? plugin.local.pluginId : undefined;
+              // The plugin page owns sign-in; only offer it where that page can start it.
+              const inspection =
+                pluginId && canCallGatewayMethod(snapshot, "mcp.authLogin", "operator.admin")
+                  ? await client.request<PluginsInspectResult>(
+                      "plugins.inspect",
+                      { pluginId },
+                      { signal },
+                    )
+                  : undefined;
+              signal.throwIfAborted();
               return {
                 ...card,
                 name: plugin.catalog.name,
@@ -172,6 +192,9 @@ export function ChatClawHubCardBody(
                 official: plugin.catalog.official,
                 installed: plugin.local.installed,
                 canInstall: plugin.catalog.official && plugin.local.action === "install",
+                needsSignIn: Boolean(
+                  inspection?.mcpAuth?.some((server) => server.state !== "authorized"),
+                ),
               };
             }
             if (!agentId) {
@@ -202,6 +225,7 @@ export function ChatClawHubCardBody(
               official: detail.skill.isOfficial === true,
               installed,
               canInstall: detail.skill.isOfficial === true && !installed,
+              needsSignIn: false,
             };
           })();
           if (!current()) {
@@ -376,10 +400,23 @@ export function ChatClawHubCardBody(
                         </>
                       }
                     >
-                      <span class="chip chip-ok chat-clawhub-card__installed">
-                        <Icon name="check" />
-                        <span>{t("pluginsPage.installed")}</span>
-                      </span>
+                      <Show
+                        when={result().needsSignIn}
+                        fallback={
+                          <span class="chip chip-ok chat-clawhub-card__installed">
+                            <Icon name="check" />
+                            <span>{t("pluginsPage.installed")}</span>
+                          </span>
+                        }
+                      >
+                        <button
+                          type="button"
+                          class="btn primary chat-clawhub-card__sign-in"
+                          onClick={() => props.onOpenListing()}
+                        >
+                          {t("chat.clawhub.signIn")}
+                        </button>
+                      </Show>
                     </Show>
                   )}
                 </Show>

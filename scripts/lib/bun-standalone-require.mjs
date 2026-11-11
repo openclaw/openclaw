@@ -96,7 +96,7 @@ export function createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths, plu
         if (typeof specifier !== "string") return Reflect.apply(target, receiver, [specifier, ...rest]);
         if (Object.hasOwn(builtinRequires, specifier)) return builtinRequires[specifier]();
         const resolved = globalThis.__openclawStandaloneNativeResolve(parent, specifier);
-        // AOT dynamic require refuses non-image modules; admitted addons use the native loader.
+        // Admitted native addons keep their physical paths and use the native loader.
         if (resolved?.endsWith(".node")) {
           if (require.cache[resolved]) return require.cache[resolved].exports;
           const module = new (require("node:module").Module)(resolved);
@@ -112,13 +112,7 @@ export function createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths, plu
           }
         }
         const entry = embedded(specifier) ?? embedded(resolved ?? imageFilename(specifier) ?? target.resolve(specifier));
-        const loaded = ${
-          pluginLoader
-            ? `!entry && globalThis.__openclawStandaloneBuildInfo.mode === "aot"
-          ? loadStandalonePluginRuntime().loadModule(parent, resolved ?? specifier)
-          : `
-            : ""
-        }Reflect.apply(target, receiver, [entry ?? resolved ?? specifier, ...rest]);
+        const loaded = entry ? import.meta.require(entry) : Reflect.apply(target, receiver, [resolved ?? specifier, ...rest]);
         return entry && commonJsEntries.has(entry) ? loaded.default ?? loaded : loaded;
       }
     });
@@ -137,4 +131,67 @@ globalThis.openclawStandaloneLoadJitiFactory = () => loadStandalonePluginRuntime
     : ""
 }`,
   };
+}
+
+/** Transfer compiled exports to interpreted plugins without reading virtual source files. */
+export function createStandaloneExternalModuleBootstrap() {
+  return `const imageNamespace = "openclaw-image";
+globalThis.__openclawStandaloneExternalModulePath = (filename) => {
+  // The compiled require adapter already passes image paths to the native loader.
+  if (filename.startsWith("/$bunfs/")) return undefined;
+  const entry = embedded(filename);
+  if (entry) ensureImageExports();
+  return entry ? imageNamespace + ":" + entry : undefined;
+};
+globalThis.__openclawStandaloneExternalModuleResolution = (filename) => {
+  const entry = embedded(filename);
+  if (entry) ensureImageExports();
+  return { path: entry ?? filename, namespace: entry ? imageNamespace : "file" };
+};
+let imageExportsRegistered = false;
+let requireImageModule;
+// Keep the onLoad hook inactive until a disk import needs image exports.
+function ensureImageExports() {
+  if (imageExportsRegistered) return;
+  Bun.plugin({ name: "openclaw-image-exports", setup(build) {
+    build.onLoad({ filter: /.*/, namespace: imageNamespace }, ({ path: filename }) => {
+      requireImageModule ??= globalThis.__openclawStandaloneCreateRequire(createRequire, path.join(root, "package.json"));
+      const loaded = requireImageModule(filename);
+      if (commonJsEntries.has(filename)) {
+        return { exports: { ...loaded, __esModule: true, default: loaded }, loader: "object" };
+      }
+      // ESM consumers retain every named export as well as the original default.
+      const { __esModule: _interop, ...exports } = loaded;
+      return { exports, loader: "object" };
+    });
+  }});
+  imageExportsRegistered = true;
+}`;
+}
+
+/** Route disk imports to their embedded module without changing the compiled loader. */
+export function createStandaloneModuleResolverBootstrap() {
+  return `let resolving = false;
+if (isMainThread) Bun.plugin({ name: "openclaw-embedded-modules", setup(build) {
+  // Bun checks the filter against the compiled entry before invoking callbacks.
+  const filter = new RegExp("^(?!" + RegExp.escape(Bun.main) + "(?![\\\\s\\\\S]))");
+  build.onResolve({ filter }, ({path: specifier, importer, kind}) => {
+    // Re-entering the disk bridge while requiring an image exposes partial exports.
+    if (specifier.startsWith("/$bunfs/")) return;
+    if (kind === "require-resolve" || resolving || specifier.startsWith("node:") || specifier.startsWith("bun:")) return;
+    let target;
+    try {
+      resolving = true;
+      target = globalThis.__openclawStandaloneNativeResolve(importer || path.join(root, "openclaw.mjs"), specifier)
+        ?? (specifier.startsWith("file:") ? fileURLToPath(specifier)
+        : path.isAbsolute(specifier) ? specifier
+        : (() => {
+          try { return Bun.resolveSync(specifier, importer ? path.dirname(importer) : root); }
+          catch { return Bun.resolveSync(specifier, root); }
+        })());
+    } catch { return; } finally { resolving = false; }
+    const entry = embedded(target);
+    if (entry) return globalThis.__openclawStandaloneExternalModuleResolution(entry);
+  });
+}});`;
 }

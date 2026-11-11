@@ -34,7 +34,8 @@ import {
   type ExecPolicyToolAccess,
   type ExecPolicyShowOptions,
 } from "./exec-policy-diagnostics.js";
-import { ExpectedCliError, rethrowExpectedCliError } from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { rethrowExpectedCliError } from "./failure-output.js";
 import { addGatewayClientOptions, resolveGatewayRpcOptionsWithLocalPort } from "./gateway-rpc.js";
 import { formatDocsHelp } from "./help-format.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
@@ -113,6 +114,11 @@ async function runExecPolicyAction(
 
 function sanitizeExecPolicyTableCell(value: string): string {
   return sanitizeExecApprovalDisplayText(sanitizeTerminalText(value));
+}
+
+/** Sanitize each cell line on its own so the table, not a value, supplies the line breaks. */
+function formatExecPolicyTableLines(...lines: string[]): string {
+  return lines.map(sanitizeExecPolicyTableCell).join("\n");
 }
 
 function sanitizeExecPolicyMessage(value: unknown): string {
@@ -229,18 +235,19 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
       ],
       rows: payload.effectivePolicy.scopes.map((scope) => ({
         Scope: sanitizeExecPolicyTableCell(scope.scopeLabel),
-        Requested: sanitizeExecPolicyTableCell(
-          `host=${scope.host.requested} (${scope.host.requestedSource})\n` +
-            `security=${scope.security.requested} (${scope.security.requestedSource})\n` +
-            `ask=${scope.ask.requested} (${scope.ask.requestedSource})`,
+        Requested: formatExecPolicyTableLines(
+          `host=${scope.host.requested} (${scope.host.requestedSource})`,
+          `security=${scope.security.requested} (${scope.security.requestedSource})`,
+          `ask=${scope.ask.requested} (${scope.ask.requestedSource})`,
         ),
-        Host: sanitizeExecPolicyTableCell(
-          `security=${scope.security.host} (${scope.security.hostSource})\n` +
-            `ask=${scope.ask.host} (${scope.ask.hostSource})\n` +
-            `askFallback=${scope.askFallback.effective} (${scope.askFallback.source})`,
+        Host: formatExecPolicyTableLines(
+          `security=${scope.security.host} (${scope.security.hostSource})`,
+          `ask=${scope.ask.host} (${scope.ask.hostSource})`,
+          `askFallback=${scope.askFallback.effective} (${scope.askFallback.source})`,
         ),
-        Effective: sanitizeExecPolicyTableCell(
-          `security=${scope.security.effective}\nask=${scope.ask.effective}`,
+        Effective: formatExecPolicyTableLines(
+          `security=${scope.security.effective}`,
+          `ask=${scope.ask.effective}`,
         ),
       })),
     }).trimEnd(),
@@ -266,14 +273,17 @@ function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPolicySho
         nextConfig.tools.exec.host = policy.host;
       }
       if (policy.security !== undefined || policy.ask !== undefined) {
-        const currentPolicy = resolveExecModePolicy({
+        const current = resolveExecModePolicy({
           mode: normalizeExecMode(nextConfig.tools.exec.mode),
           security: nextConfig.tools.exec.security ?? "full",
           ask: nextConfig.tools.exec.ask ?? "off",
         });
-        const security = policy.security ?? currentPolicy.security;
-        const ask = policy.ask ?? currentPolicy.ask;
-        const mode = resolveExactExecModeFromPolicy({ security, ask });
+        const security = policy.security ?? current.security;
+        const ask = policy.ask ?? current.ask;
+        const mode =
+          current.mode === "auto" && security === current.security && ask === current.ask
+            ? "auto"
+            : resolveExactExecModeFromPolicy({ security, ask });
         if (mode) {
           nextConfig.tools.exec.mode = mode;
           delete nextConfig.tools.exec.security;
@@ -291,10 +301,7 @@ function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPolicySho
       }
       const approvalsSnapshot = await readExecApprovalsSnapshotAsync(context);
       assertCurrent();
-      const nextApprovals: ExecApprovalsFile = structuredClone(
-        approvalsSnapshot.file ?? { version: 1 },
-      );
-      nextApprovals.version = 1;
+      const nextApprovals: ExecApprovalsFile = structuredClone(approvalsSnapshot.file);
       nextApprovals.defaults ??= {};
       if (policy.security !== undefined) {
         nextApprovals.defaults.security = policy.security;

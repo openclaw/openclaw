@@ -1,7 +1,14 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as hostTurn } from "node:timers/promises";
 import { expect, it, onTestFinished, vi } from "vitest";
+import {
+  createDiagnosticToolExecutionLiveness,
+  recordDiagnosticToolExecutionDeadline,
+} from "../infra/diagnostic-tool-execution-liveness.js";
+import { AsyncContext } from "../shared/async-context.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
+import { assertCompleteToolResult, runWithToolResultDelivery } from "./tool-result-limits.js";
 import {
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
@@ -10,11 +17,48 @@ import {
 } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
+import {
+  retainToolSearchImplementation,
+  runScheduledToolSearchCall,
+} from "./tool-search-scheduling.js";
 import type { ToolSearchCallOptions, ToolSearchToolContext } from "./tool-search-types.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 const config = resolveToolSearchConfig({ tools: { toolSearch: { maxSearchLimit: 50 } } });
 type Mode = AnyAgentTool["executionMode"];
+
+it("shares a native carrier across tool settlement, delivery, and liveness", async () => {
+  const { ctx, catalogRef } = fixture();
+  const entry = catalogRef.current!.entries[0]!;
+  const ambient = new AsyncContext<string>(Symbol("tool-caller"));
+  const invocation = createDiagnosticToolExecutionLiveness();
+  using runs = vi.spyOn(AsyncLocalStorage.prototype, "run");
+  using entries = vi.spyOn(AsyncLocalStorage.prototype, "enterWith");
+  try {
+    await ambient.run("caller", () =>
+      runScheduledToolSearchCall({
+        ctx,
+        entry,
+        execute: () =>
+          runWithToolResultDelivery(true, () =>
+            invocation.run(async () => {
+              await Promise.resolve();
+              expect(ambient.getStore()).toBe("caller");
+              recordDiagnosticToolExecutionDeadline(123);
+              expect(invocation.view.deadlineAtMs).toBe(123);
+              expect(() => assertCompleteToolResult("complete")).not.toThrow();
+            }),
+          ),
+      }),
+    );
+    expect(ambient.getStore()).toBeUndefined();
+    expect(() => assertCompleteToolResult("complete")).toThrow("Code Mode");
+    // Every extra native carrier widens all subsequent work-scope frame copies.
+    expect(new Set([...runs.mock.contexts, ...entries.mock.contexts]).size).toBe(1);
+  } finally {
+    invocation.close();
+  }
+});
 
 function fixture(
   modes: [Mode, Mode] = ["sequential", "sequential"],
@@ -182,4 +226,23 @@ it("keeps exclusion until executor acceptance settles", async () => {
   await b.started;
   b.release();
   await Promise.all([first, second]);
+});
+
+it("retains implementation settlement across an async executor continuation", async () => {
+  const implementation = createDeferredCore();
+  const { a, b, call, releases } = fixture();
+  releases.push(() => implementation.resolve());
+  a.tool.execute = async () => {
+    await Promise.resolve();
+    void retainToolSearchImplementation(implementation.promise);
+    return jsonResult({ accepted: true });
+  };
+  const first = call("a");
+  const second = call("b");
+  await first;
+  expect(b.tool.execute).not.toHaveBeenCalled();
+  implementation.resolve();
+  await b.started;
+  b.release();
+  await second;
 });

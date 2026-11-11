@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { readdir, readFile, rename, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Worker } from "node:worker_threads";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { Check } from "typebox/value";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { Principal } from "./access.js";
 import { contract } from "./contract.js";
 import { createKnowledgeService } from "./service.js";
+import { StorageClient } from "./storage-client.js";
 import { StoreRegistry } from "./store-registry.js";
 import { parsePolicy, storesRevision, type StoresSection } from "./stores-config.js";
 import { Stores } from "./stores.js";
@@ -50,7 +52,9 @@ async function fixture(options = {}) {
       as(agent),
     );
   const titles = async (agent: any) =>
-    (await service.records({}, as(agent))).records.map((r) => r.title).toSorted(defaultOrder);
+    (await service.records_detail({}, as(agent))).records
+      .map((r) => r.title)
+      .toSorted(defaultOrder);
   const snapshot = () => service.stores_snapshot({}, admin);
   const change = async (agent: any, requested: any, expectedRevision?: string) => {
     const input = {
@@ -98,6 +102,37 @@ const entry = (snapshot: any, binding: any) =>
 const query = (f: Awaited<ReturnType<typeof fixture>>, operation: string, input = {}) =>
   f.service.agent_query({ agent: "research", operation, input }, f.reader);
 
+it("membership decodes each published revision once and rejects changed ambiguous assignments", async () => {
+  const base = tempDirs.make("knowledge-membership-");
+  const host = hostApi(base, { agents: ["main", "research"] });
+  const stores = new Stores(host.api, parsePolicy(undefined), () => {});
+  afterTest(() => stores.stop());
+  const section = { team: { agents: ["research"] } };
+  const serialized = JSON.stringify(section);
+  await stores.registry.call("reconcile", serialized, storesRevision(section));
+  const parse = vi.spyOn(JSON, "parse");
+  try {
+    const first = stores.membership();
+    for (let i = 0; i < 8; i++) {
+      expect(stores.membership()).toBe(first);
+    }
+    expect(first.assigned.get("research")).toBe("team");
+    expect(parse.mock.calls.filter(([text]) => text === serialized)).toHaveLength(1);
+
+    const changed = { ...section, other: { agents: ["research"] } };
+    const nextSerialized = JSON.stringify(changed);
+    await stores.registry.call("reconcile", nextSerialized, storesRevision(changed));
+    const next = stores.membership();
+    expect(next).not.toBe(first);
+    expect(next.invalid.has("research")).toBe(true);
+    expect(next.assigned.has("research")).toBe(false);
+    expect(stores.membership()).toBe(next);
+    expect(parse.mock.calls.filter(([text]) => text === nextSerialized)).toHaveLength(1);
+  } finally {
+    parse.mockRestore();
+  }
+});
+
 it("two unassigned agents get separate stores on first use and cannot read each other", async () => {
   const f = await fixture();
   await f.save("main", "Main private");
@@ -134,9 +169,9 @@ it("passive discovery, including operator provider reads, never creates storage"
     ["ops", "agent:ops"],
   ]);
   expect(snap.stores.every((s) => s.state === "unprovisioned")).toBeTruthy();
-  const status = await f.service.status({}, f.reader);
-  expect(status.store).toBe("unprovisioned");
-  expect(((await query(f, "records")) as Output<"records">).total).toBe(0);
+  expect((await f.service.status({}, f.reader)).writesEnabled).toBe(false);
+  expect((await f.service.status({}, f.as("main"))).writesEnabled).toBe(true);
+  expect(((await query(f, "records_detail")) as Output<"records_detail">).total).toBe(0);
   expect(((await query(f, "status")) as Output<"status">).store).toBe("unprovisioned");
   expect(await f.storesDir()).toStrictEqual([]);
 });
@@ -233,7 +268,7 @@ it("share existing: same identity and records; members read and update through o
   await f.save("research", "Research addition");
   expect(await f.titles("main")).toStrictEqual(["Before sharing", "Research addition"]);
   // Writer attribution follows the publishing agent, not the viewer.
-  const records = (await f.service.records({}, f.as("main"))).records;
+  const records = (await f.service.records_detail({}, f.as("main"))).records;
   expect(records.find((r) => r.title === "Research addition")!.writtenByAgentId).toBe("research");
   expect(records.find((r) => r.title === "Before sharing")!.writtenByAgentId).toBe("main");
   // Configuration holds membership; nothing wrote an agent path.
@@ -282,6 +317,15 @@ it("store counts follow the operator's live agent role and shared-Gateway policy
   const f = await fixture();
   await f.save("main", "Main note");
   await f.save("research", "Research note");
+  const calls = vi.spyOn(StorageClient.prototype, "call");
+  try {
+    const inventory = await f.service.stores_snapshot({ includeRecordCounts: false }, f.admin);
+    expect(inventory.stores.filter((s) => s.state === "ready")).toHaveLength(2);
+    expect(inventory.stores.every((s) => s.records === null)).toBe(true);
+    expect(calls).not.toHaveBeenCalled();
+  } finally {
+    calls.mockRestore();
+  }
   const counts = async (client: Record<string, unknown>) => {
     const context = operatorContext(f.api, ["operator.read"]);
     Object.assign(context.action.client, client);
@@ -406,9 +450,9 @@ it("a crash between the config write and registry settlement reconciles to one o
   expect(
     (await restarted.stores_change_status({ requestId: input.requestId }, f.admin)).outcome,
   ).toBe("applied");
-  expect((await restarted.records({}, f.as("research"))).records.map((r) => r.title)).toStrictEqual(
-    ["Seed"],
-  );
+  expect(
+    (await restarted.records_detail({}, f.as("research"))).records.map((r) => r.title),
+  ).toStrictEqual(["Seed"]);
 });
 
 it("a journaled change whose write never landed settles as not applied after restart", async () => {
@@ -496,25 +540,133 @@ it("the cutover fences old-assignment access before applying and after", async (
   expect(next.kind, "the new assignment resolves to the named store").toBe("unprovisioned");
 });
 
+// Plugin reload starts the next generation as soon as stop/dispose resolve, so
+// both must wait for the old generation's workers to exit. Worker handles are
+// private; threadId becomes -1 once a worker has exited.
+// Worker handles are private to their clients; tests read them only to observe exit.
+const workerOf = (client: object) => Reflect.get(client, "worker") as Worker | undefined;
+
+async function runningStores() {
+  const f = await fixture();
+  await f.save("main", "Seed");
+  const stores = new Stores(f.api, parsePolicy({ writesEnabled: true }), () => {});
+  afterTest(() => stores.stop());
+  const opened = await stores.open(
+    (): Principal => ({ agentId: "main", scope: { visibility: "private" } }),
+    { provision: false },
+  );
+  if (opened.kind !== "ready") {
+    throw new Error("expected a ready store");
+  }
+  await opened.runtime.enqueue(opened.access.assertCurrent, () =>
+    opened.runtime.client.call("catalog", opened.access),
+  );
+  const workers = {
+    storage: workerOf(opened.runtime.client)!,
+    registry: workerOf(stores.registry)!,
+  };
+  expect(workers.storage.threadId).toBeGreaterThan(0);
+  expect(workers.registry.threadId).toBeGreaterThan(0);
+  return { f, stores, workers, opened };
+}
+
+it("service stop resolves only after the store and registry workers have exited", async () => {
+  const { stores, workers } = await runningStores();
+  await stores.stop();
+  expect(workers.storage.threadId, "storage worker exited").toBe(-1);
+  expect(workers.registry.threadId, "registry worker exited").toBe(-1);
+});
+
+it("disposal waits for workers and is final: later calls never start a worker", async () => {
+  const { stores, workers } = await runningStores();
+  await stores.dispose();
+  expect(workers.storage.threadId).toBe(-1);
+  expect(workers.registry.threadId).toBe(-1);
+  await expect(stores.registry.call("snapshot")).rejects.toThrow(/registry stopped/);
+  expect(workerOf(stores.registry), "no registry worker restarted").toBeUndefined();
+});
+
+it("the plugin instance disposes Knowledge through api.lifecycle.onDispose", async () => {
+  const base = tempDirs.make("knowledge-stores-");
+  const disposers: Array<() => Promise<void>> = [],
+    services: any = [];
+  const host = hostApi(base, {
+    policy: { operatorRead: true, writesEnabled: true },
+    extra: {
+      registerService: (s: any) => services.push(s),
+      lifecycle: {
+        onDispose: (d: () => Promise<void>) => {
+          disposers.push(d);
+          return () => {};
+        },
+      },
+    },
+  });
+  const service = createKnowledgeService(host.api);
+  await services[0].start({});
+  await service.save_page(
+    { requestId: randomUUID(), title: "Seed", type: "note", body: "Seed body." },
+    toolContext(host.api),
+  );
+  expect(disposers).toHaveLength(1);
+  await services[0].stop();
+  const [dispose] = disposers;
+  if (!dispose) {
+    throw new Error("expected a registered disposer");
+  }
+  await dispose();
+  await expect(service.records_detail({}, toolContext(host.api))).rejects.toThrow(/reloaded/);
+});
+
+it("restart failures carry a stable retryable code and their reason", async () => {
+  const { stores, opened } = await runningStores();
+  const restart = (reason: string) =>
+    expect.objectContaining({ code: "UNAVAILABLE", retryable: true, reason });
+  const { runtime, access } = opened;
+  const inFlight = runtime.client.call("catalog", access);
+  const closed = runtime.client.close();
+  await expect(inFlight).rejects.toEqual(restart("storage-stopped"));
+  await closed;
+  await runtime.retire();
+  await expect(
+    runtime.enqueue(
+      () => {},
+      async () => {},
+    ),
+  ).rejects.toEqual(restart("runtime-retired"));
+  await stores.dispose();
+  let reloaded: unknown;
+  try {
+    stores.assertLive(stores.incarnation);
+  } catch (error) {
+    reloaded = error;
+  }
+  expect(reloaded).toEqual(restart("service-reloaded"));
+  await expect(stores.registry.call("snapshot")).rejects.toEqual(restart("registry-stopped"));
+});
+
 it("operator proxy is operator-only and validates inner operations", async () => {
   const f = await fixture();
   await f.save("research", "Visible to operator");
-  const rows = (await query(f, "records")) as Output<"records">;
+  const rows = (await query(f, "records_detail")) as Output<"records_detail">;
   expect(rows.records.map((r) => r.title)).toStrictEqual(["Visible to operator"]);
   expect(
-    (await f.service.records({}, f.reader)).total,
+    (await f.service.records_detail({}, f.reader)).total,
     "default operator view is the default agent",
   ).toBe(0);
   await expect(
-    f.service.agent_query({ agent: "research", operation: "records", input: {} }, f.as("main")),
+    f.service.agent_query(
+      { agent: "research", operation: "records_detail", input: {} },
+      f.as("main"),
+    ),
   ).rejects.toThrow(/operator/);
   for (const operation of ["save_page", "stores_snapshot"]) {
     await expect(query(f, operation)).rejects.toThrow(/Unknown query/);
   }
   await expect(
-    f.service.agent_query({ agent: "ghost", operation: "records", input: {} }, f.reader),
+    f.service.agent_query({ agent: "ghost", operation: "records_detail", input: {} }, f.reader),
   ).rejects.toThrow(/Unknown agent/);
-  await expect(query(f, "records", { bogus: 1 })).rejects.toThrow(/Invalid input/);
+  await expect(query(f, "records_detail", { bogus: 1 })).rejects.toThrow(/Invalid input/);
 });
 
 it("recovery keeps a shared store bound to its data even when other edits conflict", async () => {
@@ -532,7 +684,9 @@ it("recovery keeps a shared store bound to its data even when other edits confli
   f.api.runtime.config.mutateConfigFile = original;
   expect(result.outcome).toBe("conflict");
   expect(
-    (await createKnowledgeService(f.api).records({}, f.as("research"))).records.map((x) => x.title),
+    (await createKnowledgeService(f.api).records_detail({}, f.as("research"))).records.map(
+      (x) => x.title,
+    ),
   ).toStrictEqual(["Seed"]);
   expect((await f.storesDir()).length, "no empty replacement store").toBe(1);
 });
@@ -545,10 +699,12 @@ it("an interrupted sentinel write is completed; a sentinel naming another regist
   // Exclusive create succeeded, then the process died before writing the ID.
   await writeFile(sentinel, "");
   const restarted = createKnowledgeService(f.api);
-  expect((await restarted.records({}, f.as("main"))).total).toBe(1);
+  expect((await restarted.records_detail({}, f.as("main"))).total).toBe(1);
   expect(await readFile(sentinel, "utf8")).toBe(id);
   await writeFile(sentinel, "another-registry\n");
-  await expect(createKnowledgeService(f.api).records({}, f.as("main"))).rejects.toThrow(/registry/);
+  await expect(createKnowledgeService(f.api).records_detail({}, f.as("main"))).rejects.toThrow(
+    /registry/,
+  );
 });
 
 it("several agents without a default: operators must choose; tools are unaffected", async () => {
@@ -561,6 +717,6 @@ it("several agents without a default: operators must choose; tools are unaffecte
   const snap = await f.snapshot();
   expect(snap.defaultAgent).toBe(undefined);
   await expect(f.service.status({}, f.reader)).rejects.toThrow(/choose which agent/);
-  expect(((await query(f, "records")) as Output<"records">).total).toBe(1);
+  expect(((await query(f, "records_detail")) as Output<"records_detail">).total).toBe(1);
   expect((await f.service.status({}, f.as("main"))).store).toBe("unprovisioned");
 });

@@ -1,6 +1,10 @@
 import { QUEUED_USER_MESSAGE_MARKER } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  captureAnthropicRequest,
+  registerParityHostLifecycle,
+} from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
+import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
@@ -10,6 +14,7 @@ import { addSession, appendOutput, deleteSession } from "../../bash-process-regi
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import * as mediaTaskStatus from "../../media-generation-task-status.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { convertToLlm } from "../../sessions/messages.js";
 import { resetSubagentRegistryForTests } from "../../subagents/registry/subagent-registry.test-helpers.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
@@ -35,7 +40,9 @@ vi.mock("../tool-result-truncation.js", () => ({
   truncateOversizedToolResultsInMessages: hoisted.truncateOversizedToolResultsInMessages,
 }));
 
+import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import { prepareEmbeddedAttemptPromptContext as prepareContext } from "./attempt-prompt-build.js";
+import { buildSystemUpdateMessage } from "./runtime-context-prompt.js";
 
 const temporalContext = "## Temporal Context\nCurrent date: 2026-10-09\nTime zone: UTC";
 const inboundRuntimeContext = `Conversation info: channel=telegram\n\n${temporalContext}`;
@@ -139,6 +146,129 @@ afterEach(async () => {
 });
 
 describe("prepareEmbeddedAttemptPromptContext", () => {
+  registerParityHostLifecycle();
+
+  it("preserves fallback context envelopes and canonical input across route switches and replay", async () => {
+    const original = "Describe the attached landscape.";
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: original, idempotencyKey: "fallback-envelope:user", timestamp: 123 },
+      target: () => undefined,
+    });
+    recorder.markSentToProvider?.();
+    const canonicalUser: AgentMessage = {
+      ...recorder.message!,
+      content: [
+        { type: "text", text: original },
+        { type: "image", data: "aW1n", mimeType: "image/png" },
+      ],
+    };
+    const initialContext = buildSystemUpdateMessage(
+      "Original runtime facts",
+      "runtime-context",
+      true,
+    );
+    const fixture = createInput({
+      attempt: createAttempt({ userTurnTranscriptRecorder: recorder, fallbackActive: true }),
+      preparedUserTurnMessage: canonicalUser,
+      messages: [canonicalUser, initialContext],
+      prompt: createPrompt({
+        effectivePrompt: original,
+        effectiveTranscriptPrompt: original,
+        promptBuildAppendContext: "Use the fallback route's current instructions.",
+      }),
+    });
+    const prepared = await prepareContext({
+      ...fixture.input,
+      sessionVersion: 4,
+      appendOnlyRuntimeContext: true,
+      inHistorySystemUpdates: false,
+    });
+    const fallback = prepared.runtimeContextMessageForCurrentTurn!;
+    expect(prepared.isDispatchedCanonicalFallback).toBe(true);
+    expect(fallback.details).toMatchObject({ replay: "append" });
+    const source = [...fixture.input.messages, fallback];
+    const before = JSON.stringify(source);
+    const capture = async (native: boolean, history = source) => {
+      const { payload } = await captureAnthropicRequest("provider", {
+        model: {
+          id: "claude-opus-5",
+          baseUrl: native ? "https://api.anthropic.com" : "https://proxy.example/v1",
+          input: ["text", "image"],
+        },
+        cacheRetention: "none",
+        context: {
+          systemPrompt: "Stable system prompt",
+          messages: convertToLlm(
+            normalizeMessagesForLlmBoundary(history, {
+              sessionVersion: 4,
+              appendOnlyRuntimeContext: true,
+              inHistorySystemUpdates: native,
+              includeTimestamp: false,
+            }),
+          ),
+        },
+      });
+      if (!Array.isArray(payload.messages)) {
+        throw new Error("Expected serialized provider messages");
+      }
+      expect(
+        JSON.stringify(payload.messages).match(/Describe the attached landscape\./g),
+      ).toHaveLength(1);
+      expect(JSON.stringify(payload.messages).match(/"type":"image"/g)).toHaveLength(1);
+      return payload.messages;
+    };
+    const native = await capture(true);
+    expect(native.at(-1)).toEqual({
+      role: "system",
+      content: [{ type: "text", text: fallback.content }],
+      clear_at: "next_user_message",
+    });
+    const proxy = await capture(false);
+    expect(proxy.at(-1)).toEqual({
+      role: "user",
+      content: `OpenClaw runtime context:\n${fallback.content}\nEnd OpenClaw runtime context.`,
+    });
+    expect(await capture(true)).toEqual(native);
+    const replay = await capture(false, [
+      ...source,
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "Done." }] }),
+      { role: "user", content: "Next question", timestamp: 124 },
+    ]);
+    expect(replay.slice(0, proxy.length)).toEqual(proxy);
+    expect(JSON.stringify(source)).toBe(before);
+  });
+
+  it("preserves attempt then system fragment bytes without changing either source", async () => {
+    const attemptFragments = [{ kind: "runtime-instruction" as const, text: "Turn instruction" }];
+    const systemFragments = [{ kind: "conversation-data" as const, text: "System context" }];
+    Object.freeze(attemptFragments);
+    Object.freeze(systemFragments);
+    const fixture = createInput({
+      attempt: createAttempt({
+        currentInboundContext: undefined,
+        runtimeContextFragments: attemptFragments,
+      }),
+    });
+
+    const result = await prepareContext({
+      ...fixture.input,
+      isRawModelRun: true,
+      systemPromptRuntimeContextFragments: systemFragments,
+    });
+
+    expect(result.runtimeContextFragments).toEqual([
+      { kind: "runtime-instruction", text: "Turn instruction" },
+      { kind: "conversation-data", text: "System context" },
+    ]);
+    expect(result.runtimeContextMessageForCurrentTurn?.content).toBe(
+      "Turn instruction\n\nSystem context",
+    );
+    expect(result.systemPromptForHook).toBe("Base system prompt");
+    expect(result.promptForModel).toBe("Visible request");
+    expect(attemptFragments).toEqual([{ kind: "runtime-instruction", text: "Turn instruction" }]);
+    expect(systemFragments).toEqual([{ kind: "conversation-data", text: "System context" }]);
+  });
+
   it.each(
     [3, 4].flatMap((sessionVersion) =>
       ["dispatched", "pending", "internal", "raw"].map((state) => ({ sessionVersion, state })),

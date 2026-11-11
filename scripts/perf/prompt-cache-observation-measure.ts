@@ -8,20 +8,25 @@
 // allocations separately, including collected objects. --measure promotion with
 // --trace-gc-nvp brackets the warm workload for a separate promotion pass.
 // --replacements also replays owner-recorded truncations. CPU includes request preparation.
+// --allow-eviction permits tracker-capacity stress; trackerReleasedBytes measures
+// diagnostic baselines after all transcript/request sources have been released.
 // All fixtures are synthetic; identity probes run separately from measured calls.
+// --hydration retained reprojects the same writable startup history each request.
+// --boundary-owner /absolute/base.ts selects the baseline request-boundary module.
+// --observer-owner /absolute/base.ts selects a baseline request-observer module.
+// Pair it with --observability-owner when that observer imports a different tracker module.
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
+import { loadavg } from "node:os";
 import { performance, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { writeHeapSnapshot } from "node:v8";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import { fingerprintMessage } from "../../src/agents/embedded-agent-runner/prompt-cache-history.js";
-import { clearPromptCacheObservations } from "../../src/agents/embedded-agent-runner/prompt-cache-observability.js";
-import { createPromptCacheRequestObserver } from "../../src/agents/embedded-agent-runner/prompt-cache-request-observer.js";
-import { normalizeMessagesForLlmBoundary } from "../../src/agents/embedded-agent-runner/run/attempt-llm-boundary.js";
 import { applyRuntimeContextCarrierRetention } from "../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import {
   createToolResultPromptProjectionState,
@@ -30,10 +35,8 @@ import {
 import { bindToolResultPromptProjectionKeys } from "../../src/agents/embedded-agent-runner/tool-result-projection-key.js";
 import { replayToolResultPromptProjections } from "../../src/agents/embedded-agent-runner/tool-result-projection-replay.js";
 import { convertToLlm } from "../../src/agents/sessions/messages.js";
-import {
-  isOwnedTranscriptPayload,
-  normalizeTranscriptJsonValue,
-} from "../../src/config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json-normalize.js";
+import { isOwnedTranscriptPayload } from "../../src/config/sessions/transcript-json.js";
 import { cloneTranscriptView } from "../../src/config/sessions/transcript-snapshot.js";
 import type { Message } from "../../src/llm/types.js";
 import { isDeeplyFrozenPlainData } from "../../src/shared/immutable-data.js";
@@ -42,7 +45,11 @@ const { values } = parseArgs({
   options: {
     envelopes: { type: "string", default: "sealed" },
     "reuse-view": { type: "boolean", default: false },
+    "allow-eviction": { type: "boolean", default: false },
     hydration: { type: "string", default: "shared" },
+    "boundary-owner": { type: "string" },
+    "observer-owner": { type: "string" },
+    "observability-owner": { type: "string" },
     sessions: { type: "string", default: "16" },
     messages: { type: "string", default: "128" },
     rounds: { type: "string", default: "20" },
@@ -53,7 +60,7 @@ const { values } = parseArgs({
 });
 assert.ok(global.gc, "Pass --expose-gc");
 assert.ok(["sealed", "append", "projected"].includes(values.envelopes));
-assert.ok(["shared", "clone"].includes(values.hydration));
+assert.ok(["shared", "clone", "retained"].includes(values.hydration));
 assert.ok(["retained", "allocation", "snapshot", "promotion"].includes(values.measure));
 const sessionCount = Number(values.sessions);
 const messageCount = Number(values.messages);
@@ -61,6 +68,30 @@ const rounds = Number(values.rounds);
 for (const count of [sessionCount, messageCount, rounds]) {
   assert.ok(Number.isSafeInteger(count) && count > 0);
 }
+const {
+  clearPromptCacheObservations,
+}: typeof import("../../src/agents/embedded-agent-runner/prompt-cache-observability.js") =
+  await import(
+    values["observability-owner"]
+      ? pathToFileURL(values["observability-owner"]).href
+      : "../../src/agents/embedded-agent-runner/prompt-cache-observability.js"
+  );
+const {
+  createPromptCacheRequestObserver,
+}: typeof import("../../src/agents/embedded-agent-runner/prompt-cache-request-observer.js") =
+  await import(
+    values["observer-owner"]
+      ? pathToFileURL(values["observer-owner"]).href
+      : "../../src/agents/embedded-agent-runner/prompt-cache-request-observer.js"
+  );
+const {
+  normalizeMessagesForLlmBoundary,
+}: typeof import("../../src/agents/embedded-agent-runner/run/attempt-llm-boundary.js") =
+  await import(
+    values["boundary-owner"]
+      ? pathToFileURL(values["boundary-owner"]).href
+      : "../../src/agents/embedded-agent-runner/run/attempt-llm-boundary.js"
+  );
 
 function fixture(index: number): AgentMessage {
   const text = `Synthetic transcript ${index}: ${"sample text ".repeat(100)}`;
@@ -136,6 +167,7 @@ function createSession(index: number, count: number) {
       message: fixture(index * messageCount + offset),
     })),
     messages: [] as Message[],
+    retainedMessages: undefined as AgentMessage[] | undefined,
     projections: createToolResultPromptProjectionState(),
     observer: createPromptCacheRequestObserver(
       { sessionId: `retention-${index}`, streamStrategy: "fixture" },
@@ -166,11 +198,15 @@ let newWrappers = 0;
 let messageCacheHits = 0;
 let measuredMessages = 0;
 function hydrate(session: ReturnType<typeof createSession>) {
-  const view =
-    values.hydration === "clone"
-      ? structuredClone(session.entries)
-      : cloneTranscriptView(session.entries);
-  const messages = view.map((entry) => entry.message);
+  const messages =
+    session.retainedMessages ??
+    (values.hydration === "shared"
+      ? cloneTranscriptView(session.entries)
+      : structuredClone(session.entries)
+    ).map((entry) => entry.message);
+  if (values.hydration === "retained") {
+    session.retainedMessages = messages;
+  }
   session.messages = convertToLlm(
     values.envelopes === "projected"
       ? normalizeMessagesForLlmBoundary(
@@ -301,6 +337,7 @@ if (values.measure === "promotion") {
   console.log("PROMOTION_START");
 }
 const started = performance.now();
+const hostLoadBefore = loadavg();
 let ended = Infinity;
 const observer = new PerformanceObserver((list) => {
   for (const entry of list.getEntries()) {
@@ -354,7 +391,9 @@ if (inspector) {
   await writeFile(values.output, JSON.stringify(profile));
   inspector.disconnect();
 }
-assert.equal(stablePrefixes, calls);
+if (!values["allow-eviction"]) {
+  assert.equal(stablePrefixes, calls);
+}
 const firstViewsAliveAfterReplacement = firstViews.filter((ref) => ref.deref()).length;
 const currentViews = sessions.flatMap(({ messages }) =>
   messages.map((message) => new WeakRef(message)),
@@ -385,15 +424,22 @@ const currentViewsAliveAfterRelease = currentViews.filter((ref) => ref.deref()).
 const fixtureDigest = hash("sha256", JSON.stringify(sessions.map(({ entries }) => entries)), "hex");
 for (const session of sessions) {
   session.entries.length = 0;
+  session.retainedMessages = undefined;
 }
+await collect();
+const trackerRetainedBytes = process.memoryUsage().heapUsed;
 clearPromptCacheObservations();
 await collect();
+const trackerReleasedBytes = trackerRetainedBytes - process.memoryUsage().heapUsed;
 const viewsAliveAfterSourceRelease = currentViews.filter((ref) => ref.deref()).length;
 const residentMessages = sessionCount * messageCount;
 console.log(
   JSON.stringify({
     node: process.version,
+    hostLoadBefore,
+    hostLoadAfter: loadavg(),
     replacements: values.replacements,
+    trackerReleasedBytes,
     sampledBytes,
     fingerprintSampledBytes,
     viewsAliveAfterSourceRelease,
@@ -426,6 +472,7 @@ console.log(
     warmCpuMsPerCall: cpuMicros / 1000 / calls,
     warmMsPerCall: observationMs / calls,
     warmCalls: calls,
+    stablePrefixes,
     gc,
     fixtureDigest,
   }),

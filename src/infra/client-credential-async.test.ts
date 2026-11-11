@@ -1,12 +1,15 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
+import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareStartupClientCredentials } from "../commands/startup-client-credentials.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -23,6 +26,8 @@ import {
 } from "./device-identity-material.js";
 import type { ExecApprovalsSnapshot } from "./exec-approvals-core.js";
 import { attachExecApprovalsSocket } from "./exec-approvals-socket.js";
+import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
+import * as workerCpu from "./worker-cpu.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const mac = it.runIf(process.platform === "darwin");
@@ -137,6 +142,33 @@ it("serializes first creation, preserves the winner and cancels queued writes wi
   ).toEqual({ kind: "token", token: null });
   expect(fs.existsSync(path.join(root, "state"))).toBe(false);
 });
+
+it.skipIf(process.platform === "win32")(
+  "keeps credential authority bound to the current root alias",
+  async () => {
+    const first = fixture();
+    const second = fixture();
+    const alias = path.join(dirs.make("cc-alias-"), "root");
+    const env = { ...first.env, OPENCLAW_STATE_DIR: alias };
+    const identity = storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity());
+    fs.symlinkSync(first.root, alias);
+    await runClientCredentialOperationAsync(env, { kind: "identity.create", identity });
+    expect(await runClientCredentialOperationAsync(env, identityRead)).toEqual({
+      kind: "identity",
+      identity,
+    });
+    fs.unlinkSync(alias);
+    fs.symlinkSync(second.root, alias);
+    expect(await runClientCredentialOperationAsync(env, identityRead)).toEqual({
+      kind: "identity",
+      identity: null,
+    });
+    expect(await runClientCredentialOperationAsync(first.env, identityRead)).toEqual({
+      kind: "identity",
+      identity,
+    });
+  },
+);
 
 it("waits for a short-lived offline owner when no app endpoint exists", async () => {
   const { env } = fixture();
@@ -291,4 +323,46 @@ mac("rejects unsafe app credentials before dispatch", async () => {
   await expect(requestClientCredentialsFromApp(env, { kind: "socket.read" })).rejects.toThrow(
     "unsafe",
   );
+});
+
+it("retires the idle credential worker under pressure and preserves identity after recreation", async ({
+  signal,
+}) => {
+  await drainGlobalSingletonLifecycleState();
+  const created = vi.spyOn(workerCpu, "createCpuTrackedWorker");
+  const entry = String(resolveRuntimeProcessEntrypointUrl("clientCredentials"));
+  const observedWorkers = () =>
+    created.mock.calls.flatMap(([url], index) => {
+      const result = created.mock.results[index];
+      return String(url) === entry && result?.type === "return" ? [result.value] : [];
+    });
+  const { env } = fixture();
+  const identity = storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(123), 456);
+  try {
+    expect(
+      await runClientCredentialOperationAsync(env, { kind: "identity.create", identity }),
+    ).toEqual({ kind: "identity", identity });
+    expect(await runClientCredentialOperationAsync(env, identityRead)).toEqual({
+      kind: "identity",
+      identity,
+    });
+    expect(observedWorkers()).toHaveLength(1);
+    const worker = observedWorkers()[0];
+    if (!worker) {
+      throw new Error("Expected the real credential worker");
+    }
+    const exited = once(worker, "exit");
+    channel("openclaw.memory.critical").publish(undefined);
+    await withinTest(exited, signal);
+    expect(worker.threadId).toBe(-1);
+    expect(await runClientCredentialOperationAsync(env, identityRead)).toEqual({
+      kind: "identity",
+      identity,
+    });
+    expect(observedWorkers()).toHaveLength(2);
+    expect(observedWorkers()[1]).not.toBe(worker);
+  } finally {
+    await drainGlobalSingletonLifecycleState();
+    created.mockRestore();
+  }
 });

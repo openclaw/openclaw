@@ -12,6 +12,7 @@ import {
   observeSqliteReadSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { readSessionTranscriptMessageEvents } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
@@ -663,28 +664,29 @@ describe("client voice session worker contract", () => {
     }
   });
 
-  it("reads tool facts without freshness probes and rejects a closed call", async () => {
+  it("validates the open call without Gateway-thread SQL and rejects a closed call", async () => {
     const voiceSessionId = await createVoice({ transcriptCapable: true });
     const binding = { ...target, voiceSessionId };
-    expect(assertClientVoiceSessionOpen(binding)).toBe("client");
+    await expect(assertClientVoiceSessionOpen(binding)).resolves.toBe("client");
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
-      expect(assertClientVoiceSessionOpen(binding)).toBe("client");
-      expect(readRecord(voiceSessionId)?.transcriptCapable).toBe(true);
-      expect(observation.queries).toHaveLength(2);
-      expect(observation.queries.join("\n")).not.toMatch(/\b(?:pragma_)?data_version\b/i);
+      await expect(assertClientVoiceSessionOpen(binding)).resolves.toBe("client");
+      expect(observation.queries).toEqual([]);
     } finally {
       observation.restore();
     }
+    expect(readRecord(voiceSessionId)?.transcriptCapable).toBe(true);
     await closeClientVoiceSession({ ...binding, config: {} });
-    expect(() => assertClientVoiceSessionOpen(binding)).toThrow("voice session is closed");
+    await expect(assertClientVoiceSessionOpen(binding)).rejects.toThrow("voice session is closed");
     expect(readRecord(voiceSessionId)?.transcriptCapable).toBe(true);
   });
 
   it("rejects a transcript after another connection closes the admitted call", async () => {
     await seedSession(target.sessionKey);
     const voiceSessionId = await createVoice();
-    expect(assertClientVoiceSessionOpen({ ...target, voiceSessionId })).toBe("client");
+    await expect(assertClientVoiceSessionOpen({ ...target, voiceSessionId })).resolves.toBe(
+      "client",
+    );
     mutateForeignVoice(voiceSessionId, "'$.status', 'closed', '$.closedAt', 42");
     await expect(
       appendTranscript(voiceSessionId, "foreign-close", "This call has already closed"),
@@ -698,6 +700,7 @@ describe("client voice session worker contract", () => {
   });
 
   it("publishes transcripts only after their voice bookkeeping commits", async () => {
+    const text = "Confirm both records before notifying observers";
     await seedSession(target.sessionKey);
     const voiceSessionId = await createVoice();
     const observed: Array<{
@@ -713,20 +716,17 @@ describe("client voice session worker contract", () => {
       }
     });
     try {
-      await appendTranscript(
-        voiceSessionId,
-        "committed-together",
-        "Confirm both records before notifying observers",
-      );
+      await appendTranscript(voiceSessionId, "committed-together", text);
+      expect(loadSessionEntry(target)).toMatchObject({
+        lastInteractionAt: expect.any(Number),
+      });
       expect(observed).toEqual([
         {
           transcript: [
             expect.objectContaining({
               event: expect.objectContaining({
                 message: expect.objectContaining({
-                  content: [
-                    { type: "text", text: "Confirm both records before notifying observers" },
-                  ],
+                  content: [{ type: "text", text }],
                 }),
               }),
             }),

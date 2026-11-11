@@ -15,16 +15,18 @@ import {
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
-import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
+  createSessionContext,
+} from "./chat-application-context.test-support.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
+import {
   createPaneTestHost,
   getPaneTestRuntime,
-  createSessionContext,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 
 type AnnotationPane = TestChatPane & {
   receiveBrowserAnnotation: (event: Event) => void;
@@ -135,6 +137,7 @@ function mountedPanes(session = "current") {
       "openclaw-chat-runtime-test",
       ChatPaneRuntime,
     ) as unknown as TestChatPane;
+    onTestFinished(() => pane.disconnectedCallback());
     Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
     Object.assign(pane, { context, paneId: "p1", sessionKey: `agent:main:${key}` });
     const stopAfterRestore = new Error("stop after attachment restore");

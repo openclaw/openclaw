@@ -1,25 +1,136 @@
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
+import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
 import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
+import { UpdateRunAdmissionBusyError } from "../../infra/update-run-admission.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { SystemPackageOwnershipError } from "../../infra/update-system-package-ownership.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
-import { prepareResult } from "./progress.js";
-import { parseUpdateTimeoutMs, type UpdateCommandOptions } from "./shared.js";
+import { prepareResult, printResult } from "./progress.js";
+import {
+  parseUpdateTimeoutMs,
+  UpdatePreMutationError,
+  type UpdateCommandOptions,
+} from "./shared.js";
+import { resolveUpdateOwnershipFailure } from "./update-command-config-failure.js";
+import { readUpdateDatabaseEngineConfig } from "./update-command-database-engine.js";
 import {
   createPreMutationUpdateResult,
+  createUpdateCommandFailureResult,
+  reportUpdateCommandPendingRecovery,
   UnreportedUpdateAdmissionOutcome,
   type UpdateAdmissionReportParams,
   UpdateCommandFailure,
+  UpdateCommandPendingRecoveryFailure,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
+import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
+import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 
 type Run = NonNullable<UpdateCommandOptions["run"]>;
+
+/** Report rejected read-only admission without creating a run or recovery diagnostics. */
+export async function withUpdateAdmissionReporting<T>(
+  opts: UpdateCommandOptions,
+  admit: () => Promise<T>,
+  mode: "unknown" | "finalize" = "unknown",
+  reportHints: NonNullable<Parameters<typeof reportUpdateCommandPendingRecovery>[2]> = {},
+): Promise<T> {
+  const startedAt = Date.now();
+  const sourceEnv =
+    opts.dryRun && reportHints.writeArtifacts === undefined
+      ? resolveServiceRefreshEnv(process.env, tryProcessCwd())
+      : undefined;
+  const resolveReportHints = async () => {
+    if (reportHints.writeArtifacts !== undefined || !sourceEnv) {
+      return reportHints;
+    }
+    try {
+      const { readFailed, sourceInvalid } = await readUpdateDatabaseEngineConfig(sourceEnv);
+      return { ...reportHints, writeArtifacts: readFailed || !sourceInvalid };
+    } catch {
+      // Source diagnostics must not replace the original admission refusal.
+      return reportHints;
+    }
+  };
+  try {
+    return await admit();
+  } catch (error) {
+    if (
+      error instanceof UpdateRunAdmissionBusyError ||
+      (error instanceof SystemPackageOwnershipError && error.owned)
+    ) {
+      const result = {
+        status: "skipped",
+        mode,
+        reason: error.reason,
+        steps: [],
+        durationMs: Date.now() - startedAt,
+        ...(opts.dryRun ? { dryRun: true } : {}),
+        notes: [error.message],
+      };
+      if (opts.json) {
+        defaultRuntime.writeJson(result);
+      } else {
+        defaultRuntime.log(theme.warn(error.message));
+      }
+      // Existing parents treat zero as completed convergence, even without reading JSON.
+      return exitCliAfterOutput(defaultRuntime, result.mode === "finalize" ? 1 : 0);
+    }
+    if (error instanceof UpdateCommandPendingRecoveryFailure) {
+      return reportUpdateCommandPendingRecovery(error, opts, await resolveReportHints());
+    }
+    const ownershipFailure = !hasCommandProcessCleanupError(error)
+      ? resolveUpdateOwnershipFailure(error)
+      : undefined;
+    if (
+      !(error instanceof GatewayServiceUpdateOwnershipError) &&
+      !(error instanceof SystemPackageOwnershipError) &&
+      !(
+        error instanceof UpdatePreMutationError &&
+        (error.reason === "config-read-failed" || error.reason === "invalid-config")
+      ) &&
+      !ownershipFailure
+    ) {
+      throw error;
+    }
+    const message =
+      ownershipFailure?.message ??
+      (error instanceof SystemPackageOwnershipError || error instanceof UpdatePreMutationError
+        ? error.message
+        : error instanceof GatewayServiceUpdateOwnershipError
+          ? `${error.message} Run \`openclaw gateway status --deep\` from the service's owning account before retrying.`
+          : undefined);
+    if (opts.json) {
+      defaultRuntime.error(message);
+    }
+    await printResult(
+      createUpdateCommandFailureResult({
+        mode: "unknown",
+        admission: true,
+        failure: { cause: error },
+        durationMs: 0,
+      }),
+      opts,
+      {
+        ...(await resolveReportHints()),
+        readHistory: false,
+        nextAction:
+          ownershipFailure?.nextAction ??
+          (error instanceof UpdatePreMutationError ? (error.nextAction ?? message) : message),
+      },
+    );
+    return exitCliAfterOutput(defaultRuntime, 1);
+  }
+}
 
 export function resolveUnreportedUpdateAdmissionReport(
   error: unknown,
@@ -151,7 +262,8 @@ async function preparePreMutationUpdateOutcome(
   assertCurrent?.();
   // A settled, unregistered admission owns only its captured refusal. Even a
   // nested report's Run is not authority to reopen history or publish a sentinel.
-  const run = detached ? undefined : params.opts.run;
+  const malformedPreview = params.opts.dryRun === true && params.malformedPreview === true;
+  const run = detached || malformedPreview ? undefined : params.opts.run;
   const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
   const nextAction = params.nextAction ?? params.message;
   if (run && active && nextAction) {
@@ -194,7 +306,11 @@ async function preparePreMutationUpdateOutcome(
     : await prepareResult(
         result,
         params.opts,
-        { nextAction, ...(detached ? { readHistory: false } : {}) },
+        {
+          nextAction,
+          ...(detached || malformedPreview ? { readHistory: false } : {}),
+          ...(malformedPreview ? { writeArtifacts: false } : {}),
+        },
         assertCurrent,
       );
   assertCurrent?.();

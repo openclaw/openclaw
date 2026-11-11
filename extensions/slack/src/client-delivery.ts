@@ -21,15 +21,16 @@ import {
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackError, getSlackWebApiErrorData } from "./errors.js";
+import { buildSlackLiteralText } from "./literal-text.js";
 import {
   buildSlackMessageIdentityPayload,
   hasSlackMessageIdentity,
   type SlackPostMessageIdentity,
 } from "./post-message-identity.js";
-import {
-  buildSlackPostMessagePayload,
-  type SlackPostMessagePayload,
-  type SlackUnfurlOptions,
+import type {
+  SlackBasePostMessagePayload,
+  SlackPostMessagePayload,
+  SlackUnfurlOptions,
 } from "./post-message-payload.js";
 
 const SLACK_COMMERCIAL_API_HOSTNAME = "slack.com";
@@ -245,9 +246,31 @@ export async function postSlackMessageBestEffort(params: {
   blocks?: (Block | KnownBlock)[];
   metadata?: MessageMetadata;
   mrkdwn?: boolean;
+  literalText?: boolean;
   unfurl?: SlackUnfurlOptions;
 }) {
-  const basePayload = buildSlackPostMessagePayload(params);
+  const threadPayload =
+    params.replyBroadcast && params.threadTs
+      ? { thread_ts: params.threadTs, reply_broadcast: true as const }
+      : params.threadTs
+        ? { thread_ts: params.threadTs }
+        : {};
+  const basePayload: SlackBasePostMessagePayload = {
+    channel: params.channelId,
+    text: params.text,
+    ...(params.blocks?.length ? { blocks: params.blocks } : {}),
+    ...(params.metadata ? { metadata: params.metadata } : {}),
+    ...(params.mrkdwn !== undefined ? { mrkdwn: params.mrkdwn } : {}),
+    ...threadPayload,
+    // Default unfurl_links to false so bot messages don't expand inline
+    // link previews (Slack message links, URLs, etc.) unless the operator
+    // explicitly opts in via `channels.slack.unfurlLinks: true`.
+    unfurl_links: params.unfurl?.unfurlLinks ?? false,
+    ...(params.unfurl?.unfurlMedia !== undefined
+      ? { unfurl_media: params.unfurl.unfurlMedia }
+      : {}),
+    ...(params.literalText ? buildSlackLiteralText(params.text) : {}),
+  };
   const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
   const post = async (payload: SlackPostMessagePayload, identity?: SlackPostMessageIdentity) => ({
     response: await withSlackDnsRequestRetry("chat.postMessage", () =>

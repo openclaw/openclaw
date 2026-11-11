@@ -28,13 +28,11 @@ export function projectRuntimeConfig(
   }));
 }
 
-export type SessionListProjectionSource = {
+/** Query membership and admission remain with the session capability. */
+export function projectSessionList(source: {
   sessions: Pick<SessionCapability, "listSnapshot" | "subscribeList">;
   scope: SessionListScope;
-};
-
-/** Query membership and admission remain with the session capability. */
-export function projectSessionList(source: SessionListProjectionSource) {
+}) {
   return projectSource(source, {
     read: ({ sessions, scope }) => sessions.listSnapshot(scope),
     subscribe: ({ sessions, scope }, notify) => sessions.subscribeList(scope, notify),

@@ -24,20 +24,17 @@ describe("sanitizeHtml", () => {
       (_, index) => `<p style="color:rgb(12,34,56)">Visible ${index}</p>`,
     ).join("");
     const NativeRegExp = globalThis.RegExp;
-    const regexpConstructor = vi.spyOn(globalThis, "RegExp").mockImplementation(function (
+    using regexpConstructor = vi.spyOn(globalThis, "RegExp").mockImplementation(function (
       pattern?: string | RegExp,
       flags?: string,
     ) {
       return Reflect.construct(NativeRegExp, [pattern, flags]);
     });
-    try {
-      const result = await sanitizeHtml(html);
-      expect(result).toContain("Visible 0");
-      expect(result).toContain("Visible 255");
-      expect(regexpConstructor).not.toHaveBeenCalled();
-    } finally {
-      regexpConstructor.mockRestore();
-    }
+
+    const result = await sanitizeHtml(html);
+    expect(result).toContain("Visible 0");
+    expect(result).toContain("Visible 255");
+    expect(regexpConstructor).not.toHaveBeenCalled();
   });
 
   it.each([

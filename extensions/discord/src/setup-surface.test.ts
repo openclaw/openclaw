@@ -1,15 +1,7 @@
 import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import { createDiscordSetupWizardBase } from "./setup-core.js";
-
-const discordSetupWizard = createDiscordSetupWizardBase({
-  promptAllowFrom: async ({ cfg }) => cfg,
-  resolveAllowFromEntries: async ({ entries }) =>
-    entries.map((input) => ({ input, resolved: false, id: null })),
-  resolveGroupAllowlist: async ({ entries }) =>
-    entries.map((input) => ({ input, resolved: false })),
-});
+import { discordSetupWizard } from "./setup-core.js";
 
 const config = (discord: NonNullable<OpenClawConfig["channels"]>["discord"]): OpenClawConfig => ({
   channels: { discord },

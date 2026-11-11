@@ -83,12 +83,16 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
         async (worker) => {
           const observeAdmission =
             <T>(withWriteAdmission: SqliteWorkerWriteAdmission<T>): SqliteWorkerWriteAdmission<T> =>
-            async (runAdmitted, diagnostics) => {
+            async (runAdmitted, diagnostics, operation) => {
               await hooks.beforeWriteAdmission?.();
-              return withWriteAdmission(async (refusal) => {
-                await hooks.afterWriteAdmission?.();
-                return await runAdmitted(refusal);
-              }, diagnostics);
+              return withWriteAdmission(
+                async (refusal) => {
+                  await hooks.afterWriteAdmission?.();
+                  return await runAdmitted(refusal);
+                },
+                diagnostics,
+                operation,
+              );
             };
           const originalPrepare = worker.prepare.bind(worker);
           const prepareSpy = vi.spyOn(worker, "prepare").mockImplementation((params) =>

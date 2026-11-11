@@ -23,20 +23,6 @@ import {
   renderMatrixMarkdownTables,
 } from "../format.js";
 
-type MatrixPreparedSingleText = {
-  trimmedText: string;
-  convertedText: string;
-  preparedBody: string;
-  singleEventLimit: number;
-  eventTextLength: number;
-  fitsInSingleEvent: boolean;
-  tableMode: MarkdownTableMode;
-};
-
-type MatrixPreparedChunkedText = MatrixPreparedSingleText & {
-  chunks: string[];
-};
-
 function normalizeMatrixEventLimit(limit: number): number {
   if (!Number.isFinite(limit) || limit <= 0) {
     return limit;
@@ -181,7 +167,7 @@ export function prepareMatrixSingleText(
     accountId?: string;
     tableMode?: MarkdownTableMode;
   },
-): MatrixPreparedSingleText {
+) {
   const trimmedText = text.replace(/\r\n?/gu, "\n");
   const cfg = requireRuntimeConfig(opts.cfg, "Matrix text preparation") as CoreConfig;
   const tableMode =
@@ -219,7 +205,7 @@ export function chunkMatrixText(
     accountId?: string;
     tableMode?: MarkdownTableMode;
   },
-): MatrixPreparedChunkedText {
+) {
   const preparedText = prepareMatrixSingleText(text, opts);
   if (preparedText.fitsInSingleEvent) {
     return {

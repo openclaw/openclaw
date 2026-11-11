@@ -84,11 +84,8 @@ describe("OpenAI realtime voice bridge connection", () => {
   it("uses the configured realtime endpoint without minting a client secret", async () => {
     const baseUrl =
       "wss://voice.example.test/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old";
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
+    const bridge = createNativeBridge({
       providerConfig: { apiKey: "test-realtime-key", baseUrl, model: "custom/realtime model" },
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
     });
     const { connecting, socket } = beginBridgeConnection(bridge);
     openSocket(socket);
@@ -120,10 +117,8 @@ describe("OpenAI realtime voice bridge connection", () => {
     123,
   ])("rejects invalid realtime baseUrl without opening a socket (%s)", (baseUrl) => {
     expect(() =>
-      buildOpenAIRealtimeVoiceProvider().createBridge({
+      createNativeBridge({
         providerConfig: { apiKey: "test-realtime-key", baseUrl },
-        onAudio: vi.fn(),
-        onClearAudio: vi.fn(),
       }),
     ).toThrow("Invalid OpenAI realtime baseUrl");
     expect(FakeWebSocket.instances).toHaveLength(0);
@@ -132,14 +127,12 @@ describe("OpenAI realtime voice bridge connection", () => {
 
   it("rejects mixing a realtime baseUrl with Azure routing", () => {
     expect(() =>
-      buildOpenAIRealtimeVoiceProvider().createBridge({
+      createNativeBridge({
         providerConfig: {
           apiKey: "test-realtime-key",
           baseUrl: "wss://voice.example.test/realtime",
           azureEndpoint: "https://example.openai.azure.com",
         },
-        onAudio: vi.fn(),
-        onClearAudio: vi.fn(),
       }),
     ).toThrow("cannot be combined with Azure");
     expect(FakeWebSocket.instances).toHaveLength(0);
@@ -753,46 +746,36 @@ describe("OpenAI realtime voice bridge connection", () => {
     },
   );
 
-  it("rejects connection when the socket closes before session readiness", async () => {
-    const bridge = createNativeBridge();
-    const { connecting, socket } = beginBridgeConnection(bridge);
-
-    openSocket(socket);
-    socket.close(1006, "session closed");
-
-    await expect(connecting).rejects.toThrow("OpenAI realtime connection closed before ready");
-    expect(bridge.isConnected()).toBe(false);
-  });
-
-  it("bounds sideband frames received before session readiness", async () => {
-    const bridge = createNativeBridge();
-    const { connecting, socket } = beginBridgeConnection(bridge);
-    openSocket(socket);
-    const frame = Buffer.from(
-      JSON.stringify({ type: "session.created", padding: "x".repeat(600 * 1024) }),
-    );
-
-    socket.emit("message", frame);
-    socket.emit("message", frame);
-
-    await expect(connecting).rejects.toThrow("sideband startup buffer exceeded");
-    expect(bridge.isConnected()).toBe(false);
-  });
-
-  it("does not report startup timeout shutdown as a clean close", async () => {
-    vi.useFakeTimers();
+  it.each([
+    ["close", "OpenAI realtime connection closed before ready"],
+    ["overflow", "sideband startup buffer exceeded"],
+    ["timeout", "OpenAI realtime connection timeout"],
+  ] as const)("rejects startup on %s without becoming connected", async (failure, message) => {
+    if (failure === "timeout") {
+      vi.useFakeTimers();
+    }
     const onClose = vi.fn();
     const bridge = createNativeBridge({ onClose });
     const { connecting, socket } = beginBridgeConnection(bridge);
-
-    const timeoutAssertion = expect(connecting).rejects.toThrow(
-      "OpenAI realtime connection timeout",
-    );
-    await vi.advanceTimersByTimeAsync(10_000);
-    await timeoutAssertion;
-    expect(socket.terminated).toBe(true);
-    expect(onClose).not.toHaveBeenCalled();
-    expect(FakeWebSocket.instances).toHaveLength(1);
+    const rejected = expect(connecting).rejects.toThrow(message);
+    if (failure === "timeout") {
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(socket.terminated).toBe(true);
+      expect(onClose).not.toHaveBeenCalled();
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    } else {
+      openSocket(socket);
+      if (failure === "close") {
+        socket.close(1006, "session closed");
+      } else {
+        const frame = Buffer.from(
+          JSON.stringify({ type: "session.created", padding: "x".repeat(600 * 1024) }),
+        );
+        socket.emit("message", frame);
+        socket.emit("message", frame);
+      }
+    }
+    await rejected;
     expect(bridge.isConnected()).toBe(false);
   });
 

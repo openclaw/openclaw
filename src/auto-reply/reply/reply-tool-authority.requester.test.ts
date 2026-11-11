@@ -25,6 +25,7 @@ describe("reply requester authority", () => {
     accountId?: string;
     senderName?: string;
     unknownOwner?: boolean;
+    ownerRestricted?: boolean;
     collaborative?: true;
     conversationId?: string | null;
     threadId?: string;
@@ -42,6 +43,13 @@ describe("reply requester authority", () => {
       name: "collaborator with fewer permissions",
       senderId: "bob",
       collaborative: true,
+      accepted: true,
+    },
+    {
+      name: "collaborator with more permissions",
+      senderId: "bob",
+      collaborative: true,
+      ownerRestricted: true,
       accepted: true,
     },
     {
@@ -99,6 +107,7 @@ describe("reply requester authority", () => {
       accountId,
       senderName,
       unknownOwner,
+      ownerRestricted,
       collaborative,
       conversationId,
       threadId,
@@ -106,6 +115,9 @@ describe("reply requester authority", () => {
     }) => {
       const run = createQueueTestRun({ prompt: "Alice's work" });
       run.run.conversationId = "shared-room";
+      if (ownerRestricted) {
+        run.toolsAllow = ["read"];
+      }
       if (unknownOwner) {
         delete run.run.senderId;
       }
@@ -119,7 +131,7 @@ describe("reply requester authority", () => {
       operation.setPhase("running");
       const incoming = {
         ...run,
-        ...(collaborative ? { toolsAllow: ["read"] } : {}),
+        ...(collaborative ? { toolsAllow: ownerRestricted ? undefined : ["read"] } : {}),
         run: {
           ...run.run,
           senderId,

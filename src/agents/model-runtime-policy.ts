@@ -23,8 +23,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
-import { resolveAgentEntry, resolveNativeModelPrimary } from "./agent-scope-config.js";
-import { resolveSessionAgentIds } from "./agent-scope.js";
+import {
+  resolveAgentEntry,
+  resolveNativeModelPrimary,
+  resolveSessionAgentIds,
+} from "./agent-scope-config.js";
 import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 

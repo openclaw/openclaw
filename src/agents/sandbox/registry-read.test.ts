@@ -28,6 +28,7 @@ import {
   readBrowserRegistry,
   assertSandboxRegistryEntryCurrent as assertCurrent,
   assertSandboxBrowserRegistryEntryCurrent as assertBrowserCurrent,
+  assertSandboxRegistryRetirementCurrent as assertRetirementCurrent,
   readRegisteredSandboxRuntimeIds,
   readRegistry,
   readRegistryEntry,
@@ -102,6 +103,47 @@ function recordRegistryFacts() {
 }
 
 describe("registry race safety", () => {
+  it.each(["container", "browser"] as const)(
+    "keeps retirement authority current across %s activity, replacement, and unknown writes",
+    async (kind) => {
+      const update = (patch: { lastUsedAtMs?: number; createdAtMs?: number } = {}) =>
+        kind === "container"
+          ? updateRegistry(containerEntry({ runtimeState: "removing", ...patch }))
+          : updateBrowserRegistry(browserEntry(patch));
+      const read = kind === "container" ? readRegistry : readBrowserRegistry;
+      await update();
+      const [selected] = (await read()).entries;
+      expect(assertRetirementCurrent(kind, selected!)).toBeUndefined();
+      await update({ lastUsedAtMs: 2 });
+      expect(assertRetirementCurrent(kind, selected!)).toBeUndefined();
+
+      await removeSandboxRegistryGeneration(kind, selected!);
+      expect(() => assertRetirementCurrent(kind, selected!)).toThrow("generation changed");
+      await update({ createdAtMs: 2 });
+      expect(() => assertRetirementCurrent(kind, selected!)).toThrow("generation changed");
+      const [replacement] = (await read()).entries;
+      expect(assertRetirementCurrent(kind, replacement!)).toBeUndefined();
+      // A superseded worker receipt leaves the generation unknown until it is read again.
+      const observe = admission.observeSqliteWorkerCommittedFacts;
+      vi.spyOn(admission, "observeSqliteWorkerCommittedFacts").mockImplementation(
+        (owner, listener) =>
+          observe(owner, (receipt) => {
+            writeNative(
+              kind === "container"
+                ? { operation: "update", entry: { ...replacement!, lastUsedAtMs: 4 } }
+                : {
+                    operation: "updateBrowser",
+                    entry: browserEntry({ createdAtMs: 2, lastUsedAtMs: 4 }),
+                  },
+            );
+            listener(receipt);
+          }),
+      );
+      await update({ createdAtMs: 2, lastUsedAtMs: 3 });
+      expect(() => assertRetirementCurrent(kind, replacement!)).toThrow("generation changed");
+    },
+  );
+
   it("publishes every native batch row before observers and discards nested or outer rollback", () => {
     using recording = recordRegistryFacts();
     const { facts } = recording;
@@ -284,6 +326,23 @@ describe("registry race safety", () => {
     await expectEntry("container-a", { ...entry, lastUsedAtMs: 2 });
   });
 
+  it.each([undefined, "ready"] as const)(
+    "drops idle-stop facts on admission without changing legacy provisioning state (%s)",
+    async (runtimeState) => {
+      const entry = containerEntry({ runtimeState, workspaceDir: "/original/workspace" });
+      await updateRegistry({ ...entry, idleStoppedAtLastUsedMs: entry.lastUsedAtMs });
+      forbidHostSql();
+      const stored = await readRegistryEntry(entry.containerName);
+      expect(stored?.idleStoppedAtLastUsedMs).toBe(entry.lastUsedAtMs);
+      expect(stored?.runtimeState).toBe(runtimeState);
+      await updateRegistry({ ...entry, lastUsedAtMs: 2 });
+      const resumed = await readRegistryEntry(entry.containerName);
+      expect(resumed?.idleStoppedAtLastUsedMs).toBeUndefined();
+      expect(resumed?.runtimeState).toBe(runtimeState);
+      expect(resumed?.workspaceDir).toBe(entry.workspaceDir);
+    },
+  );
+
   it("settles runtime registry writes in the worker and retains pending completion rules", async () => {
     const entry = containerEntry({
       backendId: "docker",
@@ -375,32 +434,34 @@ describe("registry race safety", () => {
     ).resolves.toEqual(["openshell-newer", "openshell-older"]);
   });
 
-  it("stores unsafe container names without writing path-derived files", async () => {
-    await updateRegistry(containerEntry({ containerName: "../escape" }));
-
-    const registry = await readRegistry();
-
-    expect(registry.entries.map((entry) => entry.containerName)).toEqual(["../escape"]);
-    await expect(fs.access(`${fixture.root}/escape.json`)).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
   it.each(["container", "browser"] as const)(
-    "keeps concurrent %s updates in deterministic name order",
+    "orders concurrent %s updates and selects only the requested workspace without path-derived files",
     async (kind) => {
       await Promise.all(
-        ["c", "a", "b"].map((name, index) => {
-          const containerName = `${kind}-${name}`;
+        [`${kind}-c`, "../escape", `${kind}-a`, `${kind}-other`].map((containerName, index) => {
+          const workspaceDir = ["/selected", undefined, "/selected", "/other"][index];
+          const entry = { containerName, workspaceDir };
           return kind === "container"
-            ? updateRegistry(containerEntry({ containerName }))
-            : updateBrowserRegistry(browserEntry({ containerName, cdpPort: 9222 + index }));
+            ? updateRegistry(containerEntry(entry))
+            : updateBrowserRegistry(browserEntry({ ...entry, cdpPort: 9222 + index }));
         }),
       );
-      const registry = await (kind === "container" ? readRegistry() : readBrowserRegistry());
-      expect(registry.entries.map((entry) => entry.containerName)).toEqual(
-        ["a", "b", "c"].map((name) => `${kind}-${name}`),
-      );
+      const read = kind === "container" ? readRegistry : readBrowserRegistry;
+      const registry = await read();
+      expect(registry.entries.map((entry) => entry.containerName)).toEqual([
+        "../escape",
+        `${kind}-a`,
+        `${kind}-c`,
+        `${kind}-other`,
+      ]);
+      const selected = await read({ workspaceDir: "/selected" });
+      expect(selected.entries.map((entry) => entry.containerName)).toEqual([
+        `${kind}-a`,
+        `${kind}-c`,
+      ]);
+      await expect(fs.access(`${fixture.root}/escape.json`)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     },
   );
 

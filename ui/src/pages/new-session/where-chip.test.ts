@@ -33,7 +33,7 @@ function fields(container: ParentNode) {
       "Where trigger",
     ),
     search: expectDefined(
-      container.querySelector<HTMLInputElement>('input[type="search"]'),
+      container.querySelector<HTMLButtonElement>(".header-search__toggle"),
       "environment search",
     ),
   };
@@ -86,7 +86,7 @@ describe("Where chip", () => {
     expect(document.activeElement).toBe(search);
     picker?.hide();
     picker?.show();
-    expect(container.querySelector('input[type="search"]')).toBe(search);
+    expect(container.querySelector(".header-search__toggle")).toBe(search);
     expect(container.querySelector("#new-session-where-trigger")).toBe(trigger);
   });
 
@@ -153,7 +153,7 @@ describe("Where chip", () => {
       ),
     );
     expect(container.querySelector("#new-session-where-trigger")).toBe(trigger);
-    expect(container.querySelector('input[type="search"]')).toBe(search);
+    expect(container.querySelector(".header-search__toggle")).toBe(search);
     expect(document.activeElement).toBe(search);
     expect(container.querySelector('[role="alert"]')).toBeNull();
   });
@@ -253,6 +253,10 @@ describe("Where chip", () => {
 
     expect(capacityCaption(option(container, "device:runner"))).toBe("1 of 2 session slots in use");
 
+    container.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
+    await waitForSolid(() =>
+      expect(container.querySelector('input[type="search"]')).not.toBeNull(),
+    );
     const search = container.querySelector<HTMLInputElement>('input[type="search"]')!;
     expect(search.disabled).toBe(false);
     search.value = "cloud";
@@ -299,15 +303,16 @@ describe("Where chip", () => {
     expect(container.querySelector("openclaw-select-picker")).toBeNull();
   });
 
-  it("renders devices for writers while cloud and Connect remain admin-only", async () => {
+  it("renders granted cloud profiles for writers while Connect and setup remain admin-only", async () => {
     const writer = await renderPicker(false);
     const autoRow = option(writer, "auto-device");
     expect(autoRow?.getAttribute("aria-pressed")).toBe("false");
     expect(hoverDetails(autoRow)).toContain("Chooses the least-busy connected device");
     expect(option(writer, "device:runner")).not.toBeNull();
     expect(writer.querySelector(".session-menu__sub, .session-menu__description")).toBeNull();
-    expect(option(writer, "cloud:aws")).toBeNull();
+    expect(option(writer, "cloud:aws")).not.toBeNull();
     expect(writer.querySelector('[data-action="connect-machine"]')).toBeNull();
+    expect(writer.querySelector('[data-action="manage-cloud-workers"]')).toBeNull();
 
     const admin = await renderPicker(true);
     expect(option(admin, "cloud:aws")).not.toBeNull();
@@ -318,7 +323,7 @@ describe("Where chip", () => {
     const container = await renderPicker(true, undefined, {
       environments: [device("macbook", "MacBook", { workerSlots: { total: 1, available: 1 } })],
       cloudProfiles: [],
-      deviceDisabledReason: "This runtime does not support paired devices",
+      deviceDisabledReason: "This runtime doesn’t support paired devices",
     });
 
     const row = option(container, "device:macbook");
@@ -326,7 +331,7 @@ describe("Where chip", () => {
     expect(row?.querySelector(".session-menu__description")).toBeNull();
     // Unavailable cards show only the actionable reason.
     expect(capacityCaption(row)).toBeUndefined();
-    expect(hoverDetails(row)).toContain("This runtime does not support paired devices");
+    expect(hoverDetails(row)).toContain("This runtime doesn’t support paired devices");
   });
 
   it.each<[DraftEnvironment["issues"], RegExp]>([
@@ -386,7 +391,7 @@ describe("Where chip", () => {
       expect(capacityCaption(row)).toBe(disabled ? undefined : "1 of 1 session slots in use");
       if (disabled) {
         expect(hoverDetails(row)).toContain(
-          "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
+          "Ask an admin to allow the required command on this device, or pick another device.",
         );
       }
     },

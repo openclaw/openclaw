@@ -41,7 +41,7 @@ import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
-import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
+import { kernelGatewayTestStateOptions } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type Client = Awaited<ReturnType<typeof connectGatewayClient>>;
@@ -98,6 +98,7 @@ function createScenario(index: number, scenario: (typeof cases)[number]) {
     held: createDeferredCore(),
     releaseRead: createDeferredCore(),
     requesterDelivered: createDeferredCore(),
+    closed: createDeferredCore<[number, string]>(),
     failed: createDeferredCore<never>(),
     receipt: undefined as SpawnReceipt | undefined,
     releaseDrain: undefined as (() => void) | undefined,
@@ -215,7 +216,6 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
   const cleanups: Array<() => Promise<unknown>> = [];
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>>;
-
   const receive = (recipient: string) => (event: { event?: string; payload?: unknown }) => {
     const payload = asOptionalRecord(event.payload);
     const target = scenarios.find((scenario) => scenario.sessionKey === payload?.sessionKey);
@@ -257,15 +257,9 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
     for (const scenario of scenarios) {
       void scenario.failed.promise.catch(() => {});
     }
-    state = await createOpenClawTestState({
-      label: "goal-child-authority-product",
-      env: {
-        ...KERNEL_TEST_ENV,
-        VITEST: process.env.VITEST,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
-    });
+    state = await createOpenClawTestState(
+      kernelGatewayTestStateOptions("goal-child-authority-product"),
+    );
     cleanups.push(() => state.cleanup());
     const server = createServer((request, response) => {
       let owner: Scenario | undefined;
@@ -413,6 +407,7 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
           path: state.statePath("test-devices", String(index), "client", "credentials.sqlite"),
         }),
         onEvent: receive(scenario.email),
+        onClose: (code, reason) => scenario.closed.resolve([code, reason]),
       });
       clients.set(scenario.email, client);
       cleanups.push(() => disconnectGatewayClient(client));
@@ -570,12 +565,9 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
             scenario.releaseDrain?.();
             const drained = await wait(waitForGatewayActiveWork(30_000));
             expect(drained.drained, JSON.stringify(drained.snapshot.blockers)).toBe(true);
-            // Even the refusal response orders earlier publications on this socket.
+            // Revocation closes the socket; a retained connection still orders publications by RPC.
             if (scenario.gate === "enqueue") {
-              await expect(client.request("users.self", {})).rejects.toMatchObject({
-                code: "FORBIDDEN",
-                message: expect.stringContaining("operator role changed"),
-              });
+              expect(await wait(scenario.closed.promise)).toEqual([4001, "gateway policy changed"]);
             } else {
               await client.request("users.self", {});
             }
@@ -623,12 +615,31 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
             const message = asOptionalRecord(asOptionalRecord(event)?.message);
             return message?.role === "user" ? [message] : [];
           });
-          expect(userMessages, "only human request and child settlement persist").toMatchObject([
-            { provenance: { kind: "external_user" } },
-            { provenance: { kind: "inter_session", sourceTool: "subagent_settle" } },
+          // Settlement and continuation input persists for model replay, not displayed history.
+          const visibleUserMessages = userMessages.filter((message) => message.display !== false);
+          expect(visibleUserMessages, "only the human request is visible").toMatchObject([
+            { provenance: { kind: "external_user" }, content: scenario.prompt },
           ]);
-          expect(JSON.stringify(userMessages[0])).toContain(scenario.prompt);
+          expect(
+            userMessages.slice(0, 2),
+            "human request and child settlement persist",
+          ).toMatchObject([
+            { provenance: { kind: "external_user" } },
+            {
+              display: false,
+              provenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+            },
+          ]);
           expect(JSON.stringify(userMessages[1])).toContain(scenario.childResult);
+          const continuationMessages = userMessages.slice(2);
+          expect(continuationMessages).toHaveLength(scenario.gate === "none" ? 2 : 0);
+          for (const message of continuationMessages) {
+            expect(message).toMatchObject({
+              display: false,
+              provenance: { kind: "internal_system" },
+              content: [{ type: "text", text: expect.stringContaining("Advance the active goal") }],
+            });
+          }
         } finally {
           readControl?.mockRestore();
           scenario.releaseRead.resolve();

@@ -11,7 +11,8 @@ import type {
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import { callSessionTargetGateway, type SessionTargetGateway } from "./session-target.js";
 
 export type SessionsImportOptions = SessionTargetGateway & {
@@ -54,7 +55,9 @@ function printResult(result: ImportResult, runtime: RuntimeEnv): void {
       .join("/"),
   );
   if (!result.ok) {
-    runtime.error(`Failed ${source || "catalog listing"}: ${sanitizeTerminalText(result.error)}`);
+    // Gateway failures carry remedy lines; sanitize each line and indent it under its source.
+    const detail = result.error.split("\n").map(sanitizeTerminalText).join("\n  ");
+    runtime.error(`Failed ${source || "catalog listing"}: ${detail}`);
   } else if (result.status === "would_import") {
     runtime.log(`[dry-run] Would import ${source}`);
   } else {

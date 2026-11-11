@@ -1,4 +1,3 @@
-import { StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -111,7 +110,8 @@ it.each([
       let readinessPublicationRefused = false;
       let readyAtPublication: ReturnType<typeof loadSessionEntry>;
       let stopReadinessPublication: (() => void) | undefined;
-      const reads = observeMainThreadReads();
+      const readSql: string[] = [];
+      observeMainThreadReads((sql) => readSql.push(sql));
       const upsertLink = upstreamLinks.upsertSessionUpstreamLinkWithCurrentSource;
       const deleteLink = upstreamLinks.deleteSessionUpstreamLinkAsync;
       const trackLink =
@@ -159,20 +159,14 @@ it.each([
               rollbackCommitRefused = true;
               throw new Error("injected rollback failure");
             }
-            const offsets = reads.calls.map((call) => call.mock.contexts.length);
+            const readOffset = readSql.length;
             try {
               admit(request, grant);
             } finally {
               if (operation && (request.stage === "transaction" || request.stage === "commit")) {
-                for (const [index, call] of reads.calls.entries()) {
-                  linkGrantReads += call.mock.contexts
-                    .slice(offsets[index])
-                    .filter(
-                      (statement) =>
-                        statement instanceof StatementSync &&
-                        statement.sourceSQL.includes("session_upstream_links"),
-                    ).length;
-                }
+                linkGrantReads += readSql
+                  .slice(readOffset)
+                  .filter((sql) => sql.includes("session_upstream_links")).length;
               }
             }
           }, attachment);

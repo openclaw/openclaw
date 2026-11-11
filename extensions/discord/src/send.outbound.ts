@@ -42,7 +42,7 @@ import type {
   DiscordSendResult,
 } from "./send.types.js";
 import { parseAndResolveDiscordTarget } from "./target-resolver.js";
-type DiscordSendOpts = Omit<DiscordReactOpts, "signal" | "timeoutMs"> &
+type DiscordSendOpts = Omit<DiscordReactOpts, "timeoutMs"> &
   DiscordOutboundMediaOpts & {
     mediaUrl?: string;
     filename?: string;

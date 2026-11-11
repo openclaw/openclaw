@@ -1,9 +1,10 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord as readCostRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, Loading, Repeat, Show, createMemo, lazy } from "solid-js";
+import { Errored, Loading, Repeat, Show, createMemo, lazy } from "solid-js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/shared/transcript-only-openclaw-assistant.js";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import type { ProviderQuotaGroup } from "../../../lib/provider-quota-summary.ts";
@@ -12,10 +13,16 @@ import type {
   ContextNoticeProps,
   getContextNoticeViewModel,
 } from "./chat-composer-context-model.ts";
+import { ContextCompactButton } from "./chat-context-compact.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 const ChatContextBreakdown = lazy(() => import("./chat-context-breakdown.tsx"), {
   export: "ChatContextBreakdown",
 });
+const ModelProviderIcon = lazy(() => import("../../../lib/reactive/provider-presentation.tsx"), {
+  export: "ModelProviderIcon",
+});
+const QuotaMetrics = lazy(() => import("./chat-composer-quota-metrics.tsx"));
 
 function ContextPopoverSkeleton() {
   return (
@@ -74,107 +81,21 @@ function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostS
   return null;
 }
 
-// Provider window labels arrive as compact data strings ("5h", "Week"); model
-// scoped labels (e.g. "Opus") pass through untranslated.
-function formatUsageWindowLabel(label: string): string {
-  if (label === "5h") {
-    return t("chat.composer.contextUsage.limitFiveHour");
-  }
-  if (label === "Week") {
-    return t("chat.composer.contextUsage.limitWeekly");
-  }
-  if (label === "Day") {
-    return t("chat.composer.contextUsage.limitDaily");
-  }
-  const hours = /^(\d+)h$/.exec(label);
-  if (hours) {
-    return t("chat.composer.contextUsage.limitHours", { hours: hours[1] ?? "" });
-  }
-  return label;
-}
-
-function formatBudgetAmount(amount: number, unit: string): string {
-  if (/^[A-Za-z]{3}$/.test(unit)) {
-    try {
-      return new Intl.NumberFormat(undefined, {
-        style: "currency",
-        currency: unit.toUpperCase(),
-        maximumFractionDigits: 2,
-      }).format(amount);
-    } catch {
-      // Non-ISO currency codes fall through to plain unit suffix formatting.
-    }
-  }
-  return `${amount.toFixed(2)} ${unit}`;
-}
-
 function formatContextCost(value: number) {
   return formatCost(value).replace(/(\.\d{2})0$/, "$1");
 }
 
-function quotaReset(resetAt?: number): string {
-  if (resetAt === undefined) {
-    return t("usage.common.emptyValue");
-  }
-  const date = new Date(resetAt);
-  const today = new Date();
-  return date.toDateString() === today.toDateString()
-    ? date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
-    : date.toLocaleDateString(undefined, { weekday: "short" });
-}
-
-function QuotaRow(props: {
-  label: string;
-  usedPercent: number;
-  value: string;
-  index: number;
-  reset?: string;
-}) {
-  return (
-    <div
-      class="context-usage__limit"
-      role="progressbar"
-      aria-label={props.label}
-      aria-valuemin="0"
-      aria-valuemax="100"
-      aria-valuenow={props.usedPercent}
-      aria-valuetext={props.value}
-      style={{ "--quota-strength": Math.min(props.index, 2) * 0.75 + 2 }}
-    >
-      <span class="context-usage__limit-fill" style={{ width: `${props.usedPercent}%` }} />
-      <span class="context-usage__limit-tick" aria-hidden="true" />
-      <div class="context-usage__limit-content">
-        <span class="context-usage__limit-label">{props.label}</span>
-        <Show when={props.reset}>
-          <span
-            class="context-usage__limit-reset"
-            title={t("chat.composer.contextUsage.resets", { time: props.reset! })}
-          >
-            <Icon name="refresh" />
-            {props.reset}
-          </span>
-        </Show>
-        <strong
-          class={[
-            "context-usage__limit-value",
-            {
-              "context-usage__limit-value--warn": props.usedPercent >= 75 && props.usedPercent < 90,
-              "context-usage__limit-value--danger": props.usedPercent >= 90,
-            },
-          ]}
-        >
-          {props.value}
-        </strong>
-      </div>
-    </div>
-  );
-}
-
 function QuotaGroup(props: { group: ProviderQuotaGroup; usageHref: string }) {
+  const provider = () => props.group.providers[0] ?? props.group.displayName;
+  const icon = () => <ProviderBrandIcon provider={provider()} />;
   return (
     <div class="context-usage__tray">
       <div class="context-usage__identity">
-        <ProviderBrandIcon provider={props.group.providers[0] ?? props.group.displayName} />
+        <Errored fallback={icon}>
+          <Loading fallback={icon()}>
+            <ModelProviderIcon provider={provider()} />
+          </Loading>
+        </Errored>
         <span
           class="context-usage__account"
           data-chat-usage-account="true"
@@ -192,33 +113,16 @@ function QuotaGroup(props: { group: ProviderQuotaGroup; usageHref: string }) {
         </a>
       </div>
       <div class="context-usage__limits">
-        <For each={props.group.windows} keyed={false}>
-          {(limit, index) => (
-            <QuotaRow
-              label={formatUsageWindowLabel(limit().label)}
-              usedPercent={limit().usedPercent}
-              value={`${limit().usedPercent}%`}
-              reset={quotaReset(limit().resetAt)}
-              index={index}
-            />
-          )}
-        </For>
-        <For each={props.group.budgets} keyed={false}>
-          {(budget, index) => (
-            <QuotaRow
-              label={budget().label || t("chat.composer.contextUsage.usageCredits")}
-              usedPercent={Math.max(
-                0,
-                Math.min(100, Math.round((budget().used / budget().limit) * 100)),
-              )}
-              value={t("chat.composer.contextUsage.budgetValue", {
-                used: formatBudgetAmount(budget().used, budget().unit),
-                limit: formatBudgetAmount(budget().limit, budget().unit),
-              })}
-              index={props.group.windows.length + index}
-            />
-          )}
-        </For>
+        <ChatLazyBoundary
+          fallback={
+            // Preserve the known row count and CSS geometry while only the metrics load.
+            <Repeat count={props.group.windows.length + props.group.budgets.length}>
+              {() => <div class="context-usage__limit" aria-hidden="true" />}
+            </Repeat>
+          }
+        >
+          <QuotaMetrics group={props.group} />
+        </ChatLazyBoundary>
       </div>
     </div>
   );
@@ -228,16 +132,15 @@ export function ChatComposerContextPanel(
   props: ContextNoticeProps & {
     model: ReturnType<typeof getContextNoticeViewModel>;
     currentGroup: ProviderQuotaGroup | undefined;
+    hasSubscription: boolean;
+    quotaUnknown: boolean;
     open: boolean;
   },
 ) {
   // Plan-billed sessions hide dollar estimates: subscription usage is bounded
   // by the plan windows below, and per-token math would misread as real spend.
-  // Billing mode is provider-level: session rows do not record which auth
-  // profile served the run, so a provider with both an API key and a
-  // subscription resolves to subscription display (per-run credential
-  // attribution is #102807).
-  const showCosts = () => !props.currentGroup;
+  // Billing classification is independent of account-specific quota availability.
+  const showCosts = () => !props.currentGroup && !props.hasSubscription;
   const usageHref = () => `${normalizeBasePath(props.providerUsage?.basePath ?? "")}/usage`;
   const formatStat = (value: number | null) =>
     value === null ? t("usage.common.emptyValue") : formatCompactTokenCount(value);
@@ -259,19 +162,21 @@ export function ChatComposerContextPanel(
       <Show when={props.model}>
         {(context) => (
           <>
-            <div class="context-usage__header">
-              <span class="context-usage__title">
-                {t(
-                  context().fromLastPrompt
-                    ? "chat.composer.contextUsage.promptBudget"
-                    : "chat.composer.contextUsage.contextWindow",
-                )}
-              </span>
-              <strong class="context-usage__context-value">
-                {context().detail} · {context().approximate ? "~" : ""}
-                {context().pct}%
-              </strong>
-            </div>
+            <MenuHeading
+              class="context-usage__header"
+              label={t(
+                context().fromLastPrompt
+                  ? "chat.composer.contextUsage.promptBudget"
+                  : "chat.composer.contextUsage.contextWindow",
+              )}
+              trailing={
+                /* Translation replaces the text anchors used by live token updates. */
+                <strong class="oc-menu-heading__value context-usage__context-value" translate="no">
+                  {context().detail} · {context().approximate ? "~" : ""}
+                  {context().pct}%
+                </strong>
+              }
+            />
             <Show when={props.gateway && props.session}>
               <Loading fallback={<ContextPopoverSkeleton />}>
                 <ChatContextBreakdown
@@ -287,15 +192,25 @@ export function ChatComposerContextPanel(
                 />
               </Loading>
             </Show>
-            <button
-              type="button"
-              class="context-usage__open"
-              disabled={!props.onOpenContext}
-              onClick={() => props.onOpenContext?.()}
-            >
-              {t("chat.sessionDetails.contextOpen")}
-              <Icon name="chevronRight" />
-            </button>
+            <div class="context-usage__actions">
+              <button
+                type="button"
+                class="context-usage__open"
+                disabled={!props.onOpenContext}
+                onClick={() => props.onOpenContext?.()}
+              >
+                {t("chat.sessionDetails.contextOpen")}
+                <Icon name="chevronRight" />
+              </button>
+              {/* A secondary action beside View context: the ring already carries the warning.
+                  Compacting keeps the popover open so the budget above shows the result. */}
+              <ContextCompactButton
+                onCompact={props.onCompact}
+                compactionStatus={props.compactionStatus}
+                runActive={props.runActive}
+                connected={props.connected !== false}
+              />
+            </div>
             <div class="context-usage__separator" />
             <div class="context-usage__latest">
               <span>{t("chat.composer.contextUsage.latestRun")}</span>
@@ -321,6 +236,11 @@ export function ChatComposerContextPanel(
       </Show>
       <Show when={props.currentGroup}>
         {(group) => <QuotaGroup group={group()} usageHref={usageHref()} />}
+      </Show>
+      <Show when={props.quotaUnknown}>
+        <p class="context-usage__stats" role="status">
+          {t("chat.composer.contextUsage.quotaAccountUnknown")}
+        </p>
       </Show>
     </section>
   );

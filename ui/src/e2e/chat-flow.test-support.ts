@@ -103,22 +103,6 @@ export function createChatFlowE2eSuite(
   });
 }
 
-export async function buildLocalWebchatAudioMessage(source: string) {
-  const { buildWebchatAssistantMessageFromReplyPayloads } =
-    await import("../../../src/gateway/server-methods/chat-webchat-media.ts");
-  const audioPath = new URL(source).pathname;
-  const localRoot = path.dirname(audioPath);
-  await mkdir(localRoot, { recursive: true });
-  await writeFile(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
-  return expectDefined(
-    await buildWebchatAssistantMessageFromReplyPayloads(
-      [{ mediaUrl: source, trustedLocalMedia: true }],
-      { localRoots: [localRoot] },
-    ),
-    "Gateway-produced WebChat audio message",
-  );
-}
-
 export const requireRecord = createRequireRecord("record", "expected-object-value");
 
 export function requireString(value: unknown, label: string): string {
@@ -191,10 +175,14 @@ export async function chatThreadDistanceFromBottom(page: Page): Promise<number> 
 }
 
 export async function waitForChatScrollIdle(page: Page): Promise<void> {
+  await waitForTranscriptScrollIdle(page.locator(".chat-pane-cache__pane--active .chat-thread"));
+}
+
+export async function waitForTranscriptScrollIdle(locator: Locator): Promise<void> {
   await expect
     .poll(
       () =>
-        page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate(async (element) => {
+        locator.evaluate(async (element) => {
           const thread = element as HTMLElement;
           const readGeometry = () => [
             thread.clientHeight,

@@ -28,6 +28,7 @@ export async function readRestartSentinelStartupSnapshot(params: {
   context: DeliveryQueueStateContext;
   pendingUpdate?: PendingUpdateSentinelIdentity;
   shouldRun?: () => boolean;
+  signal?: AbortSignal;
 }) {
   if (params.shouldRun?.() === false) {
     return null;
@@ -50,7 +51,14 @@ export async function readRestartSentinelStartupSnapshot(params: {
   const payload = sentinel.payload;
   const updateRun =
     payload.kind === "update"
-      ? await finalizeRestartUpdateRun(payload, false, params.context)
+      ? await finalizeRestartUpdateRun(payload, false, params.context, {
+          signal: params.signal,
+          assertCurrent: () => {
+            if (params.shouldRun?.() === false) {
+              throw new Error("Gateway restart continuation is no longer current");
+            }
+          },
+        })
       : undefined;
   if (params.shouldRun?.() === false) {
     return null;

@@ -90,6 +90,7 @@ it("allows offline drafting but disables submission without a live connection", 
       button.click();
     }
     expect(request).not.toHaveBeenCalledWith("cron.add", expect.anything());
+    expect(dom.callsFor(request, "models.list")).toHaveLength(0);
     expect(page.cron.cronForm.name).toBe("Offline draft");
   } finally {
     page.remove();
@@ -251,6 +252,7 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
     expect(dom.text(page, ".cron-run-entry--highlighted")).toContain("Linked run");
   });
   expect(page.querySelectorAll(".cron-run-entry--highlighted")).toHaveLength(1);
+  expect(dom.callsFor(request, "models.list")).toHaveLength(0);
   expect(request).toHaveBeenCalledWith(
     "cron.runs",
     expect.objectContaining({
@@ -261,13 +263,15 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
       deliveryStatuses: undefined,
     }),
   );
-  getButtonByText(page, "Show all runs").click();
+  getButtonByText(page, "Show all activity").click();
   await waitFor(() => expect(page.querySelectorAll(".cron-run-entry")).toHaveLength(50));
   expect(page.querySelector(".cron-run-entry--highlighted")).toBeNull();
   updateCronRunsFilter(page.cron, previousFilters);
   page.routeSearch = "?job=linked-job";
   await page.settle();
-  expect(request).toHaveBeenLastCalledWith(
+  dom.click(page, dom.testId("cron-detail-tab-history"));
+  await page.settle();
+  expect(dom.callsFor(request, "cron.runs").at(-1)).toEqual([
     "cron.runs",
     expect.objectContaining({
       id: job.id,
@@ -276,7 +280,8 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
       statuses: ["error"],
       deliveryStatuses: ["not-delivered"],
     }),
-  );
+  ]);
+  await waitFor(() => expect(dom.callsFor(request, "models.list")).toHaveLength(1));
 });
 
 it.each(["selecting another job", "changing agent scope", "opening another link", "disconnecting"])(
@@ -381,7 +386,9 @@ it.each(["operator.write", "operator.read"])(
     gateway.emitSnapshot({ hello: harness.operatorHello([scope]) });
     staleRunButton.click();
     await page.settle();
-    expect(page.textContent).toContain("Browsing only");
+    expect(page.textContent).toContain(
+      "Only the owner with automation access or an admin can change this automation.",
+    );
     expect(page.querySelector(dom.testId("cron-row-run-access-job"))).toBeNull();
     expect(
       request.mock.calls.some(([method]) =>
@@ -399,11 +406,13 @@ it.each([
   async (_scenario, scopeId, suggested) => {
     const request = harness.createRequest();
     const { page } = mountCronPage(request, { scopeId, selectedId: "writer" });
-    await expectRpc(request, "models.list", { agentId: "writer", view: "configured" });
+    await page.settle();
+    expect(dom.callsFor(request, "models.list")).toHaveLength(0);
     const createSelector = suggested
       ? '[data-suggestion="repoPulse"]'
       : dom.testId("cron-new-task");
     (await dom.waitForElement(page, createSelector)).click();
+    await expectRpc(request, "models.list", { agentId: "writer", view: "configured" });
     await waitFor(() => {
       expect(page.querySelector("#cron-name")).not.toBeNull();
       expect(page.querySelector("#cron-payload-text")).not.toBeNull();
@@ -542,7 +551,7 @@ it.each([
     // Run actions stop propagation; the overview still permits selecting another row.
     dom.click(page, '[data-test-id="cron-row-beta"] .cron-table__name');
     await waitFor(() => {
-      expect(betaReads).toBe(1);
+      expect(betaReads).toBe(0);
       expect(page.querySelector(dom.testId("cron-detail-tab-history"))).not.toBeNull();
     });
     (page.querySelector(dom.testId("cron-detail-tab-history")) as HTMLElement).dispatchEvent(

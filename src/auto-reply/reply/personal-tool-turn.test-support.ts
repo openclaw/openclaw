@@ -381,3 +381,12 @@ export async function withPersonalToolTurn<T>(
     admission?.close();
   }
 }
+
+export function createPersonalToolParticipant(profileId: string, name: string) {
+  return {
+    profileId,
+    name,
+    senderId: `${profileId}-sender`,
+    gatewayUiCommandTarget: { connId: `${profileId}-tab`, profileId },
+  };
+}

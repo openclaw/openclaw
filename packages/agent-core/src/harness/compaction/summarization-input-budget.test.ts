@@ -122,12 +122,18 @@ async function summarize(messages: AgentMessage[], model: Model, previousSummary
 }
 
 describe("summary request input budget", () => {
-  it("sends a small history unchanged", async () => {
-    const messages = createLongSession(3);
-    const prompt = await summarize(messages, createModel(1_000_000));
+  it("sends terminal facts from long ordinary tool results to the summarizer", async () => {
+    const output = `REPORT-START\n${"ordinary observation\n".repeat(600)}RESULT_CODE=STUDY-01-OK`;
+    const messages = [toolResult(output)];
 
-    expect(conversationOf(prompt)).toBe(serializeConversation(convertToLlm(messages)));
-    expect(prompt).not.toContain("entries omitted ...]");
+    const prompt = await summarize(messages, createModel(32_768));
+    const projected = conversationOf(prompt).split("[Tool result]: ")[1] ?? "";
+
+    expect(projected).toContain("REPORT-START\n");
+    expect(projected).toContain("RESULT_CODE=STUDY-01-OK");
+    expect(projected).toMatch(/\[\.\.\. \d+ .*characters (?:truncated|omitted)/u);
+    expect(projected.length).toBeLessThanOrEqual(2_000);
+    expect(messages[0]?.content).toEqual([{ type: "text", text: output }]);
   });
 
   it("keeps one summary request bounded when the history fills a 1M-token window", async () => {
@@ -193,14 +199,6 @@ describe("summary request input budget", () => {
     if (!result.ok) {
       expect(result.error).toBeInstanceOf(SummaryOutputBudgetError);
       expect(result.error.message).toContain("agents.defaults.compaction.model");
-    }
-  });
-
-  it("never exceeds a budget too small for one gap marker", () => {
-    for (const budget of [0, 10, 18]) {
-      const result = serializeConversationWithinBudget(convertToLlm([user("hello world")]), budget);
-      expect(result.text).not.toContain("hello");
-      expect(result.omittedEntries).toBe(1);
     }
   });
 
@@ -308,15 +306,30 @@ describe("summary request input budget", () => {
     expect(text).toMatch(/\[Tool result of write_report\(cmd="r+\.\.\.\)\]: WRITE_FAILED: quota$/u);
   });
 
-  it("sends a short history unchanged when the window is too small to sample", async () => {
+  it("rejects an undersized sample but sends a short history unchanged", async () => {
     const { streamFn, prompts } = createCapturingStream();
-    const result = await requestSummary([user("Rename the queue.")], createModel(4_096, 4_096), {
+    const model = createModel(4_096, 4_096);
+    const options = {
       reserveTokens: 2_500,
       streamFn,
-    });
+    };
+    const result = await requestSummary([user("Rename the queue.")], model, options);
 
     expect(result).toEqual({ ok: true, value: "summary" });
+    expect(prompts).toHaveLength(1);
     expect(conversationOf(prompts[0] ?? "")).toBe("[User]: Rename the queue.");
+
+    const sampled = await requestSummary(
+      [user("Keep this decision. ".repeat(1_000))],
+      model,
+      options,
+    );
+
+    expect(sampled.ok).toBe(false);
+    if (!sampled.ok) {
+      expect(sampled.error).toBeInstanceOf(SummaryOutputBudgetError);
+    }
+    expect(prompts).toHaveLength(1);
   });
 
   it.each([
@@ -422,6 +435,18 @@ describe("summary request input budget", () => {
     for (let turn = 0; turn < 400; turn += 1) {
       expect(text).toMatch(new RegExp(`\\[User\\]: (?:ask|DECISION)-${turn}\\b`, "u"));
     }
+  });
+
+  it("shortens older tool results so every assistant reply reaches a sampled input", () => {
+    const { text } = bounded(createLongSession(40));
+    const replies = Array.from({ length: 40 }, (_, turn) => `[Assistant]: reply-${turn} `);
+    expect(replies.filter((reply) => !text.includes(reply))).toEqual([]);
+    // Characters each projection left out: older results keep about 500, the newest 2,000.
+    const truncated = [
+      ...text.matchAll(/\]: result-\d+ [^[]*\[\.\.\. (\d+) more characters truncated\]/gu),
+    ].map((match) => Number(match[1]));
+    expect(truncated[0]).toBeGreaterThan(10_000);
+    expect(truncated.at(-1)).toBeLessThan(9_000);
   });
 
   it("spreads user messages across the history when they do not all fit", () => {

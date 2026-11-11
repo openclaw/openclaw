@@ -1,5 +1,5 @@
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import type { ProjectRecent } from "../../../packages/gateway-protocol/src/index.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -17,7 +17,7 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-stat
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as repositoryWorkspaces from "../../state/session-repository-workspaces.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { linkEmail } from "../../state/user-profile-writes.worker.js";
+import { linkEmail, mergeProfiles } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -27,6 +27,14 @@ import {
 import { listProjectRecents } from "./projects-recents.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
 import { initializeRepository, invokeProjectMethod } from "./projects.test-support.js";
+
+beforeEach(() => {
+  // Read-scoped listings check repository visibility; recents must not depend on live GitHub.
+  const visibility = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValue(Response.json({ visibility: "public" }));
+  return () => visibility.mockRestore();
+});
 
 const folderRecent = (name: string) => ({
   kind: "folder",
@@ -93,17 +101,18 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     seed("agent:main:c", {
       updatedAt: 400,
       projectId: "stale",
-      spawnedCwd: "/work/scratch",
+      spawnedCwd: "/work/managed-nested",
+      worktree: { id: "w", branch: "b", repoRoot: "/work", canonicalWorkspaceDir: "/work/scratch" },
       archivedAt: 1,
     });
     for (let index = 0; index < 8; index++) {
       seed(`agent:main:folder-${index}`, {
         updatedAt: 300 - index,
-        spawnedCwd: `/work/folder-${index}`,
+        spawnedCwd: index === 0 ? "/work/managed-checkout" : `/work/folder-${index}`,
+        worktree: index === 0 ? { id: "w", branch: "b", repoRoot: "/work/folder-0" } : undefined,
       });
     }
     seed("agent:main:other", {
-      sessionId: "session-other",
       updatedAt: 1_000,
       createdActor: { type: "human", source: "profile", id: "profile-bob" },
       spawnedCwd: "/work/private-bob",
@@ -136,12 +145,11 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     linkEmail("source@example.test", targetProfile.id);
     releaseCatalog = (await prepareUserProfileCatalog()).release;
     const readResult = await list(["operator.read"]);
-    expectRecents(readResult, [
-      { kind: "project", projectId: project.id, displayName: "Registered" },
-    ]);
+    const registeredRecent = { kind: "project", projectId: project.id, displayName: "Registered" };
+    expectRecents(readResult, [registeredRecent]);
     const writeResult = await list();
     const expectedRecents = [
-      { kind: "project", projectId: project.id, displayName: "Registered" },
+      registeredRecent,
       { kind: "repository", url: repository.url, displayName: "hello-world" },
       folderRecent("scratch"),
       folderRecent("incognito"),
@@ -218,11 +226,9 @@ test("projects.list returns only the caller's deterministic resolved recents", a
         return result;
       });
     try {
-      expect(await list()).toMatchObject({
-        ok: false,
-        error: { message: expect.stringContaining("Project access changed") },
-      });
-      expect(repositoryRead).toHaveBeenCalled();
+      // The changed read restarts against current facts instead of surfacing the race.
+      expectRecents(await list(), tiedRecents);
+      expect(repositoryRead).toHaveBeenCalledTimes(2);
     } finally {
       repositoryRead.mockRestore();
     }
@@ -249,6 +255,57 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     projection?.dispose();
     releaseCatalog?.();
     memorySessionActorOwners.closeDatabase(memoryLocation);
+    await state.cleanup();
+  }
+});
+
+test("projects.list retries recents when the caller's profile is merged mid-read", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
+  let projection: SessionRowProjection | undefined;
+  try {
+    const caller = ensureProfileForEmail("caller@example.test");
+    const repository = await repositoryWorkspaces.getSessionRepositoryWorkspaceStore().create({
+      agentId: "main",
+      sessionKey: "global",
+      url: "https://github.com/octocat/hello-world.git",
+      assertCurrent: () => {},
+    });
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "global" },
+      {
+        sessionId: "merge-race",
+        updatedAt: 1,
+        repositoryWorkspaceId: repository.workspaceId,
+        createdActor: { type: "human", source: "profile", id: caller.id },
+      },
+    );
+    const cfg = { agents: { entries: { main: { workspace: "/workspace" } } } };
+    projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const canonical = ensureProfileForEmail("canonical@example.test");
+    const findRepositories = repositoryWorkspaces.findSessionRepositoryWorkspaces;
+    using merging = vi
+      .spyOn(repositoryWorkspaces, "findSessionRepositoryWorkspaces")
+      .mockImplementationOnce(async (...args) => {
+        const result = await findRepositories(...args);
+        mergeProfiles(caller.id, canonical.id);
+        return result;
+      });
+    // The merge retires the prepared alias cohort; the retry reads the canonical one.
+    expectRecents(
+      await invokeProjectMethod(
+        "projects.list",
+        {},
+        cfg,
+        ["operator.write"],
+        caller.id,
+        registeredProjectsHandlers,
+        projection,
+      ),
+      [{ kind: "repository", url: repository.url, displayName: "hello-world" }],
+    );
+    expect(merging).toHaveBeenCalledTimes(2);
+  } finally {
+    projection?.dispose();
     await state.cleanup();
   }
 });

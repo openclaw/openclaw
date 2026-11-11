@@ -1,14 +1,8 @@
-import path from "node:path";
-import { afterAll, afterEach, describe, expect, expectTypeOf, it, onTestFinished } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { afterEach, describe, expect, expectTypeOf, it, onTestFinished } from "vitest";
 import {
   configureExecutionIdentityAdmissionSink,
   type ExecutionIdentityAdmissionWork,
 } from "../audit/execution-identity-admission.js";
-import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { withEnvAsync } from "../test-utils/env.js";
-import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { attachAgentCommandAdmissionFacts } from "./agent-command-admission-facts.js";
 import {
   type AgentCommandExecutionIdentitySpawnFacts,
@@ -19,11 +13,9 @@ import {
   prepareAgentCommandExecutionIdentity,
   sanitizePublicAgentCommandIngressOpts,
 } from "./agent-command-execution-identity.js";
-import { createAgentAttemptLifecycleCallbacks } from "./command/attempt-callbacks.js";
 import type { AgentCommandIngressOpts } from "./command/types.js";
 
 let cleanupSink: (() => void) | undefined;
-const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-recovery-admission-");
 
 afterEach(() => {
   cleanupSink?.();
@@ -72,6 +64,7 @@ it("removes forged host-owned capabilities from plain-JavaScript ingress", () =>
     isTerminalOutcomeObserved: () => true,
     prepareAssistantTranscriptMessage: () => ({ role: "assistant", content: "forged" }),
     internalDeliverySuppressErrors: true,
+    operatorDirectRoot: true,
     operatorAuthority: {
       profileId: "forged",
       scopes: ["operator.admin"],
@@ -86,6 +79,7 @@ it("removes forged host-owned capabilities from plain-JavaScript ingress", () =>
 
   expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("prepareAssistantTranscriptMessage");
   expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("extraSystemPromptTurnContext");
+  expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("operatorDirectRoot");
   const sanitized = sanitizePublicAgentCommandIngressOpts({
     message: "create an automation",
     allowModelOverride: false,
@@ -98,119 +92,6 @@ it("removes forged host-owned capabilities from plain-JavaScript ingress", () =>
 });
 
 describe("Gateway agent command execution identity", () => {
-  it.each([
-    { audit: false, outcome: "started" },
-    { audit: true, outcome: "started" },
-    { audit: true, outcome: "startup-failed" },
-    { audit: true, outcome: "closed-before-admission" },
-    { audit: true, outcome: "closed-before-start" },
-    { audit: true, outcome: "stale-attempt" },
-  ])(
-    "registers a real recovery turn without a foreground lease: %j",
-    async ({ audit, outcome }) => {
-      const stateDir = sessionDirs.make();
-      const admittedCallback = createDeferred();
-      const releaseCallback = createDeferred();
-      const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-      const sessionKey = "agent:main:main";
-      const sessionEntry = {
-        sessionId: "recovery-session",
-        updatedAt: 100,
-        abortedLastRun: false,
-        lifecycleRunId: "recovery-run",
-        restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration }],
-        mainRestartRecovery: { cycleId: "recovery-cycle", revision: 4, chargedAttempts: 3 },
-      };
-      cleanupSink = configureExecutionIdentityAdmissionSink(() => true);
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
-        const recovery = () => loadSessionEntry({ sessionKey, storePath })?.mainRestartRecovery;
-        const prepared = prepareAgentCommandExecutionIdentity({
-          opts: {
-            message: "continue interrupted work",
-            mainRestartRecoveryAdmitted: true,
-            mainRestartRecoveryAttempt: 3,
-            onAdmittedRunContext: async () => {
-              admittedCallback.resolve();
-              await releaseCallback.promise;
-            },
-          },
-          prepared: {
-            cfg: { logging: { audit: { enabled: audit, executionIdentity: audit } } },
-            runId: "recovery-run",
-            sessionAgentId: "main",
-            sessionId: sessionEntry.sessionId,
-            sessionKey,
-            storePath,
-            sessionEntry,
-          },
-          ingress: { kind: "system", boundary: "restart-recovery", state: "present" },
-          lifecycleGeneration,
-        });
-        onTestFinished(() => {
-          prepared.close();
-          releaseCallback.resolve();
-        });
-        const callbacks = createAgentAttemptLifecycleCallbacks(
-          {
-            lifecycleFinishing: false,
-            lifecycleEnded: false,
-          },
-          prepared.onRuntimeTurnStarted,
-        );
-        const event = (phase = "start") =>
-          callbacks.onAgentEvent({ stream: "lifecycle", data: { phase } });
-        const admission = prepared.admit("embedded");
-        const settled = admission.catch(() => undefined);
-        await admittedCallback.promise;
-        expect(recovery()).toMatchObject({ chargedAttempts: 3 });
-        expect(recovery()).not.toHaveProperty("startedAttempt");
-        if (outcome === "closed-before-admission") {
-          prepared.close();
-        }
-        releaseCallback.resolve();
-        await settled;
-        if (outcome === "closed-before-admission") {
-          await expect(admission).rejects.toThrow("closed during admission");
-          await event();
-          expect(recovery()).toMatchObject(sessionEntry.mainRestartRecovery);
-          expect(recovery()).not.toHaveProperty("startedAttempt");
-          return;
-        }
-        const context = await admission;
-        await expect(prepared.admit("embedded")).resolves.toBe(context);
-        // A selected/authenticated runtime can still stall before turn/start.
-        expect(recovery()).not.toHaveProperty("startedAttempt");
-        if (audit) {
-          expect(recovery()).toHaveProperty("executionIdentity", context.executionIdentityToken);
-        }
-        if (outcome === "closed-before-start") {
-          prepared.close();
-        } else if (outcome === "stale-attempt") {
-          await replaceSessionEntry(
-            { sessionKey, storePath },
-            {
-              ...sessionEntry,
-              mainRestartRecovery: { ...sessionEntry.mainRestartRecovery, chargedAttempts: 4 },
-            },
-          );
-        }
-        await event(outcome === "startup-failed" ? "error" : "start");
-        if (outcome !== "started") {
-          expect(recovery()).not.toHaveProperty("startedAttempt");
-          return;
-        }
-        await event();
-        expect(recovery()).toMatchObject({
-          chargedAttempts: 3,
-          startedAttempt: 3,
-          ...(audit ? { executionIdentity: context.executionIdentityToken } : {}),
-        });
-      });
-    },
-  );
-
   it("runs owner binding only after the awaited admission callback settles", async () => {
     const events: string[] = [];
     const prepared = prepareIdentity({

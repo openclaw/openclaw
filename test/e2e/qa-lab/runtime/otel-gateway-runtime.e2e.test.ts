@@ -97,6 +97,7 @@ test("exports linked success and failed-read recovery spans from a real qa-chann
     const gateway = await gatewayOwner.start({
       repoRoot: path.resolve(import.meta.dirname, "../../../.."),
       useRepoCli: true,
+      initializeCurrentRuntimeState: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
       transport,

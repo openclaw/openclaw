@@ -10,6 +10,7 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { isProcessAlive } from "../../test/scripts/live-process-fixture.test-support.js";
 import {
   buildNativeHookRelayCommand,
   registerOwnedNativeHookRelay,
@@ -154,15 +155,6 @@ function relayEnv(fixture: Awaited<ReturnType<typeof createRelayPreloadFixture>>
   };
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function relayArgs(relayId: string, ...args: string[]) {
   return [
     "hooks",
@@ -239,6 +231,7 @@ describe("hooks CLI process lifecycle", () => {
       preloadMode: "natural-exit" as const,
       args: relayArgs("ordinary-input"),
       stdin: "{",
+      exitCode: 0,
       diagnostic: "failed to read native hook input",
     },
     {
@@ -246,11 +239,12 @@ describe("hooks CLI process lifecycle", () => {
       preloadMode: "missing-drain-callbacks" as const,
       args: ["hooks", "relay"],
       stdin: "",
+      exitCode: 1,
       diagnostic: "native hook relay failed: Missing required option --provider",
     },
   ])(
-    "preserves a dedicated relay $name failure when exiting",
-    async ({ args, stdin, diagnostic, preloadMode }) => {
+    "preserves a dedicated relay $name response when exiting",
+    async ({ args, stdin, exitCode, diagnostic, preloadMode }) => {
       const fixture = await createRelayPreloadFixture(preloadMode);
       const result = await runHooksCli({
         entryPath: "src/cli/native-hook-relay-entry.ts",
@@ -261,7 +255,7 @@ describe("hooks CLI process lifecycle", () => {
         nodeExecutable: resolveTestNodeExecPath(),
         env: relayEnv(fixture),
       });
-      expect(result, result.stderr).toMatchObject({ code: 1, signal: null });
+      expect(result, result.stderr).toMatchObject({ code: exitCode, signal: null });
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(diagnostic);
       expect(result.stderr.endsWith("\n")).toBe(true);

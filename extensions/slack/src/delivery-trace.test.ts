@@ -53,6 +53,7 @@ type SlackTraceState = {
   tsCounter: number;
   /** Scripted benign rejection for the next chat.startStream call (scenario-owned). */
   rejectStartStreamCode: string | undefined;
+  rejectAppendStreamCode?: string;
 };
 
 const traceRuntimeError = vi.fn();
@@ -129,6 +130,7 @@ afterEach(async () => {
   traceState.turnOutcome = null;
   traceState.dispatchDone = null;
   traceState.rejectStartStreamCode = undefined;
+  traceState.rejectAppendStreamCode = undefined;
 });
 
 const CHANNEL_ID = "C0TRACE";
@@ -261,6 +263,14 @@ function createRecordingSlackClient(): Record<string, unknown> {
   const acknowledge =
     (method: string, includeChannel = false) =>
     async (args: Record<string, unknown>) => {
+      if (method === "chat.appendStream" && traceState.rejectAppendStreamCode) {
+        const error = traceState.rejectAppendStreamCode;
+        traceState.rejectAppendStreamCode = undefined;
+        record(method, args, args.ts, { ok: false, error });
+        throw Object.assign(new Error(`An API error occurred: ${error}`), {
+          data: { ok: false, error },
+        });
+      }
       record(method, args, args.ts, { ok: true });
       return { ok: true, ts: args.ts, ...(includeChannel ? { channel: args.channel } : {}) };
     };
@@ -807,6 +817,64 @@ describe("slack delivery trace goldens", () => {
       }
     });
   }
+
+  it.each([
+    ["start", "message_not_in_streaming_state"],
+    ["append", "message_not_in_streaming_state"],
+    ["append", "stream_timeout"],
+  ] as const)("keeps progress editable after native %s rejects with %s", async (method, code) => {
+    const events = await runSlackTrace("progress-native-unified", {
+      steps: turnSteps(
+        { kind: "partial", text: "Checking the first file." },
+        { kind: "tool-progress", name: "read", phase: "start" },
+        { kind: "advance", ms: 2000 },
+        { kind: "partial", text: "Checking the second file." },
+        { kind: "advance", ms: 2000 },
+        { kind: "partial", text: "Checking the third file." },
+        { kind: "advance", ms: 2000 },
+        { kind: "partial", text: "Checking the last file." },
+        { kind: "advance", ms: 2000 },
+        { kind: "final", text: "All files checked." },
+      ),
+      beforeStep: (step) => {
+        if (
+          step.kind === "partial" &&
+          step.text === "Checking the first file." &&
+          method === "start"
+        ) {
+          traceState.rejectStartStreamCode = code;
+        }
+        if (
+          step.kind === "partial" &&
+          step.text === "Checking the second file." &&
+          method === "append"
+        ) {
+          traceState.rejectAppendStreamCode = code;
+        }
+      },
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: method === "start" ? "chat.startStream" : "chat.appendStream",
+        data: expect.objectContaining({ result: { ok: false, error: code } }),
+      }),
+    );
+    const posts = wirePayloads(events, "chat.postMessage");
+    const edits = wirePayloads(events, "chat.update");
+    expect(posts).toContainEqual(
+      expect.objectContaining({ text: expect.stringContaining("Checking") }),
+    );
+    expect(edits).toContainEqual(
+      expect.objectContaining({ text: expect.stringContaining("Checking the last file.") }),
+    );
+    expect(
+      posts.filter((payload) => (payload as { text?: string }).text === "All files checked."),
+    ).toHaveLength(1);
+    expect(
+      collectSlackWireTexts(events).filter((text) => text.includes("All files checked.")),
+    ).toHaveLength(1);
+    expect(wirePayloads(events, "chat.delete")).toHaveLength(1);
+  });
 
   it("discards a Slack-stopped native stream without a duplicate final or stop request", async () => {
     let streamTs: string | undefined;

@@ -12,47 +12,35 @@
   font-size: 26px;
 }
 
-.settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs {
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
-  padding: 0;
-  color: var(--muted);
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-}
-
-.settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs:hover {
-  color: var(--text-strong);
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-}
-
-.settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs:focus-visible {
-  box-shadow: var(--focus-ring);
-}
-
-.settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs svg {
-  width: 18px;
-  height: 18px;
-}
-
+/* Applied filters tint the trigger; it is a status, not a pressed toggle. */
 .settings-section__actions .sessions-filter-popover__trigger.active {
   color: var(--accent);
 }
 
+/* The primary action keeps its fill but shares the toolbar icons' box and glyph. */
 .settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  box-shadow: none;
   color: var(--primary-foreground);
   background: var(--primary);
   border-color: transparent;
 }
 
+.settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs svg {
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
+}
+
 .settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs:hover {
-  color: var(--primary-foreground);
   background: var(--primary-hover);
-  border-color: transparent;
+}
+
+.settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs:active {
+  background: var(--primary-active);
 }
 
 /* --- Transcript search: server-backed message content, separate from roster filters --- */
@@ -104,10 +92,7 @@
 }
 
 .sessions-transcript-search__clear:focus-visible,
-.sessions-transcript-search__result:focus-visible,
-.sessions-filter-popover__clear:focus-visible,
-.session-actions .icon-btn:focus-visible,
-.session-details-toggle:focus-visible {
+.sessions-transcript-search__result:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -211,68 +196,10 @@
   white-space: nowrap;
 }
 
-.sessions-filter-popover__search {
-  position: relative;
-  width: 100%;
-}
-
-.sessions-filter-popover__search > svg {
-  position: absolute;
-  top: 50%;
-  inset-inline-start: 9px;
-  width: 14px;
-  height: 14px;
-  translate: 0 -50%;
-  stroke: var(--muted);
-  stroke-width: 1.8px;
-  pointer-events: none;
-}
-
-.sessions-filter-popover__search input {
-  padding-inline: 30px 34px;
-}
-
-.sessions-filter-popover__clear {
-  position: absolute;
-  inset-inline-end: 1px;
-  top: 50%;
-  translate: 0 -50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  background: transparent;
-}
-
-.sessions-filter-popover__clear[hidden] {
-  display: none;
-}
-
-.sessions-filter-popover__clear:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-
-.sessions-filter-popover__clear svg {
-  width: 14px;
-  height: 14px;
-  pointer-events: none;
-}
-
 @media (max-width: 768px), (pointer: coarse) {
   .sessions-filter-popover__search input {
     min-height: 44px;
     padding-inline-end: 48px;
-  }
-
-  .sessions-filter-popover__clear {
-    width: 44px;
-    height: 44px;
   }
 }
 
@@ -289,10 +216,9 @@
   align-items: center;
   gap: var(--space-1);
   height: 30px;
-  box-sizing: border-box;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--field-radius);
 }
 
 .session-filter-field {
@@ -318,7 +244,6 @@
 .session-filter-input {
   width: 48px;
   height: 24px;
-  box-sizing: border-box;
   padding: 0 6px;
   color: var(--text);
   background: transparent;
@@ -413,10 +338,66 @@
   width: min(280px, calc(100vw - 48px));
   gap: var(--space-3);
   padding: var(--space-3);
-  background: var(--bg-elevated);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--overlay-shadow);
+}
+
+.oc-sheet .sessions-filter-popover__panel {
+  width: auto;
+  padding: 0;
+}
+
+.oc-sheet
+  .sessions-filter-popover__panel
+  :is(.sessions-filter-popover__fields, .session-filter-toggle-group) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.oc-sheet
+  .sessions-filter-popover__panel
+  :is(.sessions-filter-popover__fields, .session-filter-toggle-group)
+  > openclaw-tooltip {
+  display: block;
+  min-width: 0;
+}
+
+.oc-sheet .sessions-filter-popover__panel .sessions-view-segment > * {
+  justify-content: center;
+}
+
+/* Global and Unknown read as fields: the check carries the state, not a tinted box. */
+.oc-sheet .sessions-filter-popover__panel .session-filter-check {
+  display: flex;
+  justify-content: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  height: var(--settings-control-height);
+  padding-inline: var(--field-padding-inline);
+  border-color: var(--field-border);
+  border-radius: var(--field-radius);
+  background: var(--field-bg);
+}
+
+/* "Descending" needs more than half of the narrowest phones, like a full date. */
+.oc-sheet .sessions-filter-popover__panel .sessions-filter-popover__fields--sort {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+/* An unchecked toggle draws no check; its slot stays so the label doesn't move. */
+.oc-sheet .session-filter-check__input:not(:checked) + .session-filter-check__mark svg {
+  visibility: hidden;
+}
+
+.oc-sheet .session-filter-check__input:focus-visible + .session-filter-check__mark {
+  opacity: 1;
+}
+
+.oc-sheet .sessions-filter-popover__panel .session-filter-check__label {
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: var(--control-ui-font-weight-normal);
+  line-height: 1.25;
+  text-overflow: ellipsis;
 }
 
 .sessions-filter-popover__fields {
@@ -456,9 +437,9 @@
 }
 
 .sessions-filter-popover__panel .session-groupby__select {
+  --settings-control-height: 30px;
+
   flex: 1 1 auto;
-  background: var(--bg);
-  border-color: color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .session-groupby {
@@ -472,16 +453,6 @@
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   white-space: nowrap;
-}
-
-.session-groupby__select {
-  height: 30px;
-  padding: 0 8px;
-  color: var(--text);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  font-size: var(--control-ui-text-sm);
 }
 
 .sessions-table {
@@ -514,13 +485,19 @@
 }
 
 /* Keep the expanded row visually attached to its drawer. */
-.session-data-row--expanded > td,
-.session-data-row--menu-open > td {
-  background: var(--bg-hover);
+.sessions-table .session-data-row:is(.session-data-row--expanded, .session-data-row--menu-open) {
+  --data-table-row-bg: var(--data-table-selected-bg);
+
+  background: var(--data-table-row-bg);
+}
+
+.sessions-table
+  .session-data-row:is(.session-data-row--expanded, .session-data-row--menu-open):hover {
+  --data-table-row-bg: var(--data-table-selected-hover-bg);
 }
 
 /* The row loses :hover once the pointer moves into the menu; keep its kebab lit. */
-.session-data-row--menu-open .session-actions .icon-btn {
+.session-data-row--menu-open .session-row-menu-trigger {
   opacity: 1;
 }
 
@@ -550,13 +527,6 @@
 
 .session-agent-col openclaw-agent-row-chip {
   width: 100%;
-}
-
-.session-actions .icon-btn svg,
-.session-details-toggle svg {
-  width: 14px;
-  height: 14px;
-  stroke-width: 2px;
 }
 
 .session-key-cell__text {
@@ -696,56 +666,18 @@
   gap: 2px;
 }
 
-.session-actions .icon-btn,
-.session-details-toggle {
-  display: inline-flex;
-  align-items: center;
-  height: 28px;
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-}
-
-.session-actions .icon-btn {
-  justify-content: center;
-  width: 28px;
-  padding: 0;
+/* The row menu stays quiet until its row is hovered or it takes focus. */
+.session-row-menu-trigger:where(:not(:disabled)) {
   opacity: 0.65;
-  transition:
-    color var(--duration-fast) ease,
-    background-color var(--duration-fast) ease,
-    border-color var(--duration-fast) ease,
-    opacity var(--duration-fast) ease;
+  transition: opacity var(--duration-fast) ease;
 }
 
-.sessions-table tr:hover .session-actions .icon-btn,
-.session-actions .icon-btn:focus-visible {
+.sessions-table tr:hover .session-row-menu-trigger,
+.session-row-menu-trigger:focus-visible {
   opacity: 1;
 }
 
-.session-actions .icon-btn:hover:not(:disabled),
-.session-details-toggle:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-  border-color: var(--border);
-}
-
-.session-actions .icon-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.3;
-}
-
-.session-details-toggle {
-  gap: 5px;
-  padding: 0 7px;
-  transition:
-    color var(--duration-fast) ease,
-    background-color var(--duration-fast) ease,
-    border-color var(--duration-fast) ease;
-}
-
-.session-details-toggle svg {
+.session-details-toggle .session-css-icon {
   transition: transform var(--duration-normal) var(--ease-out);
 }
 
@@ -753,7 +685,7 @@
   color: var(--text);
 }
 
-.session-data-row--expanded .session-details-toggle svg {
+.session-data-row--expanded .session-details-toggle .session-css-icon {
   transform: rotate(180deg);
 }
 
@@ -783,14 +715,9 @@
   height: 14px;
 }
 
-.session-group-select {
-  min-width: 110px;
-  padding: 6px 10px;
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: var(--radius-sm);
-  font-size: 13px;
+/* Room for a one-word group at either type size, plus the select's own chrome. */
+select.session-group-select {
+  width: calc(6.5em + 44px);
 }
 
 .session-group-row__count {
@@ -935,5 +862,317 @@
 
   .session-groupby__select {
     flex: 1 1 auto;
+  }
+}
+
+/* Phone width: toolbar in two rows, the table reads as a list that scrolls with
+   the page. Keep the breakpoint in sync with PHONE_LAYOUT_QUERY in view.tsx. The
+   page prefix outranks layout.mobile.css regardless of lazy stylesheet order. */
+@media (max-width: 640px) {
+  openclaw-sessions-page .settings-section__heading {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  openclaw-sessions-page .content-header.hub-page-header--stacked {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "title title"
+      "tabs actions";
+    align-items: center;
+  }
+
+  openclaw-sessions-page .content-header.hub-page-header--stacked .hub-page-header__tabs {
+    min-width: 0;
+    padding-block: 0;
+    justify-self: start;
+  }
+
+  openclaw-sessions-page .hub-tabs {
+    box-shadow: none;
+  }
+
+  openclaw-sessions-page .settings-section__header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  openclaw-sessions-page .settings-section__desc {
+    margin-block-end: var(--space-2);
+  }
+
+  openclaw-sessions-page .settings-section__actions {
+    flex-wrap: wrap;
+    min-width: 0;
+    gap: var(--space-1);
+  }
+
+  /* The session search takes the row; icons keep their place when the transcript
+     field opens on its own line beneath. */
+  .sessions-search {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 0;
+    margin-inline-end: var(--space-1);
+  }
+
+  .sessions-search input::placeholder {
+    text-overflow: ellipsis;
+  }
+
+  .sessions-search__icon {
+    position: absolute;
+    inset-inline-start: 10px;
+    top: 50%;
+    display: flex;
+    width: 14px;
+    height: 14px;
+    color: var(--muted);
+    pointer-events: none;
+    translate: 0 -50%;
+  }
+
+  .sessions-search__icon svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  .sessions-search input {
+    width: 100%;
+    padding-inline-start: 32px;
+    font-size: 16px;
+    text-overflow: ellipsis;
+  }
+
+  openclaw-sessions-page .sessions-transcript-search__form {
+    display: contents;
+  }
+
+  openclaw-sessions-page .sessions-transcript-search__input {
+    order: 1;
+    flex: 1 0 100%;
+    width: auto;
+    min-width: 0;
+    margin-block-start: var(--space-1);
+  }
+
+  openclaw-sessions-page .sessions-transcript-search__input input {
+    font-size: 16px;
+  }
+
+  /* The header's new-session action covers this one where the header renders it. */
+  :root:not(.openclaw-native-nav, .openclaw-native-web-chrome)
+    .settings-section__actions
+    .sessions-toolbar__new-session.btn--icon.btn--xs {
+    display: none;
+  }
+
+  openclaw-sessions-page
+    .settings-section__actions
+    .sessions-filter-popover__trigger.oc-icon-button,
+  openclaw-sessions-page
+    .settings-section__actions
+    .sessions-filter-popover__trigger.oc-icon-button:hover {
+    width: var(--settings-control-height);
+    min-width: var(--settings-control-height);
+    height: var(--settings-control-height);
+    color: var(--text);
+    background: var(--field-bg);
+    border: 1px solid var(--field-border);
+    border-radius: var(--field-radius);
+  }
+
+  /* Beside the search field the trigger wears the field's contour, lift included. */
+  :root[data-theme-mode="light"]
+    openclaw-sessions-page
+    .settings-section__actions
+    .sessions-filter-popover__trigger.oc-icon-button {
+    box-shadow: var(--shadow-sm);
+  }
+
+  openclaw-sessions-page
+    .settings-section__actions
+    .sessions-filter-popover__trigger.oc-icon-button.active,
+  openclaw-sessions-page
+    .settings-section__actions
+    .sessions-filter-popover__trigger.oc-icon-button.active:hover {
+    color: var(--accent);
+  }
+
+  openclaw-sessions-page .data-table-container {
+    overflow: clip;
+    max-height: none;
+    overscroll-behavior: auto;
+    scrollbar-gutter: auto;
+  }
+
+  openclaw-sessions-page .data-table.sessions-table {
+    display: block;
+    min-width: 0;
+  }
+
+  openclaw-sessions-page .sessions-table thead {
+    display: none;
+  }
+
+  openclaw-sessions-page .sessions-table tbody,
+  openclaw-sessions-page .sessions-table tr {
+    display: block;
+  }
+
+  openclaw-sessions-page .sessions-table td {
+    display: block;
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  openclaw-sessions-page .sessions-table .session-group-row td {
+    padding: 6px 12px;
+    border-bottom: 0;
+  }
+
+  openclaw-sessions-page .sessions-table tr:is(.session-data-row, .session-skeleton-row) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: var(--space-2);
+    align-items: center;
+    min-height: 56px;
+    padding-block: 6px;
+    padding-inline: 12px 4px;
+  }
+
+  openclaw-sessions-page .sessions-table tr.session-skeleton-row > td:nth-child(n + 3) {
+    display: none;
+  }
+
+  openclaw-sessions-page .sessions-table tr > td.data-table-checkbox-col {
+    position: static;
+    width: auto;
+    min-width: 16px;
+    max-width: none;
+    padding: 0 !important;
+    background: transparent;
+  }
+
+  openclaw-sessions-page .data-table.sessions-table tr > td.data-table-key-col {
+    position: static;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  openclaw-sessions-page .sessions-table tr > td.session-actions-cell {
+    grid-area: 1 / 3;
+  }
+
+  /* Scope and group controls keep their place beneath the row's text. */
+  openclaw-sessions-page
+    .sessions-table
+    tr.session-data-row
+    > td:not(.data-table-checkbox-col, .data-table-key-col, .session-actions-cell) {
+    grid-column: 2 / -1;
+    width: auto;
+    max-width: none;
+    margin-block-start: 2px;
+  }
+
+  openclaw-sessions-page .session-row-menu-trigger {
+    opacity: 1;
+  }
+
+  .session-list-cell {
+    position: relative;
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .session-list-cell__title,
+  .session-list-cell__meta {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .session-list-cell__title {
+    gap: 6px;
+    color: var(--text-strong);
+    font-size: var(--control-ui-text-md);
+    font-weight: 500;
+  }
+
+  /* After the title, so the title stays in line with its meta. */
+  .session-list-cell__title .session-unread-dot {
+    order: 1;
+  }
+
+  .session-list-cell__title > :not(.session-unread-dot) {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .session-list-cell__title .session-link {
+    color: inherit;
+    font-weight: inherit;
+  }
+
+  /* Tapping the title or its meta line opens the chat. */
+  .session-list-cell__title .session-link::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+  }
+
+  .session-list-cell__title .session-link:focus-visible {
+    outline: none;
+  }
+
+  .session-list-cell__title .session-link:focus-visible::after {
+    border-radius: var(--radius-sm);
+    box-shadow: var(--focus-ring);
+  }
+
+  .session-list-cell__meta {
+    gap: 4px;
+    color: var(--muted);
+    font-size: var(--control-ui-text-xs);
+  }
+
+  .session-list-cell__key {
+    min-width: 0;
+    overflow: hidden;
+    padding: 0;
+    color: inherit;
+    font-family: var(--mono);
+    font-size: inherit;
+    text-overflow: ellipsis;
+    background: none;
+    border: 0;
+  }
+
+  .session-list-cell__updated {
+    flex: none;
+  }
+
+  openclaw-sessions-page .data-table-bulk-bar {
+    flex-wrap: wrap;
+  }
+
+  openclaw-sessions-page .data-table-pagination__size {
+    height: var(--settings-control-height);
+    padding-inline: var(--field-padding-inline);
+    color: var(--text);
+    background: var(--field-bg);
+    border: 1px solid var(--field-border);
+    border-radius: var(--field-radius);
   }
 }

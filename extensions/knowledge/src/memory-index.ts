@@ -1,4 +1,6 @@
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { LoadedRecord } from "./model.js";
+import type { GateEntry } from "./recall-gate.js";
 
 /** Character budget for the rendered standing index (about 1k tokens). */
 const MEMORY_INDEX_MAX_CHARS = 4_000;
@@ -46,7 +48,7 @@ export function promptLabel(value: unknown, max: number): string | null {
   if (!flat || MARKUP.test(flat) || INSTRUCTION_LIKE.test(flat)) {
     return null;
   }
-  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
+  return flat.length > max ? `${truncateUtf16Safe(flat, max - 1).trimEnd()}…` : flat;
 }
 
 type Page = {
@@ -63,9 +65,12 @@ const date = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 // Shortest unaltered alias or title that knowledge_lookup resolves exactly.
 function handle(record: LoadedRecord): string | undefined {
-  return [...(record.metadata.aliases ?? []), record.title]
-    .filter((value) => value.length <= HANDLE_MAX && promptLabel(value, HANDLE_MAX) === value)
-    .toSorted((a, b) => a.length - b.length || a.localeCompare(b))[0];
+  return (
+    [...(record.metadata.aliases ?? []), record.title]
+      .filter((value) => value.length <= HANDLE_MAX && promptLabel(value, HANDLE_MAX) === value)
+      // oxlint-disable-next-line unicorn/no-array-sort -- Filtering already isolates the aliases.
+      .sort((a, b) => a.length - b.length || a.localeCompare(b))[0]
+  );
 }
 
 function pageLine(page: Page): string {
@@ -89,7 +94,8 @@ function claimLine(record: LoadedRecord, indent = ""): string {
 function hubHeadlines(pages: readonly Page[]): Map<string, LoadedRecord[]> {
   const busiest = pages
     .filter((p) => p.recentHeadlines.length > 0)
-    .toSorted((a, b) => b.recentClaims - a.recentClaims || a.record.id.localeCompare(b.record.id));
+    // oxlint-disable-next-line unicorn/no-array-sort -- The filtered hub list is privately owned.
+    .sort((a, b) => b.recentClaims - a.recentClaims || a.record.id.localeCompare(b.record.id));
   const shown = new Set<string>();
   const result = new Map<string, LoadedRecord[]>();
   for (const hub of busiest) {
@@ -98,7 +104,8 @@ function hubHeadlines(pages: readonly Page[]): Map<string, LoadedRecord[]> {
     }
     const picked = hub.recentHeadlines
       .filter((c) => !shown.has(c.id))
-      .toSorted((a, b) => recordedAt(b) - recordedAt(a) || a.id.localeCompare(b.id))
+      // oxlint-disable-next-line unicorn/no-array-sort -- Filtering already isolates the headlines.
+      .sort((a, b) => recordedAt(b) - recordedAt(a) || a.id.localeCompare(b.id))
       .slice(0, HUB_HEADLINES);
     if (picked.length > 0) {
       picked.forEach((c) => shown.add(c.id));
@@ -161,6 +168,31 @@ function collect(records: readonly LoadedRecord[], asOf: number) {
   return { pages: [...pages.values()], unfiled, claims, relationships };
 }
 
+/** Every indexable page as a recall-gate entry, most connected first. Uses the
+ * same labels as the standing index; a title that reads like an instruction or
+ * carries markup is left out. */
+export function buildGateEntries(records: readonly LoadedRecord[], asOf: number): GateEntry[] {
+  const weight = (p: Page) => (TYPE_WEIGHT[p.record.type] ?? 1) * Math.log2(2 + p.links);
+  return collect(records, asOf)
+    .pages.toSorted((a, b) => weight(b) - weight(a) || a.record.id.localeCompare(b.record.id))
+    .flatMap(({ record }) => {
+      const label = promptLabel(record.title, TITLE_MAX);
+      if (!label) {
+        return [];
+      }
+      const key = handle(record);
+      const aka = key && key !== record.title ? ` [aka ${key}]` : "";
+      return [
+        {
+          id: record.id,
+          line: `${record.type}: ${label}${aka}`,
+          label,
+          ...(key ? { handle: key } : {}),
+        },
+      ];
+    });
+}
+
 /** Deterministic standing index of an owner-private vault as of `asOf` (ms).
  * Lists page labels, recent claims not filed under any page and the newest
  * decisions and commitments about the busiest pages; never bodies.
@@ -177,7 +209,8 @@ export function buildMemoryIndex(
   const byId = (a: Page, b: Page) => a.record.id.localeCompare(b.record.id);
   const recent = pages
     .filter((p) => asOf - p.touched <= RECENT_DAYS * DAY_MS)
-    .toSorted((a, b) => b.touched - a.touched || byId(a, b));
+    // oxlint-disable-next-line unicorn/no-array-sort -- The filtered recent-page list is private.
+    .sort((a, b) => b.touched - a.touched || byId(a, b));
   const weight = (p: Page) => (TYPE_WEIGHT[p.record.type] ?? 1) * Math.log2(2 + p.links);
   const connected = pages.toSorted((a, b) => weight(b) - weight(a) || byId(a, b));
   const headlines = hubHeadlines(pages);
@@ -185,12 +218,14 @@ export function buildMemoryIndex(
   const entry = (p: Page) =>
     [pageLine(p), ...(headlines.get(p.record.id) ?? []).map((c) => claimLine(c, "  "))].join("\n");
   // The footer names every page type, so its worst case is reserved before listing.
-  const types = [...new Set(pages.map((p) => p.record.type))].toSorted();
+  // oxlint-disable-next-line unicorn/no-array-sort -- The spread creates a private type list.
+  const types = [...new Set(pages.map((p) => p.record.type))].sort();
   const footerFor = (unlisted: Page[]) =>
     `Unlisted pages by type: ${types
       .map((type) => [type, unlisted.filter((p) => p.record.type === type).length] as const)
       .filter(([, n]) => n > 0)
-      .toSorted((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      // oxlint-disable-next-line unicorn/no-array-sort -- These counts were just mapped and filtered.
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .map(([type, n]) => `${type} ${n}`)
       .join(", ")}.`;
 
@@ -227,7 +262,8 @@ export function buildMemoryIndex(
   };
 
   const unfiledLines: Array<[string, string]> = unfiled
-    .toSorted(
+    // oxlint-disable-next-line unicorn/no-array-sort -- collect created this private array; only its length is reused.
+    .sort(
       (a, b) =>
         (CLAIM_RANK[a.metadata.claim_kind ?? ""] ?? 9) -
           (CLAIM_RANK[b.metadata.claim_kind ?? ""] ?? 9) ||

@@ -1,4 +1,6 @@
 /** Native synthetic ACP binding mismatch reproduction; never operator state. */
+// Reproduces only on heads whose generic binding-ID parser truncated conversation ids at
+// U+241F; later heads decode B's id, so B's unbind removes B and this mismatch cannot occur.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";

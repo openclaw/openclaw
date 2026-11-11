@@ -1,5 +1,6 @@
 import type { ChildProcess, Serializable, SpawnOptions } from "node:child_process";
 import type { Duplex } from "node:stream";
+import { stripNodeStartupHooks } from "../../../node-runtime-env.mjs";
 import { formatChildRuntimeSpawnWarning } from "../../infra/child-runtime-viability.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -7,6 +8,8 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { resolveLaunchableNodePath } from "../../infra/stable-node-path.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { prepareAgentCoreDumpLimit } from "../linux-core-dump.js";
+import type { ProcessExecutionIntent } from "../linux-exec-cgroup.js";
 import { withChildProcessOperation } from "../spawn-diagnostics.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 import { spawnProcess } from "../spawn-utils.js";
@@ -47,21 +50,40 @@ export function createServiceChildControlSender(params: {
         reject(new Error("service child control pipe is closed"));
         return;
       }
-      const launch = () =>
-        control.write(encodeServiceChildMessage(message), "utf8", (error) => {
+      let launched = false;
+      const launch = () => {
+        launched = true;
+        return control.write(encodeServiceChildMessage(message), "utf8", (error) => {
           if (error) {
             reject(error);
           } else {
             resolve();
           }
         });
-      if (initiate) {
-        initiate(launch, settlement);
-      } else {
+      };
+      if (!initiate) {
         launch();
+        return;
+      }
+      try {
+        initiate(launch, settlement);
+      } catch (error) {
+        if (launched) {
+          throw error;
+        }
+        // Without a written frame the anchor never received launch authority.
+        reject(new ServiceChildLaunchNotInitiatedError(error));
       }
     });
   };
+}
+
+/** A launch refusal that provably never wrote the frame granting the anchor spawn authority. */
+export class ServiceChildLaunchNotInitiatedError extends Error {
+  constructor(cause: unknown) {
+    super(String(cause), { cause });
+    this.name = "ServiceChildLaunchNotInitiatedError";
+  }
 }
 
 /** Admit the target command when its final frame enters native IPC, after any broker queue. */
@@ -120,6 +142,7 @@ function createServiceChildCleanup() {
 
 /** Publish cleanup ownership before waiting for the broker's pipe and IPC handoff. */
 export function spawnServiceChildRelay(params: {
+  executionIntent?: ProcessExecutionIntent;
   workerUrl: URL;
   stdio: SpawnOptions["stdio"];
   env: NodeJS.ProcessEnv;
@@ -132,15 +155,23 @@ export function spawnServiceChildRelay(params: {
   transportReady: Promise<void> | undefined;
 } {
   const executable = resolveLaunchableNodePath();
+  const limited = prepareAgentCoreDumpLimit(
+    executable,
+    resolveRuntimeWorkerArgv(params.workerUrl, executable),
+    params.executionIntent,
+  );
   const child = withChildProcessOperation(
     "service.relay",
     () => {
       const env = resolveRuntimeWorkerEnv(params.workerUrl, params.env);
+      if (env.NODE_OPTIONS !== undefined) {
+        env.NODE_OPTIONS = stripNodeStartupHooks(env.NODE_OPTIONS);
+      }
       // The admitted owner can select a native entry without the caller's image inventory.
       if (params.nativeProcessOwner === params.workerUrl.href) {
         delete env.BUN_BE_BUN;
       }
-      return spawnProcess(executable, resolveRuntimeWorkerArgv(params.workerUrl, executable), {
+      return spawnProcess(limited.command, limited.args, {
         stdio: params.stdio,
         detached: params.detached,
         windowsHide: true,

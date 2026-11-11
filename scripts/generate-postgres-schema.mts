@@ -39,6 +39,10 @@ import {
   STATE_WRITE_INDEX_RETIREMENT_V27_SQL,
   withLegacyStateWriteIndexes,
 } from "../src/state/openclaw-state-db-schema-v27-indexes.ts";
+import {
+  WORKSPACE_CAS_COLUMNS,
+  WORKSPACE_CAS_TABLES,
+} from "../src/state/openclaw-state-db-schema-v35-workspace-cas.ts";
 import { listOpenClawStateFeatureSchemas } from "../src/state/openclaw-state-feature-schema.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { formatGeneratedModule } from "./lib/format-generated-module.mts";
@@ -391,6 +395,29 @@ export async function generatePostgresSchemas(
         files["state-v28-v29.postgres.sql"] =
           "-- Generated v28-to-v29 publication after the local credential owner has verified and retired source rows.\n" +
           "UPDATE schema_meta SET schema_version = 29 WHERE meta_key = 'primary' AND schema_version = 28;\n";
+        const additions = WORKSPACE_CAS_COLUMNS.map((column) => {
+          const definition = data.objects.find(
+            (item) =>
+              item.kind === "column" &&
+              item.table === "local_workspace_projections" &&
+              item.name === column,
+          );
+          assert.ok(definition?.sql, `Missing workspace CAS column: ${column}`);
+          return `ALTER TABLE "local_workspace_projections" ADD COLUMN ${definition.sql};`;
+        });
+        files["state-v34-v35.postgres.sql"] = [
+          "-- Generated DDL-only v34-to-v35 transition; reconciliation converts retained rows online.",
+          "DO $workspace_cas$ BEGIN",
+          "IF to_regclass('local_workspace_projections') IS NOT NULL THEN",
+          ...additions,
+          ...tableStatements({
+            ...data,
+            objects: data.objects.filter((item) =>
+              WORKSPACE_CAS_TABLES.some((table) => table === item.table),
+            ),
+          }),
+          "END IF; END $workspace_cas$;\n",
+        ].join("\n");
       }
       if (!options.reportOnly) {
         files["runtime.ts"] = formatGeneratedModule(
@@ -401,6 +428,7 @@ export async function generatePostgresSchemas(
               preWriteIndexesV27Sql,
               writeIndexesV27Sql,
               clientCredentialV29Sql: files["state-v28-v29.postgres.sql"],
+              workspaceCasV35Sql: files["state-v34-v35.postgres.sql"],
               clientCredentialSource: await generateClientCredentialSource(),
               fragments: manifest.map(({ file, ...fragment }) => ({
                 ...fragment,

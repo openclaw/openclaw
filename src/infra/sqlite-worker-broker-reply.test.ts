@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
@@ -6,6 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
+import * as mainThreadStall from "./main-thread-stall.js";
 import { classifyGatewayStorageFailure } from "./sqlite-error-diagnostics.js";
 import { receiveSqliteWorkerReply } from "./sqlite-worker-broker-reply.js";
 import type { Actor, Job } from "./sqlite-worker-broker.types.js";
@@ -35,6 +37,51 @@ function createJob(request: Job["request"]): Job {
     detach: unexpected,
   };
 }
+
+it("attributes synchronous reply decoding without creating an async task context", () => {
+  let now = 0;
+  const monitor = mainThreadStall.createMainThreadStallMonitor(() => (now += 300));
+  const enterContext = vi.spyOn(AsyncLocalStorage.prototype, "run");
+  const job = createJob({ type: "execute", id: 1, actor: 1, input: new Uint8Array() });
+  const finish = vi.fn();
+  try {
+    receiveSqliteWorkerReply(
+      { actors: new Set(), current: job, worker: { postMessage: unexpected } },
+      { id: 1, ok: true, value: serialize({ count: 42 }) },
+      { fail: unexpected, finish, dispatch() {} },
+    );
+    expect(finish).toHaveBeenCalledExactlyOnceWith(job, undefined, { count: 42 });
+    expect(monitor.drain().stalls).toEqual([
+      expect.objectContaining({ task: "worker:sqlite:reply-decode", elapsedMs: 300 }),
+    ]);
+    expect(enterContext).not.toHaveBeenCalled();
+  } finally {
+    enterContext.mockRestore();
+    monitor.stop();
+  }
+});
+
+it("settles ordinary replies without an additional wrapper crossing the decode boundary", () => {
+  const decode = vi.spyOn(mainThreadStall, "runWithMainThreadTask");
+  try {
+    for (const value of [undefined, null, 42, { bytes: Buffer.from([0, 127, 255]), count: 42n }]) {
+      const job = createJob({ type: "execute", id: 1, actor: 1, input: new Uint8Array() });
+      const finish = vi.fn();
+      receiveSqliteWorkerReply(
+        { actors: new Set(), current: job, worker: { postMessage: unexpected } },
+        { id: 1, ok: true, value: serialize(value) },
+        { fail: unexpected, finish, dispatch() {} },
+      );
+      expect(finish).toHaveBeenCalledExactlyOnceWith(job, undefined, value);
+      // Completion may return nothing or the decoded value itself, without an additional wrapper.
+      const observed = decode.mock.results.at(-1)?.value;
+      const delivered = finish.mock.calls[0]?.[2];
+      expect(observed === undefined || Object.is(observed, delivered)).toBe(true);
+    }
+  } finally {
+    decode.mockRestore();
+  }
+});
 
 it.each(["framed", "close"])("publishes receipts before settling: %s", async (kind) => {
   const key = "openclaw.sqliteNativeRuntimeAdmission";

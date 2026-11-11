@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, CronJobsListResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createInitialCronState, loadCronJobsPage } from "../../lib/cron/index.ts";
@@ -34,7 +35,7 @@ import { createCronViewJob, createCronViewRun, cronRunsResponse } from "./view.t
 import "./cron-page.tsx";
 
 const cleanups: Array<() => unknown> = [];
-const refreshMethods = ["cron.status", "cron.list", "cron.runs"];
+const refreshMethods = ["cron.status", "cron.list"];
 const schedulerStatus = (jobs = 0) => ({ enabled: true, triggersEnabled: true, jobs });
 
 function deferred<T>(fallback: T) {
@@ -97,7 +98,9 @@ it.each([{ restartPending: true }, { suspensionPhase: "draining" as const }])(
   "pauses background reads during %j and catches up without replacing the draft",
   async (unavailable) => {
     vi.useFakeTimers();
-    const request = createRequest();
+    const request = cronRpc({
+      "models.list": () => ({ models: [{ id: "retained-model" }] }),
+    });
     const gateway = createGateway(createTestGatewayClient(request), true);
     gateway.emitSnapshot(unavailable);
     const context = createContext(gateway);
@@ -113,7 +116,10 @@ it.each([{ restartPending: true }, { suspensionPhase: "draining" as const }])(
     current.cronForm.name = "Unsaved automation";
     page.context = { ...context };
     page.refreshView();
+    await vi.advanceTimersByTimeAsync(0);
     await page.settle();
+    expect(callsFor(request, "models.list")).toHaveLength(1);
+    expect(page.cronModelSuggestions).toEqual(["retained-model"]);
     expect(page.cron).toBe(current);
     expect(current.cronForm.name).toBe("Unsaved automation");
     request.mockClear();
@@ -124,7 +130,9 @@ it.each([{ restartPending: true }, { suspensionPhase: "draining" as const }])(
     expect(request).not.toHaveBeenCalled();
     gateway.emitSnapshot({ restartPending: false, suspensionPhase: "accepting" });
     await vi.advanceTimersByTimeAsync(0);
+    // The paused config event invalidates the catalog; recovery refreshes it once.
     expectCalls(request, [...refreshMethods, "models.list"], 1);
+    expect(page.cronModelSuggestions).toEqual(["retained-model"]);
     expect(page.cron).toBe(current);
     expect(current).toMatchObject({
       cronCreateOpen: true,
@@ -228,6 +236,7 @@ it.each([false, true])(
       refreshFailed: false,
     };
     const { page, gateway } = mountCronPage(modelClient(() => result));
+    await openDraft(page, "Catalogue recovery", "Keep this draft");
     await expectModels(page, ["fixture/obsolete"]);
     result = {
       models: hasRows ? [{ provider: "fixture", id: "current", name: "Current model" }] : [],
@@ -236,22 +245,20 @@ it.each([false, true])(
     emitEvent(gateway, "chat.metadata.changed");
     await expectModels(page, hasRows ? ["fixture/current"] : []);
     expect(page.textContent).toContain(
-      hasRows
-        ? "Some models could not be refreshed. Open Models to try again."
-        : "Models unavailable",
+      hasRows ? "Couldn’t refresh some models. Open Models to try again." : "Models unavailable",
     );
     result = { models: [], refreshFailed: false };
     emitEvent(gateway, "chat.metadata.changed");
     await waitForCronPage(() =>
       expect(page.textContent).not.toContain(
-        hasRows ? "Some models could not be refreshed" : "Models unavailable",
+        hasRows ? "Couldn’t refresh some models" : "Models unavailable",
       ),
     );
     await expectModels(page, []);
   },
 );
 
-it.each(["agent", "connection", "detach"])(
+it.each(["agent", "connection", "detach", "panel close"])(
   "rejects a pending catalog error after %s changes",
   async (change) => {
     const oldError = gate();
@@ -262,6 +269,7 @@ it.each(["agent", "connection", "detach"])(
       .mockReturnValue({ models: [{ id: "current-model" }] });
     const client = modelClient(read);
     const { page, gateway, context } = mountCronPage(client);
+    await openDraft(page, "Catalogue retirement", "Keep current owner");
     await expectModels(page, ["initial-model"]);
     emitEvent(gateway, "config.changed");
     await waitForCronPage(() => expect(read).toHaveBeenCalledTimes(2));
@@ -271,6 +279,8 @@ it.each(["agent", "connection", "detach"])(
     } else if (change === "connection") {
       gateway.emitSnapshot({ phase: "reconnecting" });
       gateway.emitSnapshot({ phase: "connected" });
+    } else if (change === "panel close") {
+      page.closePanel();
     } else {
       page.remove();
     }
@@ -283,6 +293,12 @@ it.each(["agent", "connection", "detach"])(
       expect(page.childElementCount).toBe(0);
       expect(read).toHaveBeenCalledTimes(readsBeforeCompletion);
     } else {
+      if (change === "agent" || change === "panel close") {
+        await page.settle();
+        expect(read).toHaveBeenCalledTimes(readsBeforeCompletion);
+        expect(page.textContent).not.toContain("Retired catalog error");
+        await openDraft(page, "Current catalogue", "Use the current owner");
+      }
       await expectModels(page, ["current-model"]);
       await page.settle();
       expect(page.cronModelSuggestions).toEqual(["current-model"]);
@@ -311,12 +327,7 @@ it("refreshes model suggestions when team selection changes without changing sco
     gateway,
     {
       state: {
-        agentsList: {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [{ id: "main" }, { id: "writer" }],
-        },
+        agentsList: makeBootRoster({ agents: [{ id: "main" }, { id: "writer" }] }),
       },
       subscribe: () => () => undefined,
     },
@@ -332,6 +343,7 @@ it("refreshes model suggestions when team selection changes without changing sco
     { render: true },
   );
   cleanups.push(() => agentSelection.dispose());
+  await openDraft(page, "Same-scope selection", "Retain this draft");
   await expectModels(page, ["main-model"]);
   const cron = page.cron;
   emitEvent(gateway, "chat.metadata.changed");
@@ -431,16 +443,19 @@ it("coalesces a cron event burst into one trailing refresh of the current page",
       };
       return replies[method] ?? { models: [] };
     },
-    [...refreshMethods, "channels.status"],
+    [...refreshMethods, "cron.runs"],
   );
   const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
   const channels = createChannelCapability(gateway);
-  const context = { ...createContext(gateway), channels };
-  const page = createPage(context);
+  const context = { ...createContext(gateway), acquireChannels: () => channels };
+  const page = createPage(context, { render: true });
   cleanups.push(() => channels.dispose());
   await page.settle();
+  click(page, testId("cron-list-tab-activity"));
+  await page.settle();
   emitEvent(gateway, "cron", {}, 20);
-  expectCalls(request, ["cron.status", "cron.runs", "cron.list", "channels.status"], 1);
+  expectCalls(request, ["cron.status", "cron.runs", "cron.list"], 1);
+  expect(callsFor(request, "channels.status")).toHaveLength(0);
   resume();
   held.resolve();
   await waitForCronPage(() => {
@@ -449,7 +464,7 @@ it("coalesces a cron event burst into one trailing refresh of the current page",
     expect(page.cron.cronRuns).toEqual([freshRun]);
   });
   expectCalls(request, ["cron.status", "cron.runs", "cron.list"], 2);
-  expect(callsFor(request, "channels.status")).toHaveLength(1);
+  expect(callsFor(request, "channels.status")).toHaveLength(0);
 });
 
 it("lets manual Refresh supersede held status and run-history reads", async () => {
@@ -471,10 +486,13 @@ it("lets manual Refresh supersede held status and run-history reads", async () =
   const { page } = mountCronPage(request);
   await waitForCronPage(() => expect(page.cron.cronLoading).toBe(false));
   await page.settle();
+  click(page, testId("cron-list-tab-activity"));
+  await page.settle();
   expect(calls).toEqual({ "cron.status": 1, "cron.runs": 1 });
   const refresh = page.querySelector<HTMLButtonElement>(".cron-refresh");
   expect(refresh).not.toBeNull();
   refresh?.click();
+  await page.settle();
   expect(calls).toEqual({ "cron.status": 2, "cron.runs": 2 });
   await waitForCronPage(() => {
     expect(page.cron.cronStatus?.jobs).toBe(2);
@@ -520,12 +538,7 @@ it.each(["disconnect", "reconnect", "agent scope", "gateway source", "unmount"])
       page.remove();
     }
     await page.settle();
-    await waitForCronPage(() =>
-      expect(callsFor(request, "models.list")).toHaveLength(
-        // Reconnection retires the client; another owner of the same client can share its read.
-        change === "reconnect" ? 2 : 1,
-      ),
-    );
+    expect(callsFor(request, "models.list")).toHaveLength(0);
     const count = request.mock.calls.length;
     held.resolve();
     await settle();
@@ -572,6 +585,43 @@ it("refreshes trigger authoring from scheduler status after reconnect", async ()
   );
   expect(triggerToggle).toBeUndefined();
   expect(page.textContent).toContain("disabled by cron.triggers.enabled");
+});
+
+it("replaces an in-flight inventory read when the connected profile hydrates", async () => {
+  const earlier = deferred<CronJobsListResult>(cronListResponse([]));
+  const currentJob = createCronViewJob("current-profile-job");
+  const fallback = createRequest();
+  let reads = 0;
+  const client = createTestGatewayClient((method) => {
+    if (method === "cron.list") {
+      reads += 1;
+      return reads === 1 ? earlier.promise : cronListResponse([currentJob]);
+    }
+    return fallback(method);
+  });
+  const gateway = createGateway(client, true);
+  gateway.emitSnapshot({
+    hello: {
+      ...operatorHello(["operator.admin"]),
+      features: { events: ["cron.inventory.changed"] },
+    },
+    selfUser: undefined,
+  });
+  const page = createPage(createContext(gateway));
+  await waitForCronPage(() => expect(reads).toBe(1));
+  const state = page.cron;
+  state.cronForm.name = "Retained draft";
+
+  gateway.emitSnapshot({
+    selfUser: { id: "hydrated-profile", identity: { type: "profile", id: "hydrated-profile" } },
+  });
+  earlier.resolve(cronListResponse([createCronViewJob("retired-profile-job")]));
+  await waitForCronPage(() => {
+    expect(page.cron.cronJobs.map((job) => job.id)).toEqual(["current-profile-job"]);
+    expect(page.cron.cronJobsError).toBeNull();
+  });
+  expect(page.cron).toBe(state);
+  expect(state.cronForm.name).toBe("Retained draft");
 });
 
 it.each([false, true])(
@@ -624,6 +674,7 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
     const lookup = deferred(job);
     const fallback = createRequest();
     const changingCatalog = publication === "roster after model catalog";
+    let modelReads = 0;
     const client = createTestGatewayClient((method, params) => {
       if (method === "agents.list") {
         return roster.promise;
@@ -631,11 +682,14 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
       if (method === "cron.get") {
         return lookup.promise;
       }
-      if (method === "models.list" && changingCatalog) {
-        if (asOptionalRecord(params)?.agentId === "previous") {
-          return { models: [{ id: "previous-model" }] };
+      if (method === "models.list") {
+        modelReads += 1;
+        if (changingCatalog) {
+          if (asOptionalRecord(params)?.agentId === "previous") {
+            return { models: [{ id: "previous-model" }] };
+          }
+          throw new Error("Current agent catalog unavailable");
         }
-        throw new Error("Current agent catalog unavailable");
       }
       return fallback(method);
     });
@@ -662,12 +716,16 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
         assistantAgentId: changingCatalog ? "previous" : publication === "hello" ? "main" : null,
       });
       await page.settle();
-      if (changingCatalog) {
-        await expectModels(page, ["previous-model"]);
-      }
       if (edited) {
         lookup.resolve(job);
         await waitForElement(page, "#cron-name");
+        if (changingCatalog) {
+          await expectModels(page, ["previous-model"]);
+        } else {
+          await page.settle();
+          expect(agentSelection.state.selectedId).toBeNull();
+          expect(modelReads).toBe(0);
+        }
         fillInput(page, "#cron-name", "Unsaved name");
         await page.settle();
         if (publication === "roster after same-scope intent") {
@@ -689,6 +747,7 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
         expect(page.querySelector("details.cron-advanced > summary")).not.toBeNull();
         expect(inputValue(page, "#cron-name")).toBe(edited ? "Unsaved name" : job.name);
       });
+      await waitForCronPage(() => expect(modelReads).toBe(changingCatalog ? 2 : 1));
     } finally {
       page.remove();
       agentSelection.dispose();
@@ -775,14 +834,14 @@ it("defers a hidden mount and reconnect, then catches up once with the current s
   emitEvent(gateway, "cron", {}, 20);
   await settle();
   expect(request.mock.calls.filter(([method]) => refreshMethods.includes(method))).toEqual([]);
-  expect(context.channels.refresh).not.toHaveBeenCalled();
+  expect(context.acquireChannels(createChannelCapability).refresh).not.toHaveBeenCalled();
   visibility("visible");
   globalThis.dispatchEvent(new Event("focus"));
   await waitForCronPage(() => expect(page.cron.cronStatus).not.toBeNull());
   await settle();
   expectCalls(request, refreshMethods, 1);
   expect(request).toHaveBeenCalledWith("cron.list", expect.objectContaining({ agentId: "writer" }));
-  expect(context.channels.refresh).toHaveBeenCalledTimes(1);
+  expect(context.acquireChannels(createChannelCapability).refresh).not.toHaveBeenCalled();
   page.remove();
   request.mockClear();
   visibility("hidden");
@@ -824,9 +883,7 @@ it.each([true, false])(
     expect(request.mock.calls.findLast(([method]) => method === "cron.list")?.[1]).toMatchObject({
       query: "keep my filter",
     });
-    expect(request.mock.calls.findLast(([method]) => method === "cron.runs")?.[1]).toMatchObject({
-      query: "keep my history filter",
-    });
+    expect(callsFor(request, "cron.runs")).toHaveLength(0);
   },
 );
 

@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { runIsolatedAgentRuntimeCompletion } from "../plugins/runtime/runtime-llm-isolated.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { runCliAgent as runRealCliAgent } from "./cli-runner.js";
@@ -20,6 +21,7 @@ const cli = vi.hoisted(() => ({
 vi.mock("./cli-runner/prepare.runtime.js", () => ({ prepareCliRunContext: cli.prepare }));
 vi.mock("./cli-runner/execute.runtime.js", () => ({ executePreparedCliRun: cli.execute }));
 
+const { attachProviderAuthAuthority } = await import("../plugins/provider-auth-authority.js");
 const { createAdmittedRunOperatorAuthority, readRunOperatorAuthority } =
   await import("./admitted-run-context.js");
 const { prepareOperatorModelPolicy } = await import("./operator-model-policy.js");
@@ -79,12 +81,11 @@ function answer(text: string, model: string) {
   };
 }
 function waitForStart<T>(started: Promise<T>, ...runs: Promise<unknown>[]) {
-  return Promise.race([
+  return awaitGateBeforeSettlement(
     started,
-    Promise.all(runs).then(() => {
-      throw new Error("Completion settled before dispatch");
-    }),
-  ]);
+    Promise.all(runs),
+    "Completion settled before dispatch",
+  );
 }
 
 function runPluginCompletion(
@@ -239,3 +240,30 @@ it("passes the operator and canonical model to the CLI execution owner", async (
     text: "CLI answer",
   });
 });
+
+it.each(["before-dispatch", "during-native-preparation"] as const)(
+  "keeps host credential revocation observable to V2 harnesses %s",
+  async (stage) => {
+    let current = stage !== "before-dispatch";
+    const revoked = new Error("Selected credential authority retired");
+    mocks.prepareSimpleCompletionModel.mockResolvedValueOnce({
+      model: { provider: "openai", id: "gpt-test", api: "openai-responses" },
+      auth: attachProviderAuthAuthority(
+        { apiKey: "synthetic-key", mode: "api-key", source: "fixture" },
+        () => {
+          if (!current) {
+            throw revoked;
+          }
+        },
+      ),
+    });
+    const dispatch = vi.fn(async (params: { assertCurrent?: () => void }) => {
+      current = false;
+      params.assertCurrent?.();
+      throw new Error("Revoked credential reached inference");
+    });
+    registerIsolatedHarness({ runIsolatedCompletionV2: dispatch });
+    await expect(runIsolatedCompletion(isolatedRequest())).rejects.toBe(revoked);
+    expect(dispatch).toHaveBeenCalledTimes(stage === "before-dispatch" ? 0 : 1);
+  },
+);

@@ -41,8 +41,10 @@ import {
   isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
   selectAutomationReplyPayloads,
+  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { appendCyberAccessProgramNotice } from "./access-program-notice.js";
 import {
   buildSilentFallbackFailurePayload,
   hasSuccessfulSourceReplyDelivery,
@@ -185,9 +187,14 @@ export async function prepareReplyAgentPayloads(state: {
   const committedMessagingToolSourceReplyDelivery =
     hasCommittedSourceReplyDeliveryEvidence(runResult);
   const completedSourceReplyDelivery = hasCompletedSourceReplyDeliveryEvidence(runResult);
-  const hasLegacyMessagingToolEvidence =
+  // A terminal payload can confirm an earlier progress send as its final answer.
+  // Explicit delivery custody and unfinished/failed turns remain authoritative.
+  const canCompleteFromMessagingToolDuplicate =
     runResult.sourceReplyDeliveryState === undefined &&
-    resolveExplicitFinalSourceReplyDeliveryEvidence(runResult) === undefined;
+    (resolveExplicitFinalSourceReplyDeliveryEvidence(runResult) === undefined ||
+      (successfulTerminal &&
+        !pendingContinuation &&
+        followupRun.run.sourceReplyDeliveryMode !== "message_tool_only"));
   const visibleOutboundDelivery = hasVisibleOutboundDeliveryEvidence(runResult);
   const successfulSideEffectDelivery =
     successfulSourceReplyDelivery ||
@@ -219,7 +226,7 @@ export async function prepareReplyAgentPayloads(state: {
   if (replyOperationRunState) {
     replyOperationRunState.replyCompletion = completion;
   }
-  const onDeliveredTerminalDuplicate = hasLegacyMessagingToolEvidence
+  const onDeliveredTerminalDuplicate = canCompleteFromMessagingToolDuplicate
     ? () => {
         if (completion.outcome !== "blocked") {
           completion = resolveReplyCompletion(terminalReplyExpectation, "delivered");
@@ -480,12 +487,22 @@ export async function prepareReplyAgentPayloads(state: {
       });
     }
   }
+  // Silent finals drop notices, so leave the one-time claim for a visible reply.
+  if (!authoredSilence && !automationNoChange) {
+    fallbackNoticeText = appendCyberAccessProgramNotice(fallbackNoticeText, context, accounting);
+  }
   const fallbackNoticePayloads: ReplyPayload[] = fallbackNoticeText
     ? [
-        markReplyPayloadForSourceSuppressionDelivery({
-          text: fallbackNoticeText,
-          isFallbackNotice: true,
-        }),
+        setReplyPayloadMetadata(
+          markReplyPayloadForSourceSuppressionDelivery({
+            text: fallbackNoticeText,
+            isFallbackNotice: true,
+          }),
+          !providerPolicyRetrySucceeded &&
+            runResult.meta.modelFallbackTranscriptToModel === fallbackTransition.activeModelRef
+            ? { modelFallbackNotice: true }
+            : {},
+        ),
       ]
     : [];
 

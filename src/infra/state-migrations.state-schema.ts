@@ -1,4 +1,5 @@
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { resolveLegacyCronDefaultStoreKey } from "../state/openclaw-state-db-cron-identity-migration.js";
 import { prepareOpenClawStateDatabaseSchema } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { SCHEMA_RECOVERY } from "./schema-migration-diagnostics.js";
@@ -16,6 +17,12 @@ export function createStateSchemaMigrationStep(params: {
   integrityCheck?: "quick" | "full";
 }): LegacyStateMigrationStep {
   const stateEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
+  // Capture selection before pinning physical paths for quarantine and permissions.
+  const legacyCronDefaultStoreKey = resolveLegacyCronDefaultStoreKey(
+    params.env.OPENCLAW_STATE_DIR?.trim() || params.env.OPENCLAW_CONFIG_PATH?.trim()
+      ? params.env
+      : stateEnv,
+  );
   const database: LegacyStateMigrationEndpoint = {
     kind: "sqlite",
     path: resolveOpenClawStateSqlitePath(stateEnv),
@@ -29,7 +36,7 @@ export function createStateSchemaMigrationStep(params: {
     reversibility: "checkpoint-required",
     run: async () => {
       const result = await prepareOpenClawStateDatabaseSchema(
-        { env: stateEnv, integrityCheck: params.integrityCheck },
+        { env: stateEnv, legacyCronDefaultStoreKey, integrityCheck: params.integrityCheck },
         params.mode,
       );
       if (result.changes.length > 0) {

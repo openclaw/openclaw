@@ -60,7 +60,7 @@ it("keeps a session pin read-only while switching its text and binary files", ()
     flush();
     expect(container.querySelector("textarea")).toBeNull();
     expect(container.textContent).toContain("Binary attachment retained with this revision.");
-    container.querySelector<HTMLButtonElement>(".exec-approval-header button")!.click();
+    container.querySelector<HTMLButtonElement>(".oc-dialog__close")!.click();
     expect(close).toHaveBeenCalledOnce();
   } finally {
     view.unmount();

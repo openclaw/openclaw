@@ -30,8 +30,8 @@ import {
   createTalkClientAgentConsultRunner,
   prepareTalkClientControlAuthority,
 } from "./client-agent-consult.js";
-import { resolveTalkAgentConsultAuthority } from "./client-gateway-control.js";
 import { retainTalkClientRunAuthority } from "./client-run-authority.js";
+import { resolveTalkAgentConsultAuthority } from "./client-tool-authority.js";
 import { prepareTalkSessionTarget } from "./session-target.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 

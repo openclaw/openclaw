@@ -78,6 +78,7 @@ describe("pending session placement recovery state", () => {
     const pending = new PendingSessionPlacementRecoveryState();
     const expected = {
       permissionMode: "guarded" as const,
+      cyberAccessProgram: "daybreak_blue" as const,
       model: "openai/gpt-5.6-sol",
       agentRuntime: "codex",
       displayName: "Repair naming",

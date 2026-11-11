@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
+import * as configRedaction from "../config/redact-snapshot.js";
 import * as supportRedaction from "../logging/diagnostic-support-redaction.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import type { SkillSnapshot } from "../skills/types.js";
 
@@ -47,11 +49,6 @@ function skill(name: string, description: string): ResolvedSkillEntry {
   });
 }
 
-const partialSkill = {
-  source: "workspace",
-  disableModelInvocation: false,
-} as unknown as ResolvedSkillEntry;
-
 afterEach(() => {
   vi.restoreAllMocks();
   resetSecretRedactionRegistryForTest();
@@ -60,6 +57,40 @@ afterEach(() => {
 });
 
 describe("trajectory metadata", () => {
+  it("redacts each immutable config once across interleaved attempts and replacements", () => {
+    const redact = vi.spyOn(configRedaction, "redactConfigObject");
+    const configs = [1, 2].map((port) =>
+      freezeJsonSnapshot({ gateway: { port, auth: { token: "synthetic-token" } } }),
+    );
+    for (let attempt = 0; attempt < 5; attempt++) {
+      for (const config of configs) {
+        expect(metadata({ config, timeoutMs: attempt }).config).toMatchObject({
+          redacted: { gateway: { port: config.gateway.port, auth: { token: REDACTED_SENTINEL } } },
+          runtime: { timeoutMs: attempt },
+        });
+      }
+    }
+    expect(redact).toHaveBeenCalledTimes(2);
+  });
+
+  it("recaptures mutable nested config while keeping immutable captures read-only", () => {
+    const config = Object.freeze({ gateway: { port: 1, auth: { token: "synthetic-token" } } });
+    expect(metadata({ config }).config).toMatchObject({ redacted: { gateway: { port: 1 } } });
+    config.gateway.port = 2;
+    config.gateway.auth.token = "synthetic-replacement";
+    expect(metadata({ config }).config).toMatchObject({
+      redacted: { gateway: { port: 2, auth: { token: REDACTED_SENTINEL } } },
+    });
+    const frozen = freezeJsonSnapshot(config);
+    const captured = metadata({ config: frozen }).config as { redacted: typeof config };
+    expect(() => {
+      captured.redacted.gateway.port = 3;
+    }).toThrow(TypeError);
+    expect(metadata({ config: frozen }).config).toMatchObject({
+      redacted: { gateway: { port: 2 } },
+    });
+  });
+
   it("redacts shared immutable catalog entries once for interleaved snapshot selections and homes", () => {
     const alpha = skill("alpha", "Alpha");
     const beta = skill("beta", "Beta");
@@ -242,7 +273,7 @@ describe("trajectory metadata", () => {
       createPluginRecord({
         id: "demo-plugin",
         imported: true,
-        toolNames: ["demo_tool"],
+        toolNames: [" demo_tool ", "demo_tool", "demo_tool"],
       }),
     );
     setActivePluginRegistry(registry, "trajectory-metadata-test");
@@ -268,36 +299,15 @@ describe("trajectory metadata", () => {
 
     expect(captured).toMatchObject({
       config: { redacted: { providers: { openai: { apiKey: REDACTED_SENTINEL } } } },
-      plugins: { source: "active-registry", entries: [{ id: "demo-plugin" }] },
+      plugins: {
+        source: "active-registry",
+        entries: [{ id: "demo-plugin", toolNames: ["demo_tool", "demo_tool"] }],
+      },
       skills: { entries: [{ id: "weather", filePath: "/tmp/workspace/skills/weather/SKILL.md" }] },
     });
-  });
-
-  it.each([
-    {
-      name: "retains valid resolved skills beside partial entries",
-      resolved: [skill("alpha", "valid entry"), partialSkill],
-      fallback: [],
-      expected: "alpha",
-    },
-    {
-      name: "falls back when every resolved skill is partial",
-      resolved: [partialSkill],
-      fallback: [{ name: "fallback-skill" }],
-      expected: "fallback-skill",
-    },
-  ])("$name", ({ resolved, fallback, expected }) => {
-    const captured = metadata({
-      sessionFile: "/tmp/workspace/session.jsonl",
-      skillsSnapshot: {
-        prompt: "skill prompt",
-        version: 1,
-        skills: fallback,
-        resolvedSkills: resolved,
-      },
-    });
-
-    expect(captured.skills).toMatchObject({ entries: [{ name: expected }] });
+    const plugins = captured.plugins as { entries: Record<string, unknown>[] };
+    // Empty capabilities are not persisted and need no recorder projection work.
+    expect(plugins.entries[0]).not.toHaveProperty("cliBackendIds");
   });
 
   it("captures final artifact summaries for export sidecars", () => {

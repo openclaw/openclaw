@@ -1,13 +1,13 @@
-import { spawnSync } from "node:child_process";
-import { createHmac } from "node:crypto";
-import { readFileSync, readlinkSync } from "node:fs";
+import { readlinkSync } from "node:fs";
 import { hostname } from "node:os";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
+import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
   classifyGatewayOwnerProcessNamespace,
   GatewayProcessNamespaceSchema,
+  MachineIdentitySchema,
   type LockPayload,
 } from "./gateway-lock-payload.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
@@ -18,6 +18,7 @@ export type StateLeaseProcessOwner = {
   host: string;
   startedAt: number | null;
   processNamespace?: LockPayload["processNamespace"];
+  machineIdentity?: LockPayload["machineIdentity"];
 };
 
 export type NamespacedStateLeaseProcessOwner = StateLeaseProcessOwner & {
@@ -25,45 +26,6 @@ export type NamespacedStateLeaseProcessOwner = StateLeaseProcessOwner & {
 };
 
 let selfNamespace: string | undefined;
-
-function readMachineIdentity(): string | null {
-  try {
-    let identity: string | undefined;
-    if (process.platform === "linux") {
-      const value = readFileSync("/etc/machine-id", "utf8").trim();
-      if (/^[a-f0-9]{32}$/u.test(value)) {
-        identity = value;
-      }
-    } else if (process.platform === "darwin") {
-      const result = spawnSync("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], {
-        encoding: "utf8",
-        timeout: 1000,
-        maxBuffer: 64 * 1024,
-        killSignal: "SIGKILL",
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      const matches = [...(result.stdout ?? "").matchAll(/"IOPlatformUUID"\s*=\s*"([^"]+)"/gu)];
-      const value = matches.length === 1 ? matches[0]?.[1]?.toLowerCase() : undefined;
-      if (
-        !result.error &&
-        result.status === 0 &&
-        value &&
-        /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(value)
-      ) {
-        identity = value;
-      }
-    }
-    if (!identity || /^0+$/u.test(identity.replaceAll("-", ""))) {
-      return null;
-    }
-    // OS machine identifiers are confidential; retain only this purpose-specific digest.
-    return createHmac("sha256", "openclaw:state-lease-process-owner:machine:v1")
-      .update(`${process.platform}\0${identity}`)
-      .digest("hex");
-  } catch {
-    return null;
-  }
-}
 
 function parseNamespace(value: string | null) {
   try {
@@ -96,13 +58,13 @@ export function captureNamespacedStateLeaseProcessOwner(): NamespacedStateLeaseP
   if (namespace === null) {
     try {
       const boot = createManagedHandoffBootIdentityReader(process.env)();
-      const pidNamespace = process.platform === "linux" ? readlinkSync("/proc/self/ns/pid") : null;
-      if (boot.identity && (process.platform !== "linux" || pidNamespace)) {
+      const pidNamespace = boot.platform === "linux" ? readlinkSync("/proc/self/ns/pid") : null;
+      if (boot.identity && (boot.platform !== "linux" || pidNamespace)) {
         namespace = JSON.stringify([
           boot.platform,
           boot.identity,
           pidNamespace,
-          readMachineIdentity(),
+          readProcessMachineIdentity(),
         ]);
         selfNamespace = namespace;
       }
@@ -163,6 +125,9 @@ export function parseStateLeaseProcessOwner(
     pid,
     host,
     startedAt,
+    ...(owner.machineIdentity === undefined
+      ? {}
+      : { machineIdentity: MachineIdentitySchema.safeParse(owner.machineIdentity).data ?? null }),
     ...(owner.processNamespace === undefined
       ? {}
       : {
@@ -181,6 +146,7 @@ export function readStateLeaseProcessOwnerStatus(
   }
   const namespace = classifyGatewayOwnerProcessNamespace(owner.processNamespace, {
     ownerHost: owner.host,
+    machineIdentity: owner.machineIdentity,
   });
   if (namespace !== "same") {
     return namespace;

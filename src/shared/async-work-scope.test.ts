@@ -193,26 +193,42 @@ it("excludes newly admitted disposal work while another owner enters its next ph
   await Promise.all([abortWork, disposal, nextPhase]);
 });
 
-it("joins synchronous descendants during drain and fences late work", async () => {
-  const { scope, gate } = makeHeldScope();
-  let child: Promise<void> | undefined;
-  const closing = scope.run(() => {
-    const drain = own(scope.drain());
-    child = trackAsyncWork(() =>
-      scope.run(() => {
-        expect(getAsyncWorkSignal()).toBe(scope.signal);
-        return gate.promise;
-      }),
+it.each([false, true])(
+  "joins synchronous descendants without duplicate pending work (settled=%s)",
+  async (settled) => {
+    const { scope, gate } = makeHeldScope();
+    // A settled promise still owns work until its queued cleanup reaction runs.
+    if (settled) {
+      void own(scope.track(() => undefined));
+    }
+    // Supported runtimes provide this intrinsic; the shared ES2023 lib predates it.
+    const deferreds = vi.spyOn(
+      Promise as PromiseConstructor & { withResolvers: typeof createDeferredCore },
+      "withResolvers",
     );
-    return drain;
-  });
-  expect(scope.signal.aborted).toBe(true);
-  expect(getAsyncWorkSignal()).toBeUndefined();
-  await releaseHeld(closing, gate, child);
-  const late = vi.fn();
-  expect(() => scope.run(late)).toThrow("Async work scope is closed");
-  expect(late).not.toHaveBeenCalled();
-});
+    let child: Promise<void> | undefined;
+    const closing = scope.run(() => {
+      const drain = own(scope.drain());
+      child = trackAsyncWork(() =>
+        scope.run(() => {
+          expect(getAsyncWorkSignal()).toBe(scope.signal);
+          return gate.promise;
+        }),
+      );
+      return drain;
+    });
+    const created = deferreds.mock.calls.length;
+    deferreds.mockRestore();
+    expect(scope.signal.aborted).toBe(true);
+    expect(getAsyncWorkSignal()).toBeUndefined();
+    await releaseHeld(closing, gate, child);
+    const late = vi.fn();
+    expect(() => scope.run(late)).toThrow("Async work scope is closed");
+    expect(late).not.toHaveBeenCalled();
+    // Only the child needs new custody when an existing operation already holds drain.
+    expect(created).toBe(settled ? 1 : 2);
+  },
+);
 
 it("settles work for cleanup without closing its captured tracker, then fences final drain", async () => {
   const scope = makeScope();
@@ -288,7 +304,7 @@ describe("async work resources", () => {
     const output = execNodeEvalSync(
       `import assert from "node:assert/strict";
        import { setImmediate as nextTurn } from "node:timers/promises";
-       import { queryObjects } from "node:v8";
+       import { forceFullGc } from ${JSON.stringify(new URL("../test-utils/retention.ts", import.meta.url).href)};
        import { runWithAsyncWorkResources, runWithTrackedCancellation } from ${JSON.stringify(new URL("./async-work-resources.ts", import.meta.url).href)};
        import { AsyncWorkScope, trackAsyncWork } from ${JSON.stringify(new URL("./async-work-scope.ts", import.meta.url).href)};
 
@@ -327,7 +343,7 @@ describe("async work resources", () => {
            );
            const control = new WeakRef({});
            await nextTurn();
-           queryObjects(WeakRef);
+           forceFullGc();
            assert.equal(control.deref(), undefined, mode + " GC control");
            assert.equal(references.input.deref(), undefined, mode + " producer data");
            assert.equal(references.output.deref(), undefined, mode + " settled result");
@@ -341,6 +357,7 @@ describe("async work resources", () => {
        }
        console.log("foreground data released");`,
       {
+        execArgv: ["--expose-gc"],
         imports: ["./scripts/tsx.mjs"],
         timeout: 10_000,
       },

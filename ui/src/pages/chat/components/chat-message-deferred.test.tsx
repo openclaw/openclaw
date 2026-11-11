@@ -26,7 +26,15 @@ it("reserves declared and saved widget height before the lazy renderer arrives",
           preferredHeight: 220,
         }}
         surface="chat_message"
-        options={{ widgetLayout: { read: () => savedHeight(), write: () => {} } }}
+        options={{
+          widgetLayout: {
+            read: () => savedHeight(),
+            readRows: () => undefined,
+            write: () => undefined,
+            writeRows: () => {},
+            invalidateRow: () => {},
+          },
+        }}
       />
     );
   });

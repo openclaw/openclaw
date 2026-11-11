@@ -326,9 +326,39 @@ describe("prepared GitHub read authority", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it.each([undefined, "other.ghe.example.test"])(
+    "keeps publication token extraction bound to its verified issuer (ambient host: %s)",
+    async (ambientHost) => {
+      const host = "ghe.example.test";
+      const config = { gateway: { github: { host, apiBaseUrl: `https://${host}/api/v3` } } };
+      setRuntimeConfigSnapshot(config);
+      run.mockImplementation(async () => commandResult("native-enterprise-publication"));
+      const publication = await prepareGitHubPublicationIdentity(
+        readOptions({
+          config,
+          env: {
+            GH_HOST: ambientHost,
+            GH_TOKEN: undefined,
+            GITHUB_TOKEN: undefined,
+            GH_ENTERPRISE_TOKEN: undefined,
+            GITHUB_ENTERPRISE_TOKEN: undefined,
+          },
+        }),
+      );
+      expect(run.mock.calls[0]?.[0]).toEqual(["gh", "auth", "token", "--hostname", host]);
+      expect(fetch).toHaveBeenCalledWith(`https://${host}/api/v3/user`, expect.anything());
+      await expect(readNativeGitHubToken(publication.env, true, publication.host)).resolves.toBe(
+        "native-enterprise-publication",
+      );
+      expect(run).toHaveBeenCalledOnce();
+      expect(publication.env.GH_HOST).toBe(host);
+    },
+  );
+
   it("caches native reads for 60 seconds but reads publication tokens live", async () => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     let token = "native-before-ttl";
     run.mockImplementation(async () => commandResult(token));
     const options = readOptions();
@@ -532,7 +562,12 @@ describe("prepared GitHub read authority", () => {
   });
 
   it("binds system read authority to its selected profile and verified account", async () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-github-read-selection-") };
+    const stateDir = tempDirs.make("openclaw-github-read-selection-");
+    const env = {
+      get OPENCLAW_STATE_DIR() {
+        return stateDir;
+      },
+    };
     const profileId = `ghp_${"3".repeat(32)}`;
     const replacementProfileId = `ghp_${"4".repeat(32)}`;
     const configured = (selectedId: string): OpenClawConfig => ({
@@ -558,6 +593,11 @@ describe("prepared GitHub read authority", () => {
     const rotated = await prepare();
     expect(rotated.selection).toEqual(identity.selection);
     expect(rotated.cacheScope).not.toBe(identity.cacheScope);
+    const stateDirReads = vi.spyOn(env, "OPENCLAW_STATE_DIR", "get");
+    for (let index = 0; index < 10; index++) {
+      rotated.assertSelected();
+    }
+    expect(stateDirReads).not.toHaveBeenCalled();
     config = configured(replacementProfileId);
     expect(() => rotated.assertSelected()).toThrow("identity changed");
     expect(run).not.toHaveBeenCalled();

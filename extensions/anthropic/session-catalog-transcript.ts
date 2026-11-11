@@ -38,24 +38,22 @@ function transcriptItemType(role: string, content: unknown): string {
 }
 
 export function collectTranscriptText(value: unknown, fragments: string[]): void {
-  if (typeof value === "string") {
-    if (value.trim()) {
-      fragments.push(value);
-    }
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectTranscriptText(item, fragments);
-    }
-    return;
-  }
-  if (!isRecord(value)) {
-    return;
-  }
-  for (const key of ["text", "thinking", "content", "input"]) {
-    if (key in value) {
-      collectTranscriptText(value[key], fragments);
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (typeof current === "string") {
+      if (current.trim()) {
+        fragments.push(current);
+      }
+    } else if (Array.isArray(current)) {
+      for (let index = current.length - 1; index >= 0; index -= 1) {
+        pending.push(current[index]);
+      }
+    } else if (isRecord(current)) {
+      // LIFO traversal preserves the original text, thinking, content, input order.
+      for (const key of ["input", "content", "thinking", "text"]) {
+        pending.push(current[key]);
+      }
     }
   }
 }
@@ -87,15 +85,15 @@ export function parseTranscriptLine(line: Buffer): ClaudeTranscriptItem | undefi
     ...(model ? { model } : {}),
     ...(uuid ? { uuid } : {}),
   };
-  if (Buffer.byteLength(JSON.stringify(item), "utf8") <= MAX_TRANSCRIPT_ITEM_BYTES) {
-    return item;
+  try {
+    if (Buffer.byteLength(JSON.stringify(item), "utf8") <= MAX_TRANSCRIPT_ITEM_BYTES) {
+      return item;
+    }
+  } catch {
+    // Parsed JSON can exceed the serializer's stack; retain text and metadata below.
   }
-  return {
-    type: item.type,
-    text: `${truncateUtf16Safe(text, MAX_TRANSCRIPT_TEXT_LENGTH)}\n\n[oversized Claude item truncated]`,
-    ...(item.timestamp ? { timestamp: item.timestamp } : {}),
-    ...(item.model ? { model: item.model } : {}),
-    ...(item.uuid ? { uuid: item.uuid } : {}),
-    truncated: true,
-  };
+  delete item.content;
+  item.text = `${truncateUtf16Safe(text, MAX_TRANSCRIPT_TEXT_LENGTH)}\n\n[oversized or deeply nested Claude item truncated]`;
+  item.truncated = true;
+  return item;
 }

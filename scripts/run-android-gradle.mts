@@ -86,7 +86,7 @@ export async function run(
       bin: command,
       cwd,
       env,
-      shell: false,
+      shell: process.platform === "win32" && /\.(?:bat|cmd)$/iu.test(command),
     });
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
@@ -140,7 +140,12 @@ export async function main(argv: string[] = process.argv.slice(2)) {
       return 1;
     }
   }
-  const gradleStatus = await run("./gradlew", gradleArgs, androidDir, env);
+  const gradleStatus = await run(
+    process.platform === "win32" ? "gradlew.bat" : "./gradlew",
+    gradleArgs,
+    androidDir,
+    env,
+  );
   if (proof && gradleStatus !== 0) {
     console.error(
       "[android-gradle] Gradle failed after prerequisite checks; inspect the task output and test reports. A failed build is not an executed test.",

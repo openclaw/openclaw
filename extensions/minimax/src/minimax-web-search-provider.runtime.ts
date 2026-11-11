@@ -74,15 +74,6 @@ function resolveMiniMaxRegion(
   return "global";
 }
 
-function resolveMiniMaxEndpoint(
-  searchConfig?: SearchConfigRecord,
-  config?: Record<string, unknown>,
-): string {
-  return resolveMiniMaxRegion(searchConfig, config) === "cn"
-    ? MINIMAX_SEARCH_ENDPOINT_CN
-    : MINIMAX_SEARCH_ENDPOINT_GLOBAL;
-}
-
 function missingMiniMaxKeyPayload() {
   return {
     error: "missing_minimax_api_key",
@@ -114,7 +105,10 @@ export async function executeMiniMaxWebSearchProviderTool(
   const { query, count } = readWebSearchQueryAndCount(args, searchConfig);
 
   const resolvedCount = resolveSearchCount(count, DEFAULT_SEARCH_COUNT);
-  const endpoint = resolveMiniMaxEndpoint(searchConfig, ctx.config);
+  const endpoint =
+    resolveMiniMaxRegion(searchConfig, ctx.config) === "cn"
+      ? MINIMAX_SEARCH_ENDPOINT_CN
+      : MINIMAX_SEARCH_ENDPOINT_GLOBAL;
 
   const cacheKey = buildSearchCacheKey(["minimax", endpoint, query, resolvedCount]);
   const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);

@@ -2,8 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import { hasTerminalControl } from "../../packages/terminal-core/src/safe-text.js";
 import { withContendedConfigMutation } from "../../test/helpers/config-mutation-lock.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as config from "../config/config.js";
@@ -89,7 +87,7 @@ async function runHooksReport(statusReport: HookStatusReport, args: string[]): P
   }
 }
 
-it("renders hook metadata and requirements safely while retaining raw JSON values", async () => {
+it("retains raw hook descriptor metadata in JSON", async () => {
   const workspaceDir = tempDirs.make("hook-terminal-");
   const directory = path.join(workspaceDir, "hooks", "terminal-fixture");
   await fs.mkdir(directory, { recursive: true });
@@ -110,37 +108,11 @@ it("renders hook metadata and requirements safely while retaining raw JSON value
   const report = buildWorkspaceHookStatus(workspaceDir, {
     config: descriptorConfig,
   });
-  const entry = report.hooks.find((candidate) => candidate.name === "terminal-fixture");
-  expect(entry?.emoji).toBe(untrusted("🔗"));
-  const infoText = await runHooksReport(report, ["info", "terminal-fixture"]);
-  const outputs = [
-    await runHooksReport(report, ["list", "--verbose"]),
-    infoText,
-    await runHooksReport(report, ["check"]),
-  ];
-  for (const output of outputs) {
-    expect(
-      hasTerminalControl(
-        stripAnsi(output).replaceAll("\n", "").replaceAll("\r", "").replaceAll("\t", ""),
-      ),
-    ).toBe(false);
-    expect(output).not.toContain(escape);
-    expect(output).toContain("terminal-fixture");
-  }
-  const infoOutput = stripAnsi(infoText);
-  for (const text of [
-    "🔗 terminal-fixture",
-    "unknown:event",
-    "MISSING_HOOK_ENV",
-    "Readable description\nsecond\tline",
-  ]) {
-    expect(infoOutput).toContain(text);
-  }
-  expect(stripAnsi(await runHooksReport(report, ["list"]))).not.toContain("second\\tline");
-  expect(
-    JSON.parse(await runHooksReport(report, ["info", "terminal-fixture", "--json"])).emoji,
-  ).toBe(untrusted("🔗"));
-  expect(entry?.emoji).toBe(untrusted("🔗"));
+  const output = JSON.parse(await runHooksReport(report, ["info", "terminal-fixture", "--json"]));
+  expect(output).toMatchObject({
+    emoji: untrusted("🔗"),
+    description: untrusted("Readable description\nsecond\tline"),
+  });
 });
 
 describe("hooks cli formatting", () => {

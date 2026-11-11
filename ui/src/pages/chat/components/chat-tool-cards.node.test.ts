@@ -176,7 +176,7 @@ it.each([
 });
 
 it.each([
-  [false, '{"error": "partial text"}', "running", "unknown"],
+  [false, '{"error": "partial text"}', "running", "unrecorded"],
   [true, "ok", "succeeded", "succeeded"],
 ] as const)(
   "settles live output only with a result receipt: %s",

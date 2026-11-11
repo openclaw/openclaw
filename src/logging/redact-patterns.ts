@@ -26,7 +26,8 @@ const CONFIG_DIRECT_ASSIGNMENT_SECRET_KEYS = String.raw`access-token|refresh-tok
 export const CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS = String.raw`password|passphrase|pass|passwd`;
 const CLI_SECRET_FLAG_KEYS = String.raw`${AWS_SECRET_ACCESS_KEY_FIELD_KEYS}|api[-_]?key|hook[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|credential|private[-_]?key|client[-_]?secret|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
 
-export const FORM_BODY_KEY_INVISIBLE_CHARS = String.raw`\p{C}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0`;
+export const FORM_BODY_KEY_INVISIBLE_CHARS =
+  "\\p{C}\\u00A0\\u1680\\u2000-\\u200A\\u202F\\u205F\\u3000\\u115F\\u1160\\u3164\\uFFA0";
 const ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g`;
 const ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})\b\s*[=:]\s*\\+(["'])([^\s"'\\]+)\\+\1/g`;
 // Quoted values may contain the other quote characters; only the matching closing quote ends
@@ -411,6 +412,7 @@ export const VENDOR_TOKEN_REDACT_PATTERNS: readonly string[] = [
   String.raw`(AIza[0-9A-Za-z\-_]{20,})`,
   String.raw`(ya29\.[0-9A-Za-z_\-./+=]{10,})`,
   String.raw`(1//0[0-9A-Za-z_\-./+=]{10,})`,
+  String.raw`(GOCSPX-[A-Za-z0-9_-]{20,})`,
   String.raw`(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})`,
   String.raw`(pplx-[A-Za-z0-9_-]{10,})`,
   String.raw`(fal_[A-Za-z0-9_-]{10,})`,
