@@ -100,7 +100,7 @@ private class AggregateNameContactsProvider(
       }
 
       ContactsContract.CommonDataKinds.Email.CONTENT_URI -> {
-        Unit
+        // This fixture provides no email rows.
       }
 
       else -> {
