@@ -325,6 +325,8 @@ it.each([
   "retains multipart topic context under a saturated history budget ($parts parts, explicit: $explicitReply, canonical: $canonical)",
   async ({ parts, historyLimit, explicitReply, canonical, independent }) => {
     const forum = { ...group, type: "supergroup", is_forum: true } as const;
+    const topicMessage = (text: string, overrides: Partial<Message.TextMessage> = {}) =>
+      message(text, { chat: forum, message_thread_id: 25, ...overrides });
     const sessionKey = `agent:main:telegram:group:${forum.id}:topic:25`;
     const eventId = "budgeted-topic-answer";
     const now = Math.floor(Date.now() / 1000);
@@ -335,15 +337,11 @@ it.each([
     cfg.channels!.telegram!.historyLimit = historyLimit;
     cfg.channels!.telegram!.groups = { "*": { requireMention: false } };
     cfg.messages!.groupChat = { unmentionedInbound: "user_request" };
-    const target = { storePath, sessionKey };
-    await upsertSessionEntry({
-      ...target,
-      entry: { sessionId: "budgeted-topic", updatedAt: now * 1000 },
-    });
+    const target = { storePath, sessionKey, agentId: "main", sessionId: "budgeted-topic" };
+    const sessionEntry = { sessionId: target.sessionId, updatedAt: now * 1000 };
+    await upsertSessionEntry({ ...target, entry: sessionEntry });
     await appendSessionTranscriptMessageByIdentity({
-      agentId: "main",
       ...target,
-      sessionId: "budgeted-topic",
       eventId: canonical ? eventId : "unrelated-newer-answer",
       message: {
         role: "assistant",
@@ -353,12 +351,7 @@ it.each([
     });
     const bot = await createBot(false, true, cfg);
     for (const [partIndex, text] of texts.entries()) {
-      const sent = message(text, {
-        chat: forum,
-        message_thread_id: 25,
-        from: bot.botInfo,
-        date: now - 5 + partIndex,
-      });
+      const sent = topicMessage(text, { from: bot.botInfo, date: now - 5 + partIndex });
       physicalMessageIds.push(sent.message_id);
       await recordOutbound(sent, {
         transcriptMessageId: eventId,
@@ -368,18 +361,14 @@ it.each([
     }
     if (independent) {
       await recordOutbound(
-        message("Independent notification", {
-          chat: forum,
-          message_thread_id: 25,
-          from: bot.botInfo,
-          date: now - 1,
-        }),
+        topicMessage("Independent notification", { from: bot.botInfo, date: now - 1 }),
       );
     }
+    if (parts === 4) {
+      await receive(bot, { message: topicMessage("Newer room discussion", { date: now - 1 }) });
+    }
     await receive(bot, {
-      message: message("Please continue", {
-        chat: forum,
-        message_thread_id: 25,
+      message: topicMessage("Please continue", {
         date: now,
         reply_to_message: reply(explicitReply ? "Earlier question" : "Topic root", {
           chat: forum,
@@ -407,6 +396,12 @@ it.each([
       expect(messages.some((entry) => entry.message_id === `session:${eventId}`)).toBe(false);
     } else if (canonical) {
       expectContextMessages({ message_id: `session:${eventId}`, body: canonicalText });
+      expect(messages.some((entry) => physicalMessageIds.includes(Number(entry.message_id)))).toBe(
+        false,
+      );
+      if (parts === 4) {
+        expectContextMessages({ body: "Newer room discussion" });
+      }
     } else {
       expectContextMessages({ message_id: String(physicalMessageIds.at(-1)), body: "beta" });
       expect(messages.some((entry) => entry.message_id === `session:${eventId}`)).toBe(false);

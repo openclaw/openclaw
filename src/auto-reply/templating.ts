@@ -54,6 +54,8 @@ export type ChannelStructuredContextEntry = {
   sessionTranscriptAssistantTextDedupeKeys?: string[];
   /** Candidate IDs in ascending priority; canonical rows may follow native fallbacks. */
   sessionTranscriptPriorityMessageIds?: string[];
+  /** Non-pinned native IDs replaced only by admitted canonical assistant IDs; prioritize the replacements when trimming. */
+  sessionTranscriptMessageReplacements?: Record<string, string>;
 };
 
 export type SessionTranscriptContext = {

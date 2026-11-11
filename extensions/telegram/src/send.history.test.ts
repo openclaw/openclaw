@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Message } from "grammy/types";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
@@ -56,14 +57,18 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
     ...cfg,
     channels: { telegram: { ...fixture.cfg.channels.telegram, ...policy } },
   });
-  const providerMessage = (chatId: number, text: string, extra = {}) => ({
-    message_id: 902,
-    date: 1_779_394_740,
-    chat: { id: chatId, type: chatId < 0 ? "supergroup" : "private" },
-    from: { id: 123456, is_bot: true, first_name: "OpenClaw" },
-    text,
-    ...extra,
-  });
+  const providerMessage = (chatId: number, text: string, extra = {}) =>
+    ({
+      message_id: 902,
+      date: 1_779_394_740,
+      chat:
+        chatId < 0
+          ? { id: chatId, type: "supergroup", title: "Checks" }
+          : { id: chatId, type: "private", first_name: "Pat" },
+      from: { id: 123456, is_bot: true, first_name: "OpenClaw" },
+      text,
+      ...extra,
+    }) satisfies Message.TextMessage;
   const pollMessage = (chatId: number, type: string, id: string, thread?: number) => ({
     message_id: 500,
     date: 1_779_394_740,
@@ -152,10 +157,9 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
       };
       fixture.responseFor = () => notification;
       await sendMessageTelegram("-100123:topic:25", notification.text, sendOptions());
+      const scope = { accountId: "default", chatId: -100123, historyEligible: true };
       await cache().record({
-        accountId: "default",
-        chatId: -100123,
-        historyEligible: true,
+        ...scope,
         msg: {
           ...notification,
           message_id: 901,
@@ -165,30 +169,21 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
         },
       });
       await cache().record({
+        ...scope,
         accountId: "other",
-        chatId: -100123,
-        historyEligible: true,
         msg: { ...notification, message_id: 904, text: "Other account secret" },
       });
       await cache().record({
-        accountId: "default",
-        chatId: -100123,
-        historyEligible: true,
-        msg: {
-          ...notification,
-          message_id: 905,
-          message_thread_id: 26,
-          text: "Other topic secret",
-        },
+        ...scope,
+        msg: { ...notification, message_id: 905, message_thread_id: 26, text: "Other topic data" },
       });
       await cache().record({
-        accountId: "default",
+        ...scope,
         chatId: -100456,
-        historyEligible: true,
         msg: {
           ...notification,
           message_id: 907,
-          chat: { id: -100456, type: "supergroup" },
+          chat: { id: -100456, type: "supergroup", title: "Other room" },
           text: "Other chat secret",
         },
       });
@@ -203,16 +198,16 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
         opts: { botInfo },
         telegramCfg: cfg.channels!.telegram!,
       });
-      const current = {
+      const inbound = {
         message_id: 906,
         message_thread_id: 25,
         date: notification.date + 120,
-        chat: { id: -100123, type: "supergroup" as const, is_forum: true },
+        chat: { id: -100123, type: "supergroup", title: "Checks", is_forum: true },
         from: { id: 42, is_bot: false, first_name: "Pat" },
         text: "Please run the focused checks",
         reply_to_message: {
           ...notification,
-          chat: { id: -100123, type: "supergroup" as const },
+          reply_to_message: undefined,
           message_id: explicitReply ? notification.message_id : 25,
           date: explicitReply ? notification.date : notification.date - 86_400,
           text: explicitReply ? notification.text : "Topic root",
@@ -220,7 +215,11 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
             ? {}
             : { forum_topic_created: { name: "Checks", icon_color: 0x6fb9f0 } }),
         },
-      };
+      } satisfies Message.TextMessage;
+      // Telegram's JSON omits terminal reply fields. structuredClone would retain
+      // undefined properties that cannot be persisted by the message cache.
+      const wire = JSON.stringify(inbound);
+      const current: typeof inbound = JSON.parse(wire);
       await runtime.recordMessageForReplyChain(current, { scope: "forum", id: 25 }, botInfo.id);
       const promptContext = await runtime.buildPromptContextForMessage(
         {
@@ -252,7 +251,7 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
       expect(
         context?.ctxPayload.InboundHistory?.filter((entry) => entry.messageId === "902"),
       ).toHaveLength(1);
-      expect(assembled).not.toMatch(/Other account secret|Other topic secret|Other chat secret/);
+      expect(assembled).not.toMatch(/Other account secret|Other topic data|Other chat secret/);
       expect(assembled).not.toContain("Forged bot name");
       expect(fixture.requests).toHaveLength(1);
     },

@@ -234,16 +234,23 @@ export function selectTelegramGroupPromptContext(params: {
       ),
     ];
     // Keep native fallbacks below their canonical row, at the group's own recency.
+    const messageReplacements: Record<string, string> = {};
     const priorityMessageIds = recentSelfMessages.flatMap((message) => {
       const canonicalId = canonicalPriorityIdForMessage(message);
       if (typeof message["message_id"] !== "string") {
         return [];
+      }
+      if (canonicalId) {
+        messageReplacements[message["message_id"]] = `session:${canonicalId}`;
       }
       return canonicalId
         ? [message["message_id"], `session:${canonicalId}`]
         : [message["message_id"]];
     });
     const recentContextMetadata = {
+      ...(Object.keys(messageReplacements).length > 0
+        ? { sessionTranscriptMessageReplacements: messageReplacements }
+        : {}),
       ...(assistantTextKeys.length > 0
         ? { sessionTranscriptAssistantTextDedupeKeys: [...new Set(assistantTextKeys)] }
         : {}),
@@ -267,6 +274,7 @@ export function selectTelegramGroupPromptContext(params: {
       sessionTranscriptDedupeMessageIds: _projectionIds,
       sessionTranscriptAssistantTextDedupeKeys: _assistantTextKeys,
       sessionTranscriptPriorityMessageIds: _priorityMessageIds,
+      sessionTranscriptMessageReplacements: _messageReplacements,
       ...selectedEntry
     } = entry;
     return [

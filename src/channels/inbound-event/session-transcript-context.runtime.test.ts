@@ -166,6 +166,7 @@ describe("session transcript inbound context", () => {
   it.each([false, true])(
     "prefers an available canonical row and retains native fallback otherwise (canonical: %s)",
     async (canonical) => {
+      const canonicalId = "session:answer";
       readRecent.mockResolvedValue([
         ...(canonical
           ? [{ id: "answer", role: "assistant" as const, text: "Alpha beta", timestamp: 500 }]
@@ -176,22 +177,27 @@ describe("session transcript inbound context", () => {
         SessionTranscriptContext: { historyLimit: 2 },
         ChannelStructuredContext: chatWindow(
           [
-            { message_id: "25", body: "explicit target", is_reply_target: true, timestamp_ms: 0 },
-            { message_id: "700", body: "Alpha", timestamp_ms: 1_000 },
+            { message_id: "700", body: "Alpha", is_reply_target: true, timestamp_ms: 0 },
             { message_id: "701", body: "beta", timestamp_ms: 2_000 },
           ],
-          { sessionTranscriptPriorityMessageIds: ["700", "701", "session:answer"] },
+          {
+            sessionTranscriptPriorityMessageIds: ["700", "701", canonicalId],
+            sessionTranscriptMessageReplacements: { "700": canonicalId, "701": canonicalId },
+          },
         ),
       });
       expect(ctx.ChannelStructuredContext?.[0]?.payload).toMatchObject({
         messages: [
-          { message_id: "25" },
+          { message_id: "700" },
           {
-            message_id: canonical ? "session:answer" : "701",
+            message_id: canonical ? canonicalId : "701",
             body: canonical ? "Alpha beta" : "beta",
           },
         ],
       });
+      expect(buildInboundUserContextPrefix(ctx)).not.toContain(
+        "sessionTranscriptMessageReplacements",
+      );
     },
   );
 

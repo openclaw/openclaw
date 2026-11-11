@@ -218,6 +218,7 @@ export async function mergeSessionTranscriptContext(params: {
     const assistantDedupeKeys = new Set(assistantTextKeys ?? []);
     const seen = new Set(existing.flatMap(messageKeys));
     const seenTranscript = new Set<string>();
+    const admittedAssistantIds = new Set<string>();
     const added: PromptMessage[] = [];
     for (const item of transcript) {
       if (item.transcriptId && ids.has(item.transcriptId)) {
@@ -241,8 +242,22 @@ export async function mergeSessionTranscriptContext(params: {
       }
       keys.forEach((key) => seenTranscript.add(key));
       added.push(message);
+      if (item.role === "assistant" && item.entry.messageId) {
+        admittedAssistantIds.add(item.entry.messageId);
+      }
     }
-    let messages = [...added, ...existing].toSorted(compareMessages);
+    // Canonical text and its native fragments are alternatives, not extra budget
+    // slots. Missing/filtered canonical rows leave native fallback untouched.
+    const native = existing.filter((message) => {
+      const replacement =
+        typeof message.message_id === "string"
+          ? window.sessionTranscriptMessageReplacements?.[message.message_id]
+          : undefined;
+      return (
+        message.is_reply_target === true || !replacement || !admittedAssistantIds.has(replacement)
+      );
+    });
+    let messages = [...added, ...native].toSorted(compareMessages);
     if (!(messages.length <= limit)) {
       const pinned = messages.filter((message) => message.is_reply_target === true);
       const priorityOrder = new Map(
