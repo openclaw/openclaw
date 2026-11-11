@@ -394,9 +394,9 @@ export function extractCompactionMessageText(message: AgentMessage): string {
       : Array.isArray(content)
         ? content
             .flatMap((block) => {
-              const text =
+              const value =
                 block && typeof block === "object" ? Reflect.get(block, "text") : undefined;
-              return typeof text === "string" && text.trim() ? [text.trim()] : [];
+              return typeof value === "string" && value.trim() ? [value.trim()] : [];
             })
             .join("\n")
         : "";
