@@ -1,4 +1,7 @@
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  AgentHarnessPreflightError,
+  embeddedAgentLog,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
@@ -24,6 +27,7 @@ import {
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import {
+  borrowsCodexConversationBinding,
   isTransientWebSearchRestriction,
   shouldRecheckRecoverablePluginBinding,
   shouldRotateCodexAppServerBindingForRuntime,
@@ -71,6 +75,16 @@ export async function startOrResumeThread(
     const assert = authority.assertCurrent;
     const params: CodexStartOrResumeThreadParams = { ...input, assertCurrent: assert, authority };
     await stopCodexAutomaticRestart(params, saved);
+    const borrowingConversation = borrowsCodexConversationBinding(params.params);
+    if (
+      borrowingConversation &&
+      (saved?.pendingResumeConfiguration || saved?.pendingSupervisionBranch)
+    ) {
+      // Only the foreground turn should consume an explicitly pending adoption.
+      throw new AgentHarnessPreflightError(
+        "The conversation has a pending native resume; the scheduled turn left it unchanged.",
+      );
+    }
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
     let binding = saved;
     let selectionBinding = binding;
@@ -420,8 +434,8 @@ export async function startOrResumeThread(
     if (configuredMcpOwnershipChanged && binding?.threadId) {
       const predecessorBinding = binding;
       // Scheduled configured MCP moved from Codex-native config to OpenClaw dynamic tools.
-      // A persistent main/named session has one binding: rotate its exact predecessor instead
-      // of retaining native and scheduled variants that could diverge or widen authority.
+      // Never reuse the old surface across this boundary. Only a turn that owns the
+      // session may commit its replacement; a borrowing turn uses it for this run only.
       stageBindingReplacement("changing configured MCP ownership");
       embeddedAgentLog.debug(
         "codex app-server configured MCP ownership changed; starting a new thread",
@@ -688,6 +702,12 @@ export async function startOrResumeThread(
       }
     }
 
+    // A poll or repair may need a fresh native thread because its tool schema is
+    // narrower. Publishing that thread as the conversation's successor would send
+    // the next human reply away from their running workers. Use the existing
+    // transient lifecycle: same delivery route, this turn's tools, no binding swap.
+    // A compatible turn above can still reuse the thread normally.
+    preserveExistingBinding ||= borrowingConversation;
     assertCodexBindingMayBeReplaced(binding, "starting a fresh native thread", expectedOwnership);
     const requestContext = await prepareRequestContext();
     if (saved) {
@@ -706,7 +726,7 @@ export async function startOrResumeThread(
       ...requestContext,
       prebuiltPluginThreadConfig,
       preserveExistingBinding,
-      rotatedContextEngineBinding,
+      rotatedContextEngineBinding: rotatedContextEngineBinding && !borrowingConversation,
       replacementPredecessor,
     });
     if (replacementPredecessor && !preserveExistingBinding && configuredMcpOwnershipChanged) {

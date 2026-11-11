@@ -21,6 +21,7 @@ import {
 } from "./session-binding.js";
 import { captureCodexAppServerClientLifetime } from "./shared-client.js";
 import {
+  borrowsCodexConversationBinding,
   shouldRotateCodexAppServerBindingForRuntime,
   shouldRotateCodexGpt56MultiAgentBinding,
 } from "./thread-binding-policy.js";
@@ -396,6 +397,15 @@ export async function assertCodexThreadReplacementSafe(
         return;
       }
       throw error;
+    }
+    if (
+      preserveExistingBinding &&
+      borrowsCodexConversationBinding(params.params) &&
+      (binding.turnRecovery || thread.status?.type === "active")
+    ) {
+      // A background poll is not the owner of an uncertain foreground turn. In
+      // particular it must not interrupt the supervisor in order to run the poll.
+      throw incompatible();
     }
     await settleCodexOrphanTurn(params, binding, thread, assertCurrent);
     assertCurrent();

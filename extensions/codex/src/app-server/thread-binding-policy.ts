@@ -1,3 +1,9 @@
+import {
+  isCronSessionKey,
+  normalizeMainKey,
+  parseAgentSessionKey,
+} from "openclaw/plugin-sdk/routing";
+import { parseSessionDeliveryRoute } from "openclaw/plugin-sdk/session-key-runtime";
 import type { CodexAppServerConnectionClass } from "./config-contracts.js";
 import { normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -5,6 +11,37 @@ import type {
   CodexPluginThreadConfigProvider,
   CodexStartOrResumeThreadParams,
 } from "./thread-lifecycle-types.js";
+
+/** A scheduled turn may borrow a conversation without owning its native supervisor. */
+export function borrowsCodexConversationBinding({
+  sessionKey,
+  trigger,
+  inputProvenance,
+  scheduledToolPolicy,
+  config,
+}: CodexStartOrResumeThreadParams["params"]): boolean {
+  if (!sessionKey || isCronSessionKey(sessionKey)) {
+    return false;
+  }
+  // Repairs arrive through the ordinary agent entry point, not the cron runner.
+  if (
+    inputProvenance?.kind === "internal_system" &&
+    inputProvenance.sourceTool === "cron_failure_repair"
+  ) {
+    return true;
+  }
+  if (trigger !== "cron") {
+    return false;
+  }
+  // A job with its own named execution session still owns that binding. Where
+  // output is *delivered* does not tell us where the turn is executing.
+  return Boolean(
+    parseSessionDeliveryRoute(sessionKey) ||
+    sessionKey === "global" ||
+    parseAgentSessionKey(sessionKey)?.rest === normalizeMainKey(config?.session?.mainKey) ||
+    (scheduledToolPolicy?.mode === "account" && scheduledToolPolicy.ownerSessionKey === sessionKey),
+  );
+}
 
 export function shouldRotateCodexAppServerBindingForRuntime(params: {
   connectionClass: CodexAppServerConnectionClass;
