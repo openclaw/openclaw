@@ -414,7 +414,7 @@ runner group. `OPENCLAW_RELEASE_RUNNER_GROUP` continues to select the existing
 hosted runners. App token creation must succeed before a VM is provisioned;
 a missing app ID or private key stops provisioning.
 The runner group must admit the nightly workflow on `main` and
-`full-release-state-watcher.yml` at `80d330dfe6d79833a6d5abffcad7478ec1b28b86`.
+`full-release-state-watcher.yml` at `ad1621f7e9d896dfdcc202d007e766e6c30153df`.
 Full Release Validation pins that reviewed watcher definition from its immutable
 `release-ci/` refs; the watcher checks out the caller's pinned tooling and admitted
 verifier. When changing the watcher definition, update the caller pin and

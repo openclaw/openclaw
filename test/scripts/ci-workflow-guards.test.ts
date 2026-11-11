@@ -2539,7 +2539,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
   it.each([
     {
       file: "full-release-state-watcher.yml",
-      runner: "blacksmith-4vcpu-ubuntu-2404",
+      runner: "blacksmith-2vcpu-ubuntu-2404",
       job: "watch",
     },
     {
