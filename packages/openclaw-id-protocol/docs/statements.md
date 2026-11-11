@@ -352,12 +352,12 @@ Unknown signed fields remain rejected. See [enrollment.md](enrollment.md#headles
 for the proof and join-link bytes and [discovery.md](discovery.md#accountless-node-authentication)
 for request authentication.
 
-| Type             | Body                                                           | Signer / authority                                                |
-| ---------------- | -------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `NodeInviteCap`  | claw_id, invite_id, label, created_at, expires_at, secret_hash | R or current owner device with `invite`; direct registration only |
-| `NodeRedemption` | claw_id, invite_id, peer_key, description, proof, requested_at | the named W, represented as ed25519: in signer; pending only      |
+| Type             | Body                                                                               | Signer / authority                                                |
+| ---------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `NodeInviteCap`  | claw_id, invite_id, label, created_at, expires_at, secret_hash                     | R or current owner device with `invite`; direct registration only |
+| `NodeRedemption` | claw_id, invite_id, peer_key, operator_peer_key?, description, proof, requested_at | the named W, represented as ed25519: in signer; pending only      |
 
-`MembershipTarget` adds `add_node { peer_key, label, invite_id }` and
+`MembershipTarget` adds `add_node { peer_key, label, invite_id, operator_peer_key? }` and
 `remove_node { peer_key }`; both require R or a current owner with `manage_members`.
 `deny_invite` and peer-key revocations cover nodes too. `MembershipSnapshotBody` requires
 `node_peer_keys: IrohEndpointKey[]` (empty when none), separate from `owner_peer_keys` and

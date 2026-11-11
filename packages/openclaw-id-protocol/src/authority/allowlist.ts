@@ -6,7 +6,14 @@
 import type { IrohEndpointKey, KeyFingerprint } from "../keys.js";
 import type { UnixSeconds } from "../statements/types.js";
 import { nodeRemovalEvents, withoutNodes } from "./nodes.js";
-import type { AuthorityEvent, AuthorityState, MemberRecord, OwnerDeviceRecord } from "./state.js";
+import {
+  nodeEnrollmentKeys,
+  nodeHolding,
+  type AuthorityEvent,
+  type AuthorityState,
+  type MemberRecord,
+  type OwnerDeviceRecord,
+} from "./state.js";
 
 /** Default: owner devices not admitted for 90 days are dropped. */
 export const OWNER_DEVICE_INACTIVITY_SECONDS = 90 * 86400;
@@ -62,7 +69,7 @@ export function memberPeerListedSeq(
  */
 export function peerKeyListedSeq(state: AuthorityState, key: IrohEndpointKey): number | undefined {
   const seqs = [
-    state.nodes[key]?.listed_seq,
+    nodeHolding(state, key)?.record.listed_seq,
     ...Object.values(state.owner_devices).map((record) => ownerPeerListedSeq(record, key)),
     ...Object.values(state.members).map((member) => memberPeerListedSeq(member, key)),
   ].filter((seq): seq is number => seq !== undefined);
@@ -195,10 +202,11 @@ export function recordSeen(
       return [account, { ...member, last_seen: { ...member.last_seen, [peerKey]: now } }];
     }),
   );
-  const node = state.nodes[peerKey];
+  // Activity on either key of a node enrollment keeps the whole enrollment listed.
+  const held = nodeHolding(state, peerKey);
   const nodes =
-    node && stale(node.last_seen)
-      ? { ...state.nodes, [peerKey]: { ...node, last_seen: now } }
+    held && stale(held.record.last_seen)
+      ? { ...state.nodes, [held.node]: { ...held.record, last_seen: now } }
       : state.nodes;
   return changed || nodes !== state.nodes ? { ...state, owner_devices, members, nodes } : null;
 }
@@ -237,8 +245,8 @@ export function dropInactive(
   const owners = withoutOwnerDevices(state, idleOwners);
   return {
     state: withoutNodes(withoutMemberPeerKeys(owners.state, idleKeys), idleNodes),
-    peers: [...new Set([...owners.peers, ...idleKeys, ...idleNodes])],
-    events: idleNodes.length ? nodeRemovalEvents(idleNodes) : [],
+    peers: [...new Set([...owners.peers, ...idleKeys, ...nodeEnrollmentKeys(state, idleNodes)])],
+    events: idleNodes.length ? nodeRemovalEvents(state, idleNodes) : [],
   };
 }
 

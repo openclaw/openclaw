@@ -71,7 +71,11 @@ export function NodeSection(props: {
   canCreate: boolean;
   error?: string;
   onCreate: (label: string) => Promise<CreatedNodeInvite | undefined>;
-  onDecide: (invite: NodeInvite, approve: boolean) => Promise<boolean | undefined>;
+  onDecide: (
+    invite: NodeInvite,
+    approve: boolean,
+    grantChat: boolean,
+  ) => Promise<boolean | undefined>;
   onRemove: (node: NodeRecord) => void;
 }) {
   const [selected, setSelected] = createSignal<string>();

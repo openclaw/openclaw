@@ -99,6 +99,8 @@ export type NodeRecord = {
   addedBy: string;
   lastSeen: number;
   inviteId: string;
+  /** Present when the owner also gave this device chat and dashboard access. */
+  operatorPeerKey?: IrohEndpointKey;
 };
 export type NodeInvite = {
   inviteId: string;
@@ -108,6 +110,8 @@ export type NodeInvite = {
   status: "open" | "pending" | "approved" | "denied" | "expired";
   pending?: {
     peerKey: IrohEndpointKey;
+    /** The device asks for chat and dashboard access with this separate key. */
+    operatorPeerKey?: IrohEndpointKey;
     requestedAt: number;
     decideBy: number;
     description: NodeDescription;

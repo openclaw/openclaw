@@ -44,12 +44,15 @@ afterEach(() => {
 const button = (name: string) =>
   [...document.querySelectorAll("button")].find((node) => node.textContent === name)!;
 
-it("creates, waits with a countdown, then expires without exposing a stale command", async () => {
+const joinLink = "openclaw-node://join#i=synthetic";
+
+it("creates, waits with a countdown, then expires without exposing a stale link", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(100000);
   const create = vi.fn().mockResolvedValue({
     inviteId: "test",
     expiresAt: 102,
+    joinLink,
     commands: { command: "npx synthetic", installedCommand: "openclaw synthetic" },
   });
   const decide = vi.fn();
@@ -67,22 +70,32 @@ it("creates, waits with a countdown, then expires without exposing a stale comma
     document.body,
   );
   flush();
-  expect(document.body.textContent).toContain("Create node command");
+  expect(document.body.textContent).toContain("Create invite");
   const input = document.querySelector("input")!;
   input.value = "Builder";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
-  button("Create node command").click();
+  button("Create invite").click();
   await Promise.resolve();
   flush();
   expect(create).toHaveBeenCalledWith("Builder");
-  expect(document.body.textContent).toContain("Waiting for the node");
+  expect(document.body.textContent).toContain("Waiting for the device");
   expect(document.body.textContent).toContain("0:02");
-  expect(document.body.textContent).toContain("npx synthetic");
+  // The friendly route comes first; shell commands stay under a disclosure.
+  expect(button("Copy invite link")).toBeDefined();
+  const open = [...document.querySelectorAll("a")].find(
+    (node) => node.textContent === "Open in OpenClaw for Mac",
+  );
+  expect(open?.getAttribute("href")).toBe(joinLink);
+  const details = document.querySelector("details")!;
+  expect(details.open).toBe(false);
+  expect(details.querySelector("summary")?.textContent).toBe("Use the command line");
+  expect(details.textContent).toContain("npx synthetic");
   await vi.advanceTimersByTimeAsync(2000);
   flush();
   expect(document.body.textContent).toContain("invitation expired");
   expect(document.body.textContent).not.toContain("npx synthetic");
+  expect(document.body.textContent).not.toContain(joinLink);
   expect(decide).not.toHaveBeenCalled();
   dispose();
   dispose = undefined;
@@ -117,16 +130,59 @@ it.each([true, false])(
     expect(document.querySelectorAll("li.danger")).toHaveLength(4);
     expect(document.body.textContent).toContain("browser");
     expect(decide).not.toHaveBeenCalled();
-    button(approve ? "Codes match — approve node" : "Deny node").click();
+    expect(document.body.textContent).not.toContain("Also allow chat");
+    button(approve ? "Codes match — approve" : "Deny node").click();
     await Promise.resolve();
     flush();
-    expect(decide).toHaveBeenCalledWith(pending, approve);
+    expect(decide).toHaveBeenCalledWith(pending, approve, false);
     expect(document.body.textContent).toContain(approve ? "Node approved" : "Node denied");
     expect(document.body.textContent).not.toContain("004-219");
   },
 );
 
-it("shows Discovery setup guidance without a copyable command", async () => {
+it.each([true, false])(
+  "approves a requested chat key in the same decision unless the owner opts out (keep=%s)",
+  async (keep) => {
+    const decide = vi.fn().mockResolvedValue(true);
+    const withChat: NodeInvite = {
+      ...pending,
+      pending: { ...pending.pending!, operatorPeerKey: `iroh:${"b".repeat(64)}` },
+    };
+    dispose = render(
+      () => (
+        <NodeDialog
+          host={host}
+          invite={withChat}
+          disabled={false}
+          canCreate
+          onCreate={() => Promise.resolve(undefined)}
+          onDecide={decide}
+          onClose={() => {}}
+        />
+      ),
+      document.body,
+    );
+    flush();
+    const box = document.querySelector<HTMLInputElement>("input[type=checkbox]")!;
+    expect(box.checked).toBe(true);
+    expect(document.body.textContent).toContain("Also allow chat and dashboard from this device");
+    if (!keep) {
+      box.checked = false;
+      box.dispatchEvent(new Event("change", { bubbles: true }));
+      flush();
+    }
+    button("Codes match — approve").click();
+    await Promise.resolve();
+    flush();
+    expect(decide).toHaveBeenCalledOnce();
+    expect(decide).toHaveBeenCalledWith(withChat, true, keep);
+    expect(document.body.textContent).toContain(
+      keep ? "can now connect, chat and open the dashboard" : "Node approved",
+    );
+  },
+);
+
+it("keeps the invite link but shows Discovery guidance under the command line", async () => {
   dispose = render(
     () => (
       <NodeDialog
@@ -134,7 +190,7 @@ it("shows Discovery setup guidance without a copyable command", async () => {
         disabled={false}
         canCreate
         onCreate={() =>
-          Promise.resolve({ inviteId: "test", expiresAt: 9999999999, commands: null })
+          Promise.resolve({ inviteId: "test", expiresAt: 9999999999, joinLink, commands: null })
         }
         onDecide={() => Promise.resolve(undefined)}
         onClose={() => {}}
@@ -147,23 +203,23 @@ it("shows Discovery setup guidance without a copyable command", async () => {
   input.value = "Builder";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
-  button("Create node command").click();
+  button("Create invite").click();
   await Promise.resolve();
   flush();
   expect(document.body.textContent).toContain(
-    "Configure the OpenClaw ID Discovery address on the Gateway first",
+    "Configure the OpenClaw ID Discovery address on the Gateway to get a command",
   );
-  expect(document.querySelector("pre")).toBeNull();
+  expect(document.querySelectorAll("pre")).toHaveLength(1);
+  expect(button("Copy invite link")).toBeDefined();
   expect(button("Copy command")).toBeUndefined();
 });
 
 it("discards a command completed after its originating dialog closes", async () => {
-  let finish!: (value: { inviteId: string; expiresAt: number; commands: null }) => void;
-  const pendingCreate = new Promise<{ inviteId: string; expiresAt: number; commands: null }>(
-    (resolve) => {
-      finish = resolve;
-    },
-  );
+  type Made = { inviteId: string; expiresAt: number; joinLink: string; commands: null };
+  let finish!: (value: Made) => void;
+  const pendingCreate = new Promise<Made>((resolve) => {
+    finish = resolve;
+  });
   const onCreated = vi.fn();
   dispose = render(
     () => (
@@ -187,10 +243,10 @@ it("discards a command completed after its originating dialog closes", async () 
   input.value = "Builder";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
-  button("Create node command").click();
+  button("Create invite").click();
   button("Close").click();
   flush();
-  finish({ inviteId: "test", expiresAt: 9999999999, commands: null });
+  finish({ inviteId: "test", expiresAt: 9999999999, joinLink, commands: null });
   await Promise.resolve();
   flush();
   expect(onCreated).not.toHaveBeenCalled();

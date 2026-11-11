@@ -200,6 +200,12 @@ capabilities. W is generated and kept locally by the node. A node must never be 
 an owner device or member to make connectivity work. The authority rejects overlap in either
 direction, including an owner D or R with the same raw bytes as node W.
 
+A device that also needs chat and dashboard access, such as OpenClaw for Mac, generates a
+second key, the operator key W_op, and asks for it in the same redemption. W_op never gains
+node authority and W never gains operator authority, so a process that can only reach the
+node's transport cannot act as an operator. The owner approves both in one decision (step 5)
+and may approve the node alone. See [Node operator key](#node-operator-key).
+
 1. An owner device with `invite` (or R) creates an invite ID and 32-byte secret with
    `generateInviteSecret`, derives the existing `deriveInviteProofKey(secret)`, signs
    `NodeInviteCap { claw_id, invite_id, label, created_at, expires_at, secret_hash }`, and
@@ -209,17 +215,17 @@ direction, including an owner D or R with the same raw bytes as node W.
    Registration enforces `MAX_NODE_INVITE_LIFETIME_SECONDS` (3600 seconds / 1 hour) from
    creation and from registration, without a clock-skew extension. Expired caps are refused.
 2. `buildNodeJoinLink` encodes `NodeJoinLink` as
-   `openclaw-node://join#i=<invite_id>.<base64url secret>&c=<claw_id>&r=<fp(R) hex>&h=<hostname>&relay=<URL>`.
-   Values are URL-encoded. `parseNodeJoinLink` is the strict CLI/deep-link decoder. All five
-   fields must occur exactly once; unknown fields, query, path, credentials and malformed
-   secrets/pins are refused. The relay must be HTTPS (HTTP only on localhost testbeds),
+   `openclaw-node://join#i=<invite_id>.<base64url secret>&c=<claw_id>&r=<fp(R) hex>&h=<hostname>&relay=<URL>[&d=<Discovery origin>]`.
+   Values are URL-encoded. `parseNodeJoinLink` is the strict CLI/deep-link decoder. The five
+   required fields must occur exactly once and the optional `d` at most once; unknown fields,
+   query, path, credentials and malformed secrets/pins/origins are refused. The relay must be HTTPS (HTTP only on localhost testbeds),
    without credentials, query or fragment. The link has no long-lived key. Treat the whole
    fragment as a secret: never put it in logs, analytics or an HTTP request target.
 3. The node generates W locally, computes `computeNodeRedemptionProof(proofKey, parts)`:
    HMAC-SHA-256(proof key, `"openclaw/node-invite-proof/v1\0"` || JCS({ claw_id, invite_id,
    peer_key })), lowercase hex. The existing proof-key derivation is shared, but the HMAC
    domain and signed statement type are separate from member invitations.
-4. W signs `NodeRedemption { claw_id, invite_id, peer_key, description, proof, requested_at }`. The
+4. W signs `NodeRedemption { claw_id, invite_id, peer_key, operator_peer_key?, description, proof, requested_at }`. The
    envelope's `signer` is `ed25519:` with the same raw 32 bytes as `peer_key` (`iroh:`).
    The node sends `node_redemption` mail with W-signed Discovery authentication, no bearer
    token. `submitNodeRedemption(state, input, now)` checks W, invite, expiry and HMAC, then
@@ -230,8 +236,10 @@ direction, including an owner D or R with the same raw bytes as node W.
    The owner must compare the codes and review that surface, then **explicitly click Approve**.
    Opening or leaving the dialog open never approves a node automatically.
    An owner with `manage_members` (or R) signs `MembershipChange` at current seq + 1,
-   `add_node { peer_key, label, invite_id }`, directly at the Gateway. It must match the
-   pending node W; it consumes the invite and retains its approved description in `NodeRecord`. `deny_invite { invite_id }` also handles nodes.
+   `add_node { peer_key, label, invite_id, operator_peer_key? }`, directly at the Gateway. It
+   must match the pending node W, and `operator_peer_key`, when present, the pending operator
+   key; omitting it approves the node alone. It consumes the invite and retains its approved
+   description (and any approved operator key) in `NodeRecord`. `deny_invite { invite_id }` also handles nodes.
    Owner-device approval through the mailbox is refused. R retains its existing mailbox
    supremacy, but must still name a matching pending node redemption.
 6. The node polls `getNodeDescriptor` using W, honoring rate-limit backoff. Only when W is
@@ -256,8 +264,10 @@ contain at most `MAX_NODE_SURFACE_ITEMS` (64) unique names of at most
 `MAX_NODE_SURFACE_NAME` (128) units each. Empty command/capability lists are allowed.
 These bounds also bound the serialized signed description; no free-form nested payload is allowed.
 
-`nodeVerificationCode({ claw_id, invite_id, peer_key, description })` computes SHA-256 over
-UTF-8 `"openclaw/node-verification-code/v1\0"` followed by JCS of exactly those four fields.
+`nodeVerificationCode({ claw_id, invite_id, peer_key, description, operator_peer_key? })`
+computes SHA-256 over UTF-8 `"openclaw/node-verification-code/v1\0"` followed by JCS of those
+fields; `operator_peer_key` is included only when the redemption carries one, so node-only codes
+are unchanged.
 Interpret the first four digest bytes as an unsigned big-endian integer, reduce modulo
 1,000,000 and display six decimal digits with leading zeroes. List order is signed and stays
 unchanged for code calculation. Proof and timestamps are excluded so Gateway receipt time
@@ -266,13 +276,12 @@ The code is for human comparison, not a credential, signature or automatic-appro
 
 ### Discovery bootstrap routing
 
-The join link deliberately does not identify a Discovery API origin. A claw hostname and
-an iroh relay URL may both differ from Discovery; clients **must not infer** the API origin
-from either. Joining therefore takes two inputs: the link and a deployment-selected Discovery
-base URL. The headless command contract is
-`openclaw node join <link> --discovery-url <https-origin>`.
-An explicit flag wins over the node's saved deployment configuration; a distribution may
-supply a documented deployment default only when neither exists. This protocol defines no
+A claw hostname and an iroh relay URL may both differ from Discovery; clients **must not
+infer** the API origin from either. The creating Gateway therefore states its configured
+Discovery origin explicitly in the link's optional `d` field, so one link is enough. The
+headless command contract is `openclaw node join <link> [--discovery-url <https-origin>]`.
+An explicit flag wins over the link's `d`, which wins over the node's saved deployment
+configuration; a distribution may supply a documented deployment default only when none exists. This protocol defines no
 universal production origin. With no configured origin, fail before generating W or sending
 mail and request `--discovery-url`. The Control UI's copyable join command must include its
 configured Discovery origin, especially for staging and independently hosted deployments.
@@ -293,6 +302,19 @@ separate map of `NodeInviteRecord`. Both invite maps share an ID namespace and a
 registration limit above; the member-invite lifetime is unchanged.
 Removing an owner deletes the open node invites it registered, as for member invites;
 already admitted nodes do not become owner approval descendants.
+
+### Node operator key
+
+`NodeRedemption.operator_peer_key` is optional, signed by W with the rest of the redemption,
+must differ from W, and is covered by the verification code. The owner dialog states that
+approving also grants chat and dashboard access and lets the owner approve the node alone.
+An approved W_op is stored as `NodeRecord.operator_peer_key` and shares the node's listing seq,
+inactivity clock and lifetime: removing the node, revoking either key or idling out removes
+both, disconnects both and invalidates both keys' tokens. W_op is listed in `node_peer_keys`
+for relay admission only; the Gateway, not Discovery, decides each key's role. It admits W_op as
+an accountless operator member (account `node:<W>`) under the member operator ceiling: chat,
+sessions, approvals, questions and talk, never configuration, administration or access
+management. W_op cannot also be an owner, member or another node's key.
 
 `MAX_NODES` is 256. Reapproving a still-listed node through a fresh pending invitation
 preserves its listing seq and inactivity clock. `isAdmitted` includes node keys; `isNode`

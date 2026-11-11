@@ -90,6 +90,11 @@ export type NodeRecord = {
   /** Last authenticated tunnel activity/admission (or initial approval). */
   last_seen: UnixSeconds;
   invite_id: string;
+  /**
+   * The same device's operator key, approved with the node in one owner decision. It shares this
+   * record's listing and lifetime, and is never node authority.
+   */
+  operator_peer_key?: IrohEndpointKey;
 };
 
 /** Separate invite class; member proofs can never redeem it. */
@@ -97,7 +102,10 @@ export type NodeInviteRecord = {
   cap: NodeInviteCapBody;
   proof_key: string;
   status: "open" | "pending" | "consumed";
-  pending: Pick<NodeRedemptionBody, "peer_key" | "requested_at" | "description"> | null;
+  pending: Pick<
+    NodeRedemptionBody,
+    "peer_key" | "requested_at" | "description" | "operator_peer_key"
+  > | null;
   created_by: OwnerApprover;
 };
 
@@ -260,7 +268,7 @@ export function isAdmitted(
   peerKey: IrohEndpointKey,
   now: UnixSeconds,
 ): boolean {
-  if (isNode(state, peerKey)) {
+  if (nodeHolding(state, peerKey)) {
     return true;
   }
   if (Object.values(state.members).some((member) => member.peer_keys.includes(peerKey))) {
@@ -274,6 +282,39 @@ export function isAdmitted(
 /** Whether an admitted W has only node authority (Gateway builds a node principal). */
 export function isNode(state: AuthorityState, peerKey: IrohEndpointKey): boolean {
   return state.nodes[peerKey] !== undefined;
+}
+
+/**
+ * The node listing that holds `peerKey`, as its W or as its approved operator key. Both keys
+ * belong to one accountless enrollment: removing, revoking or idling either removes the record.
+ */
+export function nodeHolding(
+  state: AuthorityState,
+  peerKey: IrohEndpointKey,
+): { node: IrohEndpointKey; record: NodeRecord; operator: boolean } | undefined {
+  const record = state.nodes[peerKey];
+  if (record) {
+    return { node: peerKey, record, operator: false };
+  }
+  for (const [node, entry] of Object.entries(state.nodes)) {
+    if (entry.operator_peer_key === peerKey) {
+      // SAFETY: nodes is keyed by IrohEndpointKey; Object.entries widens keys to string.
+      return { node: node as IrohEndpointKey, record: entry, operator: true };
+    }
+  }
+  return undefined;
+}
+
+/** Every key an accountless node enrollment holds: each W and its approved operator key. */
+export function nodeEnrollmentKeys(
+  state: AuthorityState,
+  // SAFETY: nodes is keyed by IrohEndpointKey; Object.keys widens keys to string.
+  nodes: readonly IrohEndpointKey[] = Object.keys(state.nodes) as IrohEndpointKey[],
+): IrohEndpointKey[] {
+  return nodes.flatMap((node) => {
+    const operator = state.nodes[node]?.operator_peer_key;
+    return operator ? [node, operator] : [node];
+  });
 }
 
 /** The snapshot body the Gateway signs with K_gw and publishes to Discovery: current state only. */
@@ -296,8 +337,7 @@ export function snapshotBody(
     owner_peer_keys: [
       ...new Set(active.flatMap((record) => record.cert.body.peer_keys)),
     ].toSorted(),
-    // SAFETY: nodes is keyed by IrohEndpointKey; Object.keys widens keys to string.
-    node_peer_keys: Object.keys(state.nodes).toSorted() as IrohEndpointKey[],
+    node_peer_keys: nodeEnrollmentKeys(state).toSorted(),
     members: Object.entries(state.members)
       .map(([account_id, member]) => ({
         account_id,

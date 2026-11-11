@@ -316,10 +316,10 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                         ),
                       )
                     }
-                    onDecide={(invite, approve) =>
+                    onDecide={(invite, approve, grantChat) =>
                       run(
                         "nodes",
-                        (link) => decideNodeInvite(host.request, link, invite, approve),
+                        (link) => decideNodeInvite(host.request, link, invite, approve, grantChat),
                         approve ? "approve" : "update",
                       )
                     }

@@ -73,7 +73,10 @@ it("registers only a signed cap and proof key; builds the secret-bearing command
   expect(params.cap.body.label).toBe("Builder");
   expect(await hasValidSignature(params.cap)).toBe(true);
   const joinLink = made.commands!.installedCommand.split("'")[1]!;
+  expect(made.joinLink).toBe(joinLink);
   const decoded = parseNodeJoinLink(joinLink)!;
+  // The link carries the Discovery origin, so the Mac app needs no second input.
+  expect(decoded.discovery_url).toBe("https://discovery.example.test");
   expect(decoded.invite_id).toBe(made.inviteId);
   expect(decoded.claw_id).toBe(link.clawId);
   expect(await deriveInviteProofKey(decoded.secret)).toEqual(base64urlToBytes(params.proofKey));
@@ -82,9 +85,9 @@ it("registers only a signed cap and proof key; builds the secret-bearing command
   );
   expect(JSON.stringify(request.mock.calls)).not.toContain(joinLink);
   request.mockResolvedValue({ discoveryUrl: null, version: "2026.11.5" });
-  expect(
-    (await createNodeInvite(request, link, "Builder", "https://relay.example.test")).commands,
-  ).toBeNull();
+  const bare = await createNodeInvite(request, link, "Builder", "https://relay.example.test");
+  expect(bare.commands).toBeNull();
+  expect(parseNodeJoinLink(bare.joinLink)?.discovery_url).toBeUndefined();
 });
 
 it("signs explicit approve, deny and remove at the freshly read membership sequence", async () => {
@@ -131,4 +134,32 @@ it("signs explicit approve, deny and remove at the freshly read membership seque
     decideNodeInvite(request, { ...link, nodeInvites: [] }, invite, true),
   ).rejects.toThrow("changed");
   expect(request).toHaveBeenCalledTimes(3);
+});
+
+it("signs the requested chat key into the same node approval only when granted", async () => {
+  const operatorPeerKey = `iroh:${"33".repeat(32)}` as const;
+  const withChat: NodeInvite = { ...invite, pending: { ...invite.pending!, operatorPeerKey } };
+  const request = vi.fn().mockResolvedValue({});
+  const current = { ...link, nodeInvites: [withChat] };
+  await decideNodeInvite(request, current, withChat, true, true);
+  await decideNodeInvite(request, current, withChat, true, false);
+  expect(request.mock.calls.map(([, params]) => params.statement.body.target)).toEqual([
+    {
+      op: "add_node",
+      peer_key: invite.pending!.peerKey,
+      label: invite.label,
+      invite_id: invite.inviteId,
+      operator_peer_key: operatorPeerKey,
+    },
+    {
+      op: "add_node",
+      peer_key: invite.pending!.peerKey,
+      label: invite.label,
+      invite_id: invite.inviteId,
+    },
+  ]);
+  // A request whose operator key changed after review is refused, not signed.
+  await expect(
+    decideNodeInvite(request, { ...link, nodeInvites: [invite] }, withChat, true, true),
+  ).rejects.toThrow("changed");
 });

@@ -33,14 +33,18 @@ export const MAX_NODE_INVITE_LIFETIME_SECONDS = 3600;
 
 /** Shared human comparison code; not a credential or substitute for explicit approval. */
 export async function nodeVerificationCode(
-  parts: Pick<NodeRedemptionBody, "claw_id" | "invite_id" | "peer_key" | "description">,
+  parts: Pick<
+    NodeRedemptionBody,
+    "claw_id" | "invite_id" | "peer_key" | "description" | "operator_peer_key"
+  >,
 ): Promise<string> {
-  const { claw_id, invite_id, peer_key, description } = parts;
+  const { claw_id, invite_id, peer_key, description, operator_peer_key } = parts;
+  // The operator key joins the compared fields only when requested, so node-only codes are unchanged.
+  const compared = operator_peer_key
+    ? { claw_id, invite_id, peer_key, description, operator_peer_key }
+    : { claw_id, invite_id, peer_key, description };
   const digest = await sha256(
-    concatBytes(
-      utf8("openclaw/node-verification-code/v1\0"),
-      utf8(canonicalize({ claw_id, invite_id, peer_key, description })),
-    ),
+    concatBytes(utf8("openclaw/node-verification-code/v1\0"), utf8(canonicalize(compared))),
   );
   const value = new DataView(digest.buffer, digest.byteOffset, digest.byteLength).getUint32(
     0,
@@ -49,7 +53,10 @@ export async function nodeVerificationCode(
   return String(value % 1_000_000).padStart(6, "0");
 }
 
-/** Node link fields. `relay_url` is a routing hint, not a trust anchor. */
+/**
+ * Node link fields. `relay_url` and `discovery_url` are routing hints, not trust anchors: the
+ * claw ID, root fingerprint and hostname still verify everything Discovery returns.
+ */
 export type NodeJoinLink = {
   invite_id: string;
   secret: Bytes;
@@ -57,11 +64,29 @@ export type NodeJoinLink = {
   root_fp: KeyFingerprint;
   hostname: string;
   relay_url: string;
+  /** The Discovery API origin the creating Gateway uses, when it has one configured. */
+  discovery_url?: string;
 };
 
 const HOST_RE =
   /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?::[0-9]{1,5})?$/;
 const LINK_FIELDS = ["i", "c", "r", "h", "relay"];
+const OPTIONAL_LINK_FIELDS = ["d"];
+
+/** An HTTPS origin (HTTP only on localhost) without userinfo, path, query or fragment. */
+export function isNodeDiscoveryOrigin(value: string): boolean {
+  if (value.length > 512) {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    return (
+      validRelay(value) && (url.pathname === "/" || url.pathname === "") && url.origin !== "null"
+    );
+  } catch {
+    return false;
+  }
+}
 
 function validRelay(value: string): boolean {
   if (value.length > 512) {
@@ -90,6 +115,7 @@ export function buildNodeJoinLink(link: NodeJoinLink): string {
     r: link.root_fp.slice(3),
     h: link.hostname,
     relay: link.relay_url,
+    ...(link.discovery_url ? { d: link.discovery_url } : {}),
   });
   const result = `openclaw-node://join#${params}`;
   if (!parseNodeJoinLink(result)) {
@@ -121,9 +147,11 @@ export function parseNodeJoinLink(value: string): NodeJoinLink | null {
     params.forEach(() => {
       fieldCount += 1;
     });
+    const optional = OPTIONAL_LINK_FIELDS.filter((field) => params.has(field));
     if (
-      fieldCount !== LINK_FIELDS.length ||
-      LINK_FIELDS.some((field) => params.getAll(field).length !== 1)
+      fieldCount !== LINK_FIELDS.length + optional.length ||
+      LINK_FIELDS.some((field) => params.getAll(field).length !== 1) ||
+      optional.some((field) => params.getAll(field).length !== 1)
     ) {
       return null;
     }
@@ -133,7 +161,9 @@ export function parseNodeJoinLink(value: string): NodeJoinLink | null {
     const root_fp = `fp:${params.get("r") ?? ""}`;
     const hostname = params.get("h") ?? "";
     const relay_url = params.get("relay") ?? "";
+    const discovery_url = params.get("d") ?? undefined;
     if (
+      (discovery_url !== undefined && !isNodeDiscoveryOrigin(discovery_url)) ||
       parts.length !== 2 ||
       !isRandomId(invite_id) ||
       !secretText ||
@@ -148,7 +178,15 @@ export function parseNodeJoinLink(value: string): NodeJoinLink | null {
     if (secret.length !== INVITE_SECRET_BYTES) {
       return null;
     }
-    return { invite_id, secret, claw_id, root_fp, hostname, relay_url };
+    return {
+      invite_id,
+      secret,
+      claw_id,
+      root_fp,
+      hostname,
+      relay_url,
+      ...(discovery_url ? { discovery_url: new URL(discovery_url).origin } : {}),
+    };
   } catch {
     return null;
   }
@@ -186,6 +224,9 @@ export async function verifyNodeRedemption(
     return signed;
   }
   const body = redemption.body;
+  if (body.operator_peer_key === body.peer_key) {
+    return failure("malformed", "the operator key must differ from the node key");
+  }
   if (body.claw_id !== invite.claw_id || body.invite_id !== invite.invite_id) {
     return failure("wrong_claw", "redemption is for another claw or invite");
   }

@@ -7,7 +7,9 @@ import type { NodeDescription } from "../../../packages/openclaw-id-protocol/src
 // - an active owner device is the Gateway owner (no role ceiling);
 // - a member is a trusted-proxy user, `openclaw-id:<account_id>`, whose
 //   operator scopes are capped by a built-in operator role policy for the
-//   member's OpenClaw ID role (operator or viewer).
+//   member's OpenClaw ID role (operator or viewer);
+// - a node's W is node-only; the separate chat key approved with it is an
+//   accountless operator member, account `node:<W>`.
 // While OpenClaw ID is off no resolver is published and nothing here runs.
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";

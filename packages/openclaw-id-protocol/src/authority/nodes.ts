@@ -15,6 +15,8 @@ import type { WriteContext } from "./apply.js";
 import { withoutSpentInvites } from "./invite-retention.js";
 import {
   applied,
+  nodeEnrollmentKeys,
+  nodeHolding,
   ownerLookup,
   proofKeyHex,
   refuse,
@@ -121,7 +123,12 @@ export async function submitNodeRedemption(
         [body.invite_id]: {
           ...invite,
           status: "pending",
-          pending: { peer_key: body.peer_key, requested_at: now, description: body.description },
+          pending: {
+            peer_key: body.peer_key,
+            requested_at: now,
+            description: body.description,
+            ...(body.operator_peer_key ? { operator_peer_key: body.operator_peer_key } : {}),
+          },
         },
       },
     },
@@ -143,17 +150,36 @@ export async function addNode(
   if (invite.pending.peer_key !== target.peer_key) {
     return refuse(state, "target_mismatch", "approval does not match pending node");
   }
-  // A raw key cannot have both node authority and human/root authority, even with a different prefix.
+  // The owner may approve the node alone; an operator key is admitted only as requested.
   if (
-    formatIrohEndpointKey(rawPublicKey(state.anchor.root_pub)) === target.peer_key ||
+    target.operator_peer_key !== undefined &&
+    target.operator_peer_key !== invite.pending.operator_peer_key
+  ) {
+    return refuse(state, "target_mismatch", "approval does not match the requested operator key");
+  }
+  const keys = target.operator_peer_key
+    ? [target.peer_key, target.operator_peer_key]
+    : [target.peer_key];
+  // A raw key cannot have both node authority and human/root authority, even with a different prefix.
+  const humanKey = (key: IrohEndpointKey) =>
+    formatIrohEndpointKey(rawPublicKey(state.anchor.root_pub)) === key ||
     Object.values(state.owner_devices).some(
       (record) =>
-        formatIrohEndpointKey(rawPublicKey(record.cert.body.device_pub)) === target.peer_key ||
-        record.cert.body.peer_keys.includes(target.peer_key),
+        formatIrohEndpointKey(rawPublicKey(record.cert.body.device_pub)) === key ||
+        record.cert.body.peer_keys.includes(key),
     ) ||
-    Object.values(state.members).some((member) => member.peer_keys.includes(target.peer_key))
-  ) {
+    Object.values(state.members).some((member) => member.peer_keys.includes(key));
+  if (keys.some(humanKey)) {
     return refuse(state, "target_mismatch", "node key is already a human authority key");
+  }
+  // Each key belongs to one enrollment; a node W never doubles as another node's operator key.
+  if (
+    keys.some((key) => {
+      const holder = nodeHolding(state, key);
+      return holder !== undefined && holder.node !== target.peer_key;
+    })
+  ) {
+    return refuse(state, "target_mismatch", "key is already held by another node");
   }
   const existing = state.nodes[target.peer_key];
   if (!existing && Object.keys(state.nodes).length >= MAX_NODES) {
@@ -171,6 +197,7 @@ export async function addNode(
           added_by: authority.kind === "root" ? "root" : await fingerprint(authority.device_pub),
           last_seen: existing?.last_seen ?? now,
           invite_id: target.invite_id,
+          ...(target.operator_peer_key ? { operator_peer_key: target.operator_peer_key } : {}),
         },
       },
       node_invites: {
@@ -197,11 +224,18 @@ export function withoutNodes(
   return { ...state, nodes };
 }
 
-/** Every node removal also removes the node-role device pairings associated with W. */
-export function nodeRemovalEvents(peers: IrohEndpointKey[]): AuthorityEvent[] {
+/**
+ * Every node removal disconnects W and its operator key, invalidates their tokens and removes the
+ * node-role device pairings associated with W. `state` is the state before removal.
+ */
+export function nodeRemovalEvents(
+  state: AuthorityState,
+  peers: IrohEndpointKey[],
+): AuthorityEvent[] {
+  const keys = nodeEnrollmentKeys(state, peers);
   return [
-    { type: "disconnect", peer_keys: peers },
-    { type: "invalidate_tokens", peer_keys: peers },
+    { type: "disconnect", peer_keys: keys },
+    { type: "invalidate_tokens", peer_keys: keys },
     { type: "remove_node_pairings", peer_keys: peers },
     { type: "publish_snapshot" },
   ];

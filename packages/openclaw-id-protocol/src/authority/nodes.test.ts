@@ -1,11 +1,22 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { deriveInviteProofKey, inviteSecretHash } from "../invites.js";
 import { fingerprint, formatIrohEndpointKey } from "../keys.js";
-import { computeNodeRedemptionProof, MAX_NODE_INVITE_LIFETIME_SECONDS } from "../node-invites.js";
+import {
+  computeNodeRedemptionProof,
+  MAX_NODE_INVITE_LIFETIME_SECONDS,
+  nodeVerificationCode,
+} from "../node-invites.js";
 import { signStatement } from "../statements/envelope.js";
 import { MAX_INVITES, MAX_NODES } from "../statements/types.js";
 import { parseStatement } from "../statements/validate.js";
-import { buildWorld, certBody, signChange, signRevocation, WORLD_NOW } from "../testing/world.js";
+import {
+  buildWorld,
+  certBody,
+  signChange,
+  signRevocation,
+  worldKey,
+  WORLD_NOW,
+} from "../testing/world.js";
 import {
   dropInactive,
   nextInactivityDrop,
@@ -18,6 +29,7 @@ import { registerNodeInvite, submitNodeRedemption } from "./nodes.js";
 import {
   isAdmitted,
   isNode,
+  nodeHolding,
   ownerLookup,
   snapshotBody,
   type AuthorityResult,
@@ -61,20 +73,26 @@ async function nodeCap(id = inviteId) {
     world.device1.signer,
   );
 }
-async function nodeRedemption(id = inviteId, key = peer) {
+async function nodeRedemption(id = inviteId, key = peer, operatorKey?: typeof peer) {
   const parts = { claw_id: world.state.claw_id, invite_id: id, peer_key: key };
   return signStatement(
     "NodeRedemption",
     {
       ...parts,
       description,
+      ...(operatorKey ? { operator_peer_key: operatorKey } : {}),
       requested_at: WORLD_NOW,
       proof: await computeNodeRedemptionProof(proofKey, parts),
     },
     world.invitee.signer,
   );
 }
-async function approve(state: AuthorityState, id = inviteId, key = peer) {
+async function approve(
+  state: AuthorityState,
+  id = inviteId,
+  key = peer,
+  operatorKey?: typeof peer,
+) {
   return submitStatement(
     state,
     await signChange(state, world.device1.signer, {
@@ -82,6 +100,7 @@ async function approve(state: AuthorityState, id = inviteId, key = peer) {
       peer_key: key,
       label: "build node",
       invite_id: id,
+      ...(operatorKey ? { operator_peer_key: operatorKey } : {}),
     }),
     context,
   );
@@ -364,6 +383,76 @@ describe("node authority boundary", () => {
       ),
     };
     expect(await approve(full)).toMatchObject({ ok: false, code: "limit_reached" });
+  });
+
+  it("admits a requested operator key with its node in one approval, and removes both together", async () => {
+    const operator = (await worldKey("mac-operator")).peer;
+    const id = "ef".repeat(16);
+    let state = stateOf(
+      await registerNodeInvite(world.state, await nodeCap(id), proofKey, context),
+    );
+    const request = await nodeRedemption(id, peer, operator);
+    expect(
+      await submitNodeRedemption(state, await nodeRedemption(id, peer, peer), WORLD_NOW),
+    ).toMatchObject({ ok: false, code: "malformed" });
+    state = stateOf(await submitNodeRedemption(state, request, WORLD_NOW));
+    const pendingRecord = state.node_invites[id]?.pending;
+    expect(pendingRecord?.operator_peer_key).toBe(operator);
+    // The compared code covers the operator key; node-only codes are unchanged.
+    const parts = { claw_id: state.claw_id, invite_id: id, peer_key: peer, description };
+    expect(await nodeVerificationCode({ ...parts, operator_peer_key: operator })).not.toBe(
+      await nodeVerificationCode(parts),
+    );
+    expect(await approve(state, id, peer, world.mallory.peer)).toMatchObject({
+      ok: false,
+      code: "target_mismatch",
+    });
+
+    const nodeOnly = stateOf(await approve(state, id));
+    expect(isAdmitted(nodeOnly, operator, WORLD_NOW)).toBe(false);
+
+    const both = stateOf(await approve(state, id, peer, operator));
+    expect(isNode(both, peer)).toBe(true);
+    expect(isNode(both, operator)).toBe(false);
+    expect(isAdmitted(both, operator, WORLD_NOW)).toBe(true);
+    expect(nodeHolding(both, operator)).toMatchObject({ node: peer, operator: true });
+    expect(snapshotBody(both, 1, WORLD_NOW).node_peer_keys).toEqual([peer, operator].toSorted());
+    // The operator key can never also become a member or owner key.
+    expect(
+      await submitStatement(
+        both,
+        await signChange(both, world.device1.signer, {
+          op: "add",
+          account_id: "acct-1",
+          role: "operator",
+          peer_keys: [operator],
+          invite_id: null,
+        }),
+        context,
+      ),
+    ).toMatchObject({ ok: false, code: "target_mismatch" });
+
+    const revokeOperator = await signRevocation(
+      both,
+      world.device1.signer,
+      await fingerprint(operator),
+      "peer_key",
+    );
+    for (const statement of [
+      revokeOperator,
+      await signChange(both, world.device1.signer, { op: "remove_node", peer_key: peer }),
+    ]) {
+      const removed = await submitStatement(both, statement, context);
+      const after = stateOf(removed);
+      expect(isAdmitted(after, peer, WORLD_NOW)).toBe(false);
+      expect(isAdmitted(after, operator, WORLD_NOW)).toBe(false);
+      expect(removed.events).toEqual([
+        { type: "disconnect", peer_keys: [peer, operator] },
+        { type: "invalidate_tokens", peer_keys: [peer, operator] },
+        { type: "remove_node_pairings", peer_keys: [peer] },
+        { type: "publish_snapshot" },
+      ]);
+    }
   });
 
   it("removes node pairings and refuses revocation replay after fresh approval", async () => {

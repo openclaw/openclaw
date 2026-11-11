@@ -23,6 +23,8 @@ type NodeInviteView = {
   pending:
     | {
         peerKey: IrohEndpointKey;
+        /** The same device's requested chat/dashboard key, approved only with the node. */
+        operatorPeerKey?: IrohEndpointKey;
         requestedAt: number;
         decideBy: number;
         description: NodeDescription;
@@ -58,6 +60,9 @@ export async function listNodeInviteViews(
           pending: pending
             ? {
                 peerKey: pending.peer_key,
+                ...(pending.operator_peer_key
+                  ? { operatorPeerKey: pending.operator_peer_key }
+                  : {}),
                 requestedAt: pending.requested_at,
                 decideBy: pending.requested_at + PENDING_REDEMPTION_TTL_SECONDS,
                 description: pending.description,
@@ -66,6 +71,7 @@ export async function listNodeInviteViews(
                   invite_id: inviteId,
                   peer_key: pending.peer_key,
                   description: pending.description,
+                  operator_peer_key: pending.operator_peer_key,
                 }),
               }
             : undefined,

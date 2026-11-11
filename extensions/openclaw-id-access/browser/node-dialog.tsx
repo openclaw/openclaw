@@ -12,7 +12,11 @@ export type NodeDialogProps = {
   canCreate: boolean;
   onCreate: (label: string) => Promise<CreatedNodeInvite | undefined>;
   onCreated?: (invite: CreatedNodeInvite) => void;
-  onDecide: (invite: NodeInvite, approve: boolean) => Promise<boolean | undefined>;
+  onDecide: (
+    invite: NodeInvite,
+    approve: boolean,
+    grantChat: boolean,
+  ) => Promise<boolean | undefined>;
   onClose: () => void;
 };
 
@@ -34,6 +38,9 @@ function NodeDialogContent(props: NodeDialogProps) {
   const [outcome, setOutcome] = createSignal<"approved" | "denied">();
   const [now, setNow] = createSignal(Math.floor(Date.now() / 1000));
   const [copyStatus, setCopyStatus] = createSignal("");
+  // A device that asked for chat gets it with the node unless the owner opts out here.
+  const [grantChat, setGrantChat] = createSignal(true);
+  const [chatGranted, setChatGranted] = createSignal(false);
   let alive = true;
   onSettled(() => {
     const timer = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
@@ -64,22 +71,24 @@ function NodeDialogContent(props: NodeDialogProps) {
     if (!invite) {
       return;
     }
-    if (await props.onDecide(invite, approve)) {
+    const chat = approve && Boolean(invite.pending?.operatorPeerKey) && grantChat();
+    if (await props.onDecide(invite, approve, chat)) {
       if (alive) {
+        setChatGranted(chat);
         setOutcome(approve ? "approved" : "denied");
         setCreated(undefined);
       }
     }
   };
-  const copy = async (command: string) => {
+  const copy = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(command);
+      await navigator.clipboard.writeText(text);
       if (alive) {
         setCopyStatus("Copied");
       }
     } catch {
       if (alive) {
-        setCopyStatus("Could not copy. Select and copy the command above.");
+        setCopyStatus("Could not copy. Select and copy it above.");
       }
     }
   };
@@ -111,54 +120,83 @@ function NodeDialogContent(props: NodeDialogProps) {
       </Show>
       <Show when={state() === "open"}>
         <Show
-          when={created()?.commands}
+          when={created()}
           fallback={
             <p class="callout info">
-              {created()
-                ? "Configure the OpenClaw ID Discovery address on the Gateway first"
-                : "Waiting for this node to join. The command is available only in the browser dialog that created it."}
+              Waiting for this device to join. The invite link is available only in the browser
+              dialog that created it.
             </p>
           }
         >
-          {(commands) => (
+          {(made) => (
             <>
               <p class="ocid-access__hint">
-                Run this in a POSIX shell on the computer you want to add. It installs and starts
-                the node service after approval.
+                Open this link on the Mac you want to add, or paste it into OpenClaw for Mac under
+                Settings → Add this Mac to a claw.
               </p>
               <pre class="ocid-node-dialog__command">
-                <code>{commands().command}</code>
+                <code>{made().joinLink}</code>
               </pre>
-              <button
-                type="button"
-                class="btn btn--sm"
-                onClick={() => void copy(commands().command)}
-              >
-                Copy command
-              </button>
-              <details>
-                <summary>Already have OpenClaw installed?</summary>
-                <pre class="ocid-node-dialog__command">
-                  <code>{commands().installedCommand}</code>
-                </pre>
+              <div class="ocid-node-dialog__actions">
                 <button
                   type="button"
-                  class="btn btn--sm"
-                  onClick={() => void copy(commands().installedCommand)}
+                  class="btn btn--sm primary"
+                  onClick={() => void copy(made().joinLink)}
                 >
-                  Copy installed command
+                  Copy invite link
                 </button>
+                <a class="btn btn--sm" href={made().joinLink}>
+                  Open in OpenClaw for Mac
+                </a>
+              </div>
+              <details>
+                <summary>Use the command line</summary>
+                <Show
+                  when={made().commands}
+                  fallback={
+                    <p class="callout info">
+                      Configure the OpenClaw ID Discovery address on the Gateway to get a command.
+                    </p>
+                  }
+                >
+                  {(commands) => (
+                    <>
+                      <p class="ocid-access__hint">
+                        Run this in a POSIX shell on the computer you want to add. It installs and
+                        starts the node service after approval.
+                      </p>
+                      <pre class="ocid-node-dialog__command">
+                        <code>{commands().command}</code>
+                      </pre>
+                      <button
+                        type="button"
+                        class="btn btn--sm"
+                        onClick={() => void copy(commands().command)}
+                      >
+                        Copy command
+                      </button>
+                      <p class="ocid-access__hint">Already have OpenClaw installed?</p>
+                      <pre class="ocid-node-dialog__command">
+                        <code>{commands().installedCommand}</code>
+                      </pre>
+                      <button
+                        type="button"
+                        class="btn btn--sm"
+                        onClick={() => void copy(commands().installedCommand)}
+                      >
+                        Copy installed command
+                      </button>
+                    </>
+                  )}
+                </Show>
               </details>
               <p class="ocid-access__hint">
-                Keep this command private. The single-use link stays only in this dialog and expires
-                in {countdown()}.
+                Keep this link private. It works once and expires in {countdown()}.
               </p>
             </>
           )}
         </Show>
-        <Show when={!created() || created()?.commands}>
-          <p role="status">Waiting for the node. You will compare a code and approve it here.</p>
-        </Show>
+        <p role="status">Waiting for the device. You will compare a code and approve it here.</p>
         <Show when={copyStatus()}>
           <p role="status">{copyStatus()}</p>
         </Show>
@@ -200,12 +238,29 @@ function NodeDialogContent(props: NodeDialogProps) {
               Only this declared surface is approved. Execution policy and local approvals still
               apply; additional capabilities need separate approval.
             </p>
+            <Show when={pending.operatorPeerKey}>
+              <label class="ocid-node-dialog__grant">
+                <input
+                  type="checkbox"
+                  checked={grantChat()}
+                  onChange={(event) => setGrantChat(event.currentTarget.checked)}
+                />{" "}
+                Also allow chat and dashboard from this device
+              </label>
+              <p class="ocid-access__hint">
+                It can chat, use sessions, and answer approvals and questions, like an operator
+                member. It cannot change configuration or manage access. Removing the node removes
+                both.
+              </p>
+            </Show>
           </>
         )}
       </Show>
       <Show when={state() === "approved"}>
         <p class="callout success" role="status">
-          Node approved. It can now connect to this claw.
+          {chatGranted()
+            ? "Approved. This device can now connect, chat and open the dashboard."
+            : "Node approved. It can now connect to this claw."}
         </p>
       </Show>
       <Show when={state() === "denied"}>
@@ -230,7 +285,7 @@ function NodeDialogContent(props: NodeDialogProps) {
             disabled={props.disabled || !props.canCreate || !label().trim()}
             onClick={() => void create()}
           >
-            Create node command
+            Create invite
           </button>
         </Show>
         <Show when={state() === "pending"}>
@@ -248,7 +303,7 @@ function NodeDialogContent(props: NodeDialogProps) {
             disabled={props.disabled}
             onClick={() => void decide(true)}
           >
-            Codes match — approve node
+            Codes match — approve
           </button>
         </Show>
       </openclaw-modal-actions>

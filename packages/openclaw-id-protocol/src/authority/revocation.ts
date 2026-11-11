@@ -12,7 +12,13 @@ import {
   withoutOwnerDevices,
 } from "./allowlist.js";
 import { withoutNodes } from "./nodes.js";
-import { applied, refuse, type AuthorityResult, type AuthorityState } from "./state.js";
+import {
+  applied,
+  nodeEnrollmentKeys,
+  refuse,
+  type AuthorityResult,
+  type AuthorityState,
+} from "./state.js";
 
 // A listing a revocation targets: an owner device, or one member's browser, with the seq at
 // which it was listed.
@@ -71,9 +77,10 @@ export async function applyRevocation(
   const removed = [
     ...new Set([...owners.peers, ...browsers.map((browser) => browser.key), ...nodes]),
   ];
+  const removedWithOperators = [...new Set([...removed, ...nodeEnrollmentKeys(state, nodes)])];
   return applied(withoutNodes(next, nodes), [
-    { type: "disconnect", peer_keys: removed },
-    { type: "invalidate_tokens", peer_keys: removed },
+    { type: "disconnect", peer_keys: removedWithOperators },
+    { type: "invalidate_tokens", peer_keys: removedWithOperators },
     ...(nodes.length ? [{ type: "remove_node_pairings" as const, peer_keys: nodes }] : []),
     { type: "publish_snapshot" },
   ]);
@@ -117,7 +124,11 @@ async function peerKeyMatches(
   for (const [key, node] of Object.entries(state.nodes)) {
     // SAFETY: nodes is keyed by IrohEndpointKey; Object.entries widens keys to string.
     const peer = key as IrohEndpointKey;
-    if ((await fingerprint(peer)) === target) {
+    // Revoking a node's operator key revokes its whole enrollment, like revoking W.
+    if (
+      (await fingerprint(peer)) === target ||
+      (node.operator_peer_key && (await fingerprint(node.operator_peer_key)) === target)
+    ) {
       matches.push({ kind: "node", key: peer, listedSeq: node.listed_seq });
     }
   }

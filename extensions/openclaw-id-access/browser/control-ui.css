@@ -749,3 +749,16 @@
     transition-delay: 0.01ms;
   }
 }
+
+.ocid-node-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.ocid-node-dialog__grant {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+}

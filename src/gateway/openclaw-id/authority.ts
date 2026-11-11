@@ -25,6 +25,8 @@ import {
   type Ed25519PublicKey,
   type InactivityWindows,
   type IrohEndpointKey,
+  nodeEnrollmentKeys,
+  nodeHolding,
   parseStatement,
   registerInvite,
   ROOT_EPOCH,
@@ -241,13 +243,16 @@ export function createOpenClawIdAuthority(
         isOwnerDeviceActive(device, now) && device.cert.body.peer_keys.includes(peerKey),
     );
     const source = { clawId: state.claw_id, rootPub: state.anchor.root_pub };
-    const node = state.nodes[peerKey];
-    if (node) {
-      return {
-        kind: "node",
-        peerKey,
-        authority: { ...source, listedSeq: node.listed_seq },
-      };
+    const held = nodeHolding(state, peerKey);
+    if (held) {
+      const authority = { ...source, listedSeq: held.record.listed_seq };
+      // A node's approved chat key is an accountless operator member, never node authority. Its
+      // per-device account `node:<W>` stays distinct from OpenClaw ID account subjects.
+      const role = "operator" as const;
+      const member = { kind: "member" as const, accountId: `node:${held.node}`, role };
+      return held.operator
+        ? { ...member, peerKey, authority }
+        : { kind: "node", peerKey, authority };
     }
     if (owner) {
       return {
@@ -825,7 +830,7 @@ function memberKeys(state: AuthorityState): Set<IrohEndpointKey> {
   return new Set<IrohEndpointKey>([
     ...Object.values(state.members).flatMap((member) => member.peer_keys),
     ...Object.values(state.owner_devices).flatMap((record) => record.cert.body.peer_keys),
-    ...Object.keys(state.nodes).filter(isIrohEndpointKey),
+    ...nodeEnrollmentKeys(state),
   ]);
 }
 

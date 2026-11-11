@@ -127,7 +127,14 @@ export type MembershipTarget =
       peer_keys: IrohEndpointKey[];
       invite_id: string | null;
     }
-  | { op: "add_node"; peer_key: IrohEndpointKey; label: string; invite_id: string }
+  | {
+      op: "add_node";
+      peer_key: IrohEndpointKey;
+      label: string;
+      invite_id: string;
+      /** Must equal the pending request's operator key; absent approves the node alone. */
+      operator_peer_key?: IrohEndpointKey;
+    }
   | { op: "remove_node"; peer_key: IrohEndpointKey }
   | { op: "remove"; account_id: string }
   | { op: "set_role"; account_id: string; role: MemberRole }
@@ -207,7 +214,10 @@ export type MembershipSnapshotBody = {
    * has not seen; the Gateway refusing unlisted versions is what keeps that harmless.
    */
   protocols: ProtocolVersions;
-  /** Node-only keys: never owner or member authority. */
+  /**
+   * Keys of accountless node enrollments the relay should admit: each node's W and any operator
+   * key approved with it. Never owner or member authority; the Gateway decides each key's role.
+   */
   node_peer_keys: IrohEndpointKey[];
   issued_at: UnixSeconds;
 };
@@ -262,6 +272,11 @@ export type NodeRedemptionBody = {
   claw_id: string;
   invite_id: string;
   peer_key: IrohEndpointKey;
+  /**
+   * A second key the same device asks to use for operator (chat/dashboard) access. Present only
+   * when requested; it is never node authority and W remains node-only.
+   */
+  operator_peer_key?: IrohEndpointKey;
   proof: string;
   requested_at: UnixSeconds;
 };

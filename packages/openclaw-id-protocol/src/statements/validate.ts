@@ -128,9 +128,10 @@ function list(check: Check, minLength = 0, maxLength = MAX_LIST): Check {
   };
 }
 
-// An object with exactly these members. Unknown members are rejected: a new signed field
-// needs a new envelope version (docs/versioning.md, "Unknown fields").
-function object(shape: Record<string, Check>): Check {
+// An object with exactly these members, plus any of `optional` that are present. Unknown members
+// are rejected: a new signed field needs a new envelope version (docs/versioning.md, "Unknown
+// fields"). An optional member is omitted when unused, never null.
+function object(shape: Record<string, Check>, optional: Record<string, Check> = {}): Check {
   return (value, path) => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
       fail(path, "expected object");
@@ -138,7 +139,7 @@ function object(shape: Record<string, Check>): Check {
     // SAFETY: the guard above rejected non-objects, null and arrays.
     const record = value as Record<string, unknown>;
     for (const key of Object.keys(record)) {
-      if (!Object.hasOwn(shape, key)) {
+      if (!Object.hasOwn(shape, key) && !Object.hasOwn(optional, key)) {
         fail(`${path}.${key}`, "unknown field");
       }
     }
@@ -147,6 +148,11 @@ function object(shape: Record<string, Check>): Check {
         fail(`${path}.${key}`, "missing field");
       }
       check(record[key], `${path}.${key}`);
+    }
+    for (const [key, check] of Object.entries(optional)) {
+      if (Object.hasOwn(record, key)) {
+        check(record[key], `${path}.${key}`);
+      }
     }
   };
 }
@@ -241,14 +247,17 @@ const V1_BODIES: Record<StatementType, Check> = {
     expires_at: seconds,
     secret_hash: sha256Hex,
   }),
-  NodeRedemption: object({
-    description: nodeDescription,
-    claw_id: clawId,
-    invite_id: randomId,
-    peer_key: irohKey,
-    proof: sha256Hex,
-    requested_at: seconds,
-  }),
+  NodeRedemption: object(
+    {
+      description: nodeDescription,
+      claw_id: clawId,
+      invite_id: randomId,
+      peer_key: irohKey,
+      proof: sha256Hex,
+      requested_at: seconds,
+    },
+    { operator_peer_key: irohKey },
+  ),
   MembershipChange: object({
     claw_id: clawId,
     seq: positive,
@@ -260,12 +269,15 @@ const V1_BODIES: Record<StatementType, Check> = {
         peer_keys: list(irohKey, 1),
         invite_id: nullable(randomId),
       }),
-      add_node: object({
-        op: oneOf(["add_node"]),
-        peer_key: irohKey,
-        label: text,
-        invite_id: randomId,
-      }),
+      add_node: object(
+        {
+          op: oneOf(["add_node"]),
+          peer_key: irohKey,
+          label: text,
+          invite_id: randomId,
+        },
+        { operator_peer_key: irohKey },
+      ),
       remove_node: object({ op: oneOf(["remove_node"]), peer_key: irohKey }),
       remove: object({ op: oneOf(["remove"]), account_id: nonEmptyText }),
       set_role: object({ op: oneOf(["set_role"]), account_id: nonEmptyText, role }),

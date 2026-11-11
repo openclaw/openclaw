@@ -33,6 +33,7 @@ import { applyRevocation } from "./revocation.js";
 import {
   applied,
   certificateWindowError,
+  nodeHolding,
   ownerLookup,
   proofKeyHex,
   refuse,
@@ -162,7 +163,10 @@ async function applyTarget(
       if (!state.nodes[target.peer_key]) {
         return refuse(state, "target_mismatch", "unknown node");
       }
-      return applied(withoutNodes(state, [target.peer_key]), nodeRemovalEvents([target.peer_key]));
+      return applied(
+        withoutNodes(state, [target.peer_key]),
+        nodeRemovalEvents(state, [target.peer_key]),
+      );
     case "add":
       return addMember(state, target, context.now);
     case "remove": {
@@ -258,7 +262,7 @@ function addMember(
   target: Extract<SignedStatement<"MembershipChange">["body"]["target"], { op: "add" }>,
   now: UnixSeconds,
 ): AuthorityResult {
-  if (target.peer_keys.some((key) => state.nodes[key])) {
+  if (target.peer_keys.some((key) => nodeHolding(state, key))) {
     return refuse(state, "target_mismatch", "a node key cannot be a member key");
   }
   const existing = state.members[target.account_id];
@@ -398,7 +402,7 @@ async function addOwnerDevice(
   }
   if (
     [formatIrohEndpointKey(rawPublicKey(cert.body.device_pub)), ...cert.body.peer_keys].some(
-      (key) => state.nodes[key],
+      (key) => nodeHolding(state, key),
     )
   ) {
     return refuse(state, "target_mismatch", "a node key cannot be an owner device key");

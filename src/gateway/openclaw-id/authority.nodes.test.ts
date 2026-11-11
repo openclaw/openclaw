@@ -26,7 +26,7 @@ import { linkedClaw, nowSeconds, serviceFor } from "./openclaw-id.test-support.j
 import { createOpenClawIdService } from "./service.js";
 
 // Exercise the signed mailbox/authority boundary; transport and device pairing have separate owners.
-async function nodeInvite() {
+async function nodeInvite(options: { operatorPeerKey?: `iroh:${string}` } = {}) {
   const claw = await linkedClaw();
   const stored = claw.authority.current()!;
   const { nodes: _nodes, node_invites: _invites, ...legacy } = stored.authority!;
@@ -71,13 +71,20 @@ async function nodeInvite() {
         commands: ["system.run"],
         caps: ["system"],
       },
+      ...(options.operatorPeerKey ? { operator_peer_key: options.operatorPeerKey } : {}),
       proof: await computeNodeRedemptionProof(proofKey, parts),
       requested_at: nowSeconds(),
     },
     signer,
   );
-  const approve = () =>
-    claw.sign({ op: "add_node", peer_key: peerKey, label: "Office node", invite_id });
+  const approve = (operatorPeerKey?: `iroh:${string}`) =>
+    claw.sign({
+      op: "add_node",
+      peer_key: peerKey,
+      label: "Office node",
+      invite_id,
+      ...(operatorPeerKey ? { operator_peer_key: operatorPeerKey } : {}),
+    });
   return { claw, cap, proofKey, peerKey, redemption, approve, inviteId: invite_id };
 }
 
@@ -231,6 +238,54 @@ describe("accountless node authority", () => {
       { deviceId: "node-device", role: "node", peerKey },
     ]);
     expect(await claw.authority.orphanedTokens()).toEqual([]);
+    await service.stop();
+  });
+
+  it("admits a node's approved chat key as an accountless operator member, never as the node", async () => {
+    const operatorPeerKey = formatIrohEndpointKey((await generateEd25519Signer()).publicKey);
+    const { claw, cap, proofKey, peerKey, redemption, approve } = await nodeInvite({
+      operatorPeerKey,
+    });
+    expect(await claw.authority.registerNodeInvite({ cap, proofKey }, "tunnel")).toMatchObject({
+      ok: true,
+    });
+    expect(await claw.authority.redeemNode(redemption)).toMatchObject({ status: "pending" });
+    const view = await claw.authority.ownerView(claw.w1);
+    expect(view?.node_invites[0]?.pending).toMatchObject({ peerKey, operatorPeerKey });
+    expect(view?.node_invites[0]?.pending?.verificationCode).toBe(
+      await nodeVerificationCode(redemption.body),
+    );
+    expect(await claw.authority.submit(await approve(operatorPeerKey), "tunnel")).toMatchObject({
+      ok: true,
+    });
+    const authority = {
+      clawId: claw.clawId,
+      rootPub: claw.authority.current()!.authority!.anchor.root_pub,
+      listedSeq: 2,
+    };
+    expect(await claw.authority.resolvePeer(peerKey)).toEqual({ kind: "node", peerKey, authority });
+    expect(await claw.authority.resolvePeer(operatorPeerKey)).toEqual({
+      kind: "member",
+      peerKey: operatorPeerKey,
+      accountId: `node:${peerKey}`,
+      role: "operator",
+      authority,
+    });
+    expect((await claw.authority.admittedPeerKeys()).admitted).toEqual(
+      expect.arrayContaining([peerKey, operatorPeerKey]),
+    );
+    expect(await claw.authority.ownerView(operatorPeerKey)).toBeUndefined();
+    await claw.authority.bindToken("mac-app", "operator", operatorPeerKey);
+    const { service, effects } = serviceFor(claw.authority);
+    await service.submitStatement(
+      "tunnel",
+      await claw.sign({ op: "remove_node", peer_key: peerKey }),
+    );
+    expect(claw.authority.currentPeer(operatorPeerKey)).toBeUndefined();
+    expect(effects.removeNodePairings).toHaveBeenCalledWith([peerKey]);
+    expect(effects.revokeDeviceTokens).toHaveBeenCalledWith([
+      { deviceId: "mac-app", role: "operator", peerKey: operatorPeerKey },
+    ]);
     await service.stop();
   });
 
