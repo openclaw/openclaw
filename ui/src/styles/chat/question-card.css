@@ -307,14 +307,14 @@ openclaw-chat-question-panel {
   display: block;
   margin-top: 2px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: calc(var(--control-ui-text-sm) - 1px);
   line-height: 1.35;
 }
 
 .chat-question-panel__option kbd {
   min-width: 18px;
   color: var(--muted);
-  font: var(--control-ui-text-sm)/1 var(--mono);
+  font: 12px/1 var(--mono);
   text-align: center;
 }
 
