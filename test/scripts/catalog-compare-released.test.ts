@@ -11,6 +11,11 @@ import {
   type ReleaseRun,
   type RowObservation,
 } from "../../scripts/lib/catalog-compare-released-diff.mts";
+import {
+  catalogRowCount,
+  releasedReaderVerdict,
+  releasedSchemaVersions,
+} from "../../scripts/lib/catalog-compare-released-gate.mts";
 
 function kimiRow(highEffort: string): RowObservation {
   const request = (effort: string) => ({
@@ -159,6 +164,151 @@ describe("catalog compare released install cache", () => {
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("npm view @openclaw/foo-provider@2099.1.1 failed");
       expect(fs.existsSync(path.join(release, ".installed"))).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("catalog compare released publish gate", () => {
+  const updated = (models: number) => ({
+    status: "updated",
+    generatedAt: 1,
+    providers: 47,
+    models,
+  });
+
+  // Audit: 2026.11.5-beta.1 salvaged rows of v2-20-enum-pricing-status and reported updated.
+  it("fails a release that reports updated but drops a published row", () => {
+    const verdict = releasedReaderVerdict({
+      feed: "v2",
+      release: "2026.11.5-beta.1",
+      candidate: { emitted: 1244, refresh: updated(1243) },
+      baseline: { emitted: 1244, refresh: updated(1244) },
+    });
+    expect(verdict).toEqual({
+      line: "v2 on openclaw@2026.11.5-beta.1: updated, 1243/1244 rows (last published 1244/1244)",
+      failure:
+        "v2 on openclaw@2026.11.5-beta.1: updated, 1243/1244 rows (last published 1244/1244): release dropped 1 of 1244 published rows (allowed 0)",
+    });
+  });
+
+  it("passes a loss the last published file already had, or one the publish allows", () => {
+    expect(
+      releasedReaderVerdict({
+        feed: "v3",
+        release: "2027.1.1",
+        candidate: { emitted: 1262, refresh: updated(1261) },
+        baseline: { emitted: 1261, refresh: updated(1260) },
+      }).failure,
+    ).toBeUndefined();
+    expect(
+      releasedReaderVerdict({
+        feed: "v3",
+        release: "2027.1.1",
+        candidate: { emitted: 1262, refresh: updated(1260) },
+        baseline: { emitted: 1261, refresh: updated(1260) },
+        allowRowLoss: 1,
+      }).failure,
+    ).toBeUndefined();
+    // A rejected baseline explains nothing.
+    expect(
+      releasedReaderVerdict({
+        feed: "v3",
+        release: "2027.1.1",
+        candidate: { emitted: 1262, refresh: updated(1261) },
+        baseline: { emitted: 1261, refresh: { status: "error", error: "x", models: 0 } },
+      }).failure,
+    ).toContain("release dropped 1 of 1262");
+  });
+
+  it("fails a rejection with its error on one line", () => {
+    expect(
+      releasedReaderVerdict({
+        feed: "v2",
+        release: "2026.11.3",
+        candidate: { emitted: 1244, refresh: { status: "error", error: "bad\n  key", models: 0 } },
+      }),
+    ).toEqual({
+      line: "v2 on openclaw@2026.11.3: error",
+      failure: "v2 on openclaw@2026.11.3: error: bad key",
+    });
+  });
+
+  it("counts rows the way released refreshes report them", () => {
+    expect(catalogRowCount({ providers: { a: { models: [{}, {}] }, b: { models: [{}] } } })).toBe(
+      3,
+    );
+    expect(catalogRowCount({ schemaVersion: 3, providers: { a: {} }, models: [{}, {}] })).toBe(2);
+  });
+
+  it("finds a release's wire readers by the source names main still declares", () => {
+    const source = fs.readFileSync(
+      "packages/model-catalog-core/src/remote-catalog-bundle.ts",
+      "utf8",
+    );
+    expect(releasedSchemaVersions([source])).toEqual(new Set([1, 2, 3]));
+    expect(
+      releasedSchemaVersions([
+        "function validateAndSanitizeRemoteModelCatalogBundle(value) {}",
+        "function validateAndSanitizeRemoteModelCatalogBundleV2(value) {}",
+      ]),
+    ).toEqual(new Set([1, 2]));
+  });
+});
+
+describe("catalog compare released --check", () => {
+  it("skips releases without a reader for the candidate's wire version, by name", () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "catalog-check-test-")));
+    try {
+      const bin = path.join(root, "bin");
+      const tmp = path.join(root, "tmp");
+      fs.mkdirSync(bin);
+      fs.mkdirSync(tmp);
+      // A release that lists no provider plugins and ships only v1/v2 readers.
+      fs.writeFileSync(
+        path.join(bin, "npm"),
+        `#!/bin/sh
+case "$1" in install)
+  for spec in "$@"; do case "$spec" in openclaw@*)
+    mkdir -p node_modules/openclaw/dist
+    echo '"official-external-provider-catalog.json" function validateAndSanitizeRemoteModelCatalogBundleV2(' > node_modules/openclaw/dist/listing.mjs
+  ;; esac; done ;;
+esac
+`,
+        { mode: 0o755 },
+      );
+      const bundle = path.join(root, "v3.json");
+      fs.writeFileSync(bundle, JSON.stringify({ schemaVersion: 3, providers: {}, models: [{}] }));
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          "scripts/catalog-compare-released.mts",
+          "--check",
+          "--candidate",
+          bundle,
+          "--releases",
+          "2099.1.1",
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            PATH: `${bin}:${process.env.PATH ?? ""}`,
+            HOME: root,
+            OPENCLAW_HOME: root,
+            OPENCLAW_STATE_DIR: path.join(root, "state"),
+            TMPDIR: tmp,
+          },
+        },
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim().split("\n")).toEqual([
+        "v3 on openclaw@2099.1.1: no v3 reader, skipped",
+        "v3: no checked release reads v3 yet",
+      ]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

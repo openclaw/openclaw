@@ -859,11 +859,25 @@ describe("publish model catalog", () => {
     expect(parsePublishModelCatalogArgs(["--dry-run", "--out", "ignored.json"])).toEqual({
       dryRun: true,
       pricing: false,
+      skipOversizedV1: false,
+      allowShrink: false,
+      previous: {},
       out: "ignored.json",
     });
-    expect(parsePublishModelCatalogArgs(["--pricing", "--dry-run"])).toEqual({
+    expect(
+      parsePublishModelCatalogArgs([
+        "--pricing",
+        "--dry-run",
+        "--previous-v3",
+        "v3.json",
+        "--skip-oversized-v1",
+      ]),
+    ).toEqual({
       dryRun: true,
       pricing: true,
+      skipOversizedV1: true,
+      allowShrink: false,
+      previous: { v3: "v3.json" },
     });
     expect(() => parsePublishModelCatalogArgs([])).toThrow("provide --out");
   });
