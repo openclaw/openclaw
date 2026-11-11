@@ -323,15 +323,16 @@ try {
           ? [false]
           : [true, false]) {
         for (let index = 0; index < samples; index++) {
-          const pair = (index % 2 ? [true, false] : [false, true]).map((candidate) =>
+          const runSample = (candidate: boolean) =>
             sample(
               `${command}-${control ? "AA" : "AB"}-${candidate ? "B" : "A"}`,
               candidate && !control,
               args,
               0,
-            ),
-          );
-          if (pair[0].outputSha256 !== pair[1].outputSha256) {
+            );
+          const first = runSample(index % 2 === 1);
+          const second = runSample(index % 2 === 0);
+          if (first.outputSha256 !== second.outputSha256) {
             throw new Error(`${command}: baseline and candidate output differs`);
           }
         }

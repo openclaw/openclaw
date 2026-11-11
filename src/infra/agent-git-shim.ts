@@ -236,7 +236,7 @@ EOF
       while IFS= read -r arg; do [ -z "$arg" ] || set -- "$@" "$arg"; done <<EOF
 $blob_paths
 EOF
-      { GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" 2>/dev/null && echo complete; } | awk '
+      { GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" 2>/dev/null && echo complete; } | LC_ALL=C awk '
         function add(oid, mode) {
           if (mode == "160000" || oid ~ /^0+$/ || seen[oid]++) return
           if (++count > 2048 || (bytes += length(oid) + 1) > 131072) exit
