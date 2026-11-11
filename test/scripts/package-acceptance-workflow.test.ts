@@ -4374,6 +4374,10 @@ function runPluginNpmPreflightToolingGuard(overrides: Record<string, string>) {
     resolve(toolingLibDir, "record-shared.mjs"),
     readFileSync(resolve(REPO_ROOT, "scripts/lib/record-shared.mjs")),
   );
+  writeFileSync(
+    resolve(toolingLibDir, "plain-gh.mjs"),
+    readFileSync(resolve(REPO_ROOT, "scripts/lib/plain-gh.mjs")),
+  );
   writeExecutable(
     resolve(binDir, "gh"),
     `#!/usr/bin/env bash
@@ -4446,6 +4450,7 @@ function writePreflightConsumerTooling(toolingDir: string) {
     "plugin-sdk-api-release-evidence.mjs",
     "release-tooling-identity.mjs",
     "lib/actions-artifact-archive.mjs",
+    "lib/plain-gh.mjs",
     "lib/npm-core-release-packages.mjs",
     "lib/npm-core-release-packages.json",
     "lib/npm-shrinkwrap-dependencies.mjs",

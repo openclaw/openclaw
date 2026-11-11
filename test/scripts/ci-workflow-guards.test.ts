@@ -5352,6 +5352,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     () => {
       const directory = tempDirs.make("ci-preflight-dependencies-");
       const harness = exportPreflightHarness(directory);
+      const adaptiveImport = spawnSync(
+        testNodeExecPath,
+        [
+          "--input-type=module",
+          "-e",
+          `await import(${JSON.stringify(pathToFileURL(path.join(harness, "scripts/ci-adaptive-priors.mjs")).href)});`,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(adaptiveImport.status, adaptiveImport.stderr).toBe(0);
       const harnessPaths = new Set<string>();
       const steps: WorkflowStep[] = readCiWorkflow().jobs.preflight.steps;
       for (const step of steps) {
@@ -7681,7 +7691,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     path: ".release-tooling",
     "persist-credentials": false,
     "sparse-checkout":
-      "apps/linux/src-tauri/tauri.conf.json\nscripts/lib/record-shared.mjs\nscripts/release-tooling-identity.mjs\nscripts/linux-updater-manifest.mjs\nscripts/lib/release-version.mjs\n",
+      "apps/linux/src-tauri/tauri.conf.json\nscripts/lib/record-shared.mjs\nscripts/lib/plain-gh.mjs\nscripts/release-tooling-identity.mjs\nscripts/linux-updater-manifest.mjs\nscripts/lib/release-version.mjs\n",
   });
   const tooling = requiredWorkflowStep(linuxSteps, "Verify trusted release tooling identity");
   expect(tooling?.env).toMatchObject({

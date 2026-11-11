@@ -62,6 +62,7 @@ import { compareAscii, sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { releaseChildReuseSha256 } from "./lib/full-release-child-request.mjs";
 import { validateReusableReleaseChild } from "./lib/full-release-child-reuse.mjs";
 import {
+  accountGithubRequest,
   execGhRead,
   execGhReadAsync,
   plainGhAuthenticatedEnv,
@@ -268,6 +269,7 @@ function downloadArtifactZip(
   for (let attempt = 1; attempt <= ARTIFACT_DOWNLOAD_ATTEMPTS; attempt += 1) {
     const output = openSync(destination, "w");
     try {
+      accountGithubRequest(artifactDownloadArgs(artifactId, repository));
       execFileSync(resolvePlainGhBin(), artifactDownloadArgs(artifactId, repository), {
         env: plainGhAuthenticatedEnv(),
         killSignal: "SIGKILL",
@@ -2250,16 +2252,16 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
       immutableReads?.observeRun(route, run);
       return run;
     },
-    getRunView(runId) {
-      return jsonGh([
-        "run",
-        "view",
-        String(runId),
-        "--repo",
-        normalizedRepository,
-        "--json",
-        "status,conclusion,attempt,headBranch,headSha,url",
-      ]);
+    async getRunView(runId) {
+      const run = await githubRestJsonAsync("actions/runs/" + runId, normalizedRepository);
+      return {
+        status: run.status,
+        conclusion: run.conclusion,
+        attempt: run.run_attempt,
+        headBranch: run.head_branch,
+        headSha: run.head_sha,
+        url: run.html_url,
+      };
     },
     loadManifest(runId, runAttempt, manifestPath) {
       return downloadParentManifestEvidence(
@@ -2291,7 +2293,7 @@ async function loadValidatedParentEvidence({
   repository,
   runId,
 }) {
-  const parentView = client.getRunView(runId);
+  const parentView = await client.getRunView(runId);
   const parentRun = preloadedRun ?? (await client.getRun(runId));
   const parentRunAttempt = normalizePositiveInteger(
     parentRun.run_attempt,

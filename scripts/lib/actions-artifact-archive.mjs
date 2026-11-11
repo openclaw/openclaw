@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { crc32, inflateRawSync } from "node:zlib";
+import { accountGithubRequest } from "./plain-gh.mjs";
 
 const ACTIONS_ARTIFACT_API_VERSION = "2026-03-10";
 const DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES = 256 * 1024 * 1024;
@@ -1037,6 +1038,7 @@ function remainingTransferMs(deadlineMs, label) {
 }
 
 async function fetchBoundedJson(url, request, params) {
+  accountGithubRequest();
   const response = await request.fetchImpl(url, {
     headers: request.headers,
     redirect: "follow",
@@ -1190,6 +1192,7 @@ function createArtifactTransfer(params, expected, digestOnly = false) {
         async (remainingMs) => {
           // Always resolve the immutable API endpoint again: signed redirect URLs
           // may expire between attempts, but the artifact identity cannot change.
+          accountGithubRequest();
           const response = await fetchImpl(
             `${apiRoot}/actions/artifacts/${expected.artifactId}/zip`,
             {

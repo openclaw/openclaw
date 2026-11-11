@@ -573,6 +573,7 @@ describe("original publication admission reader", () => {
           ? `2026-08-28T12:01:03.750Z FRV_EXECUTION_PLAN_SHA256=${releaseExecutionPlanSha256(fixture.plan)}\n`
           : fixture.client.getJobLog(id),
       getRun: async (id: string) => fixture.client.getRun(id),
+      getRunView: async (id: string) => fixture.client.getRunView(id),
       getParentJobs: async (id: string) => fixture.client.getParentJobs(id),
       getWorkflowSource: vi.fn(
         () =>
