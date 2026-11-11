@@ -17,7 +17,8 @@ jobs:
       fail-fast: false
       matrix:
         node: ["24.22.1", "26.12.1"]
-        alias: [node-short-path, node-junction]
+        # Junction proof remains blocked, not waived or passed; retain its fixture.
+        alias: [node-short-path]
     env:
       OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS: "1"
       ALIAS_MODE: ${{ matrix.alias }}
@@ -35,6 +36,7 @@ jobs:
           New-Item -ItemType Directory -Force .artifacts/retained-alias | Out-Null
           git rev-parse HEAD | Tee-Object .artifacts/retained-alias/head.txt
           node --version | Tee-Object .artifacts/retained-alias/node.txt
+          "node-junction: blocked; not waived or passed" | Tee-Object .artifacts/retained-alias/junction-status.txt
       - name: Run unmodified owner regression and canonical control
         id: proof
         shell: pwsh

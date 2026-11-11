@@ -63,10 +63,19 @@ for (const runtime of ["node", "bun", "node-short-path", "node-junction"] as con
         const shortPath = spawnSync(
           process.env.ComSpec ?? "cmd.exe",
           ["/d", "/c", `for %I in ("${root}") do @echo %~sI`],
-          { encoding: "utf8" },
+          // cmd.exe owns this command string; do not apply CRT argument quoting.
+          { encoding: "utf8", windowsVerbatimArguments: true },
         );
+        if (process.env.OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS === "1") {
+          console.error(
+            JSON.stringify({ phase: "short-path", requested: root, returned: shortPath.stdout }),
+          );
+        }
+        expect(shortPath.error, shortPath.stderr).toBeUndefined();
         expect(shortPath.status, shortPath.stderr).toBe(0);
         importRoot = shortPath.stdout.trim();
+        expect(importRoot, "malformed 8.3 alias output").not.toMatch(/["\r\n]/);
+        expect(path.isAbsolute(importRoot), "8.3 alias must be an absolute path").toBe(true);
         // No silent fallback: an unavailable 8.3 name is a fixture blocker, not proof.
         expect(importRoot, "8.3 alias unavailable on the fixture volume").not.toBe(root);
         expect(await fs.realpath(importRoot)).toBe(await fs.realpath(root));
