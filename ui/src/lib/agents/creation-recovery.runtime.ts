@@ -44,7 +44,7 @@ export class AgentCreationUncertainError extends Error {
 }
 
 /** Loaded after provisional navigation; the eager owner retains attempted identities. */
-export async function executeAgentCreation(
+async function executeAgentCreation(
   client: GatewayBrowserClient,
   attempt: AgentCreationAttempt,
   previous: boolean,

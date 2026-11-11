@@ -271,8 +271,9 @@ own person grants require write access. Creating owner grants or revoking
 another person's grant requires administrator access. Grant listings include
 the principal and scope ceiling.
 
-Revocation is persisted locally before the Gateway notifies the relay. If the
-relay is offline, the Gateway still refuses further requests using that grant;
+Revocation is persisted locally before the Gateway notifies the relay. It also
+cancels runs under that grant, including work resumed after a Gateway restart. If
+the relay is offline, the Gateway still refuses further requests using that grant;
 the command reports whether the relay was notified. A revoked client must pair
 again to regain access.
 

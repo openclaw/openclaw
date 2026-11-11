@@ -126,7 +126,7 @@ function fixture(pageHeavy = false, sameSha = false) {
   const raw = (args: readonly string[]): unknown => {
     if (args[0] === "run") {
       calls.push("run view " + f.runId);
-      return JSON.stringify(f.client.getRunView(f.runId));
+      return f.client.getRunView(f.runId).then((view) => JSON.stringify(view));
     }
     const route = args[1]!.replace("repos/" + f.repository + "/", "");
     calls.push(route);
@@ -171,7 +171,11 @@ function fixture(pageHeavy = false, sameSha = false) {
         : Promise.resolve(f.client.getRun(run[1]!)).then(done);
     }
     if (route.includes("/artifacts?")) {
-      return done({ total_count: 2, artifacts: [artifacts.get(91), artifacts.get(92)] });
+      const runId = Number(/^actions\/runs\/(\d+)/u.exec(route)![1]);
+      const listed = [...artifacts.values()].filter(
+        (metadata) => metadata.workflow_run.id === runId,
+      );
+      return done({ total_count: listed.length, artifacts: listed });
     }
     const jobs = /^actions\/runs\/(\d+)\/(?:attempts\/(\d+)\/)?jobs\?/u.exec(route);
     if (jobs) {
@@ -458,6 +462,9 @@ async function carrierFixture(prepare?: (source: ReturnType<typeof fixture>) => 
   const fetchImpl = async (input: string | URL | Request) => {
     const url = new URL(input instanceof Request ? input.url : input.toString());
     calls.push(url.pathname + url.search);
+    if (url.pathname === "/rate_limit") {
+      return Response.json({ resources: { core: { remaining: 5000, reset: 4070908800 } } });
+    }
     if (url.pathname.endsWith("/artifacts/900")) {
       return Response.json(metadata);
     }
@@ -565,6 +572,23 @@ it.each([
   expect(() => createReleaseEvidenceReplay(binding, f.payload)).toThrow(/differs/);
 });
 
+it("does not trust a caller-forged prepared projection in the public helper", async () => {
+  const { params } = fixture();
+  const immutableReads = Object.assign(createReleaseEvidenceReplay(params), {
+    authenticatedPreparedEvidence: {
+      artifact: params.artifact,
+      workflowSha: params.artifact.workflowSha,
+    },
+  });
+  await expect(
+    authenticatePreparedNpmArtifact({
+      ...params,
+      fullReleaseValidationRunAttempt: 2,
+      immutableReads,
+    }),
+  ).rejects.toThrow();
+});
+
 it("replays raw responses through semantic validators, not just their content hashes", async () => {
   const { params } = fixture();
   const writer = createReleaseEvidenceReplay(params);
@@ -627,7 +651,7 @@ function cliEnvironment(f: Awaited<ReturnType<typeof carrierFixture>>, root: str
   vi.stubGlobal("fetch", f.paramsForLoad.fetchImpl);
 }
 
-it("preserves the public return-time gate but removes exactly one CLI combined gate", async () => {
+it("preserves public return-time authority while coalescing CLI acquisition", async () => {
   const f = await carrierFixture();
   const root = tempDirs.make("npm-cli-authorize-");
   cliEnvironment(f, root);
@@ -648,9 +672,9 @@ it("preserves the public return-time gate but removes exactly one CLI combined g
   f.calls.length = 0;
   await main(["authorize", "--source-sha", f.params.sourceSha]);
   const removed = publicCalls.length - f.source.calls.length;
-  // Compare the real final callback with the eliminated identical boundary.
-  // The raw fixture graph is smaller than the saved production trace.
-  expect(removed).toBe(finalGateCalls.length);
+  // CLI acquisition also shares repeated observations; the process fixture
+  // owns exact request accounting for the complete recovery graph.
+  expect(removed).toBeGreaterThanOrEqual(finalGateCalls.length);
   // The completed admission attempt and job page replay; its current run and
   // permissions remain live. Exact-attempt replay and the shared same-actor
   // permission check remove two of the original 17 reads.
@@ -663,7 +687,6 @@ it("preserves the public return-time gate but removes exactly one CLI combined g
       "collaborators/release-operator/permission",
     ]),
   );
-  expect(removed).toBe(15);
   expect(f.calls.length).toBe(publicFetchCalls);
   expect(f.source.calls.filter((route) => route === "actions/runs/800")).toHaveLength(2);
   console.log(
@@ -756,6 +779,16 @@ async function cliPackageFixture() {
     packageArchives.set(9001, manifestZip);
     packageArchives.set(9002, packageZip);
     source.archives.set(9001, manifestZip);
+    source.artifacts.set(9002, {
+      id: 9002,
+      name: entry.artifact.artifactName,
+      digest: entry.artifact.artifactDigest,
+      size_in_bytes: packageZip.length,
+      expired: false,
+      expires_at: "2099-01-01T00:00:00Z",
+      created_at: "2026-08-28T12:01:02.000Z",
+      workflow_run: { id: 101, head_sha: source.params.sourceSha, head_branch: source.f.branch },
+    });
     source.artifacts.set(9001, {
       id: 9001,
       name: source.params.artifact.artifactName,
@@ -850,6 +883,9 @@ it.each(["load", "consume"])("keeps %s output behind the final fresh check", asy
   expect(readFileSync(f.output, "utf8")).toContain(
     command === "load" ? "has_candidates=true" : "tarball_sha256=",
   );
+  if (command === "load") {
+    expect(readFileSync(f.output, "utf8")).toContain("core_deferrals=[]");
+  }
 });
 
 it.each(["permission", "tag", "frv-attempt", "carrier-attempt", "expiry"])(
