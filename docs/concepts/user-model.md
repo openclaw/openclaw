@@ -180,28 +180,24 @@ A shared Gateway behind Keycloak can identify separate users without establishin
 a verified GitHub identity for any of them. Existing GitHub credit cannot infer
 commit details from that sign-in alone.
 
-You can also supply **Co-author name** and **Co-author email** in Profile without
-a verified GitHub account. Save both fields together and explicitly enable
-**Git co-author credit** to publish that address in future shared-session commits.
-These details are commit metadata; they do not change your sign-in identity,
-verified GitHub account, or permissions.
-
-An administrator can optionally import organization defaults through
+An administrator can import a complete co-author name/email pair through
 [trusted-proxy credit headers](/gateway/trusted-proxy-auth#organization-co-author-defaults).
-Profile labels these as organization-supplied details. Your complete custom pair
-takes precedence, followed by the organization pair, then the existing
-host-specific GitHub identity. **Use default details** clears your custom pair.
-Later sign-ins refresh organization defaults without overwriting custom details.
-Explicit or organization addresses require a saved affirmative credit preference;
-the default-on preference for verified GitHub accounts alone does not publish them.
-While a supplied pair is selected, credit stays off until that explicit consent.
-Introducing the first supplied pair resets an older saved-on choice unless you
-explicitly save consent with the pair. This applies to manual preference writes
-and proxy imports as well as Profile saves; an earlier GitHub-only or ineffective
+For example, a Keycloak authentication proxy can supply the authenticated user's
+name, email, and email-verification claim while keeping the existing immutable
+subject as the sign-in principal. These are commit details, not a verified GitHub
+account or an authorization input.
+
+Profile displays the imported pair read-only and labels it as organization-supplied.
+Enable **Git co-author credit** explicitly before the email becomes public in
+commit history. There are no editable co-author name/email fields or per-user
+identity overrides. While configured proxy details are selected, the default-on
+preference for verified GitHub accounts alone does not publish them. The first
+import resets an older saved-on choice; an earlier GitHub-only or ineffective
 toggle does not authorize a new supplied address.
-Clearing the pair restores the existing GitHub default when no organization pair applies.
-Removing the proxy mapping stops organization credit. Missing or invalid configured
-claims clear the imported pair at the next successful profile sign-in.
+
+Later sign-ins refresh the imported pair. Missing or invalid configured claims
+clear it at the next successful profile sign-in. Removing the mapping stops using
+stored organization details, leaving the existing host-specific GitHub fallback.
 
 Profile merges preserve the consent belonging to the selected supplied details,
 while retaining an explicit target opt-out. Another profile's consent cannot

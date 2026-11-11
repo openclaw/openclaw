@@ -98,10 +98,14 @@ it("returns only the authenticated person's private emails from the shared users
 it("reports verified GitHub fallback availability independently of supplied credit and consent", async () => {
   const person = ensureProfileForEmail("keycloak:credit-availability");
   catalog = await prepareUserProfileCatalog();
-  await setCanonicalUserPreferences(person.id, {
-    "git.coauthor.identity": { name: "Custom Alice", email: "custom@example.test" },
-    "git.coauthor.enabled": false,
-  });
+  await setCanonicalUserPreferences(
+    person.id,
+    {
+      "git.coauthor.organization": { name: "Organization Alice", email: "work@example.test" },
+      "git.coauthor.enabled": false,
+    },
+    { trustedProxyGitCoauthor: true },
+  );
   expect(await rpc("users.self", person.id)).toHaveBeenCalledWith(true, {
     profile: expect.objectContaining({ id: person.id, gitCoauthorAvailable: false }),
   });

@@ -26,7 +26,17 @@ const headers = {
 
 describe("trusted proxy Git credit claims", () => {
   it("imports a complete pair only from an admitted configured proxy", () => {
-    expect(resolveTrustedProxyGitCoauthor({ authConfig, authResult, headers })).toEqual({
+    expect(
+      resolveTrustedProxyGitCoauthor({
+        authConfig,
+        authResult,
+        headers: {
+          ...headers,
+          "x-credit-name": " Alice Example ",
+          "x-credit-email": " ALICE@example.test ",
+        },
+      }),
+    ).toEqual({
       name: "Alice Example",
       email: "alice@example.test",
     });
@@ -43,8 +53,14 @@ describe("trusted proxy Git credit claims", () => {
   });
 
   it.each([
+    { ...headers, "x-credit-name": "" },
     { ...headers, "x-credit-email": "" },
     { ...headers, "x-credit-name": "Alice\nCo-authored-by: Mallory" },
+    { ...headers, "x-credit-name": "Alice\u2028Other" },
+    { ...headers, "x-credit-name": "Alice\u2029Other" },
+    { ...headers, "x-credit-name": "Alice <Other>" },
+    { ...headers, "x-credit-email": "alice@example.test\nOther" },
+    { ...headers, "x-credit-email": "Alice <alice@example.test>" },
     { ...headers, "x-credit-email": "alice@example.test>" },
     { ...headers, "x-credit-email-verified": "false" },
     { ...headers, "x-credit-email-verified": undefined },

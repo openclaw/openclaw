@@ -11,7 +11,6 @@ import {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import {
   normalizeGitCoauthorIdentity,
-  GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
   GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
   type GitCoauthorIdentity,
 } from "../../../../packages/gateway-protocol/src/schema/git-coauthor-identity.ts";
@@ -32,7 +31,6 @@ import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 export type IdentityChange =
   | { kind: "display-name" }
   | { kind: "avatar"; file: File }
-  | { kind: "git-coauthor-identity"; clear?: boolean }
   | { kind: "git-coauthor" | "pr-attribution"; enabled: boolean };
 
 export class ProfileState {
@@ -61,10 +59,7 @@ export class ProfileState {
   ownProfile: UserProfile | null = null;
   displayName = "";
   gitCoauthorEnabled = true;
-  gitCoauthorIdentity: GitCoauthorIdentity | undefined;
   gitCoauthorOrganization: GitCoauthorIdentity | undefined;
-  gitCoauthorName = "";
-  gitCoauthorEmail = "";
   private gitCoauthorConsent: unknown;
   prAttributionEnabled = false;
   identityLoading = false;
@@ -149,16 +144,12 @@ export class ProfileState {
       this.identityBusy = null;
       this.identityError = null;
       this.attributionError = null;
-      this.attributionError = null;
     }
     if (identitySourceChanged) {
       this.ownProfile = null;
       this.displayName = "";
       this.gitCoauthorEnabled = true;
-      this.gitCoauthorIdentity = undefined;
       this.gitCoauthorOrganization = undefined;
-      this.gitCoauthorName = "";
-      this.gitCoauthorEmail = "";
       this.gitCoauthorConsent = undefined;
       this.prAttributionEnabled = false;
     }
@@ -200,9 +191,6 @@ export class ProfileState {
     hasUnsavedDisplayName: boolean,
     displayNameDraft: string,
   ) {
-    const hasUnsavedCoauthor =
-      this.gitCoauthorName !== (this.gitCoauthorIdentity?.name ?? "") ||
-      this.gitCoauthorEmail !== (this.gitCoauthorIdentity?.email ?? "");
     let profileLoaded = false;
     try {
       const profile = await this.context.gateway.loadSelfProfile();
@@ -230,7 +218,6 @@ export class ProfileState {
             : [
                 GIT_COAUTHOR_PREFERENCE_KEY,
                 PR_ATTRIBUTION_PREFERENCE_KEY,
-                GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
                 GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
               ],
       });
@@ -238,16 +225,9 @@ export class ProfileState {
         return;
       }
       const entries = preferences.status === "ok" ? preferences.entries : {};
-      this.gitCoauthorIdentity = normalizeGitCoauthorIdentity(
-        entries[GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY],
-      );
       this.gitCoauthorOrganization = normalizeGitCoauthorIdentity(
         entries[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY],
       );
-      if (!hasUnsavedCoauthor) {
-        this.gitCoauthorName = this.gitCoauthorIdentity?.name ?? "";
-        this.gitCoauthorEmail = this.gitCoauthorIdentity?.email ?? "";
-      }
       this.gitCoauthorConsent = entries[GIT_COAUTHOR_PREFERENCE_KEY];
       this.gitCoauthorEnabled =
         profile.id !== GATEWAY_OWNER_PROFILE_ID &&
@@ -277,17 +257,13 @@ export class ProfileState {
     if (!this.gitCoauthorAvailable) {
       return false;
     }
-    return this.gitCoauthorIdentity || this.gitCoauthorOrganization
+    return this.gitCoauthorOrganization
       ? this.gitCoauthorConsent === true
       : isGitCoauthorCreditEnabled(this.gitCoauthorConsent);
   }
 
   get gitCoauthorAvailable() {
-    return Boolean(
-      this.gitCoauthorIdentity ||
-      this.gitCoauthorOrganization ||
-      this.ownProfile?.gitCoauthorAvailable !== false,
-    );
+    return Boolean(this.gitCoauthorOrganization || this.ownProfile?.gitCoauthorAvailable !== false);
   }
 
   private retainCreditAvailability(profile: UserProfile): UserProfile {
@@ -311,8 +287,7 @@ export class ProfileState {
       this.identityBusy ||
       this.identityLoading ||
       (change.kind === "git-coauthor" && !this.gitCoauthorAvailable) ||
-      ((change.kind === "git-coauthor" || change.kind === "git-coauthor-identity") &&
-        profile.id === GATEWAY_OWNER_PROFILE_ID)
+      (change.kind === "git-coauthor" && profile.id === GATEWAY_OWNER_PROFILE_ID)
     ) {
       return;
     }
@@ -324,41 +299,6 @@ export class ProfileState {
     const isCurrent = () => client === this.client && identityRequestId === this.identityRequestId;
     try {
       switch (change.kind) {
-        case "git-coauthor-identity": {
-          const resetInertConsent =
-            !this.gitCoauthorIdentity &&
-            !this.gitCoauthorOrganization &&
-            this.gitCoauthorConsent === true;
-          const identity = change.clear
-            ? undefined
-            : normalizeGitCoauthorIdentity({
-                name: this.gitCoauthorName,
-                email: this.gitCoauthorEmail,
-              });
-          if (!change.clear && !identity) {
-            throw new Error(t("profilePage.identity.gitCoauthorInvalid"));
-          }
-          const result = await saveUserPreferences(client, {
-            entries: {
-              [GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY]: identity ?? null,
-              ...(resetInertConsent ? { [GIT_COAUTHOR_PREFERENCE_KEY]: false } : {}),
-            },
-          });
-          if (!isCurrent()) {
-            return;
-          }
-          if (result.status !== "ok") {
-            throw new Error(t("profilePage.identity.profileUnavailable"));
-          }
-          this.gitCoauthorIdentity = identity;
-          if (resetInertConsent) {
-            this.gitCoauthorConsent = false;
-          }
-          this.gitCoauthorName = identity?.name ?? "";
-          this.gitCoauthorEmail = identity?.email ?? "";
-          this.gitCoauthorEnabled = this.coauthorConsentEnabled();
-          return;
-        }
         case "display-name": {
           const result = await client.request<UsersSetDisplayNameResult>("users.setDisplayName", {
             profileId: profile.id,
@@ -440,12 +380,7 @@ export class ProfileState {
         }
       }
     } catch (error) {
-      if (
-        isCurrent() &&
-        (change.kind === "git-coauthor" ||
-          change.kind === "git-coauthor-identity" ||
-          change.kind === "pr-attribution")
-      ) {
+      if (isCurrent() && (change.kind === "git-coauthor" || change.kind === "pr-attribution")) {
         this.attributionError = formatUiError(error, t("profilePage.identity.profileUnavailable"));
       } else if (isCurrent()) {
         this.identityError =

@@ -5,7 +5,6 @@ import {
 } from "../../packages/gateway-protocol/src/schema/background-preferences.js";
 import {
   normalizeGitCoauthorIdentity,
-  GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
   GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import {
@@ -46,15 +45,10 @@ function prepareEntries(
           ? normalizeBackgroundPreference(value)
           : undefined;
       const credit =
-        prefKey === GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY ||
         prefKey === GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY
           ? normalizeGitCoauthorIdentity(value)
           : undefined;
-      if (
-        (prefKey === GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY ||
-          prefKey === GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY) &&
-        !credit
-      ) {
+      if (prefKey === GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY && !credit) {
         return err({ code: "invalid-value", key: prefKey });
       }
       if (prefKey === USER_BACKGROUND_PREFERENCE_KEY && !background) {

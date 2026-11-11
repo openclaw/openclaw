@@ -1,6 +1,5 @@
 import {
   normalizeGitCoauthorIdentity,
-  GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
   GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import {
@@ -54,24 +53,14 @@ export function readUserProfileGitAttribution(
             .onRef("preference.profile_id", "=", "profile.id")
             .on("preference.pref_key", "=", GIT_COAUTHOR_PREFERENCE_KEY),
         )
-        .leftJoin("user_preferences as explicit", (join) =>
-          join
-            .onRef("explicit.profile_id", "=", "profile.id")
-            .on("explicit.pref_key", "=", GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY),
-        )
         .leftJoin("user_preferences as organization", (join) =>
           join
             .onRef("organization.profile_id", "=", "profile.id")
             .on("organization.pref_key", "=", GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY),
         )
-        .select([
-          "preference.value_json",
-          "explicit.value_json as explicit_json",
-          "organization.value_json as organization_json",
-        ])
+        .select(["preference.value_json", "organization.value_json as organization_json"])
     : query.select((eb) => [
         eb.val<string | null>(null).as("value_json"),
-        eb.val<string | null>(null).as("explicit_json"),
         eb.val<string | null>(null).as("organization_json"),
       ]);
   const rows = executeSqliteQuerySync(
@@ -109,22 +98,11 @@ export function readUserProfileGitAttribution(
   );
   const creditPairs = new Map(
     rows.map((row) => {
-      const explicit =
-        row.explicit_json === null
-          ? undefined
-          : normalizeGitCoauthorIdentity(JSON.parse(row.explicit_json));
       const organization =
         !organizationDefaults || row.organization_json === null
           ? undefined
           : normalizeGitCoauthorIdentity(JSON.parse(row.organization_json));
-      return [
-        row.source_id,
-        explicit
-          ? { ...explicit, source: "explicit" as const }
-          : organization
-            ? { ...organization, source: "organization" as const }
-            : undefined,
-      ] as const;
+      return [row.source_id, organization] as const;
     }),
   );
   return {

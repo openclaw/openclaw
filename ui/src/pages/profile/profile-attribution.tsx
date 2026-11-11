@@ -13,7 +13,6 @@ import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import type { IdentityChange, ProfileState } from "./profile-state.ts";
 
 export function ProfileAttribution(props: {
-  state: ProfileState;
   getView: () => ProfileState;
   canEdit: boolean;
   busy: IdentityChange["kind"] | "loading" | null;
@@ -69,95 +68,20 @@ export function ProfileAttribution(props: {
             <SettingsRow
               title={t("profilePage.identity.gitCoauthorSource")}
               description={
-                props.getView().gitCoauthorIdentity
-                  ? t("profilePage.identity.gitCoauthorCustom")
-                  : props.getView().gitCoauthorOrganization
-                    ? t("profilePage.identity.gitCoauthorOrganization")
-                    : props.getView().ownProfile?.githubIdentity
-                      ? t("profilePage.identity.gitCoauthorGithub")
-                      : props.getView().ownProfile?.gitCoauthorAvailable
-                        ? t("profilePage.identity.gitCoauthorGithubHost")
-                        : t("profilePage.identity.gitCoauthorNoSource")
+                props.getView().gitCoauthorOrganization
+                  ? t("profilePage.identity.gitCoauthorOrganization")
+                  : props.getView().ownProfile?.githubIdentity
+                    ? t("profilePage.identity.gitCoauthorGithub")
+                    : props.getView().ownProfile?.gitCoauthorAvailable
+                      ? t("profilePage.identity.gitCoauthorGithubHost")
+                      : t("profilePage.identity.gitCoauthorNoSource")
               }
               control={
-                <Show
-                  when={
-                    props.getView().gitCoauthorIdentity ?? props.getView().gitCoauthorOrganization
-                  }
-                >
+                <Show when={props.getView().gitCoauthorOrganization}>
                   {(identity) => (
                     <SettingsValue value={`${identity().name} <${identity().email}>`} />
                   )}
                 </Show>
-              }
-            />
-            <SettingsRow
-              title={t("profilePage.identity.gitCoauthorDetails")}
-              description={t("profilePage.identity.gitCoauthorDetailsDescription")}
-              stacked
-              control={
-                <form
-                  class="identity-coauthor-form model-accounts-flow"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void props.onSave({ kind: "git-coauthor-identity" });
-                  }}
-                >
-                  <label for="git-coauthor-name">{t("profilePage.identity.gitCoauthorName")}</label>
-                  <input
-                    id="git-coauthor-name"
-                    class="settings-input"
-                    type="text"
-                    maxlength={256}
-                    value={props.getView().gitCoauthorName}
-                    disabled={!props.canEdit || props.busy !== null}
-                    onInput={(event) => {
-                      props.state.gitCoauthorName = event.currentTarget.value;
-                      props.state.publish();
-                    }}
-                  />
-                  <label for="git-coauthor-email">
-                    {t("profilePage.identity.gitCoauthorEmail")}
-                  </label>
-                  <input
-                    id="git-coauthor-email"
-                    class="settings-input"
-                    type="email"
-                    maxlength={254}
-                    value={props.getView().gitCoauthorEmail}
-                    disabled={!props.canEdit || props.busy !== null}
-                    onInput={(event) => {
-                      props.state.gitCoauthorEmail = event.currentTarget.value;
-                      props.state.publish();
-                    }}
-                  />
-                  <button
-                    type="submit"
-                    class="btn btn--sm"
-                    disabled={
-                      !props.canEdit ||
-                      props.busy !== null ||
-                      (props.getView().gitCoauthorName ===
-                        (props.getView().gitCoauthorIdentity?.name ?? "") &&
-                        props.getView().gitCoauthorEmail ===
-                          (props.getView().gitCoauthorIdentity?.email ?? ""))
-                    }
-                  >
-                    {props.busy === "git-coauthor-identity" ? t("common.saving") : t("common.save")}
-                  </button>
-                  <Show when={props.getView().gitCoauthorIdentity}>
-                    <button
-                      type="button"
-                      class="btn btn--sm identity-coauthor-clear"
-                      disabled={!props.canEdit || props.busy !== null}
-                      onClick={() =>
-                        void props.onSave({ kind: "git-coauthor-identity", clear: true })
-                      }
-                    >
-                      {t("profilePage.identity.gitCoauthorClear")}
-                    </button>
-                  </Show>
-                </form>
               }
             />
           </Show>

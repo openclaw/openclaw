@@ -154,7 +154,7 @@ describe("organization credit through authenticated profile admission", () => {
       });
     });
   });
-  it("refreshes and clears defaults across HTTP and WebSocket sign-ins without replacing an override", async () => {
+  it("refreshes and clears defaults across HTTP and WebSocket sign-ins", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot(cfg);
       const req = new IncomingMessage(new Socket());
@@ -171,7 +171,6 @@ describe("organization credit through authenticated profile admission", () => {
         });
         expect(
           await setCanonicalUserPreferences(profileId, {
-            "git.coauthor.identity": { name: "Alice Custom", email: "custom@example.test" },
             "git.coauthor.enabled": true,
           }),
         ).toMatchObject({ ok: true });
@@ -196,7 +195,6 @@ describe("organization credit through authenticated profile admission", () => {
         });
         expect(connected.ok && connected.prepared?.profile.profileId).toBe(profileId);
         expect(await read()).toMatchObject({
-          "git.coauthor.identity": { name: "Alice Custom", email: "custom@example.test" },
           [GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY]: {
             name: "Alice Updated",
             email: "new@example.test",
@@ -205,10 +203,7 @@ describe("organization credit through authenticated profile admission", () => {
         req.headers = {};
         await resolveAuthenticatedHttpUserProfile({ req, authResult, cfg });
         expect(await read()).not.toHaveProperty(GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY);
-        expect(await read()).toHaveProperty("git.coauthor.identity", {
-          name: "Alice Custom",
-          email: "custom@example.test",
-        });
+        expect(await read()).toHaveProperty("git.coauthor.enabled", true);
       } finally {
         req.destroy();
       }

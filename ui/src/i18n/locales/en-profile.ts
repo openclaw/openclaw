@@ -77,21 +77,14 @@ const enProfile = {
       gitCoauthor: "Git co-author credit",
       gitCoauthorShort: "Adds this profile’s credit details to shared-session commits.",
       gitCoauthorDescription:
-        "Adds your custom details, organization defaults, or GitHub address to shared-session commits, in that order. Custom and organization details require explicitly enabling this option. Your selected email address is visible in commit history. Turning it off affects future commits only.",
-      gitCoauthorDetails: "Co-author details",
-      gitCoauthorDetailsDescription:
-        "GitHub sign-in is optional. These details only affect commit credit. Custom details override organization defaults and GitHub credit. Saving them does not enable credit. Your email address will be visible in commit history when credit is enabled.",
-      gitCoauthorName: "Co-author name",
-      gitCoauthorEmail: "Co-author email",
+        "Adds your organization-provided details or GitHub address to shared-session commits. Organization details require explicitly enabling this option. Your selected email address is visible in commit history. Turning it off affects future commits only.",
       gitCoauthorSource: "Credit source",
-      gitCoauthorCustom: "Custom details",
       gitCoauthorOrganization: "From your organization",
       gitCoauthorGithub: "GitHub sign-in account",
       gitCoauthorGithubHost: "GitHub identity for the publishing host",
       gitCoauthorNoSource: "Not configured",
-      gitCoauthorConfigure: "Add a co-author name and email to enable credit.",
-      gitCoauthorClear: "Use default details",
-      gitCoauthorInvalid: "Enter a valid co-author name and email address.",
+      gitCoauthorConfigure:
+        "Ask your administrator to supply co-author details through your sign-in proxy, or use supported GitHub sign-in.",
       ownerGitCoauthorDescription:
         "Requires GitHub-backed sign-in through Cloudflare Access or Tailscale Serve.",
       prAttribution: "Add OpenClaw attribution to pull requests",

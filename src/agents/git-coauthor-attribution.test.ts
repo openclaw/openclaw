@@ -50,6 +50,17 @@ async function withSession<T>(
 }
 
 const stateOptions = () => ({ env: sharedState.env });
+const proxyCreditConfig = {
+  gateway: {
+    auth: {
+      mode: "trusted-proxy" as const,
+      trustedProxy: {
+        userHeader: "x-occ-identity",
+        gitCoauthor: { nameHeader: "x-coauthor-name", emailHeader: "x-coauthor-email" },
+      },
+    },
+  },
+};
 function readCredit(
   scope: ReturnType<typeof sessionScope>,
   overrides: Partial<Parameters<typeof resolveGitCoauthorAttribution>[0]> = {},
@@ -92,98 +103,65 @@ function expectedCredit(...accounts: [number, string][]) {
   };
 }
 
-it("credits a non-GitHub participant's explicit pair only after saved consent", async () => {
-  await withSession("explicit-pair", async (scope) => {
-    await upsertSessionEntryCore(scope, { sessionId: "explicit-pair", updatedAt: 1 });
+it("credits a non-GitHub participant's proxy pair only after saved consent", async () => {
+  await withSession("proxy-pair", async (scope) => {
+    await upsertSessionEntryCore(scope, { sessionId: "proxy-pair", updatedAt: 1 });
     const profile = ensureProfileForEmail("oidc:alice-subject", stateOptions());
     participant(scope, profile, 1);
     expect(
       setUserPreferences(
         profile.id,
-        {
-          "git.coauthor.identity": { name: "Alice Example", email: "alice@example.test" },
-        },
-        stateOptions(),
+        { "git.coauthor.organization": { name: "Alice Example", email: "alice@example.test" } },
+        { ...stateOptions(), trustedProxyGitCoauthor: true },
       ),
     ).toMatchObject({ ok: true });
-    expect(await readCredit(scope)).toBeUndefined();
-    setUserPreferences(profile.id, { "git.coauthor.enabled": true }, stateOptions());
-    expect(await readCredit(scope)).toEqual({
+    expect(await readCredit(scope, { config: proxyCreditConfig })).toBeUndefined();
+    setCredit(profile.id, true);
+    expect(await readCredit(scope, { config: proxyCreditConfig })).toEqual({
       logins: [],
       trailers: ["Co-authored-by: Alice Example <alice@example.test>"],
     });
-    const prepared = await prepareGitCoauthorAttribution({ ...scope, config: {} });
+    const prepared = await prepareGitCoauthorAttribution({ ...scope, config: proxyCreditConfig });
     expect(prepared.isCurrent()).toBe(true);
     setUserPreferences(
       profile.id,
-      {
-        "git.coauthor.identity": { name: "Alice Example", email: "new@example.test" },
-      },
-      stateOptions(),
+      { "git.coauthor.organization": { name: "Alice Example", email: "new@example.test" } },
+      { ...stateOptions(), trustedProxyGitCoauthor: true },
     );
     expect(prepared.isCurrent()).toBe(false);
-    setUserPreferences(profile.id, { "git.coauthor.enabled": false }, stateOptions());
-    expect(await readCredit(scope)).toBeUndefined();
+    setCredit(profile.id, false);
+    expect(await readCredit(scope, { config: proxyCreditConfig })).toBeUndefined();
   });
 });
 
-it("selects explicit, configured organization, then GitHub credit without mixing pairs", async () => {
+it("uses configured proxy credit with GitHub fallback, ignoring arbitrary manual preferences", async () => {
   await withSession("credit-precedence", async (scope) => {
     await upsertSessionEntryCore(scope, { sessionId: "credit-precedence", updatedAt: 1 });
     const profile = linkedProfile("credit-precedence", 9537);
     participant(scope, profile, 1);
     setUserPreferences(
       profile.id,
-      {
-        "git.coauthor.identity": { name: "Personal Alice", email: "personal@example.test" },
-      },
+      { "git.coauthor.identity": { name: "Personal Alice", email: "personal@example.test" } },
       stateOptions(),
     );
-    expect(await readCredit(scope)).toBeUndefined();
-    setUserPreferences(profile.id, { "git.coauthor.identity": null }, stateOptions());
     expect(await readCredit(scope)).toEqual(expectedCredit([9537, "credit-precedence"]));
-    const config = {
-      gateway: {
-        auth: {
-          mode: "trusted-proxy" as const,
-          trustedProxy: {
-            userHeader: "x-occ-identity",
-            gitCoauthor: { nameHeader: "x-coauthor-name", emailHeader: "x-coauthor-email" },
-          },
-        },
-      },
-    };
+    const config = proxyCreditConfig;
     setUserPreferences(
       profile.id,
-      {
-        "git.coauthor.organization": { name: "Organization Alice", email: "work@example.test" },
-      },
+      { "git.coauthor.organization": { name: "Organization Alice", email: "work@example.test" } },
       { ...stateOptions(), trustedProxyGitCoauthor: true },
     );
     // Imported addresses never inherit GitHub's default-on consent.
     expect(await readCredit(scope, { config })).toBeUndefined();
-    setUserPreferences(profile.id, { "git.coauthor.enabled": true }, stateOptions());
+    setCredit(profile.id, true);
     expect((await readCredit(scope, { config }))?.trailers).toEqual([
       "Co-authored-by: Organization Alice <work@example.test>",
     ]);
     expect(await readCredit(scope)).toEqual(expectedCredit([9537, "credit-precedence"]));
-    setUserPreferences(
-      profile.id,
-      {
-        "git.coauthor.identity": { name: "Personal Alice", email: "personal@example.test" },
-      },
-      stateOptions(),
-    );
-    expect((await readCredit(scope, { config }))?.trailers).toEqual([
-      "Co-authored-by: Personal Alice <personal@example.test>",
-    ]);
     const prepared = await prepareGitCoauthorAttribution({ ...scope, config });
     setUserPreferences(
       profile.id,
-      {
-        "git.coauthor.organization": null,
-        "git.coauthor.identity": null,
-      },
+      { "git.coauthor.organization": null },
       { ...stateOptions(), trustedProxyGitCoauthor: true },
     );
     expect(prepared.isCurrent()).toBe(false);

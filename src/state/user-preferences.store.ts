@@ -8,7 +8,6 @@ import {
 } from "../../packages/gateway-protocol/src/schema/background-preferences.js";
 import {
   normalizeGitCoauthorIdentity,
-  GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
   GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import {
@@ -52,11 +51,7 @@ export const ensureUserPreferencesSchema = createOpenClawStateSchemaEnsurer({
 });
 
 export function updatesGitCoauthorPreference(update: PreparedUserPreferenceUpdate): boolean {
-  const keys = new Set([
-    GIT_COAUTHOR_PREFERENCE_KEY,
-    GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
-    GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
-  ]);
+  const keys = new Set([GIT_COAUTHOR_PREFERENCE_KEY, GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY]);
   return (
     update.serialized.some(({ prefKey }) => keys.has(prefKey)) ||
     update.deletionKeys.some((key) => keys.has(key))
@@ -189,10 +184,6 @@ export function mergeUserPreferences(
       .selectFrom("user_preferences")
       .selectAll()
       .where("profile_id", "=", sourceProfileId)
-      // A full store may drop later keys: never transfer consent ahead of its custom address.
-      .orderBy((eb) =>
-        eb.case().when("pref_key", "=", GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY).then(0).else(1).end(),
-      )
       .orderBy("pref_key", "asc"),
   ).rows;
   for (const row of rows) {
@@ -295,9 +286,7 @@ export function writeUserPreferences(
     }
   }
   const suppliesCredit = serialized.some(
-    ({ prefKey }) =>
-      prefKey === GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY ||
-      prefKey === GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+    ({ prefKey }) => prefKey === GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
   );
   const choosesConsent =
     serialized.some(({ prefKey }) => prefKey === GIT_COAUTHOR_PREFERENCE_KEY) ||
@@ -305,12 +294,10 @@ export function writeUserPreferences(
   if (suppliesCredit && !choosesConsent) {
     const previous = readUserPreferences(sqlite, profileId, [
       GIT_COAUTHOR_PREFERENCE_KEY,
-      GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
       GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
     ]);
     if (
       previous[GIT_COAUTHOR_PREFERENCE_KEY] === true &&
-      !normalizeGitCoauthorIdentity(previous[GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY]) &&
       !normalizeGitCoauthorIdentity(previous[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY])
     ) {
       // Consent saved before any supplied address existed cannot authorize its first disclosure.

@@ -271,15 +271,15 @@ For Keycloak with OAuth2 Proxy:
    client-supplied copies. Keep the existing issuer-qualified subject as the
    authenticated principal; email is not an authorization input.
 3. Configure the matching `gitCoauthor` header names in OpenClaw and sign in again.
-   Profile shows the imported organization pair separately from custom details.
+   Profile shows the imported organization pair read-only.
 4. Each person explicitly enables **Git co-author credit** before their supplied
    address is published in commit history. Importing claims does not enable it.
 
 Successful profile admission refreshes the organization pair. Missing, malformed,
-partial, or unverified configured claims clear that pair while preserving any
-custom override. Unchanged claims do not invalidate pending credit. Removing the
-mapping stops using stored organization defaults. Manual details take precedence;
-clearing them restores the organization pair or the existing GitHub fallback.
+partial, or unverified configured claims clear that pair. Unchanged claims do not
+invalidate pending credit. Removing the mapping stops using stored organization
+defaults and leaves the existing GitHub fallback. Profile does not offer manual
+name/email entry or per-user identity overrides.
 
 Organization defaults use one protected metadata slot outside the 128-key user
 preference allowance. Importing them does not consume a user preference slot or

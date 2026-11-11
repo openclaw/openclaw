@@ -55,7 +55,6 @@ export type UserProfileGitHubAttribution = Map<
   | StoredGitHubIdentity
   | EnterpriseGitHubIdentity
   | (GitCoauthorIdentity & {
-      source: "explicit" | "organization";
       accountId?: number;
     })
   | null

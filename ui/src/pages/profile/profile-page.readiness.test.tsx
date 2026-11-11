@@ -62,7 +62,6 @@ it("reveals identity and following settings before preferences finish, then enab
         keys: [
           GIT_COAUTHOR_PREFERENCE_KEY,
           "github.prAttribution.enabled",
-          "git.coauthor.identity",
           "git.coauthor.organization",
         ],
       });

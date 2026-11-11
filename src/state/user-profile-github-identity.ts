@@ -1,5 +1,4 @@
 import {
-  GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
   GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
   normalizeGitCoauthorIdentity,
 } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
@@ -400,17 +399,15 @@ export function prepareUserProfileGitHubMerge(
       : undefined);
   const enterpriseIdentities = selectEnterpriseGitHubProfileIdsForMerge(db, sourceProfileIds);
   const profileIds = [targetProfileId, ...sourceProfileIds];
-  // Match preference transfer: the target keeps each stored key; custom credit precedes defaults.
-  const suppliedOwner = [
-    GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
+  // Match preference transfer: the target keeps its organization pair when present.
+  const suppliedPairs = selectUserPreferenceValues(
+    db,
+    profileIds,
     GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
-  ]
-    .map((key) => {
-      const values = selectUserPreferenceValues(db, profileIds, key);
-      const owner = profileIds.find((id) => values.has(id));
-      return owner && normalizeGitCoauthorIdentity(values.get(owner)) ? owner : undefined;
-    })
-    .find(Boolean);
+  );
+  const suppliedOwner = profileIds.find((id) =>
+    normalizeGitCoauthorIdentity(suppliedPairs.get(id)),
+  );
   if (suppliedOwner && suppliedOwner !== targetProfileId) {
     const choices = selectUserPreferenceValues(
       db,

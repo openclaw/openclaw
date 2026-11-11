@@ -37,7 +37,7 @@ function openWithoutFeatureSchemas() {
 }
 
 describe("user preferences", () => {
-  it.each(["git.coauthor.identity", "git.coauthor.organization"])(
+  it.each(["git.coauthor.organization"])(
     "requires a new disclosure choice when %s replaces previously inert consent",
     (key) => {
       const options = stateOptions();
@@ -65,24 +65,6 @@ describe("user preferences", () => {
       });
     },
   );
-
-  it("honors an explicit consent choice saved together with the first supplied pair", () => {
-    const options = stateOptions();
-    const profileId = ensureProfileForEmail("credit@example.test", options).id;
-    expect(
-      setUserPreferences(
-        profileId,
-        {
-          "git.coauthor.identity": { name: "Alice Example", email: "alice@example.test" },
-          "git.coauthor.enabled": true,
-        },
-        options,
-      ),
-    ).toMatchObject({ ok: true });
-    expect(getUserPreferences(profileId, ["git.coauthor.enabled"], options)).toEqual({
-      "git.coauthor.enabled": true,
-    });
-  });
 
   it("reads absent canonical preferences without creating their optional table", async () => {
     expect(await getCanonicalUserPreferences("missing", undefined, stateOptions())).toBeUndefined();

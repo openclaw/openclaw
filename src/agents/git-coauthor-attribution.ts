@@ -144,15 +144,15 @@ async function resolveAttribution(
     if (!identity) {
       continue;
     }
-    const custom = "name" in identity;
+    const organization = "name" in identity;
     const issuer = "host" in identity ? identity.host : "github.com";
     if (
-      (!custom && issuer !== host) ||
+      (!organization && issuer !== host) ||
       (params.excludeAccountId !== undefined && identity.accountId === params.excludeAccountId)
     ) {
       continue;
     }
-    const email = custom
+    const email = organization
       ? identity.email
       : "host" in identity
         ? identity.verifiedEmail
@@ -164,11 +164,11 @@ async function resolveAttribution(
     if (params.excludeAccountId === undefined && email.toLowerCase() === primaryEmail) {
       continue;
     }
-    usesOrganizationDefaults ||= custom && identity.source === "organization";
+    usesOrganizationDefaults ||= organization;
     const identityKey = email.toLowerCase();
     const contributor = contributors.get(identityKey);
     if (contributor) {
-      if (!custom) {
+      if (!organization) {
         contributor.githubLogin ??= identity.login;
       }
       if (record) {
@@ -185,8 +185,8 @@ async function resolveAttribution(
       email,
       contributionCount: record?.contributionCount ?? 0,
       firstPromptedAt: record?.firstPromptedAt ?? null,
-      login: custom ? identity.name : identity.login,
-      githubLogin: custom ? undefined : identity.login,
+      login: organization ? identity.name : identity.login,
+      githubLogin: organization ? undefined : identity.login,
       identityKey,
       ...(!record ? { inheritedOrder: inheritedProfileIds.indexOf(profileId) } : {}),
     });

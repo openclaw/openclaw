@@ -137,7 +137,7 @@ export function ProfilePage() {
           current.setGitCoauthorEnabled(change.enabled);
         } else if (change.kind === "pr-attribution") {
           current.setPrAttributionEnabled(change.enabled);
-        } else if (change.kind !== "git-coauthor-identity") {
+        } else {
           affects(identityRead);
         }
       }
@@ -148,19 +148,13 @@ export function ProfilePage() {
             ? current.gitCoauthorEnabled
             : change.kind === "pr-attribution"
               ? current.prAttributionEnabled
-              : change.kind === "git-coauthor-identity"
-                ? current.gitCoauthorEnabled
-                : identityRead,
+              : identityRead,
         );
       }
     } catch (error) {
       if (isCurrent()) {
         const message = formatUiError(error, t("profilePage.identity.profileUnavailable"));
-        if (
-          change.kind === "git-coauthor" ||
-          change.kind === "git-coauthor-identity" ||
-          change.kind === "pr-attribution"
-        ) {
+        if (change.kind === "git-coauthor" || change.kind === "pr-attribution") {
           state.attributionError = message;
         } else {
           state.identityError = message;
@@ -561,7 +555,6 @@ export function ProfilePage() {
             />
             <GitHubConnections />
             <ProfileAttribution
-              state={state}
               getView={view}
               canEdit={latest(canWrite)}
               busy={identityBusy() ?? (view().identityLoading ? "loading" : null)}
