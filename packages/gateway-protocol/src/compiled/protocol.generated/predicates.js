@@ -14490,7 +14490,8 @@ var External = [
     value === "agent-roster" ||
     value === "command-palette" ||
     value === "skill-workshop" ||
-    value === "workboard-lifecycle",
+    value === "workboard-lifecycle" ||
+    value === "sessions-search",
   check_2174 = (value) => check_2175(value) || check_398(value) || check_2094(value),
   check_2175 = (value) => typeof value == "string" && value === "compact",
   check_2176 = (value) =>
