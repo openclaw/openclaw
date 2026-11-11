@@ -14,8 +14,10 @@ import {
   invokeConfigPatch,
   startConfigWrite,
 } from "./config-invocations.test-support.js";
+import { replyWithBillingRouteWarnings } from "./config-write-flow.js";
 import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const configWriteMocks = vi.hoisted(() => ({
   commitGatewayConfigWrite: vi.fn(),
@@ -137,6 +139,7 @@ beforeEach(() => {
     async ({
       snapshot,
       nextConfig,
+      respond,
     }: Parameters<typeof import("./config-write-flow.js").commitGatewayConfigWrite>[0]) => {
       if (snapshot.hash !== storedHash) {
         throw new ConfigMutationConflictError("config changed since last load");
@@ -149,6 +152,7 @@ beforeEach(() => {
         config: storedConfig,
         hash: storedHash,
         queueFollowUp: vi.fn(),
+        reply: replyWithBillingRouteWarnings(respond, [], undefined),
       };
     },
   );
@@ -199,6 +203,46 @@ it("does not report plugin defaults discovered after the write snapshot", async 
   );
 });
 
+it.each(["config.set", "config.patch", "config.apply"] as const)(
+  "reports %s saved-but-deferred plugin config with its persisted revision",
+  async (method) => {
+    const application = {
+      status: "deferred",
+      reason: "Plugin advisor still has retained work.",
+      appliesWhen: "After retained plugin work finishes, or after a Gateway restart.",
+    };
+    const config = { plugins: { entries: { advisor: { config: { enabled: true } } } } };
+    const queueFollowUp = vi.fn();
+    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(
+      async ({ respond }: { respond?: RespondFn }) => ({
+        path: "/tmp/openclaw.json",
+        config,
+        hash: "deferred-hash",
+        application: Promise.resolve(application),
+        queueFollowUp,
+        reply: replyWithBillingRouteWarnings(respond, [], undefined),
+      }),
+    );
+    const { harness, operation } = startConfigWrite(method, { raw: config, baseHash: "base-hash" });
+    await operation;
+    expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ awaitRuntimeApplication: true }),
+    );
+    expect(harness.respond).toHaveBeenCalledExactlyOnceWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("saved but deferred"),
+        details: { persistedConfig: { hash: "deferred-hash", config }, application },
+      }),
+    );
+    expectFailure(harness.respond, expect.stringContaining(application.reason));
+    expectFailure(harness.respond, expect.stringContaining(application.appliesWhen));
+    expect(queueFollowUp).toHaveBeenCalledOnce();
+  },
+);
+
 it.each([
   { nextToken: "synthetic-old-token", expectedPaths: [] },
   {
@@ -225,13 +269,16 @@ it.each([
   "reports $method $outcome without misrepresenting active config",
   async ({ method, outcome }) => {
     const queueFollowUp = vi.fn();
-    configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
-      path: "/tmp/openclaw.json",
-      config: { hooks: { enabled: true } },
-      hash: "restart-hash",
-      application: Promise.resolve(outcome),
-      queueFollowUp,
-    });
+    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(
+      async ({ respond }: { respond?: RespondFn }) => ({
+        path: "/tmp/openclaw.json",
+        config: { hooks: { enabled: true } },
+        hash: "restart-hash",
+        application: Promise.resolve(outcome),
+        queueFollowUp,
+        reply: replyWithBillingRouteWarnings(respond, [], undefined),
+      }),
+    );
 
     const { harness, operation } = startConfigWrite(method, {
       raw: { hooks: { enabled: true } },
@@ -259,6 +306,28 @@ it.each([
     expect(queueFollowUp).toHaveBeenCalledOnce();
   },
 );
+it("acknowledges a CLI-routed config.patch accepted for restart like the offline write", async () => {
+  const queueFollowUp = vi.fn();
+  configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(
+    async ({ respond }: { respond?: RespondFn }) => ({
+      path: "/tmp/openclaw.json",
+      config: { hooks: { enabled: true } },
+      hash: "restart-hash",
+      application: Promise.resolve("restart-pending"),
+      queueFollowUp,
+      reply: replyWithBillingRouteWarnings(respond, [], undefined),
+    }),
+  );
+  // `openclaw config set` connects as the CLI; Control UI and RPC callers keep the error above.
+  const { harness, operation } = startConfigWrite(
+    "config.patch",
+    { raw: { hooks: { enabled: true } }, baseHash: "base-hash" },
+    { client: { connect: { client: { id: "cli", mode: "cli" } } } as never },
+  );
+  await operation;
+  expectSuccess(harness.respond, expect.objectContaining({ ok: true, restartPending: true }));
+  expect(queueFollowUp).toHaveBeenCalledOnce();
+});
 describe("config.openFile", () => {
   it("opens the configured file without shell interpolation", async () => {
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config $(touch pwned).json" }, async () => {
@@ -476,13 +545,7 @@ it("uses write-snapshot policies before merging manifest-backed model IDs", asyn
     ],
   });
   storedConfig = configFor("myproxy", "https://proxy.example/v1", {
-    models: [
-      modelDefinition("vendor/modern-model", {
-        name: "Before",
-        contextWindow: 200_000,
-        reasoning: false,
-      }),
-    ],
+    models: [modelDefinition("vendor/modern-model", { name: "Before" })],
   });
 
   const sourceConfig = structuredClone(storedConfig);
@@ -509,3 +572,72 @@ it("uses write-snapshot policies before merging manifest-backed model IDs", asyn
     },
   ]);
 });
+
+const billingWarning = "Billing route changed for agents.defaults.subagents.model (agent main).";
+// Commits through the real billing-aware reply so each handler branch shows what it sends.
+const mockBillingCommit = (extra: Record<string, unknown> = {}) =>
+  configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(
+    async ({ respond, context }: { respond?: RespondFn; context?: GatewayRequestContext }) => ({
+      path: "/tmp/openclaw.json",
+      config: { hooks: { enabled: true } },
+      hash: "billing-hash",
+      billingRouteWarnings: [billingWarning],
+      queueFollowUp: vi.fn(),
+      reply: replyWithBillingRouteWarnings(respond, [billingWarning], context),
+      ...extra,
+    }),
+  );
+
+it.each(["config.set", "config.apply", "config.patch"] as const)(
+  "%s returns and logs billing-route warnings with its success response",
+  async (method) => {
+    mockBillingCommit();
+    const harness = createConfigHandlerHarness({
+      method,
+      params: { raw: JSON.stringify({ hooks: { enabled: true } }), baseHash: storedHash },
+    });
+    await expectDefined(configHandlers[method], "config write handler")(harness.options);
+    expectSuccess(
+      harness.respond,
+      expect.objectContaining({ billingRouteWarnings: [billingWarning] }),
+    );
+    expect(harness.logGateway.warn).toHaveBeenCalledWith(billingWarning);
+  },
+);
+
+it("neither reports nor logs billing-route warnings for a write that was not applied", async () => {
+  mockBillingCommit({ application: Promise.resolve("failed") });
+  const { harness, operation } = startConfigWrite("config.patch", {
+    raw: { hooks: { enabled: true } },
+    baseHash: "base-hash",
+  });
+  await operation;
+  expect(harness.respond).toHaveBeenCalledWith(false, undefined, expect.anything());
+  expect(harness.logGateway.warn).not.toHaveBeenCalledWith(billingWarning);
+});
+
+it.each([
+  { client: { connect: { client: { id: "cli", mode: "cli" } } }, logged: true },
+  { client: undefined, logged: false },
+])(
+  "logs restart-pending billing-route warnings only with a success response (cli: $logged)",
+  async ({ client, logged }) => {
+    mockBillingCommit({ application: Promise.resolve("restart-pending") });
+    const { harness, operation } = startConfigWrite(
+      "config.patch",
+      { raw: { hooks: { enabled: true } }, baseHash: "base-hash" },
+      client ? { client: client as never } : undefined,
+    );
+    await operation;
+    expect(harness.respond).toHaveBeenCalledWith(
+      logged,
+      logged ? expect.anything() : undefined,
+      logged ? undefined : expect.anything(),
+    );
+    if (logged) {
+      expect(harness.logGateway.warn).toHaveBeenCalledWith(billingWarning);
+    } else {
+      expect(harness.logGateway.warn).not.toHaveBeenCalledWith(billingWarning);
+    }
+  },
+);

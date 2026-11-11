@@ -3,7 +3,6 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
-  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
@@ -21,7 +20,6 @@ import type {
   ChannelIngressClaimSnapshot,
   ChannelIngressListInput,
   ChannelIngressQueueClaim,
-  ChannelIngressQueuePruneOptions,
   ChannelIngressRow,
   ChannelIngressScope,
 } from "./ingress-queue.types.js";
@@ -346,13 +344,12 @@ export function recoverChannelIngressClaimInDatabase(
     db,
     getQueue(db)
       .updateTable("channel_ingress_events")
-      .set((eb) => ({
+      .set({
         status: "pending",
         ...CLEARED_CLAIM_COLUMNS,
-        attempts: eb("attempts", "+", 1),
-        last_attempt_at: input.now,
+        // Losing a claim owner is not a delivery failure; preserve its retry history.
         updated_at: input.now,
-      }))
+      })
       .where("queue_name", "=", current.queue_name)
       .where("event_id", "=", current.event_id)
       .where("status", "=", "claimed")
@@ -476,85 +473,6 @@ export function failChannelIngressInDatabase(
       updated_at: input.now,
     })),
   );
-}
-
-export function pruneChannelIngressInDatabase(
-  db: EngineConnection,
-  input: {
-    queueName: string;
-    options: Omit<ChannelIngressQueuePruneOptions, "protectIds"> & { protectIds?: string[] };
-    now: number;
-  },
-): number {
-  const kysely = getQueue(db);
-  const protectedIds = (input.options.protectIds ?? []).map((id) => id.trim()).filter(Boolean);
-  // Native text rows cannot match an unpaired surrogate through JS string equality.
-  const protectedMaxIds = protectedIds.filter((id) => id.isWellFormed());
-  let deleted = 0;
-  const policies = [
-    {
-      status: "pending",
-      column: "updated_at",
-      ttl: input.options.pendingTtlMs,
-      max: input.options.pendingMaxEntries,
-    },
-    {
-      status: "completed",
-      column: "completed_at",
-      ttl: input.options.completedTtlMs,
-      max: input.options.completedMaxEntries,
-    },
-    {
-      status: "failed",
-      column: "failed_at",
-      ttl: input.options.failedTtlMs,
-      max: input.options.failedMaxEntries,
-    },
-  ] as const;
-  for (const policy of policies) {
-    if (policy.ttl !== undefined) {
-      let query = kysely
-        .deleteFrom("channel_ingress_events")
-        .where("queue_name", "=", input.queueName)
-        .where("status", "=", policy.status)
-        .where(policy.column, "<", input.now - policy.ttl);
-      if (protectedIds.length) {
-        query = query.where("event_id", "not in", protectedIds);
-      }
-      deleted += affectedRows(executeSqliteQuerySync(db, query));
-    }
-    if (policy.max === undefined) {
-      continue;
-    }
-    // Protected rows occupy their original retention slots.
-    const overflow = kysely
-      .selectFrom("channel_ingress_events")
-      .select("event_id")
-      .where("queue_name", "=", input.queueName)
-      .where("status", "=", policy.status)
-      .orderBy("updated_at", "desc")
-      .orderBy("event_id", "desc")
-      .limit(-1)
-      .offset(Math.max(0, Math.floor(policy.max)));
-    let candidates = kysely.selectFrom(overflow.as("overflow")).select("event_id").limit(500);
-    if (protectedMaxIds.length) {
-      // Apply protection before the batch limit so a protected page cannot hide later overflow.
-      candidates = candidates.where("event_id", "not in", sqliteStringSet(protectedMaxIds));
-    }
-    const query = kysely
-      .deleteFrom("channel_ingress_events")
-      .where("queue_name", "=", input.queueName)
-      .where("status", "=", policy.status)
-      .where("event_id", "in", candidates);
-    while (true) {
-      const removed = affectedRows(executeSqliteQuerySync(db, query));
-      if (!removed) {
-        break;
-      }
-      deleted += removed;
-    }
-  }
-  return deleted;
 }
 
 export function listStaleChannelIngressClaimsInDatabase(
@@ -683,11 +601,11 @@ export function listChannelIngressRowsInDatabase(
     input.status === "unsettled" ? ["pending", "claimed"] : [input.status],
   );
   if (input.status === "claimed" || input.status === "failed") {
-    let ordered = select.orderBy(input.status === "claimed" ? "claimed_at" : "failed_at", "asc");
-    if (input.status === "claimed") {
-      ordered = ordered.orderBy("received_at", "asc");
-    }
-    ordered = ordered.orderBy("event_id", "asc");
+    const ordered = (
+      input.status === "claimed"
+        ? select.orderBy("claimed_at", "asc").orderBy("received_at", "asc")
+        : select.orderBy("failed_at", (order) => order.asc().nullsFirst())
+    ).orderBy("event_id", "asc");
     return executeSqliteQuerySync(
       db,
       input.status === "failed" ? ordered.limit(normalizeLimit(input.limit)) : ordered,

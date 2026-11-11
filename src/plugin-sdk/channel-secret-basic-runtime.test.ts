@@ -50,10 +50,7 @@ it("keeps inherited webhook credentials owned only by webhook-mode accounts", ()
     accounts: {
       webhook: { mode: "webhook" },
       polling: { mode: "polling" },
-      override: {
-        mode: "webhook",
-        webhookSecret: envRef("FIXTURE_OVERRIDE"),
-      },
+      override: { mode: "webhook", webhookSecret: envRef("OVERRIDE") },
     },
   };
   const context = createResolverContext({ sourceConfig: {}, env: {} });
@@ -64,8 +61,6 @@ it("keeps inherited webhook credentials owned only by webhook-mode accounts", ()
     topLevelInheritedAccountActive: ({ account, enabled }) =>
       enabled && account.mode === "webhook" && !Object.hasOwn(account, "webhookSecret"),
     accountActive: ({ account, enabled }) => enabled && account.mode === "webhook",
-    topInactiveReason: "webhook mode inactive",
-    accountInactiveReason: "account webhook mode inactive",
   });
 
   expect(context.assignments.map(({ path, ownerId }) => [path, ownerId])).toEqual([

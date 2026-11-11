@@ -107,23 +107,17 @@ it.each(["restored", "richer", "revived"] as const)(
       mode === "restored" ? "Checking files" : "Earlier headline",
     );
     await send("Checking files");
-    let target = session;
-    if (mode === "revived") {
-      target = state("Reviewing the implementation");
-      target.lastPreambleHeadline = session.lastPreambleHeadline;
-    } else {
-      if (mode === "richer") {
-        publisher.clear(session);
-      }
-      if (!session.previousDigest) {
-        throw new Error("expected previous digest");
-      }
-      session.previousDigest = {
-        ...session.previousDigest,
+    const target = mode === "revived" ? state("Reviewing the implementation") : session;
+    target.lastPreambleHeadline = session.lastPreambleHeadline;
+    if (mode === "richer") {
+      publisher.clear(session);
+    }
+    if (mode !== "revived") {
+      Object.assign(session.previousDigest!, {
         revision: 2,
         headline: "Reviewing the implementation",
         updatedAt: 2_000,
-      };
+      });
     }
     await send("Checking files", target, mode === "revived" ? 2_000 : 2_001);
     expect(target.lastPreambleHeadline).toBe("Checking files");

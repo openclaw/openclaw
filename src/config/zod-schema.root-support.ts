@@ -138,8 +138,8 @@ export const PluginEntrySchema = z.strictObject({
   enabled: z.boolean().optional(),
   hooks: z
     .strictObject({
-      /** Controls prompt mutation via before_prompt_build. */
-      allowPromptInjection: z.boolean().optional(),
+      /** Controls plugin prompt modification, including hooks, guidance, and steering. */
+      allowPromptModification: z.boolean().optional(),
       /**
        * Controls access to raw conversation content from conversation hooks including
        * before_agent_run, before_model_resolve, before_agent_reply, llm_input, llm_output,
@@ -219,7 +219,19 @@ function validateTalkProviderSelection(
 const TalkRealtimeSchema = z
   .strictObject({
     provider: z.string().optional(),
-    providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
+    providers: z
+      .record(
+        z.string(),
+        TalkProviderEntrySchema.extend({
+          inputTranscriptionModel: z
+            .string()
+            .optional()
+            .describe(
+              "Input transcription model or deployment name. Omit to keep the provider default.",
+            ),
+        }),
+      )
+      .optional(),
     model: z.string().optional(),
     speakerVoice: z.string().optional(),
     speakerVoiceId: z.string().optional(),

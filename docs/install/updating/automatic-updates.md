@@ -143,6 +143,39 @@ unattended updates.
 | `beta`            | Checks on a built-in interval and announces an update campaign as soon as a newer release is available.                                                             |
 | `dev`             | With `auto.enabled`, git installs check hourly. When upstream commits are available, the Gateway announces an update campaign pinned to the exact announced commit. |
 
+### Choose an automatic-update schedule
+
+In **Settings → Updates → Update schedule**, choose **Hourly (default)**,
+**Daily**, **Weekly**, or **Custom cron**. Daily lets you choose an hour and
+minute; weekly also lets you choose the day of the week. Times use the
+**Gateway host's timezone**, not the browser's timezone.
+
+Only one optional config field is stored. For example, to start automatic
+updates at 03:30 every Monday:
+
+```json5
+{ update: { auto: { enabled: true, schedule: "30 3 * * 1" } } }
+```
+
+Omit `update.auto.schedule` to keep the existing hourly cadence, including
+startup discovery. A configured cron expression opens a one-minute start
+window. Startup, restart, and **Check for updates** do not catch up missed
+windows. Changes take effect without restarting the Gateway. Invalid cron
+expressions are rejected, keeping the saved schedule unchanged.
+
+The schedule controls campaign starts, not completion time. Stable rollout
+delay and jitter still apply; if a release is not eligible in one window, it
+waits for a later one. Once announced, the idle/countdown policy below can
+finish outside that minute. **Hold 1 h** and manual **Update Gateway** retain
+their explicit override behavior. Changing the schedule cancels a pending
+campaign, but does not interrupt an update already applying.
+
+Cron timing uses the same owner as automations: nonexistent local times at
+the spring daylight-saving transition are skipped, and repeated local times
+run at their first occurrence. Missed windows after downtime or a forward
+clock jump are skipped. This setting does not change headless-node updates,
+manual updates, or extended-stable's read-only behavior.
+
 ### Update campaigns
 
 When an automatic update is due, the campaign waits for active work to finish,
@@ -154,8 +187,8 @@ apply. The Gateway restart ends these process-local PTYs, and terminal sessions
 are not recovered afterward.
 
 An admin can use **Hold 1 h** once to postpone the campaign and shift its hard
-deadline, or choose **Update now** from the sidebar update card or
-**Settings → Updates**. For a `dev` git install, the campaign installs the exact
+deadline, or choose **Update Gateway** from the sidebar update card or
+**Update Gateway…** in **Settings → Updates**. For a `dev` git install, the campaign installs the exact
 commit it announced. The displayed list previews up to five commits from that
 fixed target and does not move if upstream `main` advances during the countdown.
 
@@ -166,6 +199,10 @@ in the restart sentinel and surface after the Gateway returns.
 `update.checkOnStart: false` disables all automatic update checks, feature
 statistics, and update notices, even when `update.auto.enabled` is `true`.
 `OPENCLAW_NO_AUTO_UPDATE=1` also disables automatic checks and applies.
+With either opt-out, Gateway startup does not probe Git or package managers for
+installation details. When checks are enabled, discovery starts with the first
+scheduled check. Explicit update and status requests still discover installation
+details on demand.
 External-supervisor mode disables automatic applies; startup update hints can
 still run unless `update.checkOnStart` is also disabled. See
 [Usage telemetry and update checks](/gateway/telemetry) for the information
@@ -218,9 +255,10 @@ this `update.run` flow directly. This covers browser-hosted Control UI, remote
 Gateways, and manually managed local Gateways.
 
 Manual updates started from the Control UI always ask first. The first click on
-the sidebar update card or on **Settings → Updates → Update now** opens a
-confirmation naming the target, the installed and available versions when known,
-and the restart impact; it sends nothing until you choose **Update and restart**.
+the sidebar update card or on **Settings → Updates → Update Gateway…** opens a
+confirmation titled **Update and restart?**, naming the target, the installed and
+available versions when known, and the restart impact. It sends nothing until you
+choose **Update and restart**.
 Cancel, Escape, and dismissing the dialog leave the Gateway untouched. Automatic
 campaigns, the CLI, and `update.run` API clients are unaffected.
 

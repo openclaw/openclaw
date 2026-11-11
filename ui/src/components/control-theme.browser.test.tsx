@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { userEvent } from "vitest/browser";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { renderSidebarIdentityMenu } from "./app-sidebar-identity-menu.tsx";
@@ -9,6 +10,7 @@ import { Icon } from "./solid/icon.tsx";
 import "./panel-tab-strip.css";
 import "../styles/base.css";
 import "../styles/layout.css";
+import "../styles/sidebar-menus.css";
 import "../../public/themes/absolutely.css";
 import "../../public/themes/phosphor.css";
 
@@ -47,9 +49,7 @@ function color(token: string) {
 function settledStyle(element: Element) {
   // Start color transitions before finishing them to check the selected palette.
   void getComputedStyle(element).color;
-  for (const animation of element.getAnimations()) {
-    animation.finish();
-  }
+  finishElementAnimations(element);
   return getComputedStyle(element);
 }
 
@@ -124,6 +124,10 @@ it.runIf("__vitest_browser__" in globalThis)("inherits theme colors", async () =
   ).unmount;
   flush();
   const find = (selector: string) => host.querySelector<HTMLElement>(selector)!;
+  const settledPhase = (element: Element) => {
+    finishElementAnimations(host);
+    return element.getAttribute("data-phase");
+  };
   const menu = find(".sidebar-identity-menu");
   const pickerTrigger = find(".picker-select__trigger");
   const pickerMenu = find(".picker-select__menu");
@@ -148,21 +152,30 @@ it.runIf("__vitest_browser__" in globalThis)("inherits theme colors", async () =
       root.style.setProperty("--bg-elevated", "rgb(32, 45, 38)");
       root.style.setProperty("--bg-hover", "rgb(45, 62, 51)");
     }
+    await userEvent.hover(find("#theme-panel"));
     if (!menu.matches(":popover-open")) {
       find(".oc-menu-trigger").click();
     }
-    await expect.poll(() => menu.getAttribute("data-phase")).toBe("open");
+    await expect.poll(() => settledPhase(menu)).toBe("open");
     expectThemeDefaults();
-    expectColor(find(".sidebar-identity-menu__help .oc-menu-item__submenu-icon"), "muted", theme);
-    expectColor(find('[data-value="command:settings"] .oc-menu-item__details'), "muted", theme);
-    expectColor(menu, "bg-elevated", theme, "backgroundColor");
+    expectColor(
+      find(".sidebar-identity-menu__help .oc-menu-item__submenu-icon"),
+      "text-tertiary",
+      theme,
+    );
+    expectColor(
+      find('[data-value="command:settings"] .oc-menu-item__details'),
+      "text-tertiary",
+      theme,
+    );
+    expectColor(menu, "menu-surface", theme, "backgroundColor");
     expectColor(find("#theme-first-tab"), "text", theme);
     expectColor(find("#theme-first-tab"), "bg-hover", theme, "backgroundColor");
     expectColor(find("#theme-second-tab"), "muted", theme);
     expectColor(find("#theme-first-tab .tabstrip-tab__icon"), "accent", theme);
 
     pickerTrigger.click();
-    await expect.poll(() => pickerMenu.getAttribute("data-phase")).toBe("open");
+    await expect.poll(() => settledPhase(pickerMenu)).toBe("open");
     await expect.element(menu).not.toBeVisible();
     await expect.element(pickerList).toHaveFocus();
     await userEvent.keyboard("{End}");
@@ -170,13 +183,13 @@ it.runIf("__vitest_browser__" in globalThis)("inherits theme colors", async () =
     await expect
       .poll(() => pickerList.getAttribute("aria-activedescendant"))
       .toBe(currentOption.id);
-    expectColor(pickerMenu, "bg-elevated", theme, "backgroundColor");
+    expectColor(pickerMenu, "menu-surface", theme, "backgroundColor");
     expectColor(find(".picker-select__trigger .picker-select__label"), "text", theme);
     expectColor(find(".picker-select__trigger .picker-select__chevron"), "muted", theme);
     expectColor(currentOption, "text", theme);
     expectColor(currentOption, "text", theme, "outlineColor");
     expect(settledStyle(currentOption).outlineStyle, theme).toBe("solid");
     await userEvent.keyboard("{Escape}");
-    await expect.poll(() => pickerMenu.getAttribute("data-phase")).toBe("hidden");
+    await expect.poll(() => settledPhase(pickerMenu)).toBe("hidden");
   }
 });

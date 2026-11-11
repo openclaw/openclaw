@@ -2,7 +2,6 @@ import type { SandboxRegistryCleanupOperations } from "../agents/sandbox/registr
 import type { reserveWorktreeCapacityInWorker } from "../agents/worktrees/capacity.worker.js";
 import type { recoverPendingWorktreesInWorker } from "../agents/worktrees/registry-run-end.worker.js";
 import type { WorktreeTemplateWorkerOperations } from "../agents/worktrees/template-registry.worker.js";
-import type { ClawAddStateWorkerOperations } from "../claws/add-state-worker-contract.js";
 import type { CronStateWorkerOperations } from "../cron/store/worker-contract.js";
 import type { RestartLifecycleWorkerOperations } from "../infra/restart-lifecycle.worker.js";
 import type {
@@ -15,6 +14,7 @@ import type { UpdateRunWorkerOperations } from "../infra/update-run-mutation.typ
 import type { PluginStateWriteOperations } from "../plugin-state/plugin-state-worker-contract.js";
 import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker-contract.js";
+import type { TemplateAddStateWorkerOperations } from "../templates/add-state-worker-contract.js";
 import type { GitHubPublicationSourceOperations } from "./github-publication-source-contract.js";
 import type {
   OpenClawAgentDatabaseWorkerLeaseReceipt,
@@ -32,7 +32,7 @@ export type OpenClawStateWorkerOperations = Omit<
   GitHubPublicationSourceOperations &
   RestartLifecycleWorkerOperations &
   WorktreeTemplateWorkerOperations &
-  ClawAddStateWorkerOperations &
+  TemplateAddStateWorkerOperations &
   UpdateRunWorkerOperations &
   CaptureWorkerOperations &
   PluginStateWriteOperations &

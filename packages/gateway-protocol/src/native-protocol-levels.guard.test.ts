@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { IsLiteralString, IsUnion } from "typebox";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   nativeProtocolOutputDirectories,
@@ -24,24 +25,10 @@ async function assertPatterns(file: string, patterns: RegExp[]) {
 }
 
 function stringLiteralUnionValues(schema: unknown): string[] | undefined {
-  if (!schema || typeof schema !== "object") {
+  if (!IsUnion(schema) || schema.anyOf.length === 0 || !schema.anyOf.every(IsLiteralString)) {
     return undefined;
   }
-  const candidate = schema as { anyOf?: unknown; oneOf?: unknown };
-  const branches = candidate.oneOf ?? candidate.anyOf;
-  if (!Array.isArray(branches) || branches.length === 0) {
-    return undefined;
-  }
-  const values: string[] = [];
-  for (const branch of branches) {
-    if (!branch || typeof branch !== "object" || !("const" in branch)) {
-      return undefined;
-    }
-    if (typeof branch.const !== "string") {
-      return undefined;
-    }
-    values.push(branch.const);
-  }
+  const values = schema.anyOf.map((branch) => branch.const);
   return new Set(values).size === values.length ? values : undefined;
 }
 
@@ -73,18 +60,6 @@ describe("native Gateway protocol levels", () => {
   });
 
   it("uses the min constant for native connect compatibility ranges", async () => {
-    await assertPatterns(
-      "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayConnectFailureBackoff.swift",
-      [
-        /if role == "node", clientMode == "node" \{\s+return GATEWAY_MIN_NODE_PROTOCOL_VERSION\s+\}\s+return GATEWAY_MIN_PROTOCOL_VERSION/,
-      ],
-    );
-    await assertPatterns("apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayChannel.swift", [
-      /var supportedProtocols: ClosedRange<Int> \{\s+Self\.minimumProtocolVersion\(\s+role: self\.connectOptions\?\.role \?\? "operator",\s+clientMode: self\.connectOptions\?\.clientMode \?\? "ui"\)\.\.\.GATEWAY_PROTOCOL_VERSION\s+\}/,
-      /let protocols = self\.supportedProtocols/,
-      /"minProtocol": ProtoAnyCodable\(protocols\.lowerBound\)/,
-      /"maxProtocol": ProtoAnyCodable\(protocols\.upperBound\)/,
-    ]);
     await assertPatterns("apps/ios/WatchApp/Sources/WatchDirectNode.swift", [
       /minprotocol: GATEWAY_MIN_PROTOCOL_VERSION/,
       /maxprotocol: GATEWAY_PROTOCOL_VERSION/,

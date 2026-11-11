@@ -1,9 +1,9 @@
+import { presentConfirmDialog } from "./confirm-dialog-loading.tsx";
 import type {
   ConfirmDialogChoice,
   ConfirmDialogChoiceOptions,
   ConfirmDialogOptions,
 } from "./confirm-dialog-types.ts";
-import { presentConfirmDialog } from "./confirm-dialog-view.tsx";
 
 export type {
   ConfirmDialogChoice,

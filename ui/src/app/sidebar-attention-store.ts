@@ -8,6 +8,7 @@ import {
 import type { SidebarInboxEntry } from "../components/sidebar-attention-entries.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
+import type { ApplicationConfigCapability } from "./config.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
@@ -16,6 +17,7 @@ import type { ApplicationOverlays } from "./overlays-types.ts";
 
 export type SidebarAttentionStoreSources = {
   gateway: ApplicationGateway;
+  config: Pick<ApplicationConfigCapability, "current" | "subscribe">;
   agentSelection: AgentSelectionCapability;
   agents: AgentCapability;
   overlays: ApplicationOverlays;
@@ -28,6 +30,7 @@ export type SidebarAttentionStoreOwner = {
   readonly mentions: MentionsCapability;
   dismiss(dismissal: SidebarAttentionDismissal): void;
   syncDismissals(): void;
+  refreshOpenClawId(): void;
   dispose(): void;
 };
 
@@ -64,6 +67,9 @@ export function createSidebarAttentionStore(sources: SidebarAttentionStoreSource
     activate(Owner: SidebarAttentionStoreOwnerConstructor) {
       owner ??= new Owner(sources, listeners.publish);
       return owner.mentions;
+    },
+    refreshOpenClawId() {
+      owner?.refreshOpenClawId();
     },
     dismiss(dismissal: SidebarAttentionDismissal) {
       owner?.dismiss(dismissal);

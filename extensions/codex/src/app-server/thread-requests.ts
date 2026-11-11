@@ -3,9 +3,12 @@ import { isHostScopedAgentToolActive } from "openclaw/plugin-sdk/agent-harness-r
 import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
+import { deniesCodexNativeDelegation } from "../../native-tool-policy.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
   CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
+  readCodexAuthoredConfigValue,
+  readCodexConfigValue,
   readCodexEffectiveConfig,
 } from "./config-layer-policy.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
@@ -36,7 +39,11 @@ import {
   resolveCodexAppServerModelProvider,
   resolveCodexAppServerRequestModelSelection,
 } from "./thread-model-selection.js";
-import { buildDeveloperInstructions, type CodexThreadPromptContext } from "./thread-prompt.js";
+import {
+  buildDeveloperInstructions,
+  placeCodexBaseInstructions,
+  type CodexThreadPromptContext,
+} from "./thread-prompt.js";
 import { applyCodexManagedShellEnvironment } from "./thread-shell-environment.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
@@ -177,6 +184,7 @@ export function buildCodexThreadConfiguration(
           dynamicTools: options.dynamicTools,
           nativeCodeModeEnabled: options.nativeCodeModeEnabled !== false,
           nativeCodeModeOnlyEnabled: config["features.code_mode_only"] === true,
+          hostSystemAgentActive: options.hostSystemAgentActive,
         }),
       options.refreshableInstructions,
     ),
@@ -197,13 +205,13 @@ export async function buildThreadStartParams(
     model: options.model ?? params.modelId,
     modelProvider: options.modelProvider ?? resolvedModelProvider,
   });
+  const configuration = buildCodexThreadConfiguration(params, options);
   return {
     ...modelSelection,
-    ...buildCodexThreadConfiguration(params, options),
-    ...((options.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw")) &&
-    isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)
-      ? { baseInstructions: CODEX_RING_ZERO_BASE_INSTRUCTIONS }
-      : {}),
+    ...configuration,
+    ...placeCodexBaseInstructions(params, options, configuration.developerInstructions, {
+      baseInstructions: CODEX_RING_ZERO_BASE_INSTRUCTIONS,
+    }),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
     threadSource: "openclaw",
@@ -245,6 +253,7 @@ export async function buildThreadResumeParams(
           })),
         authProfileId: options.authProfileId ?? params.authProfileId,
       });
+  const configuration = buildCodexThreadConfiguration(params, options);
   return {
     threadId: options.threadId,
     // Only the latest turn id/status is needed to preserve active-turn conflict
@@ -256,7 +265,9 @@ export async function buildThreadResumeParams(
       itemsView: "notLoaded",
     },
     ...modelSelection,
-    ...buildCodexThreadConfiguration(params, options),
+    ...configuration,
+    // Ring-zero resumes omit the empty base pinned at creation.
+    ...placeCodexBaseInstructions(params, options, configuration.developerInstructions, {}),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
   };
 }
@@ -273,11 +284,20 @@ export function buildCodexRuntimeThreadConfig(
   const codeModeOnly = options.nativeCodeModeOnlyEnabled === true;
   const merged = expectDefined(
     mergeCodexThreadConfigs(
+      // Codex owns model eligibility, history replay, and the pinned request effort.
+      // Cleanup review (2026-11-07): Remove once the minimum supported Codex release
+      // defaults this on and native tests still prove opt-out and unsupported-model
+      // compatibility. This is a review date, not a runtime expiry.
+      { "features.reasoning_effort_override": true },
       enabled
         ? { ...CODEX_CODE_MODE_THREAD_CONFIG, "features.code_mode_only": codeModeOnly }
         : undefined,
       buildCodexProjectDocThreadConfig(config),
       {
+        // OpenClaw owns plugin discovery and installation. Keep Codex's recommendation
+        // catalog and install-suggestion tools out of managed prompts without disabling plugins.
+        "features.tool_suggest": false,
+        "features.recommended_plugins": false,
         // Native goals start autonomous turns; OpenClaw owns both continuation and progress cards.
         "features.goals": false,
         "tools.update_plan.enabled": false,
@@ -305,6 +325,22 @@ export function buildCodexRuntimeThreadConfig(
     return merged;
   }
   return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
+}
+
+function hasNativeQuestionOptIn(
+  config: JsonObject,
+  nativeConfig: CodexConfigReadResponse | undefined,
+): boolean {
+  return [
+    "tools.experimental_request_user_input.enabled",
+    "features.default_mode_request_user_input",
+  ].some((key) => {
+    const authored = readCodexConfigValue(config, key);
+    if (authored !== undefined) {
+      return authored === true;
+    }
+    return nativeConfig !== undefined && readCodexAuthoredConfigValue(nativeConfig, key) === true;
+  });
 }
 
 function ensureDirectOnlyToolNamespaces(
@@ -354,6 +390,7 @@ export function isCodexNativeDelegationDisabledForRun(
     params.delegationCapability === "host_only" ||
     params.requireWorkspaceOnly === true ||
     params.pluginHarnessToolPolicyRestricted === true ||
+    deniesCodexNativeDelegation(params.pluginHarnessToolPolicySafeDeniedTools) ||
     isMessageOnlyCodexSourceReply(params) ||
     (hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow))
   );
@@ -367,6 +404,8 @@ export function buildCodexRuntimeThreadConfigForRun(
     nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
     nativeCodeModeOnlyEnabled?: boolean;
     directOnlyToolNamespaces?: readonly string[];
+    askUserAvailable?: boolean;
+    nativeConfig?: CodexConfigReadResponse;
     webSearchAllowed?: boolean;
     appServer?: Pick<CodexAppServerRuntimeOptions, "networkProxy">;
     hostSystemAgentActive?: boolean;
@@ -415,6 +454,10 @@ export function buildCodexRuntimeThreadConfigForRun(
     mergeCodexThreadConfigs(
       baseConfig,
       options.appServer?.networkProxy?.configPatch,
+      // Prefer the callable OpenClaw tool unless native questions were explicitly enabled.
+      options.askUserAvailable && !hasNativeQuestionOptIn(baseConfig, options.nativeConfig)
+        ? { "tools.experimental_request_user_input.enabled": false }
+        : undefined,
       isCodexNativeDelegationDisabledForRun(params, options.hostSystemAgentActive)
         ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
         : undefined,

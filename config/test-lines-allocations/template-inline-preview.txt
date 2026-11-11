@@ -1,0 +1,3 @@
+79
+# Inline Template link recognition and one real-browser fixed-shell/navigation regression.
+# Reuses the catalog Add suite and shared config snapshot; no replacement Add flow.

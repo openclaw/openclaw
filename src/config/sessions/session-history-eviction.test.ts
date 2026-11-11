@@ -43,7 +43,7 @@ import {
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
 import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
-import * as sessionLifecycleState from "./session-accessor.sqlite-lifecycle-state.js";
+import * as sessionReferences from "./session-accessor.sqlite-references.js";
 import * as archivePruning from "./session-history-archive-pruning.js";
 import { installHistoryBudgetState } from "./session-history-budget-state.test-support.js";
 import { createSessionHistoryBudgetFixture } from "./session-history-budget.test-support.js";
@@ -116,7 +116,7 @@ describe("SQLite historical session disk budget", () => {
         if (before) {
           effect();
         }
-        const candidates = await discover(input);
+        const candidates = await discover.call(readers, input);
         if (!before) {
           effect();
         }
@@ -174,9 +174,7 @@ describe("SQLite historical session disk budget", () => {
             archiveReason: "active-session-cap",
           });
           expect(
-            sessionLifecycleState.readReferencedSessionIds(database(), undefined, [
-              "oldest-history",
-            ]),
+            sessionReferences.readReferencedSessionIds(database(), undefined, ["oldest-history"]),
           ).toEqual(new Set(["oldest-history"]));
         }
         setSessionUpdatedAt("newer-history", 20);
@@ -214,7 +212,7 @@ describe("SQLite historical session disk budget", () => {
           });
         };
         process.on("worker", observeWorker);
-        const references = vi.spyOn(sessionLifecycleState, "readReferencedSessionIds");
+        const references = vi.spyOn(sessionReferences, "readReferencedSessionIds");
         let result: Awaited<ReturnType<typeof enforceSqliteSessionHistoryDiskBudget>>;
         try {
           result = await enforceSqliteSessionHistoryDiskBudget({
@@ -381,7 +379,7 @@ describe("SQLite historical session disk budget", () => {
     const oldArchive = path.join(tempDir, archiveName);
     fs.writeFileSync(oldArchive, Buffer.alloc(256 * 1024));
     const before = await measureSessionPhysicalDiskUsage(storePath);
-    const readReferences = vi.spyOn(sessionLifecycleState, "readReferencedSessionIds");
+    const readReferences = vi.spyOn(sessionReferences, "readReferencedSessionIds");
 
     const result = await enforceSqliteSessionHistoryDiskBudget({
       env: { OPENCLAW_STATE_DIR: testState.stateDir },

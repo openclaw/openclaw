@@ -1,9 +1,11 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
+import { finishBootFrame } from "../app/boot-composer.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "../pages/chat/chat-history-events.ts";
 import {
   sidebarSnapshotInvalidationMatches,
+  sidebarSnapshotDeletedSessionKey,
   subscribeSnapshotInvalidation,
 } from "../pages/chat/session-snapshot-invalidation-events.ts";
 import {
@@ -13,10 +15,12 @@ import {
   type SidebarSnapshotScope,
 } from "../pages/chat/session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
+import { removeSidebarSnapshotSession } from "./sidebar-snapshot-data.ts";
 import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
-type SidebarSnapshotHost = {
+export function createSidebarSnapshot(host: {
   sidebarSnapshot: SidebarSnapshotModel | null;
+  readonly sidebarAgentsMode: "chip" | "roster";
   readonly sessionDataContext?: {
     gateway: ApplicationGateway;
     agentSelection: { readonly state: { readonly scopeId: string | null } };
@@ -28,24 +32,22 @@ type SidebarSnapshotHost = {
   restoreSidebarSnapshot(model: SidebarSnapshotModel): void;
   releaseSidebarSnapshot(): void;
   clearSidebarSnapshot(): void;
-};
-
-export function createSidebarSnapshot(host: SidebarSnapshotHost) {
+}) {
   let publish: (() => void) | undefined;
   let pending = false;
   let saved = false;
+  let lastCapture = "none";
   const store = new SessionSnapshotStore();
   let gateway: ApplicationGateway | undefined;
   let revision = -1;
   let scope: SidebarSnapshotScope | null = null;
   let generation = 0;
-  let serialized: string | null = null;
+  let captured: { model: SidebarSnapshotModel; serialized: string } | null = null;
   let retirement = Promise.resolve();
   let cleanup: Array<() => void> = [];
   let stopGateway: (() => void) | undefined;
   let retiredHello: ApplicationGateway["snapshot"]["hello"] | undefined;
   let cancelCapture: (() => void) | undefined;
-  let handoffTimer: ReturnType<typeof setTimeout> | undefined;
   let handoffIdle: number | undefined;
   let handoffReady = false;
 
@@ -77,7 +79,34 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
         }
       }),
       subscribeSnapshotInvalidation((event) => {
-        if (scope && sidebarSnapshotInvalidationMatches(sidebarSnapshotScopeKey(scope), event)) {
+        if (!scope) {
+          return;
+        }
+        const key = sidebarSnapshotScopeKey(scope);
+        const deleted = sidebarSnapshotDeletedSessionKey(key, event);
+        if (deleted) {
+          finishBootFrame();
+          // Cancel accepted stale captures, retaining the rest of the display and cache.
+          generation += 1;
+          cancelCapture?.();
+          cancelCapture = undefined;
+          pending = false;
+          if (captured && saved) {
+            const model = removeSidebarSnapshotSession(captured.model, deleted);
+            if (model !== captured.model) {
+              captured = { model, serialized: JSON.stringify(model) };
+            }
+          } else {
+            captured = null;
+          }
+          if (host.sidebarSnapshot) {
+            const model = removeSidebarSnapshotSession(host.sidebarSnapshot, deleted);
+            if (model !== host.sidebarSnapshot) {
+              host.restoreSidebarSnapshot(model);
+              notify();
+            }
+          }
+        } else if (sidebarSnapshotInvalidationMatches(key, event)) {
           clearDisplay();
         }
       }),
@@ -117,11 +146,15 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
             pending = false;
             if (model && matchesAgent(model) && !host.sidebarSnapshotSettled()) {
               host.restoreSidebarSnapshot(model);
-              serialized = JSON.stringify(model);
+              captured = { model, serialized: JSON.stringify(model) };
               saved = true;
+            } else {
+              finishBootFrame();
             }
             notify();
           });
+        } else {
+          finishBootFrame();
         }
         // Connection receipts retire stale snapshot capture and restore the new scope.
         stopGateway = gateway.subscribe(() => {
@@ -143,6 +176,7 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
       clearDisplay();
     }
     if (pending && host.sidebarSnapshotSettled()) {
+      finishBootFrame();
       generation += 1;
       pending = false;
       notify();
@@ -168,9 +202,13 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
         replaceScope(next);
       }
     }
-    if (host.sidebarSnapshot && host.sidebarSnapshotSettled()) {
+    if (snapshot.phase !== "connected") {
+      cancelHandoff();
+    } else if (host.sidebarSnapshot) {
+      if (!host.sidebarSnapshotSettled()) {
+        return;
+      }
       if (!handoffReady) {
-        handoffTimer ??= setTimeout(releaseWhenReady, 1800);
         if (host.sessionDataContext?.connectionBootstrap.foregroundReady) {
           if (typeof requestIdleCallback === "function") {
             handoffIdle ??= requestIdleCallback(releaseWhenReady, { timeout: 1800 });
@@ -185,8 +223,9 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
       cancelHandoff();
       // Release before rendering so a failed refresh cannot leave cached controls painted.
       host.releaseSidebarSnapshot();
-      saved = false;
-      serialized = null;
+    } else if (!captured) {
+      // Readiness can settle without changing rows, so no render need follow this publication.
+      capture();
     }
   }
 
@@ -197,11 +236,10 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
   }
 
   function cancelHandoff(): void {
-    clearTimeout(handoffTimer);
     if (handoffIdle !== undefined) {
       cancelIdleCallback(handoffIdle);
     }
-    handoffTimer = handoffIdle = undefined;
+    handoffIdle = undefined;
     handoffReady = false;
   }
 
@@ -227,34 +265,51 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
     }
     cancelCapture();
     cancelCapture = undefined;
-    if (
-      !cleanup.length ||
-      pending ||
-      !scope ||
-      (scope.profileId !== null && gateway?.snapshot.selfUser === undefined) ||
-      host.sidebarSnapshot ||
-      !host.sidebarSnapshotSettled()
-    ) {
+    const blocked = !cleanup.length
+      ? "disconnected"
+      : pending
+        ? "boot-read"
+        : !scope
+          ? "missing-scope"
+          : scope.profileId !== null && gateway?.snapshot.selfUser === undefined
+            ? "identity"
+            : host.sidebarSnapshot
+              ? "cached-display"
+              : !host.sidebarSnapshotSettled()
+                ? "unsettled"
+                : null;
+    if (blocked || !scope) {
+      lastCapture = blocked ?? "missing-scope";
       return;
     }
     const model = host.captureSidebarSnapshot();
     if (!model) {
+      lastCapture = "model-unavailable";
       return;
     }
-    const nextSerialized = JSON.stringify(model);
-    if (nextSerialized === serialized) {
+    const next = { model, serialized: JSON.stringify(model) };
+    if (next.serialized === captured?.serialized) {
+      // Retain a failed/in-flight write's phase when an unchanged capture is skipped.
       return;
     }
-    serialized = nextSerialized;
+    captured = next;
     saved = false;
     const current = captureScope();
     const key = sidebarSnapshotScopeKey(scope);
+    lastCapture = "retiring";
     void retirement.then(async () => {
       if (!current()) {
+        if (next === captured) {
+          lastCapture = "superseded";
+        }
         return;
       }
+      lastCapture = "writing";
       const written = await store.writeSidebar(key, model, parseSidebarSnapshot);
-      if (written && current() && nextSerialized === serialized) {
+      if (next === captured) {
+        lastCapture = !current() ? "superseded" : written ? "saved" : "rejected";
+      }
+      if (written && current() && next === captured) {
         saved = true;
         notify();
       }
@@ -272,6 +327,7 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
 
   function matchesAgent(model: SidebarSnapshotModel): boolean {
     return (
+      model.mode === host.sidebarAgentsMode &&
       (model.mode !== "chip" || model.roster?.agentId === host.expandedAgentId()) &&
       (model.navigationView !== "pages" ||
         model.pageScopeId === host.sessionDataContext?.agentSelection.state.scopeId)
@@ -301,18 +357,22 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
   }
 
   function clearDisplay(): void {
+    if (pending || host.sidebarSnapshot) {
+      finishBootFrame();
+    }
     cancelHandoff();
     cancelCapture?.();
     cancelCapture = undefined;
     generation += 1;
     pending = saved = false;
-    serialized = null;
+    lastCapture = "none";
+    captured = null;
     host.clearSidebarSnapshot();
     notify();
   }
 
   return {
-    read: () => ({ pending, saved, model: host.sidebarSnapshot }),
+    read: () => ({ pending, saved, model: host.sidebarSnapshot, captureStatus: lastCapture }),
     subscribe,
     connect,
     disconnect,

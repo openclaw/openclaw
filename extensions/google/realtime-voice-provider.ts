@@ -17,6 +17,7 @@ import {
   TurnCoverage,
 } from "@google/genai";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import type {
   RealtimeVoiceAudioFormat,
@@ -54,6 +55,7 @@ import {
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 import { resolveGoogleEnvApiKey } from "./gemini-auth.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
+import { buildGoogleRealtimeSystemInstruction } from "./realtime-voice-language.js";
 import {
   GOOGLE_REALTIME_DEFAULT_MODEL,
   GOOGLE_REALTIME_VOICE_METADATA,
@@ -125,6 +127,7 @@ type GoogleRealtimeVoiceProviderConfig = Partial<ReturnType<typeof normalizeProv
 type GoogleRealtimeLiveConfig = GoogleRealtimeVoiceProviderConfig & {
   apiKey: string;
   instructions?: string;
+  language?: string;
   tools?: RealtimeVoiceTool[];
 };
 
@@ -279,10 +282,8 @@ function buildGoogleLiveConnectConfig(
   config: GoogleRealtimeLiveConfig,
   model: string,
 ): LiveConnectConfig {
-  const functionDeclarations = buildFunctionDeclarations(
-    config.tools,
-    supportsAsyncFunctionCalling(model),
-  );
+  const allowNonBlocking = supportsAsyncFunctionCalling(model);
+  const functionDeclarations = buildFunctionDeclarations(config.tools, allowNonBlocking);
   const realtimeInputConfig = buildRealtimeInputConfig(config);
   const thinkingConfig = buildThinkingConfig(config, model);
   return {
@@ -297,7 +298,7 @@ function buildGoogleLiveConnectConfig(
         },
       },
     },
-    systemInstruction: config.instructions,
+    systemInstruction: buildGoogleRealtimeSystemInstruction(config.instructions, config.language),
     ...(functionDeclarations.length > 0 ? { tools: [{ functionDeclarations }] } : {}),
     ...(realtimeInputConfig ? { realtimeInputConfig } : {}),
     inputAudioTranscription: {},
@@ -943,6 +944,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (this.terminalError) {
       return;
     }
+    materializeErrorStack(error);
     this.terminalError = error;
     const session = this.detachSession({ clearInputAudio: false });
     try {

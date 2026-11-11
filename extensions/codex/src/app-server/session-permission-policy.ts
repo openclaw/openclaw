@@ -97,16 +97,12 @@ function clampSessionPermissionTuple(params: {
   mode: SessionPermissionMode;
   requested: CodexSessionPermissionTuple;
   requirementsToml?: string;
-  hostName?: string;
   canUseAutoReview: boolean;
 }): CodexSessionPermissionTuple {
   if (!params.requirementsToml) {
     return params.requested;
   }
-  const allowed = parseCodexRequirementsPolicy(
-    params.requirementsToml,
-    params.hostName ?? readHostName(),
-  );
+  const allowed = parseCodexRequirementsPolicy(params.requirementsToml, readHostName());
   if (requirementsAllowTuple(params.requested, allowed)) {
     return params.requested;
   }
@@ -162,7 +158,6 @@ export function applyCodexSessionPermissionPolicy(params: {
   pluginConfig: CodexPluginConfig;
   canUseAutoReview: boolean;
   requirementsToml?: string;
-  hostName?: string;
   policyLocked?: boolean;
   execMode?: OpenClawExecMode;
 }): CodexAppServerRuntimeOptions {
@@ -185,7 +180,6 @@ export function applyCodexSessionPermissionPolicy(params: {
           mode: params.permissionMode,
           requested,
           requirementsToml: params.requirementsToml,
-          hostName: params.hostName,
           canUseAutoReview: params.canUseAutoReview,
         })
       : requested;

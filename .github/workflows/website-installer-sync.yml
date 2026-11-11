@@ -10,6 +10,7 @@ on:
       - scripts/build-installers.mjs
       - scripts/lib/standalone-installers.mjs
       - scripts/install.ps1
+      - test/scripts/install-ps1-entrypoint.ps1
       - .github/workflows/website-installer-sync.yml
   push:
     branches: [main]
@@ -20,6 +21,7 @@ on:
       - scripts/build-installers.mjs
       - scripts/lib/standalone-installers.mjs
       - scripts/install.ps1
+      - test/scripts/install-ps1-entrypoint.ps1
       - .github/workflows/website-installer-sync.yml
   workflow_dispatch:
     inputs:
@@ -88,6 +90,7 @@ jobs:
                   ],
                   windows: [
                     "scripts/install.ps1",
+                    "test/scripts/install-ps1-entrypoint.ps1",
                     ".github/workflows/website-installer-sync.yml",
                   ],
                 };
@@ -449,6 +452,9 @@ jobs:
             if (-not (Get-Command $hostCommand -ErrorAction SilentlyContinue)) {
               throw "Required PowerShell host is unavailable: $hostCommand"
             }
+
+            & $hostCommand -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test/scripts/install-ps1-entrypoint.ps1 -InstallerPath $scriptPath
+            if ($LASTEXITCODE -ne 0) { throw "$hostCommand failed the piped installer regression." }
 
             $invalidCases = @(
               @{ Label = "unknown option"; Args = @("-DryRnu") },

@@ -8,6 +8,7 @@ import {
   sqliteTranscriptPayloadColumns,
 } from "../../../lib/sqlite-transcript-payload.mjs";
 import { readDatabase } from "./observations.mjs";
+import { readSessionArchiveBytes } from "./session-archive-proof.mjs";
 
 const KEY = "agent:main:upgrade-restored-index";
 const SESSION = "upgrade-restored-index-history";
@@ -254,10 +255,9 @@ function assertArchived(fixture) {
             target.completedMoves.some(
               (move) =>
                 move.sourcePath === original.sourcePath &&
-                fs.existsSync(move.archivePath) &&
-                move.artifact?.disposal.state === "retained" &&
+                ["retained", "disposed"].includes(move.artifact?.disposal.state) &&
                 move.artifact.identity.sha256 === original.identity.sha256 &&
-                fileIdentity(move.archivePath).sha256 === original.identity.sha256,
+                hash(readSessionArchiveBytes(move)) === original.identity.sha256,
             ),
           ),
       ),

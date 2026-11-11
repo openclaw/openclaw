@@ -4,9 +4,18 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
-import type { PlaceBrowserOptions } from "./place-browser.ts";
+import type { PlaceBrowserState } from "./place-browser-state.ts";
 export function PlaceBrowser(props: {
-  params: PlaceBrowserOptions;
+  params: {
+    browser: PlaceBrowserState;
+    id: string;
+    label: string;
+    registerProjectPath: string | null;
+    onBack: () => void;
+    onRegisterProject: (path: string) => void;
+    onClose: () => void;
+    onApplyFolder: (path: string) => void;
+  };
   registeringProject: boolean;
   pathRef?: (node: HTMLInputElement) => void;
 }) {

@@ -6,6 +6,7 @@ import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { getDatabaseEngineInput } from "../../infra/database-engine/context.js";
 import { captureSqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
 import { runSqliteReadOnlyWorker } from "../../infra/sqlite-readonly-worker.js";
+import { getArtifactPreservingSqliteRead } from "../../infra/sqlite-snapshot-source.js";
 import {
   inspectDatabasePathIdentitySync,
   type DatabasePathIdentity,
@@ -16,7 +17,7 @@ import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agen
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import {
   executeExistingOpenClawStateRead,
-  getActiveOpenClawStateDatabaseReadSnapshot,
+  hasActiveOpenClawStateDatabaseReadSnapshot,
   isArtifactPreservingStateRead,
 } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -212,16 +213,17 @@ export function prepareAgentAuthProfileRowsRead(options: {
     if (!identity.key.startsWith("file:")) {
       return missing;
     }
+    const inspection = getArtifactPreservingSqliteRead(databasePath);
     const rows = postgres
       ? await readAgentAuthProfileRows(
           { databasePath, agentId, env },
           assertCurrent,
           controller.signal,
         )
-      : await runSqliteReadOnlyWorker(databasePath, {
+      : await runSqliteReadOnlyWorker(inspection?.canonicalPath ?? databasePath, {
           mode: "auth-profile-rows",
-          source: "canonical",
-          expectedIdentity: identity.key,
+          source: inspection ? "snapshot" : "canonical",
+          expectedIdentity: inspection?.key ?? identity.key,
           env,
           signal: controller.signal,
         });
@@ -233,7 +235,7 @@ export function prepareAgentAuthProfileRowsRead(options: {
     return { store: rows.store, state: rows.state, cacheable: rows.cacheable };
   };
   const cachedReader =
-    isMainThread && !uncached && !getActiveOpenClawStateDatabaseReadSnapshot({ env })
+    isMainThread && !uncached && !hasActiveOpenClawStateDatabaseReadSnapshot({ env })
       ? runtimeAuthProfileRowsCache.prepare(
           databasePath,
           {
@@ -304,12 +306,13 @@ async function readAgentAuthProfileRows(
           admission: createSqliteWorkerOperationAdmission((request, grant) => {
             binding.authorize(request);
             assertCurrent();
+            const publication = isRecord(request.facts) ? request.facts.publication : undefined;
             if (
               request.stage === "prepare" &&
-              isRecord(request.facts) &&
-              request.facts.kind === "auth-store-read"
+              isRecord(publication) &&
+              publication.kind === "auth-store-read"
             ) {
-              rows = receiveAuthProfileReadRows(request.facts.port, rows);
+              rows = receiveAuthProfileReadRows(publication.port, rows);
             }
             if (!grant()) {
               throw new Error("Auth profile read authority expired");
@@ -379,7 +382,7 @@ export async function readSharedAuthProfileRows(
     !isMainThread ||
     artifactPreserving ||
     context.maintenanceScope ||
-    getActiveOpenClawStateDatabaseReadSnapshot({ env: context.environment })
+    hasActiveOpenClawStateDatabaseReadSnapshot({ env: context.environment })
   ) {
     return read();
   }

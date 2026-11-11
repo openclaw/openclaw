@@ -50,3 +50,16 @@ export function heldServiceLockCoordinate(directory: string): string {
   }
   return path.join(directory, names[0]!.slice(0, -".lock".length));
 }
+
+export function readManagedHandoffRowsJson(directory: string) {
+  const db = new DatabaseSync(path.join(directory, "managed-update-handoffs.sqlite"), {
+    readOnly: true,
+  });
+  try {
+    return JSON.stringify(
+      db.prepare("SELECT * FROM managed_update_handoffs ORDER BY install_root").all(),
+    );
+  } finally {
+    db.close();
+  }
+}

@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildChannelWizardMocks } from "../../../scripts/control-ui-mock-channels.ts";
+import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
 import {
   installMockGateway,
   type MockGatewayControls,
@@ -18,12 +19,7 @@ const suite = createControlUiE2eSuite({
 
 const QR_DATA_URL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=";
-const pairing = {
-  accounts: [],
-  requests: [],
-  commandOwnerConfigured: true,
-  limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-};
+const pairing = emptyPairingSnapshot();
 const linked = { configured: true, linked: true, running: true, connected: true };
 function channelStatus(
   labels: Record<string, string>,
@@ -157,30 +153,22 @@ suite.define(() => {
         const enabled = detail.getByRole("switch", { name: "Enabled" });
         await enabled.waitFor();
 
-        await gateway.deferNext("config.set");
-        await enabled.click();
-        await gateway.waitForRequest("config.set");
-        await gateway.rejectDeferred("config.set", {
-          code: "INVALID_REQUEST",
-          message: "automatic channel save rejected",
-        });
-        const alert = detail.getByRole("alert");
-        await expect.poll(() => alert.textContent()).toContain("automatic channel save rejected");
-
         const save = button(detail, "Save");
+        await enabled.click();
         await expect.poll(() => save.isEnabled()).toBe(true);
-        const writesBefore = await requestCount(gateway, "config.set");
+        expect(await requestCount(gateway, "config.set")).toBe(0);
         const readsBefore = await requestCount(gateway, "config.get");
-        await gateway.deferNext("config.set");
+        await gateway.deferNext("config.patch");
         await save.click();
-        const request = await gateway.waitForRequest("config.set", { after: writesBefore });
+        const request = await gateway.waitForRequest("config.patch");
         expect(request.params).toMatchObject({ baseHash: "channel-config-1" });
-        await gateway.rejectDeferred("config.set", {
+        await gateway.rejectDeferred("config.patch", {
           code: "INVALID_REQUEST",
           message:
             "channel rejected: OPENAI_API_KEY=sk-1234567890abcdef <img src=x onerror=alert(1)>",
         });
 
+        const alert = detail.getByRole("alert");
         await expect.poll(() => alert.textContent()).toContain("channel rejected");
         const message = await alert.textContent();
         expect(message).toContain("OPENAI_API_KEY=sk-123...cdef");
@@ -255,7 +243,10 @@ suite.define(() => {
 
         await logout.click();
         await expectRequests(gateway, "channels.logout", 0);
-        const firstConfirm = await waitForConfirmModal(page);
+        const logoutConfirmation = page.locator("openclaw-modal-dialog").filter({
+          has: page.getByText("Log out of WhatsApp account default?", { exact: true }),
+        });
+        const firstConfirm = await waitForConfirmModal(page, logoutConfirmation);
         const confirmation = await firstConfirm.textContent();
         expect(confirmation).toContain("Log out of WhatsApp account default?");
         expect(confirmation).toContain(
@@ -270,15 +261,15 @@ suite.define(() => {
         await expect.poll(() => field(detail, "Linked").textContent()).toContain("Yes");
 
         await logout.click();
-        const secondConfirm = await waitForConfirmModal(page);
+        const secondConfirm = await waitForConfirmModal(page, logoutConfirmation);
         await button(secondConfirm, "Logout").click();
         await expect
           .poll(async () => detail.locator(".settings-row__desc").allTextContents())
           .toContain(
-            "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
+            "No saved WhatsApp session was cleared. It may already be gone or need manual cleanup.",
           );
         await expect(qr.getAttribute("src")).resolves.toBe(QR_DATA_URL);
-        await expect(detail.getByText("Logged out.", { exact: true }).count()).resolves.toBe(0);
+        await expect(detail.getByText("Signed out.", { exact: true }).count()).resolves.toBe(0);
         await expectRequests(gateway, "channels.logout", 1);
         expect((await gateway.getRequests("channels.logout"))[0]?.params).toEqual({
           channel: "whatsapp",
@@ -294,7 +285,9 @@ suite.define(() => {
     await withChannels({}, async (page, gateway) => {
       const detail = await openChannel(page);
       await detail.getByRole("button", { name: "Relink" }).waitFor();
-      const phone = field(detail, "Phone number");
+      const phone = detail
+        .locator(".settings-row", { hasText: "Phone number" })
+        .locator(".settings-row__desc");
       for (const [self, expected] of [
         [{ e164: "+4930123456", jid: "4930123456@s.whatsapp.net" }, "Germany · +49 30 123456"],
         [{ e164: "not-a-phone", jid: "account@s.whatsapp.net" }, "not-a-phone"],
@@ -308,7 +301,7 @@ suite.define(() => {
           ),
         );
         const before = await gateway.getRequests("channels.status", { probe: true });
-        await button(detail, "Refresh").click();
+        await button(detail, "Check connection").click();
         await gateway.waitForRequest("channels.status", {
           after: before.length,
           match: { probe: true },
@@ -342,9 +335,12 @@ suite.define(() => {
       async (page, gateway) => {
         const detail = await openChannel(page);
         await detail.getByRole("button", { name: "Logout" }).click();
-        const confirm = (await waitForConfirmModal(page)).filter({
-          has: page.getByText("Log out of WhatsApp account work?", { exact: true }),
-        });
+        const confirm = await waitForConfirmModal(
+          page,
+          page.locator("openclaw-modal-dialog").filter({
+            has: page.getByText("Log out of WhatsApp account work?", { exact: true }),
+          }),
+        );
         await expect.poll(() => confirm.count()).toBe(1);
         const socketCount = await gateway.getSocketCount();
         await gateway.closeLatest(1012, "Reconnect during logout confirmation");
@@ -357,14 +353,9 @@ suite.define(() => {
   });
 
   it("preserves standard channel details and the complete Telegram setup wizard", async () => {
-    const channelEntries = [
-      ["discord", "Discord"],
-      ["googlechat", "Google Chat"],
-      ["imessage", "iMessage"],
-      ["signal", "Signal"],
-      ["slack", "Slack"],
-      ["telegram", "Telegram"],
-    ] as const;
+    const channelEntries = "Discord|Google Chat|iMessage|Signal|Slack|Telegram"
+      .split("|")
+      .map((label) => [label.toLowerCase().replace(" ", ""), label] as const);
     const running = { configured: true, running: true };
     const details: Record<string, Record<string, unknown>> = {
       googlechat: {
@@ -384,6 +375,8 @@ suite.define(() => {
       status: "running",
       step: { id, type, ...values },
     });
+    const sessionId = "channel-standard-proof";
+    const tokenStep = step("token", "text", { message: "Telegram bot token", sensitive: true });
     await withChannels(
       {
         "channels.status": channelStatus(
@@ -398,7 +391,7 @@ suite.define(() => {
           },
         ),
         "wizard.start": {
-          sessionId: "channel-standard-proof",
+          sessionId,
           ...step("account", "select", {
             message: "Choose Telegram account",
             initialValue: "personal",
@@ -410,7 +403,8 @@ suite.define(() => {
         },
         "wizard.next": {
           sequence: [
-            step("token", "text", { message: "Telegram bot token", sensitive: true }),
+            tokenStep,
+            { ...tokenStep, error: "Token must not contain spaces" },
             step("features", "multiselect", {
               initialValue: ["alpha"],
               options: [
@@ -428,14 +422,16 @@ suite.define(() => {
         const expectedFields: Record<string, string[]> = {
           googlechat: ["service-account", "url · https://chat.example.test"],
           signal: ["https://signal.example.test"],
-          telegram: ["@alpha_bot", "@work_bot", "2"],
+          telegram: ["@alpha_bot", "@work_bot"],
         };
         for (const [channelId, label] of channelEntries) {
           const detail = await openChannel(page, label);
-          await expect
-            .poll(() => detail.locator("h2.settings-section__heading").textContent())
-            .toContain(label);
+          const heading = detail.locator(".oc-dialog__title");
+          await expect.poll(() => heading.textContent()).toContain(label);
           await detail.getByRole("button", { name: "Check connection" }).waitFor();
+          if (channelId === "googlechat" || channelId === "signal") {
+            await detail.locator("summary", { hasText: "Details" }).click();
+          }
           for (const value of expectedFields[channelId] ?? []) {
             await detail.getByText(value, { exact: true }).waitFor();
           }
@@ -449,23 +445,29 @@ suite.define(() => {
         await gateway.deferNext("wizard.next");
         const account = wizard.locator("openclaw-select-picker");
         await selectPickerValue(account, "1");
+        await button(wizard, "Continue").click();
         await expectRequests(gateway, "wizard.next", 1);
-        await expect
-          .poll(() => account.locator(".picker-select__trigger").getAttribute("disabled"))
-          .not.toBeNull();
+        await expect.poll(() => account.locator(".picker-select__trigger").isDisabled()).toBe(true);
         const busyButton = wizard.locator('button[aria-busy="true"]');
         await expect.poll(() => busyButton.getAttribute("disabled")).not.toBeNull();
         await expect.poll(() => busyButton.locator(".btn__label").textContent()).toBe("Continue");
         await expect.poll(() => busyButton.locator(".btn__spinner").count()).toBe(1);
-        await expect
-          .poll(() => wizard.locator(".channels-wizard__spinner", { hasText: "Working…" }).count())
-          .toBe(0);
+        await expect.poll(() => wizard.locator(".channels-wizard__spinner").count()).toBe(0);
         await gateway.resolveDeferred("wizard.next");
 
         const token = wizard.getByLabel("Telegram bot token");
         await expect.poll(() => token.getAttribute("type")).toBe("password");
-        await token.fill("123456:proof-secret");
-        await button(wizard, "Continue").click();
+        await token.fill("123456 proof-secret");
+        await gateway.deferNext("wizard.next");
+        await token.press("Enter");
+        await expect.poll(() => token.isDisabled()).toBe(true);
+        await gateway.resolveDeferred("wizard.next");
+        await wizard.getByRole("alert").filter({ hasText: "must not contain spaces" }).waitFor();
+        // The rejected field regains focus, so a keyboard correction needs no click.
+        await expect.poll(() => token.evaluate((input) => input.matches(":focus"))).toBe(true);
+        await page.keyboard.press("ControlOrMeta+A");
+        await page.keyboard.type("123456:proof-secret");
+        await page.keyboard.press("Enter");
         const beta = wizard.getByRole("button", { name: /Beta/u });
         await expect.poll(() => beta.getAttribute("aria-pressed")).toBe("false");
         await beta.click();
@@ -476,16 +478,14 @@ suite.define(() => {
 
         const userAnswers = [
           ["account", "work"],
+          ["token", "123456 proof-secret"],
           ["token", "123456:proof-secret"],
           ["features", ["alpha", "beta"]],
           ["confirm", true],
         ] as const;
         expect((await gateway.getRequests("wizard.next")).map(({ params }) => params)).toEqual([
-          ...userAnswers.map(([stepId, value]) => ({
-            sessionId: "channel-standard-proof",
-            answer: { stepId, value },
-          })),
-          { sessionId: "channel-standard-proof" },
+          ...userAnswers.map(([stepId, value]) => ({ sessionId, answer: { stepId, value } })),
+          { sessionId },
         ]);
       },
       contextOptions,

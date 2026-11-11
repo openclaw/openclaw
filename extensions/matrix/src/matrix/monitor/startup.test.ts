@@ -27,12 +27,12 @@ vi.mock("../config-update.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config-update.js")>()),
   updateMatrixAccountConfig: deps.updateMatrixAccountConfig,
 }));
-function createVerificationStatus(verified = false): MatrixOwnDeviceVerificationStatus {
+function createVerificationStatus(): MatrixOwnDeviceVerificationStatus {
   return {
     encryptionEnabled: true,
     userId: "@bot:example.org",
     deviceId: "DEVICE",
-    verified,
+    verified: false,
     localVerified: false,
     crossSigningVerified: false,
     signedByOwner: false,
@@ -56,7 +56,6 @@ function createProfileSyncResult(
   overrides: Partial<MatrixProfileSyncResult> = {},
 ): MatrixProfileSyncResult {
   return {
-    skipped: false,
     displayNameUpdated: false,
     avatarUpdated: false,
     resolvedAvatarUrl: null,
@@ -71,7 +70,6 @@ describe("runMatrixStartupMaintenance", () => {
     deps.syncMatrixOwnProfile.mockReset().mockResolvedValue(createProfileSyncResult());
     deps.ensureMatrixStartupVerification.mockReset().mockResolvedValue({
       kind: "verified",
-      verification: createVerificationStatus(true),
     });
     deps.updateMatrixAccountConfig.mockReset().mockImplementation((cfg) => cfg);
   });
@@ -142,7 +140,6 @@ describe("runMatrixStartupMaintenance", () => {
     ]);
     deps.ensureMatrixStartupVerification.mockResolvedValue({
       kind: "pending",
-      verification: createVerificationStatus(),
     });
     await runMatrixStartupMaintenance(params);
     expect(params.logger.warn).toHaveBeenCalledWith(
@@ -160,7 +157,6 @@ describe("runMatrixStartupMaintenance", () => {
     deps.ensureMatrixStartupVerification.mockResolvedValueOnce({
       kind: "cooldown",
       retryAfterMs: 321,
-      verification: createVerificationStatus(),
     });
     await runMatrixStartupMaintenance(params);
     expect(params.logVerboseMessage).toHaveBeenCalledWith(
@@ -169,7 +165,6 @@ describe("runMatrixStartupMaintenance", () => {
     deps.ensureMatrixStartupVerification.mockResolvedValueOnce({
       kind: "request-failed",
       error: "boom",
-      verification: createVerificationStatus(),
     });
     await runMatrixStartupMaintenance(params);
     expect(params.logger.debug).toHaveBeenCalledWith(

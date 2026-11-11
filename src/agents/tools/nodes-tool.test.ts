@@ -186,6 +186,20 @@ it.each<[string, Record<string, unknown>, string, Parameters<typeof createNodesT
   ],
   [
     "invoke",
+    {
+      invokeCommand: "browser.proxy",
+      invokeParamsJson:
+        '{"method":"POST","path":"/act","body":{"kind":"click","ref":"e3","targetId":"T1"}}',
+    },
+    "use the dedicated browser tool",
+  ],
+  [
+    "invoke",
+    { node: "pixel", invokeCommand: "browser.proxy.upload.v1", invokeParamsJson: "{}" },
+    "use the dedicated browser tool",
+  ],
+  [
+    "invoke",
     { invokeCommand: "file.fetch" },
     'invokeCommand "file.fetch" enforces a path-allowlist policy and cannot be invoked via the generic nodes.invoke surface; use the dedicated file-transfer tool "file_fetch"',
     { allowMediaInvokeCommands: true },

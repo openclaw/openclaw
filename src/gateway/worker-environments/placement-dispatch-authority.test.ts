@@ -1,10 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -15,7 +11,6 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../../config/sessions/session-sharing-store.native.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -32,6 +27,7 @@ import {
 } from "../server-methods/sessions-sharing.test-support.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import { type PlacementStore, REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -359,22 +355,17 @@ describe("worker placement dispatch authority", () => {
     );
   }
   const effects = ["create", "attach", "tunnel:attached", "sync", "placement:starting"];
-  const deviceNode: NodeWorkerSupervisorNodeProof = {
+  const deviceNode: NodeWorkerSupervisorNodeProof = createNodeWorkerBundleTestNode({
     nodeId: "device-1",
     connId: "device-connection-1",
     pairingIdentity: "device-identity-1",
     pairingGeneration: "device-pairing-1",
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-    clientMode: GATEWAY_CLIENT_MODES.NODE,
-    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: {
-      enabled: true as const,
-      capacity: { total: 2, available: 2 },
       capturedExecPolicy: true,
       promptContext: 1,
     },
     commands: ["system.run"],
-  };
+  });
   const deviceRequest = {
     ...REQUEST,
     profileId: "device:device-1",
@@ -457,26 +448,15 @@ describe("worker placement dispatch authority", () => {
           }
           return { available: true, node: deviceNode };
         });
-        const deviceIdentity = {
-          providerId: "device",
-          profileId: "device:device-1",
-          profileSnapshot: { install: "bundle" as const, settings: { device: "device-1" } },
-          nodeDeviceId: deviceNode.nodeId,
-          sshEndpoint: null,
-          sharedHost: true,
-        };
-        const ready = { ...harness.ready, ...deviceIdentity };
-        let current: ReturnType<typeof harness.environments.get> = ready;
-        vi.mocked(harness.environments.get).mockImplementation(() => current);
-        vi.mocked(harness.environments.createWithRequest).mockImplementation(async () => {
-          harness.log.push("create");
+        const create = vi.mocked(harness.environments.createWithRequest).getMockImplementation()!;
+        vi.mocked(harness.environments.createWithRequest).mockImplementation(async (request) => {
+          const ready = await create(request);
           revokeAt("provisioning");
           return ready;
         });
         const attach = vi.mocked(harness.environments.attachSession).getMockImplementation()!;
         vi.mocked(harness.environments.attachSession).mockImplementation(async (request) => {
           const credential = await attach(request);
-          current = { ...harness.attached, ...deviceIdentity };
           revokeAt("attachment");
           return credential;
         });
@@ -492,21 +472,9 @@ describe("worker placement dispatch authority", () => {
           revokeAt("tunnel");
           return tunnel;
         });
-        const destroy = vi.mocked(harness.environments.destroy).getMockImplementation()!;
-        vi.mocked(harness.environments.destroy).mockImplementation(async (environmentId) => {
-          current = await destroy(environmentId);
-          return current;
-        });
-
         await expect(
           harness.service.dispatch(
-            {
-              ...deviceRequest,
-              inheritedProfile: {
-                providerId: deviceIdentity.providerId,
-                profileSnapshot: deviceIdentity.profileSnapshot,
-              },
-            },
+            boundary === "readiness" ? deviceRequest : REQUEST,
             (placement) => {
               if (placement.state === "starting") {
                 revokeAt("activation");

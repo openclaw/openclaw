@@ -40,12 +40,13 @@ import { normalizeResponsesFailedEvent, ResponsesStreamFailure } from "./openai-
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
 import { normalizeOpenAIResponsesReasoningReplayItem } from "./openai-responses-replay.js";
 import { countToolCallTrailingWhitespace } from "./openai-responses-stream-errors.js";
-import { adaptResponsesStream } from "./openai-responses-stream-observer-internal.js";
+import { adaptResponsesStreamEvent } from "./openai-responses-stream-observer-internal.js";
 import {
   appendResponsesPendingTextDelta,
   createResponsesOutputTracker,
   createResponsesOutputSlotTracker,
   readResponsesOutputIndex,
+  RESPONSES_BOOKKEEPING_TIMEOUT_MS,
   type ResponsesStreamOutputSlot,
 } from "./openai-responses-stream-slots-internal.js";
 import {
@@ -60,7 +61,7 @@ import type {
   ResponsesStreamOptions,
   ResponsesStreamOutputMessage,
 } from "./openai-responses-stream-types-internal.js";
-import { transportAbortError } from "./transport-stream-shared.js";
+import { iterateModelStream, transportAbortError } from "./transport-stream-shared.js";
 
 export type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-types-internal.js";
 
@@ -178,15 +179,6 @@ export async function processResponsesStream<TApi extends Api>(
       }
     }
   };
-  const appendThinkingDelta = (slot: ThinkingOutputSlot, delta: string): void => {
-    appendAssistantThinking(slot.block, delta);
-    stream.push({
-      type: "thinking_delta",
-      contentIndex: slot.contentIndex,
-      delta,
-      partial: output,
-    });
-  };
   const projectTextDelta = (slot: TextOutputSlot, delta: string): void => {
     if (slot.pendingText !== null) {
       appendResponsesPendingTextDelta(slot, delta, materializeDeferredTextSlot);
@@ -300,7 +292,7 @@ export async function processResponsesStream<TApi extends Api>(
     };
   };
 
-  const guardedStream = adaptResponsesStream(
+  const guardedStream = iterateModelStream(
     withFirstStreamEventTimeout(openaiStream, {
       provider: model.provider,
       api: model.api,
@@ -314,12 +306,13 @@ export async function processResponsesStream<TApi extends Api>(
     options?.signal,
   );
   try {
-    for await (const event of guardedStream) {
-      outputs.observeEvent(event);
-      // Bookkeeping-only SSE events (in_progress, *.done echoes) are still
-      // provider progress; keep the idle watchdog alive without exposing them,
-      // matching the completions and anthropic transports.
-      notifyLlmRequestActivity(options?.signal);
+    for await (const rawEvent of guardedStream) {
+      const event = adaptResponsesStreamEvent(rawEvent);
+      notifyLlmRequestActivity(
+        options?.signal,
+        outputs.observeEvent(event, outputSlots),
+        RESPONSES_BOOKKEEPING_TIMEOUT_MS,
+      );
       if (
         event.type === "response.output_item.done" &&
         event.item.type === "function_call" &&
@@ -404,7 +397,13 @@ export async function processResponsesStream<TApi extends Api>(
           }
           lastPart.text += delta;
         }
-        appendThinkingDelta(slot, delta);
+        appendAssistantThinking(slot.block, delta);
+        stream.push({
+          type: "thinking_delta",
+          contentIndex: slot.contentIndex,
+          delta,
+          partial: output,
+        });
       } else if (event.type === "response.content_part.added") {
         const slot = outputSlots.resolve(event, "text");
         if (!slot) {
@@ -552,7 +551,6 @@ export async function processResponsesStream<TApi extends Api>(
           const rendered = renderResponsesMessageText(
             item.content ?? outputSlot.item.content ?? [{ type: "text", text: streamedText }],
           );
-          const finalText = rendered.text;
           const phase = item.phase ?? undefined;
           const collapse =
             outputSlot.pendingText !== null
@@ -610,7 +608,7 @@ export async function processResponsesStream<TApi extends Api>(
                 partial: output,
               });
             }
-            outputSlot.block.text = finalText;
+            outputSlot.block.text = rendered.text;
             outputSlot.block.textSignature = responsesTextSignature(item.id, phase, rendered);
             const contentIndex = outputSlot.contentIndex;
             if (contentIndex === undefined) {

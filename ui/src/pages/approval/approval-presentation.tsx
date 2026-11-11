@@ -5,12 +5,14 @@ import type {
   ApprovalPresentation,
   ApprovalSnapshot,
 } from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
-import { summarizeApprovalScopeLabel } from "../../app/approval-presentation.ts";
+import { approvalHostLabel, summarizeApprovalScopeLabel } from "../../app/approval-presentation.ts";
 import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
+import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
 import { formatDateTimeMs } from "../../lib/reactive/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerApprovalsEnglish);
+registerEnglishCatalog(registerPluginConsentEnglish);
 
 export type ResolutionOrigin = "here" | "elsewhere" | "observed";
 
@@ -26,10 +28,23 @@ type ApprovalPageView = {
   resolveApproval: (decision: ApprovalDecision) => Promise<void>;
 };
 
-export function decisionLabel(
-  decision: ApprovalDecision,
-  presentation: ApprovalPresentation,
-): string {
+/** Exec requests always read as a warning; a plugin names its own severity. */
+export function approvalSeverity(presentation?: ApprovalPresentation) {
+  const raw = presentation?.kind === "plugin" ? presentation.severity?.trim().toLowerCase() : null;
+  return presentation?.kind === "exec" || raw === "warning" || raw === "warn"
+    ? "warning"
+    : raw === "danger" || raw === "critical" || raw === "error"
+      ? "danger"
+      : "info";
+}
+
+const SEVERITY_LABEL_KEYS = {
+  info: "pluginConsent.installPolicy.severity.info",
+  warning: "pluginConsent.installPolicy.severity.warn",
+  danger: "pluginConsent.installPolicy.severity.critical",
+} as const;
+
+function decisionLabel(decision: ApprovalDecision, presentation: ApprovalPresentation): string {
   const proposal = presentation.kind === "exec" ? presentation.streamProposal : undefined;
   if (proposal && decision !== "allow-always") {
     return t(
@@ -49,7 +64,7 @@ export function decisionLabel(
   );
 }
 
-export function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
+function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
   if (origin === "elsewhere" && (approval.status === "allowed" || approval.status === "denied")) {
     return t("approvalPage.resolvedElsewhere");
   }
@@ -70,7 +85,7 @@ export function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrig
   );
 }
 
-export function terminalDescription(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
+function terminalDescription(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
   if (approval.presentation.kind === "exec" && approval.presentation.streamProposal) {
     const outcome = t(
       approval.status === "allowed"
@@ -135,7 +150,7 @@ function renderMetaRow(label: string, value?: string | null) {
   ) : null;
 }
 
-export function renderApprovalPresentation(presentation: ApprovalPresentation) {
+function renderApprovalPresentation(presentation: ApprovalPresentation) {
   const scopeLabel =
     presentation.kind !== "system-agent" && presentation.scope
       ? summarizeApprovalScopeLabel(presentation.scope)
@@ -172,7 +187,7 @@ export function renderApprovalPresentation(presentation: ApprovalPresentation) {
           {presentation.commandText}
         </pre>
         <dl class="approval-page__meta">
-          {renderMetaRow(t("execApproval.labels.host"), presentation.host)}
+          {renderMetaRow(t("execApproval.labels.host"), approvalHostLabel(presentation.host))}
           {renderMetaRow(t("approvalPage.nodeLabel"), presentation.nodeId)}
         </dl>
       </>
@@ -232,7 +247,15 @@ export function ApprovalContent(props: {
           ]}
           aria-hidden="true"
         />
-        {pending() ? t("approvalPage.pending") : terminalTitle(props.approval, origin())}
+        {/* The dot's hue is the only visible severity signal, so assistive tech gets the word. */}
+        <Show when={pending() && pluginPresentation()}>
+          {(value) => (
+            <span class="sr-only">{t(SEVERITY_LABEL_KEYS[approvalSeverity(value())])} </span>
+          )}
+        </Show>
+        <span>
+          {pending() ? t("approvalPage.pending") : terminalTitle(props.approval, origin())}
+        </span>
       </div>
       <div class="approval-page__heading">
         <h1
@@ -296,7 +319,11 @@ export function ApprovalContent(props: {
             {(decision) => (
               <button
                 type="button"
-                class={["btn approval-page__action", `approval-page__action--${decision()}`]}
+                class={[
+                  "btn approval-page__action",
+                  `approval-page__action--${decision()}`,
+                  { primary: decision() === "allow-once" },
+                ]}
                 data-decision={decision()}
                 disabled={
                   props.page.resolvingDecision() !== null ||

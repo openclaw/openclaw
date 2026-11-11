@@ -186,21 +186,6 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
     }
   }
 
-  async function ensureCategories(retry = false): Promise<void> {
-    const client = gateway.getClient();
-    if (
-      !client ||
-      !gateway.isConnected() ||
-      categoriesReady ||
-      (categoriesStarted && (categoriesTask.pending || !retry))
-    ) {
-      return;
-    }
-    state.categoriesError = null;
-    categoriesStarted = true;
-    await categoriesTask.run([client]);
-  }
-
   async function fetchAvailablePage(params: {
     client: GatewayBrowserClient;
     intent: PluginDiscoveryIntent;
@@ -249,22 +234,6 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
     return intent === "all" && category === null && !query;
   }
 
-  function invalidate(): void {
-    // Reconnects reload the latest input without replaying its manual observation.
-    disconnect();
-    committedQuery = state.query.trim();
-    state.result = null;
-    resultSelection = null;
-    state.categories = [];
-    categoriesReady = false;
-    state.categoriesError = null;
-    state.error = null;
-    state.remoteError = null;
-    state.featured = [];
-    state.trending = [];
-    state.loadMoreError = null;
-  }
-
   function disconnect(): void {
     overview = null;
     browseTask.reset();
@@ -280,12 +249,6 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
       search.read.resolve(null);
       search = null;
     }
-  }
-
-  async function refresh(): Promise<void> {
-    // Inventory publication and explicit refresh retire cached local installation facts.
-    overview = null;
-    await loadSelection();
   }
 
   async function loadSelection(manual = false): Promise<void> {
@@ -307,67 +270,6 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
     await browseTask.run([client, state.intent, state.category, committedQuery, manual]);
   }
 
-  async function loadMore(): Promise<void> {
-    const client = gateway.getClient();
-    const cursor = state.result?.nextCursor;
-    if (!client || !gateway.isConnected() || !cursor || committedQuery || isGroupedOverview()) {
-      return;
-    }
-    state.loadMoreError = null;
-    await loadMoreTask.run([client, state.intent, state.category, committedQuery, cursor]);
-  }
-
-  function selectIntent(intent: PluginDiscoveryIntent): Promise<void> {
-    state.intent = intent;
-    state.category = null;
-    return loadSelection();
-  }
-
-  function selectCategory(category: string | null): Promise<void> {
-    state.intent = "all";
-    state.category = category;
-    return loadSelection();
-  }
-
-  function updateQuery(query: string): void {
-    const previousQuery = state.query.trim();
-    const nextQuery = query.trim();
-    const resetFilters = Boolean(nextQuery) && (state.intent !== "all" || state.category !== null);
-    state.query = query;
-    if (nextQuery) {
-      state.intent = "all";
-      state.category = null;
-    }
-    cancelSearch();
-    // Canceling a debounce can leave reset filters whose results still need loading.
-    if (
-      nextQuery === committedQuery &&
-      !resetFilters &&
-      (nextQuery === previousQuery ||
-        (resultSelection?.intent === state.intent && resultSelection.category === state.category))
-    ) {
-      onChange();
-      return;
-    }
-    if (!nextQuery) {
-      committedQuery = "";
-      void loadSelection();
-      onChange();
-      return;
-    }
-    const read = Promise.withResolvers<PageReadResult>();
-    const timer = setTimeout(() => {
-      search = null;
-      // Only a newly settled query records a manual search.
-      const manual = nextQuery !== committedQuery && nextQuery.length >= 2;
-      committedQuery = nextQuery;
-      void loadSelection(manual);
-      read.resolve(browseTask.read);
-    }, 250);
-    search = { timer, read };
-    onChange();
-  }
-
   onCleanup(cancelSearch);
   onCleanup(() => {
     categoriesTask.cancel();
@@ -376,13 +278,98 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
   });
   return {
     read: (): Readonly<typeof state> => state,
-    invalidate,
+    invalidate(): void {
+      // Reconnects reload the latest input without replaying its manual observation.
+      disconnect();
+      committedQuery = state.query.trim();
+      state.result = null;
+      resultSelection = null;
+      state.categories = [];
+      categoriesReady = false;
+      state.categoriesError = null;
+      state.error = null;
+      state.remoteError = null;
+      state.featured = [];
+      state.trending = [];
+      state.loadMoreError = null;
+    },
     disconnect,
-    refresh,
-    loadMore,
-    ensureCategories,
-    selectIntent,
-    selectCategory,
-    updateQuery,
+    async refresh(): Promise<void> {
+      // Inventory publication and explicit refresh retire cached local installation facts.
+      overview = null;
+      await loadSelection();
+    },
+    async loadMore(): Promise<void> {
+      const client = gateway.getClient();
+      const cursor = state.result?.nextCursor;
+      if (!client || !gateway.isConnected() || !cursor || committedQuery || isGroupedOverview()) {
+        return;
+      }
+      state.loadMoreError = null;
+      await loadMoreTask.run([client, state.intent, state.category, committedQuery, cursor]);
+    },
+    async ensureCategories(retry = false): Promise<void> {
+      const client = gateway.getClient();
+      if (
+        !client ||
+        !gateway.isConnected() ||
+        categoriesReady ||
+        (categoriesStarted && (categoriesTask.pending || !retry))
+      ) {
+        return;
+      }
+      state.categoriesError = null;
+      categoriesStarted = true;
+      await categoriesTask.run([client]);
+    },
+    selectIntent(intent: PluginDiscoveryIntent): Promise<void> {
+      state.intent = intent;
+      state.category = null;
+      return loadSelection();
+    },
+    selectCategory(category: string | null): Promise<void> {
+      state.intent = "all";
+      state.category = category;
+      return loadSelection();
+    },
+    updateQuery(query: string): void {
+      const previousQuery = state.query.trim();
+      const nextQuery = query.trim();
+      const resetFilters =
+        Boolean(nextQuery) && (state.intent !== "all" || state.category !== null);
+      state.query = query;
+      if (nextQuery) {
+        state.intent = "all";
+        state.category = null;
+      }
+      cancelSearch();
+      // Canceling a debounce can leave reset filters whose results still need loading.
+      if (
+        nextQuery === committedQuery &&
+        !resetFilters &&
+        (nextQuery === previousQuery ||
+          (resultSelection?.intent === state.intent && resultSelection.category === state.category))
+      ) {
+        onChange();
+        return;
+      }
+      if (!nextQuery) {
+        committedQuery = "";
+        void loadSelection();
+        onChange();
+        return;
+      }
+      const read = Promise.withResolvers<PageReadResult>();
+      const timer = setTimeout(() => {
+        search = null;
+        // Only a newly settled query records a manual search.
+        const manual = nextQuery !== committedQuery && nextQuery.length >= 2;
+        committedQuery = nextQuery;
+        void loadSelection(manual);
+        read.resolve(browseTask.read);
+      }, 250);
+      search = { timer, read };
+      onChange();
+    },
   };
 }

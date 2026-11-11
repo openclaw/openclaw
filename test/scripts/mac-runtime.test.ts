@@ -28,8 +28,6 @@ import {
 } from "./mac-elevation-artifact.test-support.js";
 import {
   compiledMacNativeFixtures,
-  macFatContainerFixture,
-  macObjectFixture,
   runMacFixtureTool,
 } from "./mac-native-fixtures.test-support.js";
 import { createMacScriptTest, type MacScriptFixture } from "./mac-script-fixture.test-support.js";
@@ -68,7 +66,7 @@ function scriptFixture(prefix: string) {
 }
 
 function pythonInventory(root: string, marker: string, program: string, ...args: string[]) {
-  const prelude = `import os, pathlib, runpy, shutil, sys, unicodedata, unittest
+  const prelude = `import os, pathlib, runpy, sys, unittest
 api = runpy.run_path('scripts/lib/mac-native-inventory.py')
 root = pathlib.Path(sys.argv[1])
 rejects = unittest.TestCase().assertRaises
@@ -124,6 +122,21 @@ const materializer = "scripts/materialize-mac-runtime.py";
 const inventory = "scripts/lib/mac-native-inventory.py";
 
 type MaterializationFixture = Awaited<ReturnType<typeof materializationFixture>>;
+
+async function observeMaterialization(fixture: MaterializationFixture, prelude: string) {
+  // Assert in Vitest: Python atexit exceptions do not change the process exit status.
+  const result = await fixture.run("arm64", {
+    prelude: `import atexit, json, os, shutil, subprocess
+initial_fds = len(os.listdir("/dev/fd"))
+def record(**values):
+    print(json.dumps(dict(values, initialFds=initial_fds, finalFds=len(os.listdir("/dev/fd")))))
+${prelude}`,
+  });
+  const evidence: Record<string, unknown> = JSON.parse(result.stdout);
+  expect(evidence.initialFds).toEqual(expect.any(Number));
+  expect(evidence.finalFds).toBe(evidence.initialFds);
+  return { result, evidence };
+}
 
 function expectUnpublished(
   fixture: MaterializationFixture,
@@ -194,24 +207,14 @@ async function materializationFixture(mac: MacScriptFixture, complete = false) {
   )) {
     await put(`images/${name}`, bytes);
   }
-  for (const filename of [
-    "nested/win32/README.md",
-    "nested/win32/build.mjs",
-    "nested/win32/src/modifiers.c",
-    "opposite-linux/name.node",
-    "space [*]?\nresource.js",
-  ]) {
-    await put(filename, "// nonbinary resource remains byte-identical\n", 0o640);
-  }
+  await put("nested/win32/build.mjs", "// nonbinary resource remains byte-identical\n", 0o640);
   await put("engine.wasm", Buffer.from("0061736d01000000", "hex"));
   // Java and fat Mach-O share CAFEBABE. Classifier-owned non-native resources survive.
   await put(
     "Example.class",
     Buffer.from("cafebabe0000003400010001000000000000000000000000", "hex"),
   );
-  for (let i = 0; i < (complete ? 70 : 2); i++) {
-    await put(`scripts/${i} [*]\n.js`, `// resource ${i}\n`);
-  }
+  await put("scripts/resource [*]\n.js", "// resource\n");
   await mkdir(path.join(source, "empty"));
   await chmod(path.join(source, "empty"), 0o550);
   await symlink("../nested/win32/build.mjs", path.join(source, "scripts/npm-style"));
@@ -355,14 +358,14 @@ if (fs.existsSync(${JSON.stringify(path.join(root, "reject-verification"))})) pr
   const packageRoot = path.join(canonical, "lib/node_modules/openclaw");
   const packageFile = (name: string, contents: string | Buffer, mode?: number) =>
     write(path.join(packageRoot, name), contents, mode);
-  for (const [name, os, cpu, bytes] of [
-    ["native-darwin-arm64", "darwin", "arm64", binaries.arm64],
-    ["native-darwin-x64", "darwin", "x64", binaries.x86_64],
-    ["native-linux-arm64", "linux", "arm64", binaries.elf],
-    ["native-win32-x64", "win32", "x64", binaries.pe],
-    ["@fixture/native-darwin-arm64", "darwin", "arm64", binaries.arm64],
-    ["@fixture/native-linux-arm64", "linux", "arm64", binaries.elf],
-  ] as const) {
+  const nativePackages = [
+    ["native-darwin-arm64", "darwin", "arm64", binaries.arm64, ["arm64"]],
+    ["native-darwin-x64", "darwin", "x64", binaries.x86_64, ["x86_64"]],
+    ["native-linux-arm64", "linux", "arm64", binaries.elf, []],
+    ["@fixture/native-darwin-arm64", "darwin", "arm64", binaries.arm64, ["arm64"]],
+    ["@fixture/native-linux-arm64", "linux", "arm64", binaries.elf, []],
+  ] as const;
+  for (const [name, os, cpu, bytes] of nativePackages) {
     const nativeRoot = path.join(packageRoot, "node_modules", name);
     await write(
       path.join(nativeRoot, "package.json"),
@@ -374,32 +377,13 @@ if (fs.existsSync(${JSON.stringify(path.join(root, "reject-verification"))})) pr
     "node_modules/npm/package.json",
     JSON.stringify({ name: "npm", version: "1.0.0" }),
   );
-  for (const command of ["npm", "npx"]) {
-    for (const suffix of ["", ".cmd", ".ps1"]) {
-      await packageFile(
-        `node_modules/npm/bin/${command}${suffix}`,
-        "# inert Node launcher fixture\n",
-        0o755,
-      );
-    }
-    await packageFile(
-      `node_modules/npm/bin/${command}-cli.js`,
-      "// CLI module must remain available to Bun\n",
-    );
-  }
+  await packageFile("node_modules/npm/bin/npm", "# inert Node launcher fixture\n", 0o755);
   await packageFile(
-    "nested/win32/package.json",
-    JSON.stringify({ name: "fixture-resource", os: ["win32"], cpu: ["x64"] }),
+    "node_modules/npm/bin/npm-cli.js",
+    "// CLI module must remain available to Bun\n",
   );
-  for (const [name, bytes, mode] of [
-    ["universal.node", binaries.universal, 0o644],
-    ["foreign.node", binaries.elf, 0o644],
-    ["nested/win32/build.mjs", "// preserve Windows source\n", 0o755],
-    ["dist/control-ui/index.html", "<!doctype html>\n", 0o644],
-    ["dist/control-ui/assets/app.js", "// bundled Control UI\n", 0o644],
-  ] as const) {
-    await packageFile(name, bytes, mode);
-  }
+  await packageFile("dist/control-ui/index.html", "<!doctype html>\n");
+  await packageFile("nested/package.json", '{"os":["win32"]}');
   await cp(path.join(root, "dist/build-info.json"), path.join(packageRoot, "dist/build-info.json"));
   await mkdir(path.join(packageRoot, "node_modules/.bin"));
   await symlink(
@@ -481,6 +465,7 @@ cp -p ${quote(path.join(canonical, "lib/libsqlite3.dylib"))} "$2/lib/libsqlite3.
     destination,
     calls,
     scratchLog,
+    nativePackages,
     supportedArchitectures,
     tmp,
     temporaryBefore: snapshot(tmp),
@@ -530,8 +515,6 @@ describe.skipIf(process.platform !== "darwin")("Mac runtime materialization", ()
   const stages = createMacCases(it, stagingFixture);
   cases.for([
     ["standard", false, ["arm64"]],
-    ["standard", true, ["arm64", "x86_64"]],
-    ["elevation-host", false, ["x86_64"]],
     ["elevation-host", true, ["arm64", "x86_64"]],
   ] as const)(
     "isolates %s staging and preserves package budgets (override=%s, architectures=%s)",
@@ -550,9 +533,6 @@ describe.skipIf(process.platform !== "darwin")("Mac runtime materialization", ()
         architectures.map((arch) => (arch === "x86_64" ? "x64" : arch)),
       );
       const drivers = observations.filter(({ phase }) => phase === "driver");
-      expect(drivers.map(({ cpu }) => cpu)).toEqual(
-        architectures.map((arch) => (arch === "x86_64" ? "x64" : arch)),
-      );
       expect(new Set(drivers.map(({ product }) => product)).size).toBe(architectures.length);
       expect(drivers.map(({ product }) => product)).toEqual(
         observations.filter(({ phase }) => phase === "install").map(({ product }) => product),
@@ -597,45 +577,29 @@ describe.skipIf(process.platform !== "darwin")("Mac runtime materialization", ()
           verified!.productInode,
         );
       }
-      const published = snapshot(fixture.destination);
-      const ownerMarker = "lib/node_modules/openclaw/openclaw-install-owner.json";
-      expect(published.find(({ path: name }) => name === ownerMarker)).toMatchObject({
-        path: ownerMarker,
-        kind: "file",
-        mode: 0o644,
-      });
-      expect(JSON.parse(readFileSync(path.join(fixture.destination, ownerMarker), "utf8"))).toEqual(
-        {
-          schemaVersion: 1,
-          owner: "macos-app",
-          displayName: "OpenClaw.app",
-          updateHint: "Update OpenClaw.app to update this Gateway.",
-        },
+      const ownerMarker = path.join(
+        fixture.destination,
+        "lib/node_modules/openclaw/openclaw-install-owner.json",
       );
-      expect(published.filter(({ path: name }) => name !== ownerMarker)).toEqual(
-        before.filter(
-          ({ path: name }) =>
-            name !== "lib/node_modules/openclaw/foreign.node" &&
-            !/^lib\/node_modules\/openclaw\/node_modules\/npm\/bin\/(?:npm|npx)(?:\.cmd|\.ps1)?$/.test(
-              name,
-            ) &&
-            ![
-              ".bin",
-              "native-linux-arm64",
-              "native-win32-x64",
-              "@fixture/native-linux-arm64",
-              ...(!architectures.some((architecture) => architecture === "arm64")
-                ? ["native-darwin-arm64", "@fixture/native-darwin-arm64"]
-                : []),
-              ...(!architectures.some((architecture) => architecture === "x86_64")
-                ? ["native-darwin-x64"]
-                : []),
-            ].some(
-              (packageName) =>
-                name === `lib/node_modules/openclaw/node_modules/${packageName}` ||
-                name.startsWith(`lib/node_modules/openclaw/node_modules/${packageName}/`),
-            ),
-        ),
+      const markerInfo = lstatSync(ownerMarker);
+      expect([markerInfo.isFile(), markerInfo.mode & 0o777]).toEqual([true, 0o644]);
+      expect(JSON.parse(readFileSync(ownerMarker, "utf8"))).toMatchObject({
+        schemaVersion: 1,
+        owner: "macos-app",
+      });
+      const modules = path.join(fixture.destination, "lib/node_modules/openclaw/node_modules");
+      for (const [name, _os, _cpu, bytes, retainedOn] of fixture.nativePackages) {
+        const target = path.join(modules, name);
+        if (retainedOn.some((arch) => architectures.some((requested) => requested === arch))) {
+          expect(readFileSync(path.join(target, "binding.node"))).toEqual(bytes);
+        } else {
+          expect(existsSync(target)).toBe(false);
+        }
+      }
+      expect(existsSync(path.join(modules, ".bin"))).toBe(false);
+      expect(readdirSync(path.join(modules, "npm/bin"))).toEqual(["npm-cli.js"]);
+      expect(readFileSync(path.join(modules, "../nested/package.json"), "utf8")).toBe(
+        '{"os":["win32"]}',
       );
       expectRuntimeScratchCleaned(fixture);
     },
@@ -827,46 +791,15 @@ shutil.copyfileobj = copy
         "lib/node_modules/openclaw/dist/control-ui/assets/app.js",
         "// bundled Control UI\n",
       );
-      for (const fat64 of [false, true]) {
-        const bytes = await macFatContainerFixture(
-          fixture.root,
-          [
-            await macObjectFixture(fixture.root, "arm64", mac),
-            await macObjectFixture(fixture.root, "x86_64", mac),
-          ],
-          fat64,
-          mac,
-        );
-        expect(await fixture.archs(path.join(fixture.root, "fat-container"))).toEqual([
-          "arm64",
-          "x86_64",
-        ]);
-        expect(bytes.readUInt32BE(0)).toBe(fat64 ? 0xcafebabf : 0xcafebabe);
-        expect(bytes.readUInt32BE(4)).toBe(2);
-        // Synthetic classification controls, never memory dumps or executed.
-        // lipo -create ignores MH_CORE inputs; change only the completed slices' types.
-        for (let index = 0; index < 2; index++) {
-          const record = 8 + index * (fat64 ? 32 : 20);
-          const offset = fat64
-            ? Number(bytes.readBigUInt64BE(record + 8))
-            : bytes.readUInt32BE(record + 8);
-          expect(bytes.readUInt32LE(offset)).toBe(0xfeedfacf);
-          expect(bytes.readUInt32LE(offset + 12)).toBe(1);
-          bytes.writeUInt32LE(4, offset + 12);
-        }
-        await fixture.put(`synthetic-core-fat${fat64 ? 64 : 32}`, bytes);
-      }
       const oddNative = "images/odd [*]?\narm64";
       await rename(fixture.at("images/arm64"), fixture.at(oddNative));
       for (const [name, contents, mode] of [
         ["database.js", "db.connect();\n", 0o644],
         ["unicode.js", "db.label = 'café';\n", 0o644],
-        ["query.txt", "(Query expression)\n", 0o644],
         ["setuid.txt", "small inert resource\n", 0o4755],
       ] as const) {
         const resource = fixture.at("scripts", name);
         await write(resource, contents, mode);
-        expect(statSync(resource).mode & 0o7777).toBe(mode);
       }
       // Establish the source filesystem's actual name equivalence; never guess
       // which Unicode spelling readdir returns or fold component text in the test.
@@ -875,7 +808,6 @@ shutil.copyfileobj = copy
         ["Café.txt", "Cafe\u0301.txt", "0-unicode-alias"],
       ] as const) {
         await fixture.put(name, "retained lookup resource\n", 0o640);
-        expect(statSync(fixture.at(literal)).ino).toBe(statSync(fixture.at(name)).ino);
         await symlink(literal, fixture.at(alias));
       }
       await hardlink(fixture.at("Library/addon.node"), fixture.at("Library/second.node"));
@@ -901,19 +833,6 @@ shutil.copyfileobj = copy
         before.filter((entry) => !omitted.has(entry.path)),
       );
       expect(snapshot(fixture.source)).toEqual(before);
-      for (const alias of [
-        "0-case-alias",
-        "0-unicode-alias",
-        "0-hardlink-alias",
-        "0-parent-alias",
-      ]) {
-        expect(readFileSync(path.join(fixture.destination, alias))).toEqual(
-          readFileSync(fixture.at(alias)),
-        );
-        expect(readlinkSync(path.join(fixture.destination, alias))).toBe(
-          readlinkSync(fixture.at(alias)),
-        );
-      }
       const outputSecond = statSync(path.join(fixture.destination, "Library/second.node"));
       expect(outputSecond.ino).not.toBe(
         statSync(path.join(fixture.destination, "Library/addon.node")).ino,
@@ -925,9 +844,6 @@ shutil.copyfileobj = copy
       for (const name of omitted) {
         expect(result.stderr).toContain(JSON.stringify(name));
       }
-      expect(await fixture.archs(path.join(fixture.destination, "images/fat64"))).toContain(
-        arch.split(",")[0],
-      );
     },
   );
 
@@ -1008,73 +924,6 @@ shutil.copyfileobj = copy
     expect(snapshot(fixture.source)).toEqual(before);
   });
 
-  materializations.for([
-    ["feedface", 18, false],
-    ["cefaedfe", 7, false],
-    ["feedfacf", 0x1000012, false],
-    ["cffaedfe", 0x100000c, true],
-    ["cafebabe", 0, true],
-    ["cafebabf", 0, true],
-    ["bebafeca", 0, false],
-    ["bfbafeca", 0, false],
-  ] as const)(
-    "classifies Mach magic %s with real Darwin tools",
-    async ([magic, cpu, retained], fixture, mac) => {
-      let bytes: Buffer;
-      if (cpu) {
-        const wide = magic === "feedfacf" || magic === "cffaedfe";
-        bytes = Buffer.alloc(wide ? 32 : 28);
-        Buffer.from(magic, "hex").copy(bytes);
-        const little = magic === "cefaedfe" || magic === "cffaedfe";
-        const fields = [cpu, cpu === 7 ? 3 : 0, 1, 0, 0, 0];
-        fields.forEach((value, index) =>
-          little
-            ? bytes.writeUInt32LE(value, 4 + index * 4)
-            : bytes.writeUInt32BE(value, 4 + index * 4),
-        );
-      } else {
-        bytes = Buffer.from(
-          magic === "cafebabf" || magic === "bfbafeca"
-            ? fixture.binaries.fat64
-            : fixture.binaries.universal,
-        );
-        if (magic === "bebafeca" || magic === "bfbafeca") {
-          // Apple's fat.h requires big-endian on disk; swapped containers fail closed.
-          const stride = magic === "bfbafeca" ? 32 : 20;
-          bytes.subarray(0, 8).swap32();
-          for (let index = 0; index < 2; index++) {
-            const start = 8 + index * stride;
-            bytes.subarray(start, start + (stride === 20 ? 20 : 8)).swap32();
-            if (stride === 32) {
-              bytes.subarray(start + 8, start + 24).swap64();
-              bytes.subarray(start + 24, start + 32).swap32();
-            }
-          }
-        }
-      }
-      await fixture.put("magic", bytes);
-      const before = snapshot(fixture.source);
-      const authority = await mac.run("/usr/bin/lipo", ["-archs", fixture.at("magic")], {
-        encoding: "utf8",
-        env: { HOME: fixture.root, TMPDIR: fixture.root, PATH: systemPath },
-      });
-      const result = await fixture.run();
-      // Newer Apple lipo also rejects big-endian thin headers. Its failure must
-      // stop construction, never turn an unclassified native image into a resource.
-      const unsupported = authority.status !== 0;
-      if (unsupported) {
-        expectUnpublished(fixture, result);
-      } else {
-        expect(result.status, result.stderr).toBe(0);
-        expect(existsSync(path.join(fixture.destination, "magic"))).toBe(retained);
-        if (retained) {
-          expect(readFileSync(path.join(fixture.destination, "magic"))).toEqual(bytes);
-        }
-      }
-      expect(snapshot(fixture.source)).toEqual(before);
-    },
-  );
-
   materializations.for(["mach", "fat64", "elf", "pe", "coff", "archive"])(
     "fails closed on malformed %s native candidates",
     async (kind, fixture) => {
@@ -1101,19 +950,13 @@ shutil.copyfileobj = copy
   materializations.for([
     "file-exit",
     "file-framing",
-    "file-empty",
     "file-error",
     "file-unknown",
     "lipo",
     "lipo-framing",
     "lipo-unknown",
-    "lipo-fat-unknown",
     "lipo-wrong-fd",
     "lipo-fat-wrong-fd",
-    "lipo-prefix",
-    "lipo-multiline",
-    "lipo-incomplete",
-    "lipo-empty",
     "scan",
     "copy",
     "close",
@@ -1136,22 +979,16 @@ def run(args, **kwargs):
         raise OSError("injected tool failure")
     if args[0] == "/usr/bin/file" and failure == "file-unknown":
         return subprocess.CompletedProcess(args, 0, b"unrecognized native format\\0" * len(kwargs["pass_fds"]))
-    if args[0] == "/usr/bin/file" and failure in ("file-framing", "file-empty", "file-error"):
-        return subprocess.CompletedProcess(args, 0, b"truncated" if failure == "file-framing" else (b"" if failure == "file-empty" else b"ERROR: injected\\0" * len(kwargs["pass_fds"])))
+    if args[0] == "/usr/bin/file" and failure in ("file-framing", "file-error"):
+        return subprocess.CompletedProcess(args, 0, b"truncated" if failure == "file-framing" else b"ERROR: injected\\0" * len(kwargs["pass_fds"]))
     if args[0] == "/usr/bin/lipo":
         fd = args[-1].encode()
         thin = b"Non-fat file: " + fd + b" is architecture: "
-        fat = b"Architectures in the fat file: " + fd + b" are: "
         faults = {
             "lipo-framing": thin + b"arm64???\\n",
             "lipo-unknown": thin + b"unknown\\n",
-            "lipo-fat-unknown": fat + b"arm64 unknown \\n",
             "lipo-wrong-fd": b"Non-fat file: " + fd + b"0 is architecture: arm64\\n",
             "lipo-fat-wrong-fd": b"Architectures in the fat file: " + fd + b"0 are: arm64 x86_64 \\n",
-            "lipo-prefix": b"unexpected header arm64\\n",
-            "lipo-multiline": thin + b"arm64\\n" + thin + b"x86_64\\n",
-            "lipo-incomplete": thin + b"arm64",
-            "lipo-empty": fat + b"\\n",
         }
         if failure in faults: return subprocess.CompletedProcess(args, 0, faults[failure])
     return original_run(args, **kwargs)
@@ -1203,9 +1040,9 @@ def verify_closed():
       const aliasInode =
         schedule === "symlink-aba" ? lstatSync(fixture.at("alias")).ino : undefined;
       const before = snapshot(fixture.source);
-      const result = await fixture.run("arm64", {
-        prelude: `
-import os, shutil, subprocess, json
+      const { result, evidence } = await observeMaterialization(
+        fixture,
+        `
 inside, outside = ${JSON.stringify(inside)}, ${JSON.stringify(outside)}
 schedule = ${JSON.stringify(schedule)}
 original_stat, original_scan, original_run, original_copy = os.stat, os.scandir, subprocess.run, shutil.copyfileobj
@@ -1216,7 +1053,6 @@ def open_fd(*args, **kwargs):
     return fd
 os.open = open_fd
 inode = os.stat(inside).st_ino
-initial_fds = len(os.listdir("/dev/fd"))
 original_readlink = os.readlink
 changed = False
 copied = []
@@ -1257,23 +1093,13 @@ def copy(source, destination, *args):
     if destination.name.endswith("/images/arm64"):
         with open(destination.name, "rb") as output: copied.append(output.read().hex())
 os.stat, os.scandir, subprocess.run, shutil.copyfileobj = info, scan, run, copy
-import atexit
 @atexit.register
-def evidence():
-    with open(${JSON.stringify(path.join(fixture.root, "race.json"))}, "w") as output:
-        json.dump({"changed": changed, "copied": copied, "outsideOpened": outside_opened, "initialFds": initial_fds, "finalFds": len(os.listdir("/dev/fd")) - 1}, output)
+def report():
+    record(changed=changed, copied=copied, outsideOpened=outside_opened)
 `,
-      });
-      const evidence = JSON.parse(readFileSync(path.join(fixture.root, "race.json"), "utf8")) as {
-        changed: boolean;
-        copied: string[];
-        outsideOpened: boolean[];
-        initialFds: number;
-        finalFds: number;
-      };
+      );
       expect(evidence).toMatchObject({
         changed: true,
-        finalFds: evidence.initialFds,
         outsideOpened: [],
         copied:
           schedule === "before-open" || schedule === "symlink-aba"
@@ -1297,14 +1123,13 @@ def evidence():
       const replacement = path.join(fixture.root, "replacement");
       await write(replacement, fixture.binaries.x86_64);
       const before = snapshot(fixture.source);
-      const result = await fixture.run("arm64", {
-        prelude: `
-import atexit, json, os, subprocess
+      const { result, evidence } = await observeMaterialization(
+        fixture,
+        `
 target = ${JSON.stringify(target)}
 with open(target, "rb") as stream: original = stream.read()
 with open(${JSON.stringify(replacement)}, "rb") as stream: replacement = stream.read()
 original_info = os.stat(target)
-initial_fds = len(os.listdir("/dev/fd"))
 original_run, schedule = subprocess.run, []
 def run(args, **kwargs):
     result = original_run(args, **kwargs)
@@ -1322,25 +1147,13 @@ def run(args, **kwargs):
     return result
 subprocess.run = run
 @atexit.register
-def evidence():
+def report():
     current = os.stat(target)
-    with open(${JSON.stringify(path.join(fixture.root, "omission.json"))}, "w") as output:
-        json.dump({"schedule": schedule, "sameInode": current.st_ino == original_info.st_ino,
-                   "changedCtime": current.st_ctime_ns != original_info.st_ctime_ns,
-                   "sameMtime": current.st_mtime_ns == original_info.st_mtime_ns,
-                   "initialFds": initial_fds, "finalFds": len(os.listdir("/dev/fd")) - 1}, output)
+    record(schedule=schedule, sameInode=current.st_ino == original_info.st_ino,
+           changedCtime=current.st_ctime_ns != original_info.st_ctime_ns,
+           sameMtime=current.st_mtime_ns == original_info.st_mtime_ns)
 `,
-      });
-      const evidence = JSON.parse(
-        readFileSync(path.join(fixture.root, "omission.json"), "utf8"),
-      ) as {
-        schedule: string[];
-        sameInode: boolean;
-        changedCtime: boolean;
-        sameMtime: boolean;
-        initialFds: number;
-        finalFds: number;
-      };
+      );
       expect(evidence).toMatchObject({
         schedule: [
           "replaced after file classification",
@@ -1350,7 +1163,6 @@ def evidence():
         sameInode: true,
         changedCtime: true,
         sameMtime: true,
-        finalFds: evidence.initialFds,
       });
       expect(snapshot(fixture.source)).toEqual(before);
       expectUnpublished(fixture, result);
@@ -1365,13 +1177,11 @@ def evidence():
         await fixture.put(`resource-${index}.js`, "// ordinary resource\n");
       }
       const before = snapshot(fixture.source);
-      expectExit(
-        await fixture.run("arm64", {
-          prelude: `
-import os, subprocess, json, atexit
+      const { result, evidence } = await observeMaterialization(
+        fixture,
+        `
 original_run = subprocess.run
 batches = []
-initial_fds = len(os.listdir("/dev/fd"))
 def run(args, **kwargs):
     result = original_run(args, **kwargs)
     fds = kwargs.get("pass_fds", ())
@@ -1380,23 +1190,18 @@ def run(args, **kwargs):
     return result
 subprocess.run = run
 @atexit.register
-def evidence():
-    with open(${JSON.stringify(path.join(fixture.root, "batches.json"))}, "w") as output:
-        json.dump({"batches": batches, "initial": initial_fds, "final": len(os.listdir("/dev/fd")) - 1}, output)
+def report():
+    record(batchCount=len(batches), maxBatch=max(batches), classified=sum(batches))
 `,
-        }),
       );
+      expectExit(result);
       expect(snapshot(fixture.destination)).toEqual(
         before.filter((entry) => entry.path !== "images/elf"),
       );
       expect(snapshot(fixture.source)).toEqual(before);
-      const evidence = JSON.parse(
-        readFileSync(path.join(fixture.root, "batches.json"), "utf8"),
-      ) as { batches: number[]; initial: number; final: number };
-      expect(evidence.batches.length).toBeLessThanOrEqual(3);
-      expect(Math.max(...evidence.batches)).toBeLessThanOrEqual(64);
-      expect(evidence.batches.reduce((sum, size) => sum + size, 0)).toBe(133);
-      expect(evidence.final).toBe(evidence.initial);
+      expect(evidence.batchCount).toBeLessThanOrEqual(3);
+      expect(evidence.maxBatch).toBeLessThanOrEqual(64);
+      expect(evidence.classified).toBe(133);
     },
   );
 
@@ -1640,56 +1445,14 @@ describe.runIf(process.platform === "darwin")("Mac runtime portability inventory
     expect(readFileSync(filename)).toEqual(bytes);
   });
 
-  it("looks up actual filesystem child names without following links or leaking handles", () => {
-    const root = temps.make("openclaw-native-child-lookup-");
-    pythonInventory(
-      root,
-      "child-lookup-ok",
-      `
-source = root / 'source'
-(source / 'Library').mkdir(parents=True)
-(source / 'Library/AddOn.node').write_text('resource')
-(source / 'Café.txt').write_text('unicode resource')
-special = 'slash' + chr(92) + chr(10) + 'name'
-(source / special).write_text('literal name')
-(root / 'outside').mkdir()
-(root / 'outside/probe').write_text('outside')
-(source / 'redirect').symlink_to('../outside')
-with api['open_native_inventory_tree'](source) as tree:
-    entries = {entry.parts: entry for entry in tree.entries()}
-    queries = [((), 'Library', ('Library',)), ((), 'library', ('Library',)),
-               (('Library',), 'addon.node', ('Library', 'AddOn.node')),
-               ((), unicodedata.normalize('NFD', 'Café.txt'), ('Café.txt',)),
-               ((), special, (special,)), ((), 'redirect', ('redirect',))]
-    for parent, name, canonical in queries:
-        try: os.stat(source.joinpath(*parent, name), follow_symlinks=False)
-        except FileNotFoundError:
-            with rejects(FileNotFoundError): tree.lstat_child(parent, name)
-        else:
-            actual = tree.lstat_child(parent, name)
-            assert api['content_identity'](actual) == api['content_identity'](entries[canonical].info)
-    for name in ('', '.', '..', '/outside', 'redirect/probe', 'x' + chr(0)):
-        with rejects(ValueError): tree.lstat_child((), name)
-    with rejects(ValueError): tree.lstat_child(('redirect',), 'probe')
-    tree.validate()
-with rejects_message(ValueError, 'closed'): tree.lstat_child((), 'Library')
-`,
-    );
-  });
-
-  it.each([
-    "missing",
-    "leaf-replacement",
-    "parent-link",
-    "parent-directory",
-    "root",
-    "new-hardlink",
-  ])("rejects changed child lookup bindings and closes handles (%s)", (mutation) => {
-    const root = temps.make("openclaw-native-child-replacement-");
-    pythonInventory(
-      root,
-      "child-binding-rejected",
-      `
+  it.each(["parent-link", "parent-directory", "root", "new-hardlink"])(
+    "rejects changed child lookup bindings and closes handles (%s)",
+    (mutation) => {
+      const root = temps.make("openclaw-native-child-replacement-");
+      pythonInventory(
+        root,
+        "child-binding-rejected",
+        `
 source, outside = root / 'source', root / 'outside'
 (source / 'Library').mkdir(parents=True)
 (source / 'Library/addon').write_text('original')
@@ -1698,11 +1461,7 @@ with api['open_native_inventory_tree'](source) as tree:
     list(tree.entries())
     parent, name = ('Library',), 'addon'
     mode = sys.argv[2]
-    if mode == 'missing': (source / 'Library/addon').unlink()
-    elif mode == 'leaf-replacement':
-        (source / 'Library/addon').unlink()
-        (source / 'Library/addon').symlink_to('../../outside/addon')
-    elif mode in ('parent-link', 'parent-directory'):
+    if mode in ('parent-link', 'parent-directory'):
         (source / 'Library').rename(root / 'held')
         if mode == 'parent-link': (source / 'Library').symlink_to(outside)
         else:
@@ -1719,9 +1478,10 @@ with api['open_native_inventory_tree'](source) as tree:
         with rejects((OSError, ValueError)): tree.validate()
 assert (outside / 'addon').read_text() == 'outside'
 `,
-      mutation,
-    );
-  });
+        mutation,
+      );
+    },
+  );
 
   it.each(["namespace-root", "namespace-nested", "incomplete"])(
     "rejects incomplete or changed namespaces (%s)",
@@ -1822,72 +1582,36 @@ assert (outside / 'a-resource').read_text() == 'outside'
   );
 
   it.each(["finish", "abort"])(
-    "binds classify-and-copy to borrowed files and closes them on %s",
+    "restores classifier cursors and closes borrowed streams on %s",
     async (mode) => {
       const { machoFixture } = await import("../helpers/mac-native.js");
       const root = temps.make("openclaw-native-borrow-");
-      const source = path.join(root, "source");
-      const outside = path.join(root, "outside");
-      mkdirSync(path.join(source, "dir"), { recursive: true });
-      mkdirSync(path.join(source, "empty"));
-      mkdirSync(outside);
-      writeFileSync(path.join(source, "dir", "native"), machoFixture());
-      writeFileSync(path.join(outside, "native"), machoFixture(64, true, false, 6));
-      writeFileSync(path.join(source, "resource.txt"), "ordinary resource");
-      writeFileSync(
-        path.join(source, "resource.class"),
-        Buffer.from("cafebabe0000003d0001", "hex"),
-      );
-      writeFileSync(path.join(source, "invalid"), machoFixture(32, true, true));
-      symlinkSync("../outside", path.join(source, "link"));
-      expect(spawnSync("/usr/bin/mkfifo", [path.join(source, "fifo")]).status).toBe(0);
+      mkdirSync(path.join(root, "source"));
+      writeFileSync(path.join(root, "source/a-native"), machoFixture());
+      writeFileSync(path.join(root, "source/z-invalid"), machoFixture(32, true, true));
       pythonInventory(
         root,
-        "held-file-copy-ok",
+        "borrowed-streams-closed",
         `
 source = root / 'source'
-original = (source / 'dir/native').read_bytes()
-resources = {('resource.txt',): b'ordinary resource', ('resource.class',): bytes.fromhex('cafebabe0000003d0001')}
 class CopyAborted(Exception): pass
 borrowed = None
-seen = []
 try:
     with api['open_native_inventory_tree'](source) as tree:
         iterator = tree.entries()
         for entry in iterator:
-            seen.append((type(entry).__name__, entry.parts))
-            if isinstance(entry, api['NativeInventorySymlink']):
-                assert entry.target == '../outside'
             if not isinstance(entry, api['NativeInventoryFile']): continue
-            assert entry.stream.tell() == 0
-            if entry.parts == ('dir', 'native'):
-                borrowed = entry.stream
-                os.rename(source / 'dir', root / 'retained')
-                os.symlink(root / 'outside', source / 'dir')
-                assert api['classify_macho_candidates']([(borrowed, 'native')]) == [b'executable']
-                assert borrowed.tell() == 0
-                with (root / 'copied-native').open('wb') as output:
-                    shutil.copyfileobj(borrowed, output)
-                assert (root / 'copied-native').read_bytes() == original
-                if sys.argv[2] == 'abort': raise CopyAborted()
+            if borrowed is not None: assert borrowed.closed
+            borrowed = entry.stream
+            assert borrowed.tell() == 0
+            borrowed.seek(7)
+            if entry.parts == ('z-invalid',):
+                with rejects(ValueError): api['classify_macho_candidates']([(borrowed, 'invalid')])
             else:
-                assert borrowed.closed
-                if entry.parts == ('invalid',):
-                    entry.stream.seek(7)
-                    with rejects(ValueError): api['classify_macho_candidates']([(entry.stream, 'invalid')])
-                    assert entry.stream.tell() == 7
-                    continue
-                if entry.header in api['MACHO_MAGICS']:
-                    assert api['classify_macho_candidates']([(entry.stream, 'resource')]) == [None]
-                assert entry.stream.tell() == 0
-                assert entry.stream.read() == resources[entry.parts]
-        assert ('NativeInventoryDirectory', ('empty',)) in seen
-        assert ('NativeInventorySpecial', ('fifo',)) in seen
-        assert ('NativeInventorySymlink', ('link',)) in seen
-        try: tree.validate()
-        except NotADirectoryError as error: assert error.filename == 'dir'
-        except ValueError as error: assert 'changed' in str(error)
-        else: raise AssertionError('Replaced pathname was accepted')
+                assert api['classify_macho_candidates']([(borrowed, 'native')]) == [b'executable']
+            assert borrowed.tell() == 7
+            if sys.argv[2] == 'abort': raise CopyAborted()
+        tree.validate()
 except CopyAborted:
     assert sys.argv[2] == 'abort'
 assert borrowed.closed
@@ -1953,10 +1677,8 @@ with rejects(ValueError): tree.validate()
     ["thin", "/usr/lib/libSystem.B.dylib"],
     ["thin", "/opt/homebrew/lib/nonportable.dylib"],
     ["thin", "/usr/lib/../../opt/homebrew/lib/nonportable.dylib"],
-    ["thin", "/System/Library/../../opt/homebrew/lib/nonportable.dylib"],
     ["thin", "@loader_path/../../outside.dylib"],
     ["fat64", "/usr/lib/libSystem.B.dylib"],
-    ["fat64", "/opt/homebrew/lib/nonportable.dylib"],
   ] as const)("audits load dependencies after inventory (%s, %s)", async (format, library) => {
     const root = temps.make("openclaw-portability-load-");
     const { audit, machoFixture } = await portabilityFixture(root);

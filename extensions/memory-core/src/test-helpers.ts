@@ -202,9 +202,6 @@ export const shortTermTestState = {
   async writeShortTermLock(workspaceDir: string, entry: ShortTermLockEntry) {
     await shortTermLocks().register(memoryCoreWorkspaceStateKey(workspaceDir), entry);
   },
-  async deleteShortTermLock(workspaceDir: string) {
-    await shortTermLocks().delete(memoryCoreWorkspaceStateKey(workspaceDir));
-  },
 };
 
 export const dreamingTestState = {

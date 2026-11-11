@@ -1,84 +1,53 @@
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
+import * as markdownCodeRegions from "../../packages/markdown-core/src/markdown-code-regions.js";
+import * as markdownOwnership from "../../packages/markdown-core/src/reasoning-tag-parser.js";
+import * as reasoningSyntax from "../../packages/markdown-core/src/reasoning-tag-syntax.js";
+import * as inboundMetadata from "../auto-reply/reply/strip-inbound-meta.js";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import { assistantVisibleTextFilters } from "../shared/text/assistant-visible-text.js";
-import * as finalTags from "../shared/text/final-tags.js";
-import * as reasoningTags from "../shared/text/reasoning-tags.js";
-import { createTextProjection } from "../shared/text/text-projection.js";
-import {
-  sanitizeUserFacingText,
-  userFacingTextFilters,
-} from "./embedded-agent-helpers/sanitize-user-facing-text.js";
+import { expectPrefixParity, streamChunks } from "../shared/text/streaming.test-support.js";
+import { createTextProjection, trimTextPreservingCode } from "../shared/text/text-projection.js";
+import { userFacingTextFilters } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   createAssistantVisibleStreamText,
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
 
-// Filter arrays cache their transforms, so keep the same spies for the entire module.
-const reasoning = vi.spyOn(reasoningTags, "stripReasoningTagsFromText");
-const final = vi.spyOn(finalTags, "stripFinalTags");
-const transforms = [reasoning, final];
-beforeEach(() => transforms.forEach((spy) => spy.mockClear()));
-afterAll(() => transforms.forEach((spy) => spy.mockRestore()));
+// Observe canonical work across imports, including both code-range entry points:
+// findMarkdownCodeSpans calls its local region binding without crossing an export spy.
+const reasoning = vi.spyOn(reasoningSyntax, "reduceReasoningText");
+const ownership = vi.spyOn(markdownOwnership, "parseMarkdownOwnership");
+const regions = vi.spyOn(markdownCodeRegions, "findMarkdownCodeRegions");
+const spans = vi.spyOn(markdownCodeRegions, "findMarkdownCodeSpans");
+const canonicalWork = [reasoning, ownership, regions, spans];
+const inbound = vi.spyOn(inboundMetadata, "stripInboundMetadata");
+beforeEach(() => [...canonicalWork, inbound].forEach((spy) => spy.mockClear()));
+afterAll(() => [...canonicalWork, inbound].forEach((spy) => spy.mockRestore()));
 function characters(calls: ReadonlyArray<readonly [string, ...unknown[]]>) {
   return calls.reduce((sum, [text]) => sum + text.length, 0);
 }
-function appendChunks(stream: ReturnType<typeof createTextProjection>, text: string, size: number) {
-  for (let offset = 0; offset < text.length; offset += size) {
-    stream.append(text.slice(offset, offset + size));
-  }
+function processedCharacters() {
+  return canonicalWork.reduce((sum, spy) => sum + characters(spy.mock.calls), 0);
 }
-
-it.each([undefined, "final_answer"] as const)(
-  "bounds ordinary-markup transform work (%s)",
-  (phase) => {
-    const source = "<article>Array<string>: a < b and c > d.</article>\n".repeat(96) + "Done.";
-    const stream = createAssistantVisibleStreamText(phase);
-    appendChunks(stream, source, 4);
-    expect(stream.text).toBe(source);
-    expect(characters(reasoning.mock.calls)).toBeLessThan(source.length * 2);
-    expect(characters(final.mock.calls)).toBeLessThan(source.length * 2);
-  },
-);
-
-it.each(["<think>hidden</think>Done.", "<final>Done.</final>"])(
-  "bounds transform work for a late %s",
-  (marker) => {
-    const prefix = "<article>Array<string>: a < b.</article>\n".repeat(96);
-    const source = prefix + marker;
-    const stream = createAssistantVisibleStreamText();
-    appendChunks(stream, prefix, 4);
-    stream.append(marker);
-    const processedCharacters = characters([...reasoning.mock.calls, ...final.mock.calls]);
-    expect(stream.text).toBe(prefix + "Done.");
-    expect(processedCharacters).toBeGreaterThan(0);
-    expect(processedCharacters).toBeLessThan(source.length * 8);
-  },
-);
-
-it("keeps marker probes and checkpoint deltas bounded after stripping a trace", () => {
-  const line = "<article>Array<string>: a < b and c > d.</article>\n";
-  const answer = line.repeat(256) + "Done.";
-  const source = "tool call: hidden\n" + answer;
-  const stream = createAssistantVisibleStreamText("final_answer");
-  const comparisons = vi.spyOn(String.prototype, "startsWith");
-  let comparedCharacters = 0;
-  let delivered = "";
-  try {
-    // Complete lines isolate checkpoint/probe work from provisional XML tool-tag handling.
-    for (const chunk of ["tool call: hidden\n", ...Array<string>(256).fill(line), "Done."]) {
-      const result = stream.append(chunk);
-      delivered = result.delta === null ? result.text : delivered + result.delta;
-    }
-    comparedCharacters = characters(comparisons.mock.calls);
-  } finally {
-    comparisons.mockRestore();
+it.each([
+  [undefined, "Done.", 2],
+  ["final_answer", "Done.", 2],
+  [undefined, "<think>hidden</think>Done.", 8],
+  [undefined, "<final>Done.</final>", 8],
+] as const)("bounds transform work (%s, %s)", (phase, tail, budget) => {
+  const prefix = "<article>Array<string>: a < b and c > d.</article>\n".repeat(96);
+  const stream = createAssistantVisibleStreamText(phase);
+  streamChunks(prefix, 4, stream);
+  if (budget === 2) {
+    streamChunks(tail, 4, stream);
+  } else {
+    stream.append(tail);
   }
-  expect(stream.text).toBe(answer);
-  expect(delivered).toBe(answer);
-  expect(comparedCharacters).toBeGreaterThan(0);
-  expect(comparedCharacters).toBeLessThan(source.length * 64);
-  expect(characters([...reasoning.mock.calls, ...final.mock.calls])).toBeLessThan(
-    source.length * 4,
-  );
+  expect(stream.text).toBe(prefix + "Done.");
+  if (tail.startsWith("<think>")) {
+    expect(characters(reasoning.mock.calls)).toBeGreaterThan(0);
+  }
+  expect(processedCharacters()).toBeLessThan((prefix.length + tail.length) * budget);
 });
 
 it.each([
@@ -93,36 +62,18 @@ it.each([
   ['<final reason="a>b">visible'],
   ["```xml\n<think>literal</think>\n<final>literal</final>\n```\nDone."],
   [`<${" ".repeat(128)}/${"\t".repeat(128)}ThiNKing>Answer`, "Answer"],
-])("preserves every prefix and final output for %s", (source, expected = source) => {
-  for (const size of [1, 3, 7]) {
-    const stream = createAssistantVisibleStreamText();
-    let prefix = "";
-    for (let offset = 0; offset < source.length; offset += size) {
-      const chunk = source.slice(offset, offset + size);
-      const previous = stream.text;
-      prefix += chunk;
-      const result = stream.append(chunk);
-      const visible = sanitizeAssistantVisibleStreamText(prefix);
-      expect(result.text).toBe(visible);
-      expect(result.delta === null ? result.text : previous + result.delta).toBe(visible);
-    }
-    expect(stream.text).toBe(expected ?? source);
-  }
-});
-
-it.each([
   ["Before <final data-note='ok'>Answer</final> After", "Before Answer After"],
   ["< / FINAL >Answer", "Answer"],
   ["<final /bare>literal", "<final /bare>literal"],
   ["<final-result>literal</final-result>", "<final-result>literal</final-result>"],
-])("preserves user-facing final marker behavior for %s", (source, expected) => {
-  const stream = createTextProjection(userFacingTextFilters(false, true));
-  let prefix = "";
-  for (const char of source) {
-    prefix += char;
-    expect(stream.append(char).text).toBe(sanitizeUserFacingText(prefix, { streaming: true }));
-  }
-  expect(stream.text).toBe(expected);
+])("preserves every prefix and final output for %s", (source, expected = source) => {
+  expect(
+    expectPrefixParity(
+      source,
+      createAssistantVisibleStreamText,
+      sanitizeAssistantVisibleStreamText,
+    ),
+  ).toBe(expected);
 });
 
 it.each(["<think>hidden</think>", "<final>"])(
@@ -152,4 +103,49 @@ it("resets rejected and activated heads after replacement", () => {
   expect(stream.append("<final>Tail</final>").text).toBe(literal + "Tail");
   expect(stream.replace("").text).toBe("");
   expect(stream.append("< / final >Fresh").text).toBe("Fresh");
+});
+
+it.each(["[docs](https://example.com) ", "Context: "])(
+  "bounds inbound-metadata work after ordinary %s with append and replacement starts",
+  (prefix) => {
+    const body = "The operator reads the next line. ".repeat(128) + "Done.";
+    for (const replace of [false, true]) {
+      inbound.mockClear();
+      const stream = createAssistantVisibleStreamText();
+      if (replace) {
+        stream.replace(prefix);
+      } else {
+        streamChunks(prefix, 1, stream);
+      }
+      streamChunks(body, 4, stream);
+      expect(stream.text).toBe(prefix + body);
+      expect(characters(inbound.mock.calls)).toBeLessThan((prefix.length + body.length) * 2);
+    }
+  },
+);
+
+it.each([
+  "[Mon 2026-10-24 12:34 UTC] Visible answer",
+  ...MESSAGE_TOOL_DELIVERY_HINTS.map((hint) => `${hint}\nVisible answer`),
+  `[Mon 2026-10-24 12:34 ${"long timezone ".repeat(16)}] Visible answer`,
+  "[docs](https://example.com)\nContext: ordinary prose",
+  "[^note]: Ordinary footnote\nInline Context: prose",
+  "\n\tContext: \t\r\n<active_memory_plugin>\nPrivate context\n</active_memory_plugin>\n\nVisible answer",
+  'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"id":"synthetic"}\n```\n\nVisible answer',
+  ...["\u2028", "\u2029"].flatMap((boundary) => [
+    `Before.\n${boundary}Context:\n<active_memory_plugin>\nPrivate context\n</active_memory_plugin>\n\nVisible answer`,
+    `Before.\nContext:${boundary}\n<active_memory_plugin>\nPrivate context\n</active_memory_plugin>\n\nVisible answer`,
+  ]),
+])("preserves canonical inbound filtering across every split: %s", (source) => {
+  const stream = createAssistantVisibleStreamText("final_answer");
+  expectPrefixParity(
+    source,
+    () => {
+      stream.replace("");
+      return stream;
+    },
+    (prefix) => trimTextPreservingCode(sanitizeAssistantVisibleStreamText(prefix, "final_answer")),
+  );
+  stream.replace("[ordinary] Context: literal");
+  expect(stream.append(" answer").text).toBe("[ordinary] Context: literal answer");
 });

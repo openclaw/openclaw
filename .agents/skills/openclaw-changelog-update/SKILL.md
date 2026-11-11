@@ -22,7 +22,7 @@ ordering, grouping, and attribution discipline.
 Rebuild the target `CHANGELOG/<version>.md` release section from a complete, generated
 history manifest, not stale draft notes. Produce grouped user-facing release
 notes sorted by user interest while preserving every relevant issue/PR ref and
-every human `Thanks @...` attribution.
+every verified human `Thanks @...` attribution.
 
 `CHANGELOG.md` is the generated release index. The shared owner
 `scripts/lib/release-changelog.mjs` resolves release sections and contribution
@@ -94,6 +94,7 @@ of this skill; initial generation must never overwrite them.
    node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
      --base <base-tag> \
      --target <target-ref> \
+     --release-branch <canonical-release-branch> \
      --main-ref origin/main \
      --version <YYYY.M.PATCH> \
      --manifest /tmp/openclaw-release-<YYYY.M.PATCH>.json \
@@ -109,7 +110,9 @@ of this skill; initial generation must never overwrite them.
 
    Add repeatable `--release-provenance '<40sha> -> #PR[, #PR]'` inputs when
    release commits cannot carry provenance metadata. These use the same exact
-   marker grammar and current-main validation as commit-body markers.
+   marker grammar and source validation as commit-body markers. A merged
+   release-branch original is valid only while no corresponding current-main
+   forward-port exists; its GitHub merge commit pins the original source.
 
    The verifier automatically reuses public GitHub GraphQL responses from an
    exact base/target SHA snapshot under the worktree's git metadata. Iterative
@@ -202,7 +205,17 @@ of this skill; initial generation must never overwrite them.
    - `### Complete contribution record`: generated PR-first record after the
      grouped prose; it is the exhaustive accounting surface, not a second
      release summary
-6. Preserve attribution:
+6. Preserve verified attribution:
+   - PR authorship comes from the canonical GitHub PR, never the release commit
+     author, committer, or backport operator. Resolve coauthors from that PR's
+     original merge commit; release-carrier trailers and contextual mentions
+     do not establish credit on another PR
+   - rebuild generated thanks from PR, original coauthor, and linked-reporter
+     evidence. Seeds retain membership and references, not unverified old
+     thanks. Regeneration replaces stale generated credit in records and grouped
+     prose; verification rejects both missing and unsupported credit
+   - when a vanished PR meets the existing exact-SHA recovery contract, retain
+     its recorded thanks as historical credit without inventing a PR author
    - keep `#issue`, `(#PR)`, `Fixes #...`, and `Thanks @...`
    - every human-authored merged PR represented by a user-facing entry needs
      its PR ref and `Thanks @author`, even when the PR had no linked issue
@@ -251,10 +264,9 @@ of this skill; initial generation must never overwrite them.
      that establishes a user-visible outcome
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
-   - initial release generation keeps its existing credit policy: never thank
-     bots, `@claude`, `@codex`, `@openclaw`, `@clawsweeper`, or `@steipete`.
-     The separately approved post-docs GitHub body uses its complete verified
-     human roster, including `@steipete` when credited
+   - credit verified human authors, including maintainers such as `@steipete`.
+     Never thank bots, known automation accounts such as `@steipete-oai`,
+     `@claude`, `@codex`, `@openclaw`, or `@clawsweeper`
    - do not use GitHub's release contributor count as the source of truth; the
      changelog must carry the complete human credit set itself
 7. Sorting preference:
@@ -291,7 +303,8 @@ of this skill; initial generation must never overwrite them.
   as shipped, when a source PR is absent from the contribution record, when
   direct commits are rendered as a public record dump, when non-editorial
   PRs appear in grouped prose, or when an eligible PR author or known
-  co-author is missing from that PR's `Thanks @...` credit. It also fails
+  co-author is missing from that PR's `Thanks @...` credit, or unsupported
+  credit appears in its record or represented editorial bullet. It also fails
   before history collection when `--base` is not an ancestor of `--target`
   (except beta release tags normalized to merge-base plus shipped-record subtraction),
   when `### Highlights` violates the selected stable (5-8) or beta (0-8)
@@ -403,9 +416,10 @@ workflow for their verification.
 
 Extended-stable has one release commit and one canonical GitHub Release body.
 After version prep and approved backports, regenerate `CHANGELOG/YYYY.M.P.md`
-with the regular manifest and original-main-PR provenance rules. Land it by PR, then
-validate the final branch tip before tagging. The release closeout renders that
-tag-owned section into the shared draft before the parent pipeline publishes
+with the regular manifest and original-main-PR provenance rules. Commit it directly
+to the canonical release branch, then validate the final branch tip before tagging.
+Do not open a staging/backport PR for release preparation. The release closeout
+renders that tag-owned section into the shared draft before the parent pipeline publishes
 the non-Latest release page. Re-audit after a product
 backport; a tooling-only repair needs no changelog entry. Never rewrite a
 published tag or changelog.

@@ -8,6 +8,7 @@ import {
   validateWorktreesCreateParams,
   validateWorktreesGcParams,
   validateWorktreesListParams,
+  validateWorktreesRecoverFileParams,
   validateWorktreesRecoverRemovalParams,
   validateWorktreesRemoveParams,
   validateWorktreesRestoreParams,
@@ -15,6 +16,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { managedWorktrees, WorktreeSnapshotError } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import { runGitReadOperation } from "../../infra/git-read-cache.js";
 import { resolveRecordedProjectRoot } from "../../projects/project-registry.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { requestGatewayWorktreeMaintenance } from "../worktree-maintenance.js";
@@ -22,6 +24,7 @@ import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
 } from "./local-state-owner.js";
+import { respondError } from "./response.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,
@@ -41,13 +44,9 @@ function publicWorktreeRecord(
 }
 
 function invalidParams(respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"]): void {
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "invalid worktrees parameters", {
-      details: { mutationAccepted: false },
-    }),
-  );
+  respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid worktrees parameters", {
+    details: { mutationAccepted: false },
+  });
 }
 
 function captureWorktreeMutationGuard(
@@ -221,16 +220,12 @@ export const worktreesHandlers: GatewayRequestHandlers = {
         respond(true, { removed: false, snapshotError: error.snapshotError }, undefined);
         return;
       }
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, String(error), {
-          ...(error instanceof WorktreeSnapshotError
-            ? { details: { snapshotError: error.snapshotError } }
-            : {}),
-          retryable: false,
-        }),
-      );
+      respondError(respond, ErrorCodes.UNAVAILABLE, String(error), {
+        ...(error instanceof WorktreeSnapshotError
+          ? { details: { snapshotError: error.snapshotError } }
+          : {}),
+        retryable: false,
+      });
     }
   }),
   "worktrees.restore": worktreeHandler(validateWorktreesRestoreParams, async (opts, params) => {
@@ -254,11 +249,30 @@ export const worktreesHandlers: GatewayRequestHandlers = {
     if (!repoRoot) {
       return;
     }
-    const result = params.includeRepositoryStatus
-      ? await managedWorktrees.listRepositoryBranches(repoRoot, {
-          includeRepositoryStatus: true,
-        })
-      : await managedWorktrees.listRepositoryBranches(repoRoot);
+    const cfg = opts.context.getRuntimeConfig();
+    const result = await runGitReadOperation(
+      {
+        type: "repository.branches",
+        input: { repoRoot, includeRepositoryStatus: params.includeRepositoryStatus },
+      },
+      {
+        snapshot: true,
+        signal: opts.signal,
+        onRefresh: () => {
+          if (
+            opts.client?.connId &&
+            opts.hasCurrentClientAuthority?.() !== false &&
+            opts.context.getRuntimeConfig() === cfg
+          ) {
+            opts.context.broadcastToConnIds(
+              "worktrees.branches.changed",
+              { repoRoot: params.repoRoot },
+              new Set([opts.client.connId]),
+            );
+          }
+        },
+      },
+    );
     respond(true, result, undefined);
   }),
   "worktrees.gc": worktreeHandler(validateWorktreesGcParams, async (opts, params) => {
@@ -274,6 +288,25 @@ export const worktreesHandlers: GatewayRequestHandlers = {
     });
     respond(true, receipt, undefined);
   }),
+  "worktrees.recoverFile": worktreeHandler(
+    validateWorktreesRecoverFileParams,
+    async (opts, params) => {
+      const commitGuard = captureWorktreeMutationGuard(params.expectedOwnerId, opts);
+      if (!commitGuard) {
+        return;
+      }
+      const { recoverLocalWorkspaceFile } =
+        await import("../worker-environments/local-workspace-recovery.js");
+      const result = await recoverLocalWorkspaceFile({
+        ...params,
+        cfg: opts.context.getRuntimeConfig(),
+        signal: opts.signal,
+        assertCurrent: commitGuard,
+      });
+      commitGuard();
+      opts.respond(true, result, undefined);
+    },
+  ),
   "worktrees.recoverRemoval": worktreeHandler(
     validateWorktreesRecoverRemovalParams,
     async (opts, params) => {

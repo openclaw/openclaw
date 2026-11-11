@@ -61,7 +61,7 @@ describe("shared control ownership", () => {
       "pages/chat/components/chat-model-account-control.ts",
       "pages/chat/components/chat-model-picker-options.ts",
       "pages/chat/components/chat-model-picker-panel.ts",
-      "pages/new-session/checkout-chip.ts",
+      "pages/new-session/checkout-picker-content.ts",
       "pages/new-session/place-browser.ts",
     ]);
   });

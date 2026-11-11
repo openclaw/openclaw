@@ -9,7 +9,6 @@ import {
   type LivePreviewDeliveryResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
@@ -17,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload, ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveSlackMarkdownOptions } from "../../accounts.js";
 import { formatSlackError } from "../../errors.js";
 import { normalizeSlackOutboundText } from "../../format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "../../limits.js";
@@ -87,6 +87,10 @@ async function dispatchSlackMessageWithSetup(
 ) {
   const { prepared } = setup;
   const { account, ctx, message, route } = prepared;
+  const markdownOptions = resolveSlackMarkdownOptions({
+    cfg: ctx.cfg,
+    accountId: account.accountId,
+  });
   const {
     cfg,
     disableBlockStreaming,
@@ -208,7 +212,7 @@ async function dispatchSlackMessageWithSetup(
     const reply = resolveSendableOutboundReplyParts(payload);
     const ttsSupplement = getReplyPayloadTtsSupplement(payload);
     const replySourceText = payload.text ?? ttsSupplement?.spokenText;
-    const replyRenderPlan = resolveSlackReplyRenderPlan(payload, replySourceText);
+    const replyRenderPlan = resolveSlackReplyRenderPlan(payload, replySourceText, markdownOptions);
     const slackBlocks =
       replyRenderPlan.mode === "single"
         ? replyRenderPlan.blocks
@@ -222,13 +226,7 @@ async function dispatchSlackMessageWithSetup(
     const previewFinalText =
       replyRenderPlan.mode === "single" && replyRenderPlan.textIsSlackMrkdwn
         ? trimmedFinalText
-        : normalizeSlackOutboundText((replySourceText ?? "").trim(), {
-            tableMode: resolveMarkdownTableMode({
-              cfg,
-              channel: "slack",
-              accountId: account.accountId,
-            }),
-          });
+        : normalizeSlackOutboundText((replySourceText ?? "").trim(), markdownOptions);
     const previewFinalTextFitsEdit =
       countSlackTextUtf8Bytes(previewFinalText) <= SLACK_EDIT_TEXT_MAX_BYTES;
     const shouldRestoreTtsSupplementTextForPreviewFallback =

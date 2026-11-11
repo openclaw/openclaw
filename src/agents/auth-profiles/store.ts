@@ -881,27 +881,6 @@ export function createAuthProfileStoreRuntime(
     },
   );
 
-  /** Load the main auth profile store with runtime external profiles overlaid. */
-  function loadAuthProfileStore(): AuthProfileStore {
-    if (isEnvOnlyAuthProfileRuntime()) {
-      return createEmptyAuthProfileStore();
-    }
-    const agentDir = resolveRuntimeAuthProfileAgentDir();
-    const store = loadPersistedAuthProfileStore(agentDir) ?? createEmptyAuthProfileStore();
-    recordRuntimeAuthProfilePersistedStore(
-      agentDir ? resolveAgentAuthPath(agentDir) : resolveSharedAuthPath(),
-      store,
-    );
-    observeCanonicalAuthProfileCredentials(
-      agentDir ? resolveAgentAuthPath(agentDir) : resolveSharedAuthPath(),
-      store.profiles,
-    );
-    return overlayExternalAuthProfiles(
-      applyScopedAuthReadThrough(markRuntimePersistedProfiles(store)),
-      { agentDir },
-    );
-  }
-
   function loadAuthProfileStoreForAgent(
     agentDir?: string,
     options?: LoadAuthProfileStoreOptions,
@@ -1722,7 +1701,6 @@ export function createAuthProfileStoreRuntime(
     createAuthProfileStoreReadScope,
     createAuthProfileStoreReadScopeAsync,
     updateAuthProfileStoreWithLock,
-    loadAuthProfileStore,
     loadAuthProfileStoreForSecretsRuntime,
     loadAuthProfileStoreForSecretsRuntimeAsync,
     loadAuthProfileStoreWithoutExternalProfiles,

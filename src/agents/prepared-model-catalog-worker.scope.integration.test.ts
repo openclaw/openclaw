@@ -16,6 +16,7 @@ import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { MINIMAX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 import { model } from "./model-catalog-fixtures.test-support.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
@@ -122,15 +123,7 @@ describe("prepared model catalog worker plugin scope", () => {
       },
     });
     const config: OpenClawConfig = {
-      models: {
-        providers: {
-          [provider]: {
-            baseUrl: "http://127.0.0.1:1234/v1",
-            api: "openai-completions",
-            models: [],
-          },
-        },
-      },
+      ...configFor(provider, "http://127.0.0.1:1234/v1", { api: "openai-completions" }),
       plugins: {
         allow: [provider],
         entries: { [provider]: { enabled: true } },
@@ -279,16 +272,11 @@ describe("prepared model catalog worker plugin scope", () => {
           },
           entries: { main: { agentDir, workspace: workspaceDir, ...(name ? { name } : {}) } },
         },
-        models: {
-          providers: {
-            "published-fixture": {
-              api: "openai-completions",
-              baseUrl: "https://published-fixture.invalid/v1",
-              apiKey: "published-fixture-key-not-real",
-              models: [model("published-model", "Published model")],
-            },
-          },
-        },
+        ...configFor("published-fixture", "https://published-fixture.invalid/v1", {
+          api: "openai-completions",
+          apiKey: "published-fixture-key-not-real",
+          models: [model("published-model", "Published model")],
+        }),
         plugins: {
           allow: [PLUGIN_ID, UNRELATED_PLUGIN_ID],
           ...(selection.slot === "memory"

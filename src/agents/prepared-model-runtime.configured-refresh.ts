@@ -12,7 +12,10 @@ import {
 } from "../model-catalog/remote-overlay.js";
 import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
-import { retirePreparedModelRuntimeGeneration } from "./prepared-model-runtime.lifecycle.js";
+import {
+  recordPreparedModelCatalogReplacement,
+  retirePreparedModelRuntimeGeneration,
+} from "./prepared-model-runtime.lifecycle.js";
 import {
   advancePreparedModelRuntimeOwnerConfig,
   ownerKey,
@@ -210,6 +213,9 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
     // candidates, while a newer config epoch stops every remaining build in this publication.
     isBuildCurrent: isPublicationCurrent,
     onBuildStats: options.onBuildStats,
+    selectPluginGeneration: options.preservePluginGenerations
+      ? (owner) => owner.pluginGeneration
+      : undefined,
     pluginMetadataSnapshot: options.pluginMetadataSnapshot,
     registerEntriesAfterBuildStart: true,
     progress,
@@ -275,14 +281,21 @@ async function publishPreparedModelRuntimeCatalogReplacement(
     // A failed discovery publishes the candidate's static rows, never the previous catalog's.
     await racePromiseWithAbortSignal(
       Promise.allSettled(
-        candidates.map(
-          async (owner) =>
-            await owner.snapshot?.loadFullModelCatalog?.({
-              refresh: true,
-              changedOnly: true,
-              wait: true,
-            }),
-        ),
+        candidates.map(async (owner, index) => {
+          // Catalog updates must preserve headless startup's deferred inventory acquisition.
+          if (
+            !claims[index]!.owner.catalogInventory &&
+            !claims[index]!.owner.catalogAttempt &&
+            owner.input.config.gateway?.controlUi?.enabled === false
+          ) {
+            return;
+          }
+          await owner.snapshot?.loadFullModelCatalog?.({
+            refresh: true,
+            changedOnly: true,
+            wait: true,
+          });
+        }),
       ),
       signal,
     );
@@ -325,7 +338,8 @@ async function publishPreparedModelRuntimeCatalogReplacement(
           owner.needsRefresh = true;
         }
       }
-      for (const { owner } of claims) {
+      for (const [index, { owner }] of claims.entries()) {
+        recordPreparedModelCatalogReplacement(owner.snapshot!, candidates[index]!.snapshot!);
         owner.generation += 1;
         retirePreparedModelRuntimeGeneration(owner);
         releasePreparedPluginPublication(owner);

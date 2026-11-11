@@ -2,7 +2,7 @@ import path from "node:path";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { rootDir } from "./agent-runner.misc.runreplyagent.test-support.js";
 import { createTestQueuedFollowupRun } from "./agent-runner.test-fixtures.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createMockTypingController, createReplyParams } from "./test-helpers.js";
 
 type RunReplyAgent = typeof import("./agent-runner-run.js").runReplyAgent;
 type ReplyParams = Parameters<RunReplyAgent>[0];
@@ -61,25 +61,16 @@ export function createBaseRun(options: BaseRunOptions = {}) {
       ...options.run,
     },
   });
-  const replyParams = {
+  const replyParams = createReplyParams(followupRun, {
     commandBody: "hello",
-    followupRun,
     queueKey: sessionKey,
     resolvedQueue,
-    shouldSteer: false,
-    shouldFollowup: false,
-    isActive: false,
     typing,
     sessionCtx,
     defaultModel: "anthropic/claude-opus-4-6",
-    resolvedVerboseLevel: "off",
-    isNewSession: false,
-    blockStreamingEnabled: false,
-    resolvedBlockStreamingBreak: "message_end",
-    shouldInjectGroupIntro: false,
     typingMode: "instant",
     ...options.reply,
-  } satisfies ReplyParams;
+  });
   return {
     typing,
     sessionCtx,

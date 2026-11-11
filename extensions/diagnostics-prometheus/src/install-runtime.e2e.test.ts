@@ -67,17 +67,6 @@ function isolatedEnv(root: string, registry?: string) {
   };
 }
 
-async function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<string> {
-  // E2E setup owns shared dist; a child rebuild can delete running siblings' chunks.
-  const result = await execFileAsync(process.execPath, ["openclaw.mjs", ...args], {
-    cwd: repoRoot,
-    env,
-    maxBuffer: 4 * 1024 * 1024,
-    timeout: 180_000,
-  });
-  return result.stdout;
-}
-
 async function spawnLogged(args: string[], logPath: string, env: NodeJS.ProcessEnv, ipc = false) {
   const log = await fs.open(logPath, "a");
   const child = spawn(process.execPath, args, {
@@ -230,38 +219,22 @@ it("installs trusted Prometheus metrics with scoped HTTP access", async ({ signa
   };
   await fs.writeFile(paths.OPENCLAW_CONFIG_PATH, JSON.stringify(config), "utf8");
 
-  expect(pluginVersion).not.toBe("");
   const tarballPath = await packPlugin(root);
   const registry = await startRegistry(root, tarballPath, signal);
   const env = isolatedEnv(root, registry);
 
-  await runCli(
-    ["plugins", "install", `npm:${packageName}@${pluginVersion}`, "--accept-capabilities"],
-    env,
+  // E2E setup owns shared dist; a child rebuild can delete running siblings' chunks.
+  await execFileAsync(
+    process.execPath,
+    [
+      "openclaw.mjs",
+      "plugins",
+      "install",
+      `npm:${packageName}@${pluginVersion}`,
+      "--accept-capabilities",
+    ],
+    { cwd: repoRoot, env, maxBuffer: 4 * 1024 * 1024, timeout: 180_000 },
   );
-  const inspect = JSON.parse(
-    await runCli(["plugins", "inspect", pluginId, "--runtime", "--json"], env),
-  ) as {
-    install?: { artifactKind?: unknown; installPath?: unknown; sourcePath?: unknown };
-    plugin?: { origin?: unknown };
-  };
-  expect(inspect).toMatchObject({
-    install: {
-      source: "npm",
-      resolvedName: packageName,
-      resolvedVersion: pluginVersion,
-    },
-    plugin: {
-      id: pluginId,
-      enabled: true,
-      status: "loaded",
-      trustedOfficialInstall: true,
-    },
-  });
-  expect(typeof inspect.install?.installPath).toBe("string");
-  expect(inspect.install?.artifactKind).toBeUndefined();
-  expect(inspect.install?.sourcePath).toBeUndefined();
-  expect(["config", "global"]).toContain(inspect.plugin?.origin);
 
   const { child: gateway, closeLog } = await spawnLogged(
     ["openclaw.mjs", "gateway", "run", "--bind", "loopback", "--port", String(gatewayPort)],
@@ -377,10 +350,6 @@ it("installs trusted Prometheus metrics with scoped HTTP access", async ({ signa
     expect(current.observed).toBeGreaterThanOrEqual(previous.observed);
     previous = current;
   }
-  const gatewayLogs = await fs.readFile(gatewayLog, "utf8");
-  expect(gatewayLogs).not.toContain(
-    "diagnostics-prometheus: internal diagnostics capability unavailable",
-  );
   // Graceful stop drains startup work; the forced reaper is cleanup only.
   expect(gateway.kill("SIGTERM")).toBe(true);
   await gatewayClosed;

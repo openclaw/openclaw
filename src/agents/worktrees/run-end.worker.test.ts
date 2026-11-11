@@ -1,4 +1,3 @@
-import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -325,18 +324,20 @@ it("keeps session worktree row reads out of worker admission callbacks", async (
     ownerId: "agent:main:worker-guard",
     now: 1,
   });
-  const reads = observeMainThreadReads();
+  const readSql: string[] = [];
+  const reads = observeMainThreadReads((sql) => readSql.push(sql));
   const worktreeReads: string[] = [];
   let grants = 0;
   const admission = interceptAdmission((_request, admit) => {
     grants += 1;
     reads.clear();
+    readSql.length = 0;
     try {
       return admit();
     } finally {
-      for (const statement of reads.calls.flatMap((call) => call.mock.contexts)) {
-        if (statement instanceof StatementSync && /\bworktrees\b/u.test(statement.sourceSQL)) {
-          worktreeReads.push(statement.sourceSQL);
+      for (const sql of readSql) {
+        if (/\bworktrees\b/u.test(sql)) {
+          worktreeReads.push(sql);
         }
       }
     }
@@ -451,11 +452,13 @@ it("preserves committed bytes after reply loss, rolls back refused commits, and 
     await expect(chunk(1)).rejects.toSatisfy((error: unknown) => {
       expect(error).toMatchObject({ code: "outcome-unknown" });
       expect(formatErrorMessageWithCode(error)).toContain(replyFailure.message);
+      const storageOutcome = classifyGatewayStorageFailure(error);
+      expect(storageOutcome).toBe("session_actor_reconciliation");
       expect(
         renderAssistantRequestFailureCopy({
-          storageFailure: classifyGatewayStorageFailure(error),
+          storageFailure: storageOutcome,
         }),
-      ).toContain("disk is full. Free up space");
+      ).toMatch(/check.*history.*before trying again/i);
       return true;
     });
     expect(assertCurrent).toThrow("owner or lifecycle changed");

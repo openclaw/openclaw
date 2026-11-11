@@ -95,6 +95,7 @@ function childInput(fake: ReturnType<typeof createFakeSupervisor>, index = 0) {
 }
 
 function hostService(desktop: ReturnType<typeof createManagedLinuxDesktop>, connId: string) {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   vi.spyOn(managedLinux, "createManagedLinuxDesktop").mockReturnValue(desktop);
   const desktopProbe = vi.mocked(rfbProbe.probeRfbServer).getMockImplementation()!;
   const probe = vi.fn<typeof rfbProbe.probeRfbServer>().mockResolvedValue({ kind: "unreachable" });
@@ -106,7 +107,6 @@ function hostService(desktop: ReturnType<typeof createManagedLinuxDesktop>, conn
   const service = createHostDesktopService({
     getConfig: () => ({ enabled: true, managed: true }),
     registry,
-    platform: "linux",
   });
   return { probe, registry, service, requester: { connId, isCurrent: () => true } };
 }

@@ -26,13 +26,12 @@ export type ActiveProcessSessionReference = {
 /** List active background process sessions for one scope key, newest first. */
 export function listActiveProcessSessionReferences(params: {
   scopeKey?: string;
-  now?: number;
 }): ActiveProcessSessionReference[] {
   const scopeKey = params.scopeKey?.trim();
   if (!scopeKey) {
     return [];
   }
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   return listRunningSessions()
     .filter((session) => session.scopeKey === scopeKey)
     .toSorted(compareProcessSessionStartOrder)

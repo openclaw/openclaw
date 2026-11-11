@@ -71,6 +71,24 @@ it.each([undefined, "{", '{"version":123}'])("rejects invalid manifests (%s)", a
   );
 });
 
+it.each(["empty", "installed"])("checks the SDK's %s API dependency", async (state) => {
+  const root = fixture('{"name":"openclaw","version":"1.2.3"}');
+  const sdk = path.join(root, "node_modules/@anthropic-ai/sdk");
+  const api = path.join(root, "node_modules/@opentelemetry/api");
+  mkdirSync(sdk, { recursive: true });
+  mkdirSync(api, { recursive: true });
+  writeFileSync(path.join(sdk, "package.json"), '{"dependencies":{"@opentelemetry/api":"^1.4.1"}}');
+  if (state === "empty") {
+    await expect(measureTree(root)).rejects.toThrow(
+      "Installed @anthropic-ai/sdk cannot resolve required @opentelemetry/api",
+    );
+  } else {
+    writeFileSync(path.join(api, "package.json"), '{"main":"index.cjs"}');
+    writeFileSync(path.join(api, "index.cjs"), "module.exports = {};");
+    await expect(measureTree(root)).resolves.toMatchObject({ version: "1.2.3" });
+  }
+});
+
 it("rejects a file or symlink root, including a trailing separator", async () => {
   const root = fixture('{"version":"1.2.3"}');
   const manifest = path.join(root, "package.json");

@@ -1,3 +1,4 @@
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import type { PluginRuntimeRecovery } from "../plugins/loader-types.js";
 import { PluginSourceRecoveryUnavailableError } from "../plugins/plugin-instance-error.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
@@ -103,15 +104,7 @@ export function createPluginReloadRecovery(
         [...moduleRecoveries.values()].map((recovery) => recovery.module.dispose()),
       );
       moduleRecoveries.clear();
-      const errors = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "Plugin reload recovery cleanup failed");
-      }
+      throwIfSettledRejected(results, "Plugin reload recovery cleanup failed");
     },
   };
 }

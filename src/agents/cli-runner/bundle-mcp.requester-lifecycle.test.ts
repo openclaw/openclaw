@@ -1,4 +1,3 @@
-import { json } from "node:stream/consumers";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -8,13 +7,17 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { materializeRequesterScopedMcpToolsForHarnessRunCore } from "../agent-bundle-mcp-harness.js";
 import {
+  readMcpFixtureMessage,
+  replyMcpFixtureResult,
+  startMcpHttpFixture,
+} from "../agent-bundle-mcp-lifecycle.test-support.js";
+import {
   getAdvertisedScopedMcpCatalog,
   retireSessionMcpRuntime,
   setSessionMcpRuntimeScheduler,
 } from "../agent-bundle-mcp-manager-api.js";
 import { getSessionMcpRuntimeTestManager } from "../agent-bundle-mcp-manager.test-support.js";
 import { createMcpProofPluginRegistry } from "../mcp-connection-resolver.test-fixtures.js";
-import { startCompletionServer } from "../simple-completion.test-support.js";
 import { prepareNativeMcpTestConfig } from "./bundle-mcp.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -23,48 +26,41 @@ it("keeps requester tools callable across static native preflight until session 
   const workspaceDir = tempDirs.make("openclaw-mcp-requester-discovery-");
   const sessions = new Set<string>();
   const deleted: string[] = [];
-  const server = await startCompletionServer((request, response) => {
-    void (async () => {
-      const sessionId = String(request.headers["mcp-session-id"]);
-      if (request.method === "DELETE") {
-        sessions.delete(sessionId);
-        deleted.push(sessionId);
-        response.writeHead(200).end();
-        return;
-      }
-      if (request.method !== "POST") {
-        response.writeHead(405).end();
-        return;
-      }
-      const message = (await json(request)) as {
-        id?: number;
-        method: string;
-        params?: { protocolVersion?: string };
+  const server = await startMcpHttpFixture(async (request, response) => {
+    const sessionId = String(request.headers["mcp-session-id"]);
+    if (request.method === "DELETE") {
+      sessions.delete(sessionId);
+      deleted.push(sessionId);
+      response.writeHead(200).end();
+      return;
+    }
+    if (request.method !== "POST") {
+      response.writeHead(405).end();
+      return;
+    }
+    const message = await readMcpFixtureMessage(request);
+    let result;
+    if (message.method === "initialize") {
+      const id = request.url === "/requester" ? "requester-session" : "static-session";
+      sessions.add(id);
+      response.setHeader("mcp-session-id", id);
+      result = {
+        protocolVersion: message.params?.protocolVersion,
+        capabilities: { tools: {} },
+        serverInfo: { name: "mixed-discovery", version: "1" },
       };
-      let result;
-      if (message.method === "initialize") {
-        const id = request.url === "/requester" ? "requester-session" : "static-session";
-        sessions.add(id);
-        response.setHeader("mcp-session-id", id);
-        result = {
-          protocolVersion: message.params?.protocolVersion,
-          capabilities: { tools: {} },
-          serverInfo: { name: "mixed-discovery", version: "1" },
-        };
-      } else if (message.method === "tools/list") {
-        result = { tools: [{ name: "read_note", inputSchema: { type: "object" } }] };
-      } else if (message.method === "tools/call") {
-        result = { content: [{ type: "text", text: sessionId }] };
-      }
-      if (!result) {
-        response.writeHead(202).end();
-        return;
-      }
-      response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
-    })().catch(() => response.writeHead(500).end());
+    } else if (message.method === "tools/list") {
+      result = { tools: [{ name: "read_note", inputSchema: { type: "object" } }] };
+    } else if (message.method === "tools/call") {
+      result = { content: [{ type: "text", text: sessionId }] };
+    }
+    if (!result) {
+      response.writeHead(202).end();
+      return;
+    }
+    replyMcpFixtureResult(response, message, result);
   });
-  const url = server.origin;
+  const url = server.url;
   const registry = createMcpProofPluginRegistry();
   registry.apiFor("test-plugin").registerMcpServerConnectionResolver({
     serverName: "requester",
@@ -130,6 +126,6 @@ it("keeps requester tools callable across static native preflight until session 
   } finally {
     await retireSessionMcpRuntime({ sessionId, reason: "mixed-discovery-test-cleanup" });
     await scheduler.stop();
-    await server[Symbol.asyncDispose]();
+    await server.close();
   }
 });

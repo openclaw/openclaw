@@ -51,55 +51,47 @@ export async function dispatchInteraction(
     return;
   }
   try {
-    await dispatchAcknowledgeableInteraction(client, rawData, interaction);
+    if (rawData.type === InteractionType.ApplicationCommand) {
+      const command = client.commands.find((entry) => entry.name === rawData.data?.name);
+      if (command) {
+        await deferCommandInteractionIfNeeded(command, interaction as CommandInteraction);
+        await command.run(interaction as CommandInteraction);
+      }
+      return;
+    }
+    if (rawData.type === InteractionType.MessageComponent) {
+      const customId = rawData.data?.custom_id;
+      if (!customId) {
+        return;
+      }
+      const componentInteraction = interaction as BaseComponentInteraction;
+      const component = client.componentHandler.resolve(customId, {
+        componentType: rawData.data?.component_type,
+      });
+      if (component) {
+        await deferComponentInteractionIfNeeded(component, componentInteraction);
+        await component.run(
+          componentInteraction,
+          (component.customIdParser ?? parseCustomId)(customId).data,
+        );
+      }
+      return;
+    }
+    if (rawData.type === InteractionType.ModalSubmit) {
+      const customId = rawData.data?.custom_id;
+      if (!customId) {
+        return;
+      }
+      const modal = client.modalHandler.resolve(customId);
+      if (modal) {
+        await modal.run(interaction as ModalInteraction, modal.customIdParser(customId).data);
+      }
+    }
   } catch (error) {
     // A handler that throws after deferring leaves Discord showing a spinner
     // forever, so surface the failure before rethrowing for the caller's log.
     await reportInteractionFailure(interaction);
     throw error;
-  }
-}
-
-async function dispatchAcknowledgeableInteraction(
-  client: DispatchClient,
-  rawData: APIInteraction,
-  interaction: ReturnType<typeof createInteraction>,
-): Promise<void> {
-  if (rawData.type === InteractionType.ApplicationCommand) {
-    const command = client.commands.find((entry) => entry.name === rawData.data?.name);
-    if (command) {
-      await deferCommandInteractionIfNeeded(command, interaction as CommandInteraction);
-      await command.run(interaction as CommandInteraction);
-    }
-    return;
-  }
-  if (rawData.type === InteractionType.MessageComponent) {
-    const customId = rawData.data?.custom_id;
-    if (!customId) {
-      return;
-    }
-    const componentInteraction = interaction as BaseComponentInteraction;
-    const component = client.componentHandler.resolve(customId, {
-      componentType: rawData.data?.component_type,
-    });
-    if (component) {
-      await deferComponentInteractionIfNeeded(component, componentInteraction);
-      await component.run(
-        componentInteraction,
-        (component.customIdParser ?? parseCustomId)(customId).data,
-      );
-    }
-    return;
-  }
-  if (rawData.type === InteractionType.ModalSubmit) {
-    const customId = rawData.data?.custom_id;
-    if (!customId) {
-      return;
-    }
-    const modal = client.modalHandler.resolve(customId);
-    if (modal) {
-      await modal.run(interaction as ModalInteraction, modal.customIdParser(customId).data);
-    }
   }
 }
 

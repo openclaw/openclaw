@@ -45,8 +45,8 @@ vi.mock("../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfig,
 }));
 
-function registerSingleTestPlugin(_pluginId: string, plugin: ChannelPlugin) {
-  activeChannelPlugins.splice(0, activeChannelPlugins.length, plugin);
+function registerPlugins(...plugins: ChannelPlugin[]) {
+  activeChannelPlugins.splice(0, activeChannelPlugins.length, ...plugins);
 }
 
 async function formatLocalStatusSummary(
@@ -81,166 +81,82 @@ function unresolvedTokenAccount() {
   } as const;
 }
 
-function tokenOnlyPluginConfig() {
-  return {
-    listAccountIds: () => ["primary"],
-    defaultAccountId: () => "primary",
-    isConfigured: () => true,
-    isEnabled: () => true,
-  } as const;
-}
-
-function makeUnavailableTokenPlugin(): ChannelPlugin {
+function makeTokenPlugin(
+  config: Partial<ChannelPlugin["config"]> = {},
+  id = "token-only",
+  label = "TokenOnly",
+): ChannelPlugin {
   return makeDirectPlugin({
-    id: "token-only",
-    label: "TokenOnly",
-    docsPath: "/channels/token-only",
-    config: {
-      ...tokenOnlyPluginConfig(),
-      resolveAccount: () => unresolvedTokenAccount(),
-    },
-  });
-}
-
-function makeResolvedTokenPlugin(): ChannelPlugin {
-  return makeDirectPlugin({
-    id: "token-only",
-    label: "TokenOnly",
-    docsPath: "/channels/token-only",
-    config: {
-      ...tokenOnlyPluginConfig(),
-      inspectAccount: (cfg) =>
-        (cfg as { secretResolved?: boolean }).secretResolved
-          ? {
-              accountId: "primary",
-              name: "Primary",
-              enabled: true,
-              configured: true,
-              token: "resolved-token",
-              tokenSource: "config",
-              tokenStatus: "available",
-            }
-          : { accountId: "primary", ...unresolvedTokenAccount() },
-      resolveAccount: () => unresolvedTokenAccount(),
-    },
-  });
-}
-
-function makeResolvedTokenPluginWithoutInspectAccount(): ChannelPlugin {
-  return makeDirectPlugin({
-    id: "token-only",
-    label: "TokenOnly",
-    docsPath: "/channels/token-only",
+    id,
+    label,
+    docsPath: `/channels/${id}`,
     config: {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
-      resolveAccount: (cfg) => {
-        if (!(cfg as { secretResolved?: boolean }).secretResolved) {
-          throw new Error("raw SecretRef reached resolveAccount");
-        }
-        return {
-          name: "Primary",
-          enabled: true,
-          configured: true,
-          token: "resolved-token",
-          tokenSource: "config",
-          tokenStatus: "available",
-        };
-      },
       isConfigured: () => true,
       isEnabled: () => true,
+      resolveAccount: () => unresolvedTokenAccount(),
+      ...config,
     },
   });
 }
 
-function makeIndeterminateLinkPlugin(): ChannelPlugin {
-  return makeDirectPlugin({
-    id: "whatsapp",
-    label: "WhatsApp",
-    docsPath: "/channels/whatsapp",
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({ accountId: "default", enabled: true, authDir: "/auth" }),
-      isEnabled: () => true,
-      isConfigured: () => true,
-      isLinked: () => "unknown",
-      unlinkedReason: () => "not linked",
-      describeAccount: () => ({
-        accountId: "default",
-        enabled: true,
-        configured: true,
-      }),
-    },
-  });
-}
-
-function expectResolvedTokenStatusSummary(
-  summary: string,
-  options?: { includeUnavailableTokenLine?: boolean },
-) {
+function expectResolvedTokenStatusSummary(summary: string) {
   expect(summary).toContain("TokenOnly");
   expect(summary).toContain("configured");
   expect(summary).toContain("token:config");
   expect(summary).not.toContain("secret unavailable in this command path");
-  if (options?.includeUnavailableTokenLine === false) {
-    expect(summary).not.toContain("token:config (unavailable)");
-  }
 }
 
 describe("config-only channels status output", () => {
-  it.each([
-    {
-      label: "external channels",
-      channel: "TOKEN-ONLY",
-      included: ["TokenOnly"],
-      excluded: ["WhatsApp"],
-    },
-  ])(
-    "preserves exact config-only status filtering for $label",
-    async ({ channel, included, excluded }) => {
-      activeChannelPlugins.splice(
-        0,
-        activeChannelPlugins.length,
-        makeUnavailableTokenPlugin(),
-        makeIndeterminateLinkPlugin(),
-      );
-
-      const summary = await formatLocalStatusSummary(
-        { channels: { "token-only": {}, whatsapp: {} } },
-        { channel },
-      );
-
-      expect(summary).toContain("Gateway not reachable; showing config-only status.");
-      for (const label of included) {
-        expect(summary).toContain(label);
-      }
-      for (const label of excluded) {
-        expect(summary).not.toContain(label);
-      }
-    },
-  );
+  it("preserves exact config-only status filtering for external channels", async () => {
+    registerPlugins(makeTokenPlugin(), makeTokenPlugin({}, "whatsapp", "WhatsApp"));
+    const summary = await formatLocalStatusSummary(
+      { channels: { "token-only": {}, whatsapp: {} } },
+      { channel: "TOKEN-ONLY" },
+    );
+    expect(summary).toContain("Gateway not reachable; showing config-only status.");
+    expect(summary).toContain("TokenOnly");
+    expect(summary).not.toContain("WhatsApp");
+  });
 
   it("does not resolve raw source config for extension channels without inspectAccount", async () => {
-    registerSingleTestPlugin("token-only", makeResolvedTokenPluginWithoutInspectAccount());
+    registerPlugins(
+      makeTokenPlugin({
+        resolveAccount: (cfg) => {
+          if (!(cfg as { secretResolved?: boolean }).secretResolved) {
+            throw new Error("raw SecretRef reached resolveAccount");
+          }
+          return { ...unresolvedTokenAccount(), token: "resolved-token", tokenStatus: "available" };
+        },
+      }),
+    );
 
     const joined = await formatLocalStatusSummary(
       { secretResolved: true, channels: {} },
-      {
-        sourceConfig: { channels: {} },
-      },
+      { sourceConfig: { channels: {} } },
     );
     expectResolvedTokenStatusSummary(joined);
   });
 
   it("prefers resolved config snapshots when command-local secret resolution succeeds", async () => {
-    registerSingleTestPlugin("token-only", makeResolvedTokenPlugin());
+    registerPlugins(
+      makeTokenPlugin({
+        inspectAccount: (cfg) => ({
+          accountId: "primary",
+          ...unresolvedTokenAccount(),
+          ...((cfg as { secretResolved?: boolean }).secretResolved
+            ? { token: "resolved-token", tokenStatus: "available" }
+            : {}),
+        }),
+      }),
+    );
 
     const joined = await formatLocalStatusSummary(
       { secretResolved: true, channels: {} },
-      {
-        sourceConfig: { channels: {} },
-      },
+      { sourceConfig: { channels: {} } },
     );
-    expectResolvedTokenStatusSummary(joined, { includeUnavailableTokenLine: false });
+    expectResolvedTokenStatusSummary(joined);
+    expect(joined).not.toContain("token:config (unavailable)");
   });
 });

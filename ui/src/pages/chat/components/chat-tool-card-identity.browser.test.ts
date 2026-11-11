@@ -1,9 +1,9 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it } from "vitest";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 afterEach(() => {
@@ -133,8 +133,13 @@ it
         [false, true],
       ]);
     });
-    expect(
-      bubbles.map((bubble) => panel(bubble, "raw").querySelector("code")!.textContent),
-    ).toEqual(rows.map((row) => row.output));
+    expect(panel(bubbles[0]!, "raw").querySelector("code")!.textContent).toBe(rows[0]!.output);
+    bubbles[1]!.querySelector<HTMLButtonElement>('[role="tab"][data-tab-value="raw"]')!.click();
+    await waitForSolid(() => {
+      expect(bubbles.map((bubble) => panel(bubble, "raw").hidden)).toEqual([false, false]);
+      expect(
+        bubbles.map((bubble) => panel(bubble, "raw").querySelector("code")!.textContent),
+      ).toEqual(rows.map((row) => row.output));
+    });
   },
 );

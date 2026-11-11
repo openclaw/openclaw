@@ -40,7 +40,6 @@ import {
 } from "../plugins/install-overrides.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import { resolveBundledInstallPlanForCatalogEntry } from "../plugins/install-source-plan.js";
-import { isUnavailableNpmTarget } from "../plugins/install-types.js";
 import {
   installPluginFromNpmSpec,
   installPluginFromNpmPackArchive,
@@ -49,7 +48,7 @@ import {
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "../plugins/installs.js";
 import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { invalidatePluginRuntimeDiscoveryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -589,7 +588,7 @@ export async function ensureOnboardingPluginInstalled(
     // Any install override mutates config/install records, so guard it with the
     // same write-mode check as normal installs.
     assertConfigWriteAllowedInCurrentMode();
-    return await withPluginLifecycleLease({}, async () =>
+    return await withPluginLifecycleLeaseAsync({}, async () =>
       installPluginFromOverride({
         ...params,
         override: installOverride,
@@ -702,7 +701,7 @@ export async function ensureOnboardingPluginInstalled(
   }
   assertConfigWriteAllowedInCurrentMode();
 
-  return await withPluginLifecycleLease({}, async () => {
+  return await withPluginLifecycleLeaseAsync({}, async () => {
     const installLocal = async (selectedPath: string): Promise<OnboardingPluginInstallResult> => {
       const cfg = params.cfg;
       const installEntry = params.entry;
@@ -811,27 +810,28 @@ export async function ensureOnboardingPluginInstalled(
       install: async (
         source,
       ): Promise<InstallOutcome<InstallPluginResult | InstallPluginFromClawHubResult>> => {
-        const specs = source.source === "npm" ? npmSpecs : clawhubSpecs;
         const attemptEntry = {
           ...entry,
           install: { ...entry.install, expectedIntegrity: source.expectedIntegrity },
         };
+        const install = (spec: string) =>
+          installPluginWithProgress({
+            ...params,
+            entry: attemptEntry,
+            source: { kind: source.source, spec },
+            onCapabilityConsent,
+          });
+        if (source.source === "npm") {
+          return await install(npmSpecs?.installSpec ?? source.spec);
+        }
         return await installWithChannelFallback({
-          installSpec: specs?.installSpec ?? source.spec,
-          ...(source.expectedIntegrity ? {} : { fallbackSpec: specs?.fallbackSpec }),
-          install: (spec) =>
-            installPluginWithProgress({
-              ...params,
-              entry: attemptEntry,
-              source: { kind: source.source, spec },
-              onCapabilityConsent,
-            }),
+          installSpec: clawhubSpecs?.installSpec ?? source.spec,
+          ...(source.expectedIntegrity ? {} : { fallbackSpec: clawhubSpecs?.fallbackSpec }),
+          install,
           isRetryable: (attempt) =>
             attempt.status === "completed" &&
             !attempt.result.ok &&
-            (source.source === "npm"
-              ? isUnavailableNpmTarget(attempt.result)
-              : isUnavailableClawHubTarget(attempt.result)),
+            isUnavailableClawHubTarget(attempt.result),
           onFallback,
         });
       },

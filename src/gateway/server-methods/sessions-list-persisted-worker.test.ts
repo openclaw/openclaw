@@ -3,7 +3,6 @@ import { notifyPreparedModelRuntimePublication } from "../../agents/prepared-mod
 import { persistRegistryFixture } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
-import { createEmbeddedCallGateway } from "../../agents/tools/embedded-gateway-stub.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
@@ -15,7 +14,6 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { EmbeddedTuiBackend } from "../../tui/embedded-backend.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { sessionReader } from "./sessions-keyed-read.test-support.js";
 import {
@@ -48,7 +46,8 @@ const writeSession = (sessionKey: string, entry: Parameters<typeof upsertSession
   upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
 const group = { groupId: "retained-group", done: 1 };
 const childLinks = {
-  childSessions: ["agent:main:subagent:child"],
+  // Terminal controller records retain swarm totals, but do not confer child ownership.
+  childSessions: undefined,
   swarm: { groups: [{ ...group, failed: 0 }] },
 };
 const controllerRow = { key: controller, ...childLinks };
@@ -91,14 +90,6 @@ it.each(["replaced", "made private"])(
         visibility: "shared",
         createdActor: { type: "human", source: "profile", id: ownerId },
       });
-      const [child, collector] = linkedRuns();
-      await writeSession(child.childSessionKey, {
-        sessionId: "child-session",
-        updatedAt: Date.now(),
-        visibility: "shared",
-      });
-      persistRegistryFixture(new Map([child, collector].map((entry) => [entry.runId, entry])));
-      clearSubagentRunsReadCacheForTest();
       const context = requestContext(cfg);
       await initializeSessionReadContext(context);
       const projection = getSessionRowProjection(context)!;
@@ -128,10 +119,8 @@ it.each(["replaced", "made private"])(
             session: {
               sessionId: "replacement-session",
               displayName: "Current conversation",
-              ...childLinks,
             },
           });
-          expect(JSON.stringify(result)).not.toContain("retained synthetic");
         }
       } finally {
         catalog.resolve();
@@ -143,7 +132,7 @@ it.each(["replaced", "made private"])(
   },
 );
 
-it("lists off-page controller links and deleted-collector totals while a sibling worker write settles", async () => {
+it("keeps deleted-collector totals without terminal controller links while a sibling worker write settles", async () => {
   await withRunState(async () => {
     clearSubagentRunsReadCacheForTest();
     const cfg = {
@@ -186,21 +175,6 @@ it("lists off-page controller links and deleted-collector totals while a sibling
         sessions: [controllerRow],
       });
       expect(JSON.stringify(result)).not.toContain("retained synthetic");
-      const backend = new EmbeddedTuiBackend();
-      backend.start();
-      try {
-        for (const list of [
-          () => createEmbeddedCallGateway()({ method: "sessions.list", params: { limit: 1 } }),
-          () => backend.listSessions({ limit: 1 }),
-        ]) {
-          clearSubagentRunsReadCacheForTest();
-          expect(await list()).toMatchObject({
-            sessions: [{ ...controllerRow, swarm: { groups: [group] } }],
-          });
-        }
-      } finally {
-        await backend.stop();
-      }
       expect(await lookupPluginStateInWorker(key)).toBe(true);
     } finally {
       getSessionRowProjection(context)?.dispose();

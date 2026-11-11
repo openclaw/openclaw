@@ -25,6 +25,7 @@ import {
 } from "./lib/package-lifecycle-marker.mjs";
 import {
   cleanPackedOpenClawTarballs,
+  newestOpenClawTarball,
   validatePackedTarballOutputName,
 } from "./lib/packed-openclaw-tarballs.mts";
 import { isRecord } from "./lib/record-shared.mjs";
@@ -167,28 +168,6 @@ function resolveOptionalTimerTimeoutMs(valueMs: unknown) {
   return valueMs === undefined ? undefined : resolveTimerTimeoutMs(Number(valueMs), 1);
 }
 
-function resolvePackedOpenClawFileName(value: string) {
-  const filename = value.trim();
-  if (
-    !filename.endsWith(".tgz") ||
-    (!filename.startsWith("openclaw-") &&
-      !filename.includes(":") &&
-      !filename.includes("/") &&
-      !filename.includes("\\"))
-  ) {
-    return "";
-  }
-  if (
-    !/^openclaw-[A-Za-z0-9._-]+\.tgz$/u.test(filename) ||
-    filename.includes("\0") ||
-    filename !== path.basename(filename) ||
-    filename !== path.win32.basename(filename)
-  ) {
-    throw new Error(`npm pack reported unsafe OpenClaw tarball filename: ${filename}`);
-  }
-  return filename;
-}
-
 export function parseArgs(argv: string[]) {
   const options = parseFlagArgs(
     argv,
@@ -285,6 +264,7 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
     let timedOut = false;
     let outputLimitExceeded = false;
     let stdout = "";
+    let stderrTail = "";
     let stdoutBytes = 0;
     let settled = false;
     let forceKillTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -385,6 +365,11 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
       child.stdout?.pipe(process.stderr, { end: false });
     }
     child.stderr?.pipe(process.stderr, { end: false });
+    if (command === "npm" && args[0] === "pack") {
+      child.stderr?.on("data", (chunk) => {
+        stderrTail = (stderrTail + String(chunk)).slice(-4096);
+      });
+    }
     child.on("error", (error) => finish(error));
     child.on("close", (status, signal) => {
       if (timedOut) {
@@ -405,7 +390,11 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
         finish(undefined, stdout);
         return;
       }
-      finish(new Error(`${command} ${args.join(" ")} failed with ${status ?? signal}`));
+      finish(
+        new Error(
+          `${command} ${args.join(" ")} failed with ${status ?? signal}${status === 1 && stderrTail ? `\n${stderrTail.trimEnd()}` : ""}`,
+        ),
+      );
     });
   });
 }
@@ -449,35 +438,6 @@ async function runCapture(command: string, args: string[], cwd: string, options:
 
 export { run as runCommandForTest, runCapture as runCaptureForTest };
 
-async function newestOpenClawTarball(outputDir: string, packOutput: string) {
-  let fromOutput = "";
-  for (const line of packOutput.split(/\r?\n/u)) {
-    const filename = resolvePackedOpenClawFileName(line);
-    if (filename) {
-      fromOutput = filename;
-    }
-  }
-  if (fromOutput) {
-    return path.join(outputDir, fromOutput);
-  }
-
-  const entries = await fs.readdir(outputDir);
-  const packed = entries
-    .filter((entry) => {
-      try {
-        return resolvePackedOpenClawFileName(entry) === entry;
-      } catch {
-        return false;
-      }
-    })
-    .toSorted()
-    .at(-1);
-  if (!packed) {
-    throw new Error(`missing packed OpenClaw tarball in ${outputDir}`);
-  }
-  return path.join(outputDir, packed);
-}
-
 async function writePackJson(
   packOutput: string,
   tarball: string,
@@ -491,21 +451,13 @@ async function writePackJson(
     throw new Error("npm pack --json output was not valid JSON", { cause: error });
   }
   const entries = resolveNpmJsonEntries(parsed);
-  if (
-    entries.length === 0 ||
-    entries.some((entry) => !entry || typeof entry !== "object" || Array.isArray(entry))
-  ) {
+  if (entries.length === 0 || !entries.every(isRecord)) {
     throw new Error("npm pack --json output did not contain package results");
   }
   const filename = path.basename(tarball);
   for (const entry of entries) {
-    if (
-      entry &&
-      typeof entry === "object" &&
-      "filename" in entry &&
-      typeof entry.filename === "string"
-    ) {
-      (entry as MutableJsonRecord).filename = filename;
+    if (typeof entry.filename === "string") {
+      entry.filename = filename;
     }
   }
   const target = path.resolve(sourceDir, packJsonPath);
@@ -707,6 +659,8 @@ export async function prepareBundledAiRuntimePackage(
       await fs.readFile(stagedPackageJsonPath, "utf8"),
     ) as MutableJsonRecord & {
       dependencies?: Record<string, unknown>;
+      peerDependencies?: Record<string, unknown>;
+      peerDependenciesMeta?: Record<string, unknown>;
       version?: unknown;
     };
     if (typeof stagedPackageJson.version !== "string" || !stagedPackageJson.version) {
@@ -723,6 +677,12 @@ export async function prepareBundledAiRuntimePackage(
     // Root owns these exact dependencies. Removing them from the staged copy keeps npm from
     // recursively bundling duplicate packages alongside the one private workspace runtime.
     delete stagedPackageJson.dependencies;
+    // npm may omit required dependencies when the bundled copy also declares them as peers.
+    // Root owns composed dependencies; the Anthropic SDK also requires the API transitively.
+    for (const peer of ["@opentelemetry/api", ...Object.keys(packageJson.dependencies!)]) {
+      delete stagedPackageJson.peerDependencies?.[peer];
+      delete stagedPackageJson.peerDependenciesMeta?.[peer];
+    }
     await fs.writeFile(stagedPackageJsonPath, `${JSON.stringify(stagedPackageJson, null, 2)}\n`);
 
     packageJson.dependencies![AI_RUNTIME_PACKAGE] = stagedPackageJson.version;
@@ -744,6 +704,7 @@ async function normalizeOpenClawTarballModes(
   tarballPath: string,
   sourceDir: string,
   normalizeModes: boolean,
+  bundleOwners: ReadonlyMap<string, string>,
 ) {
   // npm can retain restrictive source read bits. Normalize those for non-root
   // installers while preserving the archive's executable intent.
@@ -756,6 +717,7 @@ async function normalizeOpenClawTarballModes(
       sourceDir,
       path.join(stageDir, "package"),
       resolveTimeoutMs("OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS", DEFAULT_PACKAGE_PACK_TIMEOUT_MS),
+      bundleOwners,
     );
     if (!normalizeModes && !repaired) {
       return;
@@ -768,9 +730,18 @@ async function normalizeOpenClawTarballModes(
           await fs.chmod(entryPath, 0o755);
           await normalizeStagedModes(entryPath);
         } else if (entry.isFile()) {
+          const stats = await fs.stat(entryPath);
+          // npm preserves hardlinked dependency assets; tar must repack each as a regular file.
+          if (stats.nlink > 1) {
+            const copyDir = await fs.mkdtemp(path.join(stageDir, ".regular-file-"));
+            const copyPath = path.join(copyDir, "file");
+            await fs.copyFile(entryPath, copyPath);
+            await fs.rename(copyPath, entryPath);
+            await fs.rm(copyDir, { recursive: true });
+          }
           // Umask masking on extraction only clears group/other bits, so the
           // owner exec bit still says whether the packed entry was executable.
-          const executable = ((await fs.stat(entryPath)).mode & 0o100) !== 0;
+          const executable = (stats.mode & 0o100) !== 0;
           await fs.chmod(entryPath, executable ? 0o755 : 0o644);
           stagedFileCount += 1;
         }
@@ -953,17 +924,20 @@ export async function packOpenClawPackageForDocker(
   try {
     let cleanupBundledAiRuntime = async () => {};
     let cleanupBundledPlugins = async () => {};
+    let bundledPluginOwners: ReadonlyMap<string, string> = new Map();
     const cleanupFailures = new Set<unknown>();
     const onCleanupFailure = (error: unknown) => void cleanupFailures.add(error);
     try {
       await cleanPackedOpenClawTarballs(outputPath);
       if (packageOptions.bundlePlugins?.length) {
         const { preparePackageBundledPlugins } = await import("./lib/package-bundled-plugins.mts");
-        cleanupBundledPlugins = await preparePackageBundledPlugins(
+        const prepared = await preparePackageBundledPlugins(
           sourcePath,
           packageOptions.bundlePlugins,
           onCleanupFailure,
         );
+        cleanupBundledPlugins = prepared.cleanup;
+        bundledPluginOwners = prepared.bundleOwners;
       }
       cleanupBundledAiRuntime = await prepareBundledAiRuntime(
         sourcePath,
@@ -977,9 +951,10 @@ export async function packOpenClawPackageForDocker(
       );
       // AI staging materializes the bundled tree; pack must not inherit the
       // source workspace's isolated linker setting for that prepared bundle.
+      // npm's silent level hides failure causes as well as routine notices.
       const packArgs = [
         "pack",
-        "--silent",
+        packTool === "npm" ? "--loglevel=error" : "--silent",
         ...(packTool === "pnpm"
           ? ["--config.ignore-scripts=true", "--config.node-linker=hoisted"]
           : ["--ignore-scripts"]),
@@ -987,12 +962,28 @@ export async function packOpenClawPackageForDocker(
         outputPath,
         ...(packTool === "npm" ? ["--json=false"] : []),
       ];
-      packOutput = await runCaptureImpl(packTool, packArgs, sourcePath, {
-        timeoutMs: resolveTimeoutMs(
-          "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
-          DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
-        ),
-      });
+      const runPack = () =>
+        runCaptureImpl(packTool, packArgs, sourcePath, {
+          timeoutMs: resolveTimeoutMs(
+            "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+            DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+          ),
+        });
+      try {
+        packOutput = await runPack();
+      } catch (error) {
+        if (
+          packTool !== "npm" ||
+          !(error instanceof Error) ||
+          !error.message.includes("Exit handler never called!")
+        ) {
+          throw error;
+        }
+        // npm can exit before settling its pack promise; keep the prepared source locked for one retry.
+        console.error("==> npm exited before completing pack; retrying once");
+        await cleanPackedOpenClawTarballs(outputPath);
+        packOutput = await runPack();
+      }
     } catch (error) {
       packageError = error;
       throw error;
@@ -1037,13 +1028,22 @@ export async function packOpenClawPackageForDocker(
       }
     }
     const { hasMissingBundledDependencies } = await import("./lib/package-bundled-links.mts");
-    // Preserve complete pnpm archives exactly. Only npm's source modes or an
-    // omitted declared bundle require rebuilding the private extracted archive.
-    if (!packageOptions.pnpmPack || (await hasMissingBundledDependencies(tarball))) {
+    // Complete selected plugin bundles from their owners, even when the packer
+    // found a same-version root copy. Other complete pnpm archives stay unchanged.
+    if (
+      !packageOptions.pnpmPack ||
+      packageOptions.bundlePlugins?.length ||
+      (await hasMissingBundledDependencies(tarball))
+    ) {
       if (packageOptions.normalizeTarballModes) {
         await packageOptions.normalizeTarballModes(tarball);
       } else {
-        await normalizeOpenClawTarballModes(tarball, sourcePath, !packageOptions.pnpmPack);
+        await normalizeOpenClawTarballModes(
+          tarball,
+          sourcePath,
+          !packageOptions.pnpmPack,
+          bundledPluginOwners,
+        );
       }
     }
     if (packageOptions.packJsonPath) {

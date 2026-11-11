@@ -11,10 +11,12 @@ import { asObjectRecord } from "../config/channel-compat-normalization.js";
 import type { CompatMutationResult } from "../config/channel-compat-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { decodeUtf8Input, Utf8InputError } from "../infra/utf8-input.js";
 import type { OpenKeyedStoreOptions } from "../plugin-state/plugin-state-store.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
 
+export { decodeUtf8Input, Utf8InputError };
 export { mergeMissing } from "../config/merge-missing.js";
 export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 export { defineChannelAliasMigration } from "../config/channel-alias-migration.js";
@@ -415,14 +417,20 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
   };
   toRows: (source: TSource) => readonly { key: string; value: unknown }[];
 }): PluginDoctorStateMigration {
-  const readSource = async (filePath: string): Promise<TSource | null> => {
+  const readSource = async (
+    filePath: string,
+  ): Promise<{ source: TSource | null; warning?: string }> => {
     try {
-      return params.parse(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
+      const raw = decodeUtf8Input(await fs.readFile(filePath), `Legacy state ${filePath}`);
+      return { source: params.parse(JSON.parse(raw) as unknown) };
     } catch (error) {
+      if (error instanceof Utf8InputError) {
+        return { source: null, warning: `${error.message} Left legacy source in place.` };
+      }
       if (!hasErrnoCode(error, "ENOENT")) {
         throw error;
       }
-      return null;
+      return { source: null };
     }
   };
   const describe = (source: TSource, filePath: string) =>
@@ -433,9 +441,9 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
     label: params.label,
     async detectLegacyState({ stateDir }) {
       const filePath = params.resolvePath(stateDir);
-      const source = await readSource(filePath);
+      const { source, warning } = await readSource(filePath);
       if (!source) {
-        return null;
+        return warning ? { preview: [warning] } : null;
       }
       const rows = params.toRows(source);
       if (rows.length === 0) {
@@ -448,7 +456,10 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
       const changes: string[] = [];
       const warnings: string[] = [];
       const filePath = params.resolvePath(stateDir);
-      const source = await readSource(filePath);
+      const { source, warning } = await readSource(filePath);
+      if (warning) {
+        return { changes, warnings: [warning], warningDisposition: "recoverable" };
+      }
       if (!source) {
         return { changes, warnings };
       }

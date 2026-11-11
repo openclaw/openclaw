@@ -34,29 +34,35 @@ function catalog(ids: string[], details: Partial<SessionCatalogHost> = {}): Sess
   };
 }
 
-it("retains truncated final-page rows and warning through pagination and expanded refresh", async () => {
-  const first = catalog(["first"], { nextCursor: "last-page" });
-  const error = { code: "DISCOVERY_TRUNCATED", message: "Search by exact session ID." };
-  const last = catalog(["last"], { error });
-  const merged = mergeSessionCatalogPage({
-    current: first,
-    page: last,
-    cursors: { "gateway:local": "last-page" },
-  });
-  expect(merged.advancedHostIds).toEqual(["gateway:local"]);
-  const refreshed = await refetchExpandedSessionCatalogPages({
-    catalogs: [first],
-    previousCatalogs: [catalog(["first", "stale"])],
-    client: createTestGatewayClient(async () => ({ catalogs: [last] })),
-    agentId: "main",
-    pageDepths: new Map([[sessionCatalogHostKey("anthropic", "gateway:local"), 1]]),
-    isCurrent: () => true,
-    canRequestPage: () => true,
-  });
-  for (const result of [merged.catalog, refreshed[0]]) {
-    const host = result?.hosts[0];
-    expect(host?.sessions.map((row) => row.threadId)).toEqual(["first", "last"]);
-    expect(host?.nextCursor).toBeUndefined();
-    expect(host?.error).toEqual(error);
-  }
-});
+it.each(["host", "catalog"] as const)(
+  "retains a truncated final page with a %s warning through pagination and refresh",
+  async (warningScope) => {
+    const first = catalog(["first"], { nextCursor: "retry" });
+    const error = { code: "DISCOVERY_TRUNCATED", message: "Search by exact session ID." };
+    const last = catalog(["last"], warningScope === "host" ? { error } : {});
+    if (warningScope === "catalog") {
+      last.error = error;
+    }
+    const merged = mergeSessionCatalogPage({
+      current: first,
+      page: last,
+      cursors: { "gateway:local": "retry" },
+    });
+    expect.soft(merged.advancedHostIds).toEqual(["gateway:local"]);
+    const refreshed = await refetchExpandedSessionCatalogPages({
+      catalogs: [first],
+      previousCatalogs: [catalog(["first", "stale"])],
+      client: createTestGatewayClient(async () => ({ catalogs: [last] })),
+      agentId: "main",
+      pageDepths: new Map([[sessionCatalogHostKey("anthropic", "gateway:local"), 1]]),
+      isCurrent: () => true,
+      canRequestPage: () => true,
+    });
+    for (const result of [merged.catalog, refreshed[0]]) {
+      const host = result?.hosts[0];
+      expect(host?.sessions.map((row) => row.threadId)).toEqual(["first", "last"]);
+      expect(host?.nextCursor).toBeUndefined();
+      expect(result?.error ?? host?.error).toEqual(error);
+    }
+  },
+);

@@ -33,14 +33,6 @@ const DEEPGRAM_FLUX_QUERY_KEYS = new Set([
   "tag",
 ]);
 
-type DeepgramFluxRequestConfig = {
-  allowPrivateNetwork: boolean;
-  baseUrl: string;
-  dispatcherPolicy?: Parameters<typeof openProviderWebSocket>[0]["dispatcherPolicy"];
-  headers: Headers;
-  trustConfiguredBaseUrlOrigin: boolean;
-};
-
 export function isDeepgramFluxModel(model?: string): boolean {
   return model?.trim().toLowerCase().startsWith("flux-") ?? false;
 }
@@ -84,7 +76,13 @@ function sendSocketFrame(socket: DeepgramFluxSocket, data: Buffer | string): Pro
 
 export async function transcribeDeepgramFluxAudio(params: {
   request: AudioTranscriptionRequest;
-  requestConfig: DeepgramFluxRequestConfig;
+  requestConfig: {
+    allowPrivateNetwork: boolean;
+    baseUrl: string;
+    dispatcherPolicy?: Parameters<typeof openProviderWebSocket>[0]["dispatcherPolicy"];
+    headers: Headers;
+    trustConfiguredBaseUrlOrigin: boolean;
+  };
   model: string;
 }): Promise<AudioTranscriptionResult> {
   const deadline = createProviderOperationDeadline({

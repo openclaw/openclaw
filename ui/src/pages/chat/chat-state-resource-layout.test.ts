@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { loadSettings, saveSettings } from "../../app/settings.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -9,77 +9,78 @@ import { sessionWorkspaceForHost } from "./components/chat-session-workspace-sta
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { activatePanel, openSlot, toggleSidebarPanelExpanded } from "./sidebar-layout.ts";
 
+function fixture(height = 900, sessionKey?: string) {
+  const saved = loadSettings();
+  saveSettings({ ...saved, sidebarSessionLayouts: {} });
+  onTestFinished(() => saveSettings(saved));
+  const context = createChatPageStateContext();
+  const lifecycle = { afterCommit: () => () => {} };
+  const host = {
+    ...(sessionKey ? { sessionKey } : {}),
+    dispatchEvent: () => true,
+    getBoundingClientRect: () => new DOMRect(0, 0, 1440, height),
+  };
+  const create = () => createPageState(context, lifecycle, host);
+  return { context, state: create(), create };
+}
+const panels = (state: ReturnType<typeof createPageState>) =>
+  state.sidebarLayout.columns.flatMap((column) => column.panels);
+const slots = (state: ReturnType<typeof createPageState>) =>
+  panels(state).map((panel) => panel.slot);
+
 it.each(["minimize", "close-resource", "explicit-desktop"])(
   "preserves resource layout intent through %s",
   (action) => {
-    const savedSettings = loadSettings();
-    saveSettings({ ...savedSettings, sidebarSessionLayouts: {} });
-    try {
-      const context = createChatPageStateContext();
-      const renderLifecycle = { afterCommit: () => () => {} };
-      const host = {
-        dispatchEvent: () => true,
-        getBoundingClientRect: () => new DOMRect(0, 0, 1440, 900),
-      };
-      const state = createPageState(context, renderLifecycle, host);
-      state.updateSidebarLayout(openSlot(state.sidebarLayout, "desktop"), {
-        persist: false,
-        automaticResource: "desktop",
-      });
-      const beforeDismissalReload = createPageState(context, renderLifecycle, host);
-      expect(beforeDismissalReload.sidebarLayout.columns).toEqual([]);
-      state.updateSidebarLayout({ ...openSlot(state.sidebarLayout, "workspace"), dock: "bottom" });
-      const afterLayoutChange = createPageState(context, renderLifecycle, host);
-      expect(
-        afterLayoutChange.sidebarLayout.columns.flatMap((column) =>
-          column.panels.map((panel) => panel.slot),
-        ),
-      ).toEqual(["workspace"]);
-      expect(afterLayoutChange.sidebarLayout.dock).toBe("bottom");
-      expect(state.sidebarLayout.resourceAutoOpenDismissed).toBeUndefined();
-      if (action === "explicit-desktop") {
-        const explicit = openSlot(state.sidebarLayout, "desktop");
-        for (const panel of explicit.columns.flatMap((column) => column.panels)) {
-          if (panel.slot === "desktop") {
-            panel.environmentId = "manual-desktop";
-          }
+    const { state, create } = fixture();
+    state.updateSidebarLayout(openSlot(state.sidebarLayout, "desktop"), {
+      persist: false,
+      automaticResource: "desktop",
+    });
+    expect(create().sidebarLayout.columns).toEqual([]);
+    state.updateSidebarLayout({ ...openSlot(state.sidebarLayout, "workspace"), dock: "bottom" });
+    const afterLayoutChange = create();
+    expect(slots(afterLayoutChange)).toEqual(["workspace"]);
+    expect(afterLayoutChange.sidebarLayout.dock).toBe("bottom");
+    expect(state.sidebarLayout.resourceAutoOpenDismissed).toBeUndefined();
+    if (action === "explicit-desktop") {
+      const explicit = openSlot(state.sidebarLayout, "desktop");
+      for (const panel of explicit.columns.flatMap((column) => column.panels)) {
+        if (panel.slot === "desktop") {
+          panel.environmentId = "manual-desktop";
         }
-        state.updateSidebarLayout(explicit);
-        const reloaded = createPageState(context, renderLifecycle, host);
-        const panels = reloaded.sidebarLayout.columns.flatMap((column) => column.panels);
-        expect(panels.find((panel) => panel.slot === "desktop")).toMatchObject({
-          environmentId: "manual-desktop",
-        });
-        expect(panels.some((panel) => panel.slot === "browser")).toBe(false);
-        expect(reloaded.sidebarLayout.resourceAutoOpenDismissed).toBeUndefined();
-        return;
       }
-      if (action === "minimize") {
-        state.updateSidebarLayout({ ...state.sidebarLayout, open: false });
-      } else {
-        state.updateSidebarLayout({ ...state.sidebarLayout, columns: [] });
-      }
-      expect(state.sidebarLayout.resourceAutoOpenDismissed).toBe(true);
-      const reloaded = createPageState(context, renderLifecycle, host);
-      expect(reloaded.sidebarLayout.resourceAutoOpenDismissed).toBe(true);
-      state.updateSidebarLayout(openSlot(state.sidebarLayout, "browser"));
-      expect(state.sidebarLayout.resourceAutoOpenDismissed).toBe(true);
-      expect(state.sidebarLayout.open).toBe(true);
-    } finally {
-      saveSettings(savedSettings);
+      state.updateSidebarLayout(explicit);
+      state.updateSidebarLayout(state.sidebarLayout, {
+        persist: false,
+        retireAutomaticResource: "desktop",
+      });
+      expect(panels(state)).toContainEqual(
+        expect.objectContaining({ slot: "desktop", environmentId: "manual-desktop" }),
+      );
+      const reloaded = create();
+      expect(panels(reloaded).find((panel) => panel.slot === "desktop")).toMatchObject({
+        environmentId: "manual-desktop",
+      });
+      expect(slots(reloaded)).not.toContain("browser");
+      expect(reloaded.sidebarLayout.resourceAutoOpenDismissed).toBeUndefined();
+      return;
     }
+    if (action === "minimize") {
+      state.updateSidebarLayout({ ...state.sidebarLayout, open: false });
+    } else {
+      state.updateSidebarLayout({ ...state.sidebarLayout, columns: [] });
+    }
+    expect(state.sidebarLayout.resourceAutoOpenDismissed).toBe(true);
+    const reloaded = create();
+    expect(reloaded.sidebarLayout.resourceAutoOpenDismissed).toBe(true);
+    state.updateSidebarLayout(openSlot(state.sidebarLayout, "browser"));
+    expect(state.sidebarLayout.resourceAutoOpenDismissed).toBe(true);
+    expect(state.sidebarLayout.open).toBe(true);
   },
 );
 
 it("owns attachment views in Files without replacing Detail content", () => {
-  const state = createPageState(
-    createChatPageStateContext(),
-    { afterCommit: () => () => {} },
-    {
-      dispatchEvent: () => true,
-      getBoundingClientRect: () => new DOMRect(0, 0, 1_440, 0),
-    },
-  );
+  const { state } = fixture(0);
   const detailContent = {
     kind: "markdown" as const,
     content: "Existing review",
@@ -95,24 +96,20 @@ it("owns attachment views in Files without replacing Detail content", () => {
     src: "/media/report.pdf",
   });
 
-  expect(
-    state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
-  ).toEqual(["detail", "workspace"]);
+  expect(slots(state)).toEqual(["detail", "workspace"]);
   expect(state.sessionWorkspaceState?.previews.at(-1)?.content.kind).toBe("attachment");
   expect(state.sidebarContent).toBe(detailContent);
 
   state.sidebarLayout = activatePanel(state.sidebarLayout, "detail");
   state.handleCloseSidebar("detail");
 
-  expect(
-    state.sidebarLayout.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
-  ).toEqual(["workspace"]);
+  expect(slots(state)).toEqual(["workspace"]);
   expect(state.sessionWorkspaceState?.previews.at(-1)?.content.kind).toBe("attachment");
   expect(state.sidebarContent).toBe(detailContent);
 
   state.handleCloseSidebar("workspace");
 
-  expect(state.sidebarLayout.columns.flatMap((column) => column.panels)).toHaveLength(0);
+  expect(panels(state)).toHaveLength(0);
   expect(state.sessionWorkspaceState?.previews ?? []).toEqual([]);
   expect(state.sidebarContent).toBe(detailContent);
 });
@@ -120,18 +117,7 @@ it("owns attachment views in Files without replacing Detail content", () => {
 it.each(["catalog", "catalog-after-panel-switch", "external"] as const)(
   "preserves Files expansion only for %s navigation",
   async (origin) => {
-    const settings = loadSettings();
-    saveSettings({ ...settings, sidebarSessionLayouts: {} });
-    const context = createChatPageStateContext();
-    const state = createPageState(
-      context,
-      { afterCommit: () => () => {} },
-      {
-        sessionKey: "agent:main:main",
-        dispatchEvent: () => true,
-        getBoundingClientRect: () => new DOMRect(0, 0, 1_440, 900),
-      },
-    );
+    const { context, state } = fixture(900, "agent:main:main");
     state.client = createTestGatewayClient(vi.fn());
     state.connected = true;
     const getFile = vi.spyOn(state.sessions, "getFile").mockResolvedValue({
@@ -200,7 +186,6 @@ it.each(["catalog", "catalog-after-panel-switch", "external"] as const)(
     } finally {
       stop();
       getFile.mockRestore();
-      saveSettings(settings);
     }
   },
 );

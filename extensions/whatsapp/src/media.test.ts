@@ -10,14 +10,14 @@ import {
   createSolidPngBuffer,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { withMockedWindowsPlatform, withRestoredMocks } from "openclaw/plugin-sdk/test-node-mocks";
-import { optimizeImageToPng } from "openclaw/plugin-sdk/web-media";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   LocalMediaAccessError,
   loadWebMedia,
   loadWebMediaRaw,
   optimizeImageToJpeg,
-} from "./media.js";
+  optimizeImageToPng,
+} from "openclaw/plugin-sdk/web-media";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 let fixtureRoot = "";
 let fixtureFileCount = 0;

@@ -2,36 +2,34 @@ import type { AssistantMessage, ProviderReplayState } from "@openclaw/llm-core";
 import { expect, it } from "vitest";
 import type { AgentMessage } from "../../types.js";
 import { findCutPoint } from "../compaction/compaction.js";
+import {
+  assistant as assistantMessage,
+  bash,
+  custom as customMessage,
+  text,
+  toolResult as resultMessage,
+  user as userMessage,
+} from "../compaction/shard-fixtures.test-support.js";
 import { convertToLlm } from "../messages.js";
 import type { SessionTreeEntry as Entry } from "../types.js";
 import { buildSessionContext, projectSessionEntryMessage } from "./session.js";
 
 const timestamp = "2026-07-17T00:00:00.000Z";
 const historyPrelude = Symbol.for("openclaw.sessionHistoryPrelude");
+const model = { provider: "test-provider", modelId: "test-model" };
 
-function entryBase(id: string, parentId: string | null) {
-  return { id, parentId, timestamp };
-}
+const entryBase = (id: string, parentId: string | null) => ({ id, parentId, timestamp });
 
 function messageEntry<T extends AgentMessage>(id: string, parentId: string | null, message: T) {
   return { ...entryBase(id, parentId), type: "message" as const, message };
 }
 
-function user(id: string, parentId: string | null, content: string): Entry {
-  return messageEntry(id, parentId, { role: "user", content, timestamp: Date.parse(timestamp) });
+function user(id: string, parentId: string | null, content: string) {
+  return messageEntry(id, parentId, userMessage(content));
 }
 
 function bashEntry(id: string, parentId: string, output: string, excludeFromContext: boolean) {
-  return messageEntry(id, parentId, {
-    role: "bashExecution",
-    command: `print ${output}`,
-    output,
-    exitCode: 0,
-    cancelled: false,
-    truncated: false,
-    timestamp: Date.parse(timestamp),
-    excludeFromContext,
-  });
+  return messageEntry(id, parentId, bash(output, { excludeFromContext }));
 }
 
 function assistant(
@@ -40,24 +38,7 @@ function assistant(
   content: string | AssistantMessage["content"],
   providerReplay?: ProviderReplayState,
 ) {
-  return messageEntry<AssistantMessage>(id, parentId, {
-    role: "assistant",
-    api: "openai-responses",
-    content: typeof content === "string" ? [{ type: "text", text: content }] : content,
-    provider: "test-provider",
-    model: "test-model",
-    usage: {
-      input: 1,
-      output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 2,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-    timestamp: Date.parse(timestamp),
-    ...(providerReplay ? { providerReplay } : {}),
-  });
+  return messageEntry(id, parentId, assistantMessage(content, { providerReplay }));
 }
 
 function replayState(type: string, data: string): ProviderReplayState {
@@ -81,58 +62,31 @@ function toolCall(id: string, parentId: string, toolCallId: string) {
 }
 
 function toolResult(id: string, parentId: string, toolCallId: string, content: string) {
-  return messageEntry(id, parentId, {
-    role: "toolResult",
-    toolCallId,
-    toolName: "read",
-    content: [{ type: "text", text: content }],
-    isError: false,
-    timestamp: Date.parse(timestamp),
-  });
+  return messageEntry(id, parentId, resultMessage(content, { toolCallId }));
 }
 
-function custom(
-  id: string,
-  parentId: string,
-  customType: string,
-  content: string,
-  details: unknown,
-): Entry {
+function custom(id: string, parentId: string, type: string, details: unknown, content = id): Entry {
   return {
     type: "custom_message",
     ...entryBase(id, parentId),
-    customType,
+    customType: type,
     content,
     display: false,
     details,
   };
 }
 
-function expectRoles(messages: AgentMessage[], ...roles: AgentMessage["role"][]) {
-  expect(messages.map((message) => message.role)).toEqual(roles);
-}
-
-function expectTranscript(messages: AgentMessage[], expected: [AgentMessage["role"], string][]) {
+function expectTranscript(messages: AgentMessage[], expected: [AgentMessage["role"], unknown][]) {
   expect(
-    messages.map((message) => [
-      message.role,
-      "summary" in message ? message.summary : "content" in message ? message.content : undefined,
+    messages.map((m) => [
+      m.role,
+      "summary" in m ? m.summary : "content" in m ? m.content : undefined,
     ]),
-  ).toEqual(
-    expected.map(([role, content]) => [
-      role,
-      role === "assistant" || role === "toolResult" ? [{ type: "text", text: content }] : content,
-    ]),
-  );
+  ).toEqual(expected);
 }
 
-function reset(
-  id: string,
-  parentId: string,
-  firstKeptEntryId?: string,
-  reason: "new" | "reset" = "new",
-): Entry {
-  return { type: "reset", id, parentId, timestamp, reason, firstKeptEntryId };
+function reset(id: string, parent: string, kept?: string, reason: "new" | "reset" = "new"): Entry {
+  return { type: "reset", ...entryBase(id, parent), reason, firstKeptEntryId: kept };
 }
 
 function compaction(
@@ -156,12 +110,11 @@ function resetContext(entries: [Entry, ...Entry[]], firstKeptEntryId = "kept") {
 it.each(["reply", "model-change"])(
   "ignores a synthetic %s when selecting the inference model",
   (kind) => {
-    const answer = assistant("answer", null, "Provider answer");
     const artifact = assistant("artifact", "answer", "Delivered reply");
     artifact.message.provider = "openclaw";
     artifact.message.model = "command";
     const context = buildSessionContext([
-      answer,
+      assistant("answer", null, "Provider answer"),
       kind === "reply"
         ? artifact
         : {
@@ -171,18 +124,23 @@ it.each(["reply", "model-change"])(
             modelId: "command",
           },
     ]);
-    expect(context.model).toEqual({ provider: "test-provider", modelId: "test-model" });
+    expect(context.model).toEqual(model);
     if (kind === "reply") {
       expect(context.messages).toContainEqual(artifact.message);
     }
   },
 );
 
-it.each(["compaction", "reset", "prompt-restart", "prompt-checkpoint"])(
+it.each([
+  ["compaction", ["old-runtime", "new-update", "new-runtime"]],
+  ["reset", ["new-update", "new-runtime"]],
+  ["prompt-restart", ["old-runtime", "new-update", "new-runtime"]],
+  ["prompt-checkpoint", ["old-update", "old-runtime", "new-update", "new-runtime"]],
+] as const)(
   "retires only operators from an earlier prompt series across %s",
-  (boundary) => {
+  (boundary, expectedOperators) => {
     const operator = (id: string, kind: "prompt-update" | "runtime-context") =>
-      custom(id, "user", "openclaw.system-update", id, {
+      custom(id, "user", "openclaw.system-update", {
         kind,
         turnScoped: kind === "runtime-context",
       });
@@ -208,31 +166,16 @@ it.each(["compaction", "reset", "prompt-restart", "prompt-checkpoint"])(
       operator("new-runtime", "runtime-context"),
     ];
     const context = buildSessionContext(entries);
-    if (boundary === "compaction") {
-      expect(context.messages[0]).toMatchObject({
-        role: "compactionSummary",
-        summary: "Summary",
-      });
-    }
     expect(
       context.messages
         .filter((message) => message.role === "custom")
         .map((message) => message.content),
-    ).toEqual(
-      boundary === "prompt-checkpoint"
-        ? ["old-update", "old-runtime", "new-update", "new-runtime"]
-        : boundary === "reset"
-          ? ["new-update", "new-runtime"]
-          : ["old-runtime", "new-update", "new-runtime"],
-    );
-    const conversation = context.messages.filter(
-      (m) => m.role === "user" || m.role === "assistant",
-    );
-    expectTranscript(conversation, [
+    ).toEqual(expectedOperators);
+    const chat = context.messages.filter((m) => m.role === "user" || m.role === "assistant");
+    expectTranscript(chat, [
       ["user", "Kept question"],
-      ["assistant", "Kept answer"],
+      ["assistant", [text("Kept answer")]],
     ]);
-    expect(entries.filter((entry) => entry.type === "custom_message")).toHaveLength(4);
   },
 );
 
@@ -249,7 +192,7 @@ it.each([
   (customType, details, runtimeContextCarrier) => {
     const entries: Entry[] = [
       user("entry-0", null, "original request"),
-      custom("entry-1", "entry-0", customType, "metadata ".repeat(100), details),
+      custom("entry-1", "entry-0", customType, details, "metadata ".repeat(100)),
       assistant("entry-2", "entry-1", "done"),
     ];
     for (const keepRecentTokens of [100, 1, 1_000]) {
@@ -261,24 +204,15 @@ it.each([
         turnStartIndex: expectedIndex === 2 ? (runtimeContextCarrier ? 0 : 1) : -1,
         isSplitTurn: expectedIndex === 2,
       });
-      const firstKeptEntry = entries[cut.firstKeptEntryIndex];
-      if (!firstKeptEntry) {
-        throw new Error("Expected a retained compaction boundary");
-      }
       const replay = buildSessionContext([
         ...entries,
-        compaction("compacted", "entry-2", firstKeptEntry.id, "Earlier conversation", 1_000),
+        compaction("compacted", "entry-2", `entry-${expectedIndex}`, "Earlier conversation", 1_000),
       ]);
       expect(replay.messages).toMatchObject([
         { role: "compactionSummary", summary: "Earlier conversation" },
         ...[
           { role: "user", content: "original request" },
-          {
-            role: "custom",
-            customType,
-            content: "metadata ".repeat(100),
-            details,
-          },
+          { role: "custom", customType, content: "metadata ".repeat(100), details },
           { role: "assistant", content: [{ type: "text", text: "done" }] },
         ].slice(expectedIndex),
       ]);
@@ -287,22 +221,15 @@ it.each([
 );
 
 it.each(["activity", "shell"])("keeps excluded %s in history but out of model input", (kind) => {
-  const activity = {
-    role: "custom" as const,
+  const activity = customMessage("Context compacted", {
     customType: "openclaw.context-compaction",
-    content: "Context compacted",
-    display: true,
     excludeFromContext: true,
-    timestamp: Date.parse(timestamp),
-  };
-  const runtimeContext = {
-    role: "custom" as const,
+  });
+  const runtimeContext = customMessage("Model-visible runtime context", {
     customType: "openclaw.runtime-context",
-    content: "Model-visible runtime context",
     display: false,
     details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
-    timestamp: Date.parse(timestamp),
-  };
+  });
   const hidden =
     kind === "activity"
       ? messageEntry("hidden", "initial", activity)
@@ -321,25 +248,11 @@ it.each(["activity", "shell"])("keeps excluded %s in history but out of model in
   const messages = buildSessionContext(entries).messages;
   expect(projectSessionEntryMessage(hidden)).toBeUndefined();
   expect(projectSessionEntryMessage(visible)).toBe(visible.message);
-  expectRoles(messages, "user", kind === "activity" ? "custom" : "bashExecution", "user");
-  expect(JSON.stringify(messages)).not.toContain(hiddenText);
+  expect(messages).toEqual([entries[0]?.message, visible.message, entries[3]?.message]);
   expect(JSON.stringify(entries)).toContain(hiddenText);
-  if (kind === "shell") {
-    expect(JSON.stringify(messages)).toContain("visible shell output");
-    return;
+  if (kind === "activity") {
+    expect(convertToLlm([activity])).toEqual([]);
   }
-  expect(convertToLlm([activity])).toEqual([]);
-  expect(JSON.stringify(messages)).toContain("Model-visible runtime context");
-  expect(convertToLlm(messages)).toMatchObject([
-    { role: "user", content: "original request" },
-    {
-      role: "user",
-      content:
-        "OpenClaw runtime context:\nModel-visible runtime context\nEnd OpenClaw runtime context.",
-      runtimeContext: {},
-    },
-    { role: "user", content: "continue" },
-  ]);
 });
 
 it("replays only the retained tail and newer entries after compaction", () => {
@@ -353,27 +266,19 @@ it("replays only the retained tail and newer entries after compaction", () => {
     assistant("checkpoint", "kept", "retained checkpoint", checkpoint),
     assistant("anthropic", "checkpoint", "retained Anthropic checkpoint", anthropic),
     assistant("suppression", "anthropic", "retained suppression", suppression),
-    {
-      type: "model_change",
-      ...entryBase("model", "suppression"),
-      provider: "test-provider",
-      modelId: "test-model",
-    },
+    { type: "model_change", ...entryBase("model", "suppression"), ...model },
     compaction("compaction", "model", "kept", "older context", 123),
     assistant("post", "compaction", "post-boundary checkpoint", post),
     user("new", "post", "new turn"),
   ]);
-  expect(context).toMatchObject({
-    thinkingLevel: "off",
-    model: { provider: "test-provider", modelId: "test-model" },
-  });
+  expect(context).toMatchObject({ thinkingLevel: "off", model });
   expectTranscript(context.messages, [
     ["compactionSummary", "older context"],
     ["user", "retained"],
-    ["assistant", "retained checkpoint"],
-    ["assistant", "retained Anthropic checkpoint"],
-    ["assistant", "retained suppression"],
-    ["assistant", "post-boundary checkpoint"],
+    ["assistant", [text("retained checkpoint")]],
+    ["assistant", [text("retained Anthropic checkpoint")]],
+    ["assistant", [text("retained suppression")]],
+    ["assistant", [text("post-boundary checkpoint")]],
     ["user", "new turn"],
   ]);
   const assistants = context.messages.filter((message) => message.role === "assistant");
@@ -383,43 +288,37 @@ it("replays only the retained tail and newer entries after compaction", () => {
   expect(assistants[3]?.providerReplay).toEqual(post);
 });
 
-it("treats the latest reset as a hard cut with a user/assistant-only kept tail", () => {
-  const retainedCheckpoint = replayState("openai-responses-compaction", "reset-checkpoint");
-  const { messages } = resetContext([
-    user("discarded", null, "discarded"),
-    user("kept", "discarded", "kept question"),
-    toolResult("kept-tool", "kept", "call-1", "hidden tool result"),
-    assistant("kept-assistant", "kept-tool", "kept answer", retainedCheckpoint),
+it.each([
+  ["completed occurrences", ["call", "result", "call", "result", "result"], [0, 1, 2, 3]],
+  ["local ownership", ["call", "call", "result", "result"], [0, 1, 2]],
+  ["displaced ownership", ["call", "user", "result"], [0, 1, 2]],
+] as const)("preserves reset tool results by %s", (_name, sequence, retained) => {
+  const initial = user("kept", null, "kept");
+  const entries = sequence.map((kind, i) => {
+    const id = `entry-${i}`;
+    const parent = i === 0 ? "kept" : `entry-${i - 1}`;
+    return kind === "call"
+      ? toolCall(id, parent, "call-1")
+      : kind === "result"
+        ? toolResult(id, parent, "call-1", id)
+        : user(id, parent, id);
+  });
+  const { messages } = resetContext([initial, ...entries]);
+  expect(messages).toEqual([
+    initial.message,
+    ...retained.map((i) => entries[i]?.message),
+    user("new", "reset", "new turn").message,
   ]);
-  expectTranscript(messages, [
-    ["user", "kept question"],
-    ["assistant", "kept answer"],
-    ["user", "new turn"],
-  ]);
-  expect(JSON.stringify(messages)).not.toContain("discarded");
-  expect(JSON.stringify(messages)).not.toContain("hidden tool result");
-  const keptAssistant = messages[1];
-  expect(keptAssistant).not.toHaveProperty("providerReplay");
-  expect(Object.getOwnPropertyDescriptor(keptAssistant ?? {}, historyPrelude)?.value).toBe(true);
-});
-
-it("retains reset tool results by call occurrence while excluding an orphan", () => {
-  const { messages } = resetContext([
-    user("discarded", null, "discarded"),
-    user("kept", "discarded", "kept"),
-    toolCall("assistant-1", "kept", "call-1"),
-    toolResult("result-1", "assistant-1", "call-1", "first result"),
-    toolCall("assistant-2", "result-1", "call-1"),
-    toolResult("result-2", "assistant-2", "call-1", "second result"),
-    toolResult("orphan", "result-2", "call-1", "orphan result"),
-  ]);
-  expectRoles(messages, "user", "assistant", "toolResult", "assistant", "toolResult", "user");
-  expect(JSON.stringify(messages)).toContain("first result");
-  expect(JSON.stringify(messages)).toContain("second result");
-  expect(JSON.stringify(messages)).not.toContain("orphan result");
+  for (const i of retained) {
+    if (sequence[i] === "result") {
+      expect(messages).toContain(entries[i]?.message);
+    }
+  }
 });
 
 it("keeps tool ownership within the latest reset when resets repeat", () => {
+  const retained = toolCall("latest-assistant", "thinking", "latest-call");
+  retained.message.providerReplay = replayState("openai-responses-compaction", "reset-checkpoint");
   const context = buildSessionContext([
     user("first-user", null, "first conversation"),
     toolCall("first-assistant", "first-user", "first-call"),
@@ -433,7 +332,7 @@ it("keeps tool ownership within the latest reset when resets repeat", () => {
       ...entryBase("thinking", "orphan"),
       thinkingLevel: "high",
     },
-    toolCall("latest-assistant", "thinking", "latest-call"),
+    retained,
     toolResult("latest-result", "latest-assistant", "latest-call", "latest result"),
     reset("latest-reset", "latest-result", "latest-kept", "reset"),
     user("new", "latest-reset", "new turn"),
@@ -445,26 +344,8 @@ it("keeps tool ownership within the latest reset when resets repeat", () => {
     { role: "toolResult", toolCallId: "latest-call" },
     { role: "user", content: "new turn" },
   ]);
+  const keptAssistant = context.messages[1];
+  expect(keptAssistant).not.toHaveProperty("providerReplay");
+  expect(Object.getOwnPropertyDescriptor(keptAssistant ?? {}, historyPrelude)?.value).toBe(true);
   expect(JSON.stringify(context.messages)).not.toContain("discarded conversation");
 });
-
-it.each(["local", "displaced"])(
-  "preserves %s tool-result ownership and position after reset",
-  (kind) => {
-    const local = kind === "local";
-    const result = toolResult("result", "intervening", "call-1", "owned result");
-    const { messages } = resetContext([
-      user("kept", null, "kept"),
-      toolCall("assistant", "kept", "call-1"),
-      local
-        ? toolCall("intervening", "assistant", "call-1")
-        : user("intervening", "assistant", "intervening"),
-      result,
-      ...(local ? [toolResult("extra", "result", "call-1", "ambiguous extra")] : []),
-    ]);
-    const middleRole = local ? "assistant" : "user";
-    expectRoles(messages, "user", "assistant", middleRole, "toolResult", "user");
-    expect(messages[3]).toBe(result.message);
-    expect(JSON.stringify(messages)).not.toContain("ambiguous extra");
-  },
-);

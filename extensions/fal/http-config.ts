@@ -9,14 +9,12 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
 
-type FalAuthenticatedRequest = {
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-};
-
 export async function resolveFalHttpRequestConfig(params: {
-  req: FalAuthenticatedRequest;
+  req: {
+    cfg?: OpenClawConfig;
+    agentDir?: string;
+    authStore?: AuthProfileStore;
+  };
   capability: ProviderRequestCapability;
 }): Promise<ReturnType<typeof resolveProviderHttpRequestConfig>> {
   const auth = await resolveApiKeyForProvider({

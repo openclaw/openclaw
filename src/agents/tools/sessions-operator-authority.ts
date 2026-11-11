@@ -17,7 +17,9 @@ export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAut
   const invocation = readOperatorToolGatewayAuthority();
   const caller = getGatewayToolCallerIdentity()?.operatorAuthority;
   const scope = getPluginRuntimeGatewayRequestScope();
-  const retained = scope?.client?.internal?.operatorRunAuthority;
+  // The admitted caller owns continuation authority; the ambient client may still
+  // belong to the completed recovery request that launched this child.
+  const retained = caller ? undefined : scope?.client?.internal?.operatorRunAuthority;
   const authority = prepared ?? caller ?? invocation?.operatorRunAuthority ?? retained;
   if (!authority) {
     return undefined;
@@ -74,17 +76,26 @@ export function hasSessionWriteAuthority(prepared?: AdmittedRunOperatorAuthority
 export function prepareSandboxSessionTools(params: {
   policy?: SandboxToolPolicy;
   senderIsOwner?: boolean;
-  authority?: AdmittedRunOperatorAuthority;
+  /** Captured policy owner; null explicitly projects a run without an operator. */
+  authority?: AdmittedRunOperatorAuthority | null;
 }): { policy?: SandboxToolPolicy; renameOnly: boolean } {
   const policy = params.policy;
   const defaultAllow = policy?.[SANDBOX_DEFAULT_TOOL_ALLOW];
-  if (
-    params.senderIsOwner !== false ||
-    !policy ||
-    !defaultAllow ||
-    defaultAllow !== policy.allow ||
-    !hasSessionWriteAuthority(params.authority)
-  ) {
+  if (params.senderIsOwner !== false || !policy || !defaultAllow || defaultAllow !== policy.allow) {
+    return { policy, renameOnly: false };
+  }
+  // Catalog projection belongs to the captured run, not the request asking to
+  // compare it. Tool execution still intersects current caller authority.
+  const authority = params.authority;
+  if (authority) {
+    assertAdmittedRunOperatorAuthority(authority);
+    authority.assertCurrent();
+  }
+  const canWrite =
+    authority === undefined
+      ? hasSessionWriteAuthority()
+      : authority !== null && operatorScopeSatisfied("operator.sessions.write", authority.scopes);
+  if (!canWrite) {
     return { policy, renameOnly: false };
   }
   const added = ["sessions", "sessions_create"].filter((name) => {

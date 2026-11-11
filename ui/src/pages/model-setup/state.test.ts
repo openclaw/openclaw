@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { activationTimeoutForKind, initialWizardValue, mapActivationResult } from "./state.ts";
+import {
+  activationTimeoutForKind,
+  initialWizardValue,
+  mapActivationResult,
+  wizardStateFromResult,
+} from "./state.ts";
 
 describe("model setup state", () => {
   it("matches the activation and provider-auth wizard lifetimes", () => {
@@ -34,6 +39,18 @@ describe("model setup state", () => {
         restartWarning: "Restart the Gateway",
       }),
     ).toEqual({ phase: "failure", targetId: "openai", status: "unknown", error: "failed" });
+  });
+
+  it("shows the localized sentence instead of the Gateway's bare cancelled word", () => {
+    const cancelled = (error?: string) =>
+      wizardStateFromResult("openai", { done: true, status: "cancelled", error }, "Sign-in ended.");
+    expect(cancelled("cancelled")).toEqual({ phase: "cancelled", message: "Sign-in ended." });
+    expect(cancelled(" Cancelled ")).toEqual({ phase: "cancelled", message: "Sign-in ended." });
+    expect(cancelled("Provider declined the request.")).toEqual({
+      phase: "cancelled",
+      message: "Provider declined the request.",
+    });
+    expect(cancelled("")).toEqual({ phase: "cancelled", message: "Sign-in ended." });
   });
 
   it("copies multiselect initial values", () => {

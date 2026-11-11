@@ -2,6 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { CHAT_APP_CONTEXT_LIMITS } from "../chat-app-context.js";
 import { CHAT_WORK_CONTEXT_DETAIL_LIMITS, CHAT_WORK_CONTEXT_LIMITS } from "../chat-work-context.js";
 import {
   CHAT_HISTORY_MAX_ENTRIES,
@@ -87,6 +88,13 @@ export const ChatPendingInputsPageSchema = closedObject({
       acceptedAt: Type.Number(),
       state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
       queued: Type.Optional(Type.Literal(true)),
+      cancelledByUser: Type.Optional(Type.Literal(true)),
+      steerNow: Type.Optional(
+        closedObject({
+          status: Type.Enum(["available", "blocked"]),
+          tools: Type.Array(NonEmptyString),
+        }),
+      ),
     }),
     { maxItems: 20 },
   ),
@@ -125,7 +133,18 @@ export const ChatInputConsumptionsSchema = Type.Array(
 );
 export type ChatInputConsumptions = Static<typeof ChatInputConsumptionsSchema>;
 
+/** Legacy persisted activity receipts; retained so existing history still validates. */
+export const AgentActivityDelegationSchema = closedObject({
+  runId: Type.String({ minLength: 1, maxLength: 256 }),
+  childSessionKey: Type.String({ minLength: 1, maxLength: 1024 }),
+  label: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  groupId: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  runtimeMs: Type.Optional(Type.Number({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+  status: stringLiteralUnion(["accepted", "done", "failed", "killed", "timeout"]),
+});
+export type AgentActivityDelegation = Static<typeof AgentActivityDelegationSchema>;
 export const AgentActivityItemSchema = closedObject({
+  delegation: Type.Optional(Type.Array(AgentActivityDelegationSchema, { maxItems: 32 })),
   itemId: NonEmptyString,
   phase: stringLiteralUnion(["start", "update", "end"]),
   kind: Type.String(),
@@ -234,7 +253,41 @@ export const ChatPredictResultSchema = closedObject({
   text: Type.Union([Type.String({ maxLength: 500 }), Type.Null()]),
 });
 
+/** Dismiss displayed pending inputs that ended interrupted or cancelled. */
+export const ChatPendingInputsDismissParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  sessionId: NonEmptyString,
+  inputIds: Type.Array(NonEmptyString, { minItems: 1, maxItems: 100, uniqueItems: true }),
+});
+
+export const ChatPendingInputsDismissResultSchema = closedObject({
+  dismissedIds: Type.Array(NonEmptyString, { maxItems: 100 }),
+  runIds: Type.Array(Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }), {
+    maxItems: 100,
+  }),
+  missingIds: Type.Array(NonEmptyString, { maxItems: 100 }),
+});
+
 export type ChatPredictParams = Static<typeof ChatPredictParamsSchema>;
+
+/** Interrupt only the tools delaying one already accepted steering input. */
+export const ChatSteerNowParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  sessionId: NonEmptyString,
+  runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
+});
+
+export const ChatSteerNowResultSchema = closedObject({
+  status: Type.Enum(["interrupted", "idle", "blocked", "settled", "unavailable"]),
+  tools: Type.Array(NonEmptyString),
+});
+
+export type ChatSteerNowParams = Static<typeof ChatSteerNowParamsSchema>;
+export type ChatSteerNowResult = Static<typeof ChatSteerNowResultSchema>;
+export type ChatPendingInputsDismissParams = Static<typeof ChatPendingInputsDismissParamsSchema>;
+export type ChatPendingInputsDismissResult = Static<typeof ChatPendingInputsDismissResultSchema>;
 export type ChatPredictResult = Static<typeof ChatPredictResultSchema>;
 
 /** Batched purpose-title request for tool calls rendered in the Control UI. */
@@ -354,6 +407,17 @@ export const ChatSendParamsSchema = closedObject({
   sessionId: Type.Optional(NonEmptyString),
   message: Type.String(),
   mentions: Type.Optional(HumanMentionsSchema),
+  appContext: Type.Optional(
+    Type.Array(
+      closedObject({
+        title: Type.String({ minLength: 1, maxLength: CHAT_APP_CONTEXT_LIMITS.title }),
+        uri: Type.Optional(Type.String({ maxLength: CHAT_APP_CONTEXT_LIMITS.uri })),
+        icon: Type.Optional(Type.String({ maxLength: CHAT_APP_CONTEXT_LIMITS.icon })),
+        description: Type.Optional(Type.String({ maxLength: CHAT_APP_CONTEXT_LIMITS.description })),
+      }),
+      { minItems: 1, maxItems: CHAT_APP_CONTEXT_LIMITS.items },
+    ),
+  ),
   workContext: Type.Optional(ChatWorkContextSchema),
   intent: Type.Optional(ChatSendIntentSchema),
   thinking: Type.Optional(Type.String()),
@@ -392,9 +456,13 @@ export const ChatSendParamsSchema = closedObject({
 export const ChatAbortParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  // Optional physical-session fence; an exact runId is required when supplied.
+  sessionId: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   preserveSideRuns: Type.Optional(Type.Boolean()),
   discardPendingInput: Type.Optional(Type.Boolean()),
+  /** Explicit Stop action; presentation only, never cancellation authority. */
+  userInitiated: Type.Optional(Type.Boolean()),
 });
 
 /** Inserts an operator-visible synthetic message into an existing chat transcript. */

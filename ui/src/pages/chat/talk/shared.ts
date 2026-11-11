@@ -17,6 +17,7 @@ import type {
 import type { TalkEvent } from "../../../../../src/talk/talk-events.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../../api/gateway.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import type { RealtimeTalkInputOwner } from "./input.ts";
 
 export type RealtimeTalkStatus = "idle" | "connecting" | "listening" | "thinking" | "error";
@@ -179,7 +180,7 @@ export function waitForChatResult(params: {
     const onAbort = () => {
       settle(new DOMException("OpenClaw tool call aborted", "AbortError"));
     };
-    params.signal?.addEventListener("abort", onAbort, { once: true });
+    const disposeAbort = params.signal && listen(params.signal, "abort", onAbort, { once: true });
     let unsubscribe: () => void = () => undefined;
     const settle = (result: string | Error | DOMException) => {
       if (settled) {
@@ -190,7 +191,7 @@ export function waitForChatResult(params: {
       if (emptyFinalFallbackTimer !== undefined) {
         window.clearTimeout(emptyFinalFallbackTimer);
       }
-      params.signal?.removeEventListener("abort", onAbort);
+      disposeAbort?.();
       unsubscribe();
       if (typeof result === "string") {
         resolve(result);
@@ -381,7 +382,7 @@ export async function submitRealtimeTalkConsult(params: {
     await submitAbortResult();
     return;
   }
-  params.signal?.addEventListener("abort", abortRun, { once: true });
+  const disposeAbort = params.signal && listen(params.signal, "abort", abortRun, { once: true });
   try {
     const args =
       typeof params.args === "string" ? JSON.parse(params.args || "{}") : (params.args ?? {});
@@ -424,7 +425,7 @@ export async function submitRealtimeTalkConsult(params: {
       error: formatUiError(error),
     });
   } finally {
-    params.signal?.removeEventListener("abort", abortRun);
+    disposeAbort?.();
     if (submissionCompleted && !aborted && !params.signal?.aborted) {
       ctx.callbacks.onStatus?.("listening");
     }

@@ -16,11 +16,6 @@ import {
 
 const persistedStores = vi.hoisted(() => new Map<string, { profiles: Record<string, unknown> }>());
 
-// mock-isolation: fixed labels keep overview assertions independent of account display state.
-vi.mock("../../agents/auth-profiles/display.js", () => ({
-  resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
-}));
-
 // mock-isolation: read only synthetic credential stores, never operator credentials.
 vi.mock("../../agents/auth-profiles/persisted.js", () => ({
   loadPersistedAuthProfileStore: (agentDir?: string) => persistedStores.get(agentDir ?? "__main__"),
@@ -36,11 +31,6 @@ vi.mock("../../agents/auth-profiles/paths.js", () => ({
 vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   listProfilesForProvider: (store: OverviewParams["store"], provider: string) =>
     Object.keys(store.profiles).filter((id) => store.profiles[id]?.provider === provider),
-}));
-
-// mock-isolation: host cooldown state must not change synthetic auth overview results.
-vi.mock("../../agents/auth-profiles/usage.js", () => ({
-  resolveProfileUnusableUntilForDisplay: () => undefined,
 }));
 
 type OverviewParams = Parameters<typeof resolveProviderAuthOverview>[0];
@@ -73,7 +63,6 @@ it("labels token profiles that only have tokenRef", () => {
       tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
     },
   });
-
   expect(result.profiles.labels[0]).toContain("token:ref(env:GITHUB_TOKEN)");
 });
 
@@ -117,7 +106,6 @@ it.each([
       apiKey: "configured-key",
     }),
   );
-
   expect(result.effective.kind).toBe(kind);
 });
 
@@ -127,7 +115,13 @@ it("reports the main auth store for inherited profiles", () => {
   const result = resolveOverview(
     "openai",
     { [profileId]: createOAuthRefreshCredential() },
-    {},
+    {
+      auth: {
+        profiles: {
+          [profileId]: { provider: "openai", mode: "oauth", displayName: "Work account" },
+        },
+      },
+    },
     "/tmp/openclaw-agent-custom",
   );
 
@@ -135,6 +129,7 @@ it("reports the main auth store for inherited profiles", () => {
     kind: "profiles",
     detail: "/tmp/auth-profiles.json",
   });
+  expect(result.profiles.labels).toEqual([`${profileId}=OAuth (Work account)`]);
 });
 
 const marker = "marker(oauth:openai)";

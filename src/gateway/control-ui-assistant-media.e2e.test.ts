@@ -58,18 +58,9 @@ test("serves local assistant media through scoped tickets over the gateway HTTP 
           "content-disposition": `attachment; filename="__ ticketed (final).txt"; filename*=UTF-8''%E6%B5%8B%E8%AF%95%20ticketed%20%28final%29.txt`,
         },
       });
-      const fileUrl = pathToFileURL(filePath).href;
-      for (const source of [
-        fileUrl,
-        fileUrl.replace(/^file:/u, "FILE:"),
-        fileUrl.replace(/^file:\/\//u, "file:"),
-        fileUrl.replace(/^file:\/\//u, "FILE:"),
-      ]) {
-        expect(await read({}, source)).toMatchObject(delivered);
-      }
-      for (const source of ["file://evil-host/etc/hostname", "FILE://evil-host/etc/hostname"]) {
-        expect((await read(authorized, source, null)).status).toBe(404);
-      }
+      const fileUrl = pathToFileURL(filePath).href.replace(/^file:\/\//u, "FILE:");
+      expect(await read({}, fileUrl)).toMatchObject(delivered);
+      expect((await read(authorized, "FILE://evil-host/etc/hostname", null)).status).toBe(404);
       const validators = { etag: null, "last-modified": null, "accept-ranges": "bytes" };
       expect(await read({ headers: { Range: "bytes=9-15" } })).toMatchObject({
         status: 206,
@@ -108,6 +99,28 @@ test("serves local assistant media through scoped tickets over the gateway HTTP 
         byteLength: 0,
         headers: { "content-length": "0" },
       });
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg"><script href="payload.js"/></svg>';
+      const inboundDir = path.join(stateDir, "media", "inbound");
+      await fs.mkdir(inboundDir, { recursive: true });
+      await fs.writeFile(path.join(inboundDir, "preview.svg"), svg);
+      for (const source of [await write("preview.svg", svg), "media://inbound/preview.svg"]) {
+        const svgMetadata = await readHttp(url({ meta: "1", source }), authorized);
+        const ticket = (svgMetadata.json() as { mediaTicket: string }).mediaTicket;
+        expect(ticket).toMatch(/^v1\./);
+        for (const options of [{}, { method: "HEAD" }, { headers: { Range: "bytes=0-3" } }]) {
+          const response = await readHttp(url({ source, mediaTicket: ticket }), options);
+          expect(response).toMatchObject({
+            status: "headers" in options ? 206 : 200,
+            text: "method" in options ? "" : "headers" in options ? "<svg" : svg,
+            headers: {
+              "content-type": "image/svg+xml",
+              "content-security-policy":
+                "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; sandbox",
+              "content-disposition": expect.stringMatching(/^inline;/),
+            },
+          });
+        }
+      }
       expect((await read({}, await write("other-preview.txt", "other media\n"))).status).toBe(401);
     },
     { serverOptions: { auth: { ...auth }, controlUiEnabled: true } },

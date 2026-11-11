@@ -8,20 +8,14 @@ import { scanCliRootOptions } from "./root-option-scan.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 import { resolveSubprocessExitCode } from "./subprocess-exit-code.js";
 
-type CliContainerParseResult =
-  | { ok: true; container: string | null; argv: string[] }
-  | { ok: false; error: string };
-
-type CliContainerTargetResult =
-  | { handled: true; exitCode: number }
-  | { handled: false; argv: string[] };
-
 const CONTAINER_RUNTIMES = ["podman", "docker"] as const;
 
 const CONTAINER_ALLOW_LOOPBACK_PROXY_URL_ENV = "OPENCLAW_CONTAINER_ALLOW_LOOPBACK_PROXY_URL";
 const CONTAINER_RUNTIME_PROBE_TIMEOUT_MS = 10_000;
 
-export function parseCliContainerArgs(argv: string[]): CliContainerParseResult {
+export function parseCliContainerArgs(
+  argv: string[],
+): { ok: true; container: string | null; argv: string[] } | { ok: false; error: string } {
   let container: string | null = null;
 
   const scanned = scanCliRootOptions(argv, ({ arg, args, index }) => {
@@ -102,7 +96,9 @@ function redactProxyUrlForMessage(raw: string): string {
   return url.toString();
 }
 
-export function maybeRunCliInContainer(argv: string[]): CliContainerTargetResult {
+export function maybeRunCliInContainer(
+  argv: string[],
+): { handled: true; exitCode: number } | { handled: false; argv: string[] } {
   if (process.env.OPENCLAW_CLI_CONTAINER_BYPASS === "1") {
     return { handled: false, argv };
   }

@@ -1,3 +1,4 @@
+import { sendUpdateResultTelemetry } from "../../infra/update-result-telemetry.js";
 import {
   finishInterruptedUpdateBeforeActivation,
   getUpdateRun,
@@ -10,8 +11,8 @@ import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
+import { getCliPluginInvocationResources } from "../runtime-cleanup-scope.js";
 import {
-  exitAfterSignalExitBarriers,
   registerSignalExitBarrier,
   registerSignalExitGate,
   waitForSignalExitBarriers,
@@ -28,6 +29,7 @@ type MutableAdmission = {
   phase: UpdateRunRecord["phase"];
   terminal?: Promise<void>;
   recovering?: true;
+  ledgerRecordingRetired?: true;
   interruption?: { signal: "SIGINT" | "SIGTERM" | "SIGHUP"; phase: string; error: Error };
   forward: Set<() => void>;
 };
@@ -50,6 +52,11 @@ export async function withMutableUpdateTerminalSettlement<T>(
   } finally {
     completion.resolve();
   }
+}
+
+/** Recovery owns the run after an activation-stage signal, so its receipts still belong in history. */
+export function isMutableUpdateRecovering(run: Run | undefined): boolean {
+  return (run && admissions.get(run)?.recovering) === true;
 }
 
 export function recordMutableUpdateSignalPhase(
@@ -148,13 +155,22 @@ export function retainMutableUpdateSignalWrite(
   void retained.then(release, release);
 }
 
+/**
+ * A signal cancels the CLI's command work. Rollback must outlive that: its state-ownership
+ * reads see the cancelled scope otherwise and the update leaves the Gateway stopped.
+ */
+export function runMutableUpdateRecovery<T>(operation: () => Promise<T>): Promise<T> {
+  const resources = getCliPluginInvocationResources();
+  return resources ? resources.runCleanup(operation) : operation();
+}
+
 /** Retain rollback work without retaining a potentially unbounded forward command. */
 export function captureMutableUpdateCompensation(opts: UpdateCommandOptions) {
   const run = opts.run;
   const admission = run ? admissions.get(run) : undefined;
   return async <T>(operation: () => Promise<T>): Promise<T> => {
     if (!admission) {
-      return await operation();
+      return await runMutableUpdateRecovery(operation);
     }
     if (!admission.active || admission.sealed) {
       throw new Error("Update compensation admission is no longer current.");
@@ -163,7 +179,7 @@ export function captureMutableUpdateCompensation(opts: UpdateCommandOptions) {
     // The admission owner joins this settlement after the compensation operation resolves.
     void trackSignalSettlement(admission, completion.promise);
     try {
-      const result = await operation();
+      const result = await runMutableUpdateRecovery(operation);
       completion.resolve();
       return result;
     } catch (error) {
@@ -183,7 +199,14 @@ export function admitMutableUpdateSignalRun(run: Run, record: UpdateRunRecord): 
   });
 }
 
-export function retireMutableUpdateSignalRun(run: Run): void {
+export function retireMutableUpdateSignalLedgerRecording(run: Run): void {
+  const admission = admissions.get(run);
+  if (admission) {
+    admission.ledgerRecordingRetired = true;
+  }
+}
+
+function retireMutableUpdateSignalRun(run: Run): void {
   admissions.delete(run);
 }
 
@@ -211,6 +234,10 @@ export async function withMutableUpdateSignals<T>(
       executorFence.assertCurrent();
     };
     return () => {
+      // Candidate migrations can retire this reader without ending signal ownership.
+      if (admission.ledgerRecordingRetired) {
+        return;
+      }
       assertCurrent();
       if (admission.unconfirmedWrite) {
         throw admission.unconfirmedWrite.error;
@@ -225,7 +252,12 @@ export async function withMutableUpdateSignals<T>(
       }
       assertCurrent();
       // Accepted worker writes have settled; the original interruption policy owns this row.
-      finishInterruptedUpdateBeforeActivation(expected, assertCurrent, { env });
+      finishInterruptedUpdateBeforeActivation(
+        expected,
+        assertCurrent,
+        { env },
+        (payload) => void sendUpdateResultTelemetry(payload, { env }),
+      );
     };
   };
   let settle: (() => void) | undefined;
@@ -295,12 +327,7 @@ export async function withMutableUpdateSignals<T>(
     } catch {
       defaultRuntime.error("Update interruption could not be recorded; history remains pending.");
     }
-    if (signal === "SIGHUP") {
-      // The shared CLI signal type covers INT/TERM; retain HUP as the same
-      // accepted process outcome instead of silently converting it to SIGINT.
-      exitAfterSignalExitBarriers(code);
-    }
-    shutdown = waitForSignalExitBarriers(signal === "SIGHUP" ? undefined : signal)
+    shutdown = waitForSignalExitBarriers(signal)
       .catch(() => {
         defaultRuntime.error("Update signal cleanup did not complete.");
       })

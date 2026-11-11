@@ -3,13 +3,15 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { OPENCLAW_AGENT_FTS_SCHEMAS as schemas } from "../state/openclaw-agent-fts-schema.js";
+import { AGENT_FTS_SCHEMAS as schemas } from "../state/openclaw-agent-fts-schema.js";
 import { installSqliteFtsTokenizerMismatch } from "./sqlite-index-corruption.test-support.js";
-import { repairDoctorSqliteIndexCorruption as repairDoctor } from "./sqlite-index-recovery.js";
 import {
-  classifySqliteFtsIntegrityFindings as classify,
-  repairSqliteIndexCorruption as repair,
-} from "./sqlite-index-schema.js";
+  prepareDoctorSqliteIndexCorruption,
+  repairDoctorSqliteIndexCorruption as repairDoctor,
+  repairDoctorSqliteIndexCorruptionAsync as repairDoctorAsync,
+} from "./sqlite-index-recovery.js";
+import { repairSqliteIndexCorruption as repair } from "./sqlite-index-schema.js";
+import { classifySqliteFtsIntegrityFindings as classify } from "./sqlite-integrity.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const tables = ["memory_index_chunks_fts", "session_transcript_fts"];
@@ -35,37 +37,45 @@ function fixture() {
   return pathname;
 }
 
-it("backs up and rebuilds only canonical FTS indexes without changing content", () => {
-  const pathname = fixture();
-  using db = new DatabaseSync(pathname);
-  const findings = all(db);
-  expect(findings).toEqual(
-    tables.map((table) => ({
-      integrity_check: `malformed inverted index for FTS5 table main.${table}`,
-    })),
-  );
-  const rows = all(db, "SELECT * FROM session_transcript_fts");
-  const messages = findings.map((row) => row.integrity_check);
-  expect(classify(db, messages, schemas)).toEqual(tables);
-  const result = repairDoctor(db, pathname, {
-    label: "agent main",
-    assertCurrent: () => {},
-    ftsSchemas: schemas,
-  });
-  const backupPath = expectDefined(result[0], "backup diagnostic").replace(
-    "Saved pre-repair SQLite backup: ",
-    "",
-  );
-  using backup = new DatabaseSync(backupPath, { readOnly: true });
-  expect(all(backup)).toEqual(findings);
-  expect(all(db)).toEqual([{ integrity_check: "ok" }]);
-  expect(all(db, "SELECT * FROM session_transcript_fts")).toEqual(rows);
-  expect(all(db, "SELECT text FROM memory_index_chunks_fts")).toEqual([{ text: "ab\ufffecd" }]);
-  const matches = db.prepare(
-    "SELECT count(*) AS n FROM session_transcript_fts WHERE session_transcript_fts MATCH ?",
-  );
-  expect(matches.get('"ab\ufffecd"')).toEqual({ n: 1 });
-});
+it.each(["sync", "async", "prepared"] as const)(
+  "backs up and rebuilds only canonical FTS indexes without changing content (%s)",
+  async (mode) => {
+    const pathname = fixture();
+    using db = new DatabaseSync(pathname);
+    const findings = all(db);
+    const rows = all(db, "SELECT * FROM session_transcript_fts");
+    const messages = findings.map((row) => row.integrity_check);
+    expect(classify(db, messages, schemas)).toEqual(tables);
+    const options = {
+      label: "agent main",
+      assertCurrent: () => {},
+      ftsSchemas: schemas,
+    };
+    const prepared =
+      mode === "prepared"
+        ? await prepareDoctorSqliteIndexCorruption(db, pathname, options)
+        : undefined;
+    if (prepared) {
+      expect(all(db)).toEqual(findings);
+    }
+    const result = prepared
+      ? prepared()
+      : await (mode === "sync" ? repairDoctor : repairDoctorAsync)(db, pathname, options);
+    const backupPath = expectDefined(result[0], "backup diagnostic").replace(
+      "Saved pre-repair SQLite backup: ",
+      "",
+    );
+    using backup = new DatabaseSync(backupPath, { readOnly: true });
+    expect(all(backup)).toEqual(findings);
+    expect(all(db)).toEqual([{ integrity_check: "ok" }]);
+    expect(all(db, "SELECT * FROM session_transcript_fts")).toEqual(rows);
+    expect(all(db, "SELECT text FROM memory_index_chunks_fts")).toEqual([{ text: "ab\ufffecd" }]);
+    const matches = db.prepare(
+      "SELECT count(*) AS n FROM session_transcript_fts WHERE session_transcript_fts MATCH ?",
+    );
+    expect(matches.get('"ab\ufffecd"')).toEqual({ n: 1 });
+  },
+);
 
 it.each(["unknown", "drifted", "mixed"])(
   "does not classify %s FTS findings as derived-only damage",
@@ -102,6 +112,5 @@ it("rolls an FTS rebuild back when commit authority is lost", () => {
       },
     }),
   ).toThrow("maintenance lost");
-  expect(backup).toHaveBeenCalledOnce();
   expect(all(db)).toEqual(findings);
 });

@@ -16,6 +16,14 @@ agent scope, generations, mutation ordering, revision conflicts, and recorded
 outcomes. Solid owns readiness, keyed presentation, and temporary optimistic
 values. A projection or action must never become a second Gateway authority.
 
+Other current examples cover distinct contracts: [Config readiness](../../../../ui/src/pages/config/view.tsx)
+observes an admitted schema receipt while retaining the editor;
+[WhatsApp Settings](../../../../extensions/whatsapp/browser/settings.tsx) presents
+owner commands under a retryable error slot; and the
+[input dialog](../../../../ui/src/components/input-dialog.tsx) separates
+returned validation text from a rejected callback. Choose the matching contract
+rather than adding an action to every asynchronous operation.
+
 ## Read a Gateway-owned resource
 
 An async memo returns a promise; its accessor reads the resolved value. There
@@ -389,15 +397,15 @@ const invalid = createMemo(
   () =>
     completion()?.then(
       (value) => Boolean(value),
-      () => false,
+      () => true,
     ) ?? false,
   { loadingValue: false },
 );
 ```
 
-A callback rejection does not mark the objective invalid; only expected returned
-validation feedback does. Bind `aria-invalid` from `!saving() && invalid()` on the
-retained input. Inside
+A returned validation message or callback rejection marks the retained input
+invalid after settlement. Bind `aria-invalid` from `!saving() && invalid()`;
+rejections still reach `Errored` rather than becoming validation strings. Inside
 the narrow `Errored` slot, show a returned `message()` as ordinary validation
 feedback. The initial loading values cover first readiness; the saving checks
 avoid reading either derivation while an attempt is pending. Hide only the alert
@@ -522,36 +530,19 @@ optional fallback when losing that decoration is acceptable. `Loading` handles
 pending reads; it does not handle a rejected import. Keep usable controls and
 drafts outside the error slot so retry can recover the region in place.
 
-Use `lazy` for the component code, and retain the route's existing component
-loader. The loader still controls when import begins and when the router
-considers the module ready. The [cron route](../../../../ui/src/pages/cron/route.tsx)
-preloads its [entry](../../../../ui/src/pages/cron/cron-page-entry.tsx) this way:
+Retain the route's existing component loader. It controls when import begins
+and when the router considers the module ready. The
+[cron route](../../../../ui/src/pages/cron/route.tsx) directly imports its
+[page](../../../../ui/src/pages/cron/cron-page.tsx):
 
 ```ts
-// route.tsx: keep rendering and its runtime imports behind the route boundary.
-component: async () => {
-  const entry = await import("./cron-page-entry.tsx");
-  await entry.CronPage.preload();
-  return { renderSolid: entry.renderSolid };
-},
+component: () => import("./cron-page.tsx"),
 ```
 
-```tsx
-// cron-page-entry.tsx: loaded only by the route's component loader.
-export const CronPage = lazy(() => import("./cron-page.tsx"), { export: "CronPage" });
-export function renderSolid(props: SolidRouteProps) {
-  return (
-    <Loading>
-      <CronPage routeSearch={typeof props.data === "string" ? props.data : ""} />
-    </Loading>
-  );
-}
-```
-
-Do not invoke `preload()` at module scope or import the page implementation
-from startup. Keep the loader's current retention/error behavior. JSX belongs
-in `.tsx`; replace hand-written `createComponent` rather than keeping a second
-render helper. Check startup bytes against the base on the same machine.
+Do not add a second lazy entry merely to preload the same page. Do not import
+its implementation from startup. Keep the loader's current retention/error
+behavior and the page's loading boundary. Check startup bytes against the base
+on the same machine.
 
 Check the emitted graph as well as the source import. The first use of an
 action made Solid retain runtime initializers; the generated boot groups

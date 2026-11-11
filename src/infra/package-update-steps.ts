@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../shared/update-outcome.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
+import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { isRegistrySourceInstallSpec } from "./install-spec.js";
@@ -15,7 +17,6 @@ import { readPackageVersionIfPresent } from "./package-update-integrity.js";
 import type { PackageUpdateStepRunner } from "./package-update-lifecycle.js";
 import {
   prepareStagedPackageInstall,
-  discardPackageUpdateStage,
   runPackageUpdateLifecycle,
   verifyUnchangedPackageUpdateRecovery,
 } from "./package-update-lifecycle.js";
@@ -28,6 +29,7 @@ import {
 } from "./package-update-manager-preflight.js";
 import { prepareNpmGitSourceInstallSpec } from "./package-update-npm-pack.js";
 import { PACKAGE_REFUSAL_CODES, type PackageRefusalCode } from "./package-update-refusal.js";
+import { discardPackageUpdateStage } from "./package-update-stage-cleanup.js";
 import {
   PackageUpdateActivationError,
   type PackageActivationOptions,
@@ -283,6 +285,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       params.installTarget,
       params.packageName,
       nativeOptions,
+      params.env,
     );
     if (preparedInstall.failedStep) {
       return await packageUpdateFailure(preparedInstall.failedStep);
@@ -331,11 +334,11 @@ export async function runGlobalPackageUpdateSteps(params: {
       installSpec: params.installSpec,
       packageName: params.packageName,
       runStep: params.runStep,
+      onPackDir: (packDir) => (packedInstallDir = packDir),
       timeoutMs: workTimeoutMs,
       env: params.env,
       installCwd: params.installCwd,
     });
-    packedInstallDir = preparedSpec.packDir;
     steps.push(...preparedSpec.steps);
     if (preparedSpec.failedStep) {
       return await packageUpdateFailure(preparedSpec.failedStep, steps);
@@ -419,6 +422,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         params.installTarget,
         params.packageName,
         nativeOptions,
+        params.env,
       );
       if (preparedFallbackInstall.failedStep) {
         steps.push(preparedFallbackInstall.failedStep);
@@ -571,9 +575,13 @@ export async function runGlobalPackageUpdateSteps(params: {
         return await packageUpdateFailure(lifecycle.step, steps);
       }
     }
+    const verificationWarnings: string[] = [];
     if (!params.expectedGitCheckout && verificationErrors.length === 0) {
       verificationErrors.push(
-        ...(await collectPackageDistContentInventoryErrors(verificationPackageRoot)),
+        ...(await collectPackageDistContentInventoryErrors(
+          verificationPackageRoot,
+          verificationWarnings,
+        )),
       );
     }
     if (verificationErrors.length > 0) {
@@ -584,6 +592,15 @@ export async function runGlobalPackageUpdateSteps(params: {
           params.env,
         ),
       );
+    } else if (verificationWarnings.length) {
+      steps.push({
+        name: "package-verify",
+        command: `verify ${verificationPackageRoot}`,
+        cwd: verificationPackageRoot,
+        durationMs: 0,
+        exitCode: 0,
+        warnings: verificationWarnings,
+      });
     }
     let failedVerification = verificationErrors.length > 0;
     if (verificationErrors.length === 0) {
@@ -701,6 +718,12 @@ export async function runGlobalPackageUpdateSteps(params: {
       throw error.cause;
     }
     if (error instanceof SystemPackageOwnershipError) {
+      throw error;
+    }
+    // An operator's signal is not a package failure; the caller reports the interruption.
+    if (
+      collectNestedErrorCandidates(error).some((cause) => extractErrorCode(cause) === "interrupted")
+    ) {
       throw error;
     }
     const failedStep = await classifyPackageUpdatePermissionFailure(

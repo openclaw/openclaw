@@ -10,19 +10,20 @@ export type ProcessCommand =
       argv: string[];
       executable?: string;
       serviceMarker?: string;
+      /** A JS runtime whose environment Darwin could not bound; argv still classifies. */
+      serviceMarkerUnavailable?: true;
       uid?: number;
       owner?: "same" | "different" | "unknown";
     }
   | { argvUnavailable: true; uid: number; owner?: "same" | "different" | "unknown" }
-  | { argvUnavailable: true; uid?: never; owner: "different" };
-
-type GroupMember = {
-  pid: number;
-  ppid?: number;
-  pgid: number;
-  state: string;
-  command?: { ppid: number } & ProcessCommand;
-};
+  | { argvUnavailable: true; uid?: never; owner: "different" }
+  /** A sealed Apple binary whose argument image Darwin redacts (no-read-procargs). */
+  | {
+      argvUnavailable: true;
+      executable: string;
+      uid?: never;
+      owner?: "same" | "different" | "unknown";
+    };
 
 /** Reject a known unsupported legacy contract before launching application work. */
 export function assertProcessGroupControl(): void {
@@ -101,7 +102,13 @@ export function* readProcessGroupMembers(
       owner: "same" | "different" | "unknown",
     ) => ProcessCommand | undefined;
   },
-): Generator<GroupMember> {
+): Generator<{
+  pid: number;
+  ppid?: number;
+  pgid: number;
+  state: string;
+  command?: { ppid: number } & ProcessCommand;
+}> {
   const includeCommand = commandInspection !== undefined;
   if (process.platform === "linux") {
     const deadline = Date.now() + timeoutMs;
@@ -196,7 +203,11 @@ export function* readProcessGroupMembers(
             : commandInspection?.readDarwinCommand(member.pid, member.owner)
           : undefined;
       } catch (error) {
-        if (!(error instanceof ProcSafeError) || error.code !== "incomplete") {
+        // One unparseable argument image (Intel layout-mismatch) leaves only that PID unknown.
+        if (
+          !(error instanceof ProcSafeError) ||
+          (error.code !== "incomplete" && error.code !== "layout-mismatch")
+        ) {
           throw error;
         }
         // Preserve unknown custody for this PID without dropping later observations.

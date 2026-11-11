@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
-import { BROWSER_ANNOTATION_EVENT } from "./browser-annotation.ts";
+import { BROWSER_ANNOTATION_EVENT } from "./browser-annotation-event.ts";
 
 export function setupAnnotationCapture() {
   const receive = vi.fn<(event: Event) => void>();

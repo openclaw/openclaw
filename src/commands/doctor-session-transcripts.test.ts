@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as sessionDirs from "../agents/session-dirs.js";
 import { appendTranscriptEvent } from "../config/sessions/session-accessor.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -12,7 +13,7 @@ import * as migration from "../infra/session-sqlite-migration-manifest.js";
 import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  detectSessionTranscriptHealthIssues,
+  detectSessionTranscriptHealthIssues as detect,
   sessionTranscriptIssueToHealthFinding,
   sessionTranscriptIssueToRepairEffect,
   noteSessionTranscriptHealth,
@@ -20,11 +21,10 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
-const detect = (filePath: string) =>
-  detectSessionTranscriptHealthIssues({ sessionDirs: [path.dirname(filePath)] });
 
 function writeTranscript(entries: unknown[] | string): string {
   const filePath = path.join(tempDirs.make("openclaw-doctor-transcripts-"), "session.jsonl");
+  vi.spyOn(sessionDirs, "resolveAgentSessionDirs").mockResolvedValue([path.dirname(filePath)]);
   fs.writeFileSync(
     filePath,
     typeof entries === "string"
@@ -35,30 +35,25 @@ function writeTranscript(entries: unknown[] | string): string {
 }
 
 it("does not label a vanished file as broken", async () => {
-  const filePath = writeTranscript([{ type: "session", id: "uninspected" }]);
-  const readSpy = vi
-    .spyOn(fsPromises, "readFile")
-    .mockRejectedValueOnce(Object.assign(new Error("unavailable transcript"), { code: "ENOENT" }));
-  await expect(detect(filePath)).resolves.toEqual([]);
-  expect(readSpy).toHaveBeenCalledExactlyOnceWith(filePath, "utf-8");
+  writeTranscript([{ type: "session", id: "uninspected" }]);
+  vi.spyOn(fsPromises, "readFile").mockRejectedValueOnce(
+    Object.assign(new Error("unavailable transcript"), { code: "ENOENT" }),
+  );
+  await expect(detect()).resolves.toEqual([]);
 });
 
 it("maps affected transcripts to structured findings and dry-run effects", async () => {
   const filePath = writeTranscript([
-    { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
     {
       type: "message",
       id: "legacy-assistant",
-      parentId: null,
       message: {
-        role: "assistant",
         provider: "openai-codex",
         api: "openai-codex-responses",
-        content: [{ type: "text", text: "hello" }],
       },
     },
   ]);
-  const issue = expectDefined((await detect(filePath))[0], "session transcript health issue");
+  const issue = expectDefined((await detect())[0], "session transcript health issue");
   expect(sessionTranscriptIssueToHealthFinding(issue)).toMatchObject({
     checkId: "core/doctor/session-transcripts",
     severity: "info",
@@ -76,9 +71,8 @@ it("maps affected transcripts to structured findings and dry-run effects", async
 
 it("does not report malformed JSON as a transcript issue", async () => {
   const raw = "{\n";
-
   const filePath = writeTranscript(raw);
-  await expect(detect(filePath)).resolves.toEqual([]);
+  await expect(detect()).resolves.toEqual([]);
   expect(await fsPromises.readFile(filePath, "utf8")).toBe(raw);
 });
 
@@ -86,11 +80,9 @@ it("defers large transcripts without reading their contents", async () => {
   const filePath = writeTranscript([
     { type: "message", message: { content: "x".repeat(1024 * 1024) } },
   ]);
-  const readSpy = vi.spyOn(fs, "readFile");
   const promiseReadSpy = vi.spyOn(fsPromises, "readFile");
-  const [issue] = await detect(filePath);
+  const [issue] = await detect();
   expect(issue).toMatchObject({ filePath, deferred: true, broken: false });
-  expect(readSpy).not.toHaveBeenCalled();
   expect(promiseReadSpy).not.toHaveBeenCalled();
 });
 

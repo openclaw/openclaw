@@ -1,5 +1,8 @@
 // Resolves persisted session model metadata without loading Gateway projections.
-import { resolveSessionModelOverrideRouteResolution } from "../config/sessions/model-override-provenance.js";
+import {
+  hasSessionActiveAutoModelFallback,
+  resolveSessionModelOverrideRouteResolution,
+} from "../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -25,11 +28,39 @@ type SessionModelEntry =
       | "model"
       | "modelProvider"
       | "modelOverride"
+      | "modelOverrideSource"
       | "providerOverride"
       | "modelOverrideRouteResolution"
       | "modelOverrideFallbackOriginProvider"
       | "modelOverrideFallbackOriginModel"
     >;
+
+/** Preserve a known submitted selection without mistaking automatic failover for a user edit. */
+export function resolveSessionSubmittedModelRef(
+  entry: SessionEntry | undefined,
+): { provider: string; model: string } | undefined {
+  if (entry?.lastSubmittedModel) {
+    return entry.lastSubmittedModel;
+  }
+  const fallbackSelected = entry?.fallbackNotice?.selectedModel
+    ? parseModelRef(
+        entry.fallbackNotice.selectedModel,
+        entry.modelProvider ?? entry.providerOverride ?? DEFAULT_PROVIDER,
+        { allowPluginNormalization: false },
+      )
+    : undefined;
+  if (fallbackSelected) {
+    return fallbackSelected;
+  }
+  const originProvider = entry?.modelOverrideFallbackOriginProvider;
+  const originModel = entry?.modelOverrideFallbackOriginModel;
+  if (originProvider && originModel && hasSessionActiveAutoModelFallback(entry)) {
+    return { provider: originProvider, model: originModel };
+  }
+  return entry?.modelProvider && entry.model
+    ? { provider: entry.modelProvider, model: entry.model }
+    : undefined;
+}
 
 /** Keep prepared host metadata outside the published session-model resolver contract. */
 export function resolveSessionModelRef(
@@ -73,6 +104,10 @@ function resolveSessionModelRefCore(
   agentId?: string,
   options?: SessionModelResolutionOptions,
 ): { provider: string; model: string } {
+  // Default snapshots are historical context, not a pin on the next turn.
+  if (entry?.modelOverrideSource === "default") {
+    return resolveSessionConfiguredDefault(cfg, agentId, options);
+  }
   const overrideRouteResolution = resolveSessionModelOverrideRouteResolution(entry);
   const normalizedOverride = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,

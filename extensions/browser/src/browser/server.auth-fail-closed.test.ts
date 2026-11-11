@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startBrowserControlServerFromConfig, stopBrowserControlServer } from "../server.js";
 import { getFreePort } from "./test-port.js";
@@ -63,22 +63,15 @@ describe("browser control auth bootstrap failures", () => {
   });
 
   it("returns null when the browser control port is already in use", async () => {
-    const blocker = createServer();
-    await new Promise<void>((resolve) => {
-      blocker.listen(0, "127.0.0.1", resolve);
-    });
-    const address = blocker.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected blocker TCP address");
-    }
-    mocks.controlPort = address.port;
-    mocks.ensureBrowserControlAuth.mockResolvedValueOnce({ auth: { token: "test-token" } });
-    mocks.resolveBrowserControlAuth.mockReturnValueOnce({ token: "test-token" });
-    mocks.shouldAutoGenerateBrowserAuth.mockReturnValueOnce(false);
-    try {
-      await expect(startBrowserControlServerFromConfig()).resolves.toBeNull();
-    } finally {
-      await blocker[Symbol.asyncDispose]();
-    }
+    await withServer(
+      (_req, res) => res.end(),
+      async (baseUrl) => {
+        mocks.controlPort = Number(new URL(baseUrl).port);
+        mocks.ensureBrowserControlAuth.mockResolvedValueOnce({ auth: { token: "test-token" } });
+        mocks.resolveBrowserControlAuth.mockReturnValueOnce({ token: "test-token" });
+        mocks.shouldAutoGenerateBrowserAuth.mockReturnValueOnce(false);
+        await expect(startBrowserControlServerFromConfig()).resolves.toBeNull();
+      },
+    );
   });
 });

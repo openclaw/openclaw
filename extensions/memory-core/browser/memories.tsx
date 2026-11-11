@@ -18,6 +18,7 @@ import {
   Show,
 } from "solid-js";
 import { createTranslator } from "./i18n/index.ts";
+import { loadMessages } from "./i18n/locales.ts";
 import "./memories.css";
 
 type SearchResult = MemorySearchResponse["results"][number];
@@ -45,17 +46,35 @@ function isExpandableWorkspaceResult(result: SearchResult): boolean {
   return result.source === "memory" && safeRelativePath && workspaceMemoryPath;
 }
 
+function Empty(props: { children: string; status?: boolean }) {
+  return (
+    <div class="settings-group">
+      <p class="settings-empty" role={props.status ? "status" : undefined}>
+        {props.children}
+      </p>
+    </div>
+  );
+}
+
 function FileContent(props: { content: string; result: SearchResult }) {
+  let file!: HTMLPreElement;
+  let match!: HTMLElement;
+  // Open on the match itself; the file can be much longer than its window.
+  onSettled(() => {
+    file.scrollTop = Math.max(0, match.offsetTop - file.offsetTop - 24);
+  });
   const lines = createMemo(() => props.content.split(/\r?\n/));
   const start = () => Math.max(0, props.result.startLine - 1);
   const end = () => Math.min(lines().length, props.result.endLine);
   return (
-    <pre class="memory-memories__file" tabindex={0}>
+    <pre ref={(element) => (file = element)} class="memory-memories__file" tabindex={0}>
       <span>
         {lines().slice(0, start()).join("\n")}
         {start() ? "\n" : ""}
       </span>
-      <mark data-memory-match="true">{lines().slice(start(), end()).join("\n")}</mark>
+      <mark ref={(element) => (match = element)} data-memory-match="true">
+        {lines().slice(start(), end()).join("\n")}
+      </mark>
       <span>{end() < lines().length ? `\n${lines().slice(end()).join("\n")}` : ""}</span>
     </pre>
   );
@@ -191,31 +210,48 @@ function MemoryMemories(props: MemoryMemoriesProps) {
     const key = () => resultKey(rowProps.result, rowProps.index);
     const expandable = () => isExpandableWorkspaceResult(rowProps.result);
     const panelId = () => `memory-detail-${rowProps.index}`;
+    // Each label stays with its number when the line wraps.
+    const details = () =>
+      [
+        t("memoryPage.memories.lineRange", {
+          start: String(rowProps.result.startLine),
+          end: String(rowProps.result.endLine),
+        }),
+        t(
+          rowProps.result.source === "sessions"
+            ? "memoryPage.memories.sourceSessions"
+            : "memoryPage.memories.sourceMemory",
+        ),
+        t("memoryPage.memories.score", { score: rowProps.result.score.toFixed(2) }),
+      ]
+        .map((part) => part.replaceAll(" ", "\u00a0"))
+        .join(" · ");
     function Summary() {
       return (
         <>
           <span class="settings-row__text">
-            <span class="settings-row__title">{rowProps.result.snippet}</span>
-            <span class="settings-row__desc memory-memories__path">
-              {rowProps.result.path} ·{" "}
-              {t("memoryPage.memories.lineRange", {
-                start: String(rowProps.result.startLine),
-                end: String(rowProps.result.endLine),
-              })}
+            <span class="memory-memories__snippet">{rowProps.result.snippet}</span>
+            <span class="settings-row__desc memory-memories__meta">
+              <code>{rowProps.result.path}</code> · {details()}
             </span>
           </span>
-          <span class="settings-row__control memory-memories__meta">
-            <span class="memory-memories__source">
-              {t(
-                rowProps.result.source === "sessions"
-                  ? "memoryPage.memories.sourceSessions"
-                  : "memoryPage.memories.sourceMemory",
-              )}
+          {expandable() ? (
+            <span class="settings-row__control">
+              <span class="settings-row__chevron memory-memories__chevron">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="m9 18 6-6-6-6" />
+                </svg>
+              </span>
             </span>
-            <span>
-              {t("memoryPage.memories.score", { score: rowProps.result.score.toFixed(2) })}
-            </span>
-          </span>
+          ) : undefined}
         </>
       );
     }
@@ -252,28 +288,30 @@ function MemoryMemories(props: MemoryMemoriesProps) {
             {resultsProps.ready.action && <p>{resultsProps.ready.action}</p>}
           </div>
         )}
-        <div class="memory-memories__results-heading">
-          <span>
-            {t("memoryPage.memories.results", { count: String(resultsProps.ready.results.length) })}
-          </span>
-          <span class="memory-memories__mode">
-            {t(
-              resultsProps.ready.searchMode === "hybrid"
-                ? "memoryPage.memories.hybridSearch"
-                : "memoryPage.memories.keywordSearch",
-            )}
-          </span>
-        </div>
         {resultsProps.ready.results.length === 0 ? (
-          <p class="memory-memories__state">
-            {t("memoryPage.memories.empty", { query: resultsProps.ready.query })}
-          </p>
+          <Empty>{t("memoryPage.memories.empty", { query: resultsProps.ready.query })}</Empty>
         ) : (
-          <div class="settings-group memory-memories__results">
-            <For each={resultsProps.ready.results} keyed={(result) => result}>
-              {(result, index) => <ResultRow result={result()} index={index()} />}
-            </For>
-          </div>
+          <section class="settings-section">
+            <p class="memory-memories__summary">
+              {t(
+                resultsProps.ready.results.length === 1
+                  ? "memoryPage.memories.resultOne"
+                  : "memoryPage.memories.results",
+                { count: String(resultsProps.ready.results.length) },
+              )}{" "}
+              ·{" "}
+              {t(
+                resultsProps.ready.searchMode === "hybrid"
+                  ? "memoryPage.memories.hybridSearch"
+                  : "memoryPage.memories.keywordSearch",
+              )}
+            </p>
+            <div class="settings-group memory-memories__results">
+              <For each={resultsProps.ready.results} keyed={(result) => result}>
+                {(result, index) => <ResultRow result={result()} index={index()} />}
+              </For>
+            </div>
+          </section>
         )}
       </>
     );
@@ -283,36 +321,34 @@ function MemoryMemories(props: MemoryMemoriesProps) {
     return (
       <Loading
         on={searchRead()}
-        fallback={
-          <p class="memory-memories__state" role="status">
-            {t("memoryPage.memories.searching")}
-          </p>
-        }
+        fallback={<Empty status>{t("memoryPage.memories.searching")}</Empty>}
       >
         <Errored
           fallback={(error, reset) => (
-            <div class="memory-memories__state" role="alert">
-              <p>
-                {t("memoryPage.memories.error", {
-                  message: props.context.formatError(error()),
-                })}
-              </p>
-              <button
-                class="btn btn--sm"
-                disabled={!props.snapshot.connected || !props.snapshot.agentId}
-                onClick={() => {
-                  search(searchRead()?.query ?? "");
-                  reset();
-                }}
-              >
-                {t("memoryPage.memories.retry")}
-              </button>
+            <div class="settings-group">
+              <div class="settings-row memory-memories__error" role="alert">
+                <p>
+                  {t("memoryPage.memories.error", {
+                    message: props.context.formatError(error()),
+                  })}
+                </p>
+                <button
+                  class="btn btn--sm"
+                  disabled={!props.snapshot.connected || !props.snapshot.agentId}
+                  onClick={() => {
+                    search(searchRead()?.query ?? "");
+                    reset();
+                  }}
+                >
+                  {t("memoryPage.memories.retry")}
+                </button>
+              </div>
             </div>
           )}
         >
           <Show
             when={searchResult()}
-            fallback={<p class="memory-memories__state">{t("memoryPage.memories.idle")}</p>}
+            fallback={<Empty>{t("memoryPage.memories.idle")}</Empty>}
             keyed
           >
             {(result) => <Results ready={result} />}
@@ -326,9 +362,7 @@ function MemoryMemories(props: MemoryMemoriesProps) {
     <openclaw-memory-memories>
       <div class="settings-page memory-memories">
         {!methodAdvertised() ? (
-          <p class="memory-memories__unavailable">
-            {t("memoryPage.memories.gatewayUpdateRequired")}
-          </p>
+          <Empty>{t("memoryPage.memories.gatewayUpdateRequired")}</Empty>
         ) : (
           <>
             <form
@@ -376,12 +410,19 @@ function MemoryMemories(props: MemoryMemoriesProps) {
 export const memoriesView: ControlUiSettingsView = {
   placement: { section: "memory", panel: "memories" },
   mount(container, context) {
+    void loadMessages(context.props.locale);
     // Only the host's imperative lifetime writes this presentation projection.
     const [snapshot, setSnapshot] = createSignal(context.props, { ownedWrite: true });
     const dispose = render(
       () => <MemoryMemories context={context} snapshot={snapshot()} />,
       container,
     );
-    return { update: setSnapshot, dispose };
+    return {
+      update(next) {
+        void loadMessages(next.locale);
+        setSnapshot(next);
+      },
+      dispose,
+    };
   },
 };

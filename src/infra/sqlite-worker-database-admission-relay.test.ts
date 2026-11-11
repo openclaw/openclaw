@@ -1,17 +1,25 @@
 import { once } from "node:events";
 import { MessageChannel, type MessagePort, Worker } from "node:worker_threads";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { renderAssistantRequestFailureCopy } from "../agents/failover/assistant-request-failure-copy.js";
+import { PostgresSchemaAdmissionUnavailableError } from "../state/openclaw-state-db-schema-version.js";
+import { withPostgresSchemaAdmissionRetry } from "../state/openclaw-state-postgres-admission.js";
+import * as physicalFacts from "./database-engine/physical-facts.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import * as sqlConnection from "./sql-connection.js";
 import { classifyGatewayStorageFailure } from "./sqlite-error-diagnostics.js";
 import {
   exchangeSqliteDatabaseAdmissions,
   readSqliteDatabaseAdmissionDeadline,
+  SqliteDatabaseAdmissionTimeoutError,
   withSqliteDatabaseAdmissionWait,
 } from "./sqlite-worker-database-admission-relay.js";
+import { SqliteWorkerError } from "./sqlite-worker-error.js";
 
 const channels = new Set<MessageChannel>();
 const workers = new Set<Worker>();
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const channel of channels) {
     channel.port1.close();
     channel.port2.close();
@@ -27,6 +35,60 @@ function createChannel() {
   return channel;
 }
 
+it.each(["deadline", "early-timeout", "closed", "cancelled"])(
+  "preserves the PostgreSQL admission error only at its own deadline: %s",
+  (outcome) => {
+    const channel = createChannel();
+    const database = openNodeSqliteDatabase(":memory:");
+    const original = new PostgresSchemaAdmissionUnavailableError(
+      "Missing PostgreSQL physical schema admission",
+    );
+    const controller = new AbortController();
+    const transport =
+      outcome === "closed"
+        ? new SqliteWorkerError("Admission host closed", "closed")
+        : new SqliteDatabaseAdmissionTimeoutError();
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    vi.spyOn(process.hrtime, "bigint").mockImplementation(() => BigInt(now * 1e6));
+    vi.spyOn(Atomics, "wait").mockImplementation((_array, _index, _value, timeout) => {
+      now += timeout ?? 0;
+      if (outcome === "cancelled" && now >= 100) {
+        controller.abort(new Error("Caller cancelled PostgreSQL admission"));
+      }
+      return "timed-out";
+    });
+    vi.spyOn(sqlConnection, "isPostgresSqlConnection").mockReturnValue(true);
+    vi.spyOn(physicalFacts, "getPostgresPhysicalFacts").mockImplementation(() => {
+      if (outcome !== "deadline" && outcome !== "cancelled") {
+        throw transport;
+      }
+      exchangeSqliteDatabaseAdmissions(channel.port1, []);
+      return undefined;
+    });
+    let failure: unknown;
+    try {
+      withSqliteDatabaseAdmissionWait(
+        { assertActive: () => controller.signal.throwIfAborted() },
+        () =>
+          withPostgresSchemaAdmissionRetry(database, () => {
+            throw original;
+          }),
+      );
+    } catch (error) {
+      failure = error;
+    } finally {
+      database.close();
+    }
+    if (outcome === "cancelled") {
+      expect(failure).toMatchObject({ cause: controller.signal.reason });
+    } else {
+      expect(failure).toBe(outcome === "deadline" ? original : transport);
+    }
+  },
+);
+
 function startWorker(channel: MessageChannel, source: string, budgetMs?: number) {
   const worker = new Worker(
     `const { parentPort, workerData } = require("node:worker_threads");
@@ -34,6 +96,11 @@ function startWorker(channel: MessageChannel, source: string, budgetMs?: number)
        const { register } = await import(workerData.loader);
        register();
        const { exchangeSqliteDatabaseAdmissions, withSqliteDatabaseAdmissionWait } = await import(workerData.relay);
+       const exchange = () => exchangeSqliteDatabaseAdmissions(workerData.port, []);
+       const outcome = (run) => {
+         try { return { value: run() }; }
+         catch (error) { return { message: error.message, code: error.code }; }
+       };
        ${source}
      })().catch((error) => { throw error; });`,
     {
@@ -69,9 +136,9 @@ it("retains storage failure guidance when the caller cancels admission", () => {
     failure = error;
   }
   expect(failure).toMatchObject({ code: "unavailable", cause });
-  expect(
-    renderAssistantRequestFailureCopy({ storageFailure: classifyGatewayStorageFailure(failure) }),
-  ).toContain("disk is full. Free up space");
+  const storageFailure = classifyGatewayStorageFailure(failure);
+  expect(storageFailure).toBe("SQLITE_FULL");
+  expect(renderAssistantRequestFailureCopy({ storageFailure })).toMatch(/free.*space/i);
 });
 
 it("retains the caller deadline until asynchronous work settles", async () => {
@@ -98,18 +165,12 @@ it("does not carry a completed operation's deadline into the next operation on a
     `const { AsyncResource } = require("node:async_hooks");
        let retained;
        parentPort.on("message", (operation) => {
-         try {
-           const exchange = () => exchangeSqliteDatabaseAdmissions(workerData.port, []);
-           const value = operation === "expired"
+         parentPort.postMessage({ operation, ...outcome(() => operation === "expired"
              ? withSqliteDatabaseAdmissionWait({ deadlineAtMs: Date.now() - 1 }, () => {
                  retained = new AsyncResource("retained-worker-owner");
                  return exchange();
                })
-             : retained.runInAsyncScope(() => withSqliteDatabaseAdmissionWait({}, exchange));
-           parentPort.postMessage({ operation, value });
-         } catch (error) {
-           parentPort.postMessage({ operation, message: error.message, code: error.code });
-         }
+             : retained.runInAsyncScope(() => withSqliteDatabaseAdmissionWait({}, exchange))) });
        });
        parentPort.postMessage({ ready: true });`,
   );
@@ -151,33 +212,25 @@ it.each([
          return "timed-out";
        };
        try {
-         const exchange = () => exchangeSqliteDatabaseAdmissions(workerData.port, []);
-         if (workerData.budgetMs === undefined) exchange();
-         else withSqliteDatabaseAdmissionWait({ deadlineAtMs: Date.now() + workerData.budgetMs }, exchange);
-         parentPort.postMessage({ unexpectedSuccess: true });
-       } catch (error) {
-         parentPort.postMessage({ message: error.message, code: error.code });
+         parentPort.postMessage(outcome(() => workerData.budgetMs === undefined ? exchange()
+           : withSqliteDatabaseAdmissionWait({ deadlineAtMs: Date.now() + workerData.budgetMs }, exchange)));
        } finally {
          workerData.port.close();
          parentPort.close();
        }`,
     budgetMs,
   );
-  const result = await new Promise((resolve, reject) => {
-    let reply: unknown;
-    worker.on("error", reject);
-    // Exit can drain the result message and fire before an await continuation.
-    worker.once("exit", () => resolve(reply));
-    worker.on("message", (message) => {
-      if ("waiting" in message) {
-        waitedPastThirtySeconds = true;
-        expect(message.waiting).toBeGreaterThan(480_000);
-        expect(message.waiting).toBeLessThanOrEqual(488_000);
-      } else {
-        reply = message;
-      }
-    });
+  let result: unknown;
+  worker.on("message", (message) => {
+    if ("waiting" in message) {
+      waitedPastThirtySeconds = true;
+      expect(message.waiting).toBeGreaterThan(480_000);
+      expect(message.waiting).toBeLessThanOrEqual(488_000);
+    } else {
+      result = message;
+    }
   });
+  await once(worker, "exit");
   expect(waitedPastThirtySeconds).toBe(budgetMs === undefined);
   expect(result).toEqual({
     message: "SQLite admission facts exchange timed out; the host did not reply",

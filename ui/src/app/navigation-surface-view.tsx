@@ -1,5 +1,7 @@
 import { Errored, lazy, Loading, Show } from "solid-js";
 import type { SidebarAttentionElementAttributes } from "../components/sidebar-attention-element.ts";
+import { t } from "../lib/reactive/i18n.ts";
+import { ShellComponentBoundary } from "./app-shell-component-boundary.tsx";
 import type { ApplicationContext } from "./context.ts";
 import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
 import { isStaleChunkImportError, scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
@@ -14,6 +16,10 @@ const UpdateCard = lazy(
     }),
   { export: "SidebarUpdateCard" },
 );
+
+const SidebarAttention = lazy(() => import("../components/sidebar-attention.tsx"), {
+  export: "SidebarAttention",
+});
 
 type FloatingUpdateCardProps = {
   navigationSurfaceHidden: boolean;
@@ -39,10 +45,9 @@ export function FloatingUpdateCard(props: FloatingUpdateCardProps) {
   return (
     <>
       <Show when={floatingSidebarAttentionVisible(props)}>
-        <openclaw-sidebar-attention
-          class="sidebar-attention--floating"
-          prop:onNavigate={props.onNavigate}
-        />
+        <ShellComponentBoundary label={t("attention.issues")}>
+          <SidebarAttention class="sidebar-attention--floating" onNavigate={props.onNavigate} />
+        </ShellComponentBoundary>
       </Show>
       <Show when={!props.compact && props.refreshRequired}>
         <Errored fallback={null}>

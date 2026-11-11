@@ -74,6 +74,6 @@ export type PlacementAuthorityOwner = {
   tools: Map<string, { sequence: number; authority?: ToolAuthority }>;
   workspaceResults: Map<string, WorkspaceResultFacts>;
   projections: Map<string, WorkerSessionPlacementReadResult>;
-  preservation?: WorkerSessionPlacementRecord[];
+  preservation?: ReadonlyMap<string, WorkerSessionPlacementRecord>;
   recoveryCandidatesEmpty?: true;
 };

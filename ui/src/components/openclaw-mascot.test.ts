@@ -14,20 +14,46 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function playback() {
+  const requestFrame = vi.fn<(callback: FrameRequestCallback) => number>(() => 1);
+  const cancelFrame = vi.fn();
+  vi.stubGlobal("requestAnimationFrame", requestFrame);
+  vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  return { requestFrame, cancelFrame, visibility };
+}
+
+function mountMascot(attributes: Record<string, string> = {}) {
+  const mascot = document.createElement("openclaw-mascot");
+  for (const [name, value] of Object.entries(attributes)) {
+    mascot.setAttribute(name, value);
+  }
+  document.body.append(mascot);
+  return mascot;
+}
+
+function canvasRenderer() {
+  const draw = vi.spyOn(mascotCanvas, "drawMascot").mockImplementation(() => {});
+  const context: Pick<CanvasRenderingContext2D, "setTransform" | "clearRect"> = {
+    setTransform: vi.fn(),
+    clearRect: vi.fn(),
+  };
+  // The stubbed renderer leaves only these context operations in the host.
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+    context as CanvasRenderingContext2D,
+  );
+  vi.stubGlobal("Path2D", vi.fn());
+  return { draw, context };
+}
+
 it("replaces the animated mascot with a same-size neutral mark and restores it on theme changes", async () => {
   const warning = vi.spyOn(console, "warn");
   delete document.documentElement.dataset.themeMascot;
   setCurrentThemeBranding(resolveThemeBranding({ mascot: "claw", critters: [] }));
-  const requestFrame = vi.fn(() => 1);
-  const cancelFrame = vi.fn();
-  vi.stubGlobal("requestAnimationFrame", requestFrame);
-  vi.stubGlobal("cancelAnimationFrame", cancelFrame);
-  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-  const mascot = document.createElement("openclaw-mascot");
-  mascot.setAttribute("size", "48");
-  document.body.append(mascot);
+  const { requestFrame, cancelFrame } = playback();
+  const mascot = mountMascot({ size: "48" });
   await waitForSolid(() => expect(mascot.querySelector("canvas")).not.toBeNull());
-  expect(requestFrame).toHaveBeenCalledOnce();
+  await waitForSolid(() => expect(requestFrame).toHaveBeenCalledOnce());
 
   setCurrentThemeBranding(resolveThemeBranding({ mascot: "none", critters: [] }));
   document.documentElement.dataset.themeMascot = "none";
@@ -48,13 +74,8 @@ it("pauses for reduced motion and hidden documents, and cancels playback on remo
   const warning = vi.spyOn(console, "warn");
   const motionQuery = Object.assign(new EventTarget(), { matches: false });
   vi.stubGlobal("matchMedia", () => motionQuery);
-  const requestFrame = vi.fn(() => 1);
-  const cancelFrame = vi.fn();
-  vi.stubGlobal("requestAnimationFrame", requestFrame);
-  vi.stubGlobal("cancelAnimationFrame", cancelFrame);
-  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-  const mascot = document.createElement("openclaw-mascot");
-  document.body.append(mascot);
+  const { requestFrame, cancelFrame, visibility } = playback();
+  const mascot = mountMascot();
   await waitForSolid(() => expect(requestFrame).toHaveBeenCalledOnce());
 
   motionQuery.matches = true;
@@ -85,30 +106,13 @@ it("pauses for reduced motion and hidden documents, and cancels playback on remo
 
 it("draws current size and expression across animation frames and reduced-motion updates", async () => {
   const warning = vi.spyOn(console, "warn");
-  const draw = vi.spyOn(mascotCanvas, "drawMascot").mockImplementation(() => {});
-  const context: Pick<CanvasRenderingContext2D, "setTransform" | "clearRect"> = {
-    setTransform: vi.fn(),
-    clearRect: vi.fn(),
-  };
-  // SAFETY: The vector renderer is stubbed; these are the only context operations used by the host.
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
-    context as CanvasRenderingContext2D,
-  );
-  vi.stubGlobal("Path2D", vi.fn());
+  const { draw, context } = canvasRenderer();
   vi.stubGlobal("devicePixelRatio", 2);
   vi.spyOn(performance, "now").mockReturnValue(1_000);
   const motionQuery = Object.assign(new EventTarget(), { matches: false });
   vi.stubGlobal("matchMedia", () => motionQuery);
-  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-  const requestFrame = vi.fn<(callback: FrameRequestCallback) => number>(() => 1);
-  vi.stubGlobal("requestAnimationFrame", requestFrame);
-  const cancelFrame = vi.fn();
-  vi.stubGlobal("cancelAnimationFrame", cancelFrame);
-  const mascot = document.createElement("openclaw-mascot");
-  mascot.setAttribute("size", "48");
-  mascot.setAttribute("mood", "working");
-  mascot.setAttribute("tease", "");
-  document.body.append(mascot);
+  const { requestFrame, cancelFrame } = playback();
+  const mascot = mountMascot({ size: "48", mood: "working", tease: "" });
   await waitForSolid(() => expect(mascot.querySelector("canvas")?.width).toBe(96));
   expect(context.setTransform).toHaveBeenLastCalledWith(2, 0, 0, 2, 0, 0);
   expect(context.clearRect).toHaveBeenLastCalledWith(0, 0, 48, 48);
@@ -132,4 +136,51 @@ it("draws current size and expression across animation frames and reduced-motion
   expect(mascot.style.getPropertyValue("--openclaw-mascot-size")).toBe("120px");
   expect(draw.mock.lastCall?.[0]).toMatchObject({ hardHat: 1, rightClawDegrees: -28 });
   expect(warning.mock.calls.flat().join(" ")).not.toContain("STRICT_READ_UNTRACKED");
+});
+
+it("draws while hidden and retains the same canvas when motion first starts and resumes", async () => {
+  const { draw } = canvasRenderer();
+  let intersect: IntersectionObserverCallback | undefined;
+  const targets = new Set<Element>();
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      constructor(callback: IntersectionObserverCallback) {
+        intersect = callback;
+      }
+      observe(target: Element) {
+        targets.add(target);
+      }
+      unobserve(target: Element) {
+        targets.delete(target);
+      }
+      disconnect() {
+        targets.clear();
+      }
+    },
+  );
+  const { requestFrame, cancelFrame } = playback();
+  const mascot = mountMascot({ size: "48" });
+  await waitForSolid(() => expect(intersect).toBeDefined());
+  const canvas = mascot.querySelector("canvas");
+  expect(canvas).not.toBeNull();
+  expect(mascot.style.getPropertyValue("--openclaw-mascot-size")).toBe("48px");
+  expect(requestFrame).not.toHaveBeenCalled();
+  expect(draw).toHaveBeenCalled();
+  expect(draw.mock.lastCall?.[3]).toBe(48);
+  const setVisible = (isIntersecting: boolean) => {
+    // SAFETY: The callback reads only the target and its intersection state.
+    intersect!(
+      [...targets].map((target) => ({ target, isIntersecting }) as IntersectionObserverEntry),
+      {} as IntersectionObserver,
+    );
+  };
+  setVisible(true);
+  await waitForSolid(() => expect(requestFrame).toHaveBeenCalledOnce());
+  expect(mascot.querySelector("canvas")).toBe(canvas);
+  setVisible(false);
+  expect(cancelFrame).toHaveBeenCalledOnce();
+  setVisible(true);
+  expect(requestFrame).toHaveBeenCalledTimes(2);
+  expect(mascot.querySelector("canvas")).toBe(canvas);
 });

@@ -16,6 +16,7 @@ vi.mock("./systemd-exec.js", async (original) => ({
 }));
 vi.mock("./systemd-scope.js", () => ({ findInstalledSystemdGatewayScope: findScope }));
 
+import { nativeExit } from "./systemd-exec.test-support.js";
 import {
   readSystemdServiceCommandLocation,
   readSystemdServiceExecStart,
@@ -40,15 +41,11 @@ const defaults = {
   canStart: true,
   refuseManualStart: false,
   emptyCommand: false,
+  executable: "/usr/bin/openclaw",
 };
 let state = { ...defaults };
 
-const success = (stdout: string): ExecResult => ({
-  code: 0,
-  termination: "exit",
-  stdout,
-  stderr: "",
-});
+const success = (stdout: string): ExecResult => nativeExit(stdout);
 const property = (type: string, data: unknown) => ({ type, data });
 const reply = (type: string, data: unknown) => success(JSON.stringify(property(type, data)));
 const readLoaded = () =>
@@ -93,12 +90,7 @@ beforeEach(async () => {
     if (args.includes("GetUnit") || args.includes("LoadUnit")) {
       expect(args.at(-1)).toBe(target.unitName);
       if (!state.loaded) {
-        return {
-          code: 1,
-          termination: "exit",
-          stdout: "",
-          stderr: `Call failed: Unit ${target.unitName} not loaded.`,
-        };
+        return nativeExit("", `Call failed: Unit ${target.unitName} not loaded.`, 1);
       }
       return reply("o", ["/org/freedesktop/systemd1/unit/openclaw_2eservice"]);
     }
@@ -115,7 +107,7 @@ beforeEach(async () => {
         "a(sasbttttuii)",
         state.emptyCommand
           ? []
-          : [["/usr/bin/openclaw", ["/usr/bin/openclaw", "gateway"], false, 0, 0, 0, 0, 0, 0, 0]],
+          : [[state.executable, ["/usr/bin/openclaw", "gateway"], false, 0, 0, 0, 0, 0, 0, 0]],
       ),
       WorkingDirectory: property("s", "/home/gateway"),
       Environment: property("as", state.assignments),
@@ -139,6 +131,42 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("system-scope effective command", () => {
+  it.each(["/runtime/bun", "/runtime/node"])(
+    "reports native executable %s separately from argv zero",
+    async (executable) => {
+      const original = await readLoaded();
+      state.executable = executable;
+      const onEffectiveExecutable = vi.fn();
+      const command = await readSystemdServiceExecStart(env, {
+        requireEffective: true,
+        requireLoaded: true,
+        systemdReadTarget: target,
+        onEffectiveExecutable,
+      });
+      expect(command).toEqual(original);
+      expect(onEffectiveExecutable).toHaveBeenCalledExactlyOnceWith(executable);
+      expectNoLoad();
+    },
+  );
+
+  it.each(["invalid-command", "foreign-account", "manager-changed"] as const)(
+    "does not report an executable after %s",
+    async (failure) => {
+      state.emptyCommand = failure === "invalid-command";
+      state.serviceUser = failure === "foreign-account" ? "other" : "gateway";
+      state.managerChanges = failure === "manager-changed";
+      const onEffectiveExecutable = vi.fn();
+      await expect(
+        readSystemdServiceExecStart(env, {
+          requireEffective: true,
+          systemdReadTarget: target,
+          onEffectiveExecutable,
+        }),
+      ).rejects.toThrow();
+      expect(onEffectiveExecutable).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { canStart: false, refuse: false, empty: true, reason: "disabled-no-start" },
     { canStart: true, refuse: true, empty: true, reason: "refuse-manual-start" },
@@ -261,12 +289,7 @@ describe("system-scope effective command", () => {
   });
 
   it("does not turn unavailable native metadata into an unloaded runtime", async () => {
-    systemBus.mockResolvedValue({
-      code: 1,
-      termination: "exit",
-      stdout: "",
-      stderr: "native metadata unavailable",
-    });
+    systemBus.mockResolvedValue(nativeExit("", "native metadata unavailable", 1));
     await expect(readSystemdServiceCommandLocation(env, target)).rejects.toThrow();
   });
   it.each([false, true])(

@@ -11,15 +11,12 @@ function cloudWorkerConfig(config: Readonly<Record<string, unknown>> | null) {
   return isRecord(config?.cloudWorkers) ? config.cloudWorkers : {};
 }
 
-function repositoryRecords(config: Readonly<Record<string, unknown>>) {
-  const cloudWorkers = cloudWorkerConfig(config);
-  return isRecord(cloudWorkers.projectProfiles) ? cloudWorkers.projectProfiles : {};
-}
-
 export function readCloudWorkerRepositories(
   config: Readonly<Record<string, unknown>> | null,
 ): CloudWorkerRepository[] {
-  return Object.entries(repositoryRecords(config ?? {}))
+  const cloudWorkers = cloudWorkerConfig(config ?? {});
+  const profiles = isRecord(cloudWorkers.projectProfiles) ? cloudWorkers.projectProfiles : {};
+  return Object.entries(profiles)
     .flatMap(([repository, profileId]) =>
       typeof profileId === "string" ? [{ repository, profileId }] : [],
     )

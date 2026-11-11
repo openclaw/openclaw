@@ -70,6 +70,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
     file: "packages/normalization-core/src/string-normalization.ts",
     kind: "function",
     names: [
+      "commonPrefixLength",
       "containsAsciiControlCharacter",
       "filterStringEntries",
       "normalizeArrayBackedTrimmedStringList",
@@ -177,9 +178,13 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "readErrorCauses",
       "stringifyNonErrorCause",
       "toErrorObject",
-      "toStringifiedError",
       "toStructuredErrorObject",
     ],
+  },
+  {
+    file: "packages/normalization-core/src/stringified-error.ts",
+    kind: "function",
+    names: ["toStringifiedError"],
   },
   {
     file: "scripts/lib/error-format.mts",
@@ -215,6 +220,7 @@ export const CANONICAL_COERCION_MODULES = [
   "packages/normalization-core/src/record-coerce.ts",
   "packages/normalization-core/src/json-coercion.ts",
   "packages/normalization-core/src/error-coercion.ts",
+  "packages/normalization-core/src/stringified-error.ts",
   "packages/normalization-core/src/boolean-coercion.ts",
   "scripts/lib/error-format.mts",
   "src/utils/boolean.ts",

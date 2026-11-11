@@ -35,23 +35,6 @@ function truncateReason(reason: string): string {
   return reason.length <= 80 ? reason : `${truncateUtf16Safe(reason, 77)}...`;
 }
 
-async function buildStatus(
-  config: OnePasswordConfig | undefined,
-  opClient: Pick<OpClient, "opBin" | "tokenFilePresent">,
-) {
-  const policies = { auto: 0, approve: 0, deny: 0 };
-  for (const item of Object.values(config?.items ?? {})) {
-    policies[item.policy] += 1;
-  }
-  return {
-    tokenFilePresent: await opClient.tokenFilePresent(),
-    opBinaryResolved: Boolean(opClient.opBin),
-    opBinaryPath: opClient.opBin ?? null,
-    itemCount: Object.keys(config?.items ?? {}).length,
-    policyCounts: policies,
-  };
-}
-
 async function readAuditRows(auditStore: PluginStateKeyedStore<AuditRow>, limit: number) {
   return (await auditStore.entries())
     .toSorted(
@@ -83,13 +66,20 @@ export function registerOnePasswordCommands(context: OnePasswordCliContext): voi
     .command("status")
     .description("Show broker readiness without secret values")
     .action(async () => {
-      write(
-        JSON.stringify(
-          await buildStatus(context.resolveConfig(), context.resolveOpClient()),
-          null,
-          2,
-        ),
-      );
+      const config = context.resolveConfig();
+      const opClient = context.resolveOpClient();
+      const policies = { auto: 0, approve: 0, deny: 0 };
+      for (const item of Object.values(config?.items ?? {})) {
+        policies[item.policy] += 1;
+      }
+      const status = {
+        tokenFilePresent: await opClient.tokenFilePresent(),
+        opBinaryResolved: Boolean(opClient.opBin),
+        opBinaryPath: opClient.opBin ?? null,
+        itemCount: Object.keys(config?.items ?? {}).length,
+        policyCounts: policies,
+      };
+      write(JSON.stringify(status, null, 2));
     });
   command
     .command("audit")

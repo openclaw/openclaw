@@ -102,7 +102,6 @@ export async function fetchDiscordGatewayInfoWithTimeout(params: {
   token: string;
   gatewayBotUrl?: string;
   fetchImpl: DiscordGatewayFetch;
-  fetchInit?: DiscordGatewayFetchInit;
   timeoutMs?: number;
 }): Promise<APIGatewayBotInfo> {
   const timeoutMs = Math.max(1, params.timeoutMs ?? DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS);
@@ -115,26 +114,15 @@ export async function fetchDiscordGatewayInfoWithTimeout(params: {
         cause: new Error("gateway metadata timeout"),
       }),
     run: async (signal) => {
-      const fetchParams = {
-        ...params,
-        fetchInit: {
-          ...params.fetchInit,
-          signal,
-        },
-      };
       let response: DiscordGatewayMetadataResponse;
       let body: string;
       try {
-        response = await fetchParams.fetchImpl(
-          fetchParams.gatewayBotUrl ?? DISCORD_GATEWAY_BOT_URL,
-          {
-            ...fetchParams.fetchInit,
-            headers: {
-              ...fetchParams.fetchInit.headers,
-              Authorization: `Bot ${fetchParams.token}`,
-            },
+        response = await params.fetchImpl(params.gatewayBotUrl ?? DISCORD_GATEWAY_BOT_URL, {
+          signal,
+          headers: {
+            Authorization: `Bot ${params.token}`,
           },
-        );
+        });
         body = await response.text();
       } catch (error) {
         throw createGatewayMetadataError({

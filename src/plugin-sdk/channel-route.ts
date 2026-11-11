@@ -1,6 +1,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  normalizeOptionalStringifiedId as stringifyRouteThreadId,
   normalizeOptionalThreadValue,
 } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
@@ -67,11 +68,7 @@ export type ChannelRouteTargetInput = Pick<
 /** Route input accepted by compact-key helpers after legacy and normalized callers converge. */
 export type ChannelRouteKeyInput = ChannelRouteRef | ChannelRouteTargetInput;
 
-/** Stringifies a normalized thread id for stable route keys and comparisons. */
-export function stringifyRouteThreadId(value: unknown): string | undefined {
-  const normalized = normalizeOptionalThreadValue(value);
-  return normalized == null ? undefined : String(normalized);
-}
+export { stringifyRouteThreadId };
 
 /** Converts loose channel/account/target/thread input into a normalized route reference. */
 export function normalizeChannelRouteRef(

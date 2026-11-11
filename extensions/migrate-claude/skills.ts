@@ -1,4 +1,3 @@
-import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
@@ -12,6 +11,8 @@ import {
 import { backupMigrationItemTarget } from "openclaw/plugin-sdk/migration-runtime";
 import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
+import { decodeUtf8Input } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { exists, sanitizeName } from "./helpers.js";
 import type { ClaudeSource } from "./source.js";
@@ -148,13 +149,11 @@ export async function applyGeneratedSkillItem(
         : path.basename(item.source);
     const skillName =
       typeof item.details?.skillName === "string" ? item.details.skillName : sanitizeName(item.id);
-    const bytes = await fs.readFile(item.source);
-    if (!isUtf8(bytes)) {
-      throw new Error(
-        `Claude command file is not valid UTF-8: ${item.source}. Re-save or re-encode the file as UTF-8, then rerun the migration.`,
-      );
-    }
-    const commandContent = bytes.toString("utf8");
+    const { buffer } = await readRegularFile({ filePath: await fs.realpath(item.source) });
+    const commandContent = decodeUtf8Input(
+      buffer,
+      `Claude command file ${item.source} (re-save or re-encode it as UTF-8, then rerun the migration)`,
+    );
     const description =
       commandContent
         .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, "")

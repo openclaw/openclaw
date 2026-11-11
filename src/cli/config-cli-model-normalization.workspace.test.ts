@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTestModelDefinition } from "../commands/test-runtime-config-helpers.js";
 import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
@@ -61,17 +62,7 @@ it("preserves global provider policies across workspace changes without executin
       providers: {
         custom: {
           baseUrl: "https://example.test",
-          models: [
-            {
-              id: "latest",
-              name: "Latest",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 8192,
-              maxTokens: 4096,
-            },
-          ],
+          models: [createTestModelDefinition("latest", { name: "Latest" })],
         },
       },
     },

@@ -42,6 +42,7 @@ it.each([false, true])(
       ["check:database-dialect-ratchet", "--base", "exact-base", "--no-merge-base"],
       ["check:test-timeout-race-ratchet", "--base", "exact-base", "--no-merge-base"],
       ["check:test-mock-exports", "--base", "exact-base", "--no-merge-base"],
+      ["check:test-lines-ratchet", "--base", "exact-base", "--no-merge-base"],
       ["config:docs:check"],
       ["plugins:inventory:check"],
     ]);

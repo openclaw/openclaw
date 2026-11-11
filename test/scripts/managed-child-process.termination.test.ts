@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { afterEach, expect, it, vi } from "vitest";
+import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
 import {
   createSyntheticChild,
   psResult,
@@ -30,7 +31,7 @@ it.each([
   async ({ phase, rows, failed, reaped, accepted }) => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const { child, exit } = createSyntheticChild();
+    const { child, close } = createSyntheticChild();
     spawn.mockReturnValue(child);
     vi.spyOn(child, "kill").mockReturnValue(false);
     let signaled = false;
@@ -60,7 +61,7 @@ it.each([
       platform: "darwin",
       requireProcessTreeExit: true,
       cleanupDrainTimeoutMs: 50,
-      onReady: exit,
+      onReady: close,
     }).then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
@@ -73,6 +74,63 @@ it.each([
     }
   },
 );
+
+it("uses a mode-independent Darwin census after the group leader exits", () => {
+  vi.spyOn(process, "kill").mockImplementation(() => {
+    throw Object.assign(new Error("group denied"), { code: "EPERM" });
+  });
+  // Legacy BSD ps ignores -g; the exited leader PID then selects no rows.
+  vi.mocked(spawnSync).mockImplementation((_command, args) =>
+    Array.isArray(args) && args[0] === "-A"
+      ? psResult("42 S\n12345 Z\n")
+      : psResult("", { status: 1 }),
+  );
+  expect(
+    inspectManagedProcessGroup(
+      { pid: 12345, exitCode: 0, signalCode: null },
+      { platform: "darwin", errorPolicy: "indeterminate" },
+    ),
+  ).toBe("dead");
+});
+
+it.each([
+  { rows: "12345 Z\n", expected: "dead" },
+  { rows: "42 S\n12345 Z\n", expected: "dead" },
+  { rows: "42 Z\n12345 S\n", expected: "indeterminate" },
+  { rows: "42 Z\n", expected: "indeterminate" },
+  { rows: "12345 Z\nmalformed\n", expected: "indeterminate" },
+  { rows: "12345 S\n", expected: "indeterminate" },
+  { rows: "", expected: "indeterminate" },
+  { rows: "12345 Z\n", failed: true, expected: "indeterminate" },
+  { rows: "12345 S\n".repeat(256), expected: "indeterminate" },
+])("records Darwin indeterminate evidence: $expected / $failed", ({ rows, failed, expected }) => {
+  vi.spyOn(process, "kill").mockImplementation(() => {
+    throw Object.assign(new Error("group denied"), { code: "EPERM" });
+  });
+  vi.mocked(spawnSync).mockReturnValue(psResult(rows, { status: failed ? 1 : 0 }));
+  const onIndeterminate = vi.fn();
+  expect(
+    inspectManagedProcessGroup(
+      { pid: 12345, exitCode: 0, signalCode: null },
+      { platform: "darwin", errorPolicy: "indeterminate", onIndeterminate },
+    ),
+  ).toBe(expected);
+  if (expected === "dead") {
+    expect(onIndeterminate).not.toHaveBeenCalled();
+  } else {
+    expect(onIndeterminate).toHaveBeenCalledExactlyOnceWith({
+      pid: 12345,
+      error: "EPERM",
+      census: { status: failed ? 1 : 0, signal: null, error: undefined, rows: rows.slice(0, 1024) },
+      recheck: "EPERM",
+    });
+  }
+  expect(spawnSync).toHaveBeenCalledWith(
+    "ps",
+    ["-A", "-o", "pgid=,state="],
+    expect.objectContaining({ timeout: 5000 }),
+  );
+});
 
 it.each(["SIGTERM", "SIGKILL"])("retains POSIX %s failures", async (failedSignal) => {
   const { child } = createSyntheticChild();

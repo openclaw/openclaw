@@ -83,10 +83,7 @@ export async function minimaxUnderstandImage(params: {
     throw new Error("MiniMax VLM: imageDataUrl must be a base64 data:image/(png|jpeg|webp) URL");
   }
 
-  const configuredHost = coerceApiHost({
-    modelBaseUrl: params.modelBaseUrl,
-    provider: params.provider,
-  });
+  const configuredHost = coerceApiHost(params);
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, trustConfiguredBaseUrlOrigin } =
     resolveProviderHttpRequestConfigWithOriginTrust({
       baseUrl: configuredHost,

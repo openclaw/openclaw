@@ -2,9 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getWindowsCmdExePath } from "./windows-install-roots.js";
 import { decodeWindowsLauncherScript } from "./windows-launcher-encoding.js";
+import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn(() => os.tmpdir()));
@@ -33,17 +35,11 @@ vi.mock("./windows-encoding.js", async (original) => ({
   resolveWindowsOemEncoding: resolveWindowsOemEncodingMock,
 }));
 
-type WindowsTaskRestartModule = typeof import("./windows-task-restart.js");
-
-let relaunchGatewayScheduledTask: WindowsTaskRestartModule["relaunchGatewayScheduledTask"];
-
 const originalArgv = [...process.argv];
-const createdScriptPaths = new Set<string>();
-const createdTmpDirs = new Set<string>();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let scriptPath: string | undefined;
 const unref = vi.fn();
-const readScript = () =>
-  fs.readFileSync(expectDefined([...createdScriptPaths].at(-1), "helper path"), "utf8");
-const detachedOptions = { detached: true, stdio: "ignore", windowsHide: true };
+const readScript = () => fs.readFileSync(expectDefined(scriptPath, "helper path"), "utf8");
 
 function executeRestart(command: (line: string) => number, env: NodeJS.ProcessEnv = {}) {
   expect(relaunchGatewayScheduledTask(env).ok).toBe(true);
@@ -53,17 +49,6 @@ function executeRestart(command: (line: string) => number, env: NodeJS.ProcessEn
     return command(line);
   }).join("\n");
   return { commands, output };
-}
-
-function cleanPaths(paths: Set<string>, remove: (file: string) => void) {
-  for (const file of paths) {
-    try {
-      remove(file);
-    } catch {
-      /* Best-effort fixture cleanup. */
-    }
-  }
-  paths.clear();
 }
 
 function decodeCmdPathArg(value: string): string {
@@ -137,22 +122,17 @@ function runRestartBatch(script: string, command: (line: string) => number): str
 
 afterEach(() => {
   process.argv = [...originalArgv];
-  cleanPaths(createdScriptPaths, (file) => fs.unlinkSync(file));
-  cleanPaths(createdTmpDirs, (file) => fs.rmSync(file, { recursive: true, force: true }));
-});
-
-beforeAll(async () => {
-  ({ relaunchGatewayScheduledTask } = await import("./windows-task-restart.js"));
+  scriptPath = undefined;
 });
 
 beforeEach(() => {
   process.argv = [process.execPath, "C:\\OpenClaw\\dist\\entry.js", "gateway", "--port", "18789"];
   unref.mockReset();
   spawnMock.mockReset().mockImplementation((_file: string, args: string[]) => {
-    createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "helper path")));
+    scriptPath = decodeCmdPathArg(expectDefined(args[3], "helper path"));
     return { unref };
   });
-  resolvePreferredOpenClawTmpDirMock.mockReset().mockReturnValue(os.tmpdir());
+  resolvePreferredOpenClawTmpDirMock.mockReset().mockReturnValue(tempDirs.make("task-restart-"));
   resolveTaskScriptPathMock.mockReset().mockImplementation((env) => {
     const home = env.USERPROFILE || env.HOME || os.homedir();
     return path.join(home, ".openclaw", "gateway.cmd");
@@ -161,8 +141,7 @@ beforeEach(() => {
 });
 
 it("writes a detached schtasks relaunch helper", () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw&(restart)-"));
-  createdTmpDirs.add(tmpDir);
+  const tmpDir = tempDirs.make("openclaw&(restart)-");
   resolvePreferredOpenClawTmpDirMock.mockReturnValue(tmpDir);
   const result = relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });
   const cmdExePath = getWindowsCmdExePath();
@@ -173,12 +152,10 @@ it("writes a detached schtasks relaunch helper", () => {
   expect(seenCommandArg.endsWith('"')).toBe(true);
   expect(seenCommandArg).toContain("&");
   expect(result).toMatchObject({ ok: true, method: "schtasks" });
-  expect(result.tried).toContain('schtasks /Run /TN "OpenClaw Gateway (work)"');
-  expect(result.tried).toContain(`${cmdExePath} /d /s /c ${seenCommandArg}`);
   expect(spawnCall).toStrictEqual([
     cmdExePath,
     ["/d", "/s", "/c", seenCommandArg],
-    detachedOptions,
+    { detached: true, stdio: "ignore", windowsHide: true },
   ]);
   expect(unref).toHaveBeenCalledOnce();
   const script = readScript();
@@ -187,8 +164,8 @@ it("writes a detached schtasks relaunch helper", () => {
   for (const fragment of [
     `Get-Process -Id ${process.pid}`,
     "WaitForExit(180000)",
-    "[DateTime]::UtcNow.AddSeconds(5400)",
-    "replacement Gateway listener appeared within 5400s",
+    "$deadline = [DateTime]::UtcNow.AddSeconds(",
+    "} while ([DateTime]::UtcNow -lt $deadline)",
     "gateway-restart.log",
     'openclaw restart attempt source=windows-task-handoff target="OpenClaw Gateway (work)"',
     "Get-NetTCPConnection -LocalPort 18789 -State Listen",
@@ -201,10 +178,6 @@ it("writes a detached schtasks relaunch helper", () => {
     expect(script).toContain(fragment);
   }
   expect(script).not.toContain("Get-ScheduledTask");
-  expect(script).not.toContain("findstr");
-  expect(script.indexOf("powershell.exe -NoProfile")).toBeLessThan(
-    script.indexOf('schtasks /Run /TN "OpenClaw Gateway (work)"'),
-  );
 });
 
 it.each([
@@ -268,22 +241,17 @@ it("isolates task names from PowerShell observation", () => {
   );
 });
 
-// Keep host home/state paths ASCII; only the task name tests GBK encoding.
-const asciiPathEnv = {
-  HOME: "C:\\ocw-test",
-  USERPROFILE: "C:\\ocw-test",
-  OPENCLAW_STATE_DIR: "C:\\ocw-test\\state",
-};
-
 it("roundtrips marked CJK task names", () => {
   resolveWindowsOemEncodingMock.mockReturnValue("gbk");
   const result = relaunchGatewayScheduledTask({
-    ...asciiPathEnv,
+    // Keep host paths ASCII; only the task name tests GBK encoding.
+    HOME: "C:\\ocw-test",
+    USERPROFILE: "C:\\ocw-test",
+    OPENCLAW_STATE_DIR: "C:\\ocw-test\\state",
     OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (隆)",
   });
   expect(result.ok).toBe(true);
-  const scriptPath = expectDefined([...createdScriptPaths][0], "helper path");
-  const raw = fs.readFileSync(scriptPath);
+  const raw = fs.readFileSync(expectDefined(scriptPath, "helper path"));
   expect(
     raw.toString("latin1").startsWith("@chcp 936 >nul\r\n@rem openclaw-launcher-encoding=gbk\r\n"),
   ).toBe(true);

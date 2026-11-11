@@ -14,6 +14,7 @@ import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "../../app/native-device-settings.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -35,10 +36,8 @@ const voiceToggles = [
 ] as const;
 
 type VoiceToggle = (typeof voiceToggles)[number];
-type VoiceSetting = `voice.${VoiceToggle}` | "voice.microphone";
-type VoiceScope = { capability: NativeDeviceSettingsCapability; retired: Promise<void> };
 type VoiceControlProps = {
-  scope: VoiceScope;
+  scope: { capability: NativeDeviceSettingsCapability; retired: Promise<void> };
   snapshot: NativeDeviceSettingsSnapshot;
   isCurrent: () => boolean;
   presentationRetired: () => Promise<void>;
@@ -46,25 +45,29 @@ type VoiceControlProps = {
 
 export function voiceControlErrorFallback(retry: () => void) {
   return (error: () => unknown, reset: () => void) => (
-    <div class="callout danger" role="alert">
+    <InlineAlert
+      tone="danger"
+      action={
+        <button
+          class="btn btn--sm"
+          type="button"
+          onClick={() => {
+            retry();
+            reset();
+          }}
+        >
+          {t("common.retry")}
+        </button>
+      }
+    >
       {formatUiError(error())}
-      <button
-        class="btn btn--sm"
-        type="button"
-        onClick={() => {
-          retry();
-          reset();
-        }}
-      >
-        {t("common.retry")}
-      </button>
-    </div>
+    </InlineAlert>
   );
 }
 
 function createVoiceEdit<T extends boolean | string | null>(
   props: VoiceControlProps,
-  key: () => VoiceSetting,
+  key: () => `voice.${VoiceToggle}` | "voice.microphone",
   read: () => T,
 ) {
   const [value, setValue] = createOptimistic(read);
@@ -156,9 +159,11 @@ function VoiceWriteStatus(props: {
           {t("common.saving")}
         </span>
       </Show>
-      <Errored fallback={voiceControlErrorFallback(() => props.edit.retry())}>
-        <Loading>{latest(props.edit.outcome)}</Loading>
-      </Errored>
+      <Show when={!props.edit.saving()}>
+        <Errored fallback={voiceControlErrorFallback(() => props.edit.retry())}>
+          <Loading>{latest(props.edit.outcome)}</Loading>
+        </Errored>
+      </Show>
     </>
   );
 }

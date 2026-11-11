@@ -37,6 +37,7 @@ import { sleep } from "../../src/utils.js";
 import { decodeUtf8Tail } from "./bounded-child-output.js";
 import { createOpenClawTestProcess, type OpenClawTestProcess } from "./openclaw-test-process.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
+import { beginUiE2ePhase } from "./ui-e2e-phase.js";
 
 type OpenClawTestStateOptions = NonNullable<Parameters<typeof createOpenClawTestState>[0]>;
 
@@ -375,6 +376,7 @@ async function waitForGatewayReady(
   signal?: AbortSignal,
   record?: (diagnostic: GatewayReadinessDiagnostic) => void,
 ) {
+  const finishPhase = beginUiE2ePhase("gateway-readiness");
   const startedAt = Date.now();
   const probes: GatewayReadinessDiagnostic["probes"] = [];
   let outcome: GatewayReadinessDiagnostic["outcome"] = "timeout";
@@ -624,6 +626,7 @@ async function waitForGatewayReady(
     signal?.throwIfAborted();
     throw error;
   } finally {
+    finishPhase();
     record?.({
       probe: "GET /readyz",
       settlementProbe: "GET /startupz",
@@ -984,11 +987,24 @@ export async function createOpenClawTestInstance(
     }
     // Claim ordering before preparation can yield. Teardown joins pending startup,
     // and another start cannot borrow readiness from a child being stopped.
+    const finishQueue = beginUiE2ePhase(kind === "start" ? "gateway-start-queue" : undefined);
     const next = {
       kind,
       promise: Promise.resolve(operation?.promise)
         .catch(() => undefined)
-        .then(action),
+        .then(() => {
+          finishQueue();
+          const finishPhase = beginUiE2ePhase(
+            kind === "start"
+              ? "gateway-start"
+              : kind === "stop"
+                ? "gateway-stop"
+                : kind === "cleanup"
+                  ? "gateway-cleanup"
+                  : undefined,
+          );
+          return action().finally(finishPhase);
+        }),
     };
     operation = next;
     const release = () => {

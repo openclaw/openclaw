@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { positiveSecondsToSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   isStandaloneRuntimeExecutable,
@@ -9,11 +10,14 @@ import {
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveBrewOpenClawPath } from "../../infra/brew.js";
 import { hasErrnoCode } from "../../infra/errors.js";
+import { UPDATE_GIT_RETRY_DELAYS_MS, withGitNetworkRetry } from "../../infra/git-network-retry.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../../infra/runtime-process-url.js";
+import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
 import {
   canResolveRegistryVersionForPackageTarget,
@@ -40,11 +44,13 @@ import {
   type SystemPackageOwnershipInspection,
 } from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
+import { resolveCommandProcessSignal } from "../../process/exec-spawn.js";
+import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { UPDATE_INSTALL_SKIP_GUIDANCE } from "../../shared/update-outcome.js";
 import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { resolveNodeRunner } from "./node-runner.js";
 
 export { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
@@ -123,6 +129,16 @@ export type UpdateWizardOptions = Pick<
   UpdateCommandOptions,
   "runtimeRecoveryEnv" | "acceptCapabilities" | "fullIntegrityCheck" | "timeout"
 >;
+
+export function parseUpdateChannel(value?: string) {
+  const channel = normalizeUpdateChannel(value);
+  if (value !== undefined && !channel) {
+    throwExpectedCliError(
+      `--channel must be "stable", "extended-stable", "beta", or "dev" (got ${JSON.stringify(value)})`,
+    );
+  }
+  return channel;
+}
 
 /** Parse the shared timeout contract without exiting an owning operation. */
 export function parseUpdateTimeoutMs(
@@ -215,21 +231,16 @@ export async function resolveUpdateRoot(context?: { root: string }): Promise<str
   );
 }
 
-export async function runUpdateStep(params: {
-  name: string;
-  argv: string[];
-  cwd?: string;
-  timeoutMs?: number;
-  progress?: UpdateStepProgress;
-  env?: NodeJS.ProcessEnv;
-  input?: string;
-  runCommand?: Parameters<typeof runStep>[0]["runCommand"];
-  results?: UpdateStepResult[];
-}): Promise<UpdateStepResult> {
+export async function runUpdateStep(
+  params: Omit<Parameters<typeof runStep>[0], "cwd" | "runCommand" | "stepIndex" | "totalSteps"> &
+    Partial<Pick<Parameters<typeof runStep>[0], "cwd" | "runCommand">>,
+): Promise<UpdateStepResult> {
   return await runStep({
     ...params,
     cwd: params.cwd ?? process.cwd(),
-    runCommand: params.runCommand ?? runCommandWithTimeout,
+    runCommand:
+      params.runCommand ??
+      ((argv, options) => runCommandWithTimeout(argv, { ...options, killProcessTree: true })),
     stepIndex: 0,
     totalSteps: 0,
   });
@@ -249,7 +260,7 @@ type StagedGitCheckout = (
 
 async function cloneGitCheckoutTransactionally(
   params: Parameters<typeof ensureGitCheckout>[0],
-): Promise<GitCheckoutResult> {
+): Promise<GitCheckoutResult & { commandResult?: SpawnResult }> {
   const parentDir = path.dirname(params.dir);
   await fs.mkdir(parentDir, { recursive: true });
   const canonicalParentDir = await fs.realpath(parentDir);
@@ -278,6 +289,7 @@ async function cloneGitCheckoutTransactionally(
   let cleanupStaging = true;
   let published = false;
   let result: UpdateStepResult | null = null;
+  let commandResult: SpawnResult | undefined;
 
   async function ownsDirectory(
     directory: string,
@@ -305,6 +317,11 @@ async function cloneGitCheckoutTransactionally(
   const runOperation = async (): Promise<void> => {
     result = await runUpdateStep({
       name: "git-clone",
+      runCommand: async (argv, options) => {
+        params.assertCurrent?.();
+        commandResult = await runCommandWithTimeout(argv, options);
+        return commandResult;
+      },
       argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, UPSTREAM_REPOSITORY_URL, stagingDir],
       env: params.env,
       timeoutMs: params.timeoutMs,
@@ -444,7 +461,7 @@ async function cloneGitCheckoutTransactionally(
   if (operationFailure) {
     throw operationFailure.error;
   }
-  return { checkoutDir: targetDir, step: result };
+  return { checkoutDir: targetDir, step: result, commandResult };
 }
 
 export async function ensureGitCheckout(params: {
@@ -453,6 +470,7 @@ export async function ensureGitCheckout(params: {
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
   useStagedCheckout?: StagedGitCheckout;
+  assertCurrent?: () => void;
 }): Promise<GitCheckoutResult> {
   const gitEnv = params.env ?? (await createGlobalInstallEnv());
   const dirExists = await pathExists(params.dir);
@@ -463,7 +481,38 @@ export async function ensureGitCheckout(params: {
         `OPENCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
       );
     }
-    return await cloneGitCheckoutTransactionally({ ...params, env: gitEnv });
+    // Each attempt settles its transaction and disposes partial artifacts before
+    // retry admission. An uncertain cleanup retains its warning and stops retries.
+    const result = await withGitNetworkRetry(
+      "clone",
+      {
+        timeoutMs: params.timeoutMs,
+        retryDelaysMs: UPDATE_GIT_RETRY_DELAYS_MS,
+        signal: resolveCommandProcessSignal(),
+      },
+      async (timeoutMs) => {
+        const { commandResult, ...checkout } = await cloneGitCheckoutTransactionally({
+          ...params,
+          env: gitEnv,
+          timeoutMs: timeoutMs ?? params.timeoutMs,
+        });
+        // Classify native stderr before the step's diagnostic tail truncates it.
+        return {
+          ...commandResult,
+          checkout,
+          code: commandResult ? commandResult.code : null,
+          stderr: commandResult?.stderr ?? "",
+          termination: commandResult?.termination ?? ("signal" as const),
+          cleanup: checkout.step?.warnings?.length ? "uncertain" : commandResult?.cleanup,
+        };
+      },
+    );
+    if (result.checkout.step) {
+      result.checkout.step.exitCode = result.code;
+      result.checkout.step.termination = result.termination;
+      result.checkout.step.signal = result.signal;
+    }
+    return result.checkout;
   }
 
   if ((await readPackageName(params.dir)) !== DEFAULT_PACKAGE_NAME) {
@@ -476,6 +525,23 @@ export async function ensureGitCheckout(params: {
   return { checkoutDir: await fs.realpath(params.dir), step: null };
 }
 
+/** Inspect installation ownership without package-manager discovery or cache writes. */
+export async function assertGlobalUpdateOwner(
+  params: Parameters<typeof resolveGlobalManager>[0],
+): Promise<void> {
+  await (
+    params.pkgOwnership ?? createSystemPackageOwnershipInspection(params.timeoutMs)
+  ).assertUnowned(params.root);
+  if (params.installKind !== "git" && (await resolveBrewOpenClawPath(params.root))) {
+    const reason = resolveUnmanagedUpdateInstallReason();
+    throw new UpdatePreMutationError(
+      reason,
+      "This OpenClaw installation is managed by Homebrew. To update OpenClaw, run:\n\n  brew upgrade openclaw-cli\n\nThen restart the gateway:\n\n  openclaw gateway restart",
+      { failureFacts: [] },
+    );
+  }
+}
+
 export async function resolveGlobalManager(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -483,18 +549,8 @@ export async function resolveGlobalManager(params: {
   pkgOwnership?: SystemPackageOwnershipInspection;
   serviceUnitTarget?: string;
 }): Promise<GlobalInstallManager> {
-  await (
-    params.pkgOwnership ?? createSystemPackageOwnershipInspection(params.timeoutMs)
-  ).assertUnowned(params.root);
+  await assertGlobalUpdateOwner(params);
   if (params.installKind !== "git") {
-    if (await resolveBrewOpenClawPath(params.root)) {
-      const reason = resolveUnmanagedUpdateInstallReason();
-      throw new UpdatePreMutationError(
-        reason,
-        "This OpenClaw installation is managed by Homebrew. To update OpenClaw, run:\n\n  brew upgrade openclaw-cli\n\nThen restart the gateway:\n\n  openclaw gateway restart",
-        { failureFacts: [] },
-      );
-    }
     const diagnostics: string[] = [];
     const detected = await detectGlobalInstallManagerForRoot(
       runCommandWithTimeout,
@@ -533,7 +589,7 @@ export async function tryWriteCompletionCache(
   timeoutMs = COMPLETION_CACHE_WRITE_TIMEOUT_MS,
   nodeRunner = resolveNodeRunner(),
 ): Promise<"completed" | "failed" | "skipped"> {
-  const binPath = path.join(root, "openclaw.mjs");
+  const binPath = fileURLToPath(resolveExternalPackageRuntimeEntrypointUrl("cliLauncher", root));
   const standalone = isStandaloneRuntimeExecutable(nodeRunner);
   if (!standalone && !(await pathExists(binPath))) {
     return "skipped";

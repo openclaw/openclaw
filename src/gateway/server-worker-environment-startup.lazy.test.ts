@@ -8,6 +8,7 @@ import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import * as version from "../version.js";
 import * as bundles from "./worker-environments/bundle.js";
 import type { WorkerConnectionIdentity } from "./worker-environments/connection-identity.js";
+import { createWorkerConnectionIdentity } from "./worker-environments/connection-identity.test-support.js";
 import * as bootstrapArtifacts from "./worker-environments/node-bootstrap-artifact.js";
 import type {
   createWorkerEnvironmentService,
@@ -71,18 +72,11 @@ it("loads Gateway tools lazily and binds each requested surface", async () => {
     if (!createGatewayTools) {
       throw new Error("worker tool-surface callback was not composed");
     }
-    const identity: WorkerConnectionIdentity = {
-      environmentId: "environment",
+    const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(null, {
       credentialHash: "credential",
       bundleHash: "bundle",
-      sessionId: null,
-      runId: null,
-      turnClaim: null,
-      ownerEpoch: 1,
-      rpcSetVersion: 1,
-      protocolFeatures: [],
       credentialExpiresAtMs: Date.now() + 60_000,
-    };
+    });
     const results = await Promise.all([
       createGatewayTools({ identity }),
       createGatewayTools({ identity }),

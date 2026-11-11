@@ -1,7 +1,7 @@
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeIMessageMessageId } from "../message-guid.js";
+import { createPersistenceFailureReporter } from "../persistence-failure.js";
 import { getIMessageRuntime } from "../runtime.js";
 import {
   IMESSAGE_SENT_ECHOES_TTL_MS,
@@ -15,14 +15,7 @@ import { normalizeIMessageEchoText } from "./echo-text-corruption.js";
 
 type PersistedEchoStore = PluginStateKeyedStore<PersistedEchoEntry, 2>;
 
-let persistenceFailureLogged = false;
-function reportFailure(scope: string, err: unknown): void {
-  if (persistenceFailureLogged) {
-    return;
-  }
-  persistenceFailureLogged = true;
-  logVerbose(`imessage echo-cache: ${scope} disabled after first failure: ${String(err)}`);
-}
+const reportFailure = createPersistenceFailureReporter("echo-cache");
 
 function normalizeMedia(
   media: MediaPlaceholderTextFact | null | undefined,

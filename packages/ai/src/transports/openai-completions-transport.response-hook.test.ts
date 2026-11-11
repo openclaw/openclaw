@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, type MockInstance, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
+import { createDeferred, withinTest, nextEventLoopTurn } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { streamOpenAICompletions } from "../providers/openai-completions.js";
 import type { AssistantMessageEventStreamLike, Context, StreamOptions } from "../types.js";
@@ -217,9 +217,7 @@ it("keeps caller cancellation terminal after a late hook rejection", async ({ si
   expect(lifecycle.requestAborted).toHaveBeenCalledOnce();
 
   pendingHook.reject(new Error("late response hook rejection"));
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+  await nextEventLoopTurn();
   expect(events).toEqual(["error"]);
   lifecycle.assertListenersRemoved();
 });

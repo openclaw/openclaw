@@ -2,7 +2,10 @@ import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { crabboxCommandOutput, leaseRunArgs, runCrabboxCommand } from "./crabbox-worker-command.js";
 import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
-import { wrapCrabboxNodeScript } from "./crabbox-worker-script.js";
+import {
+  createCrabboxWorkerStateDirScript,
+  wrapCrabboxNodeScript,
+} from "./crabbox-worker-script.js";
 import { CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const MAX_NODE_ENROLLMENT_EVIDENCE_BYTES = 2_048;
@@ -24,7 +27,8 @@ export async function collectCrabboxNodeEnrollmentEvidence(params: {
       input: wrapCrabboxNodeScript(
         `const fs = require("node:fs");
 const path = require("node:path");
-const state = path.join(require("node:os").homedir(), ".openclaw", ${JSON.stringify(`cloud-workers/${params.id}`)});
+const home = fs.realpathSync(require("node:os").homedir());
+const state = ${createCrabboxWorkerStateDirScript(params.id)};
 let runtime = "absent";
 let alive = false;
 let tail = "absent";

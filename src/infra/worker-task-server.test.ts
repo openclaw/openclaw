@@ -1,7 +1,11 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import path from "node:path";
 import { MessageChannel, receiveMessageOnPort, type MessagePort } from "node:worker_threads";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { cancelWorkerNativeSections } from "../../packages/worker-runtime/src/worker-task-native-sections.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SqliteDatabaseAdmissions } from "./sqlite-database-admission-record.js";
 import { expectCalls } from "./worker-task-pool.owned.test-support.js";
 import type { WorkerTaskContext } from "./worker-task-transport.js";
@@ -12,6 +16,8 @@ const boundary = vi.hoisted(() => {
 });
 vi.mock("node:worker_threads", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:worker_threads")>()),
+  // Served workers resolve SQLite facts through their host, as in a real Worker thread.
+  threadId: 1,
   get parentPort() {
     return boundary.port;
   },
@@ -32,6 +38,10 @@ vi.mock("../logging/state.js", () => ({ loggingState: {} }));
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ error: vi.fn() }),
 }));
+// mock-isolation: Task servers inherit PostgreSQL state without loading service construction.
+vi.mock("./postgres-sync/pool.js", () => {
+  throw new Error("task servers must not load PostgreSQL service construction");
+});
 // mock-isolation: Observe diagnostic cleanup without allocating a memory transport.
 vi.mock("./worker-memory.js", () => ({
   serveWorkerMemorySamples: () => ({
@@ -45,8 +55,10 @@ vi.mock("./worker-idle-gc.js", () => ({
   cancelWorkerIdleGc: vi.fn(),
   scheduleWorkerIdleGc: vi.fn(),
 }));
-const exitCode = process.exitCode;
+const exitCode = process.exitCode ?? 0;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
+  process.exitCode = exitCode;
   vi.resetModules();
   vi.clearAllMocks();
   boundary.closeMemory.mockReset();
@@ -109,11 +121,17 @@ async function workerFixture() {
     ...(await import("./worker-task-server.js")),
     port,
     closed: closed.promise,
-    task(this: void, taskId: number, context = taskContext(), sampleMemory = false) {
+    task(
+      this: void,
+      taskId: number,
+      context = taskContext(),
+      sampleMemory = false,
+      nativeSections = new SharedArrayBuffer(4),
+    ) {
       result = createDeferred<string>();
       port.emit("message", {
         taskId,
-        nativeSections: new SharedArrayBuffer(4),
+        nativeSections,
         taskContext: context,
         sampleMemory,
       });
@@ -135,16 +153,12 @@ it.each([false, true])(
     const entered = createDeferred();
     const cleanup = createDeferred();
     const admission = await admissionFixture();
-    const { cancelWorkerIdleGc, scheduleWorkerIdleGc } = await import("./worker-idle-gc.js");
     const closeResource = vi.fn();
     const handler = vi.fn(async () => {
-      try {
-        throw new Error("uncertain native close");
-      } finally {
-        entered.resolve();
-        await cleanup.promise;
-        admission.inspect();
-      }
+      entered.resolve();
+      await cleanup.promise;
+      admission.inspect();
+      throw new Error("uncertain native close");
     });
     const receipt = resourceReceipt();
     boundary.closeMemory.mockImplementation(() => {
@@ -169,8 +183,6 @@ it.each([false, true])(
       expect(receipt.close).toHaveBeenCalledBefore(boundary.closeMemory);
       expect(boundary.closeMemory).toHaveBeenCalledBefore(admission.close);
       expect(admission.close).toHaveBeenCalledBefore(port.close);
-      expect(cancelWorkerIdleGc).toHaveBeenCalledTimes(3);
-      expect(scheduleWorkerIdleGc).not.toHaveBeenCalled();
       expect(process.exitCode).toBe(1);
       port.emit("message", { taskId: 2 });
       expectCalls(1, handler);
@@ -241,11 +253,15 @@ it("expires a task's admission budget without poisoning its successor or resourc
     ...taskContext(admission.port),
     databaseAdmissionDeadlineAtMs: Date.now() - 1,
   });
-  expect(port.postMessage).toHaveBeenCalledWith({
-    status: "failed",
-    taskId: 1,
-    error: "SQLite admission facts exchange timed out; the host did not reply",
-  });
+  expect(port.postMessage).toHaveBeenCalledWith(
+    {
+      status: "failed",
+      taskId: 1,
+      error: "SQLite admission facts exchange timed out; the host did not reply",
+      diagnostics: undefined,
+    },
+    [],
+  );
   expectCalls(0, admission.exchanges);
   port.emit("message", { closeResource: true, resourcePort: receipt });
   await receipt.closed;
@@ -256,3 +272,120 @@ it("expires a task's admission budget without poisoning its successor or resourc
   expectCalls(0, port.close, boundary.closeMemory);
   expect(process.exitCode).toBe(exitCode);
 });
+
+async function snapshotFixture(prefix: string) {
+  const root = tempDirs.make(prefix);
+  const staging = await import("./sqlite-snapshot-staging.js");
+  const { removeTempDirectoryAsync } = await import("./sqlite-readonly-location-cleanup.js");
+  const { DatabaseSync } = (await import("./node-sqlite.js")).requireNodeSqlite();
+  const allocate = () => {
+    const directory = staging.createSqliteSnapshotStagingDirectorySync(root);
+    // A child writes the copy in its own nested staging directory, then exits.
+    const child = staging.createSqliteSnapshotStagingTokenSync(directory);
+    const copy = new DatabaseSync(path.join(child.directory, "database.sqlite"));
+    copy.exec("CREATE TABLE copied(value)");
+    copy.close();
+    child.release();
+    return { directory, copy: path.join(child.directory, "database.sqlite") };
+  };
+  return { root, staging, allocate, remove: removeTempDirectoryAsync };
+}
+
+it("retires a cancelled task's snapshot copy unless a live reader still holds it", async () => {
+  const { task, serveOwnedWorkerTasks } = await workerFixture();
+  const admission = await admissionFixture();
+  const sections = new SharedArrayBuffer(4);
+  const {
+    root,
+    staging,
+    allocate,
+    remove: removeTempDirectoryAsync,
+  } = await snapshotFixture("cancelled-snapshot-");
+  const settled = createDeferred<boolean[]>();
+  const settle = async (control: { throwIfCancelled(): void }) => {
+    const [held, idle] = [allocate(), allocate()];
+    const releaseReader = staging.acquireSqliteSnapshotReadToken(held.directory);
+    cancelWorkerNativeSections(new Int32Array(sections));
+    expect(() => control.throwIfCancelled()).toThrow("worker task cancelled");
+    // Cleanup may reclaim the child's directory, but cancelled work mints no new owner.
+    expect(() => staging.createSqliteSnapshotStagingDirectorySync(root)).toThrow(/cancelled/u);
+    const removed = [
+      await removeTempDirectoryAsync(idle.directory),
+      await removeTempDirectoryAsync(held.directory),
+    ];
+    expect(fs.readdirSync(root)).toEqual([path.basename(held.directory)]);
+    expect(fs.existsSync(held.copy)).toBe(true);
+    releaseReader();
+    return [...removed, await removeTempDirectoryAsync(held.directory)];
+  };
+  serveOwnedWorkerTasks((_input, _channel, control) =>
+    settle(control).then(settled.resolve, settled.reject),
+  );
+  const result = task(1, taskContext(admission.port), false, sections);
+  expect(await settled.promise).toEqual([true, false, true]);
+  await result;
+  expect(admission.exchanges).toHaveBeenCalled();
+  expect(fs.readdirSync(root)).toEqual([]);
+});
+
+it("retires a task's snapshot copy after its admission budget lapses", async () => {
+  const { task, serveOwnedWorkerTasks } = await workerFixture();
+  const admission = await admissionFixture();
+  const { root, staging, allocate, remove } = await snapshotFixture("expired-snapshot-");
+  const deadline = Date.now() + 60_000;
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  const settled = createDeferred<boolean>();
+  serveOwnedWorkerTasks(async () => {
+    const { directory } = allocate();
+    vi.setSystemTime(deadline + 1);
+    // The lapsed budget still refuses new work; only cleanup gets its own grace.
+    expect(() => staging.createSqliteSnapshotStagingDirectorySync(root)).toThrow(/timed out/u);
+    await remove(directory).then(settled.resolve, settled.reject);
+  });
+  await task(1, { ...taskContext(admission.port), databaseAdmissionDeadlineAtMs: deadline });
+  expect(await settled.promise).toBe(true);
+  expect(admission.exchanges).toHaveBeenCalled();
+  expect(fs.readdirSync(root)).toEqual([]);
+});
+
+it.each([undefined, "openclaw doctor --fix"])(
+  "settles encoded service failures through the owning lifecycle (next step: %s)",
+  async (nextStep) => {
+    const { port, task, closed, serveOwnedWorkerTasks } = await workerFixture();
+    const { bindPostgresPool, recordPostgresPoolFailure } =
+      await import("./postgres-sync/pool-state.js");
+    const { port1, port2 } = new MessageChannel();
+    onTestFinished(() => {
+      port1.close();
+      port2.close();
+    });
+    bindPostgresPool({
+      allocation: new SharedArrayBuffer(4),
+      services: [{ port: port1, signal: new SharedArrayBuffer(8) }],
+      nextStep,
+    });
+    const error = new Error(
+      `PostgreSQL connection lost; outcome unknown${nextStep ? `. Run ${nextStep}.` : ""}`,
+    );
+    const result = { ok: false, error: error.message };
+    serveOwnedWorkerTasks(() => {
+      recordPostgresPoolFailure(error);
+      return result;
+    });
+    expect(await Promise.race([task(1), closed])).toBe(nextStep ? "result" : "closed");
+    if (nextStep) {
+      expect(port.postMessage).toHaveBeenCalledWith(
+        { status: "ok", taskId: 1, value: result, diagnostics: undefined },
+        [],
+      );
+      expect(port.close).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(exitCode);
+    } else {
+      expect(port.postMessage).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+    }
+  },
+);

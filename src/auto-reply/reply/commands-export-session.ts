@@ -11,8 +11,8 @@ import {
   type SessionHeader,
 } from "../../agents/sessions/session-manager.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
-import type { SessionEntry as StoredSessionEntry } from "../../config/sessions/types.js";
 import { FsSafeError, isPathInside, root, type Root } from "../../infra/fs-safe.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -66,21 +66,6 @@ function normalizeWorkspaceAliasPath(workspaceRoot: Root, requestedPath: string)
   return path.relative(workspaceRoot.rootDir, normalizedRequest) || requestedPath;
 }
 
-async function hasPersistedAcpSession(params: {
-  cfg: HandleCommandsParams["cfg"];
-  sessionKey: string;
-  entry: StoredSessionEntry;
-}): Promise<boolean> {
-  if (params.entry.acp) {
-    return true;
-  }
-  try {
-    return Boolean(await readAcpSessionMetaForEntryAsync(params));
-  } catch {
-    return false;
-  }
-}
-
 type SessionExportWarningSummary = {
   count: number;
   rows: number[];
@@ -116,12 +101,14 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
 
   // Active exports run after startup migration, so SQLite rows are canonical.
   // Do not read sessionFile here; a SQLite marker is an identifier, not a path.
-  const events = await loadTranscriptEvents({
-    agentId: sessionTarget.agentId,
-    sessionId: sessionTarget.sessionId,
-    sessionKey: sessionTarget.sessionKey,
-    storePath: sessionTarget.storePath,
-  });
+  const events = await withSessionTranscriptHydrationCaller("export", () =>
+    loadTranscriptEvents({
+      agentId: sessionTarget.agentId,
+      sessionId: sessionTarget.sessionId,
+      sessionKey: sessionTarget.sessionKey,
+      storePath: sessionTarget.storePath,
+    }),
+  );
   const fileEntries: SessionFileEntry[] = [];
   const skippedRows: SessionExportWarningSummary = { count: 0, rows: [] };
   for (const [index, event] of events.entries()) {
@@ -159,11 +146,19 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     sessionEntry: entry,
   });
 
-  const hasStoredAcpSession = await hasPersistedAcpSession({
+  const acpRead = {
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     entry,
-  });
+  };
+  let hasStoredAcpSession = Boolean(acpRead.entry.acp);
+  if (!hasStoredAcpSession) {
+    try {
+      hasStoredAcpSession = Boolean(await readAcpSessionMetaForEntryAsync(acpRead));
+    } catch {
+      hasStoredAcpSession = false;
+    }
+  }
   const hasBackendSession =
     hasStoredAcpSession ||
     hasNonEmptyString(entry.claudeCliSessionId) ||

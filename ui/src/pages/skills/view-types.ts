@@ -16,7 +16,8 @@ export type SkillsRouteData = {
   agents: ApplicationContext["agents"];
   selectedAgentId: string | null;
   selectionIntentRevision: number;
-  report: SkillStatusReport | null;
+  /** An admitted prefetch adopted by the mounted Skills request owner. */
+  reportRead?: Promise<SkillStatusReport | undefined>;
   error: string | null;
   clawhubRef?: string;
 };
@@ -47,6 +48,8 @@ export type SkillsProps = {
   state: SkillsState & SkillsPresentation;
   mutationSkills: SkillStatusEntry[];
   saving: boolean;
+  toggleSavingSkillKey?: string;
+  toggleDisabled?: boolean;
   readClawHubDetail: () => ClawHubSkillDetail | null;
   readClawHubVerdicts: () => Record<string, ClawHubSkillSecurityVerdict>;
   readClawHubSearch: () => boolean;
@@ -55,6 +58,7 @@ export type SkillsProps = {
   libraryEntries?: SkillLibraryEntry[];
   onLibraryOpen?: (skillId: string) => void;
   library?: JSX.Element;
+  pageMenu?: () => JSX.Element;
   showInventory?: boolean;
   canUpdate: boolean;
   canInstall: boolean;

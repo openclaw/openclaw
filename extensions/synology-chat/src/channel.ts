@@ -24,6 +24,7 @@ import {
   channelStoppedPatch,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -50,7 +51,6 @@ import {
 import { resolveSynologyHostedMediaRoute } from "./hosted-media-route.js";
 import { prepareSynologyHostedMedia } from "./outbound-media.js";
 import { collectSynologyChatSecurityAuditFindings } from "./security-audit.js";
-import { buildSynologyChatOutboundSessionKey } from "./session-key.js";
 import { synologyChatSetupContract, synologyChatSetupWizard } from "./setup-surface.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
@@ -347,10 +347,14 @@ export const synologyChatPlugin = {
         return null;
       }
       const resolvedAccountId = accountId?.trim() || DEFAULT_ACCOUNT_ID;
-      const sessionKey = buildSynologyChatOutboundSessionKey({
+      const sessionKey = buildAgentSessionKey({
         agentId,
+        channel: CHANNEL_ID,
         accountId: resolvedAccountId,
-        chatUserId,
+        // Chat API IDs and outgoing-webhook IDs are separate namespaces. Keep the
+        // outbound identity stable without ever claiming it is the inbound sender.
+        peer: { kind: "direct", id: `chat-api-${chatUserId}` },
+        dmScope: "per-account-channel-peer",
       });
       return {
         sessionKey,

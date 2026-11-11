@@ -758,7 +758,8 @@ it("reads current qualified facts and recovers lifecycle timestamps only when re
     const selected = await qualify(lookup);
     const read = (includeLifecycle = false) =>
       withQualifiedGatewaySessionEntry({
-        ...selected,
+        target: selected.target,
+        logicalStorePath: selected.logicalStorePath,
         cfg: lookup.cfg,
         includeMembership: true,
         includeLifecycle,

@@ -10,8 +10,9 @@
 import { render } from "@solidjs/web";
 import { createMemo, createStore, Errored, For, isPending, Loading, Show } from "solid-js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
-import { isReportableUpdateRun } from "../../../src/shared/update-outcome.ts";
+import { isReportableUpdateRun } from "../../../src/shared/update-outcome-classification.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import { DialogHeader } from "../components/solid/dialog-header.tsx";
 import { UpdateGitRevisions } from "../components/solid/update-git-revisions.tsx";
 import { UpdateRunView } from "../components/update-run-view.tsx";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
@@ -148,7 +149,7 @@ export async function confirmAndStartUpdateRuntime(
         ? {
             confirmLabel: t("updates.confirm.macAction"),
             message: t("updates.confirm.macMessage"),
-            title: t("chat.sidebar.updateMacAndGateway"),
+            title: t("updates.confirm.macTitle"),
           }
         : {
             confirmLabel: t("updates.confirm.action"),
@@ -157,7 +158,7 @@ export async function confirmAndStartUpdateRuntime(
                 ? "updates.confirm.message"
                 : "updates.confirm.noKnownUpdateMessage",
             ),
-            title: t("chat.sidebar.updateGateway"),
+            title: t("updates.confirm.title"),
           };
 
       const details = formatInstalledAndAvailable(updateAvailable, updateSchedule);
@@ -223,66 +224,65 @@ export async function confirmAndStartUpdateRuntime(
             description={view.body}
             onModal-cancel={finish}
           >
-            <div class="exec-approval-card update-run-dialog">
-              <div class="exec-approval-header">
-                <div>
-                  <div class="exec-approval-title">{view.route.title}</div>
-                  <div class="exec-approval-sub" style="white-space: pre-line">
-                    {view.body}
-                  </div>
-                </div>
-              </div>
-              <For each={[view.statusRead]}>
-                {(read) => {
-                  const statusMessage = (refreshed = false) => (
-                    <div role="status" aria-live="polite" class="exec-approval-sub">
-                      {view.disconnected && view.showRecovery
-                        ? t("updates.dialog.checkStatusDisconnected")
-                        : refreshed && !view.readError
-                          ? t("updates.dialog.statusRefreshed")
-                          : null}
-                    </div>
-                  );
-                  const statusError = (message: () => string) => (
-                    <>
-                      {statusMessage()}
-                      <div role="alert" class="exec-approval-sub">
-                        {message()}
+            <div class="oc-dialog confirm-dialog update-run-dialog">
+              <DialogHeader
+                title={view.route.title}
+                description={<p>{view.body}</p>}
+                onClose={finish}
+              />
+              <div class="oc-dialog__body">
+                <For each={[view.statusRead]}>
+                  {(read) => {
+                    const statusMessage = (refreshed = false) => (
+                      <div role="status" aria-live="polite" class="update-run-dialog__status">
+                        {view.disconnected && view.showRecovery
+                          ? t("updates.dialog.checkStatusDisconnected")
+                          : refreshed && !view.readError
+                            ? t("updates.dialog.statusRefreshed")
+                            : null}
                       </div>
-                    </>
-                  );
-                  if (read && "error" in read) {
-                    return statusError(() => read.error);
-                  }
-                  const completion = createMemo(() => read?.promise ?? "idle");
-                  return (
-                    <Errored fallback={(error) => statusError(() => formatUiError(error()))}>
-                      <Loading fallback={statusMessage()}>
-                        <Show when={completion()}>
-                          {(status) => (
-                            <>
-                              {statusMessage(status() === "success")}
-                              <Show when={view.details && view.confirmed && !statusPending()}>
-                                <div class="exec-approval-command mono update-confirmation-details">
-                                  <div>{view.details}</div>
-                                  <UpdateGitRevisions
-                                    schedule={view.updateSchedule}
-                                    updateAvailable={view.updateAvailable}
-                                  />
-                                </div>
-                              </Show>
-                            </>
-                          )}
-                        </Show>
-                      </Loading>
-                    </Errored>
-                  );
-                }}
-              </For>
-              <Show when={view.run}>
-                {(run) => <UpdateRunView run={run()} connected={!view.disconnected} />}
-              </Show>
-              <openclaw-modal-actions class="exec-approval-actions">
+                    );
+                    const statusError = (message: () => string) => (
+                      <>
+                        {statusMessage()}
+                        <div role="alert" class="update-run-dialog__status">
+                          {message()}
+                        </div>
+                      </>
+                    );
+                    if (read && "error" in read) {
+                      return statusError(() => read.error);
+                    }
+                    const completion = createMemo(() => read?.promise ?? "idle");
+                    return (
+                      <Errored fallback={(error) => statusError(() => formatUiError(error()))}>
+                        <Loading fallback={statusMessage()}>
+                          <Show when={completion()}>
+                            {(status) => (
+                              <>
+                                {statusMessage(status() === "success")}
+                                <Show when={view.details && view.confirmed && !statusPending()}>
+                                  <div class="exec-approval-command mono update-confirmation-details">
+                                    <div>{view.details}</div>
+                                    <UpdateGitRevisions
+                                      schedule={view.updateSchedule}
+                                      updateAvailable={view.updateAvailable}
+                                    />
+                                  </div>
+                                </Show>
+                              </>
+                            )}
+                          </Show>
+                        </Loading>
+                      </Errored>
+                    );
+                  }}
+                </For>
+                <Show when={view.run}>
+                  {(run) => <UpdateRunView run={run()} connected={!view.disconnected} />}
+                </Show>
+              </div>
+              <openclaw-modal-actions class="oc-dialog__footer">
                 <Show
                   when={view.finished || view.showRecovery}
                   fallback={

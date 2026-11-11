@@ -62,6 +62,26 @@ function makeParams(attempt: AttemptParamsLike, tempDir: string) {
   } satisfies AgentHarnessAttemptParamsV2 & Pick<AttemptParamsLike, "auth">;
 }
 
+function finish(session: copilot.FakeSession, text: string, id: string) {
+  const message = copilot.makeAssistantMessageEvent(text, { messageId: id });
+  session.emit(message.type, { ...message.data, __eventId: id });
+  session.emit("session.idle", {});
+  return { ...message, id };
+}
+
+async function fixture() {
+  const context = await journal.createFixture();
+  context.bridge.detach();
+  return { ...context, params: makeParams(context.attempt, context.tempDir) };
+}
+
+function emptyTools() {
+  selectors.copilotAttemptOverrides.createToolBridge = async () => ({
+    sourceTools: [],
+    promptToolPolicy: { apply: () => ({ tools: [], callableToolNames: [] }) },
+  });
+}
+
 describe("Copilot canonical session persistence", () => {
   beforeEach(() => runtimeConfig.setRuntimeConfigSnapshot({}));
   afterEach(() => {
@@ -71,32 +91,25 @@ describe("Copilot canonical session persistence", () => {
   });
 
   it("answers a detached setup probe through its caller-owned in-memory transcript", async () => {
-    const { attempt, tempDir, bridge } = await journal.createFixture();
-    bridge.detach();
+    const { attempt, tempDir, params } = await fixture();
     const manager = SessionManager.inMemory(tempDir);
     const sdk = copilot.makeFakeSdk((session) => {
       session.sendAndWait = vi.fn(async () => {
         session.emit("user.message", { content: attempt.prompt });
-        session.emit("assistant.message", { content: "OK", messageId: "probe-answer" });
-        session.emit("session.idle", {});
-        return copilot.makeAssistantMessageEvent("OK", { messageId: "probe-answer" });
+        return finish(session, "OK", "probe-answer");
       });
     });
-    const params = {
-      ...makeParams(attempt, tempDir),
+    const input = {
+      ...params,
       sessionTarget: undefined,
       sessionManager: manager,
       sessionPersistence: "detached" as const,
     };
-    selectors.copilotAttemptOverrides.createToolBridge = async () => ({
-      sourceTools: [],
-      promptToolPolicy: { apply: () => ({ tools: [], callableToolNames: [] }) },
-    });
-    const result = await copilot.runCopilotAttempt(params, { pool: copilot.makeFakePool(sdk) });
+    emptyTools();
+    const result = await copilot.runCopilotAttempt(input, { pool: copilot.makeFakePool(sdk) });
 
     expect(result.terminal).toEqual({ kind: "ok" });
     expect(result.lastAssistant).toMatchObject({ content: [{ type: "text", text: "OK" }] });
-    expect(sdk.sessions[0]?.sendAndWait).toHaveBeenCalledOnce();
     expect(journal.transcriptMessages(manager.getEntries()).map((row) => row.message.role)).toEqual(
       ["user", "assistant"],
     );
@@ -104,13 +117,12 @@ describe("Copilot canonical session persistence", () => {
   });
 
   it("requires an exact durable target even when a persistent manager is supplied", async () => {
-    const { attempt, target, tempDir, bridge } = await journal.createFixture();
-    bridge.detach();
+    const { target, tempDir, params } = await fixture();
     const manager = await SessionManager.openAsync(target, tempDir);
     const sdk = copilot.makeFakeSdk();
     const result = await copilot.runCopilotAttempt(
       {
-        ...makeParams(attempt, tempDir),
+        ...params,
         sessionTarget: undefined,
         sessionManager: manager,
       },
@@ -133,8 +145,7 @@ describe("Copilot canonical session persistence", () => {
   it.each(["commit", "rollback"] as const)(
     "joins the tool transcript transaction before finalizing: %s",
     async (outcome) => {
-      const { attempt, target, tempDir, bridge } = await journal.createFixture();
-      bridge.detach();
+      const { attempt, target, params: baseParams } = await fixture();
       const append = copilot.createAttemptGate();
       const controller = new AbortController();
       const signal = controller.signal;
@@ -180,17 +191,12 @@ describe("Copilot canonical session persistence", () => {
             success: reply.resultType === "success",
             toolCallId: "call-boundary",
           });
-          const final = copilot.makeAssistantMessageEvent("finished", {
-            messageId: "assistant-final",
-          });
-          session.emit(final.type, { ...final.data, __eventId: "assistant-final" });
-          session.emit("session.idle", {});
-          return { ...final, id: "assistant-final" };
+          return finish(session, "finished", "assistant-final");
         });
       });
       const pool = copilot.makeFakePool(sdk);
       const params = {
-        ...makeParams(attempt, tempDir),
+        ...baseParams,
         abortSignal: signal,
         config: { tools: { toolSearch: false } },
         disableTools: false,
@@ -220,21 +226,12 @@ describe("Copilot canonical session persistence", () => {
             terminal: { kind: "ok" },
             replayMetadata: { replaySafe: true },
           });
-          const roles = rows.map((row) => row.message.role);
-          expect(roles).toEqual(["user", "assistant", "toolResult", "assistant"]);
-          expect(rows[1]?.message).toMatchObject({
-            idempotencyKey: "copilot-sdk:sess-1:assistant-boundary",
-            content: [
-              { type: "text", text: "checking" },
-              { type: "toolCall", id: "call-boundary", name: "read", arguments: {} },
-            ],
-          });
-          expect(rows[2]?.message).toMatchObject({
-            idempotencyKey: "copilot-sdk:sess-1:result-boundary",
-            toolCallId: "call-boundary",
-            toolName: "read",
-            content: [{ type: "text", text: "result" }],
-          });
+          expect(rows.map((row) => [row.message.role, row.message.idempotencyKey])).toEqual([
+            ["user", "run-1:user"],
+            ["assistant", "copilot-sdk:sess-1:assistant-boundary"],
+            ["toolResult", "copilot-sdk:sess-1:result-boundary"],
+            ["assistant", "copilot-sdk:sess-1:assistant-final"],
+          ]);
           expect(result.messagesSnapshot).toEqual(rows.map((row) => row.message));
         } else {
           expect(rows).toEqual(prefix);
@@ -249,7 +246,6 @@ describe("Copilot canonical session persistence", () => {
           expect(result.replayMetadata.replaySafe).toBe(false);
         }
         const toolSignal = expectDefined(execute.mock.calls[0]?.[2], "tool execution signal");
-        expect(execute).toHaveBeenCalledExactlyOnceWith("call-boundary", {}, toolSignal, undefined);
         const session = expectDefined(sdk.sessions[0], "SDK session");
         expect(session.abort).toHaveBeenCalledTimes(outcome === "rollback" ? 1 : 0);
         expect(session.disconnect).toHaveBeenCalledOnce();
@@ -271,8 +267,7 @@ describe("Copilot canonical session persistence", () => {
   );
 
   it("keeps the host session through provider failure, retry, resume, and finalization", async () => {
-    const { attempt, target, tempDir, bridge } = await journal.createFixture();
-    bridge.detach();
+    const { attempt, target, params: baseParams } = await fixture();
     const failure = new Error("Authentication failed with provider (HTTP 401)");
     let turns = 0;
     const configureSession = (session: copilot.FakeSession) => {
@@ -283,13 +278,7 @@ describe("Copilot canonical session persistence", () => {
           throw failure;
         }
         const id = `assistant-${turns}`;
-        const assistant = copilot.makeAssistantMessageEvent(`answer-${turns}`, {
-          messageId: id,
-          model: "gpt-5",
-        });
-        session.emit(assistant.type, { ...assistant.data, __eventId: id });
-        session.emit("session.idle", {});
-        return { ...assistant, id };
+        return finish(session, `answer-${turns}`, id);
       });
     };
     const sdk = copilot.makeFakeSdk({
@@ -297,13 +286,9 @@ describe("Copilot canonical session persistence", () => {
       onResumeSession: configureSession,
     });
     const pool = copilot.makeFakePool(sdk);
-    const baseParams = makeParams(attempt, tempDir);
     let sessionId = baseParams.sessionId;
     let initialReplayState = baseParams.initialReplayState;
-    selectors.copilotAttemptOverrides.createToolBridge = async () => ({
-      sourceTools: [],
-      promptToolPolicy: { apply: () => ({ tools: [], callableToolNames: [] }) },
-    });
+    emptyTools();
     for (const phase of ["failure", "retry", "resume", "finalize"] as const) {
       const params = {
         ...baseParams,

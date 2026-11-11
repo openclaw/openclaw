@@ -1,5 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { BrowserProfileUnavailableError } from "../errors.js";
 import { assertBrowserNavigationResultAllowed } from "../navigation-guard.js";
 import { DEFAULT_TRACE_DIR } from "../paths.js";
@@ -25,7 +29,7 @@ import { withBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { readRoutePositiveInteger } from "./route-numeric.js";
 import { registerBrowserTabRoutes } from "./tabs.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { toBoolean, toStringOrEmpty } from "./utils.js";
+import { toBoolean } from "./utils.js";
 
 function clampScreencastOption(value: unknown, min: number, max: number, fallback: number) {
   return typeof value === "number" && Number.isFinite(value)
@@ -102,6 +106,9 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
           return;
         }
         const retainedRequester = req.screencastAuthority?.retainRequester();
+        // The session checks each navigation from a page listener on the shared connection,
+        // which runs in another call's async context. Resolve policy as this minting request.
+        const runInMintingRequest = AsyncLocalStorage.snapshot();
         try {
           const { token, expiresAtMs } = mintBrowserScreencastToken({
             profileName,
@@ -119,12 +126,13 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
             isRequesterCurrent: retainedRequester?.isCurrent ?? req.requester?.isCurrent,
             releaseRequester: retainedRequester?.release,
             assertCurrent,
-            checkNavigationAllowed: async (nextUrl) => {
-              await assertBrowserNavigationResultAllowed({
-                url: nextUrl,
-                ...browserNavigationPolicyForProfile(ctx, profileCtx),
-              });
-            },
+            checkNavigationAllowed: (nextUrl) =>
+              runInMintingRequest(() =>
+                assertBrowserNavigationResultAllowed({
+                  url: nextUrl,
+                  ...browserNavigationPolicyForProfile(ctx, profileCtx),
+                }),
+              ),
           });
           res.json({
             token,
@@ -188,12 +196,8 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
     EXISTING_SESSION_LIMITS.text,
   );
 
-  register("get", "/dialogs", "dialog state", () => async (pw, { cdpUrl, targetId }) => ({
-    browserState: await pw.getObservedBrowserStateViaPlaywright({
-      cdpUrl,
-      targetId,
-      ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-    }),
+  register("get", "/dialogs", "dialog state", () => async (pw, target) => ({
+    browserState: await pw.getObservedBrowserStateViaPlaywright(target),
   }));
 
   register("post", "/trace/start", "trace start", (input) => {
@@ -207,7 +211,7 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
   });
 
   register("post", "/trace/stop", "trace stop", (input, _params, res) => {
-    const requestedPath = toStringOrEmpty(input.path);
+    const requestedPath = readNonBlankString(input.path) ?? "";
     return async (pw, { cdpUrl, targetId }) => {
       const tracePath = await resolveWritableOutputPathOrRespond({
         res,

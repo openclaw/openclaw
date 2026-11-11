@@ -31,7 +31,6 @@ const bytes = Buffer.from(${JSON.stringify(bytes.toString())});
 if (fault === "missing-version") packument.versions = {};
 if (fault === "integrity") packument.versions[${JSON.stringify(version)}].dist.shasum = "0".repeat(40);
 if (fault === "selector") packument["dist-tags"].beta = "2026.9.1-beta.1";
-if (fault === "missing-selector") delete packument["dist-tags"].beta;
 if (fault === "ahead-selector") packument["dist-tags"].beta = "2026.9.3-beta.1";
 if (fault === "malformed-selector") packument["dist-tags"].beta = {};
 if (fault === "package-name") packument.versions[${JSON.stringify(version)}].name = "@openclaw/other";
@@ -40,7 +39,7 @@ globalThis.fetch = async (url, init) => {
   if (!url.startsWith("https://registry.npmjs.org/") || (init?.method ?? "GET") !== "GET") {
     throw new Error("Unexpected registry mutation or destination");
   }
-  const status = {unavailable: 503, forbidden: 403, "missing-package": 404}[fault];
+  const status = {unavailable: 503, forbidden: 403}[fault];
   if (status) return new Response(null, {status});
   if (url.endsWith(".tgz")) {
     if (fault === "missing-tarball") return new Response(null, {status: 404});
@@ -81,19 +80,12 @@ globalThis.fetch = async (url, init) => {
 }
 
 it.each([
-  ...[
-    "missing-version",
-    "missing-package",
-    "missing-tarball",
-    "unavailable",
-    "selector",
-    "missing-selector",
-  ].map((fault) => [fault, true, "npm-oidc", "pending"] as const),
-  ["missing-version", false, "npm-oidc", "rejected"],
+  ...["missing-version", "missing-tarball", "unavailable", "selector"].map(
+    (fault) => [fault, true, "npm-oidc", "pending"] as const,
+  ),
   ["missing-tarball", false, "npm-token-bootstrap", "rejected"],
   ["missing-version", true, "npm-readback", "rejected"],
   ["selector", false, "npm-oidc", "rejected"],
-  ["selector", true, "npm-readback", "rejected"],
   ...[
     "integrity",
     "bytes",

@@ -114,6 +114,16 @@ function publicationButtonSelection(publication: GitHubPublicationView) {
   );
 }
 
+/** Images belong to the offered account, so a different recorded publisher keeps initials. */
+function publisherAvatarUrl(
+  options: GitHubPublicationView["options"],
+  publisher: { source: string; accountId: number },
+): string | undefined {
+  const source = publisher.source === "personal" ? "personal" : "shared";
+  const offered = source === "personal" ? options?.personal?.account : options?.shared;
+  return offered?.accountId === publisher.accountId ? options?.avatarUrls?.[source] : undefined;
+}
+
 /** One eligible-choice projection serves every publication presentation. */
 export function githubPublicationAccountChoices(publication: GitHubPublicationView) {
   const personal = personalGitHubPublicationSelection(publication.options);
@@ -127,11 +137,17 @@ export function githubPublicationAccountChoices(publication: GitHubPublicationVi
     ? undefined
     : {
         accounts: [
-          { source: "shared" as const, login: shared.login, label: sourceLabel(shared.source) },
+          {
+            source: "shared" as const,
+            login: shared.login,
+            label: sourceLabel(shared.source),
+            avatarUrl: publication.options?.avatarUrls?.shared,
+          },
           {
             source: "personal" as const,
             login: personal.account.login,
             label: sourceLabel("personal"),
+            avatarUrl: publication.options?.avatarUrls?.personal,
           },
         ],
         duplicateLogin: shared.login === personal.account.login,
@@ -157,7 +173,10 @@ export function GitHubPublicationAccountSelector(props: {
       <Show when={publisher()}>
         {(value) => (
           <span class="github-publication-mobile__account-identity">
-            <GitHubPublicationAvatar login={value().login} />
+            <GitHubPublicationAvatar
+              login={value().login}
+              url={publisherAvatarUrl(props.publication.options, value())}
+            />
             <span
               ref={createTextOverflow(() => value().login)}
               class="github-publication-mobile__login"
@@ -473,28 +492,34 @@ function PublicationEffect(props: {
   );
 }
 
-// One short status line; server prose, account, and effects stay one click away.
-function publicationHeadline(publication: GitHubPublicationView, busy: boolean) {
-  const { result, error, locked } = publication;
-  if (error) {
-    return { text: t("githubPublication.statusUnavailable"), alert: true };
+export function githubPublicationState(publication: GitHubPublicationView) {
+  if (publication.error) {
+    return "unavailable";
   }
-  switch (result?.status) {
+  return (
+    publication.result?.status ??
+    (publication.locked ? (publication.activity !== null ? "active" : "unknown") : undefined)
+  );
+}
+
+// One short status line; server prose, account, and effects stay one click away.
+function publicationHeadline(publication: GitHubPublicationView) {
+  switch (githubPublicationState(publication)) {
+    case "unavailable":
+      return { text: t("githubPublication.statusUnavailable"), alert: true };
     case "failed":
       return { text: t("githubPublication.statusFailed"), alert: true };
     case "needs_confirmation":
       return { text: t("githubPublication.statusConfirm"), alert: false };
+    case "active":
     case "publishing":
       return { text: t("githubPublication.statusPublishing"), alert: false };
     case "requested":
       return { text: t("githubPublication.statusRequested"), alert: false };
+    case "unknown":
+      return { text: t("githubPublication.statusUnknown"), alert: true };
     default:
-      if (!locked) {
-        return null;
-      }
-      return busy
-        ? { text: t("githubPublication.statusPublishing"), alert: false }
-        : { text: t("githubPublication.statusUnknown"), alert: true };
+      return null;
   }
 }
 
@@ -550,7 +575,7 @@ export function GitHubPublicationDetails(props: {
       Boolean(result || confirmation || error || locked || personalUnavailable() || noAccount())
     );
   };
-  const headline = () => publicationHeadline(props.publication, busy());
+  const headline = () => publicationHeadline(props.publication);
   const refresh = () =>
     !busy() &&
     (props.publication.error ||

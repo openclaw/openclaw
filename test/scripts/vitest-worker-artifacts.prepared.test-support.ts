@@ -81,14 +81,11 @@ registerFixtureSourceTransform({
           },
         ),
       );
-      const preparationError = result.error === undefined ? "" : formatErrorMessage(result.error);
       expect(
         result.status,
-        [preparationError, result.stderr, result.stdout].filter(Boolean).join("\n"),
+        `${result.error === undefined ? "" : formatErrorMessage(result.error)}\n${result.stderr}\n${result.stdout}`,
       ).toBe(0);
       await verifyVitestWorkerArtifacts(template);
-      const manifest = JSON.parse(fs.readFileSync(path.join(template, "manifest.json"), "utf8"));
-      console.log(`file compiler prepared in ${Math.round(manifest.durationMs)}ms`);
     },
     readCompiles,
     async cleanup() {

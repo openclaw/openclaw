@@ -17,7 +17,10 @@ import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createTelegramDispatchHttpFixture } from "./bot-message-dispatch.telegram-http.test-support.js";
+import {
+  createTelegramDispatchHttpFixture,
+  telegramReplyId,
+} from "./bot-message-dispatch.telegram-http.test-support.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
 import { createTelegramMessageCache } from "./message-cache.js";
@@ -121,12 +124,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
           expect(fields).not.toHaveProperty("reply_parameters");
           expect(fields).not.toHaveProperty("reply_to_message_id");
         } else {
-          const reply = fields.reply_parameters;
-          expect(
-            reply && typeof reply === "object" && "message_id" in reply
-              ? reply.message_id
-              : fields.reply_to_message_id,
-          ).toBe(context.msg.message_id);
+          expect(telegramReplyId(fields)).toBe(context.msg.message_id);
         }
       }
     },
@@ -170,11 +168,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
       expect(sends).toHaveLength(1);
       const fields = sends[0]!.fields;
       const reply = fields.reply_parameters;
-      expect(
-        reply && typeof reply === "object" && "message_id" in reply
-          ? reply.message_id
-          : fields.reply_to_message_id,
-      ).toBe(
+      expect(telegramReplyId(fields)).toBe(
         selection === "current" ? context.msg.message_id : selection === "explicit" ? 9002 : 9001,
       );
       if (selection === "quote") {
@@ -265,12 +259,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
       expect(finalAt).toBeGreaterThanOrEqual(0);
       const fields = acceptedCalls[finalAt]!.fields;
       expect(fields.message_thread_id).toBe(15);
-      const reply = fields.reply_parameters;
-      expect(
-        reply && typeof reply === "object" && "message_id" in reply
-          ? reply.message_id
-          : fields.reply_to_message_id,
-      ).toBe(finalTarget);
+      expect(telegramReplyId(fields)).toBe(finalTarget);
       const retiredAt = acceptedCalls.findIndex((call) => call.method === "deleteMessage");
       expect(retiredAt).toBeGreaterThan(finalAt);
       expect([...visibleMessages.values()]).toEqual([finalText]);

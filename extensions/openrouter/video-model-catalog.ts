@@ -131,36 +131,6 @@ function buildOpenRouterVideoModelCapabilities(
   return capabilities;
 }
 
-function projectOpenRouterVideoModelsToCatalogEntries(
-  models: unknown[],
-): Array<UnifiedModelCatalogEntry<OpenRouterVideoModelCatalogCapabilities>> {
-  const entries: Array<UnifiedModelCatalogEntry<OpenRouterVideoModelCatalogCapabilities>> = [];
-  const seen = new Set<string>();
-  for (const model of models) {
-    if (!isRecord(model)) {
-      continue;
-    }
-    const id = normalizeOptionalString(model.id);
-    if (!id || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    const entry: UnifiedModelCatalogEntry<OpenRouterVideoModelCatalogCapabilities> = {
-      kind: "video_generation",
-      provider: "openrouter",
-      model: id,
-      source: "live",
-      capabilities: buildOpenRouterVideoModelCapabilities(model),
-    };
-    const name = normalizeOptionalString(model.name);
-    if (name) {
-      entry.label = name;
-    }
-    entries.push(entry);
-  }
-  return entries;
-}
-
 async function fetchOpenRouterVideoModels(params: {
   baseUrl: string | undefined;
   apiKey: string;
@@ -217,7 +187,31 @@ export async function listOpenRouterVideoModelCatalog(
     request: ctx.config.models?.providers?.openrouter?.request,
     timeoutMs: ctx.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
   });
-  return projectOpenRouterVideoModelsToCatalogEntries(payload);
+  const entries: Array<UnifiedModelCatalogEntry<OpenRouterVideoModelCatalogCapabilities>> = [];
+  const seen = new Set<string>();
+  for (const model of payload) {
+    if (!isRecord(model)) {
+      continue;
+    }
+    const id = normalizeOptionalString(model.id);
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    const entry: UnifiedModelCatalogEntry<OpenRouterVideoModelCatalogCapabilities> = {
+      kind: "video_generation",
+      provider: "openrouter",
+      model: id,
+      source: "live",
+      capabilities: buildOpenRouterVideoModelCapabilities(model),
+    };
+    const name = normalizeOptionalString(model.name);
+    if (name) {
+      entry.label = name;
+    }
+    entries.push(entry);
+  }
+  return entries;
 }
 
 export async function resolveOpenRouterVideoModelCapabilities(

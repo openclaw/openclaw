@@ -63,7 +63,7 @@ describe("discord group policy", () => {
     expectPolicy(group(cfg, "missing", "user:someone"), allow("message.guild"), false);
   });
 
-  it("honors account-scoped guild and channel overrides", () => {
+  it.each(["work", "Work"])("honors account %s guild and channel overrides", (accountKey) => {
     const accountGuild = {
       requireMention: false,
       tools: allow("message.account"),
@@ -71,10 +71,24 @@ describe("discord group policy", () => {
     };
     const cfg = createCfg({
       guilds: { guild: { requireMention: true, tools: allow("message.root") } },
-      accounts: { work: { guilds: { guild: accountGuild } } },
+      accounts: { [accountKey]: { guilds: { guild: accountGuild } } },
     });
     expectPolicy(group(cfg, "missing", undefined, "work"), allow("message.account"), false);
     expectPolicy(group(cfg, "123", undefined, "work"), allow("message.account-channel"), true);
+  });
+
+  it("keeps mixed-case account guild policies isolated per account", () => {
+    const cfg = createCfg({
+      guilds: { guild: { requireMention: true, tools: allow("message.root") } },
+      accounts: {
+        Work: { guilds: { guild: { requireMention: false, tools: { deny: ["exec"] } } } },
+        Ops: { guilds: { guild: { requireMention: true, tools: allow("exec") } } },
+        Bare: {},
+      },
+    });
+    expectPolicy(group(cfg, "missing", undefined, "work"), { deny: ["exec"] }, false);
+    expectPolicy(group(cfg, "missing", undefined, "ops"), allow("exec"), true);
+    expectPolicy(group(cfg, "missing", undefined, "bare"), allow("message.root"), true);
   });
 
   it.each(["ops", "#ops", "2026"])("binds resolved name key %s to its channel id", (channelKey) => {

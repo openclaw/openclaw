@@ -1,19 +1,22 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import "./detached-async-context.js";
+import { runWithAsyncStore } from "./async-store.js";
 import { createDeferredCore } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
+import { settlesWithin } from "./settle-within.js";
 
 type AsyncWorkScopeFrame = { scope: AsyncWorkScope; parent?: AsyncWorkScopeFrame };
 
 // Lazy runtime chunks share the context carrier, never the lifetime of its owners.
 const currentWorkScope = resolveGlobalSingleton(
   Symbol.for("openclaw.asyncWorkScope"),
-  () => new AsyncLocalStorage<AsyncWorkScope>(),
+  () => new AsyncLocalStorage<AsyncWorkScope | undefined>(),
 );
 // Keep the shipped owner carrier intact when replacement chunks join a live process.
 const currentWorkScopeAncestry = resolveGlobalSingleton(
   Symbol.for("openclaw.asyncWorkScopeAncestry"),
-  () => new AsyncLocalStorage<AsyncWorkScopeFrame>(),
+  () => new AsyncLocalStorage<AsyncWorkScopeFrame | undefined>(),
 );
 
 // Replacement chunks reject through the same class so callers can classify lifecycle refusals.
@@ -55,15 +58,20 @@ export class AsyncWorkScope {
     }
     const ancestry = currentWorkScopeAncestry.getStore();
     const parent = owner ? (ancestry?.scope === owner ? ancestry : { scope: owner }) : undefined;
-    return currentWorkScopeAncestry.run({ scope: this, parent }, () =>
-      currentWorkScope.run(this, run),
-    );
+    return runWithAsyncStore(currentWorkScope, this, () => {
+      currentWorkScopeAncestry.enterWith({ scope: this, parent });
+      return run();
+    });
   }
 
   /** Enters synchronous work without inspecting or assimilating its return value. */
   run<T>(run: () => T): T {
     if (this.phase === "closed") {
       throw new AsyncWorkScopeClosedError();
+    }
+    // Existing work already makes reentrant drain yield until this synchronous call returns.
+    if (this.pending.size > 0) {
+      return this.enter(run);
     }
     // Synchronous work is removed in finally and needs no promise cleanup reactions.
     const operation = createDeferredCore();
@@ -88,7 +96,10 @@ export class AsyncWorkScope {
       () => this.pending.delete(operation.promise),
       (error: unknown) => {
         this.pending.delete(operation.promise);
-        this.failures?.add(error);
+        if (this.failures) {
+          materializeErrorStack(error);
+          this.failures.add(error);
+        }
       },
     );
     try {
@@ -105,6 +116,7 @@ export class AsyncWorkScope {
     }
     this.phase = "closing";
     this.controller.abort(reason);
+    materializeErrorStack(this.controller.signal.reason);
   }
 
   /** Starts the next phase in the same continuation that observes settled pending work. */
@@ -138,6 +150,16 @@ export class AsyncWorkScope {
   }
 }
 
+export const GatewayRetainedWorkTimeoutError = resolveGlobalSingleton(
+  Symbol.for("openclaw.gatewayRetainedWorkTimeoutError"),
+  () =>
+    class RetainedWorkTimeoutError extends Error {
+      constructor() {
+        super("Retained Gateway work did not settle after abort; resources remain retained");
+      }
+    },
+);
+
 /** Retains accepted work across Gateway close handles and successor scope generations. */
 export class GatewayRetainedWorkScope {
   private work = new AsyncWorkScope();
@@ -145,7 +167,10 @@ export class GatewayRetainedWorkScope {
   private gateways = 0;
   private closing = false;
 
-  constructor(private readonly assertSettled?: () => void) {}
+  constructor(
+    private readonly assertSettled?: () => void,
+    private readonly escalation?: { abortPendingAfterMs: () => number; reason: string },
+  ) {}
 
   get scope(): AsyncWorkScope {
     return this.work;
@@ -165,8 +190,8 @@ export class GatewayRetainedWorkScope {
     this.closing = false;
   }
 
-  private drain(scope: AsyncWorkScope): Promise<void> {
-    return AsyncWorkScope.runWhenAllIdle(
+  private async drain(scope: AsyncWorkScope): Promise<void> {
+    const settlement = AsyncWorkScope.runWhenAllIdle(
       () => [scope],
       async () => {
         await scope.drain();
@@ -174,6 +199,22 @@ export class GatewayRetainedWorkScope {
         this.scopes.delete(scope);
       },
     );
+    if (!this.escalation) {
+      return settlement;
+    }
+    const graceMs = this.escalation.abortPendingAfterMs();
+    if (await settlesWithin(settlement, graceMs)) {
+      return;
+    }
+    if (!scope.isClosing) {
+      console.warn(this.escalation.reason);
+      scope.beginClose(new Error(this.escalation.reason));
+    }
+    // Cancellation never releases custody: late receipts and cleanup still join
+    // settlement, and an uncooperative operation keeps its registered scope.
+    if (!(await settlesWithin(settlement, graceMs))) {
+      throw new GatewayRetainedWorkTimeoutError();
+    }
   }
 
   beginDrainAll(): Promise<void[]> {
@@ -246,7 +287,11 @@ export function runOutsideAsyncWorkScope<T>(run: () => T): T {
       ? run()
       : currentWorkScopeAncestry.exit(run);
   }
-  return currentWorkScope.exit(() => currentWorkScopeAncestry.exit(run));
+  // One isolated frame restores both carriers without copying each on exit.
+  return runWithAsyncStore(currentWorkScope, undefined, () => {
+    currentWorkScopeAncestry.enterWith(undefined);
+    return run();
+  });
 }
 
 export function getAsyncWorkSignal(): AbortSignal | undefined {

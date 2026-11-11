@@ -7,6 +7,7 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import { withSqliteTranscriptArchiveSession } from "./session-accessor.sqlite-archive-session.js";
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import {
@@ -15,7 +16,6 @@ import {
 } from "./session-accessor.sqlite-archive.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
 import { withSqliteSessionDeletions } from "./session-accessor.sqlite-deletion.js";
-import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   SessionEntryMaintenancePlan,
   SessionEntryMaintenanceResult,
@@ -36,6 +36,7 @@ import {
   createSessionMaintenanceStatisticsOperation,
   resolveSessionReclamationDatabaseOptions,
 } from "./session-accessor.sqlite-reclamation.js";
+import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import {
   toDatabaseOptions,
   type ResolvedSqliteReadScope,
@@ -577,7 +578,14 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     let changedEntryRemovals: typeof removalOutcomes;
     let committedEntryRemovals: typeof removalOutcomes;
     try {
-      const materializedPlans = await materializeSessionStateDeletePlans(batch.stateDeletePlans);
+      const materializedPlans = await withSqliteTranscriptArchiveSession(
+        {
+          ...toDatabaseOptions(scope),
+          // Native planning can resolve a caller's symlink to its physical database path.
+          path: batch.stateDeletePlans[0]?.databasePath ?? scope.path,
+        },
+        () => materializeSessionStateDeletePlans(batch.stateDeletePlans),
+      );
       if (!isCurrent()) {
         break;
       }

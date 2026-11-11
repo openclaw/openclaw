@@ -7,19 +7,26 @@ import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import type { WorkerOperations } from "../state/worker-operation-registry.js";
 import { clearDeviceAuthToken } from "./device-auth-store.js";
+import type { DeviceBootstrapOperations } from "./device-bootstrap.worker-kernel.js";
 import type { DevicePairingAdmissionFacts } from "./device-pairing-admission.types.js";
 import { invalidatePairedCardRendererCache } from "./device-pairing-card-renderer.js";
+import type { devicePairingOperations } from "./device-pairing-core.worker.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
+import type { nodePairingOperations } from "./device-pairing-node.worker.js";
 import { captureDevicePairingPublication } from "./device-pairing-publication.js";
 import type { DevicePairingCommitReceipt } from "./device-pairing-read.types.js";
 import { listDevicePairingStoreRecordsReadOnly } from "./device-pairing-store-readonly.js";
-import type { DevicePairingWorkerOperations } from "./device-pairing-worker-contract.js";
 import type { PairedDevice } from "./device-pairing.types.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
+
+type DevicePairingWorkerOperations = WorkerOperations<typeof devicePairingOperations> &
+  WorkerOperations<typeof nodePairingOperations> &
+  DeviceBootstrapOperations;
 
 const pairingLog = createSubsystemLogger("gateway/device-pairing");
 
@@ -57,7 +64,9 @@ function admissionFacts(value: unknown): DevicePairingAdmissionFacts[] {
           typeof entry.credentialDigest !== "string" ||
           typeof entry.provisionOperationId !== "string" ||
           typeof entry.ownerEpoch !== "number")) ||
-      ((entry.kind === "bootstrap.consume" || entry.kind === "bootstrap.token") &&
+      ((entry.kind === "bootstrap.consume" ||
+        entry.kind === "bootstrap.token" ||
+        entry.kind === "browser-pair.decision") &&
         typeof entry.expiresAtMs !== "number")
     ) {
       throw new Error("Invalid pairing admission facts");
@@ -98,10 +107,15 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
   const operation = withDevicePairingLock(async () => {
     context.admission.assertCurrent();
     options.assertCurrent?.();
-    // Join codes and retained setup cleanup cannot change paired-device authority.
+    // Join codes, browser requests before a decision, and retained setup cleanup
+    // cannot change paired-device authority.
     const publication =
       captured.type === "devicePairing.registerJoinCode" ||
       captured.type === "devicePairing.redeemJoinCode" ||
+      captured.type === "devicePairing.startBrowserRequest" ||
+      captured.type === "devicePairing.collectBrowserRequest" ||
+      captured.type === "devicePairing.cancelBrowserRequest" ||
+      captured.type === "devicePairing.inspectBrowserRequest" ||
       captured.type === "bootstrap.prune"
         ? undefined
         : captureDevicePairingPublication(context.admission);
@@ -209,7 +223,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
         }
       }
     }
-  });
+  }, captured.type);
   const onAuthorityRefused = options.onAuthorityRefused;
   return onAuthorityRefused
     ? operation.catch((error: unknown) => {
@@ -234,6 +248,6 @@ export async function withCurrentDevicePairingSnapshot<T>(
     }
     const action = prepare(paired);
     return { value: action?.start() };
-  });
+  }, "devicePairing.list");
   return begun.value;
 }

@@ -17,15 +17,13 @@ const mocks = await vi.hoisted(async () => {
 });
 
 // mock-isolation: Telemetry fixtures capture config mutations without reading or writing operator state.
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
-  loadConfig: mocks.getRuntimeConfig,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
-    async () =>
-      mocks.getRuntimeConfig(...args),
-  transformConfigFileWithRetry: mocks.transformConfigFileWithRetry,
-}));
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
+  return {
+    ...createTestConfigReadMocks(mocks, "getRuntimeConfig"),
+    transformConfigFileWithRetry: mocks.transformConfigFileWithRetry,
+  };
+});
 vi.mock("../infra/telemetry.js", () => ({
   buildTelemetryPayload: mocks.buildTelemetryPayload,
   buildTelemetryUserAgent: mocks.buildTelemetryUserAgent,
@@ -43,6 +41,7 @@ const enabledStatus = {
   reason: "enabled" as const,
   endpoint,
   lastPingAt: Date.parse("2026-08-22T12:00:00.000Z"),
+  installationCountEnabled: true,
 };
 const payload = {
   schema: 1,
@@ -95,6 +94,9 @@ describe("telemetry cli", () => {
     expect(mocks.buildTelemetryPayload).toHaveBeenCalledWith(config, { surface: "gateway" });
     expect(mocks.runtimeLogs).toContain(JSON.stringify(payload));
     expect(mocks.runtimeLogs).toContain("Feature stats: enabled");
+    expect(mocks.runtimeLogs).toContain(
+      "Installation counting: eligible after a fresh receiver capability",
+    );
     expect(mocks.runtimeLogs).toContain("Last ping: 2026-08-22T12:00:00.000Z");
     expect(mocks.runtimeLogs).toContain(
       "Request: POST https://telemetry.openclaw.ai/api/latest-version",
@@ -134,6 +136,7 @@ describe("telemetry cli", () => {
     expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
       {
         featureStatsEnabled: true,
+        installationCountEnabled: true,
         reason: "enabled",
         endpoint,
         lastPingAt: "2026-08-22T12:00:00.000Z",
@@ -149,45 +152,64 @@ describe("telemetry cli", () => {
   });
 
   it.each([
-    { reason: "never-asked", label: "consent has not been requested", method: "GET" },
+    {
+      reason: "never-asked",
+      label: "consent has not been requested",
+      method: "GET",
+      installationCountEnabled: true,
+    },
+    {
+      reason: "config-disabled",
+      label: "disabled in configuration",
+      method: "GET",
+      installationCountEnabled: false,
+    },
     {
       reason: "automated-environment",
       label: "disabled in an automated environment (CI is set)",
       method: null,
+      installationCountEnabled: false,
     },
-  ])("reports the same request in JSON and text for $reason", async ({ reason, label, method }) => {
-    mocks.resolveTelemetryStatus.mockResolvedValue({
-      enabled: false,
-      reason,
-      endpoint,
-    });
-
-    await runTelemetryCli(["show", "--json"]);
-
-    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
-      {
-        featureStatsEnabled: false,
+  ])(
+    "reports the same request in JSON and text for $reason",
+    async ({ reason, label, method, installationCountEnabled }) => {
+      mocks.resolveTelemetryStatus.mockResolvedValue({
+        enabled: false,
         reason,
         endpoint,
-        lastPingAt: null,
-        request: method ? { method, userAgent } : null,
-      },
-      0,
-    );
-    expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
-    await runTelemetryCli(["show"]);
+        installationCountEnabled,
+      });
 
-    expect(mocks.buildTelemetryPayload).not.toHaveBeenCalled();
-    expect(mocks.runtimeLogs).toEqual([
-      "Feature stats: disabled",
-      `Reason: ${label}`,
-      `Endpoint: ${endpoint}`,
-      "Last ping: never",
-      ...(method
-        ? [`Request: ${method} ${endpoint}`, `User-Agent: ${userAgent}`]
-        : [`Request: none (${label})`]),
-    ]);
-  });
+      await runTelemetryCli(["show", "--json"]);
+
+      expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
+        {
+          featureStatsEnabled: false,
+          installationCountEnabled,
+          reason,
+          endpoint,
+          lastPingAt: null,
+          request: method ? { method, userAgent } : null,
+        },
+        0,
+      );
+      expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
+      await runTelemetryCli(["show"]);
+
+      expect(mocks.buildTelemetryPayload).not.toHaveBeenCalled();
+      expect(mocks.runtimeLogs).toEqual([
+        "Feature stats: disabled",
+        "Installation counting: " +
+          (installationCountEnabled ? "eligible after a fresh receiver capability" : "disabled"),
+        `Reason: ${label}`,
+        `Endpoint: ${endpoint}`,
+        "Last ping: never",
+        ...(method
+          ? [`Request: ${method} ${endpoint}`, `User-Agent: ${userAgent}`]
+          : [`Request: none (${label})`]),
+      ]);
+    },
+  );
 
   it.each([
     { command: "on", enabled: true },

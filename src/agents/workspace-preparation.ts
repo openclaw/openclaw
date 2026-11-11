@@ -3,12 +3,33 @@ import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writ
 import { DuplicateAgentError } from "./agent-create-error.js";
 import { captureWorkspaceStateFilesystemGuard } from "./workspace-state-guard.js";
 import { resolveCanonicalWorkspacePath } from "./workspace-state-identity.js";
-import { replaceWorkspaceAttestation, type WorkspaceAttestation } from "./workspace-state-store.js";
+import {
+  mergeWorkspaceSetupState,
+  replaceWorkspaceAttestation,
+  type WorkspaceAttestation,
+} from "./workspace-state-store.js";
 import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
 
 const preparationQueues = resolveGlobalMap<string, StoreWriterQueue>(
   Symbol.for("openclaw.workspacePreparationQueues"),
 );
+
+// The initializer owns seeding even when ordinary turns use this workspace.
+// Persist that custody with setup state so a restart cannot seed defaults.
+export async function deferWorkspaceBootstrap(
+  dir: string,
+  options: Parameters<typeof mergeWorkspaceSetupState>[3] = {},
+): Promise<() => Promise<void>> {
+  await mergeWorkspaceSetupState(dir, { bootstrapDeferred: true }, undefined, options);
+  return () => settleWorkspaceBootstrapDeferral(dir, options);
+}
+
+export async function settleWorkspaceBootstrapDeferral(
+  dir: string,
+  options: Parameters<typeof mergeWorkspaceSetupState>[3] = {},
+): Promise<void> {
+  await mergeWorkspaceSetupState(dir, { bootstrapDeferred: false }, undefined, options);
+}
 
 /** Keep host filesystem preparation and its worker writes in one directory's FIFO interval. */
 export function runWorkspacePreparation<T>(
@@ -32,7 +53,10 @@ export function runWorkspacePreparation<T>(
 export async function maybeWriteWorkspaceAttestation(
   dir: string,
   previous: WorkspaceAttestation | undefined,
-  collectGeneratedHashes: (dir: string) => Promise<Map<string, string>>,
+  collectGeneratedHashes: (
+    dir: string,
+    previousHashes?: ReadonlyMap<string, string>,
+  ) => Promise<Map<string, string>>,
   guard?: WorkspaceStateGuard,
 ): Promise<void> {
   const assertHost = guard?.assertHost;
@@ -40,7 +64,7 @@ export async function maybeWriteWorkspaceAttestation(
   // compares against a separate lock-time clock, so a newer committed scan
   // wins when this async collection finishes later.
   const attestedAtMs = Date.now();
-  const generatedHashes = await collectGeneratedHashes(dir);
+  const generatedHashes = await collectGeneratedHashes(dir, previous?.generatedHashes);
   assertHost?.();
   // Coalesce unchanged evidence while retaining at least 23 hours of durable
   // disappearance protection. Future-dated evidence still needs clock repair.
@@ -70,4 +94,13 @@ export async function maybeWriteWorkspaceAttestation(
     // the auxiliary disappearance evidence could not be refreshed.
   }
   assertHost?.();
+}
+
+export function captureWorkspacePreparationGuard(guard?: WorkspaceStateGuard) {
+  return (
+    guard && {
+      ...guard,
+      recoveryHoldPredicate: structuredClone(guard.recoveryHoldPredicate),
+    }
+  );
 }

@@ -2,6 +2,18 @@ import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 
+// A CLI child in its parent's workspace runs native tools no tool check sees, so
+// its process also ends when the parent resets.
+export function resolveCliChildAbortSignal(
+  runSignal: AbortSignal | undefined,
+  parentSignal: AbortSignal | undefined,
+): AbortSignal | undefined {
+  if (!parentSignal) {
+    return runSignal;
+  }
+  return runSignal ? AbortSignal.any([runSignal, parentSignal]) : parentSignal;
+}
+
 export function assertCronRuntimeAuthorityCandidate(params: {
   authority?: CronRuntimeAuthority;
   candidateRuntime: string;
@@ -24,13 +36,20 @@ export type CronSandboxPlacement = {
   sessionSandboxed: boolean;
 };
 
-/** Resolves the run's sandbox placement facts from the prepared session entry. */
+/**
+ * Resolves the run's sandbox placement facts from the prepared session entry,
+ * plus a requirement inherited from a sandboxed parent conversation. An existing
+ * cron root may predate that requirement, so its row alone cannot carry it.
+ */
 export function resolveCronSandboxPlacement(
-  params: Parameters<typeof resolvePreparedSandboxRuntimeStatus>[0],
+  params: Parameters<typeof resolvePreparedSandboxRuntimeStatus>[0] & {
+    inheritedSandbox?: "required";
+  },
 ): CronSandboxPlacement {
-  const status = resolvePreparedSandboxRuntimeStatus(params);
+  const { inheritedSandbox, ...statusParams } = params;
+  const status = resolvePreparedSandboxRuntimeStatus(statusParams);
   return {
-    sessionSandboxRequired: status.sandboxRequired,
+    sessionSandboxRequired: status.sandboxRequired || inheritedSandbox === "required",
     sessionSandboxed: status.sandboxed,
   };
 }

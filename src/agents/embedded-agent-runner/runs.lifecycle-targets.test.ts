@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import { testing as replyTesting } from "../../sessions/session-controller.test-support.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { SessionControllerAdmissionRequiredError } from "../harness/errors.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
 import { withSessionPlacementForcedTerminalSettlement } from "../session-placement-forced-terminal-settlement.js";
@@ -224,12 +225,8 @@ describe("native lifecycle admission and cancellation", () => {
     "continues detached cleanup after cancellation fails (producer settles=%s)",
     async (producerSettles) => {
       vi.useFakeTimers();
-      const cleanupEntered = createDeferred();
-      const releaseCleanup = createDeferred();
-      const cleanup = vi.fn(async () => {
-        cleanupEntered.resolve();
-        await releaseCleanup.promise;
-      });
+      const cleanupGate = createEnteredGate();
+      const cleanup = vi.fn(cleanupGate.wait);
       const abort = vi.fn(() => {
         throw new Error("detached runtime cancellation failed");
       });
@@ -243,7 +240,7 @@ describe("native lifecycle admission and cancellation", () => {
       const draining = drain({ forceClear: true }).then((result) => (completed = result));
       try {
         await awaitGateBeforeSettlement(
-          cleanupEntered.promise,
+          cleanupGate.entered,
           draining,
           "drain settled before entering detached cleanup",
         );
@@ -256,11 +253,11 @@ describe("native lifecycle admission and cancellation", () => {
           await vi.advanceTimersByTimeAsync(100);
         }
         expect(completed).toBeUndefined();
-        releaseCleanup.resolve();
+        cleanupGate.release();
         await expect(draining).resolves.toEqual({ ...undrained, drained: producerSettles });
         expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(!producerSettles);
       } finally {
-        releaseCleanup.resolve();
+        cleanupGate.release();
         detachActiveEmbeddedRun(sessionId, handle);
         await draining.catch(() => undefined);
       }

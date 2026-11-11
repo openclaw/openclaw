@@ -1,34 +1,19 @@
 import fsSync from "node:fs";
 import path from "node:path";
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, vi } from "vitest";
 import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 
-type CurrentAdmissionFixture = {
-  prepareCurrentPackage: (prefix: string) => Promise<string>;
-  createCaseDir: (prefix: string) => string;
-  writeServicePackage: (root: string) => Promise<string>;
-  mockFileBackedPathExists: () => void;
-  mockRunningManagedGateway: (programArguments: string[]) => void;
-  primeServiceCommand: (programArguments: string[]) => void;
-  useFileBackedConfig: () => Promise<void>;
-  resolveConfigPath: () => string;
-  updateCommand: typeof import("./update-command.js").updateCommand;
-  ExitError: typeof import("../../runtime.js").ExitError;
-  lastWriteJsonCall: () => unknown;
-  getErrorOutput: () => string;
-  packageInstallCommandCall: () => unknown;
-  freshRestartCalls: () => readonly unknown[];
-  expectNoSideEffects: (...effects: unknown[]) => void;
-  mocks: {
-    pluginAvailabilityPreflight: Mock;
-    syncPluginsForUpdateChannel: Mock;
-    updateNpmInstalledPlugins: Mock;
-    replaceConfigFile: Mock;
-    serviceStop: Mock;
-    serviceStart: Mock;
-    serviceRestart: Mock;
+type CurrentAdmissionFixture = ReturnType<
+  typeof import("../update-cli-fixture.test-support.js").createUpdateCliFixture
+> &
+  typeof import("../update-cli-assertions.test-support.js") &
+  typeof import("../update-cli-modules.test-support.js") & {
+    prepareCurrentPackage: (prefix: string) => Promise<string>;
+    writeServicePackage: (root: string) => Promise<string>;
+    resolveConfigPath: () => string;
+    mocks: typeof import("../update-cli-mocks.test-support.js") &
+      Pick<typeof import("../update-cli-modules.test-support.js"), "replaceConfigFile">;
   };
-};
 
 export function registerAlreadyCurrentAdmissionTests(f: CurrentAdmissionFixture) {
   const { mocks: m } = f;

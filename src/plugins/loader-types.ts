@@ -45,6 +45,7 @@ export type PluginLoadOptions = {
   runtimeOptions?: CreatePluginRuntimeOptions;
   startupTrace?: {
     detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
+    run?: <T>(name: string, run: () => T) => T;
   };
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cache?: boolean;
@@ -74,6 +75,11 @@ export type PluginLoadOptions = {
    */
   borrowRegistry?: PluginRegistry;
   replacePluginIds?: readonly string[];
+  /**
+   * Bundled plugins whose code an explicit development reload recaptures from disk.
+   * Set only when the Gateway opted in with `OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS`.
+   */
+  bundledCodeReloadPluginIds?: readonly string[];
   moduleRecoveries?: ReadonlyMap<string, PluginRuntimeRecovery>;
   /** Preserve host cleanup hooks before failed registration removes its contributions. */
   prepareRegistrationFailureCleanup?: (registry: PluginRegistry, record: PluginRecord) => void;

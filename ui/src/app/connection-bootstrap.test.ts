@@ -21,6 +21,30 @@ function setup() {
 }
 
 describe("connection bootstrap coordinator", () => {
+  it("releases cancelled queued work without cancelling started work or freeing its slots", async () => {
+    const { coordinator, started, enqueue } = setup();
+    coordinator.synchronize({ client: {}, connected: true });
+    const first = enqueue("first");
+    const second = enqueue("second");
+    const retired = enqueue("retired", "owner");
+    const settled = vi.fn();
+    void retired.task.then(settled);
+
+    coordinator.cancelQueued("owner");
+    coordinator.cancelQueued("first");
+    await Promise.resolve();
+    expect(settled).toHaveBeenCalledOnce();
+    const replacement = enqueue("replacement", "owner");
+    expect(started).toEqual(["first", "second"]);
+
+    first.resolve();
+    await first.task;
+    expect(started).toEqual(["first", "second", "replacement"]);
+    second.resolve();
+    replacement.resolve();
+    await Promise.all([second.task, replacement.task]);
+  });
+
   it("does not start queued work after its connection is disconnected", async () => {
     const { coordinator, started, enqueue } = setup();
     coordinator.synchronize({ client: {}, connected: true });

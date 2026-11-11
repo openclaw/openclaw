@@ -29,7 +29,10 @@ import {
 import { rsyncArgvPort, sshArgvPort } from "./worker-ssh-argv.test-support.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
-import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
+import {
+  adoptStagedWorkerWorkspaceHistory,
+  workerWorkspaceResultRef,
+} from "./workspace-result-staging.js";
 import {
   writeWorkspaceFiles as writeFiles,
   expectWorkspaceFiles as expectFiles,
@@ -581,6 +584,39 @@ describe("worker tunnel manager", () => {
   }, 60_000);
 });
 
+it("reclaims an empty worker commit even when the file manifest is unchanged", async () => {
+  const { localPath, remoteHome } = await localWorkspace("openclaw-worker-empty-commit-");
+  await writeFiles(localPath, { "tracked.txt": "base\n" });
+  await initializeGit(localPath, ".");
+  const baseCommit = await git(localPath, "rev-parse", "HEAD");
+  const { handle } = await startTunnel(localWorkspaceRunner(remoteHome), "worker:empty-commit", 1);
+  const dispatched = await sync(handle, localPath, "empty-commit");
+  await git(dispatched.remoteWorkspaceDir, "commit", "--allow-empty", "-m", "worker checkpoint");
+  const workerCommit = await git(dispatched.remoteWorkspaceDir, "rev-parse", "HEAD");
+  const stagedResultRef = workerWorkspaceResultRef("empty-commit");
+  const reconciled = await handle.reconcileWorkspace({
+    source: {
+      kind: "local",
+      path: localPath,
+      journal: memoryWorkspaceJournal(),
+      stagedResult: { ref: stagedResultRef, record: () => {} },
+    },
+    remoteWorkspaceDir: dispatched.remoteWorkspaceDir,
+    baseManifestRef: dispatched.manifestRef,
+  });
+  await verifyReconciledWorkspaceFinal(reconciled, {
+    assertActive: async () => {},
+    resume: async () => {},
+  });
+  expect(reconciled.changed).toBe(false);
+  expect(await git(localPath, "rev-parse", "HEAD")).toBe(baseCommit);
+  await expect(
+    adoptStagedWorkerWorkspaceHistory({ root: localPath, stagedResultRef }),
+  ).resolves.toBeUndefined();
+  expect(await git(localPath, "rev-parse", "HEAD")).toBe(workerCommit);
+  expect(await git(localPath, "status", "--porcelain")).toBe("");
+});
+
 it("materializes a large dirty git workspace as a credential-free commit-capable clone", async () => {
   const { localPath, remoteHome } = await localWorkspace("openclaw-worker-git-sync-");
   await fs.mkdir(path.join(localPath, "generated"));
@@ -686,6 +722,7 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
   expect(statusLines).toEqual(expect.arrayContaining([" D gone.txt", "?? rename-new.txt"]));
   await git(remote, "add", "-A");
   await git(remote, "commit", "-m", "worker commit");
+  const workerCommit = await git(remote, "rev-parse", "HEAD");
   await git(remote, "merge-base", "--is-ancestor", baseCommit, "HEAD");
   await fs.mkdir(path.join(remote, "private"));
   await Promise.all([
@@ -721,6 +758,13 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
   const quiescence = { assertActive: async () => {}, resume: async () => {} };
   const reconciled = await reconcile("git-changed");
   await verifyReconciledWorkspaceFinal(reconciled, quiescence);
+  expect(await git(localPath, "rev-parse", "HEAD")).toBe(baseCommit);
+  await expect(
+    adoptStagedWorkerWorkspaceHistory({
+      root: localPath,
+      stagedResultRef: workerWorkspaceResultRef("git-changed"),
+    }),
+  ).resolves.toBeUndefined();
   expect(reconciled).toMatchObject({ changed: true });
   expect(checkedPartialManifest).toBe(true);
   expect(reconciled.manifestRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
@@ -739,12 +783,25 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
   });
   await expect(fs.readlink(path.join(localPath, "worker-link"))).resolves.toBe("modified.txt");
   await expectFiles(remote, { "conflict.txt": "local result\n", "private/ignored.txt": null });
-  expect(await git(localPath, "rev-parse", "HEAD")).toBe(baseCommit);
+  expect(await git(localPath, "rev-parse", "HEAD")).toBe(workerCommit);
+  // The Gateway fixture deliberately retains invalid submodule metadata.
+  expect(
+    (await git(localPath, "status", "--porcelain", "--ignore-submodules=all"))
+      .split("\n")
+      .map((line) => line.trim()),
+  ).toEqual(
+    expect.arrayContaining(["M modified.txt", "M conflict.txt", "?? worker-untracked.txt"]),
+  );
   const unchanged = await reconcile("git-unchanged", acceptedManifestRef);
   await verifyReconciledWorkspaceFinal(unchanged, quiescence);
   expect(unchanged).toMatchObject({ manifestRef: acceptedManifestRef, changed: false });
   await unchanged.verifyStable();
   await unchanged.verifyLocalStable();
+  await git(remote, "commit", "--allow-empty", "-m", "late worker commit");
+  await expect(unchanged.verifyStable()).rejects.toThrow(
+    "Cloud workspace Git HEAD changed during final reconciliation",
+  );
+  await git(remote, "update-ref", "HEAD", workerCommit);
   await fs.writeFile(path.join(remote, "modified.txt"), "late write\n");
   await expect(unchanged.verifyStable()).rejects.toThrow(
     "Cloud workspace changed during final reconciliation",

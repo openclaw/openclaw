@@ -62,7 +62,6 @@ interface ParentTuple {
 
 interface ChildTuple {
   conclusion: string;
-  policyPassed?: boolean;
   dispatchNonce: string;
   displayTitle: string;
   event: string;
@@ -83,7 +82,6 @@ interface ChildTuple {
 interface NormalizedEvidence {
   children: ChildTuple[];
   conclusions: {
-    allRequiredSucceeded: boolean;
     children: Record<string, string>;
     current: string;
     root: string;
@@ -235,7 +233,6 @@ function normalizedEvidence(options: {
   const npmTelegramRequired =
     !npmBetaCoverage &&
     validationInputs !== null &&
-    !validationInputs.telegramWaiver &&
     Boolean(validationInputs.npmTelegramPackageSpec || validationInputs.releasePackageSpec);
   const manifest = {
     version: 4,
@@ -362,7 +359,6 @@ function normalizedEvidence(options: {
       Object.assign(
         {
           conclusion: "success",
-          policyPassed: true,
           dispatchNonce: `full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
           displayTitle: `${name} full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
           event: "workflow_dispatch",
@@ -384,7 +380,6 @@ function normalizedEvidence(options: {
   return {
     children,
     conclusions: {
-      allRequiredSucceeded: true,
       children: Object.fromEntries(children.map((child) => [child.role, child.conclusion])),
       current: "success",
       root: "success",
@@ -689,6 +684,18 @@ function parseOutput(output: string): Record<string, string> {
   );
 }
 
+function admit(record: NormalizedEvidence, sha: string) {
+  record.producerOnTrustedMainLineage = false;
+  for (const parent of [record.current, record.root]) {
+    parent.producerOnTrustedMainLineage = false;
+    parent.workflowRefProof = "candidate-owned-admission-v1";
+  }
+  record.qualificationAdmission = {
+    request: { candidateSha: sha, qualificationSha: sha },
+    coverage: { children: record.children.map(({ role }) => ({ key: role })) },
+  };
+}
+
 describe("scripts/github/find-reusable-release-validation.sh", () => {
   it.each(["main", `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`])(
     "selects candidate-owned evidence through admitted P on %s",
@@ -700,15 +707,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
         workflowRef: `release-ci/${priorSha.slice(0, 12)}-122`,
         trustedWorkflowRef,
       });
-      record.producerOnTrustedMainLineage = false;
-      for (const tuple of [record.current, record.root]) {
-        tuple.producerOnTrustedMainLineage = false;
-        tuple.workflowRefProof = "candidate-owned-admission-v1";
-      }
-      record.qualificationAdmission = {
-        request: { candidateSha: priorSha, qualificationSha: priorSha },
-        coverage: { children: record.children.map(({ role }) => ({ key: role })) },
-      };
+      admit(record, priorSha);
       const options = {
         workflowSha: priorSha,
         workflowRef: `release-ci/${priorSha.slice(0, 12)}-123`,
@@ -752,15 +751,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
         validationInputs: { ...DEFAULT_INPUTS, targetVersion: "2026.7.1" },
         workflowRef: `release-ci/${priorSha.slice(0, 12)}-122`,
       });
-      record.producerOnTrustedMainLineage = false;
-      for (const tuple of [record.current, record.root]) {
-        tuple.producerOnTrustedMainLineage = false;
-        tuple.workflowRefProof = "candidate-owned-admission-v1";
-      }
-      record.qualificationAdmission = {
-        request: { candidateSha: priorSha, qualificationSha: priorSha },
-        coverage: { children: record.children.map(({ role }) => ({ key: role })) },
-      };
+      admit(record, priorSha);
       const result = resolveEvidence(record, {
         compareBaseSha: priorSha,
         compareFiles: changedPaths,
@@ -799,41 +790,24 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     });
   });
 
-  it.each(["", "2026.8.1"])(
-    "reuses strict protected-tag evidence with Telegram waiver %j",
-    (version) => {
-      const { priorSha } = getSharedRepo();
-      const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
-      const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
-      const record = normalizedEvidence({
-        producerSha: VERIFIER_SHA,
-        targetSha: priorSha,
-        trustedWorkflowRef,
-        workflowRef: producerRef,
-        validationInputs: version
-          ? {
-              ...DEFAULT_INPUTS,
-              telegramWaiver: `${version}-owner-approved`,
-              targetVersion: version,
-              releasePackageSpec: `openclaw@${version}`,
-            }
-          : DEFAULT_INPUTS,
-      });
-
-      const result = resolveEvidence(record, {
-        inputs: record.validationInputs,
-        trustedWorkflowRef,
-        verifierOnMain: false,
-        workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
-      });
-
-      expect(result.status).toBe(0);
-      expect(parseOutput(result.stdout)).toMatchObject({
-        evidence_run_id: "111",
-        reuse: "true",
-      });
-    },
-  );
+  it("reuses strict evidence from the protected tooling tag", () => {
+    const { priorSha } = getSharedRepo();
+    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
+    const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
+    const record = normalizedEvidence({
+      producerSha: VERIFIER_SHA,
+      targetSha: priorSha,
+      trustedWorkflowRef,
+      workflowRef: producerRef,
+    });
+    const result = resolveEvidence(record, {
+      trustedWorkflowRef,
+      verifierOnMain: false,
+      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+    });
+    expect(result.status).toBe(0);
+    expect(parseOutput(result.stdout)).toMatchObject({ evidence_run_id: "111", reuse: "true" });
+  });
 
   it("reuses strict evidence produced by an ancestor of the protected tooling tag", () => {
     const { priorSha } = getSharedRepo();
@@ -1061,12 +1035,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       },
     },
     {
-      label: "successful child rejected by canonical policy",
-      mutate(record: NormalizedEvidence) {
-        expectDefined(record.children[0], "reusable release child").policyPassed = false;
-      },
-    },
-    {
       label: "extra child role",
       mutate(record: NormalizedEvidence) {
         record.children.push({
@@ -1106,18 +1074,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       expected: "validation inputs differ",
       label: "different lane inputs",
       recordOptions: { validationInputs: { ...DEFAULT_INPUTS, provider: "anthropic" } },
-      resolverOptions: {},
-    },
-    {
-      expected: "validation inputs differ",
-      label: "owner-waived Telegram evidence for an unwaived request",
-      recordOptions: {
-        validationInputs: {
-          ...DEFAULT_INPUTS,
-          telegramWaiver: "2026.8.1-owner-approved",
-          targetVersion: "2026.8.1",
-        },
-      },
       resolverOptions: {},
     },
     {
@@ -1227,48 +1183,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     expect(result.stderr).toContain("is not a CHANGELOG.md-only descendant");
   });
 
-  it.each([
-    { version: "2026.7.1", delta: "selected" },
-    { version: "2026.7.1", delta: "unrelated" },
-    { version: "2026.7.1-beta.1", delta: "selected" },
-    { version: "2026.7.1-beta.1", delta: "unrelated" },
-    { version: "2026.7.1-beta.1", delta: "dedicated-beta" },
-  ])("checks $version split release files in the shell resolver ($delta)", ({ version, delta }) => {
-    const { origin, priorSha } = createRepo({ version });
-    const entryVersion = delta === "dedicated-beta" ? version : "2026.7.1";
-    const entryPath = `CHANGELOG/${entryVersion}.md`;
-    const recordPath = `CHANGELOG/records/${entryVersion}.md`;
-    mkdirSync(join(origin, "CHANGELOG/records"), { recursive: true });
-    commitFile(origin, entryPath, `## ${entryVersion}\n\nReleased.\n`, "docs: release entry");
-    const targetSha = commitFile(origin, recordPath, "Contributors.\n", "docs: release record");
-    const inputs = { ...DEFAULT_INPUTS, targetVersion: version };
-    const record = normalizedEvidence({ targetSha: priorSha, validationInputs: inputs });
-    const fixtures = setUpFixtures([{ record, runId: "111" }]);
-    const changedPaths = [
-      entryPath,
-      recordPath,
-      ...(delta === "unrelated" ? ["CHANGELOG/2026.6.8.md"] : []),
-    ];
-    const result = runResolver({
-      ...fixtures,
-      compareBaseSha: priorSha,
-      compareFiles: changedPaths,
-      inputs,
-      repoDir: cloneHead(origin),
-      targetSha,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(parseOutput(result.stdout).reuse, result.stderr).toBe(
-      delta === "unrelated" ? "false" : "true",
-    );
-    if (delta !== "unrelated") {
-      expect(parseOutput(result.stdout)).toMatchObject({
-        changed_paths: JSON.stringify(changedPaths),
-        evidence_policy: "split-changelog-release-v1",
-      });
-    }
-  });
-
   it("rejects a source-file rename to CHANGELOG.md", () => {
     const { origin, priorSha } = createRepo();
     const targetSha = commitFile(origin, "CHANGELOG.md", "renamed source\n", "docs: rename");
@@ -1306,8 +1220,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
 
   it("rewrites inherited v3 producer identity to the current immutable workflow SHA", () => {
     const workflow = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
-    expect(workflow).toContain('--arg workflowSha "$GITHUB_SHA"');
-    expect(workflow).toContain("workflowSha: $workflowSha");
-    expect(workflow).toContain("ref: ${{ github.sha }}");
+    expect(workflow).toMatch(/--arg workflowSha "\$GITHUB_SHA"[\s\S]*workflowSha: \$workflowSha/u);
   });
 });

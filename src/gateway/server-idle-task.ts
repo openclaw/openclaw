@@ -7,6 +7,7 @@ import {
 } from "../process/gateway-work-admission.js";
 
 export type GatewayIdleTaskHandle = {
+  name?: string;
   stop: () => void | Promise<void>;
 };
 
@@ -81,6 +82,7 @@ export function scheduleGatewayIdleTask(params: {
   };
   schedule(params.delayMs);
   return {
+    name: params.id,
     stop: scheduler.stop,
   };
 }

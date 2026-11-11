@@ -35,17 +35,20 @@ export function createCronPresentation(deps: CronPresentationDeps) {
   type ModelReceipt = { state: CronState; agentId: string; result: Promise<void> };
   const [modelReceipt, setModelReceipt] = createSignal<ModelReceipt | null>(null);
   const modelRead = createMemo(() => modelReceipt()?.result.then(() => null) ?? null);
-  const cronModelSuggestions = createMemo(() => {
-    const state = deps.readState();
-    const agentId = deps.context().agentSelection.state.selectedId;
-    const receipt = modelReceipt();
-    if (receipt?.state !== state || receipt.agentId !== agentId) {
-      return [];
-    }
-    return readAgentModelCatalog(state.client, agentId)
-      .models.filter((entry) => entry.manualSelectionAllowed !== false)
-      .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider));
-  });
+  const cronModelSuggestions = createMemo(
+    () => {
+      const state = deps.readState();
+      const agentId = deps.context().agentSelection.state.selectedId;
+      const receipt = modelReceipt();
+      if (receipt?.state !== state || receipt.agentId !== agentId) {
+        return [];
+      }
+      return readAgentModelCatalog(state.client, agentId)
+        .models.filter((entry) => entry.manualSelectionAllowed !== false)
+        .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider));
+    },
+    { lazy: true },
+  );
   let modelSuggestionsRequest: { state: CronState; agentId: string } | null = null;
   let stopModelSuggestions: (() => void) | undefined;
   // Receipts describe work already admitted by the plain owner. Reading them
@@ -118,6 +121,10 @@ export function createCronPresentation(deps: CronPresentationDeps) {
       setSaving,
     };
   });
+  const [toggle, setToggle] = createSignal<{
+    view: ReturnType<typeof presentation>;
+    jobId: string;
+  } | null>(null);
   const isCurrentPresentation = (view: ReturnType<typeof presentation>) =>
     view.state === deps.currentState() && view.epoch === deps.connection.epoch;
   async function runCronTask<T>(task: (cronState: CronState) => Promise<T>): Promise<T> {
@@ -179,6 +186,7 @@ export function createCronPresentation(deps: CronPresentationDeps) {
     // the synchronous scope owner so old work cannot hold its successor.
     presentationLifetime.resolve();
     presentationLifetime = Promise.withResolvers<void>();
+    setToggle(null);
   }
 
   function reportActionError(view: ReturnType<typeof presentation>, error: unknown) {
@@ -279,12 +287,25 @@ export function createCronPresentation(deps: CronPresentationDeps) {
       expected?: Pick<CronJob, "id" | "enabled">,
     ) {
       const retired = presentationLifetime.promise;
-      // Let the owner's synchronous publication land before opening an action.
-      await Promise.resolve();
-      return presentMutation(view, pending, retired, expected);
+      // Record the accepted toggle before owner publication renders native disabled.
+      // The optimistic action still waits for that publication before joining it.
+      const intent = expected ? { view, jobId: expected.id } : null;
+      if (intent && isCurrentPresentation(view)) {
+        setToggle(intent);
+      }
+      try {
+        await Promise.resolve();
+        return await presentMutation(view, pending, retired, expected);
+      } finally {
+        setToggle((current) => (current === intent ? null : current));
+      }
     },
     reportError: reportActionError,
     saving: () => presentation().saving(),
+    toggleSavingJobId: () => {
+      const intent = toggle();
+      return intent?.view === presentation() ? intent.jobId : null;
+    },
     reads: {
       models: modelRead,
       modelRequest: modelReceipt,

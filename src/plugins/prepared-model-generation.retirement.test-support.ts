@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   loadPublishedGatewayReplyDispatchRuntime,
@@ -26,16 +27,7 @@ export function generationModels(provider: string, apiKey?: string): OpenClawCon
         api: "openai-responses",
         baseUrl: "http://127.0.0.1:1/v1",
         ...(apiKey ? { apiKey } : {}),
-        models: [
-          {
-            id: "local",
-            name: "Local",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            maxTokens: 1024,
-          },
-        ],
+        models: [modelDefinition("local", { name: "Local", reasoning: false, maxTokens: 1024 })],
       },
     },
   };
@@ -169,10 +161,8 @@ export async function verifyPreparedModelGenerationCleanup(scenario: "publicatio
             gatewayLifecycle: true,
           });
           const published = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "healthy" });
-          assert.ok(published);
-          assert.equal(published.config, healthy);
+          assert.equal(published?.config, healthy);
         } else {
-          assert.equal(scenario, "arrivals");
           const first = createFixture(state, "first-retirement");
           fixtures.push(first);
           const { lease: firstLease } = await acquire(state, first);

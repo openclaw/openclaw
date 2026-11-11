@@ -1,5 +1,6 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { parseConfigPathArrayIndex } from "./path-array-index.js";
 
 export type ConcreteConfigPathSegment = string | number;
@@ -10,77 +11,28 @@ export type ParsedConcreteConfigPath = {
 
 function parseQuotedBracketPathSegment(value: string): unknown {
   const quote = value.startsWith('"') ? '"' : "'";
-  if (quote === '"') {
-    try {
-      return JSON.parse(value) as unknown;
-    } catch {
-      // Quoted config paths also accept the JSON5 string escapes used by shipped CLI paths.
-    }
-  }
   if (!value.endsWith(quote)) {
     throw new SyntaxError("Unterminated quoted path segment");
   }
 
-  let normalized = '"';
-  for (let index = 1; index < value.length - 1; index += 1) {
-    const character = value[index];
-    if (character === quote) {
+  // Retain the path grammar's control-character rejection and silent line separators.
+  const normalized = value.replace(/\\(?:\r\n|[\s\S])|[\s\S]/g, (token, index: number) => {
+    if (token.startsWith("\\")) {
+      const escaped = token[1];
+      if (escaped && escaped.charCodeAt(0) < 0x20 && escaped !== "\r" && escaped !== "\n") {
+        throw new SyntaxError("Invalid escaped control character in path segment");
+      }
+      return token;
+    }
+    if (token === quote && index !== 0 && index !== value.length - 1) {
       throw new SyntaxError("Unexpected quote in path segment");
     }
-    if (character === '"') {
-      normalized += '\\"';
-      continue;
+    if (token.charCodeAt(0) < 0x20) {
+      throw new SyntaxError("Unescaped control character in path segment");
     }
-    if (character === "\\") {
-      const escaped = value[index + 1];
-      if (escaped === undefined || index + 1 >= value.length - 1) {
-        throw new SyntaxError("Unterminated escape in path segment");
-      }
-      index += 1;
-      if (escaped === "\n" || escaped === "\u2028" || escaped === "\u2029") {
-        continue;
-      }
-      if (escaped === "\r") {
-        if (value[index + 1] === "\n") {
-          index += 1;
-        }
-        continue;
-      }
-      if (escaped === "x") {
-        const hex = value.slice(index + 1, index + 3);
-        if (!/^[\da-f]{2}$/i.test(hex)) {
-          throw new SyntaxError("Invalid hexadecimal escape in path segment");
-        }
-        normalized += `\\u00${hex}`;
-        index += 2;
-        continue;
-      }
-      if (escaped === "0") {
-        if (/\d/.test(value[index + 1] ?? "")) {
-          throw new SyntaxError("Invalid numeric escape in path segment");
-        }
-        normalized += "\\u0000";
-        continue;
-      }
-      if (escaped === "v") {
-        normalized += "\\u000b";
-        continue;
-      }
-      if (/[1-9]/.test(escaped)) {
-        throw new SyntaxError("Invalid numeric escape in path segment");
-      }
-      if (escaped === "'") {
-        normalized += "'";
-      } else if ('"\\/bfnrtu'.includes(escaped)) {
-        normalized += `\\${escaped}`;
-      } else {
-        normalized += escaped;
-      }
-      continue;
-    }
-    normalized += character;
-  }
-  return JSON.parse(`${normalized}"`) as unknown;
+    return token === "\u2028" ? "\\u2028" : token === "\u2029" ? "\\u2029" : token;
+  });
+  return parseJsonWithJson5Fallback(normalized);
 }
 
 function parseBracketPathSegment(raw: string, fullPath: string): ConcreteConfigPathSegment {

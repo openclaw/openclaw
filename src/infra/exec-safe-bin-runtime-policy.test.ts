@@ -205,22 +205,16 @@ describe("exec safe-bin runtime policy", () => {
       return;
     }
     await withTestDir({ prefix: "openclaw-safe-bin-runtime-" }, async (dir) => {
-      try {
-        await fs.chmod(dir, 0o777);
-        const onWarning = vi.fn();
-        resolveExecSafeBinRuntimePolicy({
-          global: {
-            safeBinTrustedDirs: [dir],
-          },
-          onWarning,
-        });
+      await fs.chmod(dir, 0o777);
+      const onWarning = vi.fn();
+      resolveExecSafeBinRuntimePolicy({
+        global: { safeBinTrustedDirs: [dir] },
+        onWarning,
+      });
 
-        expect(onWarning).toHaveBeenCalledExactlyOnceWith(
-          `exec: safeBinTrustedDirs includes world-writable directory '${path.resolve(dir)}'; remove trust or tighten permissions (for example chmod 755).`,
-        );
-      } finally {
-        await fs.chmod(dir, 0o755).catch(() => undefined);
-      }
+      expect(onWarning).toHaveBeenCalledExactlyOnceWith(
+        `exec: safeBinTrustedDirs includes world-writable directory '${path.resolve(dir)}'; remove trust or tighten permissions (for example chmod 755).`,
+      );
     });
   });
 });

@@ -19,8 +19,6 @@ interface ConvertResponsesToolsOptions {
   mutableParameters?: boolean;
 }
 
-type OpenAIToolSchemaCompat = Parameters<typeof normalizeOpenAIStrictToolParameters>[2];
-
 /** Projects direct provider descriptors before resolving their strict policy. */
 export function convertResponsesToolPayload(
   tools: Tool[],
@@ -71,7 +69,7 @@ function convertPreparedResponsesTools(
         normalizeOpenAIStrictToolParameters(
           tool.parameters,
           strict === true,
-          model?.compat as OpenAIToolSchemaCompat,
+          model?.compat as Parameters<typeof normalizeOpenAIStrictToolParameters>[2],
         ),
         strict,
         mutableParameters,

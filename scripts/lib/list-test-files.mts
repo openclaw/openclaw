@@ -6,6 +6,19 @@ import { join } from "node:path";
 // Repository inventories exceed Node's 1 MiB subprocess default; keep Git authoritative.
 export const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
+// Non-Git inventories must not enter ignored runtime trees, including Vitest's
+// writable .cache/vitest transforms, which can disappear during discovery.
+const generatedDirectories = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  "vendor",
+  ".cache",
+  ".tmp",
+  ".artifacts",
+  "coverage",
+]);
+
 /** List git-tracked test files below a root, falling back to recursive filesystem discovery. */
 export function listTrackedTestFiles(rootDir: string, suffix?: string): string[] {
   const matches = (file: string) =>
@@ -36,7 +49,9 @@ export function listTrackedTestFiles(rootDir: string, suffix?: string): string[]
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) {
-        visit(path);
+        if (!generatedDirectories.has(entry.name)) {
+          visit(path);
+        }
         continue;
       }
       if (entry.isFile() && matches(path.replaceAll("\\", "/"))) {

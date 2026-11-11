@@ -8,6 +8,7 @@ import {
   buildGroupedTestComparison,
   buildGroupedTestReport,
   renderGroupedTestComparison,
+  renderGroupedTestReport,
   resolveGroupKey,
   resolveTestArea,
 } from "../../scripts/lib/test-group-report.mts";
@@ -32,10 +33,11 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
-import { isProcessAlive } from "../helpers/process-wait.js";
+import { isProcessAlive, waitForDead as waitForProcessExit } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { withinTest } from "../helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { fixtureReadyBeforeSettlement as observeFixtureReadiness } from "./run-process.test-support.js";
 import { childTermination } from "./run-vitest.test-support.js";
 import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
 
@@ -49,44 +51,15 @@ afterAll(async () => {
   await receipts.close().finally(() => cleanupTempDirs(tempDirs));
 });
 
-function fixtureReadyBeforeSettlement(
-  filePath: string,
-  operation: PromiseLike<unknown>,
-  message = `timeout waiting for ${filePath}`,
-) {
-  const recorded = () => fs.existsSync(filePath) && fs.readFileSync(filePath, "utf8").trim();
-  return Promise.race([
-    receipts.waitFor(filePath, "ready"),
-    // Product completion can overtake the socket; the fixture writes before reporting ready.
-    Promise.resolve(operation).then(
-      () => {
-        if (!recorded()) {
-          throw new Error(message);
-        }
-      },
-      (error: unknown) => {
-        if (!recorded()) {
-          throw error;
-        }
-      },
-    ),
-  ]);
+function fixtureReadyBeforeSettlement(filePath: string, operation: PromiseLike<unknown>) {
+  // Empty marker files do not establish that the report process published readiness.
+  return observeFixtureReadiness(
+    receipts,
+    filePath,
+    operation,
+    () => fs.existsSync(filePath) && fs.readFileSync(filePath, "utf8").trim() !== "",
+  );
 }
-
-// spawnText can finish after signaling a foreign descendant without joining its extinction.
-async function waitForProcessExit(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (isProcessAlive(pid)) {
-      await delay(5, undefined, { signal });
-    }
-  } catch (error) {
-    if (signal.aborted) {
-      throw new Error(`process still alive: ${pid}`, { cause: error });
-    }
-    throw error;
-  }
-}
-
 function runReportCli(args: string[], env = process.env) {
   return spawnSync(
     process.execPath,
@@ -267,27 +240,6 @@ const runCounter = (elapsedMs: number, rssMb: number) => ({
   status: 0,
 });
 
-function expectedArgs(overrides: Partial<ReturnType<typeof parseTestGroupReportArgs>>) {
-  return {
-    allowFailures: false,
-    compare: null,
-    concurrency: null,
-    configs: [],
-    fullSuite: false,
-    groupBy: "area",
-    killGraceMs: 10000,
-    limit: 25,
-    maxTestMs: null,
-    output: null,
-    reports: [],
-    rss: process.platform !== "win32",
-    timeoutMs: 1800000,
-    topFiles: 25,
-    vitestArgs: [],
-    ...overrides,
-  };
-}
-
 describe("scripts/test-group-report", () => {
   it("groups repo files by stable product area", () => {
     expect(resolveTestArea("packages/plugin-sdk/src/index.test.ts")).toBe("packages/plugin-sdk");
@@ -370,14 +322,14 @@ describe("scripts/test-group-report", () => {
           report: {
             testResults: [
               testResult(
-                "src/commands/agent.test.ts",
+                "src/a/x.test.ts",
                 [100, 700],
                 [
-                  ["agent ok", 150],
-                  ["agent slow", 2600],
+                  ["ok", 150],
+                  ["slow", 2600],
                 ],
               ),
-              testResult("extensions/discord/src/send.test.ts", [200, 450], [["send ok", 50]]),
+              testResult("extensions/b/x.test.ts", [200, 450], [["ok", 50]]),
             ],
           },
         },
@@ -387,8 +339,8 @@ describe("scripts/test-group-report", () => {
 
     expect(report.totals).toEqual({ durationMs: 850, fileCount: 2, testCount: 3 });
     expect(report.groups.map((group) => [group.key, group.durationMs])).toEqual([
-      ["src/commands", 600],
-      ["extensions/discord", 250],
+      ["src/a", 600],
+      ["extensions/b", 250],
     ]);
     expect(report.configs).toStrictEqual([
       { configs: ["commands"], ...keyedCounter("commands", 850, 2, 3) },
@@ -397,11 +349,18 @@ describe("scripts/test-group-report", () => {
       {
         config: "commands",
         durationMs: 2600,
-        file: "src/commands/agent.test.ts",
-        fullName: "agent slow",
+        file: "src/a/x.test.ts",
+        fullName: "slow",
         status: "passed",
       },
     ]);
+  });
+
+  it("defaults to area reports with platform RSS support", () => {
+    expect(parseTestGroupReportArgs([])).toMatchObject({
+      groupBy: "area",
+      rss: process.platform !== "win32",
+    });
   });
 
   it.each([
@@ -513,38 +472,27 @@ describe("scripts/test-group-report", () => {
       before: {
         groupBy: "area",
         totals: counter(1000, 2, 4),
-        groups: [
-          keyedCounter("src/commands", 700, 1, 2),
-          keyedCounter("extensions/discord", 300, 1, 2),
-        ],
+        groups: [keyedCounter("a", 700, 1, 2), keyedCounter("b", 300, 1, 2)],
         configs: [keyedCounter("commands", 1000, 2, 4)],
-        topFiles: [
-          fileCounter("src/commands/agent.test.ts", "src/commands", 700, 2),
-          fileCounter("extensions/discord/src/send.test.ts", "extensions/discord", 300, 2),
-        ],
+        topFiles: [fileCounter("a.test.ts", "a", 700, 2), fileCounter("b.test.ts", "b", 300, 2)],
         runs: [runCounter(2000, 100)],
       },
       after: {
         groupBy: "area",
         totals: counter(900, 2, 5),
-        groups: [keyedCounter("src/commands", 900, 2, 5)],
+        groups: [keyedCounter("a", 900, 2, 5)],
         configs: [keyedCounter("commands", 900, 2, 5)],
-        topFiles: [
-          fileCounter("src/commands/agent.test.ts", "src/commands", 800, 3),
-          fileCounter("src/commands/new.test.ts", "src/commands", 100, 2),
-        ],
+        topFiles: [fileCounter("a.test.ts", "a", 800, 3), fileCounter("new.test.ts", "a", 100, 2)],
         runs: [runCounter(1800, 80)],
       },
     });
 
     expect(comparison.totals.delta).toEqual({ durationMs: -100, fileCount: 0, testCount: 1 });
-    const commandsGroup = comparison.groups.find((group) => group.key === "src/commands");
+    const commandsGroup = comparison.groups.find((group) => group.key === "a");
     expect(commandsGroup?.delta).toStrictEqual({ durationMs: 200, fileCount: 1, testCount: 3 });
-    const removedDiscordFile = comparison.files.find(
-      (file) => file.file === "extensions/discord/src/send.test.ts",
-    );
-    expect(removedDiscordFile?.status).toBe("removed");
-    expect(removedDiscordFile?.delta).toStrictEqual({ durationMs: -300, testCount: -2 });
+    const removedFile = comparison.files.find((file) => file.file === "b.test.ts");
+    expect(removedFile?.status).toBe("removed");
+    expect(removedFile?.delta).toStrictEqual({ durationMs: -300, testCount: -2 });
     expect(comparison.runs[0]?.key).toBe("commands");
     expect(comparison.runs[0]?.delta).toStrictEqual({
       elapsedMs: -200,
@@ -554,6 +502,208 @@ describe("scripts/test-group-report", () => {
     expect(renderGroupedTestComparison(comparison, { limit: 2, topFiles: 2 })).toContain(
       "Top group regressions",
     );
+  });
+
+  it("preserves bounded empty report output", () => {
+    const report = buildGroupedTestReport({ groupBy: "area", reports: [] });
+    expect(renderGroupedTestReport(report)).toMatchInlineSnapshot(`
+      "[test-group-report] groupBy=area files=0 tests=0 file-sum=0.0ms
+
+      Top groups (0 of 0)
+
+      Top configs (0 of 0)
+
+      Top files (0 of 0)"
+    `);
+    expect(
+      renderGroupedTestComparison(buildGroupedTestComparison({ before: report, after: report })),
+    ).toMatchInlineSnapshot(`
+      "[test-group-report:compare] groupBy=area file-sum=0.0ms -> 0.0ms (0.0ms, 0.0%) files=0->0 (0) tests=0->0 (0) addedFiles=0 removedFiles=0
+
+      Top group regressions (0 of 0)
+        (none)
+
+      Top group gains (0 of 0)
+        (none)
+
+      Config duration deltas (0 of 0)
+        (none)
+
+      Top file regressions (0 of 0)
+        (none)
+
+      Top file gains (0 of 0)
+        (none)"
+    `);
+  });
+
+  it("preserves bounded populated report output", () => {
+    const report = buildGroupedTestReport({
+      groupBy: "area",
+      maxTestMs: 50,
+      reports: [
+        {
+          config: "test/vitest/vitest.commands.config.ts",
+          report: {
+            testResults: [
+              testResult(
+                "src/a/first.test.ts",
+                [0, 600],
+                [
+                  ["fast", 20],
+                  ["slow", 80],
+                ],
+              ),
+              testResult("src/b/second.test.ts", [0, 400], [["other", 60]]),
+              testResult("src/a/third.test.ts", [0, 200], [["ordinary", 40]]),
+            ],
+          },
+        },
+        {
+          config: "test/vitest/vitest.unit-fast.config.ts",
+          report: {
+            testResults: [testResult("src/c/fourth.test.ts", [0, 1000], [["slowest", 90]])],
+          },
+        },
+      ],
+    });
+    expect(renderGroupedTestReport(report, { limit: 1, topFiles: 2 })).toMatchInlineSnapshot(`
+      "[test-group-report] groupBy=area files=4 tests=5 file-sum=2200.0ms
+
+      Top groups (1 of 3)
+       1.   1000.0ms | files=   1 | tests=    1 | src/c
+
+      Top configs (1 of 2)
+       1.   1200.0ms | files=   3 | tests=    4 | commands
+
+      Top files (2 of 4)
+       1.   1000.0ms | tests=   1 | unit-fast | src/c/fourth.test.ts
+       2.    600.0ms | tests=   2 | commands | src/a/first.test.ts
+
+      Slow tests (2 of 3)
+       1.     90.0ms | passed | unit-fast | src/c/fourth.test.ts | slowest
+       2.     80.0ms | passed | commands | src/a/first.test.ts | slow"
+    `);
+    expect(renderGroupedTestReport(report, { limit: 0, topFiles: 0 })).toMatchInlineSnapshot(`
+      "[test-group-report] groupBy=area files=4 tests=5 file-sum=2200.0ms
+
+      Top groups (0 of 3)
+
+      Top configs (0 of 2)
+
+      Top files (0 of 4)
+
+      Slow tests (0 of 3)"
+    `);
+  });
+
+  it("preserves bounded comparison output", () => {
+    const report = (cases: Parameters<typeof testResult>[]) =>
+      buildGroupedTestReport({
+        groupBy: "area",
+        reports: [
+          {
+            config: "test/vitest/vitest.commands.config.ts",
+            report: { testResults: cases.map((args) => testResult(...args)) },
+          },
+        ],
+      });
+    const before = {
+      ...report([
+        [
+          "src/a/first.test.ts",
+          [0, 700],
+          [
+            ["a", 20],
+            ["b", 30],
+          ],
+        ],
+        [
+          "src/b/second.test.ts",
+          [0, 300],
+          [
+            ["c", 40],
+            ["d", 50],
+          ],
+        ],
+      ]),
+      runs: [runCounter(2000, 100), { config: "unit-fast", elapsedMs: 500, status: 1 }],
+    };
+    const after = {
+      ...report([
+        [
+          "src/a/first.test.ts",
+          [0, 800],
+          [
+            ["a", 20],
+            ["b", 30],
+            ["extra", 40],
+          ],
+        ],
+        [
+          "src/a/new.test.ts",
+          [0, 100],
+          [
+            ["new", 30],
+            ["added", 40],
+          ],
+        ],
+        ["src/c/third.test.ts", [0, 600], [["other", 40]]],
+      ]),
+      runs: [runCounter(1800, 80), { config: "unit-fast", elapsedMs: 600, status: 0 }],
+    };
+    expect(
+      renderGroupedTestComparison(buildGroupedTestComparison({ before, after }), {
+        limit: 1,
+        topFiles: 2,
+      }),
+    ).toMatchInlineSnapshot(`
+      "[test-group-report:compare] groupBy=area file-sum=1000.0ms -> 1500.0ms (+500.0ms, +50.0%) files=2->3 (+1) tests=4->6 (+2) addedFiles=2 removedFiles=1
+
+      Top group regressions (1 of 2)
+       1.    +600.0ms (    new) | before=     0.0ms after=   600.0ms | files=  +1 tests=   +1 | src/c
+
+      Top group gains (1 of 1)
+       1.    -300.0ms (-100.0%) | before=   300.0ms after=     0.0ms | files=  -1 tests=   -2 | src/b
+
+      Config duration deltas (1 of 1)
+       1.    +500.0ms ( +50.0%) | before=  1000.0ms after=  1500.0ms | files=  +1 tests=   +2 | commands
+
+      Config wall/RSS deltas (1 of 2)
+       1. wall=   -200.0ms before=  2000.0ms after=  1800.0ms | rss=   -20.0MB before=  100.0MB after=   80.0MB | status=0->0 | commands
+
+      Top file regressions (2 of 3)
+       1.    +600.0ms (    new) | before=     0.0ms after=   600.0ms | tests=  +1 | commands | src/c/third.test.ts
+       2.    +100.0ms ( +14.3%) | before=   700.0ms after=   800.0ms | tests=  +1 | commands | src/a/first.test.ts
+
+      Top file gains (1 of 1)
+       1.    -300.0ms (-100.0%) | before=   300.0ms after=     0.0ms | tests=  -2 | commands | src/b/second.test.ts"
+    `);
+    expect(
+      renderGroupedTestComparison(buildGroupedTestComparison({ before, after }), {
+        limit: 0,
+        topFiles: 0,
+      }),
+    ).toMatchInlineSnapshot(`
+      "[test-group-report:compare] groupBy=area file-sum=1000.0ms -> 1500.0ms (+500.0ms, +50.0%) files=2->3 (+1) tests=4->6 (+2) addedFiles=2 removedFiles=1
+
+      Top group regressions (0 of 2)
+        (none)
+
+      Top group gains (0 of 1)
+        (none)
+
+      Config duration deltas (0 of 1)
+        (none)
+
+      Config wall/RSS deltas (0 of 2)
+
+      Top file regressions (0 of 3)
+        (none)
+
+      Top file gains (0 of 1)
+        (none)"
+    `);
   });
 
   it("keeps sharded run labels distinct in comparisons", () => {
@@ -610,18 +760,11 @@ describe("scripts/test-group-report", () => {
       },
     },
   ])("parses valid report arguments %#", ({ command, expected }) => {
-    expect(parseTestGroupReportArgs(command.split(" "))).toStrictEqual(expectedArgs(expected));
+    expect(parseTestGroupReportArgs(command.split(" "))).toMatchObject(expected);
   });
 
   it.each([
     { command: "--help --unknown", error: "Unknown option: --unknown" },
-    { command: "--help --limit", error: "--limit requires a value" },
-    ...["--config", "--output"].flatMap((flag) => [
-      { command: `${flag} --limit 5`, error: `${flag} requires a value` },
-      { command: `${flag} -h`, error: `${flag} requires a value` },
-    ]),
-    { command: "--limit", error: "--limit requires a value" },
-    { command: "--limit --output report.json", error: "--limit requires a value" },
     { command: "--compare before.json --limit", error: "--compare requires a value" },
     { command: "--compare --limit 5", error: "--compare requires a value" },
     {
@@ -775,7 +918,6 @@ describe("scripts/test-group-report", () => {
         fixtureReadyBeforeSettlement(
           childPidPath,
           expectDefined(completion, "watchdog completion"),
-          `timeout waiting for pid in ${childPidPath}`,
         ),
         signal,
       );

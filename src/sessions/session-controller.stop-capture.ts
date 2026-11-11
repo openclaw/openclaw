@@ -1,5 +1,6 @@
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { captureGatewayScopeMatcher } from "../gateway/session-runtime-scope.js";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { ReplyOperation, SessionWorkRun } from "./session-controller.contracts.js";
 import {
@@ -221,12 +222,7 @@ export function captureSessionControllerStop(params: {
     get settled() {
       if (!settled) {
         settled = Promise.allSettled(raw).then((results) => {
-          const failures = results.flatMap((result) =>
-            result.status === "rejected" ? [result.reason] : [],
-          );
-          if (failures.length) {
-            throw new AggregateError(failures, "Session source cleanup failed");
-          }
+          throwSettledAggregate(results, "Session source cleanup failed");
         });
         void settled.catch(() => {});
       }

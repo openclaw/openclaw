@@ -8,7 +8,7 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
-import { finalizePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   createPluginManifestRecordFixture,
@@ -23,17 +23,18 @@ import { resolveOAuthApiKeyMarker } from "./model-auth-markers.js";
 import { modelDefinition as configuredModel } from "./model-auth.fixtures.test-support.js";
 import { enrichHarnessRows, modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { row } from "./model-catalog-fixtures.test-support.js";
+import { findModelCatalogEntry, modelSupportsVision } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import {
   buildPreparedModelCatalogSnapshot,
   type BuildPreparedModelCatalogParams,
-  findModelCatalogEntry,
   loadManifestModelCatalog,
-  modelSupportsVision,
   overlayConfiguredModelCatalog,
 } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
+import { AuthStorage } from "./sessions/auth-storage.js";
+import { ModelRegistry } from "./sessions/model-registry.js";
 
 type AugmentModelCatalogWithProviderPlugins =
   typeof import("../plugins/provider-runtime.js").augmentModelCatalogWithProviderPlugins;
@@ -153,6 +154,23 @@ it("keeps replace publication closed to a warm refreshable inventory", async () 
   expect(mocks.augmentModelCatalogWithProviderPlugins).not.toHaveBeenCalled();
 });
 
+it("uses captured suppression rules without resolving ambient plugin metadata", async () => {
+  const supplied = createManifestSnapshot("demo", {
+    suppressions: [{ provider: "demo", model: "hidden" }],
+  });
+  using ambient = vi
+    .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
+    .mockReturnValue(metadataSnapshot);
+  const snapshot = await build({
+    metadataSnapshot: supplied,
+    entries: [row("demo", "hidden"), row("demo", "visible")],
+  });
+
+  expect(snapshot.entries.map(({ id }) => id)).toEqual(["visible"]);
+  expect(snapshot.routeVariants.map(({ id }) => id)).toEqual(["visible"]);
+  expect(ambient).not.toHaveBeenCalled();
+});
+
 it("preserves ready provider membership without replenishing it from metadata", async () => {
   const entries: ModelCatalogEntry[] = [];
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([
@@ -184,6 +202,58 @@ it.each(["unowned", "disabled"] as const)(
     expect(snapshot.entries).toMatchObject([{ provider: "source", id: "model" }]);
   },
 );
+
+const discoveredRow = (id: string) => ({
+  id,
+  name: id,
+  reasoning: false,
+  input: ["text" as const],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200_000,
+  maxTokens: 8192,
+});
+
+it("publishes the family a discovered row or its manifest declares, and none otherwise", async () => {
+  const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
+  // A routing provider's discovery names each row's family from its own service metadata.
+  registry.registerProvider("router", {
+    api: "openai-responses",
+    baseUrl: "https://router.example/v1",
+    models: [
+      { ...discoveredRow("anthropic/claude-model"), family: "anthropic" },
+      discoveredRow("acme/claude-model"),
+    ],
+  });
+  const snapshot = await buildPreparedModelCatalogSnapshot({
+    agentDir: "/tmp/model-catalog-test",
+    authCredentials: {},
+    config: { plugins: { enabled: false } },
+    readOnly: true,
+    models: registry.getAll(),
+    metadataSnapshot: createManifestSnapshot("native", {
+      providers: {
+        native: {
+          api: "anthropic-messages",
+          baseUrl: "https://native.example",
+          family: "anthropic",
+          models: [{ id: "native-model", name: "Native" }],
+        },
+      },
+      discovery: { native: "static" },
+    }),
+  });
+  const families = Object.fromEntries(
+    snapshot.entries.map((entry) => [`${entry.provider}/${entry.id}`, entry.family]),
+  );
+  expect(families).toEqual({
+    "native/native-model": "anthropic",
+    "router/anthropic/claude-model": "anthropic",
+    "router/acme/claude-model": undefined,
+  });
+  expect(snapshot.routeVariants.find(({ id }) => id === "anthropic/claude-model")?.family).toBe(
+    "anthropic",
+  );
+});
 
 it("carries manifest capability metadata into the prepared catalog", async () => {
   const snapshot = fableManifest({
@@ -647,7 +717,7 @@ describe("catalog declaration planning", () => {
   const normalize = vi.mocked(normalizeModelCatalogProviderRows);
   let config: OpenClawConfig;
   function catalog(discovery: "static" | "runtime", ...modelIds: string[]) {
-    const planningMetadata = finalizePluginMetadataSnapshot(
+    const planningMetadata = pluginMetadata.finalizePluginMetadataSnapshot(
       providerManifestSnapshot("catalog-fixture", discovery, modelIds),
     );
     const params = { config, metadataSnapshot: planningMetadata };

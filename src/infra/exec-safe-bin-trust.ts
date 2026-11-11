@@ -18,7 +18,6 @@ type TrustedSafeBinPathParams = {
 
 export type WritableTrustedSafeBinDir = {
   dir: string;
-  groupWritable: boolean;
   worldWritable: boolean;
 };
 
@@ -176,7 +175,7 @@ export function listWritableExplicitTrustedSafeBinDirs(
     if (!groupWritable && !worldWritable) {
       continue;
     }
-    hits.push({ dir, groupWritable, worldWritable });
+    hits.push({ dir, worldWritable });
   }
   return hits;
 }

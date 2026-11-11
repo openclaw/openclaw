@@ -25,6 +25,7 @@ import {
   modelConfigWithApiKey,
   openAiAuthProfile,
 } from "./setup.credentials.test-support.js";
+import { createGatewayPasswordRefConfig } from "./setup.finalize.fixtures.test-support.js";
 import { runSetupWizard } from "./setup.js";
 import { SetupMigrationTargetChangedError } from "./setup.migration-snapshot.js";
 
@@ -994,14 +995,7 @@ describe("runSetupWizard", () => {
 
   it("resolves gateway.auth.password SecretRef for local setup probe", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "gateway-ref-password");
-    readInitialConfig({
-      gateway: {
-        auth: {
-          mode: "password",
-          password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
-        },
-      },
-    });
+    readInitialConfig(createGatewayPasswordRefConfig());
     await runWizard({ mode: "local" });
     expectCall(probeGatewayReachable, {
       url: "ws://127.0.0.1:18789",

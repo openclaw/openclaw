@@ -107,6 +107,11 @@ afterEach(() => {
 
 describe("verifyBetaRelease workflow outcomes", () => {
   const version = "2026.5.10-beta.3";
+  const notificationFailure = {
+    name: "Notify Windows of published Gateway packages",
+    status: "completed",
+    conclusion: "failure",
+  };
 
   function readDiagnostic(rootDir: string) {
     return JSON.parse(readFileSync(join(rootDir, "release-postpublish-diagnostics.json"), "utf8"));
@@ -137,6 +142,13 @@ describe("verifyBetaRelease workflow outcomes", () => {
   it.each([
     { label: "a later successful rerun", conclusion: "success", overrides: {} },
     { label: "a later failed rerun", conclusion: "failure", overrides: {} },
+    {
+      label: "an optional notification failure",
+      conclusion: "failure",
+      overrides: {
+        jobs: [{ name: "publish_openclaw_npm", conclusion: "success" }, notificationFailure],
+      },
+    },
     {
       label: "delayed registry readback failure",
       conclusion: "success",
@@ -438,7 +450,7 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
                 });
               },
             });
-            return undefined;
+            return { disposition: "published" as const };
           },
         },
       };
@@ -464,7 +476,10 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
     const note = "@openclaw/demo@2026.9.6 superseded by 2026.9.7; dist-tag latest stays.";
     const lines = await verifyBetaRelease(fixture.args, {
       rootDir: fixture.rootDir,
-      pluginNpmReadback: { evidence: [], verify: async () => note },
+      pluginNpmReadback: {
+        evidence: [],
+        verify: async () => ({ disposition: "published" as const, note }),
+      },
     });
     expect(lines).toContain(`plugin npm WARN: ${note}`);
     expect(lines).toContain("plugin npm OK: 1");
@@ -950,8 +965,49 @@ syncBuiltinESMExports();`,
     expect(parsePublicationDiagnostic(diagnostic, run)).toBeNull();
   });
 
+  it.each(["failure", "timed_out", "cancelled"])(
+    "keeps notification %s optional",
+    async (conclusion) => {
+      const fixture = workflowFixture(
+        {
+          jobs: [
+            { name: "publish_openclaw_npm", conclusion: "success" },
+            { ...notificationFailure, conclusion },
+          ],
+        },
+        false,
+      );
+      const warning = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
+        expect(warning).toHaveBeenCalledWith(
+          expect.stringContaining("optional Gateway publication notification"),
+        );
+        expect(readDiagnostic(fixture.rootDir)).toMatchObject({
+          verification: "success",
+          children: { openclawNpm: { failedJobCount: 1 } },
+        });
+      } finally {
+        warning.mockRestore();
+      }
+    },
+  );
+
   it.each<[boolean, Record<string, unknown>, string]>([
     [true, { conclusion: "failure" }, "NPM Telegram Beta E2E: run 44 is completed/failure"],
+    [true, { jobs: [notificationFailure] }, "failed jobs: Notify Windows"],
+    [
+      false,
+      { conclusion: "cancelled", jobs: [notificationFailure] },
+      "OpenClaw NPM Release: run 44 is completed/cancelled",
+    ],
+    [
+      false,
+      {
+        jobs: [notificationFailure, { name: "publish_openclaw_npm", conclusion: "failure" }],
+      },
+      "failed jobs: publish_openclaw_npm",
+    ],
     [
       true,
       { status: "in_progress", conclusion: null },

@@ -1,31 +1,23 @@
-import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 
-/** Generate the public card from the existing brand artwork, without a browser or fonts. */
+/** The same scene supplies the still fallback and the versioned motion asset. */
 export function controlUiSocialCardPlugin(): Plugin {
   return {
     name: "control-ui-social-card",
     apply: "build",
     async buildStart() {
-      const { PhotonImage, resize, SamplingFilter, watermark } =
-        await import("@silvia-odwyer/photon-node");
-      const pixels = Buffer.alloc(1200 * 630 * 4, Buffer.from([11, 16, 22, 255]));
-      const canvas = new PhotonImage(pixels, 1200, 630);
-      const images = [canvas];
-      try {
-        const source = PhotonImage.new_from_byteslice(
-          fs.readFileSync(new URL("../../docs/assets/openclaw-hero-dark.png", import.meta.url)),
-        );
-        images.push(source);
-        const logo = resize(source, 1060, 376, SamplingFilter.Lanczos3);
-        images.push(logo);
-        watermark(canvas, logo, 70n, 127n);
-        this.emitFile({ type: "asset", fileName: "social-card.png", source: canvas.get_bytes() });
-      } finally {
-        for (const image of images) {
-          image.free();
-        }
-      }
+      // Serve/test config imports do not own filesystem-backed artwork.
+      const { renderSocialPreviewSvg, socialPreviewFontFiles } =
+        await import("./control-ui-social-preview.ts");
+      const { Resvg } = await import("@resvg/resvg-js");
+      const image = new Resvg(renderSocialPreviewSvg(), {
+        font: {
+          loadSystemFonts: false,
+          fontFiles: socialPreviewFontFiles.map((file) => fileURLToPath(file)),
+        },
+      });
+      this.emitFile({ type: "asset", fileName: "social-card.png", source: image.render().asPng() });
     },
   };
 }

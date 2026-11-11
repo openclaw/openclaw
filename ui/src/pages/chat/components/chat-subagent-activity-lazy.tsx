@@ -1,15 +1,17 @@
-import type { JSX } from "@solidjs/web";
-import { lazy } from "solid-js";
+import { lazy, onSettled } from "solid-js";
+import { createIdleImport } from "../../../lib/idle-import.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
-import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
+import { SubagentActivity, type SubagentActivityProps } from "./chat-subagent-activity.tsx";
 
-const Activity = lazy(() => import("./chat-subagent-activity-live.tsx"), {
-  export: "ChatSubagentActivity",
-});
+const activityLoad = createIdleImport(() => import("./chat-subagent-activity-live.tsx"));
+const Activity = lazy(activityLoad.load, { export: "ChatSubagentActivity" });
 
-export function ChatSubagentActivity(props: SubagentActivityProps & { fallback?: JSX.Element }) {
+export function ChatSubagentActivity(props: SubagentActivityProps) {
+  onSettled(() => activityLoad.dispose);
   return (
-    <ChatLazyBoundary fallback={props.fallback}>
+    <ChatLazyBoundary
+      fallback={<SubagentActivity {...props} presentation={props.presentation ?? props.rows} />}
+    >
       <Activity {...props} />
     </ChatLazyBoundary>
   );

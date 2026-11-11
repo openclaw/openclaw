@@ -20,8 +20,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appendNarrativeEntry } from "./dreaming-dreams-file.js";
 import type { DreamingCompletion } from "./dreaming-narrative.js";
@@ -61,7 +59,6 @@ afterEach(async () => {
     }),
   );
   backgroundOwners.clear();
-  resetSystemEventsForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
@@ -75,6 +72,7 @@ async function createSweep(
     failDeepReport?: boolean;
     failRemReport?: boolean;
     narrativeGate?: Promise<void>;
+    timeoutSeconds?: number | null;
     managedBackground?: boolean;
   } = {},
 ) {
@@ -99,7 +97,12 @@ async function createSweep(
   }
   const config: OpenClawConfig = {
     agents: {
-      defaults: { workspace: workspaceDir, timeoutSeconds: 180 },
+      defaults: {
+        workspace: workspaceDir,
+        ...(options.timeoutSeconds === null
+          ? {}
+          : { timeoutSeconds: options.timeoutSeconds ?? 180 }),
+      },
       entries: { main: { workspace: workspaceDir } },
     },
     plugins: {
@@ -137,9 +140,11 @@ async function createSweep(
   };
   setRuntimeConfigSnapshot(config);
   const narratives: CompletionInput[] = [];
+  const consolidations: CompletionInput[] = [];
   const complete = vi.fn(async (input: CompletionInput) => {
     if (!input.extraSystemPrompt?.includes("You are keeping a dream diary")) {
       // Deliberately use the real append-only promotion fallback, not a fabricated plan.
+      consolidations.push(input);
       return { text: "" };
     }
     narratives.push(input);
@@ -150,6 +155,7 @@ async function createSweep(
     // Different replies make duplicate publications observable even without exact-text dedupe.
     return { text: `The archive glowed softly, entry ${narratives.length}.` };
   });
+
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const unexpectedSessionCall = vi.fn(async () => {
     throw new Error("Unexpected session-based subagent call");
@@ -182,6 +188,7 @@ async function createSweep(
       subagent: {
         complete,
         forkSession: unexpectedSessionCall,
+        runForkedTurn: unexpectedSessionCall,
         run: unexpectedSessionCall,
         waitForRun: unexpectedSessionCall,
         getSessionMessages: unexpectedSessionCall,
@@ -198,11 +205,6 @@ async function createSweep(
   const beforeReply = registration[1] as BeforeReply;
   const run = async (trigger: "heartbeat" | "cron" = "heartbeat") => {
     const sessionKey = "agent:main:main";
-    enqueueSystemEvent(MEMORY_DREAMING_SYSTEM_EVENT_TEXT, {
-      agentId: "main",
-      sessionKey,
-      contextKey: "cron:memory-dreaming",
-    });
     return await beforeReply(
       { cleanedBody: MEMORY_DREAMING_SYSTEM_EVENT_TEXT },
       { trigger, agentId: "main", workspaceDir, sessionKey },
@@ -218,7 +220,7 @@ async function createSweep(
   const service = registerService.mock.calls.find(
     ([entry]) => entry.id === "memory-core-dreaming",
   )?.[0];
-  if (!service?.stop) {
+  if (!service?.stop || service.apiVersion !== 2) {
     throw new Error("dreaming service lifecycle was not registered");
   }
   const serviceContext = {
@@ -232,6 +234,7 @@ async function createSweep(
     workspaceDir,
     config,
     narratives,
+    consolidations,
     resolveTimeout,
     logger,
     run,
@@ -262,6 +265,16 @@ function diaryEntryCount(dreams: string): number {
 }
 
 describe("dreaming sweep diary publication", () => {
+  it("retains the bounded consolidation timeout when agents.defaults.timeoutSeconds is absent", async () => {
+    const sweep = await createSweep({ promote: true, timeoutSeconds: null });
+
+    expectHandled(await sweep.run());
+    const narrative = expectNarrative(sweep, "openai/gpt-5.4");
+    expect(narrative).toMatchObject({ timeoutMs: 180_000 });
+    expect(sweep.consolidations).toHaveLength(1);
+    expect(sweep.consolidations[0]).toMatchObject({ timeoutMs: 60_000 });
+  });
+
   it.each([false, true])(
     "publishes one entry for Light/REM with deep promotion=%s",
     async (promote) => {
@@ -278,6 +291,12 @@ describe("dreaming sweep diary publication", () => {
       expectHandled(await sweep.run());
       const narrative = expectNarrative(sweep, promote ? "openai/gpt-5.4" : "xai/grok-4.1-fast");
       expect(narrative).toMatchObject({ agentId: "main", timeoutMs: 180_000 });
+      if (promote) {
+        expect(sweep.consolidations).toHaveLength(1);
+        expect(sweep.consolidations[0]).toMatchObject({ timeoutMs: 180_000 });
+      } else {
+        expect(sweep.consolidations).toHaveLength(0);
+      }
       expect(sweep.resolveTimeout).toHaveBeenCalledWith({ cfg: sweep.config });
       expect(narrative?.message).toContain(`Current sweep: ${DAY}`);
       if (!promote) {

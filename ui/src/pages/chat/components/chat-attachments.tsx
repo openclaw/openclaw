@@ -2,6 +2,7 @@ import { createMemo, lazy, Show } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
+import { currentAttachments } from "./chat-attachment-draft.ts";
 import type { ChatAttachmentRead } from "./chat-attachment-reads.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
@@ -45,7 +46,9 @@ export function AttachmentPreview(
 ) {
   const entries = createMemo(() => {
     void props.readRevision;
-    const attachments = props.attachments ?? [];
+    // Draft props notify membership changes; reconcile with the synchronous owner.
+    void props.attachments;
+    const attachments = currentAttachments(props);
     const reads =
       props.attachmentReads?.project(attachments) ??
       attachments.map((attachment): ChatAttachmentRead => ({ attachment, state: "ready" }));

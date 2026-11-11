@@ -12,17 +12,15 @@ import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { WorkerInferenceStore, WorkerInferenceTurnInput } from "./inference-store.js";
 
-type WorkerInferenceFenceReason = Extract<
-  WorkerInferenceErrorReason,
-  "epoch-mismatch" | "session-not-attached"
->;
-
 export type WorkerInferenceSink = {
   connectionId: string;
   send(frame: WorkerInferenceEventFrame | WorkerInferenceTerminalFrame): void;
 };
 
-export type RevalidateInference = () => WorkerInferenceFenceReason | null;
+export type RevalidateInference = () => Extract<
+  WorkerInferenceErrorReason,
+  "epoch-mismatch" | "session-not-attached"
+> | null;
 
 export type WorkerInferenceStartApplicationResult =
   | {
@@ -55,6 +53,8 @@ export type ActiveInference = {
   seq: number;
   streamedBytes: number;
   launched: boolean;
+  /** Raw executor lifetime survives its earlier cancellation/terminal acknowledgment. */
+  execution?: Promise<void>;
   settled: boolean;
   abortReason?: WorkerInferenceErrorReason;
   begun?: Promise<Awaited<ReturnType<WorkerInferenceStore["begin"]>> | undefined>;

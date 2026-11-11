@@ -71,7 +71,7 @@ export type GitWorktreeOperations = {
     output: boolean;
   };
   "worktree.provisioning-inspection": {
-    input: { sourceRoot: string };
+    input: { sourceRoot: string; estimateBytes?: boolean };
     output: { paths: string[]; estimatedBytes: number };
   };
   "worktree.git-size": {

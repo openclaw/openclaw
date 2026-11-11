@@ -1,10 +1,14 @@
 import "../config/sessions/session-entry-patch-delivery.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
-import { getSession, waitForExecScope } from "../agents/bash-process-registry.js";
+import {
+  getSession,
+  listExecSessionsForCancellation,
+  waitForExecScope,
+} from "../agents/bash-process-registry.js";
 import { createExecTool } from "../agents/bash-tools.exec-run.js";
 import {
   fullGatewayExec,
@@ -13,7 +17,6 @@ import {
 } from "../agents/bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "../agents/bash-tools.process.js";
 import { truncateOversizedToolResultsInSessionManager } from "../agents/embedded-agent-runner/tool-result-truncation.js";
-import { acknowledgeInternalToolResult } from "../agents/runtime/internal-hooks.js";
 import * as sandboxContext from "../agents/sandbox/context.js";
 import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
@@ -203,48 +206,33 @@ it("adopts one empty owner and keeps original message files separate from same-n
     );
     const process = createProcessTool({ scopeKey: target.sessionKey });
     try {
-      await expect(adoptUnboundPullRequestWorkspace(input)).rejects.toThrow("background work");
+      await expect(adoptUnboundPullRequestWorkspace(input)).rejects.toThrow(
+        `background exec ${background.sessionId} is still running`,
+      );
       expect(getSession(background.sessionId)?.exited).toBe(false);
       expect(loadSessionEntryReadOnly(target)?.worktree).toBeUndefined();
     } finally {
       await process.execute("stop-fixture", { action: "kill", sessionId: background.sessionId });
       await waitForExecScope(target.sessionKey);
-      acknowledgeInternalToolResult(
-        await process.execute("observe-fixture", {
-          action: "poll",
-          sessionId: background.sessionId,
-        }),
-      );
     }
-    const allocate = allocation.prepareSessionWorktree;
-    let queued: ReturnType<typeof reserveSessionControllerSource> | undefined;
-    const duringPreparation = vi
-      .spyOn(allocation, "prepareSessionWorktree")
-      .mockImplementationOnce(async (...args) => {
-        const result = await allocate(...args);
-        queued = reserveSessionControllerSource(target.sessionKey, {
-          policy: { mode: "followup" },
-          target: captureSessionTarget({
-            storeScope: target.storePath,
-            sessionKey: target.sessionKey,
-            agentId: target.agentId,
-            incarnation: entry.sessionId,
-          }),
-        });
-        return result;
-      });
-    try {
-      await expect(adoptUnboundPullRequestWorkspace(input)).rejects.toThrow("queued input");
-      expect(queued?.phase).toBe("preparing");
-      expect(loadSessionEntryReadOnly(target)?.worktree).toBeUndefined();
-      expect(await managedWorktrees.findLiveByOwner("session", target.sessionKey)).toBeUndefined();
-    } finally {
-      duringPreparation.mockRestore();
-      if (queued) {
-        retireSessionControllerInput(queued);
-        await queued.settlement.promise;
-      }
-    }
+    // A requested stop that was never polled leaves no competing execution.
+    const stopped = listExecSessionsForCancellation().find(
+      (candidate) => candidate.id === background.sessionId,
+    );
+    expect(stopped).toMatchObject({ exited: true, backgrounded: true });
+    expect(stopped?.terminalPollObserved).not.toBe(true);
+    const queued = reserveSessionControllerSource(target.sessionKey, {
+      policy: { mode: "followup" },
+      target: captureSessionTarget({
+        ...target,
+        storeScope: target.storePath,
+        incarnation: entry.sessionId,
+      }),
+    });
+    onTestFinished(async () => {
+      retireSessionControllerInput(queued);
+      await queued.settlement.promise;
+    });
     let committing: admission.SqliteWorkerOperationAdmission | undefined;
     const createAdmission = admission.createSqliteWorkerOperationAdmission;
     const captureAdmission = vi
@@ -292,6 +280,7 @@ it("adopts one empty owner and keeps original message files separate from same-n
       assertCurrent() {},
       async verifyBeforeBinding() {},
     });
+    expect(queued.phase).toBe("preparing");
     const worktree = await managedWorktrees.findLiveByOwner("session", target.sessionKey);
     expect(worktree).toBeDefined();
     try {
@@ -561,10 +550,15 @@ const pullRequest = {
 /** GitHub I/O and the container runtime stay synthetic; the handler, its session read,
  * allocation, binding, file-source checks and the PR association write are real. */
 function stubPullRequestPreparation(sessionKey: string) {
-  vi.spyOn(inspect, "inspectOwnGitHubPullRequest").mockResolvedValue({
-    result: pullRequest,
-    assertCurrent() {},
-  } as never);
+  vi.spyOn(inspect, "inspectOwnGitHubPullRequest").mockImplementation(
+    async ({ assertCurrent }) => ({
+      result: { ...pullRequest, author: { accountId: 9, login: "guest" }, state: "open" },
+      details: {},
+      assertCurrent,
+      ownPublication: false,
+      requirePublicRepositories: false,
+    }),
+  );
   vi.spyOn(availability, "prepareCurrentGitHubPublicationIdentity").mockResolvedValue({
     account: { accountId: 9 },
   } as never);
@@ -702,7 +696,13 @@ it("prepares an own PR in an ordinary sandboxed chat through the registered hand
     assert(earlier, "The earlier message must be persisted");
     await fs.writeFile(path.join(state.workspaceDir, "notes.md"), "original notes\n");
     vi.spyOn(requester, "prepareGitHubPublicationRequesterV2").mockResolvedValue({
-      requester: { snapshot: { actor: { kind: "system" } }, assertCurrent() {} },
+      requester: {
+        snapshot: {
+          actor: { kind: "system" },
+          scopes: [SESSION_READ_SCOPE, SESSION_WRITE_SCOPE],
+        },
+        assertCurrent() {},
+      },
       release() {},
     } as never);
     stubPullRequestPreparation(target.sessionKey);
@@ -825,7 +825,9 @@ it("refuses another guest and lost access before binding, PR import and earlier 
       try {
         // Another guest fails the publication requester; an admin passes it but is not the owner.
         await expect(prepare(otherClient)).rejects.toThrow("no longer authorized");
-        await expect(prepare(adminClient)).rejects.toThrow("Only this conversation's owner");
+        await expect(prepare(adminClient)).rejects.toThrow(
+          "Only the person who started this conversation",
+        );
         expect(allocate).not.toHaveBeenCalled();
         unbound();
 

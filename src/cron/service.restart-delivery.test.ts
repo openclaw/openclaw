@@ -1,5 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { sendGatewayCronWebhook } from "../gateway/server-cron-notifications.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
@@ -45,16 +49,18 @@ afterEach(() => vi.unstubAllGlobals());
 
 const result = "scheduled result";
 const interruptedError = "cron: job interrupted by gateway restart";
-it.each([
-  ["announce", "after-acceptance"],
-  ["webhook", "after-acceptance"],
-  ["announce", "before-delivery"],
-  ["webhook", "before-delivery"],
-  ["announce", "legacy-unknown"],
-  ["webhook", "legacy-unknown"],
+it.for([
+  ["announce", "after-acceptance", "at", 0],
+  ["webhook", "after-acceptance", "at", 0],
+  ["announce", "before-delivery", "at", 0],
+  ["webhook", "before-delivery", "at", 0],
+  ["announce", "legacy-unknown", "at", 0],
+  ["webhook", "legacy-unknown", "at", 0],
+  ["announce", "before-delivery", "every", 0],
+  ["announce", "before-delivery", "every", 5],
 ] as const)(
-  "recovers %s interrupted %s without duplicating its completion",
-  async (mode, interrupted) => {
+  "recovers %s interrupted %s (%s, %i prior failures) without duplicating its completion",
+  async ([mode, interrupted, scheduleKind, priorErrors], { signal }) => {
     const { storePath } = await makeStorePath();
     const clock = createGatewaySchedulerClock(Date.now());
     const reachedInterruption = createDeferred();
@@ -134,11 +140,22 @@ it.each([
     const first = createOwner(clock);
     const replacement = createOwner(createGatewaySchedulerClock(Date.now() + 60_000));
     const secondReplacement = createOwner(createGatewaySchedulerClock(Date.now() + 240_000));
-    const restart = async (previous: typeof first, next: typeof first) => {
+    const restart = async (previous: typeof first, next: typeof first, jobId: string) => {
       previous.cron.stop();
       advanceCronActiveJobGeneration();
+      if (previous !== first) {
+        next.clock.setTime(previous.clock.clock.now() + 60_000);
+      }
       await next.cron.start();
-      await next.clock.advanceBy(120_000);
+      if (previous === first && interrupted === "before-delivery") {
+        const recovered = await next.cron.readJob(jobId);
+        const retryAtMs = recovered?.state.nextRunAtMs;
+        expect(recovered?.state.consecutiveErrors).toBe(priorErrors);
+        expect(retryAtMs).toBeGreaterThan(next.clock.clock.now());
+        await next.clock.advanceTo(retryAtMs!);
+      } else {
+        await next.clock.advanceBy(120_000);
+      }
       await onTimer(next.state);
     };
     const expectedDeliveries = interrupted === "before-delivery" ? [] : [result];
@@ -147,12 +164,21 @@ it.each([
       expect(executionCount).toBe(interrupted === "before-delivery" ? 2 : 1);
     };
     let tick: Promise<void> | undefined;
+    let settled: PromiseSettledResult<void>[];
     try {
       await first.cron.start();
       const job = await first.cron.add(
         cronTestInput({
           ...(interrupted === "before-delivery" ? { deleteAfterRun: false } : {}),
-          schedule: { kind: "at", at: new Date(clock.clock.now() + 1_000).toISOString() },
+          schedule:
+            scheduleKind === "at"
+              ? { kind: "at", at: new Date(clock.clock.now() + 1_000).toISOString() }
+              : {
+                  kind: "every",
+                  everyMs: 24 * 60 * 60_000,
+                  anchorMs: clock.clock.now() + 1_000,
+                },
+          state: { consecutiveErrors: priorErrors },
           delivery:
             mode === "announce"
               ? { mode, channel: "telegram", to: "123" }
@@ -161,7 +187,14 @@ it.each([
       );
       clock.setTime(job.state.nextRunAtMs!);
       tick = onTimer(first.state);
-      await reachedInterruption.promise;
+      await withinTest(
+        awaitGateBeforeSettlement(
+          reachedInterruption.promise,
+          tick,
+          "Cron run settled before reaching the interruption",
+        ),
+        signal,
+      );
       expect(received).toEqual(expectedDeliveries);
       const receipt = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
       expect(receipt).toBeDefined();
@@ -175,11 +208,11 @@ it.each([
           .run(receipt!.receiptId);
       }
 
-      await restart(first, replacement);
+      await restart(first, replacement, job.id);
       expectRecoveredOnce();
       const recovered = await replacement.cron.readJob(job.id);
       expect(recovered).toMatchObject({
-        enabled: false,
+        enabled: scheduleKind !== "at",
         state: {
           lastRunStatus: interrupted === "before-delivery" ? "ok" : "error",
           ...(interrupted !== "before-delivery"
@@ -187,7 +220,11 @@ it.each([
             : { lastDeliveryStatus: "delivered" }),
         },
       });
-      expect(recovered?.state.nextRunAtMs).toBeUndefined();
+      if (scheduleKind === "at") {
+        expect(recovered?.state.nextRunAtMs).toBeUndefined();
+      } else {
+        expect(recovered?.state.nextRunAtMs).toBeGreaterThan(replacement.clock.clock.now());
+      }
       expect(recovered?.state.startupCatchupAtMs).toBeUndefined();
       expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
       if (interrupted !== "before-delivery") {
@@ -212,16 +249,25 @@ it.each([
           .get(receipt!.receiptId),
       ).toMatchObject({ status: "interrupted" });
 
-      await restart(replacement, secondReplacement);
+      await restart(replacement, secondReplacement, job.id);
       expectRecoveredOnce();
       expect(await secondReplacement.cron.readJob(job.id)).toEqual(recovered);
       expect(readHistory()).toEqual(history);
     } finally {
-      for (const owner of [first, replacement, secondReplacement]) {
+      const owners = [first, replacement, secondReplacement];
+      for (const owner of owners) {
         owner.cron.stop();
       }
       acknowledgment.resolve();
-      await tick;
+      settled = await Promise.allSettled([
+        tick,
+        ...owners.map((owner) => owner.cron.waitForIdle()),
+      ]);
+    }
+    for (const outcome of settled) {
+      if (outcome.status === "rejected") {
+        throw outcome.reason;
+      }
     }
   },
 );
@@ -261,6 +307,7 @@ it("records a rejected durable attempt as not delivered before webhook dispatch"
     });
   } finally {
     cron.stop();
+    await cron.waitForIdle();
     mutation.mockRestore();
   }
 });

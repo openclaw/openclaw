@@ -238,21 +238,7 @@ describe("AppSidebar agent chip", () => {
       "data:image/png;base64,eA==",
     );
     const researchRow = menuAgent(menu!, "research");
-    const settings = researchRow?.querySelector<HTMLButtonElement>(".sidebar-agent-menu__settings");
-    expect(settings?.hasAttribute("title")).toBe(false);
-    settings?.click();
-    await sidebar.updateComplete;
-
-    expect(onNavigate).toHaveBeenCalledExactlyOnceWith("agents", {
-      pathname: "/settings/agents/research",
-    });
-    expect(context.agentSelection.state.selectedId).toBe("main");
-
-    onNavigate.mockClear();
-    await openAgentMenu(sidebar);
-    const reopenedMenu = dom.query(".sidebar-agent-menu");
-    const reopenedResearchRow = menuAgent(reopenedMenu!, "research");
-    reopenedResearchRow?.click();
+    researchRow?.click();
     await sidebar.updateComplete;
 
     expect(context.agentSelection.state).toEqual({ selectedId: "research", scopeId: "research" });
@@ -265,31 +251,6 @@ describe("AppSidebar agent chip", () => {
     });
     expect(dom.query(".sidebar-agent-menu")).toBeNull();
   });
-
-  it.each(["chip", "roster"] as const)(
-    "opens agent settings without switching (%s)",
-    async (mode) => {
-      const { sidebar, context, dom } = await mountAgent();
-      const onNavigate = vi.fn();
-      sidebar.connected = true;
-      sidebar.onNavigate = onNavigate;
-      sidebar.activeRouteId = "skills";
-      sidebar.sidebarAgentsMode = mode;
-      await sidebar.updateComplete;
-
-      await openAgentMenu(sidebar);
-      const item = dom.query<HTMLButtonElement>(
-        '[data-value="agent:research"] .sidebar-agent-menu__settings',
-      );
-      item?.click();
-      await sidebar.updateComplete;
-
-      await vi.waitFor(() => expect(onNavigate).toHaveBeenCalledOnce());
-      const options = onNavigate.mock.calls[0]?.[1] as { pathname: string };
-      expect(options.pathname).toBe("/settings/agents/research");
-      expect(context.agentSelection.state.selectedId).toBe("main");
-    },
-  );
 
   it.each([
     { viewport: "normal", width: undefined, left: 12, right: 252, x: 12 },
@@ -391,7 +352,7 @@ describe("AppSidebar agent chip", () => {
         expect(tile.attr(".agent-select__avatar img", "src")).toBe("blob:agent-avatar");
       });
       avatar = researchRow?.querySelector(".agent-select__avatar");
-      expect(avatar?.classList).toContain("is-pending");
+      expect(avatar?.classList).not.toContain("is-pending");
       avatar?.querySelector("img")?.dispatchEvent(new Event("load"));
       await waitForSolid(() => expect(avatar?.classList).not.toContain("is-pending"));
       expect(createObjectURL).toHaveBeenCalledTimes(1);

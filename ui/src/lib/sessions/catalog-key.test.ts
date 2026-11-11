@@ -46,6 +46,7 @@ it.each([undefined, "home:a/b"])(
 );
 
 it("keeps the explicit agent owner across paginated lookup requests", async () => {
+  const read = new AbortController();
   const key = { catalogId: "codex", hostId: "gateway:local", threadId: "thread-2" };
   const request = vi
     .fn()
@@ -57,6 +58,7 @@ it("keeps the explicit agent owner across paginated lookup requests", async () =
     key,
     agentId: "jarvis",
     isCurrent: () => true,
+    signal: read.signal,
   });
 
   expect(result?.session?.threadId).toBe("thread-2");
@@ -66,9 +68,16 @@ it("keeps the explicit agent owner across paginated lookup requests", async () =
     hostIds: ["gateway:local"],
     limitPerHost: 100,
   };
-  expect(request).toHaveBeenNthCalledWith(1, "sessions.catalog.list", params);
-  expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
-    ...params,
-    cursors: { "gateway:local": "next" },
+  expect(request).toHaveBeenNthCalledWith(1, "sessions.catalog.list", params, {
+    signal: read.signal,
   });
+  expect(request).toHaveBeenNthCalledWith(
+    2,
+    "sessions.catalog.list",
+    {
+      ...params,
+      cursors: { "gateway:local": "next" },
+    },
+    { signal: read.signal },
+  );
 });

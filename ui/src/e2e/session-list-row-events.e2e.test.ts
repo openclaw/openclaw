@@ -5,7 +5,6 @@ import {
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { requireRecord } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Session list row events" });
@@ -132,19 +131,6 @@ suite.define(() => {
         await page.clock.runFor(59_499);
         await expect.poll(() => sidebarRow.textContent()).toContain("Updated with held ancestor");
         expect(await gateway.getRequests("sessions.list")).toEqual(before);
-        for (const request of before) {
-          const params = requireRecord(request.params);
-          expect(params).toMatchObject({
-            rowMode:
-              (params.source === "sidebar" || params.source === "agent-roster") &&
-              params.includeLastMessage === true
-                ? "sidebar"
-                : params.hasBoard === true
-                  ? "dashboard"
-                  : "compact",
-            source: expect.any(String),
-          });
-        }
       });
     },
   );

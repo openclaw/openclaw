@@ -1,10 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginCache } from "../plugins/plugin-cache.js";
@@ -18,8 +18,10 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as cronRuntime from "./server-cron.js";
 import {
   createDefaultGatewayReloadState,
+  createHotReloadHandlerTestParams,
   createHotTailPlan,
   createTestCronState,
+  makePluginReloadResult,
 } from "./server-reload-handlers.config.test-support.js";
 import { createGatewayReloadHandlers } from "./server-reload-hot.js";
 
@@ -30,64 +32,75 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-it("cron startup after a reload commit reads the published plugin inventory", async () => {
+it.each(["on", "off", "superseded"])("accepted cron state: %s", async (mode) => {
   setActivePluginRegistry(registry);
   using loadMetadata = vi.spyOn(pluginMetadata, "loadPluginMetadataSnapshot");
   await withOpenClawTestState({ label: "post-commit-plugin-metadata" }, async () => {
-    const config = {};
+    const owner = "memory-owner";
+    const dreaming = { enabled: mode === "on" };
+    const entries = { [owner]: { enabled: true, config: { dreaming } } };
+    const config = { plugins: { slots: { memory: owner }, entries } };
     setRuntimeConfigSnapshot(config);
-    setGatewayPluginMetadataSnapshot(
-      createPluginMetadataSnapshotFixture({
-        plugins: [{ id: "fixture", providerAuthAliases: { "fixture-alias": "fixture" } }],
-      }),
-      { config },
-    );
+    const metadata = createPluginMetadataSnapshotFixture({
+      plugins: [
+        { id: "fixture", providerAuthAliases: { "fixture-alias": "fixture" } },
+        { id: owner, kind: "memory" },
+        { id: "memory-core", kind: "memory" },
+      ],
+    });
+    setGatewayPluginMetadataSnapshot(metadata, { config });
     const resolvedProviders: string[] = [];
+    const committed: string[] = [];
     const cronState = createTestCronState();
     cronState.cron.start = vi.fn(async () => {
       resolvedProviders.push(resolveProviderIdForAuth("fixture-alias", { config }));
     });
-    using _ = vi.spyOn(cronRuntime, "buildGatewayCronService").mockReturnValue(cronState);
-    let state = createDefaultGatewayReloadState({ cronState });
-    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-    const handlers = createGatewayReloadHandlers({
-      scheduler: createTestGatewayScheduler("fake-timers"),
-      getPluginRegistry: () => registry,
-      deps: {} as never,
-      broadcast: vi.fn(),
-      getState: () => state,
-      setState: (nextState) => {
-        state = nextState;
-      },
-      startChannel: vi.fn(async () => new Map()),
-      stopChannel: vi.fn(async () => {}),
-      releaseChannelRouteHandoffs: vi.fn(),
-      pruneInactiveChannelAccountState: vi.fn(),
-      reloadPlugins: vi.fn(),
-      requestRecoveryRestart,
-      logHooks: createInfoWarnErrorLogger(),
-      logChannels: { info: vi.fn(), error: vi.fn() },
-      logCron: { error: vi.fn() },
-      logReload: { info: vi.fn(), warn: vi.fn() },
-      cronReconciliation: {
-        invalidate: vi.fn(),
-        arm: () => ({ complete: async () => {} }),
-      } as never,
+    cronState.cron.list = vi.fn(async () => [
+      makeCronJob({ id: "canonical", declarationKey: "memory-core:memory-dreaming-promotion" }),
+      makeCronJob({ id: "lookalike", name: "Memory Dreaming Promotion" }),
+    ]);
+    cronState.cron.remove = vi.fn<typeof cronState.cron.remove>(async (id, options) => {
+      if (mode === "superseded") {
+        setRuntimeConfigSnapshot({});
+      }
+      options?.commitGuard?.();
+      committed.push(id);
+      return { ok: true, removed: true };
     });
-    let commitCacheKind: string | undefined;
-
-    await withPluginLifecycleLease({}, () =>
-      handlers.applyHotReload(createHotTailPlan({ restartCron: true }), config, {
-        sourceConfig: config,
-        isCurrent: () => true,
-        publish: async (commit) => {
-          // Management before and at the commit keeps the lease's fresh operation cache.
-          commitCacheKind = getPluginCache().kind;
-          await commit();
+    using _ = vi.spyOn(cronRuntime, "buildGatewayCronService").mockReturnValue(cronState);
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const handlers = createGatewayReloadHandlers(
+      createHotReloadHandlerTestParams(
+        {
+          scheduler: createTestGatewayScheduler("fake-timers"),
+          getPluginRegistry: () => registry,
+          getPluginMetadataSnapshot: () => metadata,
+          deps: {} as never,
+          reloadPlugins: vi.fn(async ({ commitRuntime }) => {
+            await commitRuntime();
+            return makePluginReloadResult();
+          }),
+          requestRecoveryRestart,
         },
-      }),
+        createDefaultGatewayReloadState({ cronState }),
+      ),
     );
-
+    let commitCacheKind: string | undefined;
+    await withPluginLifecycleLease({}, () =>
+      handlers.applyHotReload(
+        createHotTailPlan({ restartCron: true, reloadPlugins: true }),
+        config,
+        {
+          sourceConfig: config,
+          isCurrent: () => true,
+          publish: async (commit) => {
+            commitCacheKind = getPluginCache().kind;
+            await commit();
+          },
+        },
+      ),
+    );
+    expect(committed).toEqual(mode === "off" ? ["canonical"] : []);
     expect(commitCacheKind).toBe("operation");
     expect(resolvedProviders).toEqual(["fixture"]);
     expect(loadMetadata).not.toHaveBeenCalled();

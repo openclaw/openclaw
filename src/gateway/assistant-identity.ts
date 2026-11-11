@@ -28,8 +28,6 @@ const ASSISTANT_IDENTITY_LIMITS = {
   name: 50,
   emoji: 16,
 } as const;
-type AssistantIdentityField = keyof typeof ASSISTANT_IDENTITY_LIMITS;
-
 type AssistantIdentity = {
   name: string;
   avatar: string;
@@ -67,7 +65,7 @@ export const DEFAULT_ASSISTANT_IDENTITY: AssistantIdentity = {
 };
 
 function normalizeIdentityValue(
-  field: AssistantIdentityField,
+  field: keyof typeof ASSISTANT_IDENTITY_LIMITS,
   value: string | undefined,
 ): string | undefined {
   const trimmed = normalizeOptionalString(value);

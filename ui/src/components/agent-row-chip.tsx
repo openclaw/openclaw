@@ -1,24 +1,15 @@
 import { createMemo } from "solid-js";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { projectAgentRowContext } from "../lib/reactive/agent-row-context.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
 import { resolveUiDefaultAgentId } from "../lib/sessions/session-key.ts";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import "../styles/agent-row-chip.css";
 
 export function AgentRowChip(props: { agentId?: string }) {
   const agentId = createMemo(() => props.agentId?.trim());
-  const context = projectSource(useOptionalApplication(), {
-    read: (value) => value,
-    subscribe: (value, notify) => {
-      const stops = [value?.agents, value?.agentIdentity, value?.gateway].map((source) =>
-        source?.subscribe(notify),
-      );
-      return () => stops.forEach((stop) => stop?.());
-    },
-    equality: "revision",
-  });
+  const context = projectAgentRowContext(useOptionalApplication());
   const view = createMemo(() => {
     const app = context.read();
     const agentsList = app?.agents.state.agentsList;

@@ -1,3 +1,4 @@
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type {
   OpenClawConfig,
   ResolvedMemorySearchConfig,
@@ -5,7 +6,6 @@ import type {
 import {
   resolveEmbeddingProviderFallbackModel,
   resolveEmbeddingProviderFallbackRemote,
-  type EmbeddingProvider,
   type EmbeddingProviderResult,
 } from "./embeddings.js";
 
@@ -58,7 +58,7 @@ export function resolveMemoryProviderLifecycle(
 }
 
 export function resolveFallbackCurrentProviderId(params: {
-  provider: EmbeddingProvider | null;
+  provider: MemoryEmbeddingProvider | null;
   lifecycle: MemoryProviderLifecycleState;
 }): string | null {
   if (params.provider) {

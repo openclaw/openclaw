@@ -152,6 +152,8 @@ Use `mode: "agent"` for the STT -> OpenClaw agent -> TTS path, or `mode: "bidi"`
 
 Also verify provider authentication on the Gateway host, the native audio backend on the Chrome host, and both audio routes in `doctor`. With generated input commands, browser sessions use the virtual microphone for assistant injection and report `Isolated browser playback` for participant input. Explicit input commands retain their configured capture path. GPT-Live with Cove uses the configured OpenAI account; see the [Live configuration](/plugins/google-meet/config#gpt-live-with-cove).
 
+Status recognizes native device selectors and Meet's selected `Microphone:` and `Speaker:` menus. Select the supported virtual device in both menus; an available device alone does not confirm that Meet is using it.
+
 `googlemeet doctor [session-id]` prints session, node, in-call state, manual action reason, realtime provider connection, `realtimeReady`, audio input/output activity, last audio timestamps, byte counters, and browser URL. Use `googlemeet status [session-id] --json` for raw JSON, and `googlemeet doctor --oauth` (add `--meeting` or `--create-space`) to verify OAuth refresh without exposing tokens.
 
 If an agent timed out and a Meet tab is already open, inspect it without opening another one:

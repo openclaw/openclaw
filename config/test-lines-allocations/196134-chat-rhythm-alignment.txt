@@ -1,0 +1,4 @@
+# Node-driven browser proof for the chat pane's rhythm contracts (mirrored avatar-column
+# insets in group threads, one box and centre line for every composer action-row control),
+# which had no owning geometry test. Exact net growth for PR #196134.
+149

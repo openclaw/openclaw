@@ -8,6 +8,12 @@ export const localCliBackend: CliJsonlStreamingParserOptions["backend"] = {
   sessionIdFields: ["session_id"],
 };
 
+export function createClaudeBackend(
+  command = "local-cli",
+): CliJsonlStreamingParserOptions["backend"] {
+  return { ...localCliBackend, command, sessionIdFields: ["session_id"] };
+}
+
 export function createPluginParser(overrides: Partial<CliJsonlStreamingParserOptions> = {}) {
   return createCliJsonlStreamingParser({
     backend: { command: "acme", output: "jsonl" },
@@ -113,4 +119,8 @@ export function claudeInputJsonDelta(partialJson: string, index?: number) {
 
 export function claudeTextDelta(text: string, index?: number | string) {
   return indexedEvent("content_block_delta", index, { delta: { type: "text_delta", text } });
+}
+
+export function createGeminiBackend(): CliJsonlStreamingParserOptions["backend"] {
+  return { command: "gemini", output: "jsonl", jsonlDialect: "gemini-stream-json" };
 }

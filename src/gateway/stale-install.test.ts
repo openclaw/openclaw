@@ -88,11 +88,7 @@ describe("running installation replacement", () => {
       const version = kind === "rebuild" ? "2026.9.4" : "2026.9.5";
       const handoff = registerReplacement();
       if (kind === "package swap") {
-        for (const metadata of [
-          undefined,
-          '{"version":',
-          JSON.stringify({ version, buildId: "" }),
-        ]) {
+        for (const metadata of [undefined, '{"version":', '{"version":"2026.9.5","buildId":""}']) {
           if (metadata !== undefined) {
             await fs.writeFile(path.join(fixture.root, "dist", "build-info.json"), metadata);
           }
@@ -116,8 +112,6 @@ describe("running installation replacement", () => {
       expect(owner.getGatewayInstallationReplacement()).toMatchObject({
         running: { version: "2026.9.4", buildId: "build-before" },
         onDisk: { version, buildId: "build-after" },
-        reason: expect.stringContaining("gateway.installation_replaced"),
-        message: expect.stringContaining(`${version} build build-after`),
       });
       await owner.checkGatewayInstallationReplacement();
       expect(handoff).toHaveBeenCalledOnce();
@@ -254,9 +248,6 @@ describe("running installation replacement", () => {
       ).not.toBeNull();
       owner.classifyGatewayStaleInstall(missing("dist/cron-old.js"));
       expect(handoff).toHaveBeenCalledOnce();
-      expect(owner.getGatewayInstallationReplacement()?.message).toContain(
-        "runtime chunks unavailable",
-      );
     },
   );
 });

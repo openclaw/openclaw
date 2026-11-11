@@ -1,20 +1,12 @@
 import { createRoot, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { mockDocumentVisibility as browserVisibility } from "../../test-helpers/mock-cleanup.ts";
 import { useVisiblePoll } from "./visible-poll.ts";
 
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
-
-function browserVisibility(initial: DocumentVisibilityState) {
-  let visibility = initial;
-  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
-  return (next: DocumentVisibilityState) => {
-    visibility = next;
-    document.dispatchEvent(new Event("visibilitychange"));
-  };
-}
 
 describe("Solid visible polling", () => {
   it("follows enabled state without restarting equal updates and stops on disposal", () => {

@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
+import * as processIdentity from "../shared/pid-alive.js";
+import {
+  GATEWAY_OWNER_HEARTBEAT_STALE_MS,
+  readGatewayLockProcessNamespace,
+} from "./gateway-lock-payload.js";
 import { inspectGatewayLockRecovery, recoverGatewayLock } from "./gateway-lock-recovery.js";
 import { resolveGatewayLockPaths } from "./gateway-lock.js";
 import { defaultPayload } from "./gateway-state-owner-record.js";
@@ -13,11 +17,9 @@ afterEach(() => vi.restoreAllMocks());
 
 function fixture() {
   const root = tempDirs.make("gateway-lock-recovery-");
-  const env = {
-    ...process.env,
-    OPENCLAW_STATE_DIR: root,
-    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-  };
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
+  const env = process.env;
   const paths = resolveGatewayLockPaths(env);
   const databasePath = path.join(root, "state", "openclaw.sqlite");
   const localNamespace = readGatewayLockProcessNamespace();
@@ -32,9 +34,9 @@ function fixture() {
       identity: "d14120e1-94fd-498b-92b7-e323f75da593",
     },
   };
-  fs.mkdirSync(path.dirname(paths.ownerLockPath), { recursive: true });
   const lockPaths = [paths.ownerLockPath, paths.stateLockPath, paths.configLockPath];
   for (const pathname of lockPaths) {
+    fs.mkdirSync(path.dirname(pathname), { recursive: true });
     fs.writeFileSync(pathname, JSON.stringify(payload));
   }
   return { env, paths, databasePath, payload, lockPaths };
@@ -51,10 +53,38 @@ describe("explicit Gateway lock recovery", () => {
       before.map((stat) => stat.mtimeNs),
     );
     await expect(
-      recoverGatewayLock({ env, confirmation: inspection.confirmation }),
+      recoverGatewayLock({ confirmation: inspection.confirmation }),
     ).resolves.toMatchObject({ recovered: true, removed: 3 });
     expect(lockPaths.map((pathname) => fs.existsSync(pathname))).toEqual([false, false, false]);
   });
+
+  it.each(["dead", "live", "unknown"] as const)(
+    "handles a %s legacy Windows owner during confirmed recovery",
+    async (status) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const { env, payload, lockPaths } = fixture();
+      vi.spyOn(processIdentity, "isPidAlive").mockReturnValue(status === "live");
+      vi.spyOn(processIdentity, "isPidDefinitelyDead").mockReturnValue(status === "dead");
+      vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(null);
+      for (const pathname of lockPaths) {
+        fs.writeFileSync(
+          pathname,
+          JSON.stringify({ ...payload, pid: 2_147_483_647, processNamespace: undefined }),
+        );
+        const expired = new Date(Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1000);
+        fs.utimesSync(pathname, expired, expired);
+      }
+      const inspection = await inspectGatewayLockRecovery({ env });
+      const recovery = recoverGatewayLock({ confirmation: inspection.confirmation });
+      if (status === "dead") {
+        await expect(recovery).resolves.toMatchObject({ recovered: true, removed: 3 });
+        expect(lockPaths.every((pathname) => !fs.existsSync(pathname))).toBe(true);
+      } else {
+        await expect(recovery).rejects.toThrow("stop it before recovering");
+        expect(lockPaths.every((pathname) => fs.existsSync(pathname))).toBe(true);
+      }
+    },
+  );
 
   it.each(["replacement", "heartbeat", "payload"])(
     "refuses an owner %s after inspection",
@@ -74,9 +104,9 @@ describe("explicit Gateway lock recovery", () => {
         const future = new Date(Date.now() + 60_000);
         fs.utimesSync(paths.ownerLockPath, future, future);
       }
-      await expect(
-        recoverGatewayLock({ env, confirmation: inspection.confirmation }),
-      ).rejects.toThrow("changed since inspection");
+      await expect(recoverGatewayLock({ confirmation: inspection.confirmation })).rejects.toThrow(
+        "changed since inspection",
+      );
       expect(fs.existsSync(paths.ownerLockPath)).toBe(true);
     },
   );
@@ -105,9 +135,9 @@ describe("explicit Gateway lock recovery", () => {
     fs.writeFileSync(paths.ownerLockPath, original);
     fs.utimesSync(paths.ownerLockPath, stamp, stamp);
     ctime += 1_000_000n;
-    await expect(
-      recoverGatewayLock({ env, confirmation: inspection.confirmation }),
-    ).rejects.toThrow("changed since inspection");
+    await expect(recoverGatewayLock({ confirmation: inspection.confirmation })).rejects.toThrow(
+      "changed since inspection",
+    );
     expect(fs.readFileSync(paths.ownerLockPath, "utf8")).toBe(original);
   });
 
@@ -117,9 +147,10 @@ describe("explicit Gateway lock recovery", () => {
       fs.unlinkSync(pathname);
     }
     const inspection = await inspectGatewayLockRecovery({ env });
-    await expect(
-      recoverGatewayLock({ env, confirmation: inspection.confirmation }),
-    ).resolves.toEqual({ recovered: false, removed: 0 });
+    await expect(recoverGatewayLock({ confirmation: inspection.confirmation })).resolves.toEqual({
+      recovered: false,
+      removed: 0,
+    });
     expect(lockPaths.every((pathname) => !fs.existsSync(pathname))).toBe(true);
   });
 
@@ -130,9 +161,9 @@ describe("explicit Gateway lock recovery", () => {
       fs.writeFileSync(pathname, JSON.stringify(payload));
     }
     const inspection = await inspectGatewayLockRecovery({ env });
-    await expect(
-      recoverGatewayLock({ env, confirmation: inspection.confirmation }),
-    ).rejects.toThrow("still live");
+    await expect(recoverGatewayLock({ confirmation: inspection.confirmation })).rejects.toThrow(
+      "still live",
+    );
     expect(lockPaths.every((pathname) => fs.existsSync(pathname))).toBe(true);
   });
 
@@ -165,7 +196,7 @@ describe("explicit Gateway lock recovery", () => {
     db.close();
     const inspection = await inspectGatewayLockRecovery({ env });
     expect(inspection.lease?.owner).toBe("old-gateway");
-    await recoverGatewayLock({ env, confirmation: inspection.confirmation });
+    await recoverGatewayLock({ confirmation: inspection.confirmation });
     const verified = openNodeSqliteDatabase(databasePath, { readOnly: true });
     try {
       expect(verified.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toMatchObject({

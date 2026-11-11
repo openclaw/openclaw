@@ -2,10 +2,11 @@ import { hash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import type { Message } from "../../llm/types.js";
+import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 
 const MAX_HISTORY_DIFF_FIELDS = 8;
 // Persistence-only metadata is absent from provider messages; content is hashed separately.
-const MESSAGE_ENVELOPE_OMITTED_FIELDS = new Set(["content", "__openclaw"]);
+const MESSAGE_ENVELOPE_OMITTED_FIELDS = new Set(["content", "__openclaw", "display"]);
 
 export type PromptHistoryFingerprint = {
   role: string;
@@ -18,12 +19,15 @@ export type PromptHistoryFingerprint = {
 type PromptStringFingerprint = { value: string; digest: string };
 
 const stringFingerprints = new WeakMap<Message, PromptStringFingerprint>();
-type RecordFingerprint = {
-  digest: string;
-  fields: Map<string, string>;
-  primitives: Map<string, unknown>;
-  immutable: boolean;
-};
+type RecordFingerprint =
+  | {
+      digest: string;
+      fields: Map<string, string>;
+      primitives: Record<string, unknown>;
+      immutable: false;
+      message?: { content: Message["content"]; fingerprint: PromptHistoryFingerprint };
+    }
+  | { digest: string; layout: string; packed: string; immutable: true };
 // Primitive revisions avoid rehashing retained text; nested values remain mutable.
 const recordFingerprints = new WeakMap<object, RecordFingerprint>();
 const immutableValueFingerprints = new WeakMap<object, string>();
@@ -60,14 +64,19 @@ function fingerprintRecord(
   }
   const immutable = immutableParent || isOwnedTranscriptPayload(record);
   let fields = previous ? undefined : new Map<string, string>();
-  const primitives = previous?.primitives ?? new Map<string, unknown>();
+  const primitives: Record<string, unknown> | undefined = immutable
+    ? undefined
+    : (previous?.primitives ?? {});
   for (const [key, value] of Object.entries(record)) {
     if (omit?.has(key)) {
       continue;
     }
     const primitive = value === null || typeof value !== "object";
     const digest =
-      primitive && previous?.primitives.has(key) && Object.is(previous.primitives.get(key), value)
+      primitive &&
+      previous &&
+      Object.hasOwn(previous.primitives, key) &&
+      Object.is(previous.primitives[key], value)
         ? previous.fields.get(key)!
         : typeof value === "string"
           ? fingerprintText(value)
@@ -75,28 +84,41 @@ function fingerprintRecord(
     if (!previous || previous.fields.get(key) !== digest) {
       (fields ??= new Map(previous?.fields)).set(key, digest);
     }
-    if (primitive) {
-      primitives.set(key, value);
-    } else {
-      primitives.delete(key);
+    if (primitives) {
+      if (!primitive) {
+        delete primitives[key];
+      } else if (key === "__proto__") {
+        // Revision keys are data, including the legacy prototype setter name.
+        Object.defineProperty(primitives, key, { value, writable: true, configurable: true });
+      } else {
+        primitives[key] = value;
+      }
     }
   }
   for (const key of previous?.fields.keys() ?? []) {
     if (!Object.hasOwn(record, key)) {
       (fields ??= new Map(previous?.fields)).delete(key);
-      primitives.delete(key);
+      if (primitives) {
+        delete primitives[key];
+      }
     }
   }
-  if (!fields && previous) {
-    previous.immutable = immutable;
+  if (!fields && previous && !immutable) {
     return previous;
   }
-  const fingerprint = {
-    digest: hash("sha256", stableStringify(Object.fromEntries(fields!)), "latin1"),
-    fields: fields!,
-    primitives,
-    immutable,
-  };
+  const digest = fields
+    ? hash("sha256", stableStringify(Object.fromEntries(fields)), "latin1")
+    : previous!.digest;
+  fields ??= previous!.fields;
+  // Sealed records never check primitive revisions again. Retain only diagnostic bytes.
+  const fingerprint: RecordFingerprint = immutable
+    ? {
+        digest,
+        layout: JSON.stringify(Array.from(fields.keys())),
+        packed: Array.from(fields.values()).join(""),
+        immutable: true,
+      }
+    : { digest, fields, primitives: primitives!, immutable: false };
   recordFingerprints.set(record, fingerprint);
   return fingerprint;
 }
@@ -109,16 +131,34 @@ export function fingerprintMessage(
   if (cached) {
     if (
       previous &&
-      (previous === cached ||
-        (previous.identityLength === cached.identityLength &&
-          previous.packed.startsWith(cached.packed.slice(0, cached.identityLength))))
+      previous !== cached &&
+      previous.identityLength === cached.identityLength &&
+      previous.packed.startsWith(cached.packed.slice(0, cached.identityLength))
     ) {
       messageFingerprints.set(message, previous);
       return previous;
     }
     return cached;
   }
+  const immutableMessage = isOwnedTranscriptPayload(message) || isDeeplyFrozenPlainData(message);
   const { content } = message;
+  const envelope = fingerprintRecord(message, MESSAGE_ENVELOPE_OMITTED_FIELDS);
+  // The record owner replaces this revision when any envelope field changes.
+  // Only immutable content may reuse it; mutable SDK content still needs inspection.
+  const retained = !envelope.immutable && envelope.message;
+  if (
+    !immutableMessage &&
+    retained &&
+    retained.content === content &&
+    (!previous || previous === retained.fingerprint)
+  ) {
+    return retained.fingerprint;
+  }
+  const immutableContent =
+    typeof content === "string" ||
+    immutableMessage ||
+    isOwnedTranscriptPayload(content) ||
+    isDeeplyFrozenPlainData(content);
   let stringBlock: PromptHistoryFingerprint["stringBlock"];
   let blocks: string[];
   let fingerprints: RecordFingerprint[] = [];
@@ -135,27 +175,45 @@ export function fingerprintMessage(
   } else {
     stringFingerprints.delete(message);
     // Append normalization owns the content root and freezes every descendant.
-    const immutableContent = isOwnedTranscriptPayload(content);
     fingerprints = content.map((block) => fingerprintRecord(block, undefined, immutableContent));
     blocks = fingerprints.map(({ digest }) => digest);
   }
-  const envelope = fingerprintRecord(message, MESSAGE_ENVELOPE_OMITTED_FIELDS);
   const identity = [typeof content === "string" ? "t" : "b", envelope.digest, ...blocks].join("");
+  let fingerprint: PromptHistoryFingerprint;
   if (previous?.identityLength === identity.length && previous.packed.startsWith(identity)) {
-    return previous;
+    fingerprint = previous;
+  } else {
+    const records = [envelope, ...fingerprints.slice(0, MAX_HISTORY_DIFF_FIELDS)];
+    fingerprint = {
+      role: message.role,
+      identityLength: identity.length,
+      // Flat Latin-1 strings retain full SHA-256 bytes without per-hash objects.
+      // The identity prefix precedes fixed-width, domain-tagged field hashes.
+      // Join flattens; template concatenation would retain cons-string cells per message.
+      layout: [
+        "[",
+        records
+          .map((record) =>
+            record.immutable ? record.layout : JSON.stringify(Array.from(record.fields.keys())),
+          )
+          .join(","),
+        "]",
+      ].join(""),
+      packed: [
+        identity,
+        ...records.map((record) =>
+          record.immutable ? record.packed : Array.from(record.fields.values()).join(""),
+        ),
+      ].join(""),
+      stringBlock,
+    };
   }
-  const records = [envelope, ...fingerprints.slice(0, MAX_HISTORY_DIFF_FIELDS)];
-  const fingerprint: PromptHistoryFingerprint = {
-    role: message.role,
-    identityLength: identity.length,
-    // Flat Latin-1 strings retain full SHA-256 bytes without per-hash objects.
-    // The identity prefix precedes fixed-width, domain-tagged field hashes.
-    layout: JSON.stringify(records.map(({ fields }) => Array.from(fields.keys()))),
-    packed: [identity, ...records.flatMap(({ fields }) => Array.from(fields.values()))].join(""),
-    stringBlock,
-  };
-  if (isOwnedTranscriptPayload(message)) {
+  if (immutableMessage) {
     messageFingerprints.set(message, fingerprint);
+    // Content records may still be reused by other, mutable envelopes.
+    recordFingerprints.delete(message);
+  } else if (!envelope.immutable) {
+    envelope.message = immutableContent ? { content, fingerprint } : undefined;
   }
   return fingerprint;
 }

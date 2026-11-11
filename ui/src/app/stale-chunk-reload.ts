@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Stale hashed-chunk recovery for lazy routes and the entry stylesheet.
 //
 // A gateway update replaces `dist/control-ui` in place, so a document loaded before the
@@ -15,6 +16,7 @@ import { listen } from "../lib/reactive/listener.ts";
 import { getSafeSessionStorage } from "../local-storage.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
+import { trackForegroundActivity } from "./foreground-activity.ts";
 
 const RELOAD_GUARD_STORAGE_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
 const RENDER_RELOAD_STORAGE_KEY = "openclaw.controlUi.renderErrorReloadAttempted";
@@ -31,9 +33,11 @@ const MODULE_IMPORT_ERROR_PATTERN =
 
 type StaleChunkReloadDeps = {
   buildId?: string;
+  reloadOnce?: boolean;
   storage?: Pick<Storage, "getItem" | "setItem"> | null;
   reload?: () => void;
   canReload?: () => boolean;
+  checkServingBuild?: boolean;
 };
 
 type RecoveryState = {
@@ -41,57 +45,59 @@ type RecoveryState = {
   attemptedAt: number;
   pending?: Promise<boolean>;
   controller?: AbortController;
+  checkServingBuild?: boolean;
 };
 
 const recoveryByStorage = new WeakMap<object, RecoveryState>();
 const unavailableStorage = {};
-let routeReachability: Promise<boolean> | undefined;
-const routeImportErrors = new WeakSet<Error>();
+let importReachability: Promise<boolean> | undefined;
 // A shared probe can release automatic and manual recovery in the same microtask.
 // Admit one navigation before either path can replace the guard or reload.
-let inFlightDocumentProbe: Promise<boolean> | null = null;
+let inFlightDocumentProbe: Promise<{ sameBuild: boolean } | null> | null = null;
 
 // These browser errors identify failed assets, not whether the deployed build changed.
 export function isStaleChunkImportError(error: unknown): error is Error {
   return error instanceof Error && MODULE_IMPORT_ERROR_PATTERN.test(error.message);
 }
 
-/** Keep a cold route pending through an outage, then retry its actual import. */
+function waitForImportReachability(): Promise<boolean> {
+  return (importReachability ??= waitForReachableControlUiDocument(
+    { timeoutMs: Infinity },
+    () => true,
+  ).finally(() => {
+    importReachability = undefined;
+  }));
+}
+
+/** Keep an import pending through an outage, then retry before considering a stale build. */
 export async function retryControlUiImport<T>(
   load: () => T | Promise<T>,
   signal?: AbortSignal,
 ): Promise<T> {
   try {
-    return await load();
+    return await trackForegroundActivity(Promise.resolve(load()));
   } catch (error) {
-    if (!isStaleChunkImportError(error)) {
-      throw error;
-    }
-    routeImportErrors.add(error);
-    routeReachability ??= waitForReachableControlUiDocument(
-      { timeoutMs: Infinity },
-      () => true,
-    ).finally(() => {
-      routeReachability = undefined;
-    });
-    await routeReachability;
-    signal?.throwIfAborted();
-    // Vite marks CSS preloads seen before they finish; retrying that import can
-    // mount an unstyled page. Its error surface must use guarded document recovery.
-    if (/unable to preload css/i.test(error.message)) {
-      throw error;
-    }
-    // Chromium can retain the first failed import in its module map. A persistent
-    // failure now reaches the route error surface and its guarded reload owner.
-    try {
-      return await load();
-    } catch (retryError) {
-      if (isStaleChunkImportError(retryError)) {
-        routeImportErrors.add(retryError);
-      }
-      throw retryError;
-    }
+    return retryFailedControlUiImport(error, load, signal);
   }
+}
+
+/** Reuse a failed attempt when the import started before the retry owner was loaded. */
+export async function retryFailedControlUiImport<T>(
+  error: unknown,
+  load: () => T | Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!isStaleChunkImportError(error)) {
+    throw error;
+  }
+  await waitForImportReachability();
+  signal?.throwIfAborted();
+  // Vite marks CSS preloads seen before they finish; retrying can mount an unstyled page.
+  if (/unable to preload css/i.test(error.message)) {
+    throw error;
+  }
+  // Persistent module-map failures still reach the caller's guarded error surface.
+  return trackForegroundActivity(Promise.resolve(load()));
 }
 
 export function reloadControlUiDocument(url = new URL(window.location.href)): void {
@@ -100,41 +106,51 @@ export function reloadControlUiDocument(url = new URL(window.location.href)): vo
   window.location.replace(url.href);
 }
 
-function probeControlUiDocument(): Promise<boolean> {
+function controlUiDocumentUrl(): string {
+  // Probe the serving document without session query data.
+  const url = new URL(window.location.href);
+  const [routeBasePath, resourceBasePath] = resolveControlUiPaths(url.pathname);
+  // Vite serves its own document while Gateway resources use the development proxy.
+  const documentBasePath = configuredUiDevGateway() ? routeBasePath : resourceBasePath;
+  url.pathname = `${documentBasePath}/index.html`;
+  url.search = "";
+  url.hash = "";
+  return url.href;
+}
+
+function probeControlUiDocument(): Promise<{ sameBuild: boolean } | null> {
   if (inFlightDocumentProbe) {
     return inFlightDocumentProbe;
   }
-  const probe = (async () => {
+  inFlightDocumentProbe = (async () => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), DOCUMENT_PROBE_TIMEOUT_MS);
     try {
-      // Session links reject HEAD; probe the serving document without session query data.
-      const url = new URL(window.location.href);
-      const [routeBasePath, resourceBasePath] = resolveControlUiPaths(url.pathname);
-      // Vite serves its own document while Gateway resources use the development proxy.
-      const documentBasePath = configuredUiDevGateway() ? routeBasePath : resourceBasePath;
-      url.pathname = `${documentBasePath}/index.html`;
-      url.search = "";
-      url.hash = "";
-      const response = await fetch(url.href, {
-        method: "HEAD",
+      const response = await fetch(controlUiDocumentUrl(), {
         cache: "no-store",
+        headers: { "X-OpenClaw-Reachability-Probe": "1" },
         signal: controller.signal,
       });
-      return response.ok;
+      if (!response.ok) {
+        return null;
+      }
+      // Public-asset/cache stamps can survive updates; use the full build identity.
+      const encoded = /globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(.*?);<\/script>/u.exec(
+        await response.text(),
+      )?.[1];
+      const buildInfo: unknown = encoded ? JSON.parse(encoded) : null;
+      return {
+        sameBuild: isRecord(buildInfo) && buildInfo.buildId === CONTROL_UI_BUILD_INFO.buildId,
+      };
     } catch {
-      return false;
+      return null;
     } finally {
       clearTimeout(timeout);
     }
-  })();
-  const settledProbe = probe.finally(() => {
-    if (inFlightDocumentProbe === settledProbe) {
-      inFlightDocumentProbe = null;
-    }
+  })().finally(() => {
+    inFlightDocumentProbe = null;
   });
-  inFlightDocumentProbe = settledProbe;
-  return settledProbe;
+  return inFlightDocumentProbe;
 }
 
 function persistGuardBuildId(
@@ -171,6 +187,15 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   let guardDelayMs = 0;
   try {
     const guard = JSON.parse(storage?.getItem(RELOAD_GUARD_STORAGE_KEY) ?? "null");
+    // Rejected handshakes must settle on visible recovery guidance, not a timer
+    // that keeps replacing an incompatible bundle. Also bound alternating builds.
+    if (
+      deps.reloadOnce &&
+      (guard?.buildId === buildId ||
+        (typeof guard?.at === "number" && Date.now() - guard.at < 60_000))
+    ) {
+      return false;
+    }
     if (guard?.buildId === buildId && typeof guard.at === "number") {
       guardDelayMs = Math.max(0, guard.at + RELOAD_GUARD_WINDOW_MS - Date.now());
     }
@@ -189,23 +214,34 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   if (deps.buildId === undefined && recovery?.pending && recovery.buildId !== buildId) {
     return false;
   }
+  const supersedesClassification = recovery?.checkServingBuild && !deps.checkServingBuild;
   if (
     recovery?.buildId === buildId &&
     !recovery.pending &&
+    !supersedesClassification &&
     now - recovery.attemptedAt < ATTEMPT_COOLDOWN_MS
   ) {
     return false;
   }
-  if (recovery?.buildId !== buildId || !recovery.pending) {
+  // A surface's explicit reload supersedes the global listener's build classification.
+  if (recovery?.buildId !== buildId || !recovery.pending || supersedesClassification) {
     recovery?.controller?.abort();
     const controller = new AbortController();
-    const target: RecoveryState = { buildId, attemptedAt: now, controller };
+    const target: RecoveryState = {
+      buildId,
+      attemptedAt: now,
+      controller,
+      checkServingBuild: deps.checkServingBuild,
+    };
     recoveryByStorage.set(storageIdentity, target);
     // Reachability is shared by build, not owned by the first caller's connection.
     // Each caller checks its current authority at the reload below.
     const wait = () =>
       waitForReachableControlUiDocument(
-        { timeoutMs: deps.buildId === undefined ? Infinity : undefined },
+        {
+          timeoutMs: deps.buildId === undefined ? Infinity : undefined,
+          checkServingBuild: deps.checkServingBuild,
+        },
         () =>
           recoveryByStorage.get(storageIdentity) === target &&
           target.buildId === buildId &&
@@ -297,12 +333,12 @@ async function waitForReachableControlUiDocument(
   isCurrent: () => boolean,
   signal?: AbortSignal,
 ): Promise<boolean> {
-  const deadline = Date.now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
+  const deadline = performance.now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
   for (let attempt = 0; ; attempt += 1) {
     if (signal?.aborted || !isCurrent()) {
       return false;
     }
-    const remaining = deadline - Date.now();
+    const remaining = deadline - performance.now();
     if (attempt > 0 && remaining <= 0) {
       return false;
     }
@@ -310,15 +346,15 @@ async function waitForReachableControlUiDocument(
     const reachable = await raceWithTimeout(
       probeControlUiDocument,
       remaining > 0 ? Math.min(remaining, DOCUMENT_PROBE_TIMEOUT_MS) : DOCUMENT_PROBE_TIMEOUT_MS,
-      () => false,
+      () => null,
     );
     if (signal?.aborted || !isCurrent()) {
       return false;
     }
     if (reachable) {
-      return true;
+      return !deps.checkServingBuild || !reachable.sameBuild;
     }
-    const remainingWait = deadline - Date.now();
+    const remainingWait = deadline - performance.now();
     if (remainingWait <= 0) {
       return false;
     }
@@ -406,47 +442,32 @@ export async function retryStaleChunkReloadWhenReachable(
   return true;
 }
 
-/**
- * Caught lazy-surface failures still need recovery. Give route imports the
- * rejection microtasks to claim their errors before starting global recovery.
- */
+/** Classify caught failures by the serving build, including exhausted background retries. */
 export function installStaleChunkReloadListener(): () => void {
-  const pending = new Set<ReturnType<typeof setTimeout>>();
-  const onPreloadError = (event: Event & { payload?: unknown }) => {
-    const payload = event.payload;
-    if (!isStaleChunkImportError(payload)) {
-      return;
+  let active = true;
+  const stop = listen(window, "vite:preloadError", (event: Event & { payload?: unknown }) => {
+    if (isStaleChunkImportError(event.payload)) {
+      // The existing target owns classification too, so dismissals retire the whole recovery.
+      void scheduleStaleChunkReload({ checkServingBuild: true, canReload: () => active });
     }
-    const timer = setTimeout(() => {
-      pending.delete(timer);
-      if (!routeImportErrors.has(payload)) {
-        void scheduleStaleChunkReload();
-      }
-    }, 0);
-    pending.add(timer);
-  };
-  const stopPreloadError = listen(window, "vite:preloadError", onPreloadError);
+  });
   return () => {
-    stopPreloadError();
-    for (const timer of pending) {
-      clearTimeout(timer);
-    }
+    active = false;
+    stop();
   };
 }
 
 export function installMissingStylesheetRecovery(): () => void {
-  let detected = false;
-  let uninstalled = false;
   let banner: HTMLDivElement | null = null;
-
   let stopLoad: (() => void) | undefined;
 
-  const detectMissingStylesheet = async () => {
-    if (detected || uninstalled) {
+  function checkStylesheet() {
+    if (
+      getComputedStyle(document.documentElement).getPropertyValue("--openclaw-css-ok").trim() ===
+      "1"
+    ) {
       return;
     }
-    detected = true;
-    stopLoad?.();
     banner = document.createElement("div");
     banner.role = "alert";
     // All styles are inline because the entry stylesheet is broken by definition.
@@ -457,18 +478,7 @@ export function installMissingStylesheetRecovery(): () => void {
     listen(reloadButton, "click", () => void retryStaleChunkReloadWhenReachable({ timeoutMs: 0 }));
     banner.append(t("lazyView.stylesFailed"), " ", reloadButton);
     document.body.append(banner);
-    await scheduleStaleChunkReload();
-  };
-
-  function checkStylesheet() {
-    if (
-      getComputedStyle(document.documentElement).getPropertyValue("--openclaw-css-ok").trim() ===
-      "1"
-    ) {
-      stopLoad?.();
-      return;
-    }
-    void detectMissingStylesheet();
+    void scheduleStaleChunkReload();
   }
 
   // The entry stylesheet owns this sentinel. Individual resource errors include
@@ -480,7 +490,6 @@ export function installMissingStylesheetRecovery(): () => void {
   }
 
   return () => {
-    uninstalled = true;
     stopLoad?.();
     banner?.remove();
     banner = null;

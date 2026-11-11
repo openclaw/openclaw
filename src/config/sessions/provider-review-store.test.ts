@@ -1,5 +1,5 @@
-import type { DatabaseSync, StatementSync } from "node:sqlite";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -76,13 +76,6 @@ it("reopens an existing session and preserves its provider pause without a schem
   await withStore({ entry: existingEntry }, async (database, selectedTarget) => {
     const schema = readExistingAgentSchemaMeta(database.db);
     expect(schema?.schemaVersion).toEqual(expect.any(Number));
-    await closeOpenClawAgentDatabaseByPathAsync(database.path, target.agentId);
-    expect(database.db.isOpen).toBe(false);
-
-    const existing = await readReview(selectedTarget, assertAuthority);
-    expect(existing).toMatchObject(existingEntry);
-    expect([existing?.providerReview, pauseError(existing)]).toEqual([undefined, undefined]);
-
     const retainedReview: SessionProviderReview = {
       ...review,
       api: "openai-chatgpt-responses",
@@ -98,7 +91,6 @@ it("reopens an existing session and preserves its provider pause without a schem
     await closeOpenClawAgentDatabaseByPathAsync(database.path, target.agentId);
 
     const reopened = openDatabase({ agentId: target.agentId, path: database.path });
-    expect(reopened.db.isOpen).toBe(true);
     expect(readExistingAgentSchemaMeta(reopened.db)).toEqual(schema);
     const persisted = await readReview(selectedTarget, assertAuthority);
     expect(persisted).toMatchObject(existingEntry);
@@ -122,12 +114,7 @@ it.each(["default", "shared"] as const)(
         membership: new Set(),
       });
       const entry = () => sharing.readCurrent()?.entry;
-      const statement: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
-      const db: DatabaseSync = Object.getPrototypeOf(database.db);
-      const methods = [
-        ...(["all", "get", "iterate", "run"] as const).map((method) => vi.spyOn(statement, method)),
-        vi.spyOn(db, "exec"),
-      ];
+      const sql = observeHostDataSql();
       try {
         expect(await readReview(selectedTarget, assertAuthority)).toMatchObject(original);
         expect(await compare(selectedTarget, review)).toMatchObject({
@@ -160,10 +147,11 @@ it.each(["default", "shared"] as const)(
         expect((await compare(selectedTarget, undefined, newer)).providerReview).toBeUndefined();
         expect(entry()).toMatchObject(original);
         expect([entry()?.providerReview, pauseError(entry())]).toEqual([undefined, undefined]);
-        methods.forEach((method) => expect(method).not.toHaveBeenCalled());
+        // Preparation itself is not execution; retain the original no-host-execution contract.
+        sql.calls.slice(1).forEach((method) => expect(method).not.toHaveBeenCalled());
       } finally {
         sharing.release();
-        methods.forEach((method) => method.mockRestore());
+        sql.restore();
       }
     });
   },

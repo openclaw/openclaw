@@ -3,6 +3,7 @@ import type { SessionEntry } from "./types.js";
 /** Identity is parser-validated; optional owner values retain their exact stored semantics. */
 export type SessionEntryCurrentFacts = {
   sessionId: string;
+  clientCapabilities?: string[];
   createdVia?: unknown;
   createdActor?: SessionEntry["createdActor"];
   incognito?: SessionEntry["incognito"];
@@ -11,6 +12,7 @@ export type SessionEntryCurrentFacts = {
   agentHarnessId?: SessionEntry["agentHarnessId"];
   agentRuntimeOverride?: SessionEntry["agentRuntimeOverride"];
   initializationPending?: SessionEntry["initializationPending"];
+  templateInitialization?: SessionEntry["templateInitialization"];
   execHost?: SessionEntry["execHost"];
   execNode?: SessionEntry["execNode"];
   deviceFolder?: SessionEntry["deviceFolder"];
@@ -28,8 +30,10 @@ export type SessionEntryCurrentFacts = {
   previousSessionId?: unknown;
   archivedAt?: unknown;
   repositoryWorkspaceId?: unknown;
+  goal?: unknown;
   lifecycleRevision?: unknown;
   lifecycleRunId?: unknown;
+  lastRunId?: unknown;
   activeWriterRunId?: unknown;
   spawnedBy?: unknown;
   spawnDepth?: unknown;
@@ -43,10 +47,6 @@ export type SessionEntryCurrentFacts = {
   delegatedToolPolicy?: unknown;
   skillLibrarySelections?: unknown;
   executionPolicy?: unknown;
-  subagentRecovery?: {
-    lastRunId?: unknown;
-    sessionLifecycleRunId?: unknown;
-  };
 };
 
 export type SessionEntryCurrentSource = CapturedSessionEntryReadSource &

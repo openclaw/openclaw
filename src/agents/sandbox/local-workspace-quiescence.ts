@@ -1,4 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import {
   bindDockerPersistentTarget,
@@ -21,6 +23,32 @@ import {
   assertSandboxBrowserRegistryEntryCurrent,
 } from "./registry.js";
 
+const log = createSubsystemLogger("sandbox/quiescence");
+const pauseCounts = {
+  checkpoint: 0,
+  preparation: 0,
+  reconcile: 0,
+  publication: 0,
+  retirement: 0,
+  restore: 0,
+};
+export type LocalWorkspacePauseReason = keyof typeof pauseCounts;
+export type LocalWorkspacePausePhase =
+  | "pause"
+  | "operation"
+  | "recovery"
+  | "capture"
+  | "scan"
+  | "staging"
+  | "materialization"
+  | "preflight"
+  | "patch"
+  | "apply"
+  | "acceptance"
+  | "verification"
+  | "cleanup"
+  | "resume";
+
 /** Registered runtimes and retained stream children can write the exact private mount. */
 export async function readLocalWorkspaceRuntimes(
   workspaceDir: string,
@@ -33,27 +61,23 @@ export async function readLocalWorkspaceRuntimes(
     assertCurrent: custody.assertCurrent,
   };
   const [containers, browsers, streams] = await Promise.all([
-    readRegistry(database),
-    readBrowserRegistry(database),
+    readRegistry({ ...database, workspaceDir }),
+    readBrowserRegistry({ ...database, workspaceDir }),
     custody.list(),
   ]);
   return [
-    ...containers.entries
-      .filter((entry) => entry.workspaceDir === workspaceDir)
-      .map((entry) => ({
-        kind: "container" as const,
-        entry,
-        database,
-        assertCurrent: () => assertSandboxRegistryRetirementCurrent("container", entry, database),
-      })),
-    ...browsers.entries
-      .filter((entry) => entry.workspaceDir === workspaceDir)
-      .map((entry) => ({
-        kind: "browser" as const,
-        entry,
-        database,
-        assertCurrent: () => assertSandboxRegistryRetirementCurrent("browser", entry, database),
-      })),
+    ...containers.entries.map((entry) => ({
+      kind: "container" as const,
+      entry,
+      database,
+      assertCurrent: () => assertSandboxRegistryRetirementCurrent("container", entry, database),
+    })),
+    ...browsers.entries.map((entry) => ({
+      kind: "browser" as const,
+      entry,
+      database,
+      assertCurrent: () => assertSandboxRegistryRetirementCurrent("browser", entry, database),
+    })),
     ...streams.flatMap((record) => {
       const receipt = record.receipt;
       // Preparation and START share the projection lease. Without a published
@@ -78,18 +102,20 @@ export async function readLocalWorkspaceRuntimes(
   ];
 }
 
-/** Inspect existing allocation custody; image reads never provision a runtime. */
-export async function prepareLocalWorkspaceImageRead(params: {
+/** Inspect existing allocation custody; file reads never provision a runtime. */
+export async function prepareLocalWorkspaceFileRead(params: {
   workspaceDir: string;
+  /** Read-only /agent backing can differ from the allocation's private workspace. */
+  runtimeWorkspaceDir?: string;
   containerRoot: string;
   targets: readonly string[];
   assertCurrent: () => void;
 }) {
-  // Stream children are writers to quiesce, not session image namespace authorities.
+  // Stream children are writers to quiesce, not session file namespace authorities.
   // A retained child cannot replace the registered parent after its runtime retires.
-  const runtimes = (await readLocalWorkspaceRuntimes(params.workspaceDir)).filter(
-    (runtime) => runtime.kind !== "persistent",
-  );
+  const runtimes = (
+    await readLocalWorkspaceRuntimes(params.runtimeWorkspaceDir ?? params.workspaceDir)
+  ).filter((runtime) => runtime.kind !== "persistent");
   const assertCurrent = () => {
     params.assertCurrent();
     for (const runtime of runtimes) {
@@ -102,7 +128,7 @@ export async function prepareLocalWorkspaceImageRead(params: {
   };
   assertCurrent();
   if (!runtimes.length) {
-    throw new Error("Sandbox image backing is unavailable");
+    throw new Error("Sandbox file backing is unavailable");
   }
   const { sandboxContainerShowsWorkspacePaths } = await import("./mount-plan.js");
   for (const runtime of runtimes) {
@@ -117,7 +143,7 @@ export async function prepareLocalWorkspaceImageRead(params: {
         assertCurrent,
       }))
     ) {
-      throw new Error("Sandbox image backing is unavailable");
+      throw new Error("Sandbox file backing is unavailable");
     }
   }
   assertCurrent();
@@ -187,11 +213,15 @@ export function parseLocalWorkspacePausedRuntimes(
 /** Caller holds the projection lease through pause, reconciliation, and resume. */
 export async function quiesceLocalWorkspace(params: {
   workspaceDir: string;
+  reason?: LocalWorkspacePauseReason;
   env?: NodeJS.ProcessEnv;
   retained: LocalWorkspacePausedRuntime[];
   persist: (runtimes: LocalWorkspacePausedRuntime[]) => void | Promise<void>;
   assertCurrent: () => void;
 }) {
+  using phases = observeDiagnosticsTimelinePhases(
+    "attempt.setup.sandbox.workspace_selection.quiesce.registry",
+  );
   const selected = (await readLocalWorkspaceRuntimes(params.workspaceDir, { env: params.env })).map(
     (runtime) => ({
       runtime,
@@ -205,9 +235,20 @@ export async function quiesceLocalWorkspace(params: {
   );
   params.assertCurrent();
   let paused = [...params.retained];
+  let retired = false;
+  const phaseObservers = new Set<(phase: LocalWorkspacePausePhase) => void>();
+  const markPhase = (phase: LocalWorkspacePausePhase) => {
+    for (const observe of phaseObservers) {
+      observe(phase);
+    }
+  };
   const releases: Array<() => Promise<void>> = [];
   const retirements: Array<() => Promise<void>> = [];
   for (const { runtime, bridges } of selected) {
+    // Stopped custody proves removal of this exact child, but still blocks retirement.
+    if (runtime.kind === "persistent" && runtime.record.phase === "stopped") {
+      continue;
+    }
     const { engine, backendTarget, containerName, expectedId } =
       localWorkspaceRuntimeEngine(runtime);
     // Stopped allocations remain owned resources, but were never live writers.
@@ -228,9 +269,12 @@ export async function quiesceLocalWorkspace(params: {
         });
       });
     };
+    phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.engine_target");
     await validateSandboxContainerEngineTarget(engine, backendTarget);
     params.assertCurrent();
+    phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.authority");
     await runtime.assertCurrent();
+    phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.inspect");
     const inspect = await execContainer(
       engine,
       [
@@ -244,6 +288,7 @@ export async function quiesceLocalWorkspace(params: {
     params.assertCurrent();
     if (inspect.code !== 0) {
       if (/no such (?:container|object)|does not exist/iu.test(inspect.stderr)) {
+        phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.authority");
         await runtime.assertCurrent();
         captureRetirement(null);
         continue;
@@ -260,6 +305,7 @@ export async function quiesceLocalWorkspace(params: {
     ) {
       throw new Error("Invalid local workspace runtime inspection");
     }
+    phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.authority");
     await runtime.assertCurrent();
     captureRetirement(id);
     // Podman reports a paused container as Running=false; its exact retained
@@ -277,33 +323,63 @@ export async function quiesceLocalWorkspace(params: {
     }
     if (!retained) {
       paused.push({ name: containerName, id });
+      phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.persist");
       await params.persist(paused);
     }
+    const reason = params.reason ?? "reconcile";
+    let startedAt = performance.now();
+    let phase: LocalWorkspacePausePhase = "pause";
+    let phaseStartedAt = startedAt;
+    const durations = new Map<LocalWorkspacePausePhase, number>();
+    const observePhase = (next: LocalWorkspacePausePhase) => {
+      const now = performance.now();
+      durations.set(phase, (durations.get(phase) ?? 0) + now - phaseStartedAt);
+      phase = next;
+      phaseStartedAt = now;
+    };
     if (isPaused !== "true") {
       // A retained receipt may outlive an unpause. Re-fence the live writer
       // before reconciliation rather than trusting stale pause metadata.
       params.assertCurrent();
+      phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.authority");
       await runtime.assertCurrent();
+      phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.pause");
+      phaseStartedAt = startedAt = performance.now();
       await execContainer(engine, ["pause", id], { signal: AbortSignal.timeout(30_000) });
+      log.info(`Local workspace pause: reason=${reason} count=${++pauseCounts[reason]}`, {
+        engine: engine.id,
+        runtime: runtime.kind,
+      });
     }
+    phaseObservers.add(observePhase);
     releases.push(async () => {
-      await validateSandboxContainerEngineTarget(engine, backendTarget);
+      using resumePhases = observeDiagnosticsTimelinePhases(
+        "attempt.setup.sandbox.workspace_selection.resume.engine_target",
+      );
+      if (engine.id === "docker") {
+        await validateSandboxContainerEngineTarget(engine, backendTarget);
+      }
       params.assertCurrent();
       // Archive may have removed this exact generation while settlement held it.
       // A missing or already-running runtime needs receipt cleanup, not unpause.
+      resumePhases.mark("attempt.setup.sandbox.workspace_selection.resume.inspect");
       const observed = await execContainer(engine, ["inspect", "-f", "{{.State.Paused}}", id], {
         allowFailure: true,
         signal: AbortSignal.timeout(30_000),
       });
       params.assertCurrent();
+      let outcome = "already-running";
       if (observed.code !== 0) {
         if (!/no such (?:container|object)|does not exist/iu.test(observed.stderr)) {
           throw new Error(
             "Local workspace runtime resume inspection failed; exact paused owner retained",
           );
         }
+        outcome = "removed";
       } else if (observed.stdout.trim() === "true") {
+        resumePhases.mark("attempt.setup.sandbox.workspace_selection.resume.authority");
         await runtime.assertCurrent();
+        resumePhases.mark("attempt.setup.sandbox.workspace_selection.resume.unpause");
         const result = await execContainer(engine, ["unpause", id], {
           allowFailure: true,
           signal: AbortSignal.timeout(30_000),
@@ -314,15 +390,33 @@ export async function quiesceLocalWorkspace(params: {
         ) {
           throw new Error("Local workspace runtime resume failed; exact paused owner retained");
         }
+        outcome = result.code === 0 ? "resumed" : "removed";
       } else if (observed.stdout.trim() !== "false") {
         throw new Error("Invalid local workspace runtime resume inspection");
       }
+      if (phaseObservers.delete(observePhase)) {
+        observePhase("resume");
+        const [dominantPhase, dominantPhaseMs] = [...durations].reduce((longest, measured) =>
+          measured[1] > longest[1] ? measured : longest,
+        );
+        // Recovered receipts have no timestamp; never present this owner's observation as the full pause.
+        log.info(
+          `Local workspace unpause: reason=${reason} durationMs=${Math.round(performance.now() - startedAt)} dominantPhase=${dominantPhase} dominantPhaseMs=${Math.round(dominantPhaseMs)} durationScope=${isPaused === "true" ? "observed" : "owner"} outcome=${outcome}`,
+          { engine: engine.id, runtime: runtime.kind },
+        );
+      }
       params.assertCurrent();
       paused = paused.filter((held) => held.name !== containerName || held.id !== id);
+      resumePhases.mark("attempt.setup.sandbox.workspace_selection.resume.persist");
       await params.persist(paused);
     });
   }
+  markPhase("operation");
   return {
+    markPhase,
+    get retired() {
+      return retired;
+    },
     retire: async () => {
       params.assertCurrent();
       // Retirement settles persistent writers before acquiring this projection
@@ -337,14 +431,27 @@ export async function quiesceLocalWorkspace(params: {
         await retire();
       }
       params.assertCurrent();
+      // Finish receipt cleanup before the caller removes the workspace binding.
+      if (paused.length) {
+        await params.persist([]);
+        paused = [];
+      }
+      retired = true;
     },
     resume: async () => {
+      if (retired || !paused.length) {
+        return;
+      }
+      markPhase("resume");
       params.assertCurrent();
       for (const release of releases.toReversed()) {
         await release();
       }
       params.assertCurrent();
-      await params.persist([]);
+      if (paused.length) {
+        await params.persist([]);
+        paused = [];
+      }
     },
   };
 }

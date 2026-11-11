@@ -2,7 +2,7 @@ import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime"
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CoreConfig } from "../../types.js";
-import { formatMatrixMessageText, resolveMatrixMessageAttachment } from "../media-text.js";
+import { formatMatrixMessageText } from "../media-text.js";
 import { formatPollAsText, isPollStartType, parsePollStart } from "../poll-types.js";
 import { RelationType } from "../send/types.js";
 import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
@@ -39,42 +39,6 @@ export function hasBundledMatrixReplacementRelation(event: MatrixRawEvent) {
     return false;
   }
   return relations[RelationType.Replace] !== undefined;
-}
-
-export function resolveMatrixInboundBodyText(params: {
-  rawBody: string;
-  filename?: string;
-  mediaPlaceholder?: string;
-  msgtype?: string;
-  hadMediaUrl: boolean;
-  mediaDownloadFailed: boolean;
-  mediaSizeLimitExceeded?: boolean;
-}): string {
-  if (params.mediaPlaceholder) {
-    if (params.filename?.trim()) {
-      const attachment = resolveMatrixMessageAttachment({
-        body: params.rawBody,
-        filename: params.filename,
-        msgtype: params.msgtype,
-      });
-      if (attachment && !attachment.caption) {
-        return params.mediaPlaceholder;
-      }
-    }
-    return params.rawBody || params.mediaPlaceholder;
-  }
-  if (!params.mediaDownloadFailed || !params.hadMediaUrl) {
-    return params.rawBody;
-  }
-  return (
-    formatMatrixMessageText({
-      body: params.rawBody,
-      filename: params.filename,
-      msgtype: params.msgtype,
-      tooLarge: params.mediaSizeLimitExceeded,
-      unavailable: true,
-    }) ?? ""
-  );
 }
 
 export function markTrackedRoomIfFirst(set: Set<string>, roomId: string): boolean {

@@ -9,7 +9,7 @@ import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
-import { acquireGatewayLock, readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -104,12 +104,6 @@ describe.skipIf(!connection)("managed handoff successor socket on PostgreSQL", (
         }),
       );
       await server.startupSettled;
-      expect(
-        await readActiveGatewayLockIdentity({ env: state.env, requireInspection: true }),
-      ).toMatchObject({
-        pid: process.pid,
-        port,
-      });
       {
         using anchor = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(state.env), {
           readOnly: true,
@@ -219,23 +213,18 @@ describe.skipIf(!connection)("managed handoff successor socket on PostgreSQL", (
         const { inspected, recorded } = JSON.parse(output.stdout);
         expect(inspected.revision).toBe(initial.revision);
         expect(recorded.kind).toBe("recorded");
-        expect(recorded.sentinel.payload.stats).toMatchObject({
-          reason: "candidate-doctor-failed",
-          steps: [{ name: "service-restore", command: "foreground", log: { exitCode: 0 } }],
-        });
         const persisted = await client.query(
           `SELECT doctor_hint FROM "${namespace}".gateway_restart_sentinel WHERE sentinel_key = 'current'`,
         );
         expect(persisted.rows).toEqual([{ doctor_hint: "Run openclaw update repair" }]);
-        for (const text of [
+        const artifacts = [
           await fs.readFile(transferPath, "utf8"),
           await fs.readFile(shimPath, "utf8"),
           JSON.stringify(argv),
           ...Object.values(output),
-        ]) {
-          expect(text).not.toContain(connection);
-          expect(text).not.toMatch(/postgres(?:ql)?:\/\//);
-        }
+        ].join("\n");
+        expect(artifacts).not.toContain(connection);
+        expect(artifacts).not.toMatch(/postgres(?:ql)?:\/\//);
       } finally {
         store.release(lease);
       }

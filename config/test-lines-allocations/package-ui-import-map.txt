@@ -1,0 +1,2 @@
+# Regression: packaged Control UI aliases resolve through the document import map.
+43

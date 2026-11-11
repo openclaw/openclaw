@@ -1,8 +1,5 @@
-import type {
-  MediaUnderstandingProvider,
-  VideoDescriptionRequest,
-} from "openclaw/plugin-sdk/media-understanding";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { VideoDescriptionRequest } from "openclaw/plugin-sdk/media-understanding";
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import {
   createRequestCaptureJsonFetch,
@@ -11,12 +8,8 @@ import {
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
-const mediaProviders: MediaUnderstandingProvider[] = [];
-plugin.register(
-  createTestPluginApi({
-    registerMediaUnderstandingProvider: (provider) => mediaProviders.push(provider),
-  }),
-);
+const { api, mediaUnderstandingProviders: mediaProviders } = createCapturedPluginRegistration();
+plugin.register(api);
 
 installPinnedHostnameTestHooks();
 

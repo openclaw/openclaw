@@ -57,3 +57,14 @@ export const PluginRuntimeRetentionSchema = closedObject({
     { maxItems: 64 },
   ),
 });
+
+const PluginPredecessorRetentionsSchema = Type.Array(PluginRuntimeRetentionSchema, {
+  minItems: 1,
+});
+export const PluginInspectRuntimeRetentionSchema = Type.Union([
+  closedObject({
+    ...PluginRuntimeRetentionSchema.properties,
+    predecessors: Type.Optional(PluginPredecessorRetentionsSchema),
+  }),
+  closedObject({ predecessors: PluginPredecessorRetentionsSchema }),
+]);

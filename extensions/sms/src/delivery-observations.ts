@@ -101,36 +101,6 @@ export function isTwilioDeliveryStatusForm(form: Record<string, string>): boolea
   return Boolean(resolveDeliveryStatus(form));
 }
 
-function parseSmsDeliveryObservation(
-  form: Record<string, string>,
-  nowMs = Date.now(),
-): { messageSid: string; observation: SmsDeliveryObservation } | null {
-  const messageSid = resolveTwilioMessageSid(form);
-  const status = resolveDeliveryStatus(form);
-  if (!messageSid || !status) {
-    return null;
-  }
-  const errorCode = firstTrimmed(form, "ErrorCode");
-  const rawDlrDoneDate = firstTrimmed(form, "RawDlrDoneDate");
-  return {
-    messageSid,
-    observation: {
-      source: "callback",
-      fingerprint: fingerprintObservation({
-        source: "callback",
-        messageSid,
-        status,
-        ...(errorCode ? { errorCode } : {}),
-        ...(rawDlrDoneDate ? { rawDlrDoneDate } : {}),
-      }),
-      status,
-      observedAt: nowMs,
-      ...(errorCode ? { errorCode } : {}),
-      ...(rawDlrDoneDate ? { rawDlrDoneDate } : {}),
-    },
-  };
-}
-
 function reduceDeliveryStatus(
   current: SmsDeliveryRecord | undefined,
   observation: SmsDeliveryObservation,
@@ -234,21 +204,33 @@ async function recordSmsDeliveryObservation(params: {
   }
 }
 
-export function createSmsDeliveryRecorder(
-  store: PluginStateKeyedStore<SmsDeliveryRecord> = openDeliveryStore(),
-) {
+export function createSmsDeliveryRecorder() {
+  const store = openDeliveryStore();
   return {
     async record({ account, form }: { account: ResolvedSmsAccount; form: Record<string, string> }) {
-      const parsed = parseSmsDeliveryObservation(form);
-      if (!parsed) {
+      const nowMs = Date.now();
+      const messageSid = resolveTwilioMessageSid(form);
+      const status = resolveDeliveryStatus(form);
+      if (!messageSid || !status) {
         throw new Error("Invalid Twilio delivery status callback.");
       }
-      return await recordSmsDeliveryObservation({
-        account,
-        messageSid: parsed.messageSid,
-        observation: parsed.observation,
-        store,
-      });
+      const errorCode = firstTrimmed(form, "ErrorCode");
+      const rawDlrDoneDate = firstTrimmed(form, "RawDlrDoneDate");
+      const observation: SmsDeliveryObservation = {
+        source: "callback",
+        fingerprint: fingerprintObservation({
+          source: "callback",
+          messageSid,
+          status,
+          ...(errorCode ? { errorCode } : {}),
+          ...(rawDlrDoneDate ? { rawDlrDoneDate } : {}),
+        }),
+        status,
+        observedAt: nowMs,
+        ...(errorCode ? { errorCode } : {}),
+        ...(rawDlrDoneDate ? { rawDlrDoneDate } : {}),
+      };
+      return await recordSmsDeliveryObservation({ account, messageSid, observation, store });
     },
   };
 }
@@ -256,8 +238,6 @@ export function createSmsDeliveryRecorder(
 export async function recordInitialSmsDeliveryResult(params: {
   account: ResolvedSmsAccount;
   result: SmsSendResult;
-  nowMs?: number;
-  store?: PluginStateKeyedStore<SmsDeliveryRecord>;
 }) {
   const messageSid = params.result.sid.trim();
   const status = normalizeDeliveryStatus(params.result.status ?? "");
@@ -275,20 +255,16 @@ export async function recordInitialSmsDeliveryResult(params: {
         status,
       }),
       status,
-      observedAt: params.nowMs ?? Date.now(),
+      observedAt: Date.now(),
     },
-    store: params.store ?? openDeliveryStore(),
+    store: openDeliveryStore(),
   });
 }
 
 export async function listRecentSmsDeliveryRecords(
   account: ResolvedSmsAccount,
-  limit = 1,
-  store: PluginStateKeyedStore<SmsDeliveryRecord> = openDeliveryStore(),
 ): Promise<SmsDeliveryRecord[]> {
-  if (limit <= 0) {
-    return [];
-  }
+  const store = openDeliveryStore();
   const accountSidHash = sha256Hex(account.accountSid);
   return (await store.entries())
     .map((entry) => entry.value)
@@ -297,5 +273,5 @@ export async function listRecentSmsDeliveryRecords(
         record.accountId === account.accountId && record.accountSidHash === accountSidHash,
     )
     .toSorted((left, right) => right.lastObservedAt - left.lastObservedAt)
-    .slice(0, limit);
+    .slice(0, 1);
 }

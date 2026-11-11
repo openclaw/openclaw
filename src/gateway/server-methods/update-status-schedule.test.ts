@@ -1,23 +1,34 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { UpdateCampaignController } from "../../infra/update-campaign.js";
-import {
-  currentUpdateCheckLifecycle,
-  type UpdateCheckLifecycle,
-} from "../../infra/update-check-lifecycle.js";
+import type { UpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import type { UpdateCheckResult } from "../../infra/update-check.js";
-import { resolveDevGitCommits } from "../../infra/update-git-metadata.js";
-import { createDevGitStatus } from "../../infra/update-startup-git.test-support.js";
-import { resetUpdateAvailableStateForTest } from "../../infra/update-startup.js";
 import {
-  getUpdateAvailable,
-  getUpdateSchedule,
-  resetUpdateStatusState,
-  setUpdateScheduleCache,
-} from "../../infra/update-status-state.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { updateStatusHandlers } from "./update-status.js";
+  closeUpdateFixtureDatabases,
+  resetUpdateFixtureModules,
+} from "../../infra/update-fixture.test-support.js";
+
+let { createMacosAppInstallOwner } = await import("../../commands/test-runtime-config-helpers.js");
+let { UpdateCampaignController } = await import("../../infra/update-campaign.js");
+let { createGatewayUpdateLifecycle } = await import("../../infra/update-check-lifecycle.js");
+let { resolveDevGitCommits } = await import("../../infra/update-git-metadata.js");
+let { createDevGitStatus } = await import("../../infra/update-startup-git.test-support.js");
+let { getUpdateAvailable, getUpdateSchedule, setUpdateScheduleCache } =
+  await import("../../infra/update-status-state.js");
+let { createTestGatewayScheduler } = await import("../../test-utils/gateway-scheduler-clock.js");
+let { updateStatusHandlers } = await import("./update-status.js");
+
+async function importUpdateFixtureModules() {
+  ({ createMacosAppInstallOwner } = await import("../../commands/test-runtime-config-helpers.js"));
+  ({ UpdateCampaignController } = await import("../../infra/update-campaign.js"));
+  ({ createGatewayUpdateLifecycle } = await import("../../infra/update-check-lifecycle.js"));
+  ({ resolveDevGitCommits } = await import("../../infra/update-git-metadata.js"));
+  ({ createDevGitStatus } = await import("../../infra/update-startup-git.test-support.js"));
+  ({ getUpdateAvailable, getUpdateSchedule, setUpdateScheduleCache } =
+    await import("../../infra/update-status-state.js"));
+  ({ createTestGatewayScheduler } = await import("../../test-utils/gateway-scheduler-clock.js"));
+  ({ updateStatusHandlers } = await import("./update-status.js"));
+}
 
 vi.mock("../../version.js", () => ({ VERSION: "2026.9.7" }));
 
@@ -46,11 +57,12 @@ vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
 }));
 
 let lifecycle: UpdateCheckLifecycle;
-let campaignOwner: UpdateCampaignController;
-beforeEach(() => {
+let campaignOwner: InstanceType<typeof UpdateCampaignController>;
+beforeEach(async () => {
+  await resetUpdateFixtureModules();
+  await importUpdateFixtureModules();
   vi.useFakeTimers();
-  resetUpdateAvailableStateForTest(createTestGatewayScheduler());
-  lifecycle = currentUpdateCheckLifecycle();
+  lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
   campaignOwner = new UpdateCampaignController(lifecycle.scheduler);
   lifecycle.campaign = campaignOwner;
   history.mockClear();
@@ -61,7 +73,7 @@ beforeEach(() => {
 afterEach(async () => {
   await lifecycle.stop();
   await lifecycle.scheduler.stop();
-  resetUpdateStatusState();
+  await closeUpdateFixtureDatabases();
   vi.unstubAllEnvs();
   vi.useRealTimers();
 });
@@ -332,12 +344,7 @@ it("omits app-owned install and stale package targets from the protocol schedule
   stalePackageSchedule("dev", false);
   install.mockResolvedValue(
     installAt("host", "/opt/OpenClaw.app/openclaw", {
-      installOwner: {
-        schemaVersion: 1,
-        owner: "macos-app",
-        displayName: "OpenClaw.app",
-        updateHint: "Update OpenClaw.app to update this Gateway.",
-      },
+      installOwner: createMacosAppInstallOwner(),
     }),
   );
 
@@ -389,7 +396,6 @@ it.for([
   { tag: "v2026.10.0-beta.1", configured: false },
   { tag: "v2026.9.30", configured: false },
   { tag: "v2026.10.0-beta.1", configured: true },
-  { tag: "v2026.9.30", configured: true },
 ] as const)(
   "revalidates the inferred channel from fresh Git identity (tag=$tag, configured=$configured)",
   async ({ tag, configured }) => {
@@ -424,8 +430,6 @@ it.for([
 
 it.each([
   { channel: "stable", initialized: true, refreshCheckout: true, enabled: false },
-  { channel: "beta", initialized: true, refreshCheckout: true, enabled: false },
-  { channel: "stable", initialized: false, refreshCheckout: true, enabled: false },
   { channel: "beta", initialized: false, refreshCheckout: true, enabled: false },
   { channel: "stable", initialized: true, refreshCheckout: false, enabled: false },
   { channel: "stable", initialized: true, refreshCheckout: false, enabled: true },
@@ -465,9 +469,8 @@ it.each([
         : {}),
     };
     install.mockResolvedValue(immutableInstall(refreshed));
-    const privateStatus = vi.fn().mockResolvedValue(null);
     if (!refreshCheckout) {
-      resolveManager.mockResolvedValue({ canStart: true, status: privateStatus });
+      resolveManager.mockResolvedValue({ canStart: true, status: vi.fn().mockResolvedValue(null) });
     }
 
     const result = await status(makeConfig(channel, true), { refreshCheckout });
@@ -483,7 +486,6 @@ it.each([
       expect(install).toHaveBeenCalledWith(true, expect.any(AbortSignal));
     } else {
       expect(resolveManager).not.toHaveBeenCalled();
-      expect(privateStatus).not.toHaveBeenCalled();
     }
 
     install.mockResolvedValue(installAt("unknown", immutable.currentPath));

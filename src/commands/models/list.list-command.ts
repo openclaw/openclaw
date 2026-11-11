@@ -4,7 +4,7 @@ import type { ModelsListParams } from "../../../packages/gateway-protocol/src/sc
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
-import { ExpectedCliError } from "../../cli/failure-output.js";
+import { ExpectedCliError } from "../../cli/expected-cli-error.js";
 import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
@@ -68,13 +68,19 @@ export async function modelsListCommand(
       { withPreparedModelCatalogOwner },
       { getPreparedModelRuntimeAuthMaterializations },
       { buildModelsListResult },
+      { UnknownModelCatalogProviderError },
     ] = await Promise.all([
       import("../../agents/prepared-model-catalog-owner.js"),
       import("../../agents/prepared-model-catalog.js"),
       import("../../agents/prepared-model-runtime-auth.js"),
       import("../../gateway/server-methods/models-list-result.js"),
+      import("../../gateway/server-methods/models-list-capabilities.js"),
     ]);
-    const readLocal = async () => {
+    const readLocal = async (refreshOwner?: {
+      env: NodeJS.ProcessEnv;
+      signal: AbortSignal;
+      assertCurrent: () => void;
+    }) => {
       const localConfig = await loadModelsConfig({
         commandName: "models list",
         runtime,
@@ -82,6 +88,25 @@ export async function modelsListCommand(
       const { agentId, agentDir } = resolveModelsTargetAgent(localConfig, opts.agent, {
         kind: "read",
       });
+      if (refreshOwner) {
+        const [
+          { prepareOpenClawAgentDatabaseExecution },
+          { resolveAuthProfileDatabasePath },
+          { prepareLocalCapabilityAccountSecrets },
+        ] = await Promise.all([
+          import("../../state/openclaw-agent-execution.js"),
+          import("../../agents/auth-profiles/sqlite.js"),
+          import("../../cli/capability-cli/local-account-secrets.js"),
+        ]);
+        // Prepare the catalog's writable store before secrets observe its initial file identity.
+        await prepareOpenClawAgentDatabaseExecution(
+          { agentId, path: resolveAuthProfileDatabasePath(agentDir), env: refreshOwner.env },
+          refreshOwner.assertCurrent,
+          refreshOwner.signal,
+        );
+        await prepareLocalCapabilityAccountSecrets({ cfg: localConfig, agentId });
+        refreshOwner.assertCurrent();
+      }
       const proxy = opts.refresh ? await startProxy(localConfig.proxy) : null;
       try {
         return await withPreparedModelCatalogOwner(
@@ -112,19 +137,33 @@ export async function modelsListCommand(
         await stopProxy(proxy);
       }
     };
-    result = opts.refresh
-      ? await runWithLocalStateOwner({
-          method: "models.list",
-          params,
-          target: "local model catalog",
-          onForeignOwner: "refuse",
-          runLocal: async ({ assertCurrent }) => {
-            const refreshed = await readLocal();
-            assertCurrent();
-            return refreshed;
-          },
-        })
-      : await readLocal();
+    try {
+      result = opts.refresh
+        ? await runWithLocalStateOwner({
+            method: "models.list",
+            params,
+            target: "local model catalog",
+            onForeignOwner: "refuse",
+            runLocal: async (owner) => {
+              const refreshed = await readLocal(owner);
+              owner.assertCurrent();
+              return refreshed;
+            },
+          })
+        : await readLocal();
+    } catch (error) {
+      // The Gateway answers an unknown provider filter with its message; the local read must too.
+      if (error instanceof UnknownModelCatalogProviderError) {
+        const message = error.message;
+        throw new ExpectedCliError({
+          message,
+          humanOutput: message,
+          machineOutput: message,
+          cause: error,
+        });
+      }
+      throw error;
+    }
   }
   for (const warning of getModelCatalogWarnings(result)) {
     runtime.error(`${warning.message} ${warning.fixHint}`);

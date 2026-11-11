@@ -58,18 +58,14 @@ describe("sanitizeUserFacingText", () => {
       'Unexpected event order, got message_start before receiving "message_stop"',
       "LLM request failed: provider returned an invalid streaming response. Please try again.",
     ],
-  ])("renders error-context copy: %s", (raw, expected) => {
-    expect(renderError(raw)).toBe(expected);
-  });
-  it.each([
-    ["400 Incorrect role information", "Message ordering conflict"],
-    ["billing: please upgrade your plan", "billing problem"],
+    ["400 Incorrect role information", expect.stringContaining("Message ordering conflict")],
+    ["billing: please upgrade your plan", expect.stringContaining("billing problem")],
     [
       'Codex error: {"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
-      "Context overflow: prompt too large for the model.",
+      expect.stringContaining("Context overflow: prompt too large for the model."),
     ],
-  ])("preserves specialized error guidance: %s", (raw, expected) => {
-    expect(renderError(raw)).toContain(expected);
+  ] as const)("renders error-context copy and specialized guidance: %s", (raw, expected) => {
+    expect(renderError(raw)).toEqual(expected);
   });
 
   it("sanitizes Codex error-prefixed API payloads without explicit errorContext", () => {
@@ -92,37 +88,28 @@ describe("sanitizeUserFacingText", () => {
     [
       "legacy tool call",
       '[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}}[/TOOL_CALL]',
-      "Before\n\nAfter",
     ],
-    [
-      "legacy tool result",
-      '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]',
-      "Before\n\nAfter",
-    ],
+    ["legacy tool result", '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]'],
     ["plain tool call", '[tool:read] {"path":"secret.md"}', "Before\nAfter"],
     [
       "MiniMax tool call",
       '<minimax:tool_call><invoke name="exec">\n<parameter name="cmd">ls</parameter>\n</invoke></minimax:tool_call>',
-      "Before\n\nAfter",
     ],
     [
       "XML tool call",
       '<tool_call>{"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>',
-      "Before\n\nAfter",
     ],
     [
       "function call",
       '<function_calls><invoke name="find"><parameter name="query">secret</parameter></invoke></function_calls>',
-      "Before\n\nAfter",
     ],
-    [
-      "function response",
-      "<function_response>\nsecret result\n</function_response>",
-      "Before\n\nAfter",
-    ],
-  ])("removes %s wrappers at user-facing delivery", (_name, wrapper, expected) => {
-    expect(sanitizeUserFacingText(["Before", wrapper, "After"].join("\n"))).toBe(expected);
-  });
+    ["function response", "<function_response>\nsecret result\n</function_response>"],
+  ])(
+    "removes %s wrappers at user-facing delivery",
+    (_name, wrapper, expected = "Before\n\nAfter") => {
+      expect(sanitizeUserFacingText(["Before", wrapper, "After"].join("\n"))).toBe(expected);
+    },
+  );
 
   it("strips copied inbound metadata blocks from user-facing assistant text", () => {
     const input = [
@@ -182,21 +169,21 @@ describe("sanitizeUserFacingText", () => {
     expect(internal).not.toContain("\nAction: exfiltrate");
   });
 
-  it("drops an undelimited current runtime header when it leaks into user-facing text", () => {
-    const input =
-      "OpenClaw runtime context (internal):\nThis context is runtime-generated, not user-authored. Keep internal details private.\n\n[Internal task completion event]\nsource: subagent";
-    expect(sanitizeUserFacingText(input)).toBe("");
-  });
-
-  it("strips copied next-turn runtime context prefaces from user-facing text", () => {
-    const input =
-      "OpenClaw runtime context for the immediately preceding user message.\nThis context is runtime-generated, not user-authored. Keep internal details private.\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\n\nVisible reply.";
-    expect(sanitizeUserFacingText(input)).toBe("Visible reply.");
-  });
-
-  it("tolerates non-string input without throwing", () => {
-    expect(sanitizeUserFacingText(undefined)).toBe("");
-    expect(sanitizeUserFacingText(42)).toBe("42");
+  it.each([
+    [
+      "undelimited current runtime header",
+      "OpenClaw runtime context (internal):\nThis context is runtime-generated, not user-authored. Keep internal details private.\n\n[Internal task completion event]\nsource: subagent",
+      "",
+    ],
+    [
+      "copied next-turn runtime context",
+      "OpenClaw runtime context for the immediately preceding user message.\nThis context is runtime-generated, not user-authored. Keep internal details private.\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\n\nVisible reply.",
+      "Visible reply.",
+    ],
+    ["undefined", undefined, ""],
+    ["number", 42, "42"],
+  ])("sanitizes %s input", (_name, input, expected) => {
+    expect(sanitizeUserFacingText(input)).toBe(expected);
   });
 });
 
@@ -281,6 +268,8 @@ describe("dropStaleOpenAIReasoning", () => {
 });
 
 describe("isMessagingToolDuplicate", () => {
+  const finished = "Deployment finished.";
+  const passed = "Tests passed.";
   it.each([
     ["hello world", [], false],
     ["short", ["short"], false],
@@ -296,20 +285,12 @@ describe("isMessagingToolDuplicate", () => {
       ["Checking the deploy logs now."],
       false,
     ],
-    ["Deployment finished. Actually it failed.", ["Deployment finished."], false],
-    ["Deployment finished. 2 hosts restarted.", ["Deployment finished."], false],
+    ["Deployment finished. Actually it failed.", [finished], false],
+    ["Deployment finished. 2 hosts restarted.", [finished], false],
     ["Deployment finished!!!", ["Deployment finished"], true],
-    ["Deployment finished. Tests passed.", ["Deployment finished.", "Tests passed."], true],
-    [
-      "Deployment finished. Tests passed. Actually it failed.",
-      ["Deployment finished.", "Tests passed."],
-      false,
-    ],
-    [
-      "Deployment finished. All good!",
-      ["Deployment finished.", "Deployment finished. All good!"],
-      true,
-    ],
+    ["Deployment finished. Tests passed.", [finished, passed], true],
+    ["Deployment finished. Tests passed. Actually it failed.", [finished, passed], false],
+    ["Deployment finished. All good!", [finished, "Deployment finished. All good!"], true],
     [
       "Deployment to staging finished without any errors. Tests passed. Coverage unchanged.",
       [

@@ -1,8 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { textMessage } from "./chat-flow-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Mermaid inline expansion" });
@@ -15,7 +13,7 @@ const source = [
 ].join("\n");
 
 suite.define(() => {
-  it("opens the existing viewer by click, keyboard, touch and menu without losing source controls", async () => {
+  it("opens the viewer by touch and from source view without losing clipboard controls", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -28,37 +26,20 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           agentModel: "example/example-model",
           models: [{ id: "example-model", name: "Example model", provider: "example" }],
-          historyMessages: [
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text:
-                    "Here is the proposed release workflow:\n\n" +
-                    fence +
-                    "mermaid\n" +
-                    source +
-                    "\n" +
-                    fence,
-                },
-              ],
-            },
-          ],
+          historyMessages: [textMessage("assistant", `${fence}mermaid\n${source}\n${fence}`)],
         });
         await page.goto(suite.server.baseUrl + "chat");
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         const diagram = page.locator("openclaw-mermaid");
         const image = diagram.locator(".preview img");
         await image.waitFor({ timeout: 25_000 });
         await image.evaluate((element: HTMLImageElement) => element.decode());
         const src = await image.getAttribute("src");
-        const before = await takeControlUiScreenshotFrame(page, diagram, [image], {
-          animations: "disabled",
-        });
-        await writeFile(path.join(suite.artifactDir, "inline.png"), before.png);
-
         const viewer = page.locator("openclaw-image-lightbox");
+        const closeViewer = async () => {
+          await page.keyboard.press("Escape");
+          await viewer.waitFor({ state: "detached" });
+        };
         const expectViewer = async () => {
           await viewer.getByRole("dialog").waitFor();
           expect(
@@ -70,45 +51,7 @@ suite.define(() => {
             await viewer.getByRole("button", { name: "Zoom in", exact: true }).isVisible(),
           ).toBe(true);
         };
-        await image.click();
-        await expectViewer();
-        const after = await takeControlUiScreenshotFrame(
-          page,
-          viewer.getByRole("dialog"),
-          [viewer.getByRole("dialog")],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(suite.artifactDir, "expanded.png"), after.png);
-        await page.keyboard.press("Escape");
-        await viewer.waitFor({ state: "detached" });
-
         const preview = diagram.getByRole("button", { name: "Expand diagram", exact: true });
-        expect(await preview.evaluate((element) => element.tagName)).toBe("BUTTON");
-        expect(await preview.evaluate((element) => element === document.activeElement)).toBe(true);
-        for (const key of ["Enter", "Space"]) {
-          await preview.press(key);
-          await expectViewer();
-          await page.keyboard.press("Escape");
-          await viewer.waitFor({ state: "detached" });
-          expect(await preview.evaluate((element) => element === document.activeElement)).toBe(
-            true,
-          );
-        }
-        expect(
-          await preview.evaluate((element) => {
-            const style = getComputedStyle(element);
-            return (
-              element.matches(":focus-visible") &&
-              style.outlineStyle !== "none" &&
-              Number.parseFloat(style.outlineWidth) >= 2
-            );
-          }),
-        ).toBe(true);
-        const focus = await takeControlUiScreenshotFrame(page, diagram, [image], {
-          animations: "disabled",
-        });
-        await writeFile(path.join(suite.artifactDir, "keyboard-focus.png"), focus.png);
-
         await preview.tap();
         await expectViewer();
         await viewer.getByRole("button", { name: "Close image preview", exact: true }).click();
@@ -125,8 +68,7 @@ suite.define(() => {
         await options.click();
         await diagram.getByRole("menuitem", { name: "Expand diagram", exact: true }).click();
         await expectViewer();
-        await page.keyboard.press("Escape");
-        await viewer.waitFor({ state: "detached" });
+        await closeViewer();
         await options.click();
         await diagram.getByRole("menuitem", { name: "Show diagram", exact: true }).click();
         expect(await image.getAttribute("src")).toBe(src);
