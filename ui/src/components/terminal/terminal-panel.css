@@ -167,6 +167,8 @@ openclaw-terminal-panel {
   }
   .tp-find__preview {
     margin-top: 4px;
+    /* Preserve scroll room when the last glyph has a fractional width. */
+    padding-inline-end: 1px;
     overflow: hidden;
     white-space: pre;
     font-family: var(--mono);

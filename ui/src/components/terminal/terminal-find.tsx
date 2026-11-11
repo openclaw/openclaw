@@ -32,9 +32,9 @@ export function TerminalFind(props: { tab: Pick<TerminalPanelSessionTab, "contro
       const region = preview.getBoundingClientRect();
       const match = highlight.getBoundingClientRect();
       if (match.left < region.left || match.width > region.width) {
-        preview.scrollLeft += match.left - region.left;
+        preview.scrollLeft += Math.floor(match.left - region.left);
       } else if (match.right > region.right) {
-        preview.scrollLeft += match.right - region.right;
+        preview.scrollLeft += Math.ceil(match.right - region.right);
       }
     },
     { horizontal: true, trackScroll: false, presented: open, content: selected },

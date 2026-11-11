@@ -190,7 +190,8 @@ it("keeps the selected glyphs visible through navigation, reopening and resize",
     view.getByRole("button", { name: "Find in terminal" }).click();
     flush();
     await expectVisible();
-    view.container.style.width = "320px";
+    view.container.querySelector<HTMLElement>(".tp-find__preview")!.style.fontSize = "12.1px";
+    view.container.style.width = "320.25px";
     await expectVisible();
   } finally {
     view.close();
