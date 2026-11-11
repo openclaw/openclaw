@@ -131,6 +131,11 @@ export function onInternalSessionTranscriptUpdate(
   return registerListener(INTERNAL_SESSION_TRANSCRIPT_LISTENERS, listener);
 }
 
+/** Advance committed transcript freshness without adding a presentation notification. */
+export function advanceSessionTranscriptUpdateVersion(): void {
+  SESSION_TRANSCRIPT_UPDATE_STATE.version += 1;
+}
+
 export function emitSessionTranscriptUpdate(update: InternalSessionTranscriptUpdate): void {
   const nextUpdate = normalizeSessionTranscriptUpdate(update);
   if (!nextUpdate) {
@@ -138,7 +143,7 @@ export function emitSessionTranscriptUpdate(update: InternalSessionTranscriptUpd
   }
   // Commit-then-broadcast: a subscriber's refetch races the sessions.list
   // cache, so the fence must advance before any listener can observe the write.
-  SESSION_TRANSCRIPT_UPDATE_STATE.version += 1;
+  advanceSessionTranscriptUpdateVersion();
   const publicUpdate = projectPublicSessionTranscriptUpdate(nextUpdate);
   if (publicUpdate) {
     notifyListeners(SESSION_TRANSCRIPT_LISTENERS, publicUpdate);

@@ -60,8 +60,11 @@ export type {
 } from "./provider-config-context.types.js";
 export type {
   ProviderAuthOptionBag,
-  ProviderResolveSyntheticAuthContext,
-} from "./provider-external-auth.types.js";
+  ProviderNonInteractiveApiKeyCredentialParams,
+  ProviderNonInteractiveApiKeyResult,
+  ProviderResolveNonInteractiveApiKeyParams,
+} from "./provider-auth-types.js";
+export type { ProviderResolveSyntheticAuthContext } from "./provider-external-auth.types.js";
 export type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 export type {
   ProviderDefaultThinkingPolicyContext,

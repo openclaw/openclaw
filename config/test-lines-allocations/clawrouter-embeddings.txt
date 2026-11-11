@@ -1,0 +1,2 @@
+# Registered memory transport, offered routes, credentials, grants and cancellation.
+198

@@ -2,7 +2,11 @@
 
 Connect OpenAI models to OpenClaw. The plugin also provides embeddings, media
 understanding, image generation, speech output, realtime transcription,
-and realtime voice.
+realtime voice, and typed Decision evaluations.
+
+For the Decision role, select `openai/gpt-6-luna` after configuring a Platform
+API key with Decisions API access. See [Decision models](https://docs.openclaw.ai/providers/openai#decision-models)
+for configuration and the text/JSON input contract.
 
 ## Get started
 
@@ -18,6 +22,9 @@ with `openclaw models list --provider openai`.
 Account sign-in is available through onboarding too. Authentication methods have
 different model and capability coverage; configuring chat does not configure
 every media or voice feature.
+
+Explicitly selected pre-GPT-5 models use OpenClaw's function-tool runtime rather
+than Codex's native custom tools. GPT-5-family models keep the Codex runtime.
 
 See the [OpenAI setup guide](https://docs.openclaw.ai/providers/openai/setup) and
 [authentication comparison](https://docs.openclaw.ai/providers/openai/authentication)

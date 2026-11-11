@@ -1,6 +1,10 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeFastMode } from "@openclaw/normalization-core/string-coerce";
+import type { CyberAccessProgram } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { modelKey } from "../shared/model-key.js";
 import { resolveAgentEntry } from "./agent-scope-config.js";
 
@@ -50,33 +54,42 @@ export function resolveModelExtraParamSources(params: {
   const configuredModels = params.config?.agents?.defaults?.models;
   const canonicalKey = params.modelId ? modelKey(params.provider, params.modelId) : undefined;
   const legacyKey = params.modelId ? legacyModelKey(params.provider, params.modelId) : undefined;
-  const modelParams = canonicalKey
-    ? (configuredModels?.[canonicalKey]?.params ??
-      (legacyKey ? configuredModels?.[legacyKey]?.params : undefined))
-    : undefined;
+  const paramsForModel = (models: typeof configuredModels) =>
+    canonicalKey
+      ? (models?.[canonicalKey]?.params ?? (legacyKey ? models?.[legacyKey]?.params : undefined))
+      : undefined;
+  const modelParams = paramsForModel(configuredModels);
   const agent =
     params.agentId && params.config ? resolveAgentEntry(params.config, params.agentId) : undefined;
-  const agentModelParams = canonicalKey
-    ? (agent?.models?.[canonicalKey]?.params ??
-      (legacyKey ? agent?.models?.[legacyKey]?.params : undefined))
-    : undefined;
+  const agentModelParams = paramsForModel(agent?.models);
   return { defaultParams, modelParams, agentModelParams, agentParams: agent?.params };
 }
 
 /** Returns whether embedded OpenClaw would apply authored provider request parameters. */
 export function hasAuthoredProviderRequestParams(
   params: Parameters<typeof resolveModelExtraParamSources>[0],
+  options?: { nativeContextManagement?: boolean },
 ): boolean {
   const sources = resolveModelExtraParamSources(params);
+  // These are host compaction controls, never credentials, privacy policy, or custom payload.
+  // Native context management owns its trigger and cannot reproduce these tuning values.
+  const usesHostCompaction = (key: string, value: unknown) =>
+    options?.nativeContextManagement === true &&
+    ((key === "responsesServerCompaction" && typeof value === "boolean") ||
+      (key === "responsesCompactThreshold" &&
+        ((typeof value === "number" && Number.isFinite(value) && value > 0) ||
+          (typeof value === "string" && parseStrictPositiveInteger(value) !== undefined))));
   if (
-    [sources.defaultParams, sources.agentParams].some(
-      (source) => source !== undefined && Object.keys(source).length > 0,
+    [sources.defaultParams, sources.agentParams].some((source) =>
+      Object.entries(source ?? {}).some(([key, value]) => !usesHostCompaction(key, value)),
     )
   ) {
     return true;
   }
   return [sources.modelParams, sources.agentModelParams].some((modelParams) =>
-    Object.entries(modelParams ?? {}).some(([key, value]) => !isAgentRuntimeModelParam(key, value)),
+    Object.entries(modelParams ?? {}).some(
+      ([key, value]) => !usesHostCompaction(key, value) && !isAgentRuntimeModelParam(key, value),
+    ),
   );
 }
 
@@ -86,11 +99,7 @@ export function sanitizeExtraParamsRecord(
   if (!value) {
     return undefined;
   }
-  return Object.fromEntries(
-    Object.entries(value).filter(
-      ([key]) => key !== "__proto__" && key !== "prototype" && key !== "constructor",
-    ),
-  );
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !isBlockedObjectKey(key)));
 }
 
 /** Later sources win; each source's first own alias wins, including null and undefined. */
@@ -112,4 +121,25 @@ export function resolveAliasedParamValue(
     }
   }
   return resolved;
+}
+
+/** Explicit empty or invalid settings remain unset; only absent configuration uses the fallback. */
+export function resolveConfiguredCyberAccessProgram(
+  params: Parameters<typeof resolveModelExtraParamSources>[0],
+  fallback?: CyberAccessProgram,
+): CyberAccessProgram | undefined {
+  const { defaultParams, modelParams, agentModelParams, agentParams } =
+    resolveModelExtraParamSources(params);
+  const sources = [defaultParams, modelParams, agentModelParams, agentParams];
+  if (!sources.some((source) => source && Object.hasOwn(source, "accessPrograms"))) {
+    return fallback;
+  }
+  const programs = asOptionalRecord(resolveAliasedParamValue(sources, ["accessPrograms"]));
+  if (!programs || Object.keys(programs).some((key) => key !== "cyber")) {
+    return undefined;
+  }
+  const cyber = programs.cyber;
+  return cyber === "standard" || cyber === "daybreak_blue" || cyber === "daybreak_red"
+    ? cyber
+    : undefined;
 }

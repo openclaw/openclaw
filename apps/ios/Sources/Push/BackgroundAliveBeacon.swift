@@ -64,23 +64,12 @@ enum BackgroundAliveBeacon {
             pushTransport: pushTransport)
     }
 
-    static func makeNodeEventRequestPayloadJSON(
-        payload: Payload,
-        encoder: JSONEncoder = JSONEncoder()) throws -> String
-    {
-        let payloadData = try encoder.encode(payload)
-        guard let payloadJSON = String(data: payloadData, encoding: .utf8) else {
-            throw EncodingError.invalidValue(payload, EncodingError.Context(
-                codingPath: [],
-                debugDescription: "Failed to encode background alive payload as UTF-8"))
-        }
-        let requestData = try encoder.encode(NodeEventParams(event: self.eventName, payloadjson: payloadJSON))
-        guard let requestJSON = String(data: requestData, encoding: .utf8) else {
-            throw EncodingError.invalidValue(payload, EncodingError.Context(
-                codingPath: [],
-                debugDescription: "Failed to encode node.event payload as UTF-8"))
-        }
-        return requestJSON
+    static func makeNodeEventRequestPayloadJSON(payload: Payload) throws -> String {
+        let encoder = JSONEncoder()
+        let payloadJSON = try String(bytes: encoder.encode(payload), encoding: .utf8)!
+        return try String(
+            bytes: encoder.encode(NodeEventParams(event: self.eventName, payloadjson: payloadJSON)),
+            encoding: .utf8)!
     }
 
     static func decodeResponse(_ data: Data) -> NodeEventResponsePayload? {

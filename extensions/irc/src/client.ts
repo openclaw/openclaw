@@ -17,10 +17,18 @@ import type { IrcNickServConfig } from "./types.js";
 const IRC_ERROR_CODES = new Set(["432", "464", "465"]);
 const IRC_NICK_COLLISION_CODES = new Set(["433", "436"]);
 const IRC_MAX_LINE_BYTES = 512;
+// Recipients see our line with the server's `:nick!user@host ` prefix in front, and 512 bytes
+// bounds that relayed line too: servers truncate it or reject the send outright (Ergo answers
+// 417 "Line too long to be relayed without truncation"). Our user@host is only as long as the
+// server makes it, so reserve its ceiling: `~` + USERLEN 10, and HOSTLEN 63.
+const IRC_MAX_RELAY_USER_BYTES = 11;
+const IRC_MAX_RELAY_HOST_BYTES = 63;
 // Inbound framing cap: IRCv3 allows up to 8191 bytes of message tags plus a 512-byte
 // line body. Bound a pending (unterminated) line at twice that so compliant servers
 // never trip it, while a peer that withholds the line terminator cannot grow memory.
 const IRC_MAX_INBOUND_LINE_LENGTH = 16 * 1024;
+// Silent network drops need a receive deadline even when TCP never reports a close.
+const IRC_LIVENESS_TIMEOUT_MS = 4 * 60_000;
 
 function takeIrcPrivmsgChunk(text: string, maxChars: number, maxBytes: number): string {
   let end = 0;
@@ -45,12 +53,6 @@ function takeIrcPrivmsgChunk(text: string, maxChars: number, maxBytes: number): 
   return text.slice(0, findGraphemeChunkEnd(text, 0, end, preferredEnd));
 }
 
-type IrcPrivmsgEvent = {
-  senderNick: string;
-  connectedNick: string;
-  rawLine: string;
-};
-
 export type IrcClientOptions = {
   host: string;
   port: number;
@@ -64,11 +66,14 @@ export type IrcClientOptions = {
   connectTimeoutMs?: number;
   messageChunkMaxChars?: number;
   abortSignal?: AbortSignal;
-  onPrivmsg?: (event: IrcPrivmsgEvent) => void | Promise<void>;
+  onPrivmsg?: (event: {
+    senderNick: string;
+    connectedNick: string;
+    rawLine: string;
+  }) => void | Promise<void>;
   onNotice?: (text: string, target?: string) => void;
   onError?: (error: Error) => void;
   onDisconnect?: () => void;
-  onLine?: (line: string) => void;
 };
 
 type IrcNickServOptions = Omit<IrcNickServConfig, "passwordFile">;
@@ -90,7 +95,7 @@ function buildFallbackNick(nick: string): string {
   const seq = ++nickCollisionFallbackSeq;
   const suffix = seq === 1 ? "_" : `_${seq}`;
   const maxNickLen = 30;
-  if (base.length >= maxNickLen) {
+  if (base.length + suffix.length > maxNickLen) {
     return `${base.slice(0, maxNickLen - suffix.length)}${suffix}`;
   }
   return `${base}${suffix}`;
@@ -217,7 +222,12 @@ export async function connectIrcClient(options: IrcClientOptions) {
     if (!cleaned) {
       throw new Error("Message must be non-empty for IRC sends");
     }
-    const lineOverheadBytes = Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
+    const relayPrefixBytes =
+      Buffer.byteLength(`:${currentNick}!@ `, "utf8") +
+      IRC_MAX_RELAY_USER_BYTES +
+      IRC_MAX_RELAY_HOST_BYTES;
+    const lineOverheadBytes =
+      relayPrefixBytes + Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
     const maxChunkBytes = IRC_MAX_LINE_BYTES - lineOverheadBytes;
     let remaining = replyTo ? sanitizeIrcOutboundText(`${text}\n\n[reply:${replyTo}]`) : cleaned;
     const chunks: string[] = [];
@@ -249,11 +259,28 @@ export async function connectIrcClient(options: IrcClientOptions) {
       });
   };
 
+  let lastReceivedAt = performance.now();
+  const livenessTimer = setInterval(() => {
+    if (!ready || closed) {
+      return;
+    }
+    const silentMs = performance.now() - lastReceivedAt;
+    if (silentMs >= IRC_LIVENESS_TIMEOUT_MS) {
+      fail(new Error(`IRC server sent nothing for ${Math.round(silentMs / 1000)}s; reconnecting`));
+      // Let the close listener notify the monitor, which owns reconnect and backoff.
+      socket.destroy();
+    } else if (silentMs >= IRC_LIVENESS_TIMEOUT_MS / 2) {
+      sendRaw("PING :openclaw");
+    }
+  }, 30_000);
+  livenessTimer.unref();
+
   const quit = (reason?: string) => {
     if (closed) {
       return;
     }
     closed = true;
+    clearInterval(livenessTimer);
     removeAbortListener?.();
     removeAbortListener = null;
     const safeReason = sanitizeIrcOutboundText(reason ?? "bye");
@@ -274,6 +301,7 @@ export async function connectIrcClient(options: IrcClientOptions) {
       return;
     }
     closed = true;
+    clearInterval(livenessTimer);
     removeAbortListener?.();
     removeAbortListener = null;
     socket.destroy();
@@ -293,6 +321,7 @@ export async function connectIrcClient(options: IrcClientOptions) {
     if (receiveOverflowed) {
       return;
     }
+    lastReceivedAt = performance.now();
     buffer += chunk;
     let idx = buffer.indexOf("\n");
     while (idx !== -1) {
@@ -307,8 +336,6 @@ export async function connectIrcClient(options: IrcClientOptions) {
       if (!rawLine) {
         continue;
       }
-      options.onLine?.(rawLine);
-
       const line = parseIrcLine(rawLine);
       if (!line) {
         continue;
@@ -384,7 +411,9 @@ export async function connectIrcClient(options: IrcClientOptions) {
         const text = line.trailing ?? line.params[1] ?? "";
         const prefix = parseIrcPrefix(line.prefix);
         const senderNick = prefix.nick?.trim() ?? "";
-        if (!target || !senderNick || !text.trim()) {
+        const isCtcpQuery =
+          text.startsWith("\u0001") && !text.toUpperCase().startsWith("\u0001ACTION ");
+        if (!target || !senderNick || !text.trim() || isCtcpQuery) {
           continue;
         }
         if (options.onPrivmsg) {
@@ -430,6 +459,7 @@ export async function connectIrcClient(options: IrcClientOptions) {
   });
 
   socket.once("close", () => {
+    clearInterval(livenessTimer);
     if (!closed) {
       closed = true;
       removeAbortListener?.();
@@ -470,7 +500,6 @@ export async function connectIrcClient(options: IrcClientOptions) {
       return currentNick;
     },
     isReady: () => ready && !closed,
-    sendRaw,
     join,
     sendPrivmsg,
     quit,

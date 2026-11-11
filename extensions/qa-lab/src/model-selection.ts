@@ -8,11 +8,6 @@ import type { RuntimeId } from "./runtime-id.js";
 
 export type { QaProviderMode, QaProviderModeInput } from "./providers/index.js";
 
-type QaModelSelection = {
-  primaryModel: string;
-  alternateModel: string;
-};
-
 export { normalizeQaProviderMode } from "./providers/index.js";
 
 export function defaultQaModelForMode(
@@ -40,7 +35,7 @@ export function isQaFastModeModelRef(ref: string) {
   return getQaProvider(DEFAULT_QA_LIVE_PROVIDER_MODE).usesFastModeByDefault(ref);
 }
 
-export function isQaFastModeEnabled(selection: QaModelSelection) {
+export function isQaFastModeEnabled(selection: { primaryModel: string; alternateModel: string }) {
   return (
     isQaFastModeModelRef(selection.primaryModel) || isQaFastModeModelRef(selection.alternateModel)
   );

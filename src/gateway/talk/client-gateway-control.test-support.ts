@@ -6,6 +6,7 @@ export const sessionTarget = {
   sessionKey: "agent:main:main",
   canonicalKey: "agent:main:main",
   storePath: "/tmp/sessions",
+  assertCurrent: vi.fn(),
 };
 
 export function controlContext(
@@ -14,7 +15,6 @@ export function controlContext(
 ) {
   return {
     logGateway: { warn },
-    chatAbortControllers: new Map(),
     broadcastToConnIds: vi.fn((_name: string, payload: { talkEvent?: unknown }) => {
       if (payload.talkEvent) {
         onTalkEvent?.(payload.talkEvent as { type: string; payload: unknown });

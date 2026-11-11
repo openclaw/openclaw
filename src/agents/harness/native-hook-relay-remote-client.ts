@@ -1,6 +1,5 @@
-import { constants } from "node:fs";
-import { open } from "node:fs/promises";
 import { request } from "node:https";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import type {
   InvokeNativeHookRelayParams,
   NativeHookRelayProcessResponse,
@@ -15,25 +14,15 @@ export async function invokeRemoteNativeHookRelay(
   params: InvokeNativeHookRelayParams,
   signal: AbortSignal,
 ): Promise<NativeHookRelayProcessResponse> {
-  const file = await open(credentialPath, constants.O_RDONLY | constants.O_NOFOLLOW);
   let credential: { url: string; token: string };
   try {
-    const stat = await file.stat();
-    if (!stat.isFile() || stat.size > MAX_CREDENTIAL_BYTES) {
-      throw new Error("Invalid native hook callback credential");
-    }
-    const buffer = Buffer.alloc(MAX_CREDENTIAL_BYTES + 1);
-    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
-    if (bytesRead > MAX_CREDENTIAL_BYTES) {
-      throw new Error("Invalid native hook callback credential");
-    }
-    try {
-      credential = JSON.parse(buffer.subarray(0, bytesRead).toString("utf8"));
-    } catch {
-      throw new Error("Invalid native hook callback credential");
-    }
-  } finally {
-    await file.close();
+    const { buffer } = await readRegularFile({
+      filePath: credentialPath,
+      maxBytes: MAX_CREDENTIAL_BYTES,
+    });
+    credential = JSON.parse(buffer.toString("utf8"));
+  } catch {
+    throw new Error("Invalid native hook callback credential");
   }
   if (
     !credential ||
@@ -55,12 +44,22 @@ export async function invokeRemoteNativeHookRelay(
   signal.throwIfAborted();
   const body = JSON.stringify(params);
   return await new Promise((resolve, reject) => {
+    let outcome:
+      | { ok: true; value: NativeHookRelayProcessResponse }
+      | { ok: false; error: Error }
+      | undefined;
+    const fail = (message: string) => {
+      outcome ??= { ok: false, error: new Error(message) };
+      req.destroy();
+    };
     // Node's HTTPS client verifies certificates, honors NODE_EXTRA_CA_CERTS, and
     // does not follow redirects. A relay credential never leaves this endpoint.
     const req = request(
       url,
       {
         method: "POST",
+        // The cold relay owns this socket through close, never an idle pooled connection.
+        agent: false,
         signal,
         headers: {
           authorization: `Bearer ${credential.token}`,
@@ -69,9 +68,9 @@ export async function invokeRemoteNativeHookRelay(
         },
       },
       (res) => {
+        res.on("error", () => fail("Native hook callback response failed"));
         if (res.statusCode !== 200) {
-          res.destroy();
-          reject(new Error(`Native hook callback rejected (${res.statusCode ?? 0})`));
+          fail(`Native hook callback rejected (${res.statusCode ?? 0})`);
           return;
         }
         const chunks: Buffer[] = [];
@@ -79,13 +78,11 @@ export async function invokeRemoteNativeHookRelay(
         res.on("data", (chunk: Buffer) => {
           size += chunk.length;
           if (size > MAX_RESPONSE_BYTES) {
-            reject(new Error("Native hook callback response too large"));
-            res.destroy();
+            fail("Native hook callback response too large");
             return;
           }
           chunks.push(chunk);
         });
-        res.on("error", () => reject(new Error("Native hook callback response failed")));
         res.on("end", () => {
           try {
             const decoded = JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -99,15 +96,23 @@ export async function invokeRemoteNativeHookRelay(
             ) {
               throw new Error("Invalid response");
             }
-            resolve(result);
+            outcome ??= { ok: true, value: result };
           } catch {
-            reject(new Error("Invalid native hook callback response"));
+            fail("Invalid native hook callback response");
           }
         });
       },
     );
     // Do not surface URLs, headers, or a server-supplied error containing secrets.
-    req.on("error", () => reject(new Error("Native hook callback connection failed")));
+    req.on("error", () => fail("Native hook callback connection failed"));
+    // An error or response end does not yet prove the owned socket closed.
+    req.once("close", () => {
+      if (outcome?.ok) {
+        resolve(outcome.value);
+      } else {
+        reject(outcome?.error ?? new Error("Native hook callback connection failed"));
+      }
+    });
     req.end(body);
   });
 }

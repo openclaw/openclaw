@@ -1,7 +1,7 @@
 # Shared Mermaid renderer
 
-The Control UI and native chat use one pinned Mermaid engine, sandbox, and SVG
-sanitizer. `renderMermaidSvg` renders in an opaque iframe and returns passive,
+The Control UI and native chat render Mermaid syntax with one pinned Pele engine,
+sandbox, and SVG sanitizer. `renderMermaidSvg` renders in an opaque iframe and returns passive,
 sanitized SVG. The host never inserts diagram-controlled HTML and accepts native
 results only from its trusted top-level document.
 
@@ -41,20 +41,21 @@ leave source available in the caller's UI.
 
 ## Dependency notices
 
-Mermaid's classic bundle includes dependencies with versions different from the
-workspace's installed packages. Native notices must cover the exact bundle,
-including its embedded DOMPurify, as well as the host's DOMPurify dependency.
-Android and iOS package the original license texts per dependency in
-`apps/android/THIRD_PARTY_LICENSES/openclaw/licenses/` and
-`apps/ios/Resources/Licenses/`; the filename is the Licenses screen's dependency
-title. The generated assets also carry `native/NOTICE.txt` for the shared Apple
-resource bundle. Preserve the upstream copyright and license
-text, including distinct license texts when Mermaid bundles multiple versions.
-Do not replace these files with an aggregate notice bundle. When updating
-Mermaid, audit its source map and retained license comments and refresh the
-affected dependency files alongside the pinned dependency. Keep the existing
-KaTeX notice when its MIT text matches, and preserve the separate JamaJS notice
-for the Apache-licensed code embedded by layout-base.
+Pele has no runtime dependencies and requires no WebAssembly. Preserve its
+complete MIT license, including the ISC notice for the bundled Lucide zoom-reset
+icon, together with the host DOMPurify notice. Android and iOS package original
+license texts per dependency in `apps/android/THIRD_PARTY_LICENSES/openclaw/licenses/`
+and `apps/ios/Resources/Licenses/`; the filename is the Licenses screen's dependency
+title. Generated assets also carry `native/NOTICE.txt` for the shared Apple
+resource bundle. Audit the emitted classic script and dependency graph when
+updating Pele, and refresh the corresponding notices in the same change.
+
+The package and bridge retain the Mermaid name because stored Markdown uses
+`mermaid` fences. Pele has its own layout: node placement and connectors can
+change without changing the source. Source and image actions are unchanged.
+Links and images supplied by diagram authors are disabled. The sandbox resolves
+Pele's theme/font CSS variables before removing CSS, so the sanitized standalone
+SVG and native bitmap keep the host theme.
 
 Browser contract tests live in `ui/src/components/markdown-mermaid*.test.ts`.
 They cover the sandbox, SVG sanitization, streaming presentation, native result

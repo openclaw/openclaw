@@ -38,9 +38,13 @@ async function resize(file: File, maxBytes: number): Promise<File> {
   }
 }
 
-globalThis.addEventListener("message", ({ data }: MessageEvent<ChatAttachmentImageRequest>) => {
+function onMessage({ data }: MessageEvent<ChatAttachmentImageRequest>) {
+  globalThis.removeEventListener("message", onMessage);
   void resize(data.file, data.maxBytes).then(
     (file) => globalThis.postMessage(file, { transfer: [] }),
     () => globalThis.postMessage(null, { transfer: [] }),
   );
-});
+}
+
+// The dedicated worker accepts one job; onMessage detaches before decoding it.
+globalThis.addEventListener("message", onMessage);

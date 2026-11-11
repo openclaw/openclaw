@@ -4,16 +4,8 @@ import { loadLibopus } from "libopus-wasm";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createRealtimePlaybackFixture } from "./realtime-playback.integration.test-support.js";
 
-function tone(frame: number): Buffer {
-  const pcm = Buffer.alloc(960);
-  for (let sample = 0; sample < 480; sample += 1) {
-    pcm.writeInt16LE(
-      Math.round(4_000 * Math.sin(((frame * 480 + sample) * Math.PI * 880) / 24_000)),
-      sample * 2,
-    );
-  }
-  return pcm;
-}
+// Timing needs 20 ms of audible PCM16, not a particular frequency or phase.
+const tone = () => Buffer.alloc(960, Buffer.from([0xa0, 0x0f, 0xa0, 0x0f, 0x60, 0xf0, 0x60, 0xf0]));
 
 async function createJitterFixture() {
   await loadLibopus();
@@ -25,6 +17,14 @@ async function createJitterFixture() {
     vi.useRealTimers();
   });
   return fixture;
+}
+
+async function tick(ms: number, done = () => false) {
+  for (let elapsed = 0; elapsed < ms && !done(); elapsed++) {
+    await vi.advanceTimersByTimeAsync(1);
+    // The real encoder yields between packet-clock ticks.
+    await nextEventLoopTurn();
+  }
 }
 
 it("absorbs an 80 ms delivery reorder gap without inserting playback silence", async () => {
@@ -52,7 +52,7 @@ it("absorbs an 80 ms delivery reorder gap without inserting playback silence", a
     const arrival = Math.max(previousArrival, frame * 20 + (frame % 20 === 5 ? 80 : 0));
     previousArrival = arrival;
     setTimeout(() => {
-      fixture.callbacks.onAudio(tone(frame), { itemId: "reply" });
+      fixture.callbacks.onAudio(tone(), { itemId: "reply" });
       if (frame === 99) {
         fixture.callbacks.onMark?.("complete", () => {
           consumedMs = fixture.callbacks.getPlaybackState?.()[0]?.audioEndMs;
@@ -61,25 +61,15 @@ it("absorbs an 80 ms delivery reorder gap without inserting playback silence", a
       }
     }, arrival);
   }
-  for (let elapsed = 0; elapsed < 3_000; elapsed += 1) {
-    await vi.advanceTimersByTimeAsync(1);
-    // The real encoder yields with setImmediate; let it run between packet-clock ticks.
-    await nextEventLoopTurn();
-    if (complete) {
-      break;
-    }
-  }
-  expect(complete).toBe(true);
-  expect(consumedMs).toBe(2_000);
-  expect(missingFrames).toBe(0);
-  expect(resources.size).toBe(1);
+  await tick(3_000, () => complete);
+  expect([complete, consumedMs, missingFrames, resources.size]).toEqual([true, 2_000, 0, 1]);
   expect(fixture.onTerminalError).not.toHaveBeenCalled();
 });
 
 it("retires a short continuous reply before its startup deadline without late playback", async () => {
   const fixture = await createJitterFixture();
   const play = vi.spyOn(fixture.player, "play");
-  fixture.callbacks.onAudio(tone(0));
+  fixture.callbacks.onAudio(tone());
   expect(play).not.toHaveBeenCalled();
   fixture.callbacks.onClearAudio();
   await vi.advanceTimersByTimeAsync(200);
@@ -95,9 +85,9 @@ it.each(["finish", "cancel"] as const)(
     const fixture = await createJitterFixture();
     const next = fixture.createLane();
     const heard: string[] = [];
-    fixture.callbacks.onAudio(tone(0));
+    fixture.callbacks.onAudio(tone());
     fixture.callbacks.onMark?.("first", () => heard.push("first"));
-    next.callbacks.onAudio(Buffer.concat(Array.from({ length: 6 }, (_, frame) => tone(frame))));
+    next.callbacks.onAudio(Buffer.concat(Array.from({ length: 6 }, tone)));
     next.callbacks.onMark?.("second", () => heard.push("second"));
     next.callbacks.onResponseDone?.({ status: "completed" });
     if (firstAction === "finish") {
@@ -105,10 +95,7 @@ it.each(["finish", "cancel"] as const)(
     } else {
       fixture.callbacks.onClearAudio();
     }
-    for (let elapsed = 0; elapsed < 500; elapsed += 1) {
-      await vi.advanceTimersByTimeAsync(1);
-      await nextEventLoopTurn();
-    }
+    await tick(500);
     expect(heard).toEqual(firstAction === "finish" ? ["first", "second"] : ["second"]);
     expect(fixture.onTerminalError).not.toHaveBeenCalled();
     expect(next.onTerminalError).not.toHaveBeenCalled();

@@ -16,7 +16,7 @@ const PACKAGE_PATTERN = /^@openclaw\/[a-z0-9][a-z0-9._-]*$/u;
 const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 const RECOVERY_CONFLICT = Symbol("recoveryConflict");
 
-export function formatClawHubRecoveryCommand({ attemptId, clawhubSource, reason }) {
+export function formatClawHubRecoveryCommand({ attemptId, clawhubSource, reason, registry }) {
   if (!isClawHubPublishAttemptId(attemptId)) {
     throw new Error("Invalid ClawHub publish attempt.");
   }
@@ -24,6 +24,7 @@ export function formatClawHubRecoveryCommand({ attemptId, clawhubSource, reason 
   return [
     "bun",
     quote(join(clawhubSource, "packages/clawhub/src/cli.ts")),
+    ...(registry ? ["--registry", quote(registry)] : []),
     "--no-input package recover",
     quote(attemptId),
     "--manual-override-reason",
@@ -71,6 +72,7 @@ export function createClawHubRecoveryManifest(transactionsInput, recordsInput) {
         artifactName: transaction.artifactName,
         artifactSha256: transaction.artifactSha256,
         artifactSize: transaction.artifactSize,
+        // Missing receipt is unknown delivery, not evidence that staging never happened.
         publicationStatus: "unavailable",
       };
     }
@@ -168,7 +170,7 @@ async function requestRecovery(
     method: body ? "POST" : "GET",
     headers: {
       accept: "application/json",
-      authorization: `Bearer ${token}`,
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...(body ? { "content-type": "application/json" } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
@@ -223,6 +225,42 @@ async function readPublicationState(expected, context) {
   return publication;
 }
 
+// Receipts identify the original operation; only the registry selects what can
+// happen now. Pending work belongs to ClawHub's existing finalizer, not recovery.
+function selectRecoveryOperation(entry, publication) {
+  if (publication.state === "published") {
+    return "verify";
+  }
+  if (publication.state === "pending") {
+    return "wait";
+  }
+  if (publication.state === "failed" && !publication.recoverable) {
+    throw new Error(
+      `ClawHub publication is not recoverable: ${entry.name}. Use a new version or ask the ClawHub operator to inspect the attempt.`,
+    );
+  }
+  if (
+    !["failed", "reconcile", "unpublished"].includes(publication.state) ||
+    !isClawHubPublishAttemptId(entry.attemptId)
+  ) {
+    throw new Error(
+      `ClawHub recovery ${publication.state}: ${entry.name}. No bound recoverable attempt; ask the ClawHub operator to inspect it.`,
+    );
+  }
+  return "recover";
+}
+
+function describeRecoveryOperation(entry, operation, observedAttemptId) {
+  const identity = `${entry.name}@${entry.version}`;
+  if (operation === "verify") {
+    return `${identity}: public publication state verified; no recovery performed. Run postpublish verification for sealed-byte evidence.`;
+  }
+  if (operation === "wait") {
+    return `${identity}: observe the existing ClawHub finalizer; no recovery or replacement publication. If it remains pending, ask the ClawHub operator to run the targeted prepublication worker for attempt ${observedAttemptId ?? "unavailable"}.`;
+  }
+  return `${identity}: recover sealed attempt ${entry.attemptId} with current publisher authority; ClawHub validates eligibility and any existing successor.`;
+}
+
 async function waitForPublicationState(
   expected,
   context,
@@ -234,6 +272,29 @@ async function waitForPublicationState(
       throw new Error(`ClawHub recovery timed out: ${expected.name}.`);
     }
     const state = await readPublicationState(expected, context);
+    if (expected.publicationStatus === "unavailable") {
+      // Public state identifies a version, not its original workflow/inventory.
+      // The registry has no lookup by that sealed identity; never adopt its
+      // current attempt as the missing receipt or submit replacement bytes.
+      if (state.state === "published") {
+        context.report(describeRecoveryOperation(expected, "verify"));
+        return state;
+      }
+      // Do not spend the whole recovery job waiting on an unbound attempt:
+      // independent receipted siblings must still get their recovery turn.
+      throw new Error(
+        `ClawHub publication outcome is unknown: ${expected.name}@${expected.version}; receipt missing, registry state ${state.state}, observed attempt ${state.attemptId ?? "unavailable"}. Cannot bind the original attempt; ask the ClawHub operator to reconcile the sealed child run and inventory. No recovery or replacement publication performed.`,
+      );
+    }
+    if (recoverAttemptChange) {
+      const operation = selectRecoveryOperation(expected, state);
+      if (operation !== "recover") {
+        context.report(describeRecoveryOperation(expected, operation, state.attemptId));
+      }
+      if (operation === "verify") {
+        return state;
+      }
+    }
     const stale = state.attemptId !== undefined && state.attemptId === staleAttemptId;
     if (state.attemptId !== undefined && state.attemptId !== attemptId && !stale) {
       if (recoverAttemptChange) {
@@ -271,6 +332,24 @@ async function waitForPublicationState(
   }
 }
 
+/**
+ * @typedef {{name: string, version: string, recoveredFromAttemptId: string, attemptId: string, publicationStatus: string}} ClawHubRecoveryRecord
+ * @typedef {{schemaVersion: number, complete: boolean, recovered: ClawHubRecoveryRecord[]}} ClawHubRecoveryResult
+ */
+
+/**
+ * @param {object} options
+ * @param {unknown} options.manifest
+ * @param {string} options.reason
+ * @param {string} [options.registry]
+ * @param {string} options.token
+ * @param {typeof fetch} [options.fetchImpl]
+ * @param {(milliseconds: number) => Promise<void>} [options.wait]
+ * @param {number} [options.timeoutMilliseconds]
+ * @param {(message: string) => void} [options.report]
+ * @param {() => void | Promise<void>} [options.revalidateAuthority]
+ * @param {(result: ClawHubRecoveryResult) => void | Promise<void>} [options.onProgress]
+ */
 export async function executeClawHubRecoveryManifest({
   manifest: rawManifest,
   reason,
@@ -282,38 +361,66 @@ export async function executeClawHubRecoveryManifest({
       setTimeout(resolveWait, milliseconds);
     }),
   timeoutMilliseconds = 30 * 60 * 1000,
+  report = console.error,
+  revalidateAuthority,
+  onProgress,
 }) {
   const manifest = validateClawHubRecoveryManifest(rawManifest);
   const trimmedReason = reason?.trim();
   if (!trimmedReason || trimmedReason.length > 500 || !token) {
     throw new Error("ClawHub recovery requires a token and a 1-500 character reason.");
   }
-  const unavailable = manifest.packages.find((entry) => entry.publicationStatus === "unavailable");
-  if (unavailable) {
-    throw new Error(
-      `ClawHub package was not staged and has no recoverable attempt: ${unavailable.name}.`,
-    );
-  }
-  const recovered = [];
+  const unresolved = [];
+  /** @type {ClawHubRecoveryResult} */
+  const result = { schemaVersion: 1, complete: false, recovered: [] };
+  const { recovered } = result;
+  await onProgress?.(result);
   for (const entry of manifest.packages) {
-    if (entry.publicationStatus === "published") {
+    const deadline = Date.now() + timeoutMilliseconds;
+    let lastMessage;
+    const context = {
+      registry,
+      token,
+      fetchImpl,
+      wait,
+      report: (message) => {
+        if (message !== lastMessage) {
+          report(message);
+        }
+        lastMessage = message;
+      },
+    };
+    let publication;
+    try {
+      publication = await waitForPublicationState(entry, context, deadline, {
+        attemptId: entry.attemptId,
+        recoverAttemptChange: true,
+        recoverLegacyUnpublished: true,
+      });
+    } catch (error) {
+      if (entry.publicationStatus !== "unavailable") {
+        throw error;
+      }
+      const message = `Unresolved missing ClawHub receipt for ${entry.name}@${entry.version}: ${error instanceof Error ? error.message : String(error)}`;
+      context.report(message);
+      unresolved.push(message);
       continue;
     }
-    const deadline = Date.now() + timeoutMilliseconds;
-    const context = { registry, token, fetchImpl, wait };
-    let publication = await waitForPublicationState(entry, context, deadline, {
-      attemptId: entry.attemptId,
-      recoverAttemptChange: true,
-      recoverLegacyUnpublished: true,
-    });
     if (publication.state === "published") {
       continue;
     }
-    if (!["failed", "reconcile", "unpublished"].includes(publication.state)) {
-      throw new Error(`ClawHub recovery ${publication.state}: ${entry.name}.`);
-    }
     let started;
     for (;;) {
+      context.report(
+        describeRecoveryOperation(
+          entry,
+          selectRecoveryOperation(entry, publication),
+          publication.attemptId,
+        ),
+      );
+      // Registry observations and conflict waits may outlive the current
+      // parent admission. Retained attempts identify bytes, not live authority.
+      await revalidateAuthority?.();
       started = await requestRecovery(
         `/api/v1/publish/attempts/${encodeURIComponent(entry.attemptId)}/recover`,
         {
@@ -347,9 +454,6 @@ export async function executeClawHubRecoveryManifest({
       if (publication.state === "published") {
         break;
       }
-      if (!["failed", "reconcile", "unpublished"].includes(publication.state)) {
-        throw new Error(`ClawHub recovery ${publication.state}: ${entry.name}.`);
-      }
     }
     if (started?.[RECOVERY_CONFLICT] !== undefined) {
       continue;
@@ -367,6 +471,16 @@ export async function executeClawHubRecoveryManifest({
       name: entry.name,
       version: entry.version,
     });
+    const record = {
+      name: entry.name,
+      version: entry.version,
+      recoveredFromAttemptId: entry.attemptId,
+      attemptId: started.attemptId,
+      publicationStatus: started.publicationStatus,
+    };
+    recovered.push(record);
+    // Retain accepted custody before polling: a timeout is not a failed submission.
+    await onProgress?.(result);
     if (["blocked", "failed", "expired"].includes(started.publicationStatus)) {
       throw new Error(`ClawHub recovery ${started.publicationStatus}: ${entry.name}.`);
     }
@@ -376,19 +490,26 @@ export async function executeClawHubRecoveryManifest({
         recoverLegacyUnpublished: false,
         staleAttemptId: entry.attemptId,
       });
+      record.publicationStatus = state.state;
+      await onProgress?.(result);
       if (state.state !== "published") {
         throw new Error(`ClawHub recovery ${state.state}: ${entry.name}.`);
       }
     }
-    recovered.push({
-      name: entry.name,
-      version: entry.version,
-      recoveredFromAttemptId: entry.attemptId,
-      attemptId: started.attemptId,
-      publicationStatus: "published",
-    });
   }
-  return { schemaVersion: 1, complete: true, recovered };
+  if (unresolved.length) {
+    throw new Error(
+      `${unresolved.join("\n")}\nIndependent recoveries completed: ${
+        recovered
+          .filter((entry) => entry.publicationStatus === "published")
+          .map((entry) => `${entry.name}@${entry.version}`)
+          .join(", ") || "none"
+      }.`,
+    );
+  }
+  result.complete = true;
+  await onProgress?.(result);
+  return result;
 }
 
 async function main() {
@@ -454,16 +575,23 @@ async function main() {
       JSON.parse(readFileSync(values.manifest, "utf8")),
       JSON.parse(readFileSync(values["run-json"], "utf8")),
     );
+    let outputCreated = false;
     const result = await executeClawHubRecoveryManifest({
       manifest,
       reason: values.reason,
       registry: values.registry,
       token: process.env.CLAWHUB_TOKEN,
+      onProgress: values.output
+        ? (progress) => {
+            mkdirSync(dirname(values.output), { recursive: true });
+            writeFileSync(values.output, `${JSON.stringify(progress, null, 2)}\n`, {
+              flag: outputCreated ? "w" : "wx",
+            });
+            outputCreated = true;
+          }
+        : undefined,
     });
-    if (values.output) {
-      mkdirSync(dirname(values.output), { recursive: true });
-      writeFileSync(values.output, `${JSON.stringify(result, null, 2)}\n`, { flag: "wx" });
-    } else {
+    if (!values.output) {
       console.log(JSON.stringify(result));
     }
     return;
@@ -491,21 +619,30 @@ async function main() {
       throw new Error(`Mixed-version or duplicate publish artifact: ${path}`);
     }
     names.add(record.name);
-    if (record.publicationStatus === "published") {
-      continue;
-    }
-    if (attempts.has(record.attemptId)) {
+    if (record.attemptId && attempts.has(record.attemptId)) {
       throw new Error(`Duplicate publish attempt: ${path}`);
     }
-    attempts.add(record.attemptId);
+    if (record.attemptId) {
+      attempts.add(record.attemptId);
+    }
+    const publication = await readPublicationState(record, {
+      registry: values.registry,
+      fetchImpl: fetch,
+    });
+    const recoveryOperation = selectRecoveryOperation(record, publication);
     commands.push(
-      `# ${record.name}@${record.version}: recorded ${record.publicationStatus}`,
-      formatClawHubRecoveryCommand({
-        attemptId: record.attemptId,
-        clawhubSource: resolve(values["clawhub-source"]),
-        reason,
-      }),
+      `# ${describeRecoveryOperation(record, recoveryOperation, publication.attemptId)}`,
     );
+    if (recoveryOperation === "recover") {
+      commands.push(
+        formatClawHubRecoveryCommand({
+          attemptId: record.attemptId,
+          clawhubSource: resolve(values["clawhub-source"]),
+          registry: values.registry,
+          reason,
+        }),
+      );
+    }
   }
   console.error(
     "Review these commands against the original child/parent attempt before executing; no recovery was performed.",
@@ -515,7 +652,15 @@ async function main() {
   }
 }
 
-if (process.argv[1] && isDirectRunUrl(realpathSync(process.argv[1]), import.meta.url)) {
+let invokedAsMain = false;
+if (process.argv[1]) {
+  try {
+    invokedAsMain = isDirectRunUrl(realpathSync(process.argv[1]), import.meta.url);
+  } catch {
+    // Inline and stdin importers need not have a filesystem entrypoint.
+  }
+}
+if (invokedAsMain) {
   try {
     await main();
   } catch (error) {

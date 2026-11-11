@@ -1,4 +1,5 @@
 // Slack question envelope and feedback tests.
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   decodeSlackQuestionAction,
@@ -22,6 +23,7 @@ describe("Slack question actions", () => {
     [{ status: "answered", questionId: "target", optionValue: "Production" }, "Answer submitted."],
     [{ status: "already-terminal", reason: "not-found" }, "This question was already answered."],
   ] as const)("shows ephemeral-ready outcome feedback", async (result, expectedText) => {
+    using _ = vi.spyOn(questionGatewayRuntime, "resolveOption").mockResolvedValue(result);
     const respond = vi.fn(async () => undefined);
 
     await resolveSlackQuestionAction({
@@ -30,13 +32,17 @@ describe("Slack question actions", () => {
       accountId: "default",
       userId: "U123",
       respond,
-      resolveQuestion: vi.fn(async () => result),
     });
 
     expect(respond).toHaveBeenCalledWith(expectedText);
   });
 
   it("does not turn a committed answer into an error when feedback fails", async () => {
+    using _ = vi.spyOn(questionGatewayRuntime, "resolveOption").mockResolvedValue({
+      status: "answered",
+      questionId: "target",
+      optionValue: "Production",
+    });
     const respond = vi.fn(async () => {
       throw new Error("receipt failed");
     });
@@ -48,11 +54,6 @@ describe("Slack question actions", () => {
         accountId: "default",
         userId: "U123",
         respond,
-        resolveQuestion: vi.fn(async () => ({
-          status: "answered" as const,
-          questionId: "target",
-          optionValue: "Production",
-        })),
       }),
     ).resolves.toBeUndefined();
     expect(respond).toHaveBeenCalledOnce();

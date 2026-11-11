@@ -45,9 +45,21 @@ final class GatewayChildSupervisor {
         return source.filter { !markers.contains($0.key) && !$0.key.hasPrefix("LAUNCH_JOB_") }
     }
 
+    enum Failure: Sendable, CustomStringConvertible {
+        case terminated(TerminationStatus?)
+        case launch(String)
+
+        var description: String {
+            switch self {
+            case let .terminated(status): String(describing: status)
+            case let .launch(message): message
+            }
+        }
+    }
+
     struct Child: Sendable {
         let waitUntilStarted: @Sendable () async throws -> Int32
-        let wait: @Sendable () async -> String
+        let wait: @Sendable () async -> Failure
         let terminate: @Sendable () async -> Void
     }
 
@@ -180,7 +192,7 @@ final class GatewayChildSupervisor {
                 failure = await child.wait()
             } catch {
                 if self.child != nil { await child.terminate() }
-                failure = error.localizedDescription
+                failure = .launch(error.localizedDescription)
             }
         }
     }
@@ -226,7 +238,7 @@ final class GatewayChildSupervisor {
             gracefulShutdownTimeout: .seconds(Self.shutdownTimeoutSeconds))
         return Child(
             waitUntilStarted: { try await process.waitUntilStarted() },
-            wait: { await String(describing: process.completionTask.value) },
+            wait: { await .terminated(process.completionTask.value) },
             terminate: { await process.terminate() })
     }
 }

@@ -213,7 +213,6 @@ export async function readTelegramHistory(
   let after = params.after;
   const messages: TelegramCachedMessageNode[] = [];
   while (messages.length <= params.limit) {
-    assertCurrent();
     const page = await params.cache.readHistory({
       accountId: params.accountId,
       chatId: params.chatId,
@@ -222,11 +221,9 @@ export async function readTelegramHistory(
       after,
       limit: Math.min(100, params.limit + 1),
     });
-    assertCurrent();
     const candidates = ascending ? page.messages : page.messages.toReversed();
     for (const node of candidates) {
       const allowed = await isTelegramHistoryNodeAllowed({ ...params, cfg, node, assertCurrent });
-      assertCurrent();
       if (allowed) {
         messages.push(node);
         if (messages.length > params.limit) {

@@ -1,4 +1,3 @@
-// SSH probe execution for SSH-verified node pairing.
 // Kept as a narrow runtime boundary so gateway tests can mock the probe
 // without touching the eligibility/verification policy.
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
@@ -6,7 +5,6 @@ import { runUtf8CommandWithTimeout } from "../process/exec.js";
 export type NodeIdentityProbeParams = {
   user: string;
   host: string;
-  port?: number;
   identity?: string;
   timeoutMs: number;
 };
@@ -59,7 +57,7 @@ export async function runNodeIdentityProbe(
     "-o",
     "ExitOnForwardFailure=yes",
     "-p",
-    String(params.port ?? 22),
+    "22",
   ];
   if (params.identity?.trim()) {
     args.push("-i", params.identity.trim(), "-o", "IdentitiesOnly=yes");

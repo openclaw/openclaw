@@ -90,13 +90,6 @@ function resolveSentMessageScopeKey(cfg?: SentMessageConfig, owner?: SentMessage
   return createHash("sha256").update(storePath, "utf8").digest("hex").slice(0, 24);
 }
 
-function sentMessageEntryKey(scopeKey: string, chatId: string, messageId: string): string {
-  return createHash("sha256")
-    .update(`${scopeKey}\0${chatId}\0${messageId}`, "utf8")
-    .digest("hex")
-    .slice(0, 32);
-}
-
 function getSentMessageBucket(scopeKey: string): Promise<SentMessageBucket> {
   const state = resolveGlobalSingleton<SentMessageState>(TELEGRAM_SENT_MESSAGES_STATE_KEY, () => ({
     bucketsByScope: new Map(),
@@ -121,7 +114,10 @@ async function persistSentMessage(
 ): Promise<void> {
   try {
     await openSentMessageStore().register(
-      sentMessageEntryKey(scopeKey, chatId, messageId),
+      createHash("sha256")
+        .update(`${scopeKey}\0${chatId}\0${messageId}`, "utf8")
+        .digest("hex")
+        .slice(0, 32),
       { scopeKey, chatId, messageId, timestamp },
       { ttlMs: TTL_MS },
     );
