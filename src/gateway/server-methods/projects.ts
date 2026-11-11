@@ -57,6 +57,7 @@ import {
   authorizeOperatorScopesForRequiredScope,
 } from "../method-scopes.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import { filterProjectsForRequester, projectRequesterForClient } from "../project-access.js";
 import { searchRemoteProjects } from "../project-github-search.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { resolveSessionCreateAgentId } from "../session-request-agent.js";
@@ -164,7 +165,12 @@ export const projectsHandlers: GatewayRequestHandlers = {
       const memoryStores = readMemoryProjectStores(assertCurrent);
       const assertMemoryCurrent = (keys: ReadonlySet<string>) =>
         assertMemoryProjectStoresCurrent(memoryStores, keys, assertCurrent);
-      const registryProjects = await listProjectRegistry(cfg);
+      // Restricted roles only discover projects they could open (public-only by default).
+      const registryProjects = await filterProjectsForRequester(
+        cfg,
+        await listProjectRegistry(cfg),
+        projectRequesterForClient(client),
+      );
       diagnostics?.mark("sessions");
       const githubHost = resolveConfiguredGitHubHost(cfg);
       const projects = registryProjects.map((project) => {
@@ -263,7 +269,8 @@ export const projectsHandlers: GatewayRequestHandlers = {
                 return record;
               }),
           ...(canCreate ? { githubHost: resolveConfiguredGitHubHost(cfg) } : {}),
-          ...(defaultRepository && (writable || canCreate) ? { defaultRepository } : {}),
+          // The default repository opens through projectGitUrl, an operator.write capability.
+          ...(defaultRepository && writable ? { defaultRepository } : {}),
           ...(recents
             ? {
                 recents: writable ? recents : recents.filter((recent) => recent.kind === "project"),
@@ -336,6 +343,7 @@ export const projectsHandlers: GatewayRequestHandlers = {
         cfg,
         projectId: params.projectId,
         targetAgentId: selected.agentId,
+        requester: projectRequesterForClient(client),
         resolveSandboxRequired: () =>
           resolveCreatorSandbox(cfg, resolveOperatorSessionCreation(client)) === "required",
         assertCurrent,

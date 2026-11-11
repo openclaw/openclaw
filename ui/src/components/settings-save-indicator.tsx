@@ -52,11 +52,11 @@ function IndicatorAction(props: { label: string; busy: boolean; onClick: () => v
   );
 }
 
-type FailureKind = "error" | "rejected" | "recovery";
+type FailureKind = "error" | "rejected" | "recovery" | "deferred";
 type Failure = { kind: FailureKind; reason: string | null };
 
 const isFailure = (state: string | undefined): state is FailureKind =>
-  state === "error" || state === "rejected" || state === "recovery";
+  state === "error" || state === "rejected" || state === "recovery" || state === "deferred";
 
 export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
   type Command = "retry" | "save" | "reload" | "apply";
@@ -65,7 +65,9 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
   });
   const presentation = createMemo(() => {
     const { retired } = lifetime();
-    const [command, setCommand] = createOptimistic<Command | null>(null);
+    const [command, setCommand] = createOptimistic<{ kind: Command; failure?: Failure } | null>(
+      null,
+    );
     const [saving, setSaving] = createOptimistic(false);
     const needsApply = createMemo(() => props.needsApply);
     return { retired, command, setCommand, saving, setSaving, needsApply };
@@ -81,7 +83,7 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
     view: ReturnType<typeof presentation>,
     pending: Promise<unknown>,
     retired: Promise<void>,
-    command: Command,
+    command: { kind: Command; failure?: Failure },
   ) {
     try {
       if (current(view)) {
@@ -106,6 +108,11 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
     if (busy() || (command === "apply" && props.applyDisabled)) {
       return;
     }
+    // Capture before the owner clears its failure while admitting the retry.
+    const presentedCommand = {
+      kind: command,
+      failure: command === "retry" ? failure() : undefined,
+    };
     const pending =
       command === "retry"
         ? props.onRetry()
@@ -123,7 +130,7 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
               throw error;
             }
           })
-        : Promise.resolve().then(() => present(view, pending, retired, command)),
+        : Promise.resolve().then(() => present(view, pending, retired, presentedCommand)),
     );
   }
   const saving = () => presentation().saving();
@@ -131,13 +138,13 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
   const status = createMemo(() => (props.saving ? "saving" : props.status));
   const state = createMemo(() => {
     const command = presentation().command();
-    if ((saving() && command === "apply") || props.applying) {
+    if ((saving() && command?.kind === "apply") || props.applying) {
       return "applying";
     }
     if (saving() || status() === "saving") {
       return "saving";
     }
-    if (["recovery", "rejected", "error", "paused", "conflict"].includes(status())) {
+    if (["recovery", "rejected", "error", "deferred", "paused", "conflict"].includes(status())) {
       return status();
     }
     if (props.pending) {
@@ -150,14 +157,17 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
   });
   // Retry keeps the failure in place until it has an outcome, so the card does not
   // collapse into Saving… and grow back when the same write fails again.
-  const retrying = () => saving() && presentation().command() === "retry";
+  const retrying = () => saving() && presentation().command()?.kind === "retry";
   const failure = createMemo<Failure | undefined>(
-    (previous) => {
+    () => {
+      if (retrying()) {
+        return presentation().command()?.failure;
+      }
       const shown = state();
       if (isFailure(shown)) {
         return { kind: shown, reason: props.lastError?.trim() || null };
       }
-      return retrying() ? previous : undefined;
+      return undefined;
     },
     {
       equals: (previous, next) =>
@@ -196,7 +206,9 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
             ? t("configView.autoSaveSaving")
             : card.failure.kind === "rejected"
               ? t("configView.autoSaveRejected")
-              : t("configView.autoSaveFailed")}
+              : card.failure.kind === "deferred"
+                ? t("configView.autoSaveDeferred")
+                : t("configView.autoSaveFailed")}
         </span>
         <Show when={card.reason}>
           {(reason) => <p class="settings-save-indicator__reason">{reason()}</p>}
@@ -212,14 +224,16 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
               {t("configView.retry")}
             </button>
           </Show>
-          <button
-            class="btn btn--sm btn--ghost settings-save-indicator__action"
-            type="button"
-            disabled={busy()}
-            onClick={discard}
-          >
-            {t("configView.discardChanges")}
-          </button>
+          <Show when={card.failure.kind !== "deferred" || props.pending}>
+            <button
+              class="btn btn--sm btn--ghost settings-save-indicator__action"
+              type="button"
+              disabled={busy()}
+              onClick={discard}
+            >
+              {t("configView.discardChanges")}
+            </button>
+          </Show>
         </div>
       </div>
     );

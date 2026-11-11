@@ -272,9 +272,11 @@ span.new-session-page__select {
   max-width: 100%;
 }
 
+/* The bordered pair keeps the row's pill shape; its two triggers square off
+   the edge they share so the pair reads as one control. */
 .new-session-page__workspace--checkout {
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
 }
 
 .new-session-page__workspace > span.new-session-page__select {
@@ -288,14 +290,20 @@ span.new-session-page__select {
   max-width: 65%;
 }
 
+.new-session-page__workspace--checkout #new-session-project-trigger {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
 .new-session-page__workspace--checkout #new-session-checkout-trigger {
   border-inline-start: 1px solid var(--border);
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
 }
 
 .new-session-page__workspace .new-session-page__trigger {
   min-width: 0;
   max-width: 100%;
-  border-radius: inherit;
 }
 
 .new-session-page__workspace .new-session-page__trigger-label {
@@ -330,7 +338,7 @@ span.new-session-page__select {
   cursor: var(--cursor-action);
   user-select: none;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: transparent;
   font-family: inherit;
 }
@@ -729,6 +737,10 @@ span.new-session-page__select {
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+
+div.new-session-page__project-search {
+  padding: 8px 10px;
 }
 
 .new-session-page__environment-picker {

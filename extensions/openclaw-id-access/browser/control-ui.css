@@ -113,3 +113,29 @@
 .ocid-access__error code {
   white-space: pre-wrap;
 }
+
+.ocid-node-dialog {
+  display: grid;
+  gap: var(--space-3);
+  overflow-y: auto;
+  max-height: var(--openclaw-modal-height-limit, 85vh);
+}
+
+.ocid-node-dialog__command {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.ocid-node-dialog__code {
+  font-family: var(--mono);
+  font-size: 28px;
+  letter-spacing: 0.12em;
+}
+
+.ocid-node-dialog__surface {
+  padding-left: var(--space-5);
+  overflow-wrap: anywhere;
+}

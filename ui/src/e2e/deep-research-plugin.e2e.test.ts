@@ -1,7 +1,8 @@
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { expect as pw } from "playwright/test";
+import { expect as pw, type Locator, type Page } from "playwright/test";
 import { expect, it } from "vitest";
+import { openChatPanels } from "../test-helpers/chat-layout-menu.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -12,6 +13,17 @@ import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugi
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Deep research native bundle" });
+
+// The side panel is the plugin's only Control UI entry point; sessions carry no research chrome.
+async function openResearchPanel(page: Page, beforeSelect?: (launcher: Locator) => Promise<void>) {
+  await pw(page.getByRole("button", { name: /deep research/i })).toHaveCount(0);
+  await openChatPanels(page, "desktop");
+  const launcher = page.locator(".side-panel-launcher");
+  const option = launcher.getByRole("button", { name: "Deep research" });
+  await pw(option).toBeVisible();
+  await beforeSelect?.(launcher);
+  await option.click();
+}
 const sessionKey = "agent:main:dashboard:research-ui";
 const method = (action: string) => `deep-research.view.v1.${action}`;
 const timestamp = Date.parse("2026-01-01T12:00:00Z");
@@ -115,7 +127,7 @@ suite.define(() => {
         },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await page.getByRole("button", { name: "Open deep research progress" }).click();
+      await openResearchPanel(page);
       const pane = page.locator(".deep-research-pane");
       const input = pane.getByLabel("Research question");
       await input.fill(questionA);
@@ -287,14 +299,11 @@ suite.define(() => {
           }
         };
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const open = page.getByRole("button", { name: "Open deep research progress" });
-        await pw(open).toBeVisible();
-        await capture("desktop-before", open);
-        await page.setViewportSize({ width: 390, height: 844 });
-        await capture("phone-before", open);
-        await page.setViewportSize({ width: 1440, height: 1000 });
-        await open.click();
+        await pw(page.getByText("No messages yet")).toBeVisible();
+        await capture("desktop-before");
+        await openResearchPanel(page, (launcher) => capture("desktop-launcher", launcher));
         const pane = page.locator(".deep-research-pane");
+        const retained = pane.locator(".deep-research-counts div", { hasText: "Sources retained" });
         await pw(pane).toBeVisible();
         try {
           await pw(
@@ -371,12 +380,14 @@ suite.define(() => {
         });
         expect(startKeys[1]).toBe(startKeys[2]);
         expect(startKeys[0]).not.toBe(startKeys[1]);
-        await pw(open).toContainText("1 source");
+        // The Gateway announces job changes; the pane refreshes from them.
+        await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
+        await pw(retained.locator("dd")).toHaveText("1");
         const progressed = { ...running, counts: { ...running.counts, sources: 2 } };
         await gateway.setMethodResponse(method("list"), list(progressed));
         await gateway.setMethodResponse(method("read"), read(progressed));
         await gateway.emitGatewayEvent("plugin.deep-research.changed", {});
-        await pw(open).toContainText("2 sources");
+        await pw(retained.locator("dd")).toHaveText("2");
         await capture("desktop-running", pane, [pane.getByText("Gathering evidence (round 1)")]);
         await pane.getByRole("button", { name: "Cancel research", exact: true }).click();
         await gateway.waitForRequest(method("cancel"), {
@@ -397,8 +408,7 @@ suite.define(() => {
         const cite = pane.getByRole("button", { name: "Source S1", exact: true });
         await pw(cite).toBeVisible();
         await pw(pane.getByRole("heading", { name: question, exact: true })).toBeVisible();
-        await pw(open).toContainText("1 source");
-        await pw(open).not.toContainText("1 sources");
+        await capture("desktop-after", page.locator("openclaw-app"), [pane]);
         await capture("desktop-report", pane, [cite]);
         await cite.click();
         await pw(pane.getByRole("region", { name: "Research sources" })).toBeVisible();
@@ -415,7 +425,8 @@ suite.define(() => {
         await page.setViewportSize({ width: 390, height: 844 });
         // Mobile starts with its conversation open, independently of the saved desktop panels.
         await pw(pane).toBeHidden();
-        await open.click();
+        // Mobile Panels restores the research tab opened on desktop.
+        await openChatPanels(page, "mobile");
         await pw(pane).toBeVisible();
         await pane.getByRole("button", { name: "Report", exact: true }).click();
         await capture("phone-portrait-report", pane, [cite]);

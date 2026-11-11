@@ -56,7 +56,12 @@ function childEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-const fixtureWorkers = createVitestWorkerRun(childEnv());
+const fixtureWorkers = createVitestWorkerRun(
+  childEnv(),
+  undefined,
+  undefined,
+  resolveTestNodeExecPath(),
+);
 afterAll(() => fixtureWorkers.dispose());
 try {
   await fixtureWorkers.prepare();
@@ -130,8 +135,8 @@ it("starts with an empty, attribute-free body and native default focus", () => {
 function fixtureFiles(fixtureRoot: string): Record<string, string> {
   const sourcePath = (name: string) => JSON.stringify(path.join(repoRoot, "src", name));
   const payloadImports = `import { createRequire } from "node:module";
-import { queryObjects } from "node:v8";
-const { ManualPayload, AutoPayload } = createRequire(import.meta.url)("./mock-payloads.cjs");`;
+import { expectCollected, expectLiveObjects } from ${sourcePath("test-utils/retention.ts")};
+const { ManualPayload, AutoPayload, manualRefs, autoRefs } = createRequire(import.meta.url)("./mock-payloads.cjs");`;
 
   return {
     "runner.ts": `import Runner from ${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))};
@@ -426,14 +431,18 @@ it("starts from unrouted, unpatched console state", () => {
   spy.mockRestore();
 });
 `,
-    // Native require keeps only the constructors stable across module resets.
+    // Native require keeps weak instance registries stable across module resets.
     // Plain factory closures avoid vi.fn's separate process-lifetime mock set.
-    // Each census collects and traverses the heap. Run this chain after the
-    // collection-failure pair, before unrelated fixtures grow the shared heap;
-    // keep both presence and release checks without pre-allocation scans.
-    "mock-payloads.cjs": `class ManualPayload { value = "manual"; }
-class AutoPayload extends Date {}
-module.exports = { ManualPayload, AutoPayload };
+    // Keep both presence and release checks across the collection-failure pair.
+    "mock-payloads.cjs": `const manualRefs = [], autoRefs = [];
+class ManualPayload {
+  value = "manual";
+  constructor() { manualRefs.push(new WeakRef(this)); }
+}
+class AutoPayload extends Date {
+  constructor(...args) { super(...args); autoRefs.push(new WeakRef(this)); }
+}
+module.exports = { ManualPayload, AutoPayload, manualRefs, autoRefs };
 `,
     "07-manual-dep.ts": `export function flavor() { return "real"; }
 export const untouched = "original";
@@ -447,13 +456,13 @@ vi.mock("./07-manual-dep.js", () => {
 it("creates a file-owned manual mock payload", async () => {
   const { flavor } = await import("./07-manual-dep.js");
   expect(flavor()).toBe("manual");
-  expect(queryObjects(ManualPayload)).toBe(1);
+  await expectLiveObjects(manualRefs, 1);
 });
 `,
     "01-d-manual-release.test.ts": `import { expect, it } from "vitest";
 ${payloadImports}
 it("releases the previous file manual mock payload", async () => {
-  expect(queryObjects(ManualPayload)).toBe(0);
+  await expectCollected(...manualRefs);
   const { flavor, untouched } = await import("./07-manual-dep.js");
   expect(flavor()).toBe("real");
   expect(untouched).toBe("original");
@@ -489,13 +498,13 @@ vi.mock("./08-auto-dep.js");
 it("creates a file-owned automock payload", async () => {
   const { payload } = await import("./08-auto-dep.js");
   expect(payload.getTime()).toBe(1234);
-  expect(queryObjects(AutoPayload)).toBe(1);
+  await expectLiveObjects(autoRefs, 1);
 });
 `,
     "01-h-auto-release.test.ts": `import { expect, it } from "vitest";
 ${payloadImports}
 it("releases the previous file automock payload", async () => {
-  expect(queryObjects(AutoPayload)).toBe(0);
+  await expectCollected(...autoRefs);
   const { payload } = await import("./08-auto-dep.js");
   expect(payload.getTime()).toBe(1234);
 });

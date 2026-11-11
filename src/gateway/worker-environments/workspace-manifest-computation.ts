@@ -37,12 +37,19 @@ type WorkspaceManifestSnapshot = Awaited<ReturnType<typeof readActualWorkspaceMa
 type WorkspaceManifestCapture = Omit<WorkspaceManifestSnapshot, "rawManifest">;
 
 export type WorkspaceManifestValueInputs = {
+  "workspace.manifest.template": {
+    root: string;
+    baseCommit: string;
+    buildCacheInputs: string[];
+    previous?: { rawManifest: string; manifestRef: string; changedPaths: string[] };
+  };
   "workspace.manifest.capture": {
     root: string;
     baseCommit: string | null;
     preserveDirectories?: readonly string[];
     includePaths?: readonly string[];
     buildCacheInputs?: string[];
+    gitIgnore?: { paths: string[]; retainedPaths: string[] };
     hashes?: WorkspaceComputationHashes;
   };
   "workspace.manifest.snapshot": WorkspaceManifestValueInputs["workspace.manifest.capture"];
@@ -111,6 +118,7 @@ export type WorkspaceStageInput<Raw = Uint8Array<ArrayBuffer>> = WorkspaceStageI
 };
 
 export type WorkspaceManifestValueOutputs = {
+  "workspace.manifest.template": Omit<WorkspaceManifestSnapshot, "manifest">;
   "workspace.manifest.capture": WorkspaceComputationHashResult<WorkspaceManifestCapture>;
   "workspace.manifest.snapshot": WorkspaceComputationHashResult<WorkspaceManifestSnapshot>;
   "workspace.manifest.document": WorkspaceComputationHashResult<

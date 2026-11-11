@@ -192,6 +192,24 @@ export function safeDaemonEnv(env: Record<string, string> | undefined): string[]
   return Object.entries(filterDaemonEnv(env)).map(([key, value]) => `${key}=${value}`);
 }
 
+export function resolveLaunchdInspectionWarnings(service: {
+  foreignLaunchdInspectionError?: string;
+  staleLaunchdInspectionError?: string;
+}): string[] {
+  const warnings: string[] = [];
+  if (service.foreignLaunchdInspectionError) {
+    warnings.push(
+      terminalText`Could not inspect foreign launchd jobs: ${service.foreignLaunchdInspectionError}`,
+    );
+  }
+  if (service.staleLaunchdInspectionError) {
+    warnings.push(
+      terminalText`Could not inspect stale OpenClaw updater launchd jobs: ${service.staleLaunchdInspectionError}; interrupted-update leftovers were NOT checked. Check launchctl availability and rerun ${formatCliCommand("openclaw doctor")}.`,
+    );
+  }
+  return warnings;
+}
+
 export function normalizeListenerAddress(raw: string): string {
   return raw
     .trim()

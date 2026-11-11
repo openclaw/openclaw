@@ -1,0 +1,2 @@
+# Cover conditional Bun cache readers and independent docs checks after setup failure.
+33

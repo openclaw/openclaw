@@ -32,7 +32,6 @@ import type {
   CliBackendPreparedExecution,
   CliBackendPromptContext,
 } from "../../plugins/cli-backend.types.js";
-import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
@@ -42,10 +41,7 @@ import {
 } from "../../routing/session-key.js";
 import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { resolveUserPath } from "../../utils.js";
-import {
-  readRunOperatorAuthority,
-  resolveAdmittedRunActiveAssertion,
-} from "../admitted-run-context.js";
+import { readRunOperatorAuthority } from "../admitted-run-context.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
@@ -141,11 +137,13 @@ import { prepareCliLoopbackBundleMcp } from "./loopback-bundle-mcp.js";
 import { mintCliMcpClientGrant } from "./mcp-client-grant.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
-import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
+import { detectNodeClaudePlacement } from "./prepare-claude.js";
+import { prepareCliTurnHookContext, runCliAuthorizedPromptBuild } from "./prepare-hook-context.js";
 import * as mcp from "./prepare-mcp.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
 import {
   capCliToolAvailability,
+  retainPolicyAllowedManagedNativeTools,
   keptManagedNativeTools,
   withCliToolSearch,
   resolveCliBootstrapFileAccess,
@@ -560,10 +558,10 @@ async function prepareCliRunContextWithinReadFence(
   }
   const modelDisplay = `${params.provider}/${modelId}`;
   const isClaudeCli = isClaudeCliBackendId(params.provider);
-  const requestedContextModelId = isClaudeCli ? resolveClaudeCliContextModelId(modelId) : modelId;
-  const normalizedContextModelId = isClaudeCli
-    ? resolveClaudeCliContextModelId(normalizedCatalogModel)
-    : normalizedCatalogModel;
+  // A CLI-native alias (Claude Code's `fable`) sizes context from the model the
+  // CLI's own menu resolves it to; OpenClaw keeps no alias table of its own.
+  const requestedContextModelId = params.nativeModelId ?? modelId;
+  const normalizedContextModelId = params.nativeModelId ?? normalizedCatalogModel;
   // Aliases can map a canonical id to a CLI shorthand or a user shorthand to
   // a canonical id. Resolve both identities and keep the safest owned limit.
   const contextModelIds = uniqueStrings([requestedContextModelId, normalizedContextModelId]);
@@ -629,19 +627,17 @@ async function prepareCliRunContextWithinReadFence(
       ? { tokens: modelContextTokens, source: "model" as const }
       : resolvedContextWindowInfo;
   let openClawHistoryMessages: unknown[] | undefined;
-  const promptBuildHookContext = {
-    runId: params.runId,
-    agentId: sessionAgentId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    workspaceDir,
-    modelProviderId: params.provider,
-    modelId,
-    contextTokenBudget: contextWindowInfo.tokens,
-    trigger: params.trigger,
-    inputProvenance: params.inputProvenance,
-    ...buildAgentHookContextChannelFields(params),
-  };
+  const { turnAudience, promptBuildHookContext } = await prepareCliTurnHookContext(
+    { ...params, config: runConfig },
+    {
+      agentId: sessionAgentId,
+      workspaceDir,
+      modelId,
+      contextTokenBudget: contextWindowInfo.tokens,
+      skip: skipsTurnPreparation,
+      resources: callerToolAuthorityResources,
+    },
+  );
   const promptBuildHookRunner = skipsTurnPreparation ? undefined : getGlobalHookRunner();
   let promptBuildHookResult: ResolvedPromptBuildHookResult | undefined;
   if (!skipsTurnPreparation) {
@@ -811,7 +807,12 @@ async function prepareCliRunContextWithinReadFence(
         resolveScopedTools: resolveMcpLoopbackScopedTools,
       })
     : { params, tools: [] };
-  params = mcpProjection.params;
+  params = await retainPolicyAllowedManagedNativeTools(
+    mcpProjection.params,
+    managedNativeTools,
+    backendResolved,
+    resolveNativeMcpCapabilityProfile,
+  );
   params.assertCurrent?.();
   const hookFilteredProjectedTools = applyEmbeddedAttemptToolsAllow(
     mcpProjection.tools,
@@ -840,13 +841,7 @@ async function prepareCliRunContextWithinReadFence(
       },
     };
   }
-  if (params.cliToolAvailability && promptBuildToolsAllow !== undefined) {
-    const { cliToolAvailability } = params;
-    params = {
-      ...params,
-      cliToolAvailability: capCliToolAvailability(cliToolAvailability, promptBuildToolsAllow),
-    };
-  }
+  params = capCliToolAvailability(params, promptBuildToolsAllow);
   const projectedTools = applyEmbeddedAttemptToolsAllow(
     hookFilteredProjectedTools,
     params.cliToolAvailability?.openClaw,
@@ -905,38 +900,12 @@ async function prepareCliRunContextWithinReadFence(
     : nodeSkillWorkshop
       ? [nodeSkillWorkshop]
       : [];
-  const authorizedPromptBuildResult = await (async () => {
-    const toolAuthorityFingerprint = params.toolAuthorityFingerprint;
-    if (!promptBuildHookRunner || !toolAuthorityFingerprint) {
-      return undefined;
-    }
-    const admittedParams = await admitCliRunParams(params, workspaceResolution.agentId);
-    params = admittedParams;
-    const assertHostActive = resolveAdmittedRunActiveAssertion(
-      admittedParams.admittedRunContext,
-      admittedParams.abortSignal,
-    );
-    if (!assertHostActive) {
-      return undefined;
-    }
-    try {
-      return await promptBuildHookRunner.runAuthorizedPromptBuild(
-        {
-          prompt: params.prompt,
-          messages: (openClawHistoryMessages ??= await loadCliSessionHistoryMessages(params)),
-        },
-        promptBuildHookContext,
-        {
-          toolAuthorityFingerprint,
-          activeToolNames: promptTools.map((tool) => tool.name),
-          assertHostActive,
-        },
-      );
-    } catch (error) {
-      cliBackendLog.warn(`authorized CLI prompt-build hook failed: ${String(error)}`);
-      return undefined;
-    }
-  })();
+  const toolAuthorityFingerprint = params.toolAuthorityFingerprint;
+  // The MCP grant below needs admitted params. Authorized enrichment itself runs after the
+  // session continuity decision so it can report that decision for this same turn.
+  if (promptBuildHookRunner && toolAuthorityFingerprint) {
+    params = await admitCliRunParams(params, workspaceResolution.agentId);
+  }
   params.assertCurrent?.();
   const messageToolAvailable = promptTools.some(
     (tool) => normalizeToolPolicyName(tool.name) === "message",
@@ -978,10 +947,11 @@ async function prepareCliRunContextWithinReadFence(
             ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
             ...(loopbackBundleMcp ? { bundledTools: loopbackBundleMcp.tools } : {}),
             ...(mcpToolAuth ? { toolAuth: mcpToolAuth } : {}),
+            turnAudience: turnAudience.forGrant(mcpGrant.context.sessionKey),
           })
         : undefined;
     const mcpClientGrant = mcpClient?.grant;
-    // The grant's cleanup also releases the memory audience leased for this turn.
+    // The turn's audience releases with caller resources after this cleanup revokes the grant.
     // Configured MCP tools close only after their grant can no longer reach them.
     const cleanupMcpClientGrant = sequenceCliCleanups(
       mcpClient?.cleanup,
@@ -1490,6 +1460,28 @@ async function prepareCliRunContextWithinReadFence(
             nativeSessionId: reusableCliSessionId,
             tools: promptTools,
           });
+    // Fresh native sessions receive only account-owned history via stdin.
+    const shouldPrepareOpenClawHistoryPrompt =
+      !skipsTurnPreparation && (!reusableCliSessionId || allowRawTranscriptReseed);
+    const authorizedPromptBuildResult = await runCliAuthorizedPromptBuild({
+      hookRunner: promptBuildHookRunner,
+      admitted: historyParams,
+      toolAuthorityFingerprint,
+      hookCtx: promptBuildHookContext,
+      messages: async () =>
+        (openClawHistoryMessages ??= await loadCliSessionHistoryMessages(params)),
+      activeToolNames: promptTools.map((tool) => tool.name),
+      invalidatedReason,
+      nativeSessionId: reusableCliSessionId,
+      history: {
+        replayed: Boolean(
+          sessionPromptContext?.resumeContext ||
+          (shouldPrepareOpenClawHistoryPrompt && sessionPromptContext?.reseedMessages.length),
+        ),
+        gapNotice: Boolean(sessionPromptContext?.sessionGapContext),
+      },
+    });
+    params.assertCurrent?.();
     const effectiveReplyGuidance =
       skipsTurnPreparation || params.isolatedCompletion
         ? undefined
@@ -1552,7 +1544,7 @@ async function prepareCliRunContextWithinReadFence(
           !reusableCliSessionId?.trim() || reusableCliSession.mode === "reuse-with-drift",
         thinkLevel: params.thinkLevel,
         // Operator-kept orchestration tools that survived every later native-tool cap.
-        nativeDelegationTools: keptManagedNativeTools(managedNativeTools, params),
+        nativeDelegationTools: keptManagedNativeTools(managedNativeTools, params, backendResolved),
         runtimeContextFragments: params.runtimeContextFragments,
         sessionTarget: params.isolatedCompletion ? undefined : replayableTarget(cliHistoryWriter),
         context: [promptBuildHookResult?.appendContext, authorizedPromptBuildResult?.appendContext],
@@ -1567,9 +1559,6 @@ async function prepareCliRunContextWithinReadFence(
         promptForHooks = current.renderPrompt(promptForHooks, preferResumableText);
       }
     }
-    // Fresh native sessions receive only account-owned history via stdin.
-    const shouldPrepareOpenClawHistoryPrompt =
-      !skipsTurnPreparation && (!reusableCliSessionId || allowRawTranscriptReseed);
     const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
       ? buildCliSessionHistoryPrompt({
           messages: sessionPromptContext?.reseedMessages ?? [],
@@ -1625,6 +1614,7 @@ async function prepareCliRunContextWithinReadFence(
       cwd,
       backendResolved,
       hostOwnedTools,
+      ...(turnAudience.memoryAudience ? { memoryAudience: turnAudience.memoryAudience } : {}),
       preparedBackend: preparedBackendFinal,
       ...(loopbackServerConfig &&
       !systemAgentMcpConfig &&

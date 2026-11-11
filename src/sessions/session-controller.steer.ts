@@ -1,5 +1,9 @@
 /** One controller-owned steer of a reserved input into its captured execution owner. */
 import { bindWorkerToolPreparation } from "../agents/harness/host-private-capabilities.js";
+import {
+  admitFollowupRunLifecycle,
+  completeFollowupRunLifecycle,
+} from "../auto-reply/reply/queue/lifecycle.js";
 import type {
   ReplySteerNowResult,
   ReplySteerNowState,
@@ -34,6 +38,8 @@ type SessionControllerSteerParams = {
   target: ReplyMessageInjectionTarget;
   text: string;
   options: ReplyMessageInjectionOptions;
+  retry?: NonNullable<SessionControllerInput["steerNow"]>["retry"];
+  retryWithdrawnSteer?: boolean;
 };
 
 export type SessionControllerSteerResult =
@@ -53,7 +59,9 @@ export type SessionControllerSteerResult =
 export async function beginSessionControllerSteer(
   params: SessionControllerSteerParams,
 ): Promise<ReplyMessageInjectionAttempt | undefined> {
-  const injection = beginSessionControllerSourceInjection(params.input);
+  const injection = beginSessionControllerSourceInjection(params.input, {
+    retryWithdrawnSteer: params.retryWithdrawnSteer,
+  });
   if (!(await injection.admit())) {
     return undefined;
   }
@@ -119,30 +127,41 @@ export async function beginSessionControllerSteer(
   // Failed acknowledgement does not settle accepted native work.
   const acceptance = attempt.acceptance.then((accepted) => {
     injection.accepted(accepted);
-    if (accepted && pending && params.input.injection === pending) {
-      pending.steerNow = { target: params.target, queueIdentity };
+    if (accepted && pending && params.input.injection === pending && !params.retryWithdrawnSteer) {
+      params.input.steerNow = { target: params.target, queueIdentity, retry: params.retry };
     }
     return accepted;
   });
   void acceptance.catch(() => {});
+  const finish = async (consumed: boolean) => {
+    try {
+      if (consumed && params.retryWithdrawnSteer && params.input.source) {
+        try {
+          await admitFollowupRunLifecycle(params.input.source);
+        } finally {
+          completeFollowupRunLifecycle(params.input.source, "consumed");
+        }
+      }
+    } finally {
+      injection.finish(consumed);
+    }
+  };
   const outcome = attempt.outcome.then(
     async (nativeOutcome) => {
       try {
         await acceptance;
       } catch (error) {
         // The native outcome has now settled; an unknown ACK never permits replay.
-        injection.finish(true);
+        await finish(true);
         throw error;
       }
       // The failure owner already retains ambiguous acceptance and releases proven withdrawal.
-      injection.finish(
-        nativeOutcome.status === "accepted" || nativeOutcome.status === "indeterminate",
-      );
+      await finish(nativeOutcome.status === "accepted" || nativeOutcome.status === "indeterminate");
       return nativeOutcome;
     },
-    (error: unknown) => {
+    async (error: unknown) => {
       // An exceptional result after handoff cannot prove that input was rejected.
-      injection.finish(true);
+      await finish(true);
       throw error;
     },
   );
@@ -151,13 +170,19 @@ export async function beginSessionControllerSteer(
 }
 
 function resolvePendingSteerControl(input: SessionControllerInput) {
-  const pending = input.injection?.steerNow;
-  if (!pending || input.abortSignal.aborted || input.retirementRequested) {
+  const pending = input.steerNow;
+  const queuedFollowup = input.phase === "waiting" && input.custody.enqueued === true;
+  if (
+    !pending ||
+    input.abortSignal.aborted ||
+    input.retirementRequested ||
+    (!input.injection && !queuedFollowup)
+  ) {
     return undefined;
   }
   const resolved = pending.target[replyMessageInjectionTargetOwner].resolve({});
   return "injection" in resolved
-    ? { pending, control: resolved.backend.messageInjectionV2?.steerNow }
+    ? { pending, control: resolved.backend.messageInjectionV2?.steerNow, queuedFollowup }
     : undefined;
 }
 
@@ -166,31 +191,69 @@ export function readSessionControllerSteerNow(
   input: SessionControllerInput,
 ): ReplySteerNowState | undefined {
   const selected = resolvePendingSteerControl(input);
+  if (selected?.queuedFollowup && !selected.pending.retry) {
+    return { status: "blocked", tools: [] };
+  }
   return selected
-    ? (selected.control?.read(selected.pending.queueIdentity) ??
+    ? (selected.control?.read(selected.pending.queueIdentity, selected.queuedFollowup) ??
         (selected.control ? undefined : { status: "blocked", tools: [] }))
     : undefined;
 }
 
-/** The RPC caller checks current session write authority immediately before this synchronous effect. */
-export function sendSessionControllerSteerNow(input: SessionControllerInput): ReplySteerNowResult {
+/** Re-admit a withdrawn input before interruption; every caller retains current write authority. */
+export async function sendSessionControllerSteerNow(
+  input: SessionControllerInput,
+  assertCurrent: () => void = () => {},
+): Promise<ReplySteerNowResult> {
+  assertCurrent();
   const selected = resolvePendingSteerControl(input);
   if (!selected) {
     return { status: "settled", tools: [] };
   }
   input.sourceAdapter?.authority?.assertCurrent();
-  const { pending, control } = selected;
+  const { pending, queuedFollowup } = selected;
   if (pending.result) {
     return pending.result;
   }
-  const result = control?.send(pending.queueIdentity) ?? {
-    status: "unavailable" as const,
-    tools: [],
+  const interrupt = (): ReplySteerNowResult => {
+    assertCurrent();
+    input.sourceAdapter?.authority?.assertCurrent();
+    const current = resolvePendingSteerControl(input);
+    if (!current) {
+      return { status: "settled", tools: [] };
+    }
+    const result = current.control?.send(pending.queueIdentity) ?? {
+      status: "unavailable" as const,
+      tools: [],
+    };
+    if (result.status === "interrupted" || result.status === "idle") {
+      pending.result = result;
+    }
+    return result;
   };
-  if (result.status === "interrupted" || result.status === "idle") {
-    pending.result = result;
+  if (queuedFollowup) {
+    const state = selected.control?.read(pending.queueIdentity, true);
+    if (state?.status === "blocked") {
+      return { status: "blocked", tools: state.tools };
+    }
+    const retry = pending.retry;
+    if (!state || !retry) {
+      return { status: "unavailable", tools: [] };
+    }
+    const sending = (async (): Promise<ReplySteerNowResult> => {
+      const attempt = await retry(assertCurrent);
+      return attempt && (await attempt.acceptance)
+        ? interrupt()
+        : { status: "unavailable", tools: [] };
+    })().finally(() => {
+      if (pending.result === sending) {
+        pending.result = undefined;
+      }
+    });
+    pending.result = sending;
+    return sending;
   }
-  return result;
+  return interrupt();
 }
 
 /** Steers once into the exact target (default: the input owner's current turn); authority failures throw. */
