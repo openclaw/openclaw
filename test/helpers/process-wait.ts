@@ -71,9 +71,12 @@ export function waitForPidFile(
   return waitForObservation(
     () => {
       if (existsSync(filePath)) {
-        const pid = Number.parseInt(readFileSync(filePath, "utf8"), 10);
-        if (Number.isInteger(pid) && pid > 0) {
-          return pid;
+        const pidText = readFileSync(filePath, "utf8").trim();
+        if (/^\d+$/u.test(pidText)) {
+          const pid = Number(pidText);
+          if (Number.isSafeInteger(pid) && pid > 0) {
+            return pid;
+          }
         }
       }
       return undefined;
