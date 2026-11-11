@@ -147,7 +147,7 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
     };
   });
   // Zero totals are normal while idle; an error must keep its own explanation.
-  const isEmpty = () => overview().isEmpty && !loading() && !props.data.error;
+  const isEmpty = () => overview().isEmpty && !props.data.error;
   const showAnalytics = () => overview().hasOverviewData && !isEmpty();
   const keepAnalytics = () =>
     showAnalytics() || (retainedCharts() && Boolean(retainedChartSnapshot()));

@@ -517,6 +517,29 @@ describe("renderUsage", () => {
     expect(textAt(container, ".cost-window--range .cost-window__value")).toBe("$10.00");
   });
 
+  it("retains an accepted zero overview during refresh but not an error or retired result", () => {
+    const props = usageFixture({ totals: createEmptyCostUsageTotals() });
+    const { container, setData } = mountReactiveUsage(props);
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+    const button = container.querySelector<HTMLButtonElement>(".usage-empty-state button")!;
+    expect(button).not.toBeNull();
+    button.focus();
+    const pending = Promise.withResolvers<null>();
+    onTestFinished(() => pending.resolve(null));
+    setData({ ...props.data, read: pending.promise });
+    flush();
+    expect(container.querySelector(".usage-empty-state button")).toBe(button);
+    expect(document.activeElement).toBe(button);
+    setData({ ...props.data, read: pending.promise, error: "Usage unavailable" });
+    flush();
+    expect(container.querySelector(".usage-empty-state")).toBeNull();
+    setData({ ...props.data, read: pending.promise, totals: null });
+    flush();
+    expect(container.querySelector(".usage-empty-state")).toBeNull();
+    expect(container.querySelector(".usage-loading-card")).not.toBeNull();
+  });
+
   it("shows the empty state for an all-zero successful response", () => {
     const container = mountFixture({ totals: createEmptyCostUsageTotals() });
     expect(container.querySelector(".usage-empty-state")).not.toBeNull();
