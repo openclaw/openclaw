@@ -120,7 +120,10 @@ attributes are unchanged, OpenClaw clones a prepared template into a separate ge
 imports only the new Git objects, and checks out the source delta before reinstalling
 into its retained dependencies.
 Repeat installation still runs repository lifecycle scripts when manifests and
-lockfiles are unchanged.
+lockfiles are unchanged. Refresh reuses compressed Git objects without searching
+the entire snapshot for new deltas; obsolete source objects are still removed.
+Ready sandbox generations are immutable and reuse their publication-time validation.
+Installation output is still validated after the builder stops, before publication.
 Preparation logs distinguish native snapshot cloning (`templateClone`), installer
 shutdown (`templateRetire`), and publication validation (`templateValidateOutput`).
 The `snapshot` phase measures the content manifest, not the native filesystem clone.

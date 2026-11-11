@@ -29,6 +29,7 @@ async function idle() {
   return record;
 }
 function preparationGate() {
+  assert(params.validate, "Mutable fixture requires idle validation");
   const entered = createDeferred();
   const finish = createDeferred();
   const block = <Args extends unknown[], Result>(run: (...args: Args) => Promise<Result>) =>
