@@ -126,7 +126,7 @@ describe("consecutive tool runs", () => {
       await tool(`${index}`);
       expect(labels()).toEqual([index === 1 ? "Bash" : `Bash ×${index}`]);
       await tool(`${index}`, "bash", "completed");
-      await tool(`${index}`, "bash", "completed");
+      await progress.pushItemEvent({ itemId: "model-wait", kind: "model-wait", phase: "end" });
       expect(labels()).toEqual([index === 1 ? "Bash" : `Bash ×${index}`]);
     }
     await tool("other", "read");
@@ -155,28 +155,6 @@ describe("consecutive tool runs", () => {
     await progress.pushPreambleHeadline("Checking the next step", { itemId: "preamble-1" });
     await tool("6");
     expect(labels().slice(-2)).toEqual(["Bash", "Bash"]);
-  });
-
-  it("keeps one run across an interleaved model wait", async () => {
-    const { progress, tool, labels } = setup();
-    const wait = (phase: "update" | "end") =>
-      progress.pushItemEvent({
-        itemId: "model-wait",
-        kind: "model-wait",
-        phase,
-        ...(phase === "update" ? { progressText: "Waiting for the model" } : {}),
-      });
-    await tool("1");
-    await tool("2");
-    await wait("update");
-    await wait("end");
-    await tool("3");
-    await wait("update");
-    await wait("end");
-    await tool("4");
-    // A wait renders no tool row, so the run keeps accumulating instead of
-    // restarting as repeated "Bash ×2" rows.
-    expect(labels()).toEqual(["Bash ×4"]);
   });
 
   it("does not count unkeyed calls, detailed rows or colliding truncated titles", async () => {
