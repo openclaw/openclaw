@@ -5,6 +5,7 @@ import {
   type AgentMessage,
   type EmbeddedRunAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { applyCodexTranscriptTaint } from "./transcript-mirror-attestation.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -30,7 +31,7 @@ export class CodexTranscriptCheckpoint {
   ) {}
 
   nextTimestamp = (): number => {
-    // Commentary and tool mirrors share this clock so equal wall-clock values
+    // Reasoning, commentary, and tool mirrors share this clock so equal wall-clock values
     // still preserve the app-server receipt order in the durable transcript.
     this.lastTimestamp = Math.max(Date.now(), this.lastTimestamp + 1);
     return this.lastTimestamp;
@@ -85,7 +86,7 @@ export class CodexTranscriptCheckpoint {
         return message
           ? [
               projectAgentHarnessTranscriptMessageForDisplay({
-                hidden: this.params.trigger === "memory",
+                hidden: this.params.privateCompletion === true || this.params.trigger === "memory",
                 inputProvenance: this.params.inputProvenance,
                 message: applyCodexTranscriptTaint(message, taint),
               }),
@@ -94,11 +95,11 @@ export class CodexTranscriptCheckpoint {
       });
       try {
         await codexTranscriptMirrorRuntime.mirror({
-          assertWriteCurrent: () => {
+          assertWriteCurrent: createNativeSessionBindingScope(() => {
             if (this.state === "abandoned") {
               throw new Error("Codex transcript checkpoint was retired before write");
             }
-          },
+          }).assertLegacyCurrent,
           ...this.params.sessionTarget,
           sessionId: this.params.sessionId,
           cwd: this.params.workspaceDir,

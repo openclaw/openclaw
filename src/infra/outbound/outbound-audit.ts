@@ -20,12 +20,12 @@ import {
 } from "./channel-target-prefix.js";
 import {
   countPhysicalOutboundSends,
+  type OutboundDeliveryBatch as OutboundAuditBatch,
   type OutboundAuditTerminal,
   type IndexedOutboundAuditTerminal,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
-import type { DeliveryMirror } from "./mirror.js";
 import type { OutboundSessionContext } from "./session-context.js";
 
 type OutboundAuditDeliveryContext = {
@@ -41,7 +41,6 @@ type OutboundAuditDeliveryContext = {
     sourcePayloadCount?: number;
   };
   session?: OutboundSessionContext;
-  mirror?: DeliveryMirror;
 };
 
 function outboundQueueAuditSourceId(
@@ -51,18 +50,6 @@ function outboundQueueAuditSourceId(
 ): string {
   const terminalId = `message:outbound:queue:${queueId}:payload:${payloadIndex}`;
   return lifecycle ? `${terminalId}:${lifecycle}` : terminalId;
-}
-
-function outcomesByPayload(
-  outcomes: readonly OutboundPayloadDeliveryOutcome[],
-): Map<number, OutboundPayloadDeliveryOutcome[]> {
-  const indexed = new Map<number, OutboundPayloadDeliveryOutcome[]>();
-  for (const outcome of outcomes) {
-    const history = indexed.get(outcome.index) ?? [];
-    history.push(outcome);
-    indexed.set(outcome.index, history);
-  }
-  return indexed;
 }
 
 function projectRecordedOutboundAuditTerminal(
@@ -96,17 +83,16 @@ function projectRecordedOutboundAuditTerminal(
   return undefined;
 }
 
-type OutboundAuditBatch = {
-  payloadCount: number;
-  results: readonly OutboundDeliveryResult[];
-  payloadOutcomes: readonly OutboundPayloadDeliveryOutcome[];
-};
-
 function projectOutboundAuditTerminals(
   params: OutboundAuditBatch,
   fallback: (history: readonly OutboundPayloadDeliveryOutcome[]) => OutboundAuditTerminal,
 ): IndexedOutboundAuditTerminal[] {
-  const indexed = outcomesByPayload(params.payloadOutcomes);
+  const indexed = new Map<number, OutboundPayloadDeliveryOutcome[]>();
+  for (const outcome of params.payloadOutcomes) {
+    const history = indexed.get(outcome.index) ?? [];
+    history.push(outcome);
+    indexed.set(outcome.index, history);
+  }
   return Array.from({ length: params.payloadCount }, (_, payloadIndex) => {
     const history = indexed.get(payloadIndex) ?? [];
     return {
@@ -134,7 +120,8 @@ export function failedOutboundAuditTerminals(
 ): IndexedOutboundAuditTerminal[] {
   return projectOutboundAuditTerminals(params, (history) => {
     const latest = history.at(-1);
-    const failedResults = latest?.status === "failed" ? (latest.results ?? []) : [];
+    const failed = latest?.status === "failed" ? latest : undefined;
+    const failedResults = failed?.results ?? [];
     const payloadResults =
       failedResults.length > 0
         ? failedResults
@@ -143,13 +130,10 @@ export function failedOutboundAuditTerminals(
     const results = payloadResults.length > 0 ? payloadResults : fallbackResults;
     return {
       outcome: "failed",
-      failureStage: latest?.status === "failed" ? latest.stage : params.failureStage,
+      failureStage: failed ? failed.stage : params.failureStage,
       results,
-      sentBeforeError:
-        results.length > 0 || (latest?.status === "failed" && latest.sentBeforeError),
-      ...(latest?.status === "failed" && latest.deliveryKind
-        ? { deliveryKind: latest.deliveryKind }
-        : {}),
+      sentBeforeError: results.length > 0 || (failed !== undefined && failed.sentBeforeError),
+      ...(failed?.deliveryKind ? { deliveryKind: failed.deliveryKind } : {}),
     };
   });
 }
@@ -244,18 +228,14 @@ function resolveConversationKind(
     // Declared destination facts only; see OutboundSessionContext.conversationKind.
     return context.session.conversationKind;
   }
-  const routeCandidates = [
-    context.session?.policyKey,
-    context.session?.key,
-    context.mirror?.sessionKey,
-  ];
+  const routeCandidates = [context.session?.policyKey, context.session?.key];
   for (const candidate of routeCandidates) {
     const route = parseSessionDeliveryRoute(candidate);
     if (routeNamesDestination(route, context)) {
       return route.peerKind === "dm" || route.peerKind === "direct" ? "direct" : route.peerKind;
     }
   }
-  if (context.session?.conversationType === "group" || context.mirror?.isGroup === true) {
+  if (context.session?.conversationType === "group") {
     return "group";
   }
   return "unknown";
@@ -297,7 +277,7 @@ function resolveResultIdentifiers(
 }
 
 function outboundAuditContext(context: OutboundAuditDeliveryContext, includeReplyHook = false) {
-  const agentId = context.session?.agentId ?? context.mirror?.agentId;
+  const agentId = context.session?.agentId;
   const runId =
     context.runId ??
     context.preparedBatch?.runId ??

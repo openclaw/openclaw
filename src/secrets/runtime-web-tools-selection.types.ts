@@ -4,8 +4,6 @@ import type { SecretDegradationReason } from "./runtime-degraded-state.js";
 import type { SecretResolverWarningCode } from "./runtime-shared.js";
 import type { RuntimeWebDiagnosticCode } from "./runtime-web-tools.types.js";
 
-export type RuntimeWebWarningCode = Extract<RuntimeWebDiagnosticCode, SecretResolverWarningCode>;
-
 export type RuntimeWebResolveSecretInputParams = {
   providerId: string;
   value: unknown;
@@ -50,7 +48,7 @@ export class RuntimeWebProviderUnavailableError extends Error {
   readonly unavailableProviders: RuntimeWebUnavailableProvider[];
 
   constructor(
-    code: RuntimeWebWarningCode,
+    code: Extract<RuntimeWebDiagnosticCode, SecretResolverWarningCode>,
     reason: SecretDegradationReason,
     unavailableProviders: RuntimeWebUnavailableProvider[],
   ) {

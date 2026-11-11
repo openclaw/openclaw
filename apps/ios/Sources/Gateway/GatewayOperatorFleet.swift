@@ -112,14 +112,34 @@ final class GatewayOperatorFleet {
 
     private func run(runtime: Runtime, key: GatewayStableIdentifier.Key) async {
         let config = runtime.config
-        let options = Self.operatorOptions(from: config.nodeOptions)
         // The session box is part of GatewayNodeSession's route identity. Keep it for
         // this runtime so a retry cannot replace an unchanged TLS transport.
         let sessionBox = config.webSocketSessionBox()
+        defer {
+            // Releases the session's delegate and idle pooled connections. It cannot reclaim a
+            // socket Foundation orphans when cancellation races the upgrade (WebSocketTaskBox.cancel).
+            (sessionBox?.session as? GatewayTLSPinningSession)?.finishTasksAndInvalidate()
+        }
         let runtimeID = runtime.id
         var attempt = 0
         while !Task.isCancelled, self.runtimes[key]?.id == runtime.id {
             do {
+                let bindingStore = GatewayAccessDeviceAuthBindingStore.shared
+                let optionsBase = Self.operatorOptions(from: config.nodeOptions)
+                let deviceAuthGatewayID = optionsBase.deviceAuthGatewayID ?? config.effectiveStableID
+                let storedOperatorAuth = bindingStore.storedDeviceAuth(
+                    role: "operator",
+                    gatewayID: deviceAuthGatewayID,
+                    profile: optionsBase.deviceIdentityProfile)
+                var options = optionsBase
+                options.allowStoredDeviceAuth = bindingStore.allowsStoredDeviceAuth(
+                    entry: storedOperatorAuth,
+                    principal: config.ingressAuthorization?.principal,
+                    gatewayID: deviceAuthGatewayID,
+                    role: "operator",
+                    profile: optionsBase.deviceIdentityProfile,
+                    fallbackAllowed: optionsBase.allowStoredDeviceAuth)
+                let tokenVersionBeforeConnect = bindingStore.tokenVersion(for: storedOperatorAuth)
                 try await runtime.session.connect(
                     url: config.url,
                     credentials: GatewayNodeSessionCredentials(
@@ -137,7 +157,13 @@ final class GatewayOperatorFleet {
                     },
                     onConnected: { [weak self] in
                         await MainActor.run {
-                            guard self?.runtimes[key]?.id == runtimeID else { return }
+                            guard let self, self.runtimes[key]?.id == runtimeID else { return }
+                            _ = GatewayAccessDeviceAuthBindingStore.shared.bindCurrentTokenAfterHandshake(
+                                principal: config.ingressAuthorization?.principal,
+                                gatewayID: deviceAuthGatewayID,
+                                role: "operator",
+                                profile: optionsBase.deviceIdentityProfile,
+                                previousVersion: tokenVersionBeforeConnect)
                             _ = GatewaySettingsStore.markGatewayConnected(
                                 stableID: config.effectiveStableID,
                                 atMs: Int(Date().timeIntervalSince1970 * 1000))
@@ -196,6 +222,7 @@ final class GatewayOperatorFleet {
             clientId: nodeOptions.clientId,
             clientMode: "ui",
             clientDisplayName: nodeOptions.clientDisplayName,
+            deviceIdentityProfile: nodeOptions.deviceIdentityProfile,
             includeDeviceIdentity: true,
             allowStoredDeviceAuth: nodeOptions.allowStoredDeviceAuth,
             deviceAuthGatewayID: nodeOptions.deviceAuthGatewayID)

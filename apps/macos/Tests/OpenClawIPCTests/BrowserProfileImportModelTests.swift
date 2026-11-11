@@ -71,6 +71,14 @@ private final class BrowserImportTransportStub {
     func requests(for path: String) -> [BrowserProfileImportRequest] {
         self.requests.filter { $0.path == path }
     }
+
+    func requestImportWhileUnavailable(on model: BrowserProfileImportModel) async {
+        let failures = self.failingPaths
+        self.failingPaths.insert("/system-profile-import/status")
+        _ = await model.refresh(force: true)
+        self.failingPaths = failures
+        self.requests.removeAll()
+    }
 }
 
 @MainActor
@@ -92,6 +100,20 @@ struct BrowserProfileImportModelTests {
         id: "Default",
         name: "Personal",
         hasCookies: true)
+
+    @Test func `passive availability and automatic offers do not inspect browser data`() async {
+        let stub = BrowserImportTransportStub()
+        let model = stub.makeModel()
+
+        await model.refreshAvailability()
+        #expect(model.importAvailable)
+        #expect(await !model.requestAutomaticOfferIfEligible())
+        #expect(model.phase == .hidden)
+        #expect(stub.requests.isEmpty)
+
+        #expect(await model.refresh(force: true) == .offering)
+        #expect(stub.requests(for: "/system-profile-import/status").count == 1)
+    }
 
     @Test func `automatic offer requires importable cookies and no prior outcome`() {
         let fresh = Self.status(profiles: [Self.chromeProfile])
@@ -145,6 +167,7 @@ struct BrowserProfileImportModelTests {
         let model = stub.makeModel(
             isOnboarded: { eligibility.isOnboarded },
             isLocalMode: { eligibility.isLocalMode })
+        await stub.requestImportWhileUnavailable(on: model)
 
         #expect(await !model.requestAutomaticOfferIfEligible())
         eligibility.isOnboarded = true
@@ -158,6 +181,7 @@ struct BrowserProfileImportModelTests {
         let stub = BrowserImportTransportStub()
         stub.failingPaths = ["/system-profile-import/status"]
         let model = stub.makeModel()
+        await stub.requestImportWhileUnavailable(on: model)
 
         #expect(await !model.requestAutomaticOfferIfEligible())
         stub.failingPaths = []
@@ -168,6 +192,7 @@ struct BrowserProfileImportModelTests {
     @Test func `automatic offer does not apply after its inline browser closes`() async {
         let stub = BrowserImportTransportStub()
         let model = stub.makeModel()
+        await stub.requestImportWhileUnavailable(on: model)
         let gate = ContinuationBox()
         var shouldApply = true
         stub.beforeStatusResponse = {
@@ -363,7 +388,7 @@ struct BrowserProfileImportModelTests {
         let status = Self.status(
             profiles: [Self.chromeProfile],
             state: BrowserProfileImportOutcome(status: disposition))
-        stub.statusJSON = try String(decoding: JSONEncoder().encode(status), as: UTF8.self)
+        stub.statusJSON = try #require(String(bytes: JSONEncoder().encode(status), encoding: .utf8))
         let model = stub.makeModel()
         let gate = ContinuationBox()
         stub.beforeStatusResponse = {
@@ -423,6 +448,7 @@ struct BrowserProfileImportModelTests {
     {
         let stub = BrowserImportTransportStub()
         let model = stub.makeModel()
+        await stub.requestImportWhileUnavailable(on: model)
         let gate = ContinuationBox()
         stub.beforeStatusResponse = {
             await withCheckedContinuation { gate.continuation = $0 }
@@ -458,6 +484,7 @@ struct BrowserProfileImportModelTests {
     {
         let stub = BrowserImportTransportStub()
         let model = stub.makeModel()
+        await stub.requestImportWhileUnavailable(on: model)
         let offerGate = ContinuationBox()
         stub.beforeStatusResponse = {
             await withCheckedContinuation { offerGate.continuation = $0 }
@@ -474,7 +501,7 @@ struct BrowserProfileImportModelTests {
                 : Self.chromeProfile],
             state: nil,
             suggestedTarget: profileChanges ? "work-logins" : "imported")
-        stub.statusJSON = try String(decoding: JSONEncoder().encode(latestStatus), as: UTF8.self)
+        stub.statusJSON = try #require(String(bytes: JSONEncoder().encode(latestStatus), encoding: .utf8))
         let availabilityGate = ContinuationBox()
         stub.beforeStatusResponse = {
             await withCheckedContinuation { availabilityGate.continuation = $0 }
@@ -503,6 +530,7 @@ struct BrowserProfileImportModelTests {
         let eligibility = BrowserImportEligibilityGate()
         eligibility.isLocalMode = true
         let model = stub.makeModel(isLocalMode: { eligibility.isLocalMode })
+        await stub.requestImportWhileUnavailable(on: model)
         let gate = ContinuationBox()
         stub.beforeStatusResponse = {
             await withCheckedContinuation { gate.continuation = $0 }

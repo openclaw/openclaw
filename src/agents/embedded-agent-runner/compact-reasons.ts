@@ -1,19 +1,22 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isSummaryProviderError } from "../../../packages/agent-core/src/harness/types.js";
-import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
 import type { CompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
-import { hasModelFallbackStop } from "../failover-error.js";
+import {
+  buildAssistantFailoverSignal,
+  classifyAssistantFailoverReason,
+} from "../embedded-agent-helpers/assistant-message-failures.js";
+import { describeFailoverError, hasModelFallbackStop } from "../failover-error.js";
 import { extractFailoverHttpStatus } from "../failover/retry-evidence.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
-const MAX_COMPACTION_REASON_DETAIL_CHARS = 100;
 const COMPACTION_PROVIDER_4XX = new Set([400, 401, 403, 429]);
 const COMPACTION_PROVIDER_5XX = new Set([500, 502, 503, 504]);
 const COMPACTION_TEXT_REASONS: ReadonlyArray<
   readonly [reason: string, fragments: readonly string[], match?: "all"]
 > = [
+  ["unshrinkable_request", ["estimated foreground request budget still exceeds"]],
   ["no_compactable_entries", ["nothing to compact", "no real conversation messages"]],
   // Both backends' phrases mean the transcript is already small enough.
   ["below_threshold", ["below threshold", "already under target"]],
@@ -63,6 +66,38 @@ export function resolveCompactionFailure(params: {
   return { reason: cancellation?.reason ?? reason, error: cancellation?.error ?? params.error };
 }
 
+function findSummaryProviderError(error: unknown) {
+  let current = error;
+  while (current instanceof Error) {
+    if (isSummaryProviderError(current)) {
+      return current;
+    }
+    current = current.cause;
+  }
+  return undefined;
+}
+
+/** Classify the retained provider response, not the compaction wrappers' display text. */
+export function describeCompactionFailure(
+  error: unknown,
+): ReturnType<typeof describeFailoverError> {
+  const providerFailure = findSummaryProviderError(error);
+  const reason = classifyAssistantFailoverReason(providerFailure?.response);
+  if (providerFailure && reason) {
+    const signal = buildAssistantFailoverSignal(providerFailure.response);
+    return {
+      message: signal.message ?? providerFailure.message,
+      rawError: signal.message,
+      reason,
+      status: signal.status,
+      code: signal.code,
+      provider: signal.provider,
+      model: providerFailure.response.model,
+    };
+  }
+  return describeFailoverError(error);
+}
+
 /**
  * Only an actual summary timeout qualifies: the summary watchdog fired (the caller is still
  * live, so its composed signal aborted on the deadline), or the provider answered 408/504.
@@ -76,14 +111,12 @@ export function isSummaryTimeoutFailure(params: {
   abortSignal?: AbortSignal;
 }): boolean {
   // Terminal failures (model-fallback stop) rethrow before any timeout verdict.
-  let providerFailure = resolveCompactionFailure(params).error;
+  const failure = resolveCompactionFailure(params).error;
   if (params.summarySignal?.aborted) {
     return true;
   }
-  while (providerFailure instanceof Error && !isSummaryProviderError(providerFailure)) {
-    providerFailure = providerFailure.cause;
-  }
-  const status = isSummaryProviderError(providerFailure)
+  const providerFailure = findSummaryProviderError(failure);
+  const status = providerFailure
     ? extractErrorHttpStatus(providerFailure.response.errorMessage?.trim() ?? "")?.code
     : undefined;
   return status === 408 || status === 504;
@@ -133,16 +166,4 @@ export function isBenignCompactionSkipResult(result: {
     isBenignCompactionSkipReason(result.reason) ||
     (result.ok && classifyCompactionReason(result.reason) === "no_compactable_entries")
   );
-}
-
-export function formatUnknownCompactionReasonDetail(reason?: string): string | undefined {
-  const sanitized = sanitizeForLog((reason ?? "").replace(/\s+/g, " "))
-    .trim()
-    .replace(/[^A-Za-z0-9._:@/+~-]+/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  if (!sanitized) {
-    return undefined;
-  }
-  return sanitized.slice(0, MAX_COMPACTION_REASON_DETAIL_CHARS);
 }

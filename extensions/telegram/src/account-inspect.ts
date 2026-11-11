@@ -6,7 +6,10 @@ import {
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/secret-ref-readonly";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   listTelegramAccountIds,
   mergeTelegramAccountConfig,
@@ -82,91 +85,73 @@ function inspectTokenValue(params: {
   return null;
 }
 
-function hasConfiguredTelegramAccounts(cfg: OpenClawConfig): boolean {
-  const accounts = cfg.channels?.telegram?.accounts;
-  return (
-    Boolean(accounts) &&
-    typeof accounts === "object" &&
-    !Array.isArray(accounts) &&
-    Object.keys(accounts).length > 0
-  );
-}
-
-function inspectTelegramAccountPrimary(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  envToken?: string | null;
-}): TelegramAccountInspection {
-  const accountId = normalizeAccountId(params.accountId);
-  const merged = mergeTelegramAccountConfig(params.cfg, accountId);
-  const enabled = params.cfg.channels?.telegram?.enabled !== false && merged.enabled !== false;
-  const account = {
-    accountId,
-    enabled,
-    name: normalizeOptionalString(merged.name),
-    config: merged,
-  };
-
-  const accountConfig = resolveTelegramAccountConfig(params.cfg, accountId);
-  const allowChannelCredentialFallback =
-    accountId === DEFAULT_ACCOUNT_ID ||
-    Boolean(accountConfig) ||
-    !hasConfiguredTelegramAccounts(params.cfg);
-  const credentialScopes = [
-    { config: accountConfig, path: `channels.telegram.accounts.${accountId}` },
-    ...(allowChannelCredentialFallback
-      ? [{ config: params.cfg.channels?.telegram, path: "channels.telegram" }]
-      : []),
-  ];
-  for (const { config, path } of credentialScopes) {
-    const credential =
-      inspectTokenFile(config?.tokenFile, `${path}.tokenFile`) ??
-      inspectTokenValue({ cfg: params.cfg, value: config?.botToken });
-    if (credential) {
-      return {
-        ...account,
-        ...credential,
-        configured: credential.tokenStatus !== "missing",
-      };
-    }
-  }
-
-  const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
-  const envToken = allowEnv
-    ? (normalizeOptionalString(params.envToken) ??
-      normalizeOptionalString(process.env.TELEGRAM_BOT_TOKEN) ??
-      "")
-    : "";
-  if (envToken) {
-    return {
-      ...account,
-      token: envToken,
-      tokenSource: "env",
-      tokenStatus: "available",
-      configured: true,
-    };
-  }
-
-  return {
-    ...account,
-    token: "",
-    tokenSource: "none",
-    tokenStatus: "missing",
-    configured: false,
-    stateReason: allowChannelCredentialFallback
-      ? undefined
-      : `not configured: unknown accountId "${accountId}" in multi-bot setup`,
-  };
-}
-
 function readTelegramAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   envToken?: string | null;
 }): TelegramAccountInspection {
-  return resolveTelegramAccountFallback(params, (accountId) =>
-    inspectTelegramAccountPrimary({ cfg: params.cfg, accountId, envToken: params.envToken }),
-  );
+  return resolveTelegramAccountFallback(params, (rawAccountId): TelegramAccountInspection => {
+    const accountId = normalizeAccountId(rawAccountId);
+    const merged = mergeTelegramAccountConfig(params.cfg, accountId);
+    const enabled = params.cfg.channels?.telegram?.enabled !== false && merged.enabled !== false;
+    const account = {
+      accountId,
+      enabled,
+      name: normalizeOptionalString(merged.name),
+      config: merged,
+    };
+
+    const accountConfig = resolveTelegramAccountConfig(params.cfg, accountId);
+    const allowChannelCredentialFallback =
+      accountId === DEFAULT_ACCOUNT_ID ||
+      Boolean(accountConfig) ||
+      Object.keys(asNonArrayRecord(params.cfg.channels?.telegram?.accounts)).length === 0;
+    const credentialScopes = [
+      { config: accountConfig, path: `channels.telegram.accounts.${accountId}` },
+      ...(allowChannelCredentialFallback
+        ? [{ config: params.cfg.channels?.telegram, path: "channels.telegram" }]
+        : []),
+    ];
+    for (const { config, path } of credentialScopes) {
+      const credential =
+        inspectTokenFile(config?.tokenFile, `${path}.tokenFile`) ??
+        inspectTokenValue({ cfg: params.cfg, value: config?.botToken });
+      if (credential) {
+        return {
+          ...account,
+          ...credential,
+          configured: credential.tokenStatus !== "missing",
+        };
+      }
+    }
+
+    const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
+    const envToken = allowEnv
+      ? (normalizeOptionalString(params.envToken) ??
+        normalizeOptionalString(process.env.TELEGRAM_BOT_TOKEN) ??
+        "")
+      : "";
+    if (envToken) {
+      return {
+        ...account,
+        token: envToken,
+        tokenSource: "env",
+        tokenStatus: "available",
+        configured: true,
+      };
+    }
+
+    return {
+      ...account,
+      token: "",
+      tokenSource: "none",
+      tokenStatus: "missing",
+      configured: false,
+      stateReason: allowChannelCredentialFallback
+        ? undefined
+        : `not configured: unknown accountId "${accountId}" in multi-bot setup`,
+    };
+  });
 }
 
 export function findTelegramTokenOwnerAccountId(params: {
@@ -184,12 +169,11 @@ export function findTelegramTokenOwnerAccountId(params: {
       continue;
     }
     const ownerAccountId = tokenOwners.get(token);
+    if (account.accountId === normalizedAccountId) {
+      return ownerAccountId ?? null;
+    }
     if (!ownerAccountId) {
       tokenOwners.set(token, account.accountId);
-      continue;
-    }
-    if (account.accountId === normalizedAccountId) {
-      return ownerAccountId;
     }
   }
   return null;
@@ -213,7 +197,7 @@ export function inspectTelegramAccount(
     ? findTelegramTokenOwnerAccountId({ ...params, accountId: account.accountId })
     : null;
   const groups =
-    params.cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
+    resolveTelegramAccountConfig(params.cfg, account.accountId)?.groups ??
     params.cfg.channels?.telegram?.groups;
   return {
     ...account,

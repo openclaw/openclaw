@@ -1,10 +1,5 @@
-import {
-  deferSqliteWorkerCommitReceipt,
-  requestSqliteWorkerOperationAdmission,
-} from "../../infra/sqlite-worker-operation-admission.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type {
-  WorkerOperationContext,
+  WorkerWriteOperationContext,
   WorkerOperationHandlers,
 } from "../../state/worker-operation-registry.js";
 import { createPlacementWorkspaceJournalOps } from "./placement-workspace-journal.js";
@@ -23,21 +18,16 @@ function operation<Input>(
   ) => WorkspaceJournalMutation,
   now: (input: Input) => number = Date.now,
 ) {
-  return (input: Input, { open }: WorkerOperationContext): WorkspaceJournalReceipt =>
-    runOpenClawStateWriteTransaction(
+  return (input: Input, { writeAdmitted }: WorkerWriteOperationContext): WorkspaceJournalReceipt =>
+    writeAdmitted(
       ({ db }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const journal = createPlacementWorkspaceJournalOps({
           now: () => now(input),
           write: (write) => write(db),
         });
-        const receipt: WorkspaceJournalReceipt = { type, ...execute(journal, input) };
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: receipt });
-        deferSqliteWorkerCommitReceipt(db, receipt);
-        return receipt;
+        return { type, ...execute(journal, input) };
       },
-      { database: open() },
-      { operationLabel: type },
+      { operationLabel: type, receipt: "result", transactionEnvironment: "process" },
     );
 }
 
@@ -63,4 +53,4 @@ export const workspaceJournalOperations = {
     "placementJournals.prune",
     (journal, _input: Record<string, never>) => journal.pruneOrphanedWorkspaceReconciliations(),
   ),
-} satisfies WorkerOperationHandlers;
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

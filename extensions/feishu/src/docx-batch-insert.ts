@@ -16,10 +16,7 @@ export type DocxDescendantCreateBlock = NonNullable<
 
 function toDescendantBlock(block: FeishuDocxBlock): DocxDescendantCreateBlock {
   const child = readStringValue(block.children);
-  return {
-    ...block,
-    ...(child ? { children: [child] } : {}),
-  } as DocxDescendantCreateBlock;
+  return (child ? { ...block, children: [child] } : block) as DocxDescendantCreateBlock;
 }
 
 export async function insertDocxDescendants(
@@ -101,10 +98,7 @@ export async function insertBlocksInBatches(
       );
     }
 
-    if (
-      currentBatch.blocks.length + newBlocks.length > BATCH_SIZE &&
-      currentBatch.blocks.length > 0
-    ) {
+    if (currentBatch.blocks.length + newBlocks.length > BATCH_SIZE) {
       batches.push(currentBatch);
       currentBatch = { firstLevelIds: [], blocks: [] };
     }

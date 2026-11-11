@@ -6,11 +6,9 @@
 import { readFile } from "node:fs/promises";
 import type { RunMediaUnderstandingFileParams } from "openclaw/plugin-sdk/media-understanding-runtime";
 
-/** Default prompt for turning browser screenshots into text-only page context. */
 const DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT =
   "Describe what is visible in this browser screenshot. Capture page layout, headings, primary content blocks, visible text, and notable interactive elements so a text-only assistant can reason about the page.";
 
-/** Input context for browser screenshot image understanding. */
 type BrowserScreenshotDescriptionContext = Pick<
   RunMediaUnderstandingFileParams,
   "cfg" | "filePath" | "agentDir" | "workspaceDir" | "agentId"

@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolvePnpmRunner } from "../pnpm-runner.mts";
+import { resolveFsSafePackageManifest } from "./fs-safe-windows-helper-asset.mts";
+import { copyWorkerNativeArchiveCache } from "./fs-safe-worker-native-assets.mts";
 import { hasUnjoinedWork, runManagedCommand, signalExitCode } from "./managed-child-process.mts";
+import { requirePinnedBun } from "./pinned-bun.mts";
 import { isRecord } from "./record-shared.mjs";
 import {
   collectVitestFileFilters,
@@ -38,8 +41,21 @@ const CONTAINER_ENV = {
   container: "podman",
 };
 
+export type IsolatedVitestRuntime = "node" | "bun";
+const BUN_TARGET = "/opt/openclaw-vitest/bun";
+function containerEnv(runtime: IsolatedVitestRuntime) {
+  return runtime === "node"
+    ? CONTAINER_ENV
+    : {
+        ...CONTAINER_ENV,
+        OPENCLAW_VITEST_RUNTIME: "bun",
+        OPENCLAW_BUN_PATH: BUN_TARGET,
+      };
+}
+
 export function parseIsolatedVitestArgs(argv: string[]) {
   let image: string | undefined;
+  let runtime: IsolatedVitestRuntime | undefined;
   const args: string[] = [];
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]!;
@@ -60,6 +76,16 @@ export function parseIsolatedVitestArgs(argv: string[]) {
           "--isolated-image requires a full local sha256 image ID or repository@sha256 digest; tags are refused.",
         );
       }
+    } else if (arg === "--isolated-runtime" || arg.startsWith("--isolated-runtime=")) {
+      if (runtime !== undefined) {
+        throw new Error("--isolated-runtime must occur once.");
+      }
+      const selected =
+        arg === "--isolated-runtime" ? argv[++index] : arg.slice("--isolated-runtime=".length);
+      if (selected !== "node" && selected !== "bun") {
+        throw new Error("--isolated-runtime requires node or bun.");
+      }
+      runtime = selected;
     } else {
       args.push(arg);
       if (vitestOptionConsumesNextArg(arg, argv[index + 1])) {
@@ -67,7 +93,10 @@ export function parseIsolatedVitestArgs(argv: string[]) {
       }
     }
   }
-  return image === undefined ? null : { image, args };
+  if (runtime !== undefined && image === undefined) {
+    throw new Error("--isolated-runtime requires --isolated-image.");
+  }
+  return image === undefined ? null : { image, args, runtime: runtime ?? "node" };
 }
 
 /** Keep the first supported surface finite and source-qualified, not an alternate CLI. */
@@ -157,8 +186,10 @@ export function isolatedVitestCreateArgs(options: {
   gid: number;
   pnpmVersion: string;
   argv: string[];
+  bun?: string;
 }) {
-  const { name, image, snapshot, mounts, node, pnpm, uid, gid, pnpmVersion, argv } = options;
+  const { name, image, snapshot, mounts, node, pnpm, uid, gid, pnpmVersion, argv, bun } = options;
+  const runtime = bun ? "bun" : "node";
   // Runtime builds need the compiler's 12 GiB heap plus native/bundler headroom.
   // Keep the smaller envelope for source-only tests that need no runtime build.
   const memory = resolveIsolatedVitestBuild(argv, CONTAINER_ENV) ? "16g" : "8g";
@@ -167,6 +198,7 @@ export function isolatedVitestCreateArgs(options: {
     ...mounts.map((mount) => ({ source: mount.source, target: mount.target, readonly: true })),
     { source: node, target: "/opt/openclaw-vitest/node", readonly: true },
     { source: pnpm, target: "/opt/openclaw-vitest/pnpm", readonly: true },
+    ...(bun ? [{ source: bun, target: BUN_TARGET, readonly: true }] : []),
   ];
   for (const mount of bindings) {
     if (!path.isAbsolute(mount.source) || /[,\r\n\0]/u.test(mount.source)) {
@@ -207,7 +239,10 @@ export function isolatedVitestCreateArgs(options: {
     "--timeout=7200",
     "--stop-timeout=5",
     "--workdir=/workspace",
-    ...Object.entries(CONTAINER_ENV).flatMap(([key, value]) => ["--env", `${key}=${value}`]),
+    ...Object.entries(containerEnv(runtime)).flatMap(([key, value]) => [
+      "--env",
+      `${key}=${value}`,
+    ]),
     ...bindings.flatMap((mount) => [
       "--mount",
       `type=bind,src=${mount.source},dst=${mount.target},${mount.readonly ? "ro" : "rw"}`,
@@ -217,6 +252,7 @@ export function isolatedVitestCreateArgs(options: {
     "scripts/lib/vitest-isolated-entry.mts",
     process.version,
     pnpmVersion,
+    runtime,
     ...argv,
   ];
 }
@@ -263,6 +299,7 @@ export function verifyIsolatedVitestContainer(
   value: Record<string, unknown>,
   name: string,
   expectedMounts: string[],
+  runtime: IsolatedVitestRuntime = "node",
 ) {
   const config = record(value.Config);
   if (record(config.Labels)[LABEL] !== name) {
@@ -278,7 +315,9 @@ export function verifyIsolatedVitestContainer(
   ) {
     throw new Error("Container isolation settings differ from the admitted invocation.");
   }
-  const expectedEnv = new Set(Object.entries(CONTAINER_ENV).map(([key, val]) => `${key}=${val}`));
+  const expectedEnv = new Set(
+    Object.entries(containerEnv(runtime)).map(([key, val]) => `${key}=${val}`),
+  );
   if (
     !Array.isArray(config.Env) ||
     config.Env.length !== expectedEnv.size ||
@@ -410,6 +449,7 @@ export async function runIsolatedVitest(
   image: string,
   argv: string[],
   env: NodeJS.ProcessEnv,
+  runtime: IsolatedVitestRuntime = "node",
 ) {
   if (
     process.platform !== "linux" ||
@@ -540,7 +580,24 @@ export async function runIsolatedVitest(
     if (!source.copied.has("scripts/lib/vitest-isolated-entry.mts")) {
       throw new Error("Stage the isolated adapter's new source files before running it.");
     }
+    let bun: string | undefined;
+    if (runtime === "bun") {
+      // Use only the existing canonical cache, never host path/env overrides. The
+      // copied native artifact is readonly; the entry revalidates it against the snapshot pin.
+      const prepared = requirePinnedBun({}, { repoRoot: snapshot, preparedOnly: true });
+      bun = path.join(temporary, "bun");
+      fs.copyFileSync(nativeExecutable(prepared), bun);
+      fs.chmodSync(bun, 0o555);
+    }
     const mounts = prepareIsolatedVitestDependencies(root, snapshot, source.copied);
+    if (resolveIsolatedVitestBuild(argv, CONTAINER_ENV)) {
+      const archives = await copyWorkerNativeArchiveCache(
+        root,
+        snapshot,
+        resolveFsSafePackageManifest(root),
+      );
+      console.error(`[vitest:isolated] offline worker native archives ${JSON.stringify(archives)}`);
+    }
     const name = `openclaw-vitest-${randomUUID()}`;
     console.error(
       `[vitest:isolated] source sha256:${source.digest}; ${source.copied.size} working-tree files; network=none; container=${name}`,
@@ -556,19 +613,21 @@ export async function runIsolatedVitest(
       gid: process.getgid(),
       pnpmVersion,
       argv,
+      bun,
     });
     const expectedMounts = [
       `${snapshot}:/workspace:rw`,
       ...mounts.map((mount) => `${mount.source}:${mount.target}:ro`),
       `${node}:/opt/openclaw-vitest/node:ro`,
       `${pnpm}:/opt/openclaw-vitest/pnpm:ro`,
+      ...(bun ? [`${bun}:${BUN_TARGET}:ro`] : []),
     ];
     safeToRemove = false;
     const code = await runIsolatedVitestContainer({
       command,
       name,
       createArgs,
-      verify: (value) => verifyIsolatedVitestContainer(value, name, expectedMounts),
+      verify: (value) => verifyIsolatedVitestContainer(value, name, expectedMounts, runtime),
       onAbsent: () => {
         safeToRemove = true;
       },

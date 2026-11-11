@@ -80,6 +80,10 @@ that same queue. Messages missed while disconnected cannot be recovered, and
 pending DMs from an earlier connection are discarded because IRC nicknames can
 change owners.
 
+A dropped network path can leave the socket open with nothing arriving. When the
+server has sent nothing for two minutes, OpenClaw sends it a `PING`; after four
+minutes of silence it closes the connection and reconnects.
+
 ## Outbound text
 
 IRC sends Markdown as plain text, preserving code contents and link destinations.
@@ -117,6 +121,7 @@ Config keys:
 - DM allowlist (DM sender access): `channels.irc.allowFrom`
 - Group sender allowlist (channel sender access): `channels.irc.groupAllowFrom`
 - Per-channel controls (channel + sender + mention rules): `channels.irc.groups["#channel"]` with `requireMention`, `allowFrom`, `enabled`, `tools`, `toolsBySender`, `skills`, and `systemPrompt`
+- An explicit empty per-channel `allowFrom` denies all senders in that channel, even if a wildcard channel or global group sender list allows them.
 - `channels.irc.groupPolicy="open"` allows unconfigured channels (**still mention-gated by default**)
 
 Allowlist entries should use stable sender identities (`nick!user@host`).

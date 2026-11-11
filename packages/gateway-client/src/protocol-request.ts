@@ -2,6 +2,15 @@ import type { ErrorShape } from "@openclaw/gateway-protocol";
 
 const gatewayResponseErrors = new WeakSet<Error>();
 
+export class GatewayPayloadLimitError extends Error {
+  constructor(bytes: number, limit: number) {
+    super(
+      `Request exceeds the Gateway payload limit (${bytes} > ${limit} bytes). Shorten the message or remove one or more attachments and retry.`,
+    );
+    this.name = "GatewayPayloadLimitError";
+  }
+}
+
 /** Distinguishes correlated Gateway responses from locally constructed transport errors. */
 export function isGatewayProtocolResponseError(
   error: unknown,
@@ -15,6 +24,8 @@ export type GatewayProtocolRequestOptions = {
   onSent?: (requestId: string) => void;
   onAccepted?: (payload: unknown) => void;
   signal?: AbortSignal;
+  /** Abort unsent/retry work while retaining a sent write's result and original deadline. */
+  retainSentResultOnAbort?: boolean;
 };
 
 export class GatewayProtocolRequestError extends Error {

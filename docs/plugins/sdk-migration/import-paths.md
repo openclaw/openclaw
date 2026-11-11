@@ -26,7 +26,7 @@ The mappings on this page are a migration subset, not the full SDK surface.
 Check both the public subpath and its actual named exports before replacing an
 import.
 
-Reserved bundled-plugin helper seams, including the `plugin-sdk/discord` and
+Reserved bundled-plugin helper interfaces, including the `plugin-sdk/discord` and
 `plugin-sdk/telegram-account` compatibility facades, have been retired from the
 public SDK export map. Owner-specific
 helpers live inside the owning plugin package; shared host behavior moves

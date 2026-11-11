@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenClaw native setup proof</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script>
+      document.documentElement.dataset.nativeSetupAtBoot = String(
+        Boolean(window.__OPENCLAW_NATIVE_SETUP__?.openGateways),
+      );
+    </script>
+    <script type="module" src="./onboarding-card.tsx"></script>
+  </body>
+</html>

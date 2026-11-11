@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveRuntimeScriptEnv } from "../../cli-invocation.mjs";
 import { resolveSafeChildProcessInvocation } from "../process/windows-command.js";
 import { resolveNpmCommand } from "./npm-command.js";
 import { tryProcessCwd } from "./safe-cwd.js";
@@ -37,8 +38,6 @@ const NPM_FRESHNESS_BYPASS_KEYS = [
   "NPM_CONFIG_MIN-RELEASE-AGE",
   "npm_config_min-release-age",
 ] as const;
-
-type NpmFreshnessBypassMode = "before" | "min-release-age";
 
 export type NpmConfigScope = {
   npmConfigCwd?: string;
@@ -118,15 +117,16 @@ function runNpmConfigProbe(params: {
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
 }): string {
+  const env = resolveRuntimeScriptEnv(params.env);
   const invocation = resolveSafeChildProcessInvocation({
     argv: resolveNpmCommand(params.args),
     cwd: params.cwd,
-    env: params.env,
+    env,
   });
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: params.cwd,
     encoding: "utf-8",
-    env: params.env,
+    env,
     stdio: ["ignore", "pipe", "ignore"],
     timeout: params.timeoutMs,
     windowsHide: invocation.windowsHide,
@@ -276,7 +276,7 @@ export function findExplicitNpmConfigKeys(
 function resolveNpmFreshnessBypassMode(
   env: NodeJS.ProcessEnv,
   scope: NpmConfigScope,
-): NpmFreshnessBypassMode {
+): "before" | "min-release-age" {
   if (process.platform === "win32") {
     return "before";
   }
@@ -331,9 +331,8 @@ export function applyNpmFreshnessBypassEnv(
 export function createNpmProjectInstallEnv(
   env: NodeJS.ProcessEnv,
   options: NpmProjectInstallEnvOptions = {},
-  now = new Date(),
 ): NodeJS.ProcessEnv {
-  const nextEnv = { ...env };
+  const nextEnv = resolveRuntimeScriptEnv(env);
   for (const key of Object.keys(nextEnv)) {
     if (NPM_CONFIG_KEYS_TO_RESET.has(key.toLowerCase())) {
       delete nextEnv[key];
@@ -363,7 +362,7 @@ export function createNpmProjectInstallEnv(
     npm_config_save: "false",
     ...(options.cacheDir ? { npm_config_cache: options.cacheDir } : {}),
   };
-  applyNpmFreshnessBypassEnv(installEnv, now, options);
+  applyNpmFreshnessBypassEnv(installEnv, new Date(), options);
   applyPosixNpmScriptShellEnv(installEnv);
   return installEnv;
 }

@@ -1,5 +1,5 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { AsyncContext } from "../shared/async-context.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type AgentRingZeroToolScope = {
@@ -7,16 +7,7 @@ type AgentRingZeroToolScope = {
   tools: readonly AnyAgentTool[];
 };
 
-const activeRingZeroTools = new AsyncLocalStorage<AgentRingZeroToolScope>();
-
-class HostScopedAgentToolAuthorizationError extends Error {
-  readonly status = 403;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "HostScopedAgentToolAuthorizationError";
-  }
-}
+const activeRingZeroTools = new AsyncContext<AgentRingZeroToolScope>(Symbol("agentRingZeroTools"));
 
 function bindToolToScope(tool: AnyAgentTool, scope: AgentRingZeroToolScope): AnyAgentTool {
   const execute = tool.execute;
@@ -28,8 +19,9 @@ function bindToolToScope(tool: AnyAgentTool, scope: AgentRingZeroToolScope): Any
       // active because SDK callbacks can run on async resources created outside
       // this ALS store; every retained handle fails after run settlement.
       if (!scope.active) {
-        throw new HostScopedAgentToolAuthorizationError(
-          `host-scoped tool "${tool.name}" is no longer authorized for this run`,
+        throw Object.assign(
+          new Error(`host-scoped tool "${tool.name}" is no longer authorized for this run`),
+          { name: "HostScopedAgentToolAuthorizationError", status: 403 },
         );
       }
       return await execute(toolCallId, params, signal, onUpdate);

@@ -31,23 +31,19 @@ export function isMissingCopilotSessionError(error: unknown): boolean {
   );
 }
 
-interface ReplayMetadataComputeInput {
+// A timeout may have committed work server-side, so it is side-effecting even
+// without an observed tool call. Replay carries the worst outcome across attempts.
+export function computeReplayMetadata(input: {
   readonly priorReplayInvalid?: boolean;
   readonly priorHadPotentialSideEffects?: boolean;
   readonly thisAttemptTimedOut?: boolean;
   readonly thisAttemptHadPotentialSideEffects?: boolean;
   readonly thisAttemptDowngradedFromResume?: boolean;
   readonly thisAttemptResumeFailureRecovered?: boolean;
-}
-
-interface ComputedReplayMetadata {
+}): {
   readonly hadPotentialSideEffects: boolean;
   readonly replaySafe: boolean;
-}
-
-// A timeout may have committed work server-side, so it is side-effecting even
-// without an observed tool call. Replay carries the worst outcome across attempts.
-export function computeReplayMetadata(input: ReplayMetadataComputeInput): ComputedReplayMetadata {
+} {
   const priorReplayInvalid = input.priorReplayInvalid === true;
   const priorHadPotentialSideEffects = input.priorHadPotentialSideEffects === true;
   const timedOut = input.thisAttemptTimedOut === true;

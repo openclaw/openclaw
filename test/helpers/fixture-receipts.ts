@@ -53,7 +53,7 @@ export async function openFixtureReceiptChannel(): Promise<FixtureReceiptChannel
     ? path.join(directory, "s")
     : `\\\\.\\pipe\\openclaw-fixture-receipts-${process.pid}-${randomUUID()}`;
   const broadcastName = `openclaw-fixture-receipts:${randomUUID()}`;
-  const broadcast = new BroadcastChannel(broadcastName);
+  let broadcast: BroadcastChannel | undefined;
   const receipts = new Map<string, string[]>();
   const waiters = new Set<Waiter>();
   const sockets = new Set<net.Socket>();
@@ -123,16 +123,6 @@ export async function openFixtureReceiptChannel(): Promise<FixtureReceiptChannel
       }
     }
   };
-  broadcast.addEventListener("message", ({ data }: { data: unknown }) => {
-    if (failure) {
-      return;
-    }
-    try {
-      record(data);
-    } catch (cause) {
-      fail(new Error("Malformed fixture receipt: broadcast message", { cause }));
-    }
-  });
   const server = net.createServer((socket) => {
     sockets.add(socket);
     socket.setEncoding("utf8");
@@ -184,7 +174,6 @@ export async function openFixtureReceiptChannel(): Promise<FixtureReceiptChannel
       });
     });
   } catch (error) {
-    broadcast.close();
     if (directory) {
       await fs.rm(directory, { recursive: true, force: true });
     }
@@ -193,7 +182,24 @@ export async function openFixtureReceiptChannel(): Promise<FixtureReceiptChannel
 
   return {
     endpoint,
-    broadcastName,
+    get broadcastName() {
+      // Socket-only fixtures need no worker transport. Register before exposing
+      // its name so a worker can post and immediately block its event loop.
+      if (!closing && !broadcast) {
+        broadcast = new BroadcastChannel(broadcastName);
+        broadcast.addEventListener("message", ({ data }: { data: unknown }) => {
+          if (failure) {
+            return;
+          }
+          try {
+            record(data);
+          } catch (cause) {
+            fail(new Error("Malformed fixture receipt: broadcast message", { cause }));
+          }
+        });
+      }
+      return broadcastName;
+    },
     waitFor(source, text, count = 1) {
       if (failure) {
         return Promise.reject(failure);
@@ -243,7 +249,7 @@ export async function openFixtureReceiptChannel(): Promise<FixtureReceiptChannel
     },
     close() {
       closing ??= (async () => {
-        broadcast.close();
+        broadcast?.close();
         for (const waiter of waiters) {
           waiter.reject(
             new Error(

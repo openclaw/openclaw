@@ -1,52 +1,33 @@
 import { describe, expect, it } from "vitest";
+import { withinTest } from "../../../../test/helpers/promise.js";
+import { makeStallingStream } from "../providers/provider-stream.test-support.js";
 import { createSseByteGuard } from "./streaming-byte-guard.js";
 
-async function settleWithin<T>(promise: Promise<T>, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} did not settle`)), 250);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 describe("createSseByteGuard cancellation", () => {
-  it("reports overflow without waiting for upstream cancellation", async () => {
+  it("reports overflow without waiting for upstream cancellation", async ({ signal }) => {
     let cancelStarted = false;
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array(2));
-      },
-      cancel() {
-        cancelStarted = true;
-        return new Promise<void>(() => {});
-      },
+    const body = makeStallingStream([new Uint8Array(2)], () => {
+      cancelStarted = true;
+      return new Promise<void>(() => {});
     });
     const guard = createSseByteGuard(body.getReader(), { maxBytes: 1 });
 
-    await expect(settleWithin(guard.read(), "overflow read")).rejects.toThrow(
+    await expect(withinTest(guard.read(), signal)).rejects.toThrow(
       "SSE stream exceeds 1 bytes (received 2)",
     );
     expect(cancelStarted).toBe(true);
     expect(guard.overflowed()).toBe(true);
   });
 
-  it("finishes explicit cancellation after handing cleanup upstream", async () => {
+  it("finishes explicit cancellation after handing cleanup upstream", async ({ signal }) => {
     let cancelStarted = false;
-    const body = new ReadableStream<Uint8Array>({
-      cancel() {
-        cancelStarted = true;
-        return new Promise<void>(() => {});
-      },
+    const body = makeStallingStream([], () => {
+      cancelStarted = true;
+      return new Promise<void>(() => {});
     });
     const guard = createSseByteGuard(body.getReader(), { maxBytes: 1 });
 
-    await expect(settleWithin(guard.cancel("done"), "explicit cancel")).resolves.toBeUndefined();
+    await expect(withinTest(guard.cancel("done"), signal)).resolves.toBeUndefined();
     expect(cancelStarted).toBe(true);
     expect(guard.cancelled()).toBe(true);
   });

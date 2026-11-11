@@ -71,15 +71,14 @@ struct SimpleTaskSupportTests {
 
     @Test
     @MainActor
-    func `cancelling after sleep completes does not run the scheduled operation`() async {
+    func `cancelled delay does not run the scheduled operation`() async {
         let operation = SimpleTaskOperationProbe()
         var task: Task<Void, Never>?
 
         SimpleTaskSupport.schedule(
             task: &task,
             delay: 0,
-            sleep: { _ in },
-            beforeOperationCheck: {
+            sleep: { _ in
                 withUnsafeCurrentTask { currentTask in
                     currentTask?.cancel()
                 }

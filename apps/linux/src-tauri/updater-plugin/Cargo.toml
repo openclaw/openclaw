@@ -1,0 +1,89 @@
+# Vendored from steipete/plugins-workspace 63e8185eb184cf0af6b665f631e2314c7b14d9c6.
+# That revision runs Windows exit cleanup only after the installer launches.
+# Workspace keys are expanded so this crate builds outside that workspace.
+# The only dependency change is Windows zip 4 to 9.0.5 (CVE-2026-115905 and
+# CVE-2026-115909). Drop this copy when a crates.io release contains both
+# that launch behavior and zip >= 9.0.5.
+[package]
+name = "tauri-plugin-updater"
+version = "2.11.0"
+description = "In-app updates for Tauri applications."
+edition = "2021"
+authors = ["Tauri Programme within The Commons Conservancy"]
+license = "Apache-2.0 OR MIT"
+rust-version = "1.77.2"
+repository = "https://github.com/tauri-apps/plugins-workspace"
+links = "tauri-plugin-updater"
+exclude = [
+  "/banner.png",
+  "/guest-js",
+  "/package.json",
+  "/rollup.config.js",
+  "/tests",
+  "/tsconfig.json",
+]
+
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["zip"]
+
+[package.metadata.platforms.support]
+windows = { level = "full", notes = "" }
+linux = { level = "full", notes = "" }
+macos = { level = "full", notes = "" }
+android = { level = "none", notes = "" }
+ios = { level = "none", notes = "" }
+
+[build-dependencies]
+tauri-plugin = { version = "2.5", features = ["build"] }
+
+[dependencies]
+tauri = { version = "2.10", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+log = "0.4.21"
+tokio = "1"
+reqwest = { version = "0.13", default-features = false, features = [
+  "json",
+  "stream",
+] }
+rustls = { version = "0.23", default-features = false, features = [
+  "ring",
+], optional = true }
+url = "2"
+http = "1"
+minisign-verify = "0.2"
+time = { version = "0.3", features = ["parsing", "formatting"] }
+base64 = "0.22"
+semver = { version = "1", features = ["serde"] }
+futures-util = "0.3"
+tempfile = "3.20"
+infer = "0.19"
+percent-encoding = "2.3"
+
+[target."cfg(target_os = \"windows\")".dependencies]
+zip = { version = "9.0.5", default-features = false, optional = true }
+windows-sys = { version = "0.60.0", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Shell",
+] }
+
+[target."cfg(target_os = \"linux\")".dependencies]
+dirs = "6"
+tar = { version = "0.4", optional = true }
+flate2 = { version = "1", optional = true }
+
+[target."cfg(target_os = \"macos\")".dependencies]
+tar = "0.4"
+flate2 = "1"
+osakit = { version = "0.3", features = ["full"] }
+
+[features]
+default = ["rustls-tls", "system-proxy", "zip"]
+zip = ["dep:zip", "dep:tar", "dep:flate2"]
+native-tls = ["reqwest/native-tls"]
+native-tls-vendored = ["reqwest/native-tls-vendored"]
+rustls-tls = ["reqwest/rustls-no-provider", "dep:rustls"]
+system-proxy = ["reqwest/system-proxy"]

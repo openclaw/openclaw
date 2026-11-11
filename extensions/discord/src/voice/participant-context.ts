@@ -38,7 +38,7 @@ export function listDiscordVoiceParticipantStates(params: {
   channelId: string;
 }): APIVoiceState[] | null {
   const gateway = params.client.getPlugin("gateway");
-  if (!gateway || typeof gateway.listVoiceChannelStates !== "function") {
+  if (!gateway) {
     return null;
   }
   return gateway.listVoiceChannelStates(params.guildId, params.channelId);
@@ -72,12 +72,12 @@ export function createDiscordVoiceOccupancyWatcher(
   };
 }
 
-function retainParticipantId(selected: string[], userId: string): void {
-  if (selected.includes(userId)) {
-    return;
-  }
-  selected.push(userId);
-  selected.sort((left, right) => left.localeCompare(right));
+function retainParticipant(
+  selected: DiscordVoiceParticipantState[],
+  participant: DiscordVoiceParticipantState,
+): void {
+  selected.push(participant);
+  selected.sort((left, right) => left.userId.localeCompare(right.userId));
   if (selected.length > MAX_PARTICIPANTS) {
     selected.pop();
   }
@@ -89,7 +89,7 @@ export function collectDiscordVoiceParticipants(params: {
   additionalUserId?: string;
   additionalUserIds?: Iterable<string>;
 }): DiscordVoiceParticipantRoster {
-  const selectedUserIds: string[] = [];
+  const participants: DiscordVoiceParticipantState[] = [];
   const additionalUserIds = new Set<string>();
   const addAdditionalUserId = (rawUserId: string | undefined) => {
     const userId = rawUserId?.trim();
@@ -116,25 +116,14 @@ export function collectDiscordVoiceParticipants(params: {
     }
     totalCount += 1;
     additionalUserIds.delete(userId);
-    retainParticipantId(selectedUserIds, userId);
+    retainParticipant(participants, { userId, state });
   }
   for (const additionalUserId of additionalUserIds) {
     // A speaking event proves presence even if the initial Gateway roster raced startup.
     totalCount += 1;
-    retainParticipantId(selectedUserIds, additionalUserId);
+    retainParticipant(participants, { userId: additionalUserId });
   }
-  const selected = new Set(selectedUserIds);
-  const statesByUserId = new Map<string, APIVoiceState>();
-  for (const state of params.states) {
-    const userId = state.user_id?.trim();
-    if (userId && selected.has(userId)) {
-      statesByUserId.set(userId, state);
-    }
-  }
-  return {
-    participants: selectedUserIds.map((userId) => ({ userId, state: statesByUserId.get(userId) })),
-    totalCount,
-  };
+  return { participants, totalCount };
 }
 
 export function countDiscordVoiceHumanParticipants(params: {
@@ -168,7 +157,7 @@ export function countDiscordVoiceHumanParticipants(params: {
 }
 
 function formatDiscordVoiceParticipantLine(userId: string, displayName?: string): string {
-  const label = normalizeLabel(displayName) ?? userId;
+  const label = displayName ?? userId;
   return `- user_id=${JSON.stringify(userId)} display_name=${JSON.stringify(label)}`;
 }
 
@@ -184,7 +173,7 @@ export function formatDiscordVoiceParticipantStateLine(
 export function formatDiscordVoiceParticipantStateLines(
   roster: DiscordVoiceParticipantRoster,
 ): string[] {
-  const participants = roster.participants.slice(0, MAX_PARTICIPANTS);
+  const participants = roster.participants;
   const lines = participants.map(formatDiscordVoiceParticipantStateLine);
   if (roster.totalCount > participants.length) {
     lines.push(`- ${roster.totalCount - participants.length} more participant(s)`);
@@ -197,7 +186,7 @@ export async function resolveDiscordVoiceParticipantLines(params: {
   guildId: string;
   speakerContext: DiscordVoiceSpeakerContextResolver;
 }): Promise<string[]> {
-  const participants = params.roster.participants.slice(0, MAX_PARTICIPANTS);
+  const participants = params.roster.participants;
   const lines = await Promise.all(
     participants.map(async ({ userId, state }) => {
       const label =

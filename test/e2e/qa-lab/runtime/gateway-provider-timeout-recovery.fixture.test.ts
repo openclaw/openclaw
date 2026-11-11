@@ -1,4 +1,5 @@
 import { request, type ClientRequest } from "node:http";
+import { text as readStreamText } from "node:stream/consumers";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -24,6 +25,11 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
   let assistantMessages: unknown[] = [];
   const bootstrap: Array<() => Promise<void>> = [];
   const cleanup: Array<() => Promise<void>> = [];
+  const runCleanup = async () => {
+    for (const run of cleanup.splice(0).toReversed()) {
+      await run();
+    }
+  };
   const cases: Array<{
     run: (context: { signal: AbortSignal }) => Promise<void>;
     timeout: number;
@@ -63,6 +69,7 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
       await setImmediate();
     },
   }));
+  // mock-isolation: Capture the fixture's Gateway lifecycle and RPCs without launching a child process.
   vi.doMock("../../../../extensions/qa-lab/api.js", () => ({
     createQaGatewayChild: () => ({
       start: async (options: { providerBaseUrl: string }) => {
@@ -75,19 +82,14 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
             }
             if (method === "chat.send") {
               requestAt = now;
+              // Keep loopback I/O on the event loop driven by the fixture's simulated clock.
               providerReply = new Promise<string>((resolve, reject) => {
                 providerRequest = request(
                   `${providerUrl}/responses`,
                   { method: "POST" },
                   (response) => {
                     releasedAt = now;
-                    let body = "";
-                    response.setEncoding("utf8");
-                    response.on("data", (chunk: string) => {
-                      body += chunk;
-                    });
-                    response.on("end", () => resolve(body));
-                    response.on("error", reject);
+                    void readStreamText(response).then(resolve, reject);
                   },
                 );
                 providerRequest.on("error", reject);
@@ -129,9 +131,7 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
     const bodyStartedAt = now;
     await test.run({ signal });
     const bodyMs = now - bodyStartedAt;
-    for (const run of cleanup.splice(0).toReversed()) {
-      await run();
-    }
+    await runCleanup();
 
     expect.soft(test.timeout).toBe(510_000);
     expect.soft(bodyMs).toBeLessThan(test.timeout);
@@ -146,18 +146,13 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
     for (const [index, entry] of activeProgress.entries()) {
       expect(entry.at - (activeProgress[index - 1]?.at ?? requestAt)).toBeLessThanOrEqual(60_000);
     }
-    expect
-      .soft(
-        progress.some(({ text }) =>
-          text.includes('"phase":"provider-timeout-recovery-proof-complete"'),
-        ),
-      )
-      .toBe(true);
+    const completed = progress.some(({ text }) =>
+      text.includes('"phase":"provider-timeout-recovery-proof-complete"'),
+    );
+    expect.soft(completed).toBe(true);
   } finally {
     providerRequest?.destroy();
-    for (const run of cleanup.splice(0).toReversed()) {
-      await run();
-    }
+    await runCleanup();
     await providerReply?.catch(() => {});
   }
 });

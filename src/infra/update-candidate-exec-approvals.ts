@@ -4,8 +4,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { root } from "@openclaw/fs-safe";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
+import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { hasNodeErrorCode } from "./path-guards.js";
 import {
   detectLegacyExecApprovals,
   DOCTOR_CLAIM_SUFFIX,
@@ -51,12 +51,7 @@ export function createUpdateCandidateExecApprovalsProjection(
         // lstat keeps broken links visible to the same refusal as ordinary links.
         const exists = await fs.lstat(source).then(
           () => true,
-          (error: unknown) => {
-            if (hasNodeErrorCode(error, "ENOENT")) {
-              return false;
-            }
-            throw error;
-          },
+          (error: unknown) => ignoreMissingUpdateCandidateFile(error) ?? false,
         );
         if (!exists) {
           continue;

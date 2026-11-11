@@ -3,7 +3,8 @@ import { vi } from "vitest";
 export const activeRunRegistrationMocks = {
   cancelPendingAgentQuestionForSession: vi.fn(),
   clearActiveEmbeddedRun: vi.fn(),
-  setActiveEmbeddedRun: vi.fn(),
+  setActiveEmbeddedRun:
+    vi.fn<typeof import("openclaw/plugin-sdk/agent-harness-runtime").setActiveEmbeddedRun>(),
   questionWaiters: new Map<string, (value: unknown) => void>(),
   cancelQuestionError: undefined as Error | undefined,
 };
@@ -11,6 +12,7 @@ export const activeRunRegistrationMocks = {
 export async function createSteeringRuntimeMock(
   actual: typeof import("openclaw/plugin-sdk/agent-harness-runtime"),
 ) {
+  activeRunRegistrationMocks.setActiveEmbeddedRun.mockImplementation(actual.setActiveEmbeddedRun);
   const gatewayCall = async (...args: Parameters<typeof actual.callGatewayTool>) => {
     const [method, , rawParams] = args;
     const params = rawParams as { id?: string; answers?: unknown; cancel?: boolean } | undefined;
@@ -55,11 +57,6 @@ export async function createSteeringRuntimeMock(
       activeRunRegistrationMocks.clearActiveEmbeddedRun(...args);
       return actual.clearActiveEmbeddedRun(...args);
     },
-    setActiveEmbeddedRun: (
-      ...args: Parameters<typeof actual.setActiveEmbeddedRun>
-    ): ReturnType<typeof actual.setActiveEmbeddedRun> => {
-      activeRunRegistrationMocks.setActiveEmbeddedRun(...args);
-      return actual.setActiveEmbeddedRun(...args);
-    },
+    setActiveEmbeddedRun: activeRunRegistrationMocks.setActiveEmbeddedRun,
   };
 }

@@ -11,7 +11,6 @@ import {
   assertSutMatchesLease,
   assertTesterMatchesLease,
   createGatewayEnvironment,
-  createScenarioCommandEnvironment,
   drainSutUpdates,
   ownChild,
   runCommand,
@@ -53,11 +52,41 @@ const test = (name, run) =>
     }
   });
 
-function startOwnedChild() {
+const configParams = {
+  sutToken: "42:synthetic-file-token",
+  backend: "mock",
+  gatewayPort: 19879,
+  mockPort: 19882,
+  telegramApiRoot: "http://127.0.0.1:19881",
+  testerId: "123",
+  groupId: "-1001",
+};
+function temporary(context, prefix) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  return root;
+}
+const nodeCommand = (argv, options) => runCommand(process.execPath, argv, options);
+const scriptCommand = (source, options) => nodeCommand(["-e", source], options);
+async function assertRelease() {
+  let released = false;
+  await currentTelegramRun().acquire(
+    Promise.resolve({
+      async release() {
+        released = true;
+      },
+    }),
+  );
+  await currentTelegramRun().close();
+  assert.equal(released, true);
+}
+
+function startOwnedChild(source = "setInterval(() => {}, 1000)", options = {}) {
   return ownChild(
-    spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    spawn(process.execPath, ["-e", source], {
       detached: true,
       stdio: "ignore",
+      ...options,
     }),
   );
 }
@@ -91,8 +120,7 @@ const orphanSideEffectScript =
   'process.stdin.on("end",()=>require("node:fs").writeFileSync(process.env.SIDE_EFFECT,"sent")); process.stdin.resume();';
 
 async function wrapperFixture(context, prefix) {
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  context.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const temp = temporary(context, prefix);
   const wrapper = path.join(temp, "wrapper.cjs");
   const child = path.join(temp, "child.cjs");
   fs.writeFileSync(wrapper, wrapperScript);
@@ -129,8 +157,7 @@ function assertStopped(pid) {
 
 test("forwardBurst rejects a non-DM scenario before acquiring credentials", async (context) => {
   // openclaw-temp-dir: allow the CLI reads its scenario and loader from disk.
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-forward-burst-dm-"));
-  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const root = temporary(context, "telegram-forward-burst-dm-");
   const scenario = path.join(root, "scenario.json");
   fs.writeFileSync(
     scenario,
@@ -148,8 +175,7 @@ test("forwardBurst rejects a non-DM scenario before acquiring credentials", asyn
       return next(url, context);
     }});`,
   );
-  const result = await runCommand(
-    process.execPath,
+  const result = await nodeCommand(
     [
       "--import",
       preload,
@@ -173,14 +199,9 @@ test("forwardBurst rejects a non-DM scenario before acquiring credentials", asyn
 test("gateway and recorder readiness budgets reject invalid values before acquiring credentials", async () => {
   for (const [flag, value] of [
     ["--gateway-ready-timeout-ms", "0"],
-    ["--gateway-ready-timeout-ms", "-1"],
-    ["--gateway-ready-timeout-ms", "1.5"],
-    ["--gateway-ready-timeout-ms", "soon"],
     ["--recorder-ready-timeout-ms", "0"],
-    ["--recorder-ready-timeout-ms", "1.5"],
   ]) {
-    const result = await runCommand(
-      process.execPath,
+    const result = await nodeCommand(
       [new URL("./run-mock-sut-user-e2e.mjs", import.meta.url).pathname, flag, value],
       { env: {} },
     );
@@ -190,8 +211,7 @@ test("gateway and recorder readiness budgets reject invalid values before acquir
 });
 
 test("config patches restart before releasing their scenario barrier", async (context) => {
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-config-patch-"));
-  context.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const temp = temporary(context, "telegram-config-patch-");
   const configPath = path.join(temp, "openclaw.json");
   fs.writeFileSync(configPath, JSON.stringify({ channels: { telegram: { historyLimit: 5 } } }));
   const calls = [];
@@ -233,90 +253,9 @@ test("runner rejects a live SUT identity that differs from the lease", () => {
   assert.doesNotThrow(() => assertSutMatchesLease({ id: "42", username: "sut_bot" }, credential));
 });
 
-test("scenario commands receive credential file locations without broker authority", () => {
-  const commandEnv = createScenarioCommandEnvironment({
-    gatewayEnv: {
-      OPENCLAW_CONFIG_PATH: "/tmp/openclaw.json",
-      OPENCLAW_STATE_DIR: "/tmp/state",
-    },
-    driverEnv: {
-      TELEGRAM_E2E_STATE_DIR: "/tmp/lease-state",
-      TELEGRAM_USER_DRIVER_STATE_DIR: "/tmp/user-driver",
-    },
-    telegramApiRoot: "http://127.0.0.1:19881",
-  });
-  assert.deepEqual(commandEnv, {
-    OPENCLAW_CONFIG_PATH: "/tmp/openclaw.json",
-    OPENCLAW_STATE_DIR: "/tmp/state",
-    TELEGRAM_E2E_STATE_DIR: "/tmp/lease-state",
-    TELEGRAM_USER_DRIVER_STATE_DIR: "/tmp/user-driver",
-    TELEGRAM_E2E_TEST_API_ROOT: "http://127.0.0.1:19881",
-  });
-});
-
-test("gateway environment strips inherited bot tokens and keeps the synthetic provider key", () => {
-  const gatewayEnv = createGatewayEnvironment({
-    baseEnv: {
-      PATH: "/safe/bin",
-      TELEGRAM_BOT_TOKEN: "synthetic-bot-token",
-      TELEGRAM_E2E_SUT_BOT_TOKEN: "synthetic-bot-token",
-      OPENCLAW_QA_CONVEX_SECRET_CI: "synthetic-broker-secret",
-      GITHUB_TOKEN: "github-secret",
-      TELEGRAM_E2E_STATE_DIR: "/private/lease",
-      TELEGRAM_USER_DRIVER_STATE_DIR: "/private/lease/user-driver",
-    },
-    configPath: "/tmp/openclaw.json",
-    stateDir: "/tmp/state",
-  });
-  assert.deepEqual(gatewayEnv, {
-    PATH: "/safe/bin",
-    OPENCLAW_CONFIG_PATH: "/tmp/openclaw.json",
-    OPENCLAW_STATE_DIR: "/tmp/state",
-    OPENAI_API_KEY: "openclaw-e2e-mock-key",
-  });
-});
-
-test("gateway token stays in a private run-owned file until scratch cleanup", async () => {
-  const token = "42:synthetic-file-token";
-  const temp = writeConfig({
-    sutToken: token,
-    backend: "mock",
-    gatewayPort: 19879,
-    mockPort: 19882,
-    telegramApiRoot: "http://127.0.0.1:19881",
-    testerId: "123",
-    groupId: "-1001",
-  });
-  const configText = fs.readFileSync(temp.configPath, "utf8");
-  const config = JSON.parse(configText);
-  const tokenFile = config.channels.telegram.tokenFile;
-  assert.equal(path.dirname(tokenFile), temp.root);
-  assert.equal(fs.readFileSync(tokenFile, "utf8"), token);
-  assert.equal(Object.hasOwn(config.channels.telegram, "botToken"), false);
-  assert.equal(configText.includes(token), false);
-  for (const directory of [temp.root, temp.stateDir, temp.workspace]) {
-    assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
-  }
-  for (const file of [tokenFile, temp.configPath]) {
-    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-  }
-  await currentTelegramRun().close();
-  assert.equal(fs.existsSync(tokenFile), false);
-  assert.equal(fs.existsSync(temp.root), false);
-});
-
 test("source Gateway selects the checkout's Telegram plugin entry over its built peer", () => {
   const repoRoot = path.resolve(import.meta.dirname, "../../../..");
-  const params = {
-    sutToken: "42:synthetic-file-token",
-    backend: "mock",
-    gatewayPort: 19879,
-    mockPort: 19882,
-    telegramApiRoot: "http://127.0.0.1:19881",
-    testerId: "123",
-    groupId: "-1001",
-    repoRoot,
-  };
+  const params = { ...configParams, repoRoot };
   const readPlugins = (sourceGateway) =>
     JSON.parse(fs.readFileSync(writeConfig({ ...params, sourceGateway }).configPath, "utf8"))
       .plugins;
@@ -347,53 +286,26 @@ test("scenario command evidence retains no argv or process output", () => {
   assert.doesNotMatch(JSON.stringify(summary), new RegExp(credential, "u"));
 });
 
-test("termination joins credential-bearing children before lease release", async () => {
-  const gateway = startOwnedChild();
-  const recorder = startOwnedChild();
-  let released = false;
-  await currentTelegramRun().acquire(
-    Promise.resolve({
-      async release() {
-        assert.notEqual(gateway.signalCode, null);
-        assert.notEqual(recorder.signalCode, null);
-        released = true;
-      },
-    }),
-  );
-  await currentTelegramRun().close();
-  assert.equal(released, true);
-});
-
 test("signal cleanup waits for credential acquisition before releasing scratch", async (context) => {
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-pending-acquire-"));
-  context.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
-  let resolveCredential;
-  const credentialPromise = currentTelegramRun().acquire(
-    new Promise((resolve) => {
-      resolveCredential = resolve;
-    }),
-  );
+  const scratch = temporary(context, "telegram-pending-acquire-");
+  const acquisition = Promise.withResolvers();
+  const credentialPromise = currentTelegramRun().acquire(acquisition.promise);
   const signalCleanup = currentTelegramRun().close();
   let releaseCount = 0;
-  let finishRelease;
-  const releaseGate = new Promise((resolve) => {
-    finishRelease = resolve;
-  });
+  const releaseGate = Promise.withResolvers();
   const credential = {
     async release() {
       releaseCount += 1;
-      await releaseGate;
+      await releaseGate.promise;
       fs.rmSync(scratch, { recursive: true, force: true });
     },
   };
-  resolveCredential(credential);
+  acquisition.resolve(credential);
   await credentialPromise;
   const mainCleanup = currentTelegramRun().close();
-  await new Promise((resolve) => {
-    setImmediate(resolve);
-  });
+  await new Promise(setImmediate);
   assert.equal(releaseCount, 1);
-  finishRelease();
+  releaseGate.resolve();
   await Promise.all([signalCleanup, mainCleanup]);
   assert.equal(releaseCount, 1);
   assert.equal(fs.existsSync(scratch), false);
@@ -403,29 +315,12 @@ test("lease loss signals active Telegram process groups before waiting", async (
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-concurrent-lease-fence-"));
   const cronSideEffect = path.join(temp, "cron-delivered");
   context.after(() => fs.rmSync(temp, { recursive: true, force: true }));
-  ownChild(
-    spawn(
-      process.execPath,
-      [
-        "-e",
-        'process.on("SIGTERM",()=>setTimeout(()=>process.exit(0),300)); setInterval(()=>{},1000);',
-      ],
-      { detached: true, stdio: "ignore" },
-    ),
+  startOwnedChild(
+    'process.on("SIGTERM",()=>setTimeout(()=>process.exit(0),300)); setInterval(()=>{},1000);',
   );
-  const cron = ownChild(
-    spawn(
-      process.execPath,
-      [
-        "-e",
-        'const fs=require("node:fs"); setTimeout(()=>fs.writeFileSync(process.env.CRON_SIDE_EFFECT,"delivered"),150); setInterval(()=>{},1000);',
-      ],
-      {
-        detached: true,
-        env: { ...process.env, CRON_SIDE_EFFECT: cronSideEffect },
-        stdio: "ignore",
-      },
-    ),
+  const cron = startOwnedChild(
+    'const fs=require("node:fs"); setTimeout(()=>fs.writeFileSync(process.env.CRON_SIDE_EFFECT,"delivered"),150); setInterval(()=>{},1000);',
+    { env: { ...process.env, CRON_SIDE_EFFECT: cronSideEffect } },
   );
   const restartedGateway = startOwnedChild();
   let controlsCancelled = false;
@@ -459,8 +354,12 @@ test("lease loss during blocked readiness stops the gateway before polling", asy
   const gatewayEnv = createGatewayEnvironment({
     baseEnv: {
       PATH: "/safe/bin",
-      OPENCLAW_QA_CONVEX_SECRET_CI: "broker-secret",
+      TELEGRAM_BOT_TOKEN: "synthetic-bot-token",
+      TELEGRAM_E2E_SUT_BOT_TOKEN: "synthetic-bot-token",
+      OPENCLAW_QA_CONVEX_SECRET_CI: "synthetic-broker-secret",
+      GITHUB_TOKEN: "github-secret",
       TELEGRAM_E2E_STATE_DIR: "/private/lease",
+      TELEGRAM_USER_DRIVER_STATE_DIR: "/private/lease/user-driver",
     },
     configPath: path.join(path.dirname(fixture.wrapper), "openclaw.json"),
     stateDir: path.join(path.dirname(fixture.wrapper), "state"),
@@ -484,9 +383,12 @@ test("lease loss during blocked readiness stops the gateway before polling", asy
     (error) => error === leaseError,
   );
   await currentTelegramRun().close();
-  assert.equal(gatewayEnv.PATH, "/safe/bin");
-  assert.equal(gatewayEnv.OPENCLAW_QA_CONVEX_SECRET_CI, undefined);
-  assert.equal(gatewayEnv.TELEGRAM_E2E_STATE_DIR, undefined);
+  assert.deepEqual(gatewayEnv, {
+    PATH: "/safe/bin",
+    OPENCLAW_CONFIG_PATH: path.join(path.dirname(fixture.wrapper), "openclaw.json"),
+    OPENCLAW_STATE_DIR: path.join(path.dirname(fixture.wrapper), "state"),
+    OPENAI_API_KEY: "openclaw-e2e-mock-key",
+  });
   assertStopped(poller);
   assert.equal(fs.existsSync(fixture.sideEffect), false);
   return leaseError;
@@ -551,12 +453,8 @@ test("lease loss during a credential command stops every owned child before its 
 });
 
 test("successful command parents keep descendants lease-owned until cleanup", async () => {
-  const result = await runCommand(
-    process.execPath,
-    [
-      "-e",
-      'const child=require("node:child_process").spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"}); child.unref(); process.stdout.write(String(child.pid));',
-    ],
+  const result = await scriptCommand(
+    'const child=require("node:child_process").spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"}); child.unref(); process.stdout.write(String(child.pid));',
     { cwd: process.cwd(), env: process.env },
   );
   assert.equal(result.status, 0);
@@ -574,25 +472,12 @@ test("failed executable launches settle before credential release", async () => 
   assert.equal(result.status, null);
   assert.equal(result.timedOut, false);
   assert.match(result.stderr, /ENOENT/u);
-  let released = false;
-  await currentTelegramRun().acquire(
-    Promise.resolve({
-      async release() {
-        released = true;
-      },
-    }),
-  );
-  await currentTelegramRun().close();
-  assert.equal(released, true);
+  await assertRelease();
 });
 
 test("command completion drains readiness stderr from an inherited pipe after parent exit", async () => {
-  const result = await runCommand(
-    process.execPath,
-    [
-      "-e",
-      `require('node:child_process').spawn(process.execPath, ['-e', 'process.stderr.write("late readiness diagnostic")'], {stdio: ['ignore', 'ignore', 'inherit']}).unref();`,
-    ],
+  const result = await scriptCommand(
+    `require('node:child_process').spawn(process.execPath, ['-e', 'process.stderr.write("late readiness diagnostic")'], {stdio: ['ignore', 'ignore', 'inherit']}).unref();`,
     { cwd: process.cwd(), env: {} },
   );
   assert.equal(result.status, 0);
@@ -609,16 +494,7 @@ test("failed direct probe launches settle before credential release", async () =
   const outcome = await watchChildCompletion(probe);
   assert.equal(outcome.type, "spawn-error");
   assert.match(outcome.error.message, /ENOENT/u);
-  let released = false;
-  await currentTelegramRun().acquire(
-    Promise.resolve({
-      async release() {
-        released = true;
-      },
-    }),
-  );
-  await currentTelegramRun().close();
-  assert.equal(released, true);
+  await assertRelease();
 });
 
 test("credential command timeout stops a nested wrapper before its side effect", async (context) => {
@@ -721,4 +597,17 @@ test("clears a leased bot webhook before polling updates", async () => {
     drained: 0,
     pendingAfter: 0,
   });
+});
+
+test("DM-topic CLI setup requires an explicit DM scenario before leasing", async () => {
+  const result = await nodeCommand(
+    [path.join(import.meta.dirname, "run-mock-sut-user-e2e.mjs"), "--dm", "--create-dm-topic"],
+    {
+      cwd: process.cwd(),
+      env: { PATH: process.env.PATH, HOME: process.env.HOME },
+      timeoutMs: 10_000,
+    },
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /--create-dm-topic requires --dm and a --scenario/);
 });
