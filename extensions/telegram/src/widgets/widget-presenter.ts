@@ -9,7 +9,11 @@ import {
   TELEGRAM_WIDGET_HTML_MAX_BYTES,
   TELEGRAM_WIDGET_HTML_MAX_COMPRESSED_BYTES,
 } from "./widget-bot-api.js";
-import { checkTelegramWidget, formatTelegramWidgetCheckErrors } from "./widget-check.js";
+import {
+  checkTelegramWidget,
+  formatTelegramWidgetCheckErrors,
+  formatTelegramWidgetCheckWarnings,
+} from "./widget-check.js";
 import {
   TELEGRAM_WIDGET_AUTHORING_GUIDANCE,
   TELEGRAM_WIDGET_STATE_DESCRIPTION,
@@ -24,6 +28,9 @@ import {
   lookupTelegramWidgetTap,
   recordTelegramSentWidget,
 } from "./widget-store.js";
+
+const notesFrom = (warnings: readonly string[]) =>
+  warnings.length ? { notes: formatTelegramWidgetCheckWarnings(warnings) } : {};
 
 type WidgetPresenter = Parameters<OpenClawPluginApi["registerWidgetPresenter"]>[0];
 type WidgetPresenterContext = Parameters<WidgetPresenter["availability"]>[0];
@@ -118,7 +125,7 @@ async function presentTelegramWidget(
   if (updatesTapped) {
     // Replay the widget's own code with its old state, then deliver the new one.
     const code = source || tapped.source;
-    const problems = code
+    const check = code
       ? await checkTelegramWidget({
           source: code,
           // Telegram exposes an empty or missing state to widget code as null.
@@ -126,9 +133,9 @@ async function presentTelegramWidget(
           nextState: params.state || null,
           tapAll: false,
         })
-      : [];
-    if (problems.length) {
-      return presentationError(formatTelegramWidgetCheckErrors(problems));
+      : { errors: [], warnings: [] };
+    if (check.errors.length) {
+      return presentationError(formatTelegramWidgetCheckErrors(check.errors));
     }
     await editTelegramWidgetState({
       cfg: route.cfg,
@@ -145,7 +152,12 @@ async function presentTelegramWidget(
     });
     return {
       ok: true,
-      value: { kind: "message", receipt: widgetReceipt(tap.messageId), updated: true },
+      value: {
+        kind: "message",
+        receipt: widgetReceipt(tap.messageId),
+        updated: true,
+        ...notesFrom(check.warnings),
+      },
     };
   }
   if (!source) {
@@ -164,13 +176,13 @@ async function presentTelegramWidget(
       `widget_code is ${size.bytes} bytes (${size.compressedBytes} compressed); Telegram allows ${TELEGRAM_WIDGET_HTML_MAX_BYTES} bytes and ${TELEGRAM_WIDGET_HTML_MAX_COMPRESSED_BYTES} compressed. Shorten it and retry`,
     );
   }
-  const problems = await checkTelegramWidget({
+  const check = await checkTelegramWidget({
     source,
     state: params.state || null,
     tapAll: true,
   });
-  if (problems.length) {
-    return presentationError(formatTelegramWidgetCheckErrors(problems));
+  if (check.errors.length) {
+    return presentationError(formatTelegramWidgetCheckErrors(check.errors));
   }
   const sent = await sendTelegramWidget({
     cfg: route.cfg,
@@ -184,7 +196,11 @@ async function presentTelegramWidget(
   // The widget is already visible here; a missing receipt must not invite a duplicate send.
   return {
     ok: true,
-    value: { kind: "message", receipt: sent.receipt ?? widgetReceipt(sent.messageId) },
+    value: {
+      kind: "message",
+      receipt: sent.receipt ?? widgetReceipt(sent.messageId),
+      ...notesFrom(check.warnings),
+    },
   };
 }
 

@@ -43,7 +43,9 @@ let pool:
  * Trial-runs widget code the way Telegram would and returns the problems the model must fix.
  * A checker failure never blocks delivery: it is logged and the widget goes out unchecked.
  */
-export async function checkTelegramWidget(input: TelegramWidgetCheckInput): Promise<string[]> {
+export async function checkTelegramWidget(
+  input: TelegramWidgetCheckInput,
+): Promise<{ errors: string[]; warnings: string[] }> {
   try {
     pool ??= new WorkerTaskPool({
       workerUrl: widgetCheckWorkerUrl(),
@@ -57,11 +59,15 @@ export async function checkTelegramWidget(input: TelegramWidgetCheckInput): Prom
     if (result.unavailable) {
       log.warn(`widget check unavailable: ${result.unavailable}`);
     }
-    return result.errors;
+    return { errors: result.errors, warnings: result.warnings };
   } catch (error) {
     log.warn(`widget check failed to run: ${formatErrorMessage(error)}`);
-    return [];
+    return { errors: [], warnings: [] };
   }
+}
+
+export function formatTelegramWidgetCheckWarnings(warnings: readonly string[]): string[] {
+  return warnings.map((warning) => `Possible Telegram rendering issue: ${warning}`);
 }
 
 export function formatTelegramWidgetCheckErrors(errors: readonly string[]): string {

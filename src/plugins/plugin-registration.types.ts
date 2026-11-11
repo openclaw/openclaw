@@ -94,7 +94,13 @@ export type WidgetPresentationError =
 
 export type WidgetPresentationSuccess =
   | { kind: "node"; nodeId: string; nodeName?: string }
-  | { kind: "message"; receipt: MessageReceipt; updated?: boolean };
+  | {
+      kind: "message";
+      receipt: MessageReceipt;
+      updated?: boolean;
+      /** Advisory findings for the model; the widget was still delivered. */
+      notes?: readonly string[];
+    };
 
 export type WidgetPresenter = {
   description: string;

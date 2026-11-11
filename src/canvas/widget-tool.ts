@@ -122,6 +122,11 @@ export function resolveCurrentChannelWidgetPresenter(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+// Advisory presenter findings: the widget was delivered, so the model may fix them in a follow-up.
+function presenterNotesText(notes: readonly string[] | undefined): string {
+  return notes?.length ? `\n${notes.map((note) => `- ${note}`).join("\n")}` : "";
+}
+
 function widgetPresentationFailureText(
   error: WidgetPresentationError,
   inlineAvailable: boolean,
@@ -454,7 +459,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         return jsonResult({
           kind: "widget",
           presentation: { target: "current_channel", title, receipt },
-          text: `Widget state updated in place${messageId ? ` on message ${messageId}` : ""}. The user sees it; do not restate it in text.`,
+          text: `Widget state updated in place${messageId ? ` on message ${messageId}` : ""}. The user sees it; do not restate it in text.${presenterNotesText(updated.value.notes)}`,
         });
       }
       if (wantsCurrentChannel && currentChannelPresenter) {
@@ -608,7 +613,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           },
           ...(pinnedWidgetName ? { boardWidgetName: pinnedWidgetName } : {}),
           ...(capabilityState ? { capabilityState } : {}),
-          text: `Widget ${presentationAttempt.value.updated ? "updated in place in the current channel" : "presented in the current channel"}${messageId ? ` as message ${messageId}` : ""}${pinnedText ? `; ${pinnedText}` : ""}. The user sees it; do not restate its contents in text.`,
+          text: `Widget ${presentationAttempt.value.updated ? "updated in place in the current channel" : "presented in the current channel"}${messageId ? ` as message ${messageId}` : ""}${pinnedText ? `; ${pinnedText}` : ""}. The user sees it; do not restate its contents in text.${presenterNotesText(presentationAttempt.value.notes)}`,
         });
       }
 

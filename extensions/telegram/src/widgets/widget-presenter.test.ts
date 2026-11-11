@@ -63,11 +63,14 @@ describe("Telegram widget presenter", () => {
     vi.clearAllMocks();
     sendTelegramWidget.mockResolvedValue({ messageId: "77", chatId: "111" });
     lookupTelegramWidgetTap.mockResolvedValue(undefined);
-    checkTelegramWidget.mockResolvedValue([]);
+    checkTelegramWidget.mockResolvedValue({ errors: [], warnings: [] });
   });
 
   it("returns the trial run's problems to the model instead of sending", async () => {
-    checkTelegramWidget.mockResolvedValue(["ReferenceError: s is not defined (script 1, line 8)"]);
+    checkTelegramWidget.mockResolvedValue({
+      errors: ["ReferenceError: s is not defined (script 1, line 8)"],
+      warnings: [],
+    });
     const presenter = registerPresenter();
     const result = await presenter.present({
       document: { kind: "html", html: "", source: SOURCE },
@@ -83,7 +86,7 @@ describe("Telegram widget presenter", () => {
     expect(sendTelegramWidget).not.toHaveBeenCalled();
   });
 
-  it("replays the tapped widget's stored code with its old and new state", async () => {
+  it("replays the tapped widget's code and passes approximate findings as notes", async () => {
     lookupTelegramWidgetTap.mockResolvedValue({ chatId: "111", messageId: 42 });
     lookupTelegramSentWidget.mockResolvedValue({
       name: "vote",
@@ -92,7 +95,10 @@ describe("Telegram widget presenter", () => {
       state: '{"v":0}',
       source: SOURCE,
     });
-    checkTelegramWidget.mockResolvedValue(['The widget shows "undefined" after the state update']);
+    checkTelegramWidget.mockResolvedValue({
+      errors: [],
+      warnings: ['The widget shows "undefined" after the state update'],
+    });
     const presenter = registerPresenter();
     const result = await presenter.present({
       document: { kind: "html", html: "", source: "" },
@@ -101,14 +107,18 @@ describe("Telegram widget presenter", () => {
       state: '{"vote":"v"}',
       context: { ...dm, currentMessageId: "query-1" },
     });
-    expect(result).toMatchObject({ ok: false });
+    // Approximate findings never block: the update goes out and the model gets a note.
+    expect(result).toMatchObject({
+      ok: true,
+      value: { updated: true, notes: [expect.stringContaining('shows "undefined"')] },
+    });
     expect(checkTelegramWidget).toHaveBeenCalledWith({
       source: SOURCE,
       state: '{"v":0}',
       nextState: '{"vote":"v"}',
       tapAll: false,
     });
-    expect(editTelegramWidgetState).not.toHaveBeenCalled();
+    expect(editTelegramWidgetState).toHaveBeenCalled();
   });
 
   it("checks a cleared state as null, like Telegram, but still sends the empty state", async () => {

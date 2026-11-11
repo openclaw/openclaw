@@ -12,7 +12,10 @@ export type TelegramWidgetCheckInput = {
 };
 
 export type TelegramWidgetCheckResult = {
+  /** Exact problems Telegram would reject or break; the widget is not sent. */
   errors: string[];
+  /** Approximate findings passed back to the model; the widget is still sent. */
+  warnings: string[];
   /** The checker itself failed; callers must not block the widget on it. */
   unavailable?: string;
 };
@@ -169,8 +172,12 @@ export async function runTelegramWidgetCheck(
     // Findings so far are still valid after an interrupt; give the report its own short budget.
     timedOut = false;
     deadline = performance.now() + 250;
-    // SAFETY: the shim's report() returns JSON.stringify({ errors: string[], ... }).
-    const report = JSON.parse(String(call("report"))) as { errors: string[] };
+    // SAFETY: the shim's report() returns JSON.stringify({ errors, warnings, unsupported, ... }).
+    const report = JSON.parse(String(call("report"))) as {
+      errors: string[];
+      warnings: string[];
+      unsupported: string | null;
+    };
     driver.dispose();
     const errors = [...report.errors, ...rejections];
     if (interrupted) {
@@ -178,16 +185,25 @@ export async function runTelegramWidgetCheck(
         "The widget code did not finish running within a second (an endless loop or very heavy work). Telegram would stop it.",
       );
     }
-    return { errors };
+    if (report.unsupported) {
+      // The widget uses a web API the trial run does not model, so its findings are not reliable.
+      return { errors: [], warnings: [], unavailable: `uses ${report.unsupported}` };
+    }
+    return { errors, warnings: report.warnings };
   } catch (error) {
     if (timedOut) {
       return {
+        warnings: [],
         errors: [
           "The widget code did not finish running within a second (an endless loop or very heavy work). Telegram would stop it.",
         ],
       };
     }
-    return { errors: [], unavailable: error instanceof Error ? error.message : String(error) };
+    return {
+      errors: [],
+      warnings: [],
+      unavailable: error instanceof Error ? error.message : String(error),
+    };
   } finally {
     vm.dispose();
   }

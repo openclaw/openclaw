@@ -22,6 +22,13 @@ var maxHeavy = 0, maxBackdrop = 0, maxNodes = 0, maxRules = 0;
 // The host drains promise jobs between driver calls; QuickJS cannot run them re-entrantly.
 G.__drainJobs = function () {};
 G.queueMicrotask = G.queueMicrotask || function (f) { Promise.resolve().then(f); };
+// Approximate checks (CSS paint projection, visible undefined/NaN) warn but never block.
+var warnings = [];
+function warn(msg) {
+  if (seen.has(msg) || warnings.length >= 6) return;
+  seen.add(msg);
+  warnings.push(msg);
+}
 function fail(msg) {
   if (seen.has(msg) || errors.length >= 12) return;
   seen.add(msg);
@@ -60,7 +67,7 @@ function checkCssValue(prop, value) {
   if (prop === "position" && /sticky/i.test(v)) fail("CSS \"" + short(where) + "\": position: sticky is not supported in widgets.");
   if (/(^|[^\w-])(color-mix|oklch|oklab)\(/i.test(v)) fail("CSS \"" + short(where) + "\": color-mix(), oklch() and oklab() are not supported. Use theme variables or hex colors.");
   if (/url\(\s*['"]?(?!data:|#)/i.test(v)) fail("CSS \"" + short(where) + "\": widgets have no network, so external url() resources never load. Inline a data: URL or drop it.");
-  if (/\b(undefined|NaN)\b/.test(v)) fail("CSS \"" + short(where) + "\" " + context + ": a computed style value is undefined or NaN, so that element renders wrong. Check the data the code reads.");
+  if (/\b(undefined|NaN)\b/.test(v)) warn("CSS \"" + short(where) + "\" " + context + ": a computed style value is undefined or NaN, so that element renders wrong. Check the data the code reads.");
 }
 var sheetCache = new Map();
 function parseSheet(text) {
@@ -181,7 +188,7 @@ function measure() {
   // Words the author wrote as text or string literals are content, not missing data.
   if (bad && LITERAL_TEXT.indexOf(bad[1]) < 0) {
     var at = Math.max(0, bad.index - 30);
-    fail("The widget shows \"" + bad[1] + "\" " + context + " (\"..." + short(shown.slice(at, bad.index + 30)) + "...\"). The code reads data that is not there; check the state shape and the variables it uses.");
+    warn("The widget shows \"" + bad[1] + "\" " + context + " (\"..." + short(shown.slice(at, bad.index + 30)) + "...\"). The code reads data that is not there; check the state shape and the variables it uses.");
   }
 }
 function visibleText(root) {
@@ -324,7 +331,7 @@ function canvasContext(canvas) {
       if (k === "isPointInPath" || k === "isPointInStroke") return function () { return false; };
       return function () {};
     },
-    set: function (t, k, v) { t[k] = v; if (typeof v === "string" && /\b(undefined|NaN)\b/.test(v)) fail("Canvas " + String(k) + " = \"" + short(v) + "\" " + context + ": a computed value is undefined or NaN."); return true; },
+    set: function (t, k, v) { t[k] = v; if (typeof v === "string" && /\b(undefined|NaN)\b/.test(v)) warn("Canvas " + String(k) + " = \"" + short(v) + "\" " + context + ": a computed value is undefined or NaN."); return true; },
   });
 }
 function noopObserver() { return function () { this.observe = function () {}; this.unobserve = function () {}; this.disconnect = function () {}; this.takeRecords = function () { return []; }; }; }
@@ -387,6 +394,27 @@ function needsTap(name) { if (!gesture) fail("TelegramWidget." + name + "() ran 
 // Dark-theme palette and a private-chat viewer, the values Telegram supplies to query-enabled widgets.
 var THEME_PARAMS = Object.freeze({ bg_color: "#212121", text_color: "#ffffff", hint_color: "#aaaaaa", link_color: "#8774e1", button_color: "#8774e1", button_text_color: "#ffffff", secondary_bg_color: "#181818", header_bg_color: "#212121", accent_text_color: "#8774e1", section_bg_color: "#212121", section_header_text_color: "#8774e1", subtitle_text_color: "#aaaaaa", destructive_text_color: "#e53935", bottom_bar_bg_color: "#212121" });
 var VIEWER = Object.freeze({ id: 1, first_name: "Test", last_name: "User", username: "test_user", language_code: "en", is_premium: false });
+// Web APIs the trial run does not model: touching one means the check cannot judge the widget.
+var unsupported = null;
+["URL", "URLSearchParams", "Blob", "File", "FileReader", "crypto", "AbortController", "DOMParser", "Worker", "BroadcastChannel", "IndexedDB", "indexedDB", "caches", "Response", "Request", "Headers", "FormData", "ReadableStream", "WebAssembly", "OffscreenCanvas", "createImageBitmap"].forEach(function (name) {
+  if (name in G) return;
+  Object.defineProperty(G, name, { configurable: true, get: function () { if (!unsupported) unsupported = name; throw new ReferenceError(name + " is not available in the widget trial run"); } });
+});
+G.TextEncoder = function () {};
+G.TextEncoder.prototype.encoding = "utf-8";
+G.TextEncoder.prototype.encode = function (str) {
+  var u = unescape(encodeURIComponent(String(str === undefined ? "" : str))), out = new Uint8Array(u.length);
+  for (var i = 0; i < u.length; i++) out[i] = u.charCodeAt(i);
+  return out;
+};
+G.TextDecoder = function () {};
+G.TextDecoder.prototype.encoding = "utf-8";
+G.TextDecoder.prototype.decode = function (bytes) {
+  if (!bytes) return "";
+  var arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes.buffer || bytes), s = "";
+  for (var i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]);
+  try { return decodeURIComponent(escape(s)); } catch (e) { return s; }
+};
 var HapticFeedback = { impactOccurred: function () {}, notificationOccurred: function () {}, selectionChanged: function () {} };
 G.TelegramWidget = Object.freeze({
   get profile() { return 1; },
@@ -490,11 +518,11 @@ G.__widgetCheck = {
     measure();
   },
   report: function () {
-    if (maxHeavy > 16) fail(maxHeavy + " elements use opacity below 1, filter or a blurred box-shadow. Telegram stops widgets with more than 16, so it would show \"Widget stopped\". Use solid theme colors for tints and fills instead of opacity.");
-    if (maxBackdrop > 2) fail(maxBackdrop + " elements use backdrop-filter. Telegram stops widgets with more than 2.");
+    if (maxHeavy > 16) warn(maxHeavy + " elements use opacity below 1, filter or a blurred box-shadow. Telegram stops widgets with more than 16, so it would show \"Widget stopped\". Use solid theme colors for tints and fills instead of opacity.");
+    if (maxBackdrop > 2) warn(maxBackdrop + " elements use backdrop-filter. Telegram stops widgets with more than 2.");
     if (maxNodes > 2000) fail("The widget has " + maxNodes + " elements. Telegram stops widgets with more than 2000.");
     if (maxRules > 400) fail("The widget has " + maxRules + " CSS rules. Telegram stops widgets with more than 400.");
-    return JSON.stringify({ errors: errors, requests: requests, heavy: maxHeavy, nodes: maxNodes, rules: maxRules });
+    return JSON.stringify({ errors: errors, warnings: warnings, unsupported: unsupported, requests: requests, heavy: maxHeavy, nodes: maxNodes, rules: maxRules });
   },
 };
 })();`;
