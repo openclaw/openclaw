@@ -42,7 +42,7 @@ async function query<T extends pg.QueryResultRow>(sql: string, values: unknown[]
   }
 }
 
-function install(postgres: { connection: string; localStores?: "none" }) {
+function install(postgres: { connection: string; ownership?: "installation" }) {
   const schemaPrefix = `gpo_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
   installDatabaseEngineSelection({
     effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
@@ -107,7 +107,10 @@ it("bounds connection startup and closes the failed attempt", async () => {
   if (!address || typeof address === "string") {
     throw new Error("Expected a TCP listener");
   }
-  install({ connection: `postgres://owner@127.0.0.1:${address.port}/silent`, localStores: "none" });
+  install({
+    connection: `postgres://owner@127.0.0.1:${address.port}/silent`,
+    ownership: "installation",
+  });
 
   await expect(
     acquireConfiguredGatewayPostgresOwner({ onContention() {}, onLost() {}, timeoutMs: 200 }),
@@ -116,9 +119,9 @@ it("bounds connection startup and closes the failed attempt", async () => {
   await closed[0];
 });
 
-describe.skipIf(!connection)("Gateway ownership with database.localStores none", () => {
+describe.skipIf(!connection)("Gateway ownership with ownership installation", () => {
   it("refuses a second Gateway on another host and names the holder", async () => {
-    const schemaPrefix = install({ connection: connection!, localStores: "none" });
+    const schemaPrefix = install({ connection: connection!, ownership: "installation" });
     const first = await acquireOnHost();
 
     const refused = acquireOnHost();
@@ -137,7 +140,7 @@ describe.skipIf(!connection)("Gateway ownership with database.localStores none",
   });
 
   it("retires the former Gateway's state owner when its session is terminated", async () => {
-    const schemaPrefix = install({ connection: connection!, localStores: "none" });
+    const schemaPrefix = install({ connection: connection!, ownership: "installation" });
     const former = await acquireOnHost("gateway");
     const owner = captureGatewayStateOwner(former.databasePath);
     // Captured before the loss, as work queued in a worker would be.
@@ -202,7 +205,7 @@ describe.skipIf(!connection)("Gateway ownership with database.localStores none",
       throw new Error("Expected a TCP listener");
     }
     target.host = `127.0.0.1:${address.port}`;
-    install({ connection: target.toString(), localStores: "none" });
+    install({ connection: target.toString(), ownership: "installation" });
     const onLost = vi.fn();
 
     const owner = await acquireConfiguredGatewayPostgresOwner({
@@ -219,7 +222,7 @@ describe.skipIf(!connection)("Gateway ownership with database.localStores none",
   });
 
   it("refuses a cold CLI owner whose configured engine is resolved after its lock", async () => {
-    const schemaPrefix = install({ connection: connection!, localStores: "none" });
+    const schemaPrefix = install({ connection: connection!, ownership: "installation" });
     const gateway = await acquireOnHost("gateway");
     // A fresh CLI process has no engine selection until it reads its config under custody.
     resetDatabaseEngineSelectionForTest();
@@ -230,8 +233,7 @@ describe.skipIf(!connection)("Gateway ownership with database.localStores none",
       JSON.stringify({
         database: {
           engine: "postgres",
-          localStores: "none",
-          postgres: { connection, schemaPrefix },
+          postgres: { connection, schemaPrefix, ownership: "installation" },
         },
       }),
     );
@@ -264,7 +266,7 @@ describe.skipIf(!connection)("Gateway ownership with database.localStores none",
   });
 
   it("keeps PostgreSQL custody while a retained lease keeps the process owner", async () => {
-    const schemaPrefix = install({ connection: connection!, localStores: "none" });
+    const schemaPrefix = install({ connection: connection!, ownership: "installation" });
     const former = await acquireOnHost("gateway");
     // Uncertain child cleanup borrows the owner before the lock is released.
     const retained = tryBorrowGatewayStateOwner(former.databasePath);

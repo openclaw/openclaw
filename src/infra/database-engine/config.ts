@@ -63,6 +63,8 @@ async function resolveDatabasePostgresInput(
     connection: value,
     schemaPrefix: config.database?.postgres?.schemaPrefix ?? "openclaw",
     ...(ref?.source === "env" ? { connectionEnvKey: ref.id } : {}),
-    ...(config.database?.localStores === "none" ? { localStores: "none" as const } : {}),
+    ...(config.database?.postgres?.ownership === "installation"
+      ? { ownership: "installation" as const }
+      : {}),
   });
 }

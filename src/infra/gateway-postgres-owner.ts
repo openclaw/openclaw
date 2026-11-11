@@ -1,4 +1,4 @@
-// Gateway state ownership for database.localStores none: a PostgreSQL session-level advisory lock.
+// Gateway state ownership for database.postgres.ownership installation: a PostgreSQL session-level advisory lock.
 import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -148,7 +148,7 @@ async function acquireGatewayPostgresOwner(
 }
 
 /**
- * Takes the install lock when database.localStores is none. Contention names the holder once
+ * Takes the install lock when database.postgres.ownership is installation. Contention names the holder once
  * per holder while the caller waits, and reports the PostgreSQL target to `onContention`.
  */
 export async function acquireConfiguredGatewayPostgresOwner(params: {
@@ -158,7 +158,7 @@ export async function acquireConfiguredGatewayPostgresOwner(params: {
   timeoutMs?: number;
 }): Promise<GatewayPostgresOwner | undefined> {
   const input = getDatabaseEngineInput("state");
-  if (input?.localStores !== "none") {
+  if (input?.ownership !== "installation") {
     return undefined;
   }
   try {

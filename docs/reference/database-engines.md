@@ -678,22 +678,22 @@ ownership in PostgreSQL:
 {
   database: {
     engine: "postgres",
-    localStores: "none",
     postgres: {
       connection: { source: "env", provider: "default", id: "OPENCLAW_DATABASE_DSN" },
+      ownership: "installation",
     },
   },
 }
 ```
 
-Config validation rejects `localStores: "none"` unless `database.engine` is
-`postgres` and no family overrides its engine to `sqlite`. The default,
-`anchors`, keeps today's behavior. In this release, `none` only moves Gateway
-ownership into PostgreSQL: store anchors, `client/credentials.sqlite`,
+Config validation rejects `ownership: "installation"` unless `database.engine`
+is `postgres` and no family overrides its engine to `sqlite`. The default,
+`state-directory`, keeps today's behavior. The setting only changes Gateway
+ownership: store anchors, `client/credentials.sqlite`,
 `control/services.sqlite`, the local lock files, and the local safety journals
 all stay.
 
-With `none`, every process that takes Gateway state ownership also takes a
+With `installation`, every process that takes Gateway state ownership also takes a
 session-level `pg_try_advisory_lock` on one dedicated connection outside the
 pool. The lock key is derived from `database.postgres.schemaPrefix`, and
 PostgreSQL scopes advisory locks to one database, so the database and schema

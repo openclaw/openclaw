@@ -29,10 +29,6 @@ export const DatabaseConfigSchema = z
         label: "Family Database Engines",
         help: "Optional engine overrides for state, agent, workboard, logbook, and team-reports. Each override requires engine. State and agent families may use different engines; local safety journals are not configurable. All PostgreSQL families share database.postgres.",
       }),
-    localStores: z.enum(["anchors", "none"]).optional().register(configUiMetadata, {
-      label: "Local Store Files",
-      help: "Opt-in for all-PostgreSQL installs (default: anchors). In this release, none only moves Gateway state ownership into PostgreSQL: a session advisory lock keyed by the database and schema prefix refuses a second Gateway for the same installation on any host, and losing that session stops the Gateway. Requires every configurable family to use postgres. Store anchors and other local files are unchanged; see the PostgreSQL operator guide.",
-    }),
     postgres: z
       .strictObject({
         connection: SecretInputSchema.refine(
@@ -53,6 +49,13 @@ export const DatabaseConfigSchema = z
             label: "PostgreSQL Schema Prefix",
             help: "Prefix for new PostgreSQL store schemas (default: openclaw). Use 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors retain their schema.",
           }),
+        ownership: z
+          .enum(["state-directory", "installation"])
+          .optional()
+          .register(configUiMetadata, {
+            label: "PostgreSQL Gateway Ownership",
+            help: "Scope of Gateway state ownership (default: state-directory, a local lock file). installation also holds a PostgreSQL session advisory lock keyed by the database and schema prefix, so a second Gateway or maintenance owner for the same installation is refused on any host, and losing that session stops the Gateway. Requires every configurable family to use postgres. Store anchors and other local files are unchanged; see the PostgreSQL operator guide.",
+          }),
       })
       .optional()
       .register(configUiMetadata, {
@@ -61,7 +64,7 @@ export const DatabaseConfigSchema = z
       }),
   })
   .superRefine((database, ctx) => {
-    if (database.localStores !== "none") {
+    if (database.postgres?.ownership !== "installation") {
       return;
     }
     const families = Object.values(database.families ?? {});
@@ -71,9 +74,9 @@ export const DatabaseConfigSchema = z
     ) {
       ctx.addIssue({
         code: "custom",
-        path: ["localStores"],
+        path: ["postgres", "ownership"],
         message:
-          'database.localStores "none" requires database.engine postgres and no family overrides to sqlite.',
+          'database.postgres.ownership "installation" requires database.engine postgres and no family overrides to sqlite.',
       });
     }
   })

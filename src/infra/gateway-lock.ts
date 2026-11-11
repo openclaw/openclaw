@@ -496,7 +496,7 @@ export async function acquireGatewayLock(
   // Lock file that blocked the failing attempt, named in the timeout error.
   let contendedLockPath: string | undefined;
   let projection: GatewayStateProjection | undefined;
-  // database.localStores none: the install's PostgreSQL session lock excludes other hosts too.
+  // database.postgres.ownership installation: the install's PostgreSQL session lock excludes other hosts too.
   const postgres = createGatewayPostgresCustody();
   // Retained schema leases keep the process owner, so its PostgreSQL session ends with it.
   let postgresEnded: Promise<void> | undefined;
