@@ -1,0 +1,2 @@
+# Existing process Stop feedback and spinner regression coverage.
+10

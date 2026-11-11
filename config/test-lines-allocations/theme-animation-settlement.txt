@@ -1,0 +1,2 @@
+# Settle finite fixture animations before the existing theme phase assertions.
+3

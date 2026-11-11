@@ -17,11 +17,8 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
-import {
-  githubPublicationApiArgs,
-  runPublicationCommand,
-} from "./github-publication-git-transport.js";
 import { captureOwnGitHubPullRequestReader } from "./github-publication-inspect-reader.js";
+import { createGitHubPublicationJsonReader } from "./github-publication-json-read.js";
 import { matchesGitHubPublicationIdentityRow } from "./github-publication-receipt.js";
 import {
   captureGitHubPublicationActionAuthority,
@@ -240,25 +237,13 @@ export async function readOwnGitHubPullRequest(params: {
     assertIdentityCurrent();
   };
   assertCurrent();
-  const read = async (endpoint: string): Promise<unknown> => {
-    assertCurrent();
-    const response = await runPublicationCommand(githubPublicationApiArgs(endpoint, "GET", host), {
-      env: identity.env,
-      beforeRun: assertCurrent,
-    }).catch(() => {
-      assertCurrent();
-      throw unavailable();
-    });
-    assertCurrent();
-    if (response.code !== 0) {
-      return undefined;
-    }
-    try {
-      return JSON.parse(response.stdout.toString("utf8"));
-    } catch {
-      throw unavailable();
-    }
-  };
+  const read = createGitHubPublicationJsonReader({
+    host,
+    env: identity.env,
+    assertCurrent,
+    unavailable,
+    requireSuccess: false,
+  });
   const hasAccess = async (repository: string, accountId: number, login: string) => {
     const permission = await read(
       `repos/${repository}/collaborators/${encodeURIComponent(login)}/permission`,

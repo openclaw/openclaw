@@ -44,6 +44,7 @@ function presencePool(
 ) {
   let persisted = initial;
   let currentRepository = repository;
+  let preparationKey = PREPARATION_KEY;
   let sourceEnabled = true;
   const write = vi.fn<NonNullable<PoolOptions["presenceDemandStore"]>["write"]>(
     async (value, assertCurrent) => {
@@ -56,8 +57,6 @@ function presencePool(
   fixture.developmentProfile.readyWorkers = 3;
   const prepareIntent = vi.fn<PoolOptions["prepareIntent"]>(async (_profileId, options) => {
     const project = options.projectRepository ?? currentRepository;
-    const preparationKey =
-      project.baseCommit === repository.baseCommit ? PREPARATION_KEY : "e".repeat(64);
     const { executionMode: _defaultExecutionMode, ...profile } = fixture.profile(
       PROJECT_KEY,
       preparationKey,
@@ -90,6 +89,9 @@ function presencePool(
     read: () => persisted,
     setRepository: (project: RepositoryWorkerProjectSnapshot) => {
       currentRepository = project;
+    },
+    setPreparationKey: (key: string) => {
+      preparationKey = key;
     },
     disableSource: () => {
       sourceEnabled = false;
@@ -304,9 +306,23 @@ it.each(["changed", "removed"])(
   },
 );
 
-it("refreshes main with live reserves, retires only unused old workers, and claims the new generation", async () => {
-  // Old activation demand is still valid when the ref refreshes. It must not
-  // keep unused A reserves occupying capacity for the newly selected B.
+it("retains ready reserves when presence resolves a newer commit with compatible preparation", async () => {
+  const presence = presencePool(undefined, "worker-turn");
+  await presence.owner.setHumanPresence(true);
+  const ready = await fixture.readyReserves();
+  const nextRepository = { ...repository, baseCommit: "f".repeat(40) };
+  presence.setRepository(nextRepository);
+  fixture.nowMs = 61_000;
+
+  await fixture.schedule(presence.owner);
+
+  expect(presence.read()?.project.baseCommit).toBe(nextRepository.baseCommit);
+  expect(fixture.reserves().map((record) => record.environmentId)).toEqual(environmentIds(ready));
+  expect(stored(ready).every((record) => record?.destroyRequestedAtMs === null)).toBe(true);
+});
+
+it("retires unused incompatible reserves after a recipe change and claims the new generation", async () => {
+  // Old activation demand cannot retain reserves after preparation compatibility changes.
   fixture.provider.resolvePreparedIdleTimeoutMs = () => 300_000;
   const presence = presencePool(undefined, "worker-turn");
   await presence.owner.setHumanPresence(true);
@@ -321,6 +337,7 @@ it("refreshes main with live reserves, retires only unused old workers, and clai
   expect(stored(old.slice(1)).every((record) => record?.destroyRequestedAtMs === null)).toBe(true);
 
   fixture.nowMs = 61_000;
+  presence.setPreparationKey("e".repeat(64));
   await fixture.schedule(presence.owner);
   expect(presence.read()).toMatchObject({
     project: { baseCommit: nextRepository.baseCommit },
@@ -361,6 +378,7 @@ it("refreshes main with live reserves, retires only unused old workers, and clai
     preparation: { consumedAtMs: 61_000 },
   });
   expect(environmentIds(presence.owner.candidates(intent))).not.toContain(claimed.environmentId);
+  presence.setPreparationKey(PREPARATION_KEY);
   const staleIntent = await presence.prepareIntent("development", {
     projectRepository: repository,
   });

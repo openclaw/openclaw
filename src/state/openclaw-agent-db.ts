@@ -9,6 +9,7 @@ import {
   resolveExistingSqliteFileUri,
   supportsNodeSqliteExtensionLoading,
 } from "../infra/node-sqlite.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import {
   isPostgresSqlConnection,
   sqlPublicationAnchor,
@@ -31,7 +32,6 @@ import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamatio
 import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
-  registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { SqliteWorkerOpenRefusedError } from "../infra/sqlite-worker-contract.js";
@@ -587,7 +587,7 @@ function* openOpenClawAgentDatabaseSteps(
     cache.terminal.clear(pathname);
     // Safety net for processes that end without an orderly close: agent DBs have
     // no shutdown owner like the ACP/gateway state DB closes. Closing unregisters.
-    cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
+    cache.unregisterExitClose ??= registerProcessExitCleanup(closeOpenClawAgentDatabases);
     finishPhase("registration");
     registerAgentDatabaseHandle(database, leaseId, leaseEnvironment);
     assertCurrent(database);
@@ -658,7 +658,7 @@ function* openOpenClawAgentDatabaseSteps(
       getOpenClawDatabaseMaintenanceScope()?.own(retainedDatabase.db, "agent-handles", () =>
         closeMaintenanceAgentDatabase(retainedDatabase),
       );
-      cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
+      cache.unregisterExitClose ??= registerProcessExitCleanup(closeOpenClawAgentDatabases);
     } else if (!deferLeaseRelease) {
       const closeOutcome = error instanceof SqliteWorkerOpenRefusedError ? "read-only" : undefined;
       try {

@@ -368,7 +368,9 @@ describe("ManagedWorktreeService canonical paths", () => {
     await fs.mkdir(path.dirname(unrelated), { recursive: true });
     await fs.writeFile(unrelated, "unrelated data\n");
     for (const record of [restored, successor]) {
-      await updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+      await updateRegistryWorktree(env, record.id, {
+        lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+      });
     }
 
     const result = await service.gc();

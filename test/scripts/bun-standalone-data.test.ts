@@ -24,6 +24,24 @@ it("decodes only requested routing rows and retains their identity", () => {
   expect(parse).toHaveBeenCalledTimes(2);
 });
 
+it("looks up keys without scanning large embedded values", () => {
+  const payload = "x".repeat(100_000);
+  const scannedLengths: number[] = [];
+  const lookup = runInNewContext(
+    `String.prototype.lastIndexOf = new Proxy(String.prototype.lastIndexOf, {
+      apply(target, value, args) {
+        recordScanLength(value.length);
+        return Reflect.apply(target, value, args);
+      }
+    });\n${standaloneLookupExpression({ a: { payload }, z: false })}`,
+    { recordScanLength: (length: number) => scannedLengths.push(length) },
+  );
+  expect(lookup("missing")).toBeUndefined();
+  expect(lookup("a")).toEqual({ payload });
+  expect(lookup("z")).toBe(false);
+  expect(scannedLengths.every((length) => length < payload.length)).toBe(true);
+});
+
 it("preserves escaped keys, falsy values and JSON omission without prototype lookups", () => {
   const entries = Object.assign(Object.create(null), {
     'path/"quoted"\\file\n\t.js': ["separator\u2028text"],

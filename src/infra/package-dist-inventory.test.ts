@@ -191,13 +191,28 @@ it.each([
   },
 );
 
-it("omits interrupted Control UI build siblings through the root package files list", async () => {
+it("omits local build artifacts through the root package files list without deleting them", async () => {
   const { files } = JSON.parse(await fs.readFile(path.resolve("package.json"), "utf8"));
   await writeJson("package.json", { files });
   await writeFiles(`dist/control-ui/index.html dist/control-ui.build-123-AbCdEf/assets/index.js
     dist/control-ui.build-123-AbCdEf.retired/index.html`);
+  const metadata = [
+    "dist/.source-module-urls/build.json",
+    "dist/extensions/example/.source-module-urls/build.json",
+  ];
+  await writeFiles(metadata, "{}\n");
 
   await expectInventory(inventory(), "dist/control-ui/index.html");
+  await expect(content()).resolves.toEqual([
+    expect.objectContaining({ path: "dist/control-ui/index.html" }),
+  ]);
+  const buildFiles = await collectPackageDistInventory(packageRoot, {
+    includePackageExcludedFiles: true,
+  });
+  for (const file of metadata) {
+    expect(buildFiles).toContain(file);
+    await expect(fs.readFile(at(file), "utf8")).resolves.toBe("{}\n");
+  }
 });
 
 it.each([

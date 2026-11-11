@@ -98,6 +98,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       custodyLoss,
       runtimeRepair,
       systemNodeVersion,
+      nodePrefixSkew = false,
     }: {
       tokenPresent?: boolean;
       update?: boolean;
@@ -105,6 +106,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       custodyLoss?: CustodyLoss;
       runtimeRepair?: "secret" | "PATH" | "launcher";
       systemNodeVersion?: string;
+      nodePrefixSkew?: boolean;
     } = {},
   ) {
     state = await createOpenClawTestState({ prefix: "doctor-authority-" });
@@ -131,9 +133,20 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       plugins: { enabled: false },
     };
     const originalConfig = `${JSON.stringify(cfg, null, 2)}\n`;
-    const packageRoot = path.join(root, "node_modules/openclaw");
+    const packageRoot = path.join(
+      root,
+      nodePrefixSkew
+        ? ".nvm/versions/node/v26.12.1/lib/node_modules/openclaw"
+        : "node_modules/openclaw",
+    );
     const entrypoint = path.join(packageRoot, "dist/index.js");
-    const oldNode = "/nix/store/fixture-nodejs-24.15.0/bin/node";
+    const oldNode = nodePrefixSkew
+      ? path.join(root, ".nvm/versions/node/v24.15.0/bin/node")
+      : "/nix/store/fixture-nodejs-24.15.0/bin/node";
+    if (nodePrefixSkew) {
+      await fs.mkdir(path.dirname(oldNode), { recursive: true });
+      await fs.writeFile(oldNode, "#!/bin/sh\nexit 99\n", { mode: 0o700 });
+    }
     const systemNode = "/usr/local/bin/node";
     if (runtimeRepair) {
       const cliNode = path.join(root, "current/bin/node");
@@ -161,7 +174,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       ...(runtimeRepair
         ? {}
         : { OPENCLAW_WRAPPER: wrapperPath, OPENCLAW_GATEWAY_TOKEN: embeddedToken }),
-      PATH: `${runtimeRepair ? `${path.dirname(oldNode)}:` : ""}/usr/local/bin:/usr/bin:/bin`,
+      PATH: `${runtimeRepair && !nodePrefixSkew ? `${path.dirname(oldNode)}:` : ""}/usr/local/bin:/usr/bin:/bin`,
     };
     const dropInPath = `${unitPath}.d/homeassistant.conf`;
     const dropIn =
@@ -567,20 +580,49 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
   }
 
   it.each([
-    { runtimeRepair: "secret", systemNodeVersion: undefined, selectedNode: "cli" },
-    { runtimeRepair: "secret", systemNodeVersion: "24.15.0", selectedNode: "cli" },
-    { runtimeRepair: "secret", systemNodeVersion: "26.12.1", selectedNode: "/usr/local/bin/node" },
-    { runtimeRepair: "PATH", systemNodeVersion: undefined, selectedNode: undefined },
-    { runtimeRepair: "launcher", systemNodeVersion: undefined, selectedNode: undefined },
+    {
+      runtimeRepair: "secret",
+      systemNodeVersion: undefined,
+      selectedNode: "cli",
+      nodePrefixSkew: true,
+    },
+    {
+      runtimeRepair: "secret",
+      systemNodeVersion: "24.15.0",
+      selectedNode: "cli",
+      nodePrefixSkew: false,
+    },
+    {
+      runtimeRepair: "secret",
+      systemNodeVersion: "26.12.1",
+      selectedNode: "/usr/local/bin/node",
+      nodePrefixSkew: false,
+    },
+    {
+      runtimeRepair: "PATH",
+      systemNodeVersion: undefined,
+      selectedNode: undefined,
+      nodePrefixSkew: false,
+    },
+    {
+      runtimeRepair: "launcher",
+      systemNodeVersion: undefined,
+      selectedNode: undefined,
+      nodePrefixSkew: false,
+    },
   ] as const)(
-    "repairs incompatible Node without taking over $runtimeRepair drop-in settings (system Node: $systemNodeVersion)",
-    async ({ runtimeRepair, systemNodeVersion, selectedNode }) => {
+    "repairs incompatible Node without taking over $runtimeRepair drop-in settings (system Node: $systemNodeVersion; prefix skew: $nodePrefixSkew)",
+    async ({ runtimeRepair, systemNodeVersion, selectedNode, nodePrefixSkew }) => {
       const { observations, diagnostics, errors } = await runRepair("writable", {
         tokenPresent: true,
         runtimeRepair,
         systemNodeVersion,
+        nodePrefixSkew,
       });
       expect(errors).toEqual([]);
+      if (nodePrefixSkew) {
+        expect(diagnostics).toContain("does not own this install");
+      }
       expect(observations.configBytesPreserved).toBe(true);
       expect(observations.dropInPreserved).toBe(true);
       if (runtimeRepair !== "secret") {

@@ -1,6 +1,38 @@
 import { isProxy } from "node:util/types";
-import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
-import { isOwnedTranscriptPayload } from "./transcript-json.js";
+import { freezeTrustedJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
+import type { SessionTranscriptReadSnapshot } from "./session-history-read.types.js";
+import { isOwnedTranscriptPayload, retainOwnedTranscriptPayload } from "./transcript-json.js";
+
+function rejectTranscriptMapMutation(): never {
+  throw new TypeError("Transcript snapshot maps are immutable");
+}
+
+const immutableMapMethods = {
+  set: { value: rejectTranscriptMapMutation },
+  delete: { value: rejectTranscriptMapMutation },
+  clear: { value: rejectTranscriptMapMutation },
+};
+
+/** Admit decoded snapshots once; internal readers share payloads and navigation. */
+export function freezeTranscriptSnapshot<T extends SessionTranscriptReadSnapshot>(snapshot: T): T {
+  if (isOwnedTranscriptPayload(snapshot)) {
+    return snapshot;
+  }
+  for (const value of Object.values(snapshot)) {
+    if (value instanceof Map) {
+      for (const member of value.values()) {
+        freezeTrustedJsonSnapshot(member);
+      }
+      // Freezing a Map's properties alone does not prevent set/delete/clear.
+      Object.defineProperties(value, immutableMapMethods);
+      Object.freeze(value);
+    } else {
+      freezeTrustedJsonSnapshot(value);
+    }
+  }
+  retainOwnedTranscriptPayload(snapshot);
+  return Object.freeze(snapshot);
+}
 
 class NativeCloneRequired extends Error {
   constructor() {
@@ -65,6 +97,13 @@ export function cloneTranscriptView<T>(
       descriptor.configurable = true;
       descriptor.writable = true;
       Object.defineProperty(result, key, descriptor);
+    }
+    for (const key of Object.getOwnPropertySymbols(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+      if ("value" in descriptor) {
+        descriptor.value = copy(descriptor.value);
+        Object.defineProperty(result, key, descriptor);
+      }
     }
     return result;
   };

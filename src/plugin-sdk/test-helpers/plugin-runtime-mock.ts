@@ -177,6 +177,13 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       ensureAgentWorkspace: vi
         .fn<PluginRuntime["agent"]["ensureAgentWorkspace"]>()
         .mockResolvedValue({ dir: "/tmp/workspace" }),
+      explainToolAvailability: vi.fn<PluginRuntime["agent"]["explainToolAvailability"]>(
+        async ({ agentId, toolNames }) => ({
+          agentId: agentId ?? "main",
+          sandbox: { mode: "off", source: "agents.defaults.sandbox.mode" },
+          tools: toolNames.map((name) => ({ name, available: true })),
+        }),
+      ),
       session: {
         resolveStorePath: vi.fn<PluginRuntime["agent"]["session"]["resolveStorePath"]>(
           () => "/tmp/agent-sessions.json",
@@ -546,6 +553,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     subagent: {
       complete: vi.fn(),
       forkSession: vi.fn(),
+      runForkedTurn: vi.fn(),
       run: vi.fn(),
       waitForRun: vi.fn(),
       getSessionMessages: vi.fn(),
@@ -564,6 +572,10 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       create: vi.fn(),
       release: vi.fn(),
       removeIfLossless: vi.fn(),
+    },
+    skills: {
+      readUsage: vi.fn(async () => ({ tracked: false, usage: new Map() })),
+      recordUsed: vi.fn(() => false),
     },
     nodes: {
       list: vi.fn(async () => ({ nodes: [] })),

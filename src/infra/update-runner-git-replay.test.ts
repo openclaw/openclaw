@@ -109,6 +109,28 @@ describe("Git update local replay", () => {
     await expectInstalled(target);
   }, 20_000);
 
+  it("updates and preserves local main with Git lacking --no-lazy-fetch", async () => {
+    await fs.writeFile(path.join(root, "local.txt"), "keep local work\n");
+    await git(root, "add", ".");
+    await git(root, "commit", "-m", "local work");
+    const local = await head();
+    await git(root, "checkout", "--detach", beforeSha);
+    const target = await advanceRemote();
+    const execute = runCommand;
+    runCommand = (argv, options) =>
+      argv.includes("--no-lazy-fetch")
+        ? Promise.resolve({ code: 129, stdout: "", stderr: "unknown option: --no-lazy-fetch" })
+        : execute(argv, options);
+    const result = await update();
+    expect(result.status, JSON.stringify(result.steps)).toBe("ok");
+    expect(await git(root, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
+    expect(await git(root, "merge-base", "--is-ancestor", target, "HEAD")).toBe("");
+    expect(await fs.readFile(path.join(root, "local.txt"), "utf8")).toBe("keep local work\n");
+    expect(await git(root, "rev-parse", `refs/openclaw/update-preserved/main-${local}`)).toBe(
+      local,
+    );
+  });
+
   it.for([
     "connected",
     "merge",

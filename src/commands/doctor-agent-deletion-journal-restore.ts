@@ -6,7 +6,8 @@ import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/target
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { resolveAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.js";
 import {
@@ -47,15 +48,15 @@ function readVerifiedOwner(database: DatabaseSync, agentId: string) {
   return row;
 }
 
-function inspectOwner(pathname: string, agentId: string) {
-  const snapshot = prepareSqliteReadOnlyLocationSync(pathname);
+async function inspectOwner(pathname: string, agentId: string) {
+  const snapshot = await prepareSqliteReadOnlyLocation(pathname, { preserveSourceArtifacts: true });
   let producer: ReturnType<typeof readVerifiedOwner>;
   let cleanedUp: boolean;
   try {
     using database = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
     producer = readVerifiedOwner(database, agentId);
   } finally {
-    cleanedUp = snapshot.cleanup();
+    cleanedUp = await snapshot.cleanupAsync();
   }
   if (!cleanedUp) {
     throw new Error(`Could not release agent recovery inspection snapshot: ${snapshot.location}`);
@@ -108,7 +109,12 @@ export async function restoreDoctorMissingJournalStores(params: {
           allowNativeRead: true,
         }) === true;
   };
-  const eligible = params.held.flatMap((target) => {
+  const signal = resolveSqliteInspectionSignal();
+  const eligible: Array<
+    HeldAgentDatabase & { producer: NonNullable<ReturnType<typeof readVerifiedOwner>> }
+  > = [];
+  for (const target of params.held) {
+    signal?.throwIfAborted();
     const owned = isReservedSystemAgentId(target.agentId)
       ? samePath(
           target.path,
@@ -119,18 +125,20 @@ export async function restoreDoctorMissingJournalStores(params: {
           (entry) => entry.agentId === target.agentId && samePath(entry.path, target.path),
         );
     if (!owned || !matchesReceipt(target)) {
-      return [];
+      continue;
     }
     try {
-      const producer = inspectOwner(target.path, target.agentId);
-      return producer ? [{ ...target, producer }] : [];
+      const producer = await inspectOwner(target.path, target.agentId);
+      if (producer) {
+        eligible.push({ ...target, producer });
+      }
     } catch (error) {
+      signal?.throwIfAborted();
       warnings.push(
         `Agent ${target.agentId} remains held; could not verify its database ownership: ${formatErrorMessage(error)}`,
       );
-      return [];
     }
-  });
+  }
   if (eligible.length === 0) {
     return { changes, warnings, restored };
   }
@@ -211,7 +219,7 @@ export async function restoreDoctorMissingJournalStores(params: {
     assertCurrent();
     if (isReservedSystemAgentId(agentId)) {
       for (const target of targets) {
-        if (!isDeepStrictEqual(inspectOwner(target.path, agentId), target.producer)) {
+        if (!isDeepStrictEqual(await inspectOwner(target.path, agentId), target.producer)) {
           throw new Error(`System agent ${agentId} ownership changed before recovery.`);
         }
       }

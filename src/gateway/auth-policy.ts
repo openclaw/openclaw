@@ -1,6 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { getRuntimeConfig } from "../config/io.js";
+import { readRuntimeConfig as getRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";

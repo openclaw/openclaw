@@ -32,7 +32,7 @@ import {
 import {
   boundSessionEntryReplacementPublication,
   prepareSessionEntryReplacementPublication,
-} from "./session-accessor.sqlite-replacement-state.js";
+} from "./session-accessor.sqlite-replacement-publication.js";
 import { prepareSessionActorEntryPatch } from "./session-actor-entry-publication.worker.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";

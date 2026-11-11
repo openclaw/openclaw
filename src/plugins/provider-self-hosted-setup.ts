@@ -3,11 +3,11 @@ import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles/upsert-with-lock.js";
+import { resolveDefaultModelMaxTokens } from "../agents/defaults.js";
 import { CUSTOM_LOCAL_AUTH_MARKER, isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
-  SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../agents/self-hosted-provider-defaults.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,11 +15,8 @@ import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
-import type {
-  ProviderAuthMethodNonInteractiveContext,
-  ProviderAuthResult,
-  ProviderNonInteractiveApiKeyResult,
-} from "./types.js";
+import type { ProviderNonInteractiveApiKeyResult } from "./provider-auth-types.js";
+import type { ProviderAuthMethodNonInteractiveContext, ProviderAuthResult } from "./types.js";
 
 export {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
@@ -84,7 +81,11 @@ function buildOpenAICompatibleSelfHostedProviderConfig(
                 input: params.input ?? ["text"],
                 cost: SELF_HOSTED_DEFAULT_COST,
                 contextWindow: params.contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-                maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
+                maxTokens:
+                  params.maxTokens ??
+                  resolveDefaultModelMaxTokens(
+                    params.contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+                  ),
               },
             ],
           },

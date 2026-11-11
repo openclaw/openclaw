@@ -33,8 +33,8 @@ it.each(["append", "reorder", "identity invalidation"])(
       __openclaw: { id: `report-${agentId}` },
     }));
     const host = projectChatFields(
-      {
-        ...makeChatHost({
+      Object.assign(
+        makeChatHost({
           sessionKey: "agent:main:main",
           chatMessages: messages,
           requestHandlers: {
@@ -44,9 +44,11 @@ it.each(["append", "reorder", "identity invalidation"])(
             }),
           },
         }),
-        agentsList: { agents: [{ id: "main" }, { id: "research" }, { id: "planner" }] },
-        senderAgentAvatars: undefined as ReadonlyMap<string, string | null> | undefined,
-      },
+        {
+          agentsList: { agents: [{ id: "main" }, { id: "research" }, { id: "planner" }] },
+          senderAgentAvatars: undefined as ReadonlyMap<string, string | null> | undefined,
+        },
+      ),
       ["senderAgentAvatars"],
     );
     const identities = createAgentIdentityCapability({

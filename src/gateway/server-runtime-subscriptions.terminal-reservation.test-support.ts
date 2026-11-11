@@ -17,6 +17,44 @@ export function registerTerminalReservationPublicationTests(fixture: {
   ) => void;
 }): void {
   const { createParams, start } = fixture;
+  it("persists and delivers a queued run start before its deferred chat mapping is registered", async () => {
+    const actual = await vi.importActual<typeof import("./server-chat.js")>("./server-chat.js");
+    const { persistGatewaySessionLifecycleEvent } = await import("./session-lifecycle-state.js");
+    fixture.installHandlerFactory(actual.createAgentEventHandler);
+    const params = createParams();
+    const runId = "queued-start-run";
+    const sessionKey = "agent:main:queued-start";
+    const sessionId = "queued-start-session";
+    registerSubscriptionChatRun(params, { runId, sessionKey, sessionId });
+    claimAgentRunContext(runId, { sessionKey, sessionId });
+    const subscriptions = start(params);
+    try {
+      emitAgentEvent({
+        runId,
+        sessionKey,
+        sessionId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_000 },
+      });
+      // Runtime start precedes the queued source's onAgentRunStart callback.
+      params.chatRunState.registry.add(runId, { sessionKey, clientRunId: runId });
+      await subscriptions.agentUnsub();
+      const started = expect.objectContaining({
+        runId,
+        data: { phase: "start", startedAt: 1_000 },
+      });
+      expect(persistGatewaySessionLifecycleEvent).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ sessionKey, event: started }),
+      );
+      // A queued chat links itself from this start; clients still need the start itself.
+      expect(params.broadcast).toHaveBeenCalledWith("agent", started, expect.anything());
+    } finally {
+      await subscriptions.agentUnsub();
+      subscriptions.transcriptUnsub();
+      subscriptions.lifecycleUnsub();
+    }
+  });
+
   it("keeps a newer terminal reservation when an older no-write dispatch fails", async () => {
     const params = createParams();
     const runId = "replaced-terminal-dispatch";
@@ -26,11 +64,8 @@ export function registerTerminalReservationPublicationTests(fixture: {
       sessionKey: "agent:main:main",
     });
     const entry = registration.entry;
-    claimAgentRunContext(runId, {
-      sessionId: getRpcSourceIdentity(entry).sessionId,
-      sessionKey: getRpcSourceIdentity(entry).sessionKey,
-      projectSessionLifecycle: false,
-    });
+    const { sessionId, sessionKey } = getRpcSourceIdentity(entry);
+    claimAgentRunContext(runId, { sessionId, sessionKey, projectSessionLifecycle: false });
     const olderDispatch = { entered: createDeferred(), release: createDeferred() };
     const newerDispatch = { entered: createDeferred(), release: createDeferred() };
     const dispatches = [olderDispatch, newerDispatch];

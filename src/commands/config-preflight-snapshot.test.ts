@@ -32,6 +32,7 @@ import {
 import * as databasePreflight from "../state/openclaw-database-preflight.js";
 import {
   getActiveOpenClawStateDatabaseReadSnapshot,
+  withExistingOpenClawStateDatabaseReadOnly,
   withArtifactPreservingStateReads,
 } from "../state/openclaw-state-db-readonly.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "../state/openclaw-state-db-schema-migration-required.js";
@@ -367,7 +368,8 @@ it("overlaps config discovery with schema admission and drains both before repor
       releaseConfig.resolve();
       await expect(admission).rejects.toBe(schemaFailure);
       expect(configRetainedSnapshot).toBe(true);
-      expect(fs.existsSync(retainedLocation)).toBe(false);
+      expect(fs.existsSync(retainedLocation)).toBe(true);
+      expect(getActiveOpenClawStateDatabaseReadSnapshot({ env })).toBeUndefined();
     } finally {
       releaseSchema.resolve();
       releaseConfig.resolve();
@@ -377,13 +379,12 @@ it("overlaps config discovery with schema admission and drains both before repor
   });
 });
 
-it("shares startup validation and discovery reads, then releases them before readiness guards", async () => {
+it("reads live startup metadata without copying the state database while writers commit", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
     writeConfig(home);
     const options = { env: process.env };
     const databasePath = await retiredDatabase(true);
     const writer = new DatabaseSync(databasePath);
-    const family = () => databaseFamily(databasePath);
     const readIndex = () =>
       readPersistedInstalledPluginIndexRowSync({ env: process.env })?.value_json;
     try {
@@ -393,24 +394,20 @@ it("shares startup validation and discovery reads, then releases them before rea
            ON CONFLICT(state_key) DO UPDATE SET value_json = excluded.value_json`,
       );
       setMetadata.run('"compat"', '{"generation":"before"}');
-      const before = family();
-      let afterWrite: ReturnType<typeof family> | undefined;
-      const validations: Array<string | undefined> = [];
       const result = await readAdmittedConfigSnapshot({
         env: process.env,
-        validateConfig: () => {
-          validations.push(readIndex());
-          expect(readBundledDiscoveryMode(options)).toBe("compat");
-        },
         readSnapshot: async () => {
           const snapshot = await readCore();
+          expect(getActiveOpenClawStateDatabaseReadSnapshot(options)?.location).toBe(databasePath);
           expect(readBundledDiscoveryMode(options)).toBe("compat");
-          expectFilesEqual(family(), before);
-          // A different owner commits between the two metadata reads.
+          writer.exec("BEGIN IMMEDIATE");
           setMetadata.run('"allowlist"', '{"generation":"after"}');
-          afterWrite = family();
-          expect(readIndex()).toBe('{"generation":"before"}');
-          expectFilesEqual(family(), afterWrite);
+          withExistingOpenClawStateDatabaseReadOnly(() => {
+            expect(readIndex()).toBe('{"generation":"before"}');
+            writer.exec("COMMIT");
+            expect(readIndex()).toBe('{"generation":"before"}');
+          }, options);
+          expect(readIndex()).toBe('{"generation":"after"}');
           return { snapshot };
         },
         beforeStatePreparation: async () => {
@@ -420,8 +417,6 @@ it("shares startup validation and discovery reads, then releases them before rea
         },
       });
       expect(result.snapshot.valid).toBe(true);
-      expect(validations).toEqual(['{"generation":"before"}', '{"generation":"before"}']);
-      expectFilesEqual(family(), afterWrite);
     } finally {
       writer.close();
       closeOpenClawStateDatabaseForTest();
@@ -516,6 +511,15 @@ it.each([
     }
     expect(fs.readFileSync(configPath, "utf8")).toBe(activeRaw);
     expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backupRaw);
-    expectFilesEqual(databaseFamily(databasePath), before);
+    if (legacyIdentity) {
+      // Live startup may create WAL/SHM; refusal must leave stored data unchanged.
+      expectBytesEqual(
+        fs.readFileSync(databasePath),
+        expectDefined(before[0], "Expected the original database file").bytes,
+        databasePath,
+      );
+    } else {
+      expectFilesEqual(databaseFamily(databasePath), before);
+    }
   });
 });

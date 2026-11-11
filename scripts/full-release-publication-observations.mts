@@ -22,8 +22,10 @@ import { collectPublishablePluginPackagesFromCandidates } from "./lib/plugin-pub
 
 const MAX_NPM_NAMES = 1024;
 const MAX_RESPONSE_BYTES = 128 * 1024 * 1024;
-const MAX_COLLECTION_MS = 300_000;
-const OBSERVATION_CONCURRENCY = 16;
+// Keep registry pressure bounded while allowing the all-publishable roster to
+// absorb transient ClawHub retries without exhausting the admission window.
+const MAX_COLLECTION_MS = 600_000;
+const OBSERVATION_CONCURRENCY = 8;
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
 
 type ClawHubRead = PublicationObservationCollection["clawhub"][number] & {

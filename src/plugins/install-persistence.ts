@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { readDeferredPluginMigrationsAsync } from "../infra/deferred-plugin-migrations.js";
+import { realpathViaExistingPrefixSync } from "../infra/path-containment.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
@@ -129,8 +130,13 @@ function shouldPreserveReplacedInstallPath(params: {
   removalTarget: string;
   nextInstallPath: string;
 }) {
-  const removalTarget = resolveUserPath(params.removalTarget);
-  const nextInstallPath = resolveUserPath(params.nextInstallPath);
+  // Two spellings of one directory (state-dir alias vs real path) must count as overlapping,
+  // or replacing a plugin deletes the directory that was just installed.
+  const removalTarget = realpathViaExistingPrefixSync(resolveUserPath(params.removalTarget));
+  const nextInstallPath = realpathViaExistingPrefixSync(resolveUserPath(params.nextInstallPath));
+  if (!removalTarget || !nextInstallPath) {
+    return true;
+  }
   return (
     isPathInside(removalTarget, nextInstallPath) || isPathInside(nextInstallPath, removalTarget)
   );

@@ -3,6 +3,7 @@ import {
   formatMediaPlaceholderText,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { runInDetachedAsyncContext } from "openclaw/plugin-sdk/concurrency-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -41,6 +42,11 @@ import {
 import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 import { resolveStickerVisionSupport } from "./sticker-vision.js";
+import {
+  getTopicName,
+  resolveTelegramTopicNameCacheScope,
+  updateTopicName,
+} from "./topic-name-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
@@ -270,7 +276,9 @@ export const dispatchTelegramMessage = async (
     hadErrorReplyFailureOrSkip: false,
   };
 
-  let isFirstTurnInSession = false;
+  let shouldLabelDmTopic = false;
+  let topicNameScope: string | undefined;
+  let topicNameBeforeLabel: string | undefined;
   let turnDispatched: boolean | undefined;
   const isDmTopic =
     !dispatchContext.isGroup &&
@@ -281,9 +289,16 @@ export const dispatchTelegramMessage = async (
     try {
       const sessionKey = dispatchContext.ctxPayload.SessionKey;
       if (sessionKey) {
-        isFirstTurnInSession = !(
-          await loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
-        ).entry?.systemSent;
+        const { entry } = await loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey);
+        topicNameScope = resolveTelegramTopicNameCacheScope({
+          cfg,
+          accountId: dispatchContext.accountId,
+          direct: true,
+        });
+        topicNameBeforeLabel = dispatchContext.ctxPayload.ThreadLabel ?? entry?.topicName;
+        // Reply completion is not title completion: a failed background label must
+        // remain eligible on the next message while the native placeholder remains.
+        shouldLabelDmTopic = !entry?.systemSent || topicNameBeforeLabel === "New Thread";
       } else {
         logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
       }
@@ -431,7 +446,8 @@ export const dispatchTelegramMessage = async (
   }
 
   const scheduleDmTopicLabel = () => {
-    if (!isDmTopic || !isFirstTurnInSession) {
+    // Control commands (/reset, /model) leave the topic eligible for its first real message.
+    if (!isDmTopic || !shouldLabelDmTopic || dispatchContext.ctxPayload.CommandSource) {
       return;
     }
     const { RawBody, BodyForAgent, Body, media } = dispatchContext.ctxPayload;
@@ -450,7 +466,8 @@ export const dispatchTelegramMessage = async (
       return;
     }
     const topicThreadId = dispatchContext.threadSpec.id!;
-    void (async () => {
+    // The turn's work scope closes on return; the label outlives it.
+    void runInDetachedAsyncContext(async () => {
       try {
         const label = await generateTopicLabel({
           userMessage,
@@ -465,12 +482,29 @@ export const dispatchTelegramMessage = async (
           return;
         }
         logVerbose(`auto-topic-label: generated label (len=${label.length})`);
+        const observedName = await getTopicName(
+          dispatchContext.chatId,
+          topicThreadId,
+          topicNameScope,
+        );
+        if (observedName && observedName !== topicNameBeforeLabel) {
+          logVerbose("auto-topic-label: topic name changed, skipping rename");
+          return;
+        }
         await bot.api.editForumTopic(dispatchContext.chatId, topicThreadId, { name: label });
+        // The Bot API returns only true; do not depend on a service-message echo
+        // to retire the placeholder and prevent renaming on every later turn.
+        await updateTopicName(
+          dispatchContext.chatId,
+          topicThreadId,
+          { name: label },
+          topicNameScope,
+        );
         logVerbose(`auto-topic-label: renamed topic ${dispatchContext.chatId}/${topicThreadId}`);
       } catch (err) {
         logVerbose(`auto-topic-label: failed: ${String(err)}`);
       }
-    })();
+    });
   };
   scheduleDmTopicLabel();
   if (statusReactionController) {

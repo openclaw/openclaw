@@ -25,6 +25,7 @@ import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu-solid.tsx";
 import {
   createHarness as createBaseHarness,
+  endArchiveUndoWindow,
   sessionRow,
   sessionTarget,
 } from "./session-organizer-batch-mutations.test-support.ts";
@@ -218,7 +219,7 @@ describe("patchSessionRows", () => {
     await expect(h.patchRows(rows, { archived: false })).resolves.toBeNull();
 
     expect(h.request).not.toHaveBeenCalled();
-    expectError(h, "Session lifecycle action requires a durable session identity.");
+    expectError(h, "This action needs a saved session.");
   });
 
   it("dispatches 101 rows as ordered protocol-sized chunks and refreshes once", async () => {
@@ -457,6 +458,7 @@ function cloudWorkerRow(hasActiveRun: boolean): SidebarRecentSession {
       method: "sessions.reclaim",
       requiredScope: "operator.write",
       blocksActiveRun: true,
+      copyKey: "sessionsView.stopCloudWorker",
     },
   });
 }
@@ -514,7 +516,8 @@ describe("session organizer destructive confirmations", () => {
     response.resolve({ deleted: true, worktreePreserved: preservedWorktree("busy", "wt-busy") });
     await pending;
     expect(showToast).toHaveBeenCalledWith({
-      message: "Managed Worktrees:\nfeature — live run or cleanup active",
+      severity: undefined,
+      message: "Managed worktrees:\nfeature — live run or cleanup active",
     });
   });
 
@@ -534,7 +537,7 @@ describe("session organizer destructive confirmations", () => {
     const pending = deleteSessionsBatch(h.host, rows, h.scope);
     const actions = await waitForConfirmDialogActions();
     expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-      "Delete 2 sessions and their transcripts?",
+      "Delete 2 sessions?This also deletes their transcripts.",
     );
     answerConfirmDialog(actions, "confirm");
     await pending;
@@ -549,7 +552,7 @@ describe("session organizer destructive confirmations", () => {
     );
     expectError(h, retryError);
     expect(alertSpy).toHaveBeenCalledWith(
-      "Managed Worktrees:\nopenclaw/busy — live run or cleanup active",
+      "Managed worktrees:\nopenclaw/busy — live run or cleanup active",
     );
     alertSpy.mockRestore();
   });
@@ -575,7 +578,7 @@ describe("session organizer destructive confirmations", () => {
       return;
     }
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-    expect(showToast).toHaveBeenCalledWith({ message: operation.staleMessage });
+    expect(showToast).toHaveBeenCalledWith({ severity: "error", message: operation.staleMessage });
 
     // Reconnecting must release the old dialog's lock before the operator retries.
     h.renewScope();
@@ -598,7 +601,8 @@ describe("session organizer destructive confirmations", () => {
 
     expectNoCalls(h.request, h.replaceCurrentSession);
     expect(showToast).toHaveBeenCalledWith({
-      message: "Managed Worktrees:\nfeature — cleanup failed",
+      severity: undefined,
+      message: "Managed worktrees:\nfeature — cleanup failed",
     });
   });
 
@@ -759,6 +763,7 @@ describe("session organizer batch archive confirmation", () => {
         }
         await pending;
         if (decision === "confirm") {
+          await endArchiveUndoWindow(h);
           expectArchive(h, rows, true);
           expect(h.finishArchive).toHaveBeenCalledTimes(rows.length);
         } else {
@@ -772,7 +777,7 @@ describe("session organizer batch archive confirmation", () => {
   );
 
   it.each([false, true])(
-    "keeps idle archive and archived=%s restore immediate",
+    "skips confirmation for idle archive and archived=%s restore",
     async (archived) => {
       const h = createHarness();
       const rows = [sessionRow(0), sessionRow(1)].map((row) =>
@@ -780,6 +785,9 @@ describe("session organizer batch archive confirmation", () => {
       );
       await h.action({ kind: "toggle-archived" }, rows, false);
       expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+      if (!archived) {
+        await endArchiveUndoWindow(h);
+      }
       expectArchive(h, rows, !archived);
     },
   );

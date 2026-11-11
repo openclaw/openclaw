@@ -120,6 +120,25 @@ function validateCommandResult(value: unknown, label: string) {
 }
 
 function validateCollectorOnlyPhase(phase: JsonRecord) {
+  if (phase.id === "pre-cleanup-timeline") {
+    check(
+      phase.driverKind === "kova" && phase.measurementScope === "cleanup",
+      "historical timeline phase identity was invalid",
+    );
+    const timeline = object(
+      object(phase.metrics, "historical timeline metrics").timeline,
+      "historical timeline",
+    );
+    check(
+      timeline.schemaVersion === "kova.timelineCollector.v1" &&
+        timeline.commandStatus === 0 &&
+        typeof timeline.available === "boolean",
+      "historical timeline collector was invalid",
+    );
+    array(timeline.openSpans, "historical timeline open spans");
+    object(timeline.keySpans, "historical timeline key spans");
+    return;
+  }
   check(
     phase.driverKind === "none" && phase.collectionIntent === "post-ready-health",
     "commandless phase was not a collector-only phase",
@@ -171,11 +190,19 @@ function validateRecord(recordValue: unknown) {
   check(profiling.schemaVersion === SCHEMA.profiling, "wrong profiling schema");
   const phases = array(record.phases, "record phases");
   check(phases.length > 0, "record had no phases");
+  let scenarioPhaseCount = 0;
   for (const phaseValue of phases) {
     const phase = object(phaseValue, "phase");
     const commands = array(phase.commands, "phase commands");
     const results = array(phase.results, "phase results");
     check(commands.length === results.length, "phase command/result counts did not match");
+    if (phase.id === "pre-cleanup-timeline") {
+      // Historical attribution cannot substitute for scenario work.
+      check(commands.length === 0, "historical timeline phase contained commands");
+      validateCollectorOnlyPhase(phase);
+      continue;
+    }
+    scenarioPhaseCount += 1;
     if (commands.length === 0) {
       validateCollectorOnlyPhase(phase);
       continue;
@@ -190,6 +217,7 @@ function validateRecord(recordValue: unknown) {
       validateCommandResult(result, `phase result ${index}`);
     });
   }
+  check(scenarioPhaseCount > 0, "record had no scenario phases");
   validateCleanup(
     record.cleanup,
     record.cleanupResult,

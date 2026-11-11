@@ -24,12 +24,14 @@ import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs
 import { loadCronJobsStore, saveCronJobsStore } from "../../../cron/store.js";
 import * as receipts from "../../../cron/store/run-receipt-store.test-support.js";
 import type { CronStoredJob } from "../../../cron/types.js";
+import { cronInferenceCheck } from "../../../flows/doctor-cron-checks.js";
 import { runLegacyCronHealth } from "../../../flows/doctor-health-contribution-runners.state.js";
 import { mintCronStandingGrantLocked } from "../../../gateway/operator-approval-standing-grants.worker.js";
 import * as grants from "../../../gateway/operator-approval-store.js";
 import * as snapshots from "../../../infra/sqlite-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
+import { createNonExitingRuntime } from "../../../runtime.js";
 import * as stateDb from "../../../state/openclaw-state-db.js";
 import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -345,7 +347,7 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
       pinned,
       stale,
       legacyJob("inherited"),
-      { ...legacyJob("bound"), inferenceBinding: binding },
+      { ...legacyJob("bound"), inferenceBinding: binding ?? undefined },
     ];
     const storePath = state.statePath("cron", "jobs.json");
     const inactivePath = state.statePath("inactive-cron", "jobs.json");
@@ -355,7 +357,8 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
     const query = (sql: string) => stateDb.openOpenClawStateDatabase().db.prepare(sql).get();
     const backupsOnDisk = async () =>
       (await fs.readdir(state.statePath("state"))).filter(
-        (name) => name.includes(".doctor-cron-") && name.endsWith(".bak"),
+        (name) =>
+          name.startsWith("openclaw.sqlite.pre-startup-migration-") && name.endsWith(".bak"),
       );
     stateDb
       .openOpenClawStateDatabase()
@@ -464,10 +467,13 @@ it("warns that an unbound job whose default moved to a stored account is refused
     const storePath = state.statePath("cron", "jobs.json");
     await saveJobs(storePath, legacyJob("hourly"));
     await doctor.withDoctorConfigMaintenance(async () => {
-      const preview = await migrate(cfg, false);
-      expect(preview.changes).toEqual([]);
+      const runtime = createNonExitingRuntime();
+      const findings = await cronInferenceCheck.detect({ cfg, mode: "lint", runtime });
+      expect(findings).toContainEqual(
+        expect.objectContaining({ requirement: "cron-inference-account" }),
+      );
       contains(
-        preview.warnings.join("\n"),
+        findings.map((finding) => finding.message).join("\n"),
         "Automation hourly (hourly): retain openai:manual for openai/gpt-5.5",
         "Its runs are refused until it records this account",
         "openclaw doctor --fix",
@@ -475,6 +481,83 @@ it("warns that an unbound job whose default moved to a stored account is refused
     });
   });
 });
+
+it.each(["native", "stored", "native-default", "stored-default", "pinned-native", "incompatible"])(
+  "diagnoses CLI account selection without adoption: %s",
+  async (scenario) => {
+    await withAccounts(async (state) => {
+      const model = "anthropic/claude-opus-4-6";
+      const profile = scenario === "native-default" ? "anthropic:claude-cli" : "anthropic:work";
+      const cfg = config(state, {
+        systemAgent: { agentId: "main" },
+        model: scenario.endsWith("default") ? `${model}@${profile}` : model,
+        models: { "anthropic/*": { agentRuntime: { id: "claude-cli" } } },
+      });
+      cfg.plugins = { allow: ["anthropic"], slots: { memory: "none" } };
+      cfg.session = { reset: { mode: "idle", idleMinutes: 1 } };
+      await configure(state, cfg);
+      if (scenario !== "native" && scenario !== "incompatible") {
+        await saveProfiles(
+          scenario === "stored-default"
+            ? apiProfile(profile, "synthetic-key")
+            : {
+                profileId: "anthropic:token",
+                credential: { type: "token", provider: "anthropic", token: "synthetic-token" },
+              },
+        );
+      }
+      await saveProfiles(apiProfile("openai:work", "synthetic-openai-key"));
+      const sessionKey = "agent:main:selection";
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "selection",
+          updatedAt: 1,
+          ...(scenario === "incompatible"
+            ? { authProfileOverride: "openai:work", authProfileOverrideSource: "user" as const }
+            : { cliSessionBindings: { "claude-cli": { sessionId: "native-resume" } } }),
+        },
+      );
+      const originalSession = loadSessionEntry({ agentId: "main", sessionKey });
+      const job: CronStoredJob = {
+        ...makeAccountJob(
+          scenario,
+          scenario === "stored" || scenario === "native" ? undefined : model,
+        ),
+        ...(["pinned-native", "incompatible"].includes(scenario)
+          ? { sessionTarget: `session:${sessionKey}` }
+          : {}),
+      };
+      const storePath = state.statePath("cron", "jobs.json");
+      await saveJobs(storePath, job);
+      await doctor.withDoctorConfigMaintenance(async () => {
+        const findings = await cronInferenceCheck.detect({
+          cfg,
+          mode: "lint",
+          runtime: createNonExitingRuntime(),
+        });
+        const result = await migrate(cfg);
+        expect(result.changes).toEqual([]);
+        expect(findings.map((finding) => finding.message)).toEqual(result.warnings);
+        if (scenario === "stored" || scenario === "stored-default") {
+          expect(result.warnings).toHaveLength(1);
+          contains(
+            result.warnings[0]!,
+            scenario,
+            "claude-cli",
+            "never borrow a stored account",
+            `openclaw automations edit ${scenario} --model ${model}@${scenario === "stored" ? "anthropic:token" : profile}`,
+          );
+        } else {
+          expect(result.warnings).toEqual([]);
+        }
+        expect(await readJobs(storePath)).toEqual([job]);
+        expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(originalSession);
+        expect(globalThis.fetch).not.toHaveBeenCalled();
+      });
+    });
+  },
+);
 
 it("records the planner's first account for ambiguous jobs, keeps direct keys unbound and refuses missing accounts instead of pinning a previous fallback", async () => {
   await withAccounts(async (state) => {
@@ -582,9 +665,18 @@ it("records the planner's first account for ambiguous jobs, keeps direct keys un
         (entry) => entry.id === "malformed",
       );
       expect(malformedBefore?.definition?.sessionTarget).toBe("session:");
-      const preview = await migrate(cfg, false);
-      expect(preview.changes).toEqual([]);
-      expect(preview.warnings.join("\n")).toContain("openclaw doctor --fix");
+      const findings = await cronInferenceCheck.detect({
+        cfg,
+        mode: "lint",
+        runtime: createNonExitingRuntime(),
+      });
+      const preview = findings.map((finding) => finding.message).join("\n");
+      contains(
+        preview,
+        "Automation ambiguous (ambiguous): retain openai:a for openai/gpt-5.5",
+        "Also eligible: openai:b",
+        "openclaw doctor --fix",
+      );
       expect(await readJobs(storePath)).toEqual(original);
       const result = await migrate(cfg);
       const warnings = result.warnings.join("\n");

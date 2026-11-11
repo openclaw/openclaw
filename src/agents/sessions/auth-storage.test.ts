@@ -47,6 +47,7 @@ import * as authProfileStoreRuntime from "../auth-profiles/store-runtime.js";
 import * as authProfileStoreUpdate from "../auth-profiles/store-update.js";
 import type { AuthProfileStore, OAuthCredential } from "../auth-profiles/types.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
+import { AuthStorage as CoreAuthStorage } from "./auth-storage.core.js";
 import { AuthStorage, OAuthProviderConfiguredUnavailableError } from "./auth-storage.js";
 import {
   stored as readProfile,
@@ -57,6 +58,7 @@ import {
   observeAuthTransactions,
   createSqliteAuthRefreshFixture,
 } from "./auth-storage.test-support.js";
+import { ModelRegistry as CoreModelRegistry } from "./model-registry.core.js";
 
 const providerOAuthMocks = {
   login: vi.fn<typeof providerRuntime.loginProviderOAuthWithPlugin>(),
@@ -625,7 +627,11 @@ describe("SQLite auth storage", () => {
   it("initializes detached in-memory credentials without a legacy reload warning", () => {
     const warn = vi.spyOn(sdkDeprecation, "warnPluginSdkDeprecation").mockImplementation(() => {});
     const credential = apiKey("synthetic-initial-key");
-    const storage = PublicAuthStorage.inMemory({ fixture: credential });
+    const storage = CoreAuthStorage.inMemory({ fixture: credential });
+    expect(CoreAuthStorage).toBe(PublicAuthStorage);
+    expect(storage).toBeInstanceOf(PublicAuthStorage);
+    expect(CoreModelRegistry).toBe(PublicModelRegistry);
+    expect(CoreModelRegistry.inMemory(storage).fork(storage)).toBeInstanceOf(PublicModelRegistry);
     credential.key = "synthetic-mutated-key";
 
     expect(storage.get("fixture")).toEqual(apiKey("synthetic-initial-key"));
@@ -758,6 +764,42 @@ describe("SQLite auth storage", () => {
       ...metadata,
     });
     expect(storage.get("test-oauth")).toMatchObject(identity);
+  });
+
+  it("preserves public default directories and explicit undefined factory arguments", async () => {
+    vi.stubEnv("OPENCLAW_AGENT_DIR", agentDir);
+    writeProfiles({ "openai:default": createApiKeyCredential("openai", "synthetic-default-key") });
+    fs.writeFileSync(
+      path.join(agentDir, "models.json"),
+      JSON.stringify({
+        providers: {
+          fixture: {
+            baseUrl: "https://fixture.invalid/v1",
+            api: "openai-completions",
+            models: [{ id: "selected" }],
+          },
+        },
+      }),
+    );
+    const sync = PublicAuthStorage.forAgent();
+    const async = await PublicAuthStorage.forAgentAsync(undefined);
+    for (const storage of [
+      sync,
+      async,
+      PublicAuthStorage.create(undefined),
+      PublicAuthStorage.create(""),
+    ]) {
+      expect(storage.get("openai")).toMatchObject({ key: "synthetic-default-key" });
+      expect(storage).toBeInstanceOf(CoreAuthStorage);
+    }
+    const options = { includePluginCatalogs: false };
+    for (const registry of [
+      PublicModelRegistry.create(sync, undefined, options),
+      await PublicModelRegistry.createAsync(async, undefined, options),
+    ]) {
+      expect(registry.find("fixture", "selected")).toBeDefined();
+      expect(registry).toBeInstanceOf(CoreModelRegistry);
+    }
   });
 
   it("keeps AuthStorage.create(path) as a named SQLite-backed deprecation", () => {

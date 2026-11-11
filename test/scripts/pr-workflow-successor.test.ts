@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createBaselineFixture } from "./pr-baseline-native.test-support.js";
+import { createBaselineFixture, reuseBaselineFixture } from "./pr-baseline-native.test-support.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
@@ -19,8 +19,8 @@ const retained = [
   "prep.env",
 ];
 
-function fixture(baseline = false) {
-  const f = createBaselineFixture(temps.make("pr-workflow-successor-"), 1);
+function createFixture(root: string, baseline = false) {
+  const f = createBaselineFixture(root, 1);
   if (baseline) {
     f.pass("prepare-baseline-refresh", f.manifest(f.advanceMain("baseline")));
     f.approve();
@@ -113,6 +113,10 @@ complete_prepare_push "$2" "$3" "$4" "$4" "$2"
     originalGate,
   };
 }
+
+const ordinaryFixture = reuseBaselineFixture(createFixture);
+const baselineFixture = reuseBaselineFixture((root) => createFixture(root, true));
+const fixture = (baseline = false) => (baseline ? baselineFixture : ordinaryFixture)();
 
 function expectExit(result: ReturnType<typeof spawnSync>, status: number) {
   expect(result.status, `${String(result.stdout)}${String(result.stderr)}`).toBe(status);

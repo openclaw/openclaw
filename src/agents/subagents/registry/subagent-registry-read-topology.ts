@@ -291,7 +291,6 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
   }
   return {
     inputs,
-    requesterSessionKeys: () => latestRunByRequesterAndChildSessionKey.keys(),
     get revision() {
       return revision;
     },

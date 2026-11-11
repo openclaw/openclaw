@@ -344,7 +344,7 @@ suite.define(() => {
           ? page.touchscreen.tap(sendPoint.x, sendPoint.y)
           : page.mouse.click(sendPoint.x, sendPoint.y));
         await gateway.waitForRequest("chat.send");
-        const stop = page.getByRole("button", { name: "Stop generating" });
+        const stop = page.getByRole("button", { name: "Stop", exact: true });
         await expect(stop).toBeVisible();
         const stopBounds = await stop.boundingBox();
         expect(stopBounds && { width: stopBounds.width, height: stopBounds.height }).toEqual({
@@ -376,7 +376,7 @@ suite.define(() => {
               await expectEditableDraft(page, visibleHeight + offsetTop, mobile);
             }
             if (scale === 1) {
-              await reach("Stop generating", visibleHeight + offsetTop);
+              await reach("Stop", visibleHeight + offsetTop);
             }
           }
           await visualViewport(page, height);
@@ -391,14 +391,14 @@ suite.define(() => {
           await waitForLayoutSettled(page, ".chat-main__conversation-frame");
           const bounds = (await frame.boundingBox())!;
           await expectEditableDraft(page, bounds.y + bounds.height, mobile);
-          await reach("Stop generating", bounds.y + bounds.height);
+          await reach("Stop", bounds.y + bounds.height);
           await frame.evaluate((element: HTMLElement) => {
             element.style.removeProperty("flex");
           });
         }
         if (mobile && width > height) {
           await visualViewport(page, height - 240);
-          const point = await reach("Stop generating", height - 240);
+          const point = await reach("Stop", height - 240);
           await page.touchscreen.tap(point.x, point.y);
         } else {
           await stop.click();
@@ -438,11 +438,9 @@ suite.define(() => {
         expect(generating.scrollWidth).toBeLessThanOrEqual(width);
         if (mobile) {
           const usableWidth = width - left - right;
-          for (const [frame, inset] of [
-            [fresh, 20],
-            [generating, 16],
-          ] as const) {
-            const margin = Math.max(inset, (usableWidth - 768) / 2);
+          // A phone draft starts at the same edges as the session it opens.
+          for (const frame of [fresh, generating]) {
+            const margin = Math.max(16, (usableWidth - 768) / 2);
             expect(frame.composer.left).toBeCloseTo(left + margin, 0);
             expect(frame.composer.right).toBeCloseTo(width - right - margin, 0);
           }

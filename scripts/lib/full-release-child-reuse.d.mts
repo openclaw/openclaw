@@ -32,6 +32,9 @@ export interface ReusableReleaseChildSelection {
 }
 
 export interface ReusableReleaseChildDependencies {
+  immutableReads?: ReturnType<
+    typeof import("./release-evidence-replay.mjs").createReleaseEvidenceReplay
+  >;
   report?: (message: string) => void;
   github?: (endpoint: string) => Promise<unknown>;
   downloadArchive?: (input: Record<string, unknown>) => Promise<{

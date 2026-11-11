@@ -1,4 +1,6 @@
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   readExistingAgentSchemaMeta,
   type ExistingAgentSchemaMeta,
@@ -7,6 +9,7 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-cont
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
+import { emitSnapshotCleanupFailure } from "./sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import { readSqliteUserVersion, readSqliteWriterAppVersion } from "./sqlite-user-version.js";
@@ -48,12 +51,27 @@ export function readSqliteSchemaHeaderFromSnapshot(
   prepared: PreparedSqliteReadOnlyLocation,
   signal?: AbortSignal,
   agentSchemaVersionForOwnership?: number,
+  options: { cleanupFailure?: "warn" } = {},
 ): SqliteSchemaHeader {
   return runWithSqliteCleanup(
     {
       release: () => {
-        if (!prepared.cleanup()) {
-          throw new Error(`SQLite read-only worker snapshot cleanup failed: ${prepared.location}`);
+        try {
+          if (!prepared.cleanup() && options.cleanupFailure !== "warn") {
+            throw new Error(
+              `SQLite read-only worker snapshot cleanup failed: ${prepared.location}`,
+            );
+          }
+        } catch (error) {
+          if (options.cleanupFailure !== "warn") {
+            throw error;
+          }
+          // Boolean failures are logged by the prepared owner, which retains retry custody.
+          emitSnapshotCleanupFailure({
+            cleanupRoot: prepared.cleanupRoot ?? path.dirname(prepared.location),
+            operation: "rm",
+            code: extractErrorCode(error),
+          });
         }
       },
     },

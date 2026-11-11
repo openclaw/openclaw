@@ -6,7 +6,11 @@ if (isMainThread && process.argv[2] === "forest") {
   // Keep the same background processes across crossover arms. The container owns cleanup.
   const fs = require("node:fs");
   const roots = [];
+  const unrelated = [];
   const cleanup = () => {
+    for (const child of unrelated) {
+      child.kill("SIGKILL");
+    }
     for (const child of roots) {
       try {
         process.kill(-child.pid, "SIGKILL");
@@ -22,6 +26,15 @@ if (isMainThread && process.argv[2] === "forest") {
   process.on("SIGINT", cleanup);
   void (async () => {
     try {
+      // Optional host noise is outside every watched tree: forest <roots> <children> <file> <noise>.
+      for (let index = 0; index < Number(process.argv[6] ?? 0); index++) {
+        const child = spawn("sleep", ["infinity"], { stdio: "ignore" });
+        unrelated.push(child);
+        await new Promise((resolve, reject) => {
+          child.once("spawn", resolve);
+          child.once("error", reject);
+        });
+      }
       for (let index = 0; index < Number(process.argv[3]); index++) {
         const child = spawn(process.execPath, [__filename, process.argv[4]], {
           detached: true,
