@@ -684,14 +684,28 @@ jobs:
           )"
           echo "value=${BASELINE_SPEC}" >> "$GITHUB_OUTPUT"
 
-      - name: Pack baseline artifact
-        if: ${{ inputs.mode != 'fresh' }}
+      # Diagnostic ref: reuse the exact original baseline, never rebuild it.
+      - name: Download retained baseline artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: 13828626304
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline
+          run-id: 42958295170
+          github-token: ${{ github.token }}
+
+      - name: Verify retained baseline and write acquisition metadata
         env:
-          BASELINE_SPEC: ${{ steps.baseline.outputs.value }}
           OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline
+          GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p "${OUTPUT_DIR}"
-          timeout --preserve-status 300s npm pack --ignore-scripts --json "${BASELINE_SPEC}" --pack-destination "${OUTPUT_DIR}" > "${OUTPUT_DIR}/pack.json"
+          bash workflow/scripts/docker/shared-image-artifact.sh verify-upload Baseline 13828626304 openclaw-cross-os-release-checks-baseline-42958295170-1 c311df1bec960fdfe48e72a4988f59c7f8a63ea487b7839abbf81c6d96716dc0 42958295170 1
+          node <<'NODE'
+          const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
+          const file = path.join(process.env.OUTPUT_DIR, "openclaw-2026.11.3.tgz");
+          const digest = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+          if (digest !== "dae4c4f7549561db2fe5ac43af7ba0c9491f876380f070f7ffb87bf9721a10df") throw new Error("Retained baseline digest mismatch");
+          fs.writeFileSync(path.join(process.env.OUTPUT_DIR, "pack.json"), JSON.stringify([{filename: "openclaw-2026.11.3.tgz"}]));
+          NODE
 
       - name: Capture candidate metadata
         id: candidate_metadata

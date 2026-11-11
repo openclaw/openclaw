@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type {
   CandidateBuild,
   Cleanup,
@@ -253,6 +254,12 @@ export async function runUpgradeLane(
       baselineVersion: baseline.version,
     });
     const updateEnv = updateCommand.env;
+    // Diagnostic ref only: keep sealed package bytes and the scope decision unchanged.
+    if (process.platform === "win32") {
+      const preload = pathToFileURL(join(import.meta.dirname, "windows-scope-diagnostic.mjs")).href;
+      updateEnv.NODE_OPTIONS = [updateEnv.NODE_OPTIONS, "--import=" + preload].filter(Boolean).join(" ");
+      updateEnv.OPENCLAW_WINDOWS_SCOPE_DIAGNOSTIC_FILE = join(params.logsDir, "windows-scope-operands.jsonl");
+    }
     const updateArgs = updateCommand.args;
     const updateLogPath = join(params.logsDir, "upgrade-update.log");
     appendFileSync(
