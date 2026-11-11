@@ -1,2 +1,0 @@
-# Public inventory cancellation, auth/legacy fallback, and mutation receipt regressions.
-109

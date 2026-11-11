@@ -4,7 +4,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
-import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
@@ -59,18 +58,17 @@ export function runNodesCommand(label: string, action: () => Promise<void>) {
   });
 }
 
-/** Inventory reads may stop; admitted node operations keep their response custody. */
+/** Ctrl+C owns the exit of an inventory read; node operations keep their response custody. */
 export function runNodesReadCommand(
   label: string,
-  action: (signal: AbortSignal | undefined) => Promise<void>,
+  action: (signal?: AbortSignal) => Promise<void>,
 ) {
   const signal = getAsyncWorkSignal();
   return runNodesCommand(label, async () => {
     try {
-      signal?.throwIfAborted();
       await action(signal);
     } catch (error) {
-      if (!signal?.aborted || !isAbortError(error)) {
+      if (!signal?.aborted) {
         throw error;
       }
     }
