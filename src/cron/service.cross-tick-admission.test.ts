@@ -2,7 +2,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import * as cron from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { enqueueCommandInLane, setCommandLaneConcurrency } from "../process/command-queue.js";
 import * as work from "../process/gateway-work-admission.js";
+import { CommandLane } from "../process/lanes.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import * as clocks from "../test-utils/gateway-scheduler-clock.js";
 import { createTestCronOperatorSource } from "./execution-context.test-support.js";
@@ -408,5 +410,57 @@ it.each([
     await waitForCronRunQueue(state);
     stop(state);
     stop(replacement);
+  }
+});
+
+it("runs as many automations as the agent limit leaves free of conversations", async () => {
+  let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
+  const dueAtMs = nowMs + 1_000;
+  const store = await seedJobs(
+    Array.from({ length: 12 }, (_, index) => dueJob(`job-${index}`, nowMs, dueAtMs)),
+  );
+  const release = createDeferred();
+  const finish = createDeferred();
+  const turnEnds = createDeferred();
+  const started: string[] = [];
+  const state = cron.createCronRegressionState({
+    storePath: store.storePath,
+    nowMs: () => nowMs,
+    runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
+      await (started.push(job.id) === 1 ? release : finish).promise;
+      return { status: "ok" as const, summary: job.id };
+    },
+  });
+  // An agent limit of twelve with two conversation turns in progress leaves automation ten.
+  setCommandLaneConcurrency(CommandLane.Main, 12);
+  const turns = [turnEnds, finish].map((turn) =>
+    enqueueCommandInLane(CommandLane.Main, async () => await turn.promise),
+  );
+  const running = await captureCronSchedulerWakeForTest(() => start(state));
+  const runningJobs = async () =>
+    (await loadCronStore(store.storePath)).jobs.filter((job) => job.state.runningAtMs).length;
+  try {
+    nowMs = dueAtMs;
+    await running.wake(state);
+    await vi.waitFor(() => expect(started).toHaveLength(10));
+    expect(await runningJobs()).toBe(10);
+
+    // A run ends: its slot goes to a queued automation, and the count stays at ten.
+    release.resolve();
+    await vi.waitFor(() => expect(started).toHaveLength(11));
+    expect(await runningJobs()).toBe(10);
+
+    // A conversation turn ends: the next tick gives its slot to the last queued automation.
+    turnEnds.resolve();
+    await turns[0];
+    await running.wake(state);
+    await vi.waitFor(() => expect(started).toHaveLength(12));
+  } finally {
+    release.resolve();
+    turnEnds.resolve();
+    finish.resolve();
+    await Promise.all(turns);
+    await waitForCronRunQueue(state);
+    stop(state);
   }
 });
