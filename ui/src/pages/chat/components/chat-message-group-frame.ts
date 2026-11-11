@@ -76,15 +76,12 @@ export function prepareGroupMessage(
   return { item, source, actions: details, ownsActions };
 }
 
-export function isActivityMessageGroup(
-  group: MessageGroupData,
-  options: Pick<NativeMessageGroupOptions, "bubbleMode" | "frameContent">,
-): boolean {
-  if (options.frameContent !== undefined || normalizeRoleForGrouping(group.role) !== "tool") {
+export function isActivityMessageGroup(group: MessageGroupData, bubbleMode = false): boolean {
+  if (normalizeRoleForGrouping(group.role) !== "tool") {
     return false;
   }
   if (
-    options.bubbleMode &&
+    bubbleMode &&
     group.messages.some(
       (item) => item.hasVisibleContent && resolveMessageRole(item.message) === "assistant",
     )
@@ -93,7 +90,7 @@ export function isActivityMessageGroup(
   }
   const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
   return (
-    options.bubbleMode ||
+    bubbleMode ||
     group.messages.length > 1 ||
     cards.length > 1 ||
     (cards.length === 0 &&
@@ -190,6 +187,10 @@ export function prepareMessageGroupFrame(
         : "other";
   const avatarPlacement = opts.avatarPlacement ?? "gutter";
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
+  const turnDurationMs =
+    normalizedRole === "assistant" && !group.isStreaming && group.runId && !forwardedSource
+      ? opts.turnDurations?.get(group.runId)
+      : undefined;
 
   const ownsRunFrame = opts.frameContent !== undefined;
   // Tool activity and live narration are blocks of the turn whose answer follows:
@@ -264,6 +265,11 @@ export function prepareMessageGroupFrame(
     who,
     avatarPlacement,
     meta,
+    turnDurationMs,
+    footerTimestamp:
+      normalizedRole === "user"
+        ? (preparedMessages.at(-1)?.source.normalizedMessage.timestamp ?? group.timestamp)
+        : group.timestamp,
     ownsRunFrame,
     isTurnBlock,
     preparedMessages,

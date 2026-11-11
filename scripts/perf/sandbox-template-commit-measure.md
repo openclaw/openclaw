@@ -47,21 +47,36 @@ extent observations describe sharing; overlapping subtree totals must not be
 summed or presented as unique newly allocated disk space. Sync and extent
 inspection belong outside timing intervals. No global cache flush is needed.
 
-## Divergent source refreshes
+## Divergent source refresh attribution
 
 Use `--fixture --divergent` to generate sibling commits with 22-path and
 6,002-path changes and an unchanged lockfile. Later `--divergent` runs reuse that
 fixture, measure both refreshes, and finish with same-commit reuse. Every clone
 checks the selected source and source-dependent installed outputs. The `phases`
-field records existing diagnostic owner spans; parent and child durations are
-inclusive and must not be summed together.
+field records diagnostic owner spans; parent and child durations are inclusive
+and must not be summed together.
 
-Run two baseline controls followed by five counterbalanced A/B pairs. Record
-full preparation and clone time, owner phases, process/main-thread CPU, main-isolate
-allocated bytes, and host load. Profile separately with `--profile`. The fixture
-uses a small real local dependency; its installation time does not represent a
-large production dependency graph. APFS changes clone inode identities and may
-make Git rehash unchanged files; do not project that cost onto Btrfs.
+Freeze both baseline and candidate owner snapshots and pass `--baseline-dir` to
+both arms. The initial owner imports occur outside the clone timer, but using
+the same loading mechanism keeps that difference out of the comparison.
+
+For attribution-only changes, compare at least five serial, counterbalanced
+baseline/candidate pairs on the same host. Report cold creation, small and large
+refreshes, and same-commit reuse separately. Acceptance is unchanged source and
+installed outputs and paired owner medians within ±10%. Record p95, process and
+main-thread CPU, main-isolate allocated bytes, and host load alongside the medians;
+retain failures and investigate tail regressions separately. Profile outside the
+timing series with `--profile`.
+
+The fixture uses a small real local dependency; its installation time does not
+represent a large production dependency graph. APFS changes clone inode identities
+and may make Git rehash unchanged files; do not project that cost onto Btrfs.
+
+For behavioral changes, use matched A/A controls and counterbalanced A/B pairs
+with the same sample counts on one host. Retain all samples and report latency
+medians, tails, CPU, and allocation separately. Investigate adverse tail changes
+and any group spread of at least 2×; a noisy control alone does not qualify a
+candidate regression. Keep cold creation separate from commit-change refreshes.
 
 ## Native Btrfs Git refresh attribution
 

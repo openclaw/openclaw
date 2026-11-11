@@ -18,8 +18,8 @@
  * Create them with git show <base>:src/gateway/worker-environments/<name>.ts.
  * Run two baseline A/A controls, then five counterbalanced baseline/candidate pairs.
  * Acceptance: same exact source and source-dependent install output; one refresh for
- * concurrent consumers, lock changes rebuild, lower owner cost; target prepare+apply
- * <10 s on source-only changes. Inclusive child phases must not be added twice.
+ * concurrent consumers, lock changes rebuild. For attribution-only changes, owner
+ * medians must remain within ±10%. Inclusive child phases must not be added twice.
  * Main-thread CPU/allocation exclude workers, Git, Docker, and guest processes.
  * Process CPU includes JS workers but excludes Git, Docker, and guest processes.
  * Prepare the local image from node:26.12.1-bookworm with
@@ -421,11 +421,9 @@ try {
     }
   }
   if (values.contract) {
+    const concurrentRef = values.divergent ? "fixture-base" : "fixture-source-two";
     const before = installs;
-    await Promise.all([
-      clone("waiter-a", "fixture-source-two"),
-      clone("waiter-b", "fixture-source-two"),
-    ]);
+    await Promise.all([clone("waiter-a", concurrentRef), clone("waiter-b", concurrentRef)]);
     assert.equal(installs - before, 1, "Concurrent callers must share one install");
     await clone("lock-change", "fixture-lock");
   }

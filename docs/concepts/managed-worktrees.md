@@ -127,6 +127,7 @@ Installation output is still validated after the builder stops, before publicati
 Preparation logs distinguish native snapshot cloning (`templateClone`), installer
 shutdown (`templateRetire`), and publication validation (`templateValidateOutput`).
 The `snapshot` phase measures the content manifest, not the native filesystem clone.
+Nested phase durations are inclusive; do not add them to their parent duration.
 Concurrent requests for that commit share the refresh. Lockfile or attribute changes
 build a fresh template. Refresh never changes the source generation, including while
 another session is cloning it. Each
