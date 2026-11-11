@@ -27,7 +27,7 @@ export async function autoRemovalProtectionReason(
 ): Promise<string | undefined> {
   if (
     record.ownerId !== undefined &&
-    policy.shouldProtectOwner?.(record.ownerKind, record.ownerId) === true
+    policy.readOwnerState?.(record.ownerKind, record.ownerId) === "active"
   ) {
     return "owner is active";
   }
@@ -52,9 +52,11 @@ export async function autoRemovalProtectionReason(
         : previous.fingerprint;
     context.deferrals.set(record.id, { revision, fingerprint });
     if (record.gcProtection) {
+      // The registry already admitted this receipt at the current revision.
+      // A snapshot saved during removal can supersede this service's old observation.
       if (
         !policy.retryDeferred &&
-        (!previous || (previous.revision === revision && previous.fingerprint === fingerprint))
+        (!previous || previous.revision !== revision || previous.fingerprint === fingerprint)
       ) {
         return record.gcProtection;
       }

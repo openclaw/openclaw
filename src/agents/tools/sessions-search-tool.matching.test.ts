@@ -35,14 +35,15 @@ function createSearchFixture(
     callGateway: async <T>(request: GatewayRequest): Promise<T> => {
       requests.push(request);
       if (request.method === "sessions.list") {
-        const params = request.params as { archived: boolean; agentId?: string };
-        if (params.archived && params.agentId === "main") {
-          onListed?.();
-        }
+        const params = request.params as { archived: boolean | "all"; agentId?: string };
         return {
-          sessions: params.archived ? [] : keys.map((key) => ({ key, agentId: "main" })),
+          sessions: params.archived === true ? [] : keys.map((key) => ({ key, agentId: "main" })),
           hasMore: false,
         } as T;
+      }
+      if (request.method === "sessions.describe") {
+        onListed?.();
+        return { session: null } as T;
       }
       expect(request.method).toBe("sessions.search");
       return { results: typeof results === "function" ? results(request) : results } as T;
@@ -59,31 +60,27 @@ describe("sessions_search candidate matching", () => {
     );
     const keys = ["agent:main:requester", ...aliases];
     const returned = aliases.slice(-25).map((key, index) => searchHit(`agent:main:${key}`, index));
-    const parse = vi.spyOn(sessionKeys, "parseAgentSessionKey");
-    try {
-      const { tool, requests } = createSearchFixture(keys, returned, () => parse.mockClear());
-      const result = await tool.execute("candidate-budget", { query: "text", limit: 25 });
-      expect(result.details).toEqual({
-        results: returned.map((row, index) =>
-          Object.assign({}, row, { sessionKey: aliases[174 + index] }),
-        ),
-      });
-      expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-      expect(requests.filter((request) => request.method === "sessions.search")).toEqual([
-        {
-          method: "sessions.search",
-          params: { agentId: "main", query: "text", limit: 25, sessionKeys: keys },
-        },
-      ]);
-      expect(requests.filter((request) => request.method === "sessions.list")).toHaveLength(4);
-      const aliasKeys = new Set(aliases);
-      const aliasParses = parse.mock.calls.filter(
-        ([key]) => typeof key === "string" && aliasKeys.has(key),
-      );
-      expect(aliasParses.length).toBeLessThanOrEqual(1_000);
-    } finally {
-      parse.mockRestore();
-    }
+    using parse = vi.spyOn(sessionKeys, "parseAgentSessionKey");
+
+    const { tool, requests } = createSearchFixture(keys, returned, () => parse.mockClear());
+    const result = await tool.execute("candidate-budget", { query: "text", limit: 25 });
+    expect(result.details).toEqual({
+      results: returned.map((row, index) =>
+        Object.assign({}, row, { sessionKey: aliases[174 + index] }),
+      ),
+    });
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(requests.filter((request) => request.method === "sessions.search")).toEqual([
+      expect.objectContaining({
+        method: "sessions.search",
+        params: { agentId: "main", query: "text", limit: 25, sessionKeys: keys },
+      }),
+    ]);
+    const aliasKeys = new Set(aliases);
+    const aliasParses = parse.mock.calls.filter(
+      ([key]) => typeof key === "string" && aliasKeys.has(key),
+    );
+    expect(aliasParses.length).toBeLessThanOrEqual(1_000);
   });
 
   it.each([

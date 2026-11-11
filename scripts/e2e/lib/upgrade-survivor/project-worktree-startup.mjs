@@ -174,7 +174,7 @@ async function prepareSchema(ctx, packageRoot, bindings) {
     "Expected a published-to-candidate schema upgrade",
   );
   const require = createRequire(import.meta.url);
-  const parserPath = fs.realpathSync(require.resolve("typescript/unstable/sync"));
+  const parserPath = fs.realpathSync(require.resolve("typescript/sync"));
   const { version: parserVersion } = readJson(require.resolve("typescript/package.json"));
   const { createNativeTypeScriptParser } = await import("../../../lib/native-typescript.mts");
   const parser = createNativeTypeScriptParser({ cwd: packageRoot });

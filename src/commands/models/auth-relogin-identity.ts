@@ -2,16 +2,16 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { listRuntimeLocalProfileIds } from "../../agents/auth-profiles/runtime-snapshot-owner.js";
 import { resolveSharedMainAuthAgentDir } from "../../agents/auth-profiles/shared-main-dir.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import type { ProviderAuthMethod, ProviderAuthResult } from "../../plugins/types.js";
 
 type AccountMatcher = ProviderAuthMethod["matchesPersonalAccount"];
 
-export function snapshotReloginAuthProfiles(params: {
+export async function snapshotReloginAuthProfiles(params: {
   agentDir: string;
   matchesPersonalAccount?: AccountMatcher;
-}): Readonly<Record<string, AuthProfileCredential>> | undefined {
+}): Promise<Readonly<Record<string, AuthProfileCredential>> | undefined> {
   if (!params.matchesPersonalAccount) {
     return undefined;
   }
@@ -22,7 +22,7 @@ export function snapshotReloginAuthProfiles(params: {
     path.resolve(params.agentDir) === path.resolve(resolveSharedMainAuthAgentDir())
       ? undefined
       : params.agentDir;
-  const store = loadAuthProfileStoreWithoutExternalProfiles(storeAgentDir);
+  const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(storeAgentDir);
   return Object.fromEntries(
     listRuntimeLocalProfileIds(store).flatMap((profileId) => {
       const credential = store.profiles[profileId];
@@ -37,13 +37,7 @@ export function resolveReloginProfileIdentity(params: {
   existingProfiles?: Readonly<Record<string, AuthProfileCredential>>;
   matchesPersonalAccount?: AccountMatcher;
   allowMissingReusedProfile?: boolean;
-}): {
-  profiles: ProviderAuthResult["profiles"];
-  validateCurrentCredential?: (
-    profileId: string,
-    credential: AuthProfileCredential | undefined,
-  ) => void;
-} {
+}) {
   const requestedProfileId = params.requestedProfileId?.trim();
   if (requestedProfileId) {
     if (params.profiles.length !== 1) {
@@ -83,7 +77,7 @@ export function resolveReloginProfileIdentity(params: {
   const reusedProfileId = expectDefined(matchingProfileIds[0], "matched auth profile id");
   return {
     profiles: [{ ...returnedProfile, profileId: reusedProfileId }],
-    validateCurrentCredential: (profileId, current) => {
+    validateCurrentCredential: (profileId: string, current: AuthProfileCredential | undefined) => {
       let currentMatches = false;
       if (current) {
         try {

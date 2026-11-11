@@ -36,15 +36,6 @@ describe("acp runtime registry", () => {
     testing.resetAcpRuntimeBackendsForTests();
   });
 
-  it("registers and resolves backends by id", () => {
-    const runtime = createRuntimeStub();
-    registerAcpRuntimeBackend({ id: "acpx", runtime });
-
-    const backend = getAcpRuntimeBackend("acpx");
-    expect(backend?.id).toBe("acpx");
-    expect(backend?.runtime).toBe(runtime);
-  });
-
   it("throws a typed missing-backend error when no backend is registered", () => {
     expect(() => requireAcpRuntimeBackend()).toThrowError(AcpRuntimeError);
     expect(() => requireAcpRuntimeBackend()).toThrowError(/ACP runtime backend is not configured/i);

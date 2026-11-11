@@ -1,3 +1,6 @@
+export const OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS = 272_000;
+export const OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS = 500_000;
+
 // OpenAI model route membership shared by catalog and policy surfaces.
 
 export const OPENAI_CHAT_LATEST_MODEL_ID = "chat-latest";
@@ -6,11 +9,12 @@ export const OPENAI_DAYBREAK_MODEL_IDS = [
   "gpt-daybreak-red-latest",
 ] as const;
 export const OPENAI_GPT_6_ASTRA_MODEL_ID = "gpt-6-astra";
+export const OPENAI_GPT_61_SOL_MODEL_ID = "gpt-6.1-sol";
 export const OPENAI_GPT_6_MODEL_IDS = [
   OPENAI_GPT_6_ASTRA_MODEL_ID,
   "gpt-6-sol",
   "gpt-6-luna",
-  "gpt-6.1-sol",
+  OPENAI_GPT_61_SOL_MODEL_ID,
 ] as const;
 export const OPENAI_GPT_56_MODEL_ID = "gpt-5.6";
 export const OPENAI_GPT_56_SOL_MODEL_ID = "gpt-5.6-sol";
@@ -50,8 +54,8 @@ const OPENAI_CODEX_REASONING_EFFORTS_BY_MODEL = new Map<
   [OPENAI_GPT_56_LUNA_MODEL_ID, OPENAI_CODEX_REASONING_EFFORT_ORDER.slice(0, -1)],
 ]);
 
-/** Models with known first-party Platform and ChatGPT transports. */
-const OPENAI_DUAL_ROUTE_MODEL_IDS = [
+/** First-party models with Platform and ChatGPT routes and image input. */
+export const OPENAI_DUAL_ROUTE_MODEL_IDS = [
   ...OPENAI_GPT_6_MODEL_IDS,
   ...OPENAI_GPT_56_VARIANT_MODEL_IDS,
   OPENAI_GPT_55_MODEL_ID,

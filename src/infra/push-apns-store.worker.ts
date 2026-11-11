@@ -77,7 +77,7 @@ function registerApnsRegistrationInDatabase(
       const stateDb = getNodeSqliteKysely<ApnsRegistrationDatabase>(db);
       // The tombstone carries the deleted row's successor version. Advancing past
       // both rows keeps stale compare-and-delete callers harmless after re-registration.
-      const { previousVersions } = readApnsRegistrationVersions(db, nodeId);
+      const previousVersions = readApnsRegistrationVersions(db, nodeId);
       const next: ApnsRegistration = {
         ...candidate,
         updatedAtMs: nextApnsRegistrationVersion(nodeId, previousVersions, input.nowMs),

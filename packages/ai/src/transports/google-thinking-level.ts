@@ -1,5 +1,11 @@
-/** Returns whether a Gemini Flash model accepts the MINIMAL thinking level. */
+import { isGoogleGemini4Model } from "../internal/google-model-family.js";
+
+/** Reports MINIMAL support for Gemini Flash and Gemini 4 models. */
 export function googleFlashSupportsMinimalThinking(modelId: string): boolean {
+  // Live Gemini API contract on 2026-10-13: Gemini 4 also rejects MINIMAL.
+  if (isGoogleGemini4Model(modelId)) {
+    return false;
+  }
   const match = modelId.toLowerCase().match(/(?:^|\/)gemini-3\.(\d+)-flash(?:-|$)/);
   if (!match) {
     return true;

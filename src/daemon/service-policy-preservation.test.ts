@@ -27,7 +27,7 @@ vi.mock("./service-layout.js", async (original) => ({
 }));
 
 it.each(["linux", "darwin", "win32"] as const)(
-  "preserves custom native policy while refreshing known defaults: %s",
+  "preserves %s policy and defaults",
   async (platform) => {
     const f = await fixture(platform);
     f.command.environment = {
@@ -119,7 +119,7 @@ it.each(["linux", "darwin", "win32"] as const)(
 );
 
 it.each(["migrated", "registration-rejected"])(
-  "keeps Doctor's legacy Windows task repair recoverable: %s",
+  "recovers legacy task repair: %s",
   async (outcome) => {
     const f = await fixture("win32");
     const hiddenPath = f.sourcePath.replace(/\.cmd$/u, ".vbs");
@@ -159,9 +159,7 @@ it.each(["migrated", "registration-rejected"])(
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     await installDoctorGatewayService({
       service: createMockGatewayService({
-        install: async (args) => {
-          await installScheduledTask(args);
-        },
+        install: async (args) => void (await installScheduledTask(args)),
       }),
       command: f.command,
       maintenance: { assertCurrent: f.assertCurrent, assertReadCurrent: f.assertCurrent },

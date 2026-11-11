@@ -16,7 +16,9 @@ type NativeObservation = {
   image: string;
   companion: string;
   privateStateDir: string;
-  addon: { type: (name: string) => { size: number } };
+  addon: {
+    canonicalizePath: (file: string, ordinary: boolean) => { path?: string; errno?: number };
+  };
 };
 
 async function inspect(): Promise<NativeObservation> {
@@ -45,7 +47,9 @@ async function inspect(): Promise<NativeObservation> {
   assert.equal(fs.existsSync(observed.privateStateDir), false);
   assert.equal(fs.existsSync(observed.image), true);
   assert.equal(fs.readFileSync(observed.companion, "utf8"), "retained native companion");
-  assert.equal(observed.addon.type("uint32_t").size, 4);
+  assert.deepEqual(observed.addon.canonicalizePath(observed.companion, true), {
+    path: fs.realpathSync(observed.companion),
+  });
   assert.equal(
     fs.existsSync(path.join(process.env.OPENCLAW_STATE_DIR!, "tmp", "plugin-captures")),
     false,
@@ -77,7 +81,9 @@ void runCliWithExitFinalization({
     assert.notEqual(observed[0]!.image, observed[1]!.image);
     for (const capture of observed) {
       assert.equal(fs.readFileSync(capture.companion, "utf8"), "retained native companion");
-      assert.equal(capture.addon.type("uint32_t").size, 4);
+      assert.deepEqual(capture.addon.canonicalizePath(capture.companion, true), {
+        path: fs.realpathSync(capture.companion),
+      });
     }
     process.stdout.write(
       "CAPTURE_PROOF:" +

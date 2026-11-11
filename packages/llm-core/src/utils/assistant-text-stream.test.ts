@@ -1,40 +1,16 @@
 import { describe, expect, it } from "vitest";
-import type { AssistantMessage, AssistantMessageEvent } from "../types.js";
-import { AssistantMessageEventStream } from "./event-stream.js";
+import { collect } from "../../../../test/helpers/async-iterable.js";
+import type { AssistantMessageEvent } from "../types.js";
+import { assistantStream } from "./stream.test-support.js";
 
 function fixture() {
-  const message: AssistantMessage = {
-    role: "assistant",
-    content: [{ type: "text", text: "Hello world" }],
-    api: "openai-responses",
-    provider: "synthetic",
-    model: "text-fixture",
-    stopReason: "stop",
-    timestamp: 1,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-  };
-  const stream = new AssistantMessageEventStream();
+  const { message, stream } = assistantStream([{ type: "text", text: "Hello world" }]);
   const append = (delta: string) => {
     const event = { type: "text_delta", contentIndex: 0, delta } as const;
     stream.push(event);
     return event;
   };
   return { message, stream, append };
-}
-
-async function collect(stream: AssistantMessageEventStream) {
-  const events: AssistantMessageEvent[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  return events;
 }
 
 describe("queued assistant text appends", () => {
@@ -53,9 +29,7 @@ describe("queued assistant text appends", () => {
           : terminal === "done"
             ? [{ type: "done", reason: "stop", message }]
             : [{ type: "error", reason: "error", error: result }];
-      for (const event of last) {
-        stream.push(event);
-      }
+      last.forEach((event) => stream.push(event));
       if (terminal === "end") {
         stream.end(result);
       }

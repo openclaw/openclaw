@@ -30,7 +30,6 @@ import {
   decodeCursor,
   encodeCursor,
   TranscriptLibraryError,
-  type TranscriptExportRead,
   type TranscriptReadOptions,
 } from "./store-read.js";
 import { safeTranscriptPathSegment, type TranscriptsStore } from "./store.js";
@@ -143,37 +142,29 @@ export async function exportTranscriptLibrary(
   store: TranscriptsStore,
   params: TranscriptsExportParams,
 ): Promise<TranscriptsExportResult> {
-  const rows = store.iterateExport(params.selector, params.format === "markdown");
   const parts: string[] = [];
   let sizeBytes = 0;
-  let completed: TranscriptExportRead | undefined;
-  try {
-    for (let step = await rows.next(); ; step = await rows.next()) {
-      if (step.done) {
-        completed = step.value;
-        break;
+  const completed = await store.streamExport(
+    params.selector,
+    params.format === "markdown",
+    (rows) => {
+      for (const utterance of rows) {
+        if (isTranscriptArtifactText(utterance.text)) {
+          continue;
+        }
+        const text =
+          params.format === "jsonl"
+            ? `${JSON.stringify(projectTranscriptUtterance(utterance))}\n`
+            : sanitizeTerminalText(utterance.text).trim();
+        const speaker = sanitizeTerminalText(utterance.speakerLabel ?? "").trim();
+        const line = params.format === "markdown" && speaker ? `${speaker}: ${text}` : text;
+        // Include Markdown list/newline overhead while accumulating, before rendering the body.
+        sizeBytes += Buffer.byteLength(line, "utf8") + (params.format === "markdown" ? 3 : 0);
+        assertTranscriptByteCount(sizeBytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
+        parts.push(line);
       }
-      const utterance = step.value;
-      if (isTranscriptArtifactText(utterance.text)) {
-        continue;
-      }
-      const text =
-        params.format === "jsonl"
-          ? `${JSON.stringify(projectTranscriptUtterance(utterance))}\n`
-          : sanitizeTerminalText(utterance.text).trim();
-      const speaker = sanitizeTerminalText(utterance.speakerLabel ?? "").trim();
-      const line = params.format === "markdown" && speaker ? `${speaker}: ${text}` : text;
-      // Include Markdown list/newline overhead while accumulating, before rendering the body.
-      sizeBytes += Buffer.byteLength(line, "utf8") + (params.format === "markdown" ? 3 : 0);
-      assertTranscriptByteCount(sizeBytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
-      parts.push(line);
-    }
-  } finally {
-    await rows.return(undefined);
-  }
-  if (!completed) {
-    throw new Error("Transcript export ended before completion.");
-  }
+    },
+  );
   const { entry, notes } = completed;
   const summary = notes?.summary;
   const title = sanitizeTerminalText(entry.session.title ?? "").trim() || "Transcript";

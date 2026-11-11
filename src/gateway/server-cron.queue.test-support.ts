@@ -1,0 +1,145 @@
+import { expect, it, vi } from "vitest";
+import { observeCronJobCommits } from "../../test/helpers/cron/runtime-mutation.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { onTimer as onCronTimer } from "../cron/service/timer.test-support.js";
+import { loadCronStore } from "../cron/store.js";
+import { cronStoreKey } from "../cron/store/key.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import type { registerGatewayCronContextTests } from "./server-cron.context.test-support.js";
+
+const idleState = { queuedAtMs: undefined, runningAtMs: undefined, runningReceiptId: undefined };
+
+type ContextHarness = Parameters<typeof registerGatewayCronContextTests>[0];
+type GatewayCronQueueTestHarness = Pick<
+  ContextHarness,
+  | "createCronConfig"
+  | "withCronService"
+  | "getCronState"
+  | "addAgentTurnJob"
+  | "loadConfigMock"
+  | "runCronIsolatedAgentTurnMock"
+> & {
+  loadCronService: ContextHarness["createCronService"];
+  expectIsolatedRunFields: (fields: Record<string, unknown>) => unknown;
+};
+
+export function registerGatewayCronQueueTests(h: GatewayCronQueueTestHarness) {
+  it("does not resurrect a startup agent missing from the runtime roster", async () => {
+    const startupCfg = h.createCronConfig("server-cron-agent-workspace");
+    startupCfg.agents = { entries: { main: {}, yinze: {} } };
+    const reloadedCfg = {
+      ...startupCfg,
+      agents: { ...startupCfg.agents, entries: { main: {} } },
+    };
+    await h.withCronService(startupCfg, async (state) => {
+      const job = await h.addAgentTurnJob(state, "isolated-subagent-workspace", "read SOW.md", {
+        agentId: "yinze",
+      });
+
+      h.loadConfigMock.mockReturnValue(reloadedCfg);
+      await expect(state.cron.run(job.id, "force")).resolves.toEqual({
+        ok: true,
+        ran: false,
+        reason: "not-due",
+      });
+      expect(h.runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+      const skipped = openOpenClawStateDatabase()
+        .db.prepare(
+          "SELECT status, error_text FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
+        )
+        .get(cronStoreKey(h.getCronState(state).deps.storePath), job.id);
+      const skippedJob = await state.cron.readJob(job.id);
+      expect({ ...idleState, ...skippedJob?.state }).toMatchObject(idleState);
+      expect(skipped).toMatchObject({
+        status: "skipped",
+        error_text: expect.stringContaining("cron job agent is unavailable: yinze"),
+      });
+    });
+  });
+
+  it("retries due work after scheduled claim and activation roll back together", async ({
+    signal,
+  }) => {
+    using cleanup = new DisposableStack();
+    vi.useFakeTimers();
+    const now = Date.parse("2026-08-13T18:15:00.000Z");
+    vi.setSystemTime(now);
+    const clock = createGatewaySchedulerClock(now);
+    const cfg = h.createCronConfig("server-cron-activation-write-failure");
+    const state = h.loadCronService(cfg, { scheduler: createTestGatewayScheduler(clock.clock) });
+    const cronState = h.getCronState(state);
+    const database = openOpenClawStateDatabase().db;
+    cleanup.defer(() => {
+      state.cron.stop();
+      vi.useRealTimers();
+    });
+    cleanup.defer(() => database.exec("DROP TRIGGER IF EXISTS fail_gateway_cron_activation"));
+    await state.cron.start();
+    const job = await h.addAgentTurnJob(state, "activation-failure", "run it", {
+      agentId: "main",
+      deleteAfterRun: false,
+      delivery: { mode: "none" },
+      schedule: { kind: "cron", expr: "* * * * *", staggerMs: 0 },
+    });
+    const storeKey = cronStoreKey(cronState.deps.storePath);
+    const readState = async () =>
+      (await loadCronStore(cronState.deps.storePath)).jobs.find((entry) => entry.id === job.id)
+        ?.state;
+    const receipts = () =>
+      database
+        .prepare(
+          "SELECT receipt_id, status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY receipt_id",
+        )
+        .all(storeKey, job.id);
+    expect(receipts()).toEqual([]);
+    // The scheduler commits the receipt and running state together.
+    database.exec(`
+          CREATE TRIGGER fail_gateway_cron_activation
+          AFTER UPDATE OF state_json ON cron_jobs
+          WHEN NEW.store_key = '${storeKey.replaceAll("'", "''")}'
+            AND NEW.job_id = '${job.id}'
+            AND json_extract(OLD.state_json, '$.runningAtMs') IS NULL
+            AND json_extract(NEW.state_json, '$.runningAtMs') IS NOT NULL
+          BEGIN
+            SELECT RAISE(ABORT, 'injected scheduled activation failure');
+          END;
+        `);
+    vi.setSystemTime(now + 60_000);
+    clock.setTime(Date.now());
+    await expect(onCronTimer(cronState)).rejects.toThrow("injected scheduled activation failure");
+    expect(receipts()).toEqual([]);
+    expect({ ...idleState, ...(await readState()) }).toMatchObject({
+      ...idleState,
+      nextRunAtMs: now + 60_000,
+    });
+    expect(h.runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+    database.exec("DROP TRIGGER fail_gateway_cron_activation");
+
+    const completed = createDeferred();
+    const stopObserving = observeCronJobCommits(job.id, (runtime) => {
+      if (runtime.queuedAtMs === undefined && runtime.runningAtMs === undefined) {
+        completed.resolve();
+      }
+    });
+    try {
+      vi.setSystemTime(now + 120_000);
+      clock.setTime(Date.now());
+      await onCronTimer(cronState);
+      await withinTest(completed.promise, signal);
+    } finally {
+      stopObserving();
+    }
+    expect(h.runCronIsolatedAgentTurnMock).toHaveBeenCalledOnce();
+    h.expectIsolatedRunFields({ job: expect.objectContaining({ id: job.id }) });
+    expect({ ...idleState, ...(await readState()) }).toMatchObject({
+      lastRunStatus: "ok",
+      queuedAtMs: undefined,
+      runningAtMs: undefined,
+    });
+    expect(receipts()).toEqual([expect.objectContaining({ status: "ok" })]);
+  });
+}
