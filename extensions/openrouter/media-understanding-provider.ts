@@ -1,14 +1,8 @@
 import path from "node:path";
 import { normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
-import type {
-  AudioTranscriptionRequest,
-  AudioTranscriptionResult,
-  MediaUnderstandingProvider,
-} from "openclaw/plugin-sdk/media-understanding";
+import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import {
-  assertOkOrThrowHttpError,
-  postJsonRequest,
-  readProviderJsonResponse,
+  postJsonResponse,
   requireTranscriptionText,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
@@ -34,107 +28,6 @@ const AUDIO_FORMAT_BY_MIME = new Map([
   ["audio/aac", "aac"],
 ]);
 
-function resolveFormatFromFileName(fileName?: string): string | undefined {
-  const ext = path
-    .extname(fileName ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/^\./, "");
-  if (!ext) {
-    return undefined;
-  }
-  if (ext === "mpeg") {
-    return "mp3";
-  }
-  if (ext === "mp4") {
-    return "m4a";
-  }
-  if (ext === "oga" || ext === "opus") {
-    return "ogg";
-  }
-  return SUPPORTED_AUDIO_FORMATS.has(ext) ? ext : undefined;
-}
-
-function resolveOpenRouterAudioFormat(params: { mime?: string; fileName?: string }): string {
-  const format =
-    AUDIO_FORMAT_BY_MIME.get(normalizeMimeType(params.mime) ?? "") ??
-    resolveFormatFromFileName(params.fileName);
-  if (format) {
-    return format;
-  }
-  throw new Error(
-    `OpenRouter STT could not resolve audio format from mime "${params.mime ?? ""}" and file "${params.fileName ?? ""}"`,
-  );
-}
-
-type OpenRouterSttResponse = {
-  text?: string;
-};
-
-async function transcribeOpenRouterAudio(
-  params: AudioTranscriptionRequest,
-): Promise<AudioTranscriptionResult> {
-  const model = params.model?.trim() || DEFAULT_OPENROUTER_AUDIO_TRANSCRIPTION_MODEL;
-  const format = resolveOpenRouterAudioFormat({
-    mime: params.mime,
-    fileName: params.fileName,
-  });
-  const fetchFn = params.fetchFn ?? fetch;
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-    resolveProviderHttpRequestConfig({
-      baseUrl: params.baseUrl,
-      defaultBaseUrl: OPENROUTER_BASE_URL,
-      headers: params.headers,
-      request: params.request,
-      defaultHeaders: {
-        Authorization: `Bearer ${params.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      provider: "openrouter",
-      api: "openrouter-stt",
-      capability: "audio",
-      transport: "media-understanding",
-    });
-  const temperature = asFiniteNumber(params.query?.temperature);
-
-  const { response, release } = await postJsonRequest({
-    url: `${baseUrl}/audio/transcriptions`,
-    headers,
-    body: {
-      model,
-      input_audio: {
-        data: params.buffer.toString("base64"),
-        format,
-      },
-      ...(params.language?.trim() ? { language: params.language.trim() } : {}),
-      ...(temperature !== undefined ? { temperature } : {}),
-    },
-    timeoutMs: params.timeoutMs,
-    ...(params.signal ? { signal: params.signal } : {}),
-    fetchFn,
-    allowPrivateNetwork,
-    dispatcherPolicy,
-    auditContext: "openrouter stt",
-  });
-
-  try {
-    await assertOkOrThrowHttpError(response, "OpenRouter audio transcription failed");
-    const payload = await readProviderJsonResponse<OpenRouterSttResponse>(
-      response,
-      "openrouter.stt",
-    );
-    return {
-      text: requireTranscriptionText(
-        payload.text,
-        "OpenRouter transcription response missing text",
-      ),
-      model,
-    };
-  } finally {
-    await release();
-  }
-}
-
 export const openrouterMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "openrouter",
   capabilities: ["image", "audio"],
@@ -147,5 +40,76 @@ export const openrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
   },
   describeImage: undefined,
   describeImages: undefined,
-  transcribeAudio: transcribeOpenRouterAudio,
+  async transcribeAudio(params) {
+    const model = params.model?.trim() || DEFAULT_OPENROUTER_AUDIO_TRANSCRIPTION_MODEL;
+    let format = AUDIO_FORMAT_BY_MIME.get(normalizeMimeType(params.mime) ?? "");
+    if (format === undefined) {
+      const ext = path
+        .extname(params.fileName ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/^\./, "");
+      if (ext === "mpeg") {
+        format = "mp3";
+      } else if (ext === "mp4") {
+        format = "m4a";
+      } else if (ext === "oga" || ext === "opus") {
+        format = "ogg";
+      } else {
+        format = SUPPORTED_AUDIO_FORMATS.has(ext) ? ext : undefined;
+      }
+    }
+    if (!format) {
+      throw new Error(
+        `OpenRouter STT could not resolve audio format from mime "${params.mime ?? ""}" and file "${params.fileName ?? ""}"`,
+      );
+    }
+    const fetchFn = params.fetchFn ?? fetch;
+    const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+      resolveProviderHttpRequestConfig({
+        baseUrl: params.baseUrl,
+        defaultBaseUrl: OPENROUTER_BASE_URL,
+        headers: params.headers,
+        request: params.request,
+        defaultHeaders: {
+          Authorization: `Bearer ${params.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        provider: "openrouter",
+        api: "openrouter-stt",
+        capability: "audio",
+        transport: "media-understanding",
+      });
+    const temperature = asFiniteNumber(params.query?.temperature);
+
+    const payload = await postJsonResponse({
+      url: `${baseUrl}/audio/transcriptions`,
+      headers,
+      body: {
+        model,
+        input_audio: {
+          data: params.buffer.toString("base64"),
+          format,
+        },
+        ...(params.language?.trim() ? { language: params.language.trim() } : {}),
+        ...(temperature !== undefined ? { temperature } : {}),
+      },
+      timeoutMs: params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
+      fetchFn,
+      allowPrivateNetwork,
+      dispatcherPolicy,
+      auditContext: "openrouter stt",
+      errorLabel: "OpenRouter audio transcription failed",
+      responseLabel: "openrouter.stt",
+      objectResponse: true,
+    });
+    return {
+      text: requireTranscriptionText(
+        payload.text,
+        "OpenRouter transcription response missing text",
+      ),
+      model,
+    };
+  },
 };

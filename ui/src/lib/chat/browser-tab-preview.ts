@@ -1,11 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
-  bindBrowserRequestClient,
-  captureBrowserScreenshot,
-  fetchBrowserScreenshotDataUrl,
-} from "../../components/browser/browser-client.ts";
-import {
   browserTabKey,
   type BrowserTabTarget,
   type BrowserTabSelection,
@@ -23,6 +18,8 @@ const latestTabsByHistory = new WeakMap<
   readonly unknown[],
   { toolMessages: readonly unknown[]; latest: ReadonlyMap<string, BrowserTabSelection> }
 >();
+// Unrelated message receipts must not invalidate every transcript row's previews.
+const emptyBrowserTabs: ReadonlyMap<string, BrowserTabSelection> = new Map();
 
 export function latestBrowserTabCards(
   messages: readonly unknown[],
@@ -32,7 +29,7 @@ export function latestBrowserTabCards(
   if (cached?.toolMessages === toolMessages) {
     return cached.latest;
   }
-  const latest = new Map<string, BrowserTabSelection>();
+  let latest: Map<string, BrowserTabSelection> | undefined;
   // History precedes the current live stream. Select before search/virtualization
   // so expanding an old row cannot turn it into a new capture request.
   for (const source of [messages, toolMessages]) {
@@ -44,14 +41,16 @@ export function latestBrowserTabCards(
         const revision = browserTabCardRevision(card);
         if (card.browserTab && revision && resolveToolCardOutcome(card, false) === "succeeded") {
           const key = browserTabKey(card.browserTab);
+          latest ??= new Map();
           latest.delete(key);
           latest.set(key, { tab: card.browserTab, revision });
         }
       }
     }
   }
-  latestTabsByHistory.set(messages, { toolMessages, latest });
-  return latest;
+  const result = latest ?? emptyBrowserTabs;
+  latestTabsByHistory.set(messages, { toolMessages, latest: result });
+  return result;
 }
 
 type ThumbnailEntry = {
@@ -98,6 +97,8 @@ export function loadBrowserTabThumbnail(params: {
   // must capture after the older flight, and failures count as an attempt.
   const pending = (entry.pending ?? Promise.resolve()).then(async () => {
     try {
+      const { bindBrowserRequestClient, captureBrowserScreenshot, fetchBrowserScreenshotDataUrl } =
+        await import("../../components/browser/browser-client.ts");
       const capture = await captureBrowserScreenshot(
         bindBrowserRequestClient(params.client, params.tab),
         params.tab.targetId,

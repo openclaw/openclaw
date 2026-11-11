@@ -52,7 +52,13 @@ A watcher is a session that holds a cursor (`session_watch_cursors`) on a target
 - **Ambient groups.** Under `session.groupScope: "per-group"`, the agent's main session watches its isolated group, room, and channel sessions after their first human turn. This is independent of `session.dmScope`. Routing a room into main needs no watch, because it already shares the main conversation.
 - **Explicit (`sessions_send watch: true`).** A coordinator with normal status visibility can watch a non-spawned target. Pass `watch: true` on `sessions_send`. A per-agent `tools.agentToAgent.send` rule alone does not grant watch access to otherwise hidden sessions. After the send dispatches successfully, the sender is registered as a watcher of the session that actually received the message. Registration starts at the target's current state version — prior history never produces notices. The tool result reports `watched: true|false` when the parameter was set.
 
-Watcher identity must be an agent-qualified session key. Under `session.scope="global"` the shared `global` key is ambiguous across agents, so such sessions get the durable log and `changesSince` but no proactive notices.
+Both watcher and target must have valid agent-qualified session keys. An explicitly
+selected target agent must agree with the target key. Raw keys such as `global`
+are ambiguous across agents: their owner-scoped durable log and `changesSince`
+remain available, but proactive watches are refused. `sessions_send watch: true`
+reports `watched: false` with an explanation for these targets without turning an
+accepted send into a failed send. Registry-owned child completion is independent
+of a proactive state watch.
 
 A watch also records its watcher's physical store. Changing `session.store` does
 not transfer its queued notices to another conversation with the same key. Older
@@ -60,9 +66,19 @@ watches with unknown store provenance retain history but need fresh registration
 before proactive notices resume. The next group turn registers its ambient watch
 against the current store.
 
-Watches clean themselves up: cursor rows expire with signal-log retention, are removed when the watcher session resets, and are removed with either session. A reset that has committed still clears its watches if a later cleanup step fails. There is no unwatch verb in v1.
+Qualified watches clean themselves up: cursor rows expire with signal-log retention,
+are removed when the watcher session resets, and are removed with either session.
+A reset that has committed still clears its qualified watches if a later cleanup
+step fails. Historical cursors with a raw or malformed endpoint are inert, including
+after restart: they cannot advance, notify, acknowledge, or grant ambient visibility.
+Session reset or deletion does not remove these unbound cursors; their existing
+retention expiry still applies. There is no unwatch verb in v1.
 
 Watched Claude, Codex, OpenCode, and Pi sessions adopted from a session catalog are checked for direct upstream human activity on a fixed cadence. Pi monitoring starts after the session is in its append-only v3 format. Detected activity enters the same signal log and watcher flow as other direct human turns.
+
+Recent user text used to recognize OpenClaw-origin prompts comes from one transcript
+snapshot, including long histories. Concurrent replies or transcript resets cannot
+repeat a page or combine messages from different history windows.
 
 OpenCode detection is deliberately conservative. OpenCode's v1 tables do not preserve message provenance, so reporting ambiguous rows would create false alarms. Per-message provenance exists only in its v2 schema. OpenCode therefore does not report image-only turns, `@file`-mention-only turns, slash commands routed to a subagent, or turns from ACP clients that annotate content with an audience (mapped by OpenCode to `synthetic` or `ignored`). It also suppresses text matching any of the preceding 50 user messages, to catch compaction replay. A human deliberately repeating the same text within that window can therefore be missed.
 
@@ -76,7 +92,7 @@ When a notify-eligible event lands and a watcher's cursor is behind, the watcher
 Session "agent:main:subagent:child" changed (other actor). Reconcile before acting: session_status sessionKey "agent:main:subagent:child" changesSince 12.
 ```
 
-Main-session watchers are also woken immediately via a heartbeat wake. Nested sub-agent watchers get the notice on their next turn.
+Live notices for explicit watchers coalesce for 20 seconds before starting a session event. Nested sub-agent and ambient group watchers receive context on their next ordinary turn.
 
 The protocol is deliberately anti-spam:
 
@@ -84,7 +100,7 @@ The protocol is deliberately anti-spam:
 - **Frozen watermark.** The cursor freezes its notified position when a notice is queued. Further material events advance only the material watermark. They do not re-notify.
 - **Acknowledge on drain, reopen only for interleaved work.** When the watcher's turn consumes the notice, the cursor advances. If more material events arrived between queueing and draining, exactly one fresh notice is opened for the remainder.
 - **Self-suppression.** A watcher never gets notified about events it caused itself.
-- **Restart recovery.** Pending notices live in an in-memory queue. A startup sweep re-materializes them from durable cursors after a gateway restart.
+- **Restart recovery.** A startup sweep restores pending notices from durable cursors as context for the next ordinary turn. It does not start model turns or outbound delivery for the recovered notices. Repeated sweeps retain one notice per watcher/target pair; the ordinary turn acknowledges the cursor when it consumes the notice. Until then, later changes to that already-pending notice remain passive and advance its material watermark. Newly created live notices still use active coalescing.
 
 ## Reconciling
 

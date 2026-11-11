@@ -1,5 +1,4 @@
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { readSessionTranscriptVisibleMessageDeltaCore } from "./session-accessor.sqlite-active-events.js";
 import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptRawDeltaResult,
@@ -7,17 +6,22 @@ import type {
   SessionTranscriptVisibleMessageDeltaLimits,
   SessionTranscriptVisibleMessageDeltaResult,
 } from "./session-accessor.sqlite-contract.js";
-import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import { toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
-import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
-import { prepareIncognitoSessionHistoryRead } from "./session-incognito-history-read.js";
+import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
+import { readRestoredSessionTranscriptInWorker } from "./session-cold-storage-read.js";
 import { isSessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import type {
+  SessionTranscriptReplayGroup,
+  SessionTranscriptReplaySelection,
+} from "./session-transcript-replay.types.js";
 
 type SessionTranscriptDeltaReader = {
+  replayGroups: (
+    selection: SessionTranscriptReplaySelection,
+  ) => Promise<SessionTranscriptReplayGroup[]>;
   raw: (limits: SessionTranscriptRawDeltaLimits) => Promise<SessionTranscriptRawDeltaResult>;
   visible: (
     limits: SessionTranscriptVisibleMessageDeltaLimits,
@@ -37,7 +41,48 @@ export async function withSessionTranscriptDeltaReader<T>(
     sessionId: scope.sessionId,
   });
   const admission = receipt && structuredClone(receipt);
-  const incognito = captureIncognitoSessionHistoryBinding(scope);
+  const memory = captureSessionActorTranscriptRead(scope, signal);
+  if (memory) {
+    let active = true;
+    const assertActive = () => {
+      signal?.throwIfAborted();
+      if (!active) {
+        throw new Error("Transcript delta reader is no longer active");
+      }
+    };
+    try {
+      const result = await consume({
+        replayGroups: async (selection) => {
+          assertActive();
+          if (memory.missing) {
+            memory.assertCurrent();
+            throw new Error("Canonical session transcript is unavailable");
+          }
+          return memory.read("session.history.replay-groups", { selection });
+        },
+        raw: async (limits) => {
+          assertActive();
+          if (memory.missing) {
+            memory.assertCurrent();
+            return { kind: "missing" };
+          }
+          return memory.read("session.history.raw-delta", { limits });
+        },
+        visible: async (limits) => {
+          assertActive();
+          if (memory.missing) {
+            memory.assertCurrent();
+            return { kind: "missing" };
+          }
+          return memory.read("session.history.visible-delta", { limits });
+        },
+      });
+      assertActive();
+      return result;
+    } finally {
+      active = false;
+    }
+  }
   let active = true;
   const assertActive = () => {
     signal?.throwIfAborted();
@@ -46,59 +91,8 @@ export async function withSessionTranscriptDeltaReader<T>(
     }
   };
   try {
-    if (incognito) {
-      const prepared = prepareIncognitoSessionHistoryRead(incognito, scope, signal);
-      const read = async <Value>(operation: () => Promise<Value>) => {
-        assertActive();
-        prepared.authority.assertCurrent();
-        const value = await operation();
-        prepared.authority.assertCurrent();
-        assertActive();
-        return value;
-      };
-      const result = await prepared.actor.sessions.withSharedState(() =>
-        consume({
-          raw: (limits) =>
-            read(() =>
-              prepared.actor.sessions.history(
-                prepared.authority,
-                {
-                  type: "session.history.raw-delta",
-                  input: { ...prepared.target, limits },
-                },
-                signal,
-              ),
-            ),
-          visible: (limits) =>
-            read(() =>
-              prepared.actor.sessions.history(
-                prepared.authority,
-                {
-                  type: "session.history.visible-delta",
-                  input: { ...prepared.target, limits },
-                },
-                signal,
-              ),
-            ),
-        }),
-      );
-      prepared.authority.assertCurrent();
-      return result;
-    }
-    return await withSessionTranscriptReadSource(
+    const result = await withSessionTranscriptReadSource(
       scope,
-      async (captured) =>
-        consume({
-          // Process-held incognito retains its native owner until atomic activation.
-          raw: async (limits) => {
-            assertActive();
-            return readTranscriptRawDelta(captured, limits);
-          },
-          visible: async (limits) => {
-            assertActive();
-            return readSessionTranscriptVisibleMessageDeltaCore(captured, limits);
-          },
-        }),
       async (source) => {
         const reader = source.preparedReads ?? source.owner;
         const assertCurrent = () => {
@@ -107,24 +101,19 @@ export async function withSessionTranscriptDeltaReader<T>(
         };
         const read = async <Value>(operation: () => Promise<Value>) => {
           assertCurrent();
-          const value = await readRestoredSessionTranscript(source.scope, operation, {
-            assertCurrent,
-            coldRead: {
-              target: source.resolved,
-              readMetadata: async () =>
-                (
-                  await reader.readColdMetadata({
-                    sessionId: source.resolved.sessionId,
-                    env: source.scope.env,
-                  })
-                ).archive,
-            },
-          });
+          const value = await readRestoredSessionTranscriptInWorker(
+            { ...source, owner: reader, assertCurrent },
+            operation,
+          );
           assertCurrent();
           return value;
         };
         if (!source.expectedIdentity) {
           return consume({
+            replayGroups: async () => {
+              assertCurrent();
+              throw new Error("Canonical session transcript is unavailable");
+            },
             raw: async () => {
               assertCurrent();
               return { kind: "missing" };
@@ -142,6 +131,21 @@ export async function withSessionTranscriptDeltaReader<T>(
           expectedIdentity: source.expectedIdentity,
         };
         return consume({
+          replayGroups: (selection) =>
+            read(async () => {
+              try {
+                return await reader.readReplayGroups({ ...request, selection }, signal);
+              } catch (error) {
+                if (isSessionTranscriptProjectionUnavailableError(error)) {
+                  assertCurrent();
+                  startSessionTranscriptIndexReconcile({
+                    ...toDatabaseOptions(source.resolved),
+                    preferredSessionId: source.resolved.sessionId,
+                  });
+                }
+                throw error;
+              }
+            }),
           raw: (limits) =>
             read(() => reader.readRawDelta({ ...request, limits: { ...limits } }, signal)),
           visible: (limits) =>
@@ -163,6 +167,8 @@ export async function withSessionTranscriptDeltaReader<T>(
       },
       signal,
     );
+    assertActive();
+    return result;
   } finally {
     active = false;
   }

@@ -13,13 +13,7 @@ enum CommandResolver {
     }
 
     static func errorCommand(with message: String) -> [String] {
-        let script = """
-        cat <<'__OPENCLAW_ERR__' >&2
-        \(message)
-        __OPENCLAW_ERR__
-        exit 1
-        """
-        return ["/bin/sh", "-c", script]
+        ["/bin/sh", "-c", "printf '%s\\n' \"$1\" >&2; exit 1", "openclaw-error", message]
     }
 
     static func projectRoot(

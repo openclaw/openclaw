@@ -123,10 +123,6 @@ export async function scanStatusJsonGateway(
     includeRegistryUpdate: opts.all === true,
     gatewaySnapshot,
     getAgentLocalStatuses: async () => agentStatus,
-    getTailnetHostname: async (runner) =>
-      (await import("../infra/tailscale.js")).getTailnetHostname(runner),
-    getUpdateCheckResult: async (params) =>
-      (await import("./status.update.js")).getUpdateCheckResult(params),
   });
   const [tailscaleDns, tailscaleHttpsUrl, update] = await Promise.all([
     bootstrap.tailscaleDnsPromise,

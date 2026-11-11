@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { withStateDatabaseSchemaMaintenance } from "../../infra/state-database-maintenance.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
-  withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
 import { tableExists, tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -19,6 +18,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { WorktreeRemovalContentionError } from "./errors.js";
+import { worktreeRegistryPublication } from "./registry-publication.js";
 import { rowToRecord } from "./registry-read.kernel.js";
 import { runWorktreeRunEndCommand } from "./registry-run-end.js";
 import type { WorktreeRegistryPatch } from "./registry-run-end.worker.js";
@@ -51,11 +51,11 @@ type WorktreeRegistryDatabase = Pick<
   "worktrees" | "worktree_provisioned_file_chunks" | "state_leases"
 >;
 
-function dbFor(env: NodeJS.ProcessEnv): DatabaseSync {
+function dbFor(env: NodeJS.ProcessEnv): EngineConnection {
   return openOpenClawStateDatabase({ env }).db;
 }
 
-function kyselyFor(db: DatabaseSync) {
+function kyselyFor(db: EngineConnection) {
   return getNodeSqliteKysely<WorktreeRegistryDatabase>(db);
 }
 
@@ -93,9 +93,9 @@ export function listLegacyRegistryWorktreesForMigration(
 function readRegistry<T>(
   env: NodeJS.ProcessEnv,
   behavior: { artifactPreservingReadOnly?: boolean },
-  read: (db: DatabaseSync) => T,
+  read: (db: EngineConnection) => T,
 ): T | undefined {
-  const operation = ({ db }: { db: DatabaseSync }) =>
+  const operation = ({ db }: { db: EngineConnection }) =>
     tableExists(db, "worktrees") ? read(db) : undefined;
   return behavior.artifactPreservingReadOnly
     ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(operation, { env })
@@ -104,7 +104,7 @@ function readRegistry<T>(
 
 // Doctor/startup planning may release schema custody before these native business writes.
 function runRegistryMigration(
-  write: (db: DatabaseSync) => number,
+  write: (db: EngineConnection) => number,
   { env }: { env: NodeJS.ProcessEnv },
 ): number {
   return withStateDatabaseSchemaMaintenance(
@@ -121,18 +121,20 @@ export function discardLegacyRegistryWorktrees(
     return 0;
   }
   return runRegistryMigration(
-    (db) =>
-      Number(
-        executeSqliteQuerySync(
-          db,
-          // Delete only the owner rows captured in the migration receipt. A row that
-          // appears after planning belongs to the next Doctor run.
-          kyselyFor(db)
-            .deleteFrom("worktrees")
-            .where("provisioned_paths_json", "is", null)
-            .where("id", "in", [...worktreeIds]),
-        ).numAffectedRows ?? 0n,
-      ),
+    (db) => {
+      const removed = executeSqliteQuerySync(
+        db,
+        // Delete only the owner rows captured in the migration receipt. A row that
+        // appears after planning belongs to the next Doctor run.
+        kyselyFor(db)
+          .deleteFrom("worktrees")
+          .where("provisioned_paths_json", "is", null)
+          .where("id", "in", [...worktreeIds])
+          .returningAll(),
+      ).rows;
+      worktreeRegistryPublication.deleted(db, removed);
+      return removed.length;
+    },
     { env },
   );
 }
@@ -148,21 +150,19 @@ export function rewriteRegistryWorktreePathsForMigration(
   // Runtime updates deliberately keep `path` outside their patch surface.
   return runRegistryMigration(
     (db) =>
-      rewrites.reduce(
-        (count, rewrite) =>
-          count +
-          Number(
-            executeSqliteQuerySync(
-              db,
-              kyselyFor(db)
-                .updateTable("worktrees")
-                .set({ path: rewrite.toPath })
-                .where("id", "=", rewrite.id)
-                .where("path", "=", rewrite.fromPath),
-            ).numAffectedRows ?? 0n,
-          ),
-        0,
-      ),
+      rewrites.reduce((count, rewrite) => {
+        const changed = executeSqliteQuerySync(
+          db,
+          kyselyFor(db)
+            .updateTable("worktrees")
+            .set({ path: rewrite.toPath })
+            .where("id", "=", rewrite.id)
+            .where("path", "=", rewrite.fromPath)
+            .returningAll(),
+        ).rows;
+        worktreeRegistryPublication.rows(db, changed);
+        return count + changed.length;
+      }, 0),
     { env },
   );
 }
@@ -309,15 +309,4 @@ export function assertWorktreeRemovalAvailable(
       "Worktree removal is in progress; retry after cleanup settles",
     );
   }
-}
-
-export function hasLiveWorktreeRunLeaseRow(env: NodeJS.ProcessEnv, worktreeId: string): boolean {
-  return (
-    withExistingOpenClawStateDatabaseCurrentReadOnly(
-      ({ db }) =>
-        collectLiveRunLeases(db, kyselyFor(db), worktreeRunLeaseScope(worktreeId), false).livePids
-          .length > 0,
-      { env },
-    ) ?? false
-  );
 }

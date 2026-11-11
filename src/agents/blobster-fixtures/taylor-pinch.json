@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "id": "taylor-pinch",
+  "name": "Taylor Pinch",
+  "description": "Blonde-gold shell, red smile and claws, sparkling lavender costume, and claw-held microphone.",
+  "palette": {
+    "shell": "#efcc78",
+    "claw": "#d5485c",
+    "glint": "#d5c4f2"
+  },
+  "layers": {
+    "shell_overlay": "<g class=\"lob-taylorpinch\">\n    <path d=\"M51 44 Q56 40 60 43 Q64 40 69 44 Q60 54 51 44 Z\" fill=\"#c92e48\" />\n    <path d=\"M16 52 Q37 50 60 62 Q83 50 104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z\" fill=\"#9c82cf\" />\n    <path d=\"M22 57 Q40 56 60 68 Q80 56 98 57\" fill=\"none\" stroke=\"#d5c4f2\" stroke-width=\"2\" stroke-linecap=\"round\" />\n    <g fill=\"#fff4fb\">\n      <path d=\"M36 65 L37.5 69.5 L42 71 L37.5 72.5 L36 77 L34.5 72.5 L30 71 L34.5 69.5 Z\" />\n      <path d=\"M79 72 L80.5 76.5 L85 78 L80.5 79.5 L79 84 L77.5 79.5 L73 78 L77.5 76.5 Z\" />\n      <circle cx=\"57\" cy=\"79\" r=\"1.5\" /><circle cx=\"67\" cy=\"88\" r=\"1.5\" /><circle cx=\"87\" cy=\"64\" r=\"1.5\" />\n    </g>\n  </g>",
+    "right_prop": "<path class=\"lob-microphone\" d=\"M106 32 L112 34 L106 56 Q105 58 103 57 Q101 56 102 54 Z\" fill=\"#343747\" />\n  <path class=\"lob-microphone\" d=\"M103 27 A7 7 0 1 1 117 27 A7 7 0 1 1 103 27 Z\" fill=\"#666a80\" />\n  <path class=\"lob-microphone\" d=\"M106 23 L114 25 M105 27 L113 29\" fill=\"none\" stroke=\"#e7e7f0\" stroke-width=\"1.5\" stroke-linecap=\"round\" />"
+  }
+}

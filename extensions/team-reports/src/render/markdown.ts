@@ -1,12 +1,10 @@
+import { GITHUB_ITEM_KINDS } from "../github-item-kinds.js";
 import type { ReportDocument, SummaryDocument } from "../types.js";
-import { countDescription, ITEM_LABELS, memberSummary, safeExternalUrl } from "./shared.js";
+import { countDescription, memberSummary, safeExternalUrl } from "./shared.js";
 
 function text(value: string): string {
-  return value
-    .replace(/[\\`*_{}[\]()#+.!|>~-]/g, "\\$&")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/\r?\n/g, " ");
+  // Metadata is literal text: escape entity/tag delimiters along with Markdown punctuation.
+  return value.replace(/[\\`*_{}[\]()#+.!|<>&~-]/g, "\\$&").replace(/\r?\n/g, " ");
 }
 
 function modelText(value: string): string {
@@ -25,7 +23,7 @@ export function renderMarkdown(report: ReportDocument, summary?: SummaryDocument
   ];
   if (!summary || summary.source === "fallback") {
     lines.push(
-      "> Deterministic summary: model summaries are disabled, pending, or unavailable.",
+      "> Summary without a model: model summaries are disabled, pending, or unavailable.",
       "",
     );
   }
@@ -63,7 +61,7 @@ export function renderMarkdown(report: ReportDocument, summary?: SummaryDocument
       const url = safeExternalUrl(item.url);
       const title = text(item.title);
       lines.push(
-        `- ${ITEM_LABELS[item.kind]} · ${text(item.repo)}: ${url ? `[${title}](<${url}>)` : title}`,
+        `- ${GITHUB_ITEM_KINDS[item.kind].label} · ${text(item.repo)}: ${url ? `[${title}](<${url}>)` : title}`,
       );
     }
     for (const excerpt of member.discord.excerpts) {

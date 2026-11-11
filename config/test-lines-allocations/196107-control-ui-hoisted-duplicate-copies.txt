@@ -1,0 +1,2 @@
+32
+# Control UI update-cache regression for hoisted installs that nest one package version under several dependents (Mac packaging).

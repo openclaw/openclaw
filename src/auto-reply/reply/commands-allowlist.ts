@@ -31,22 +31,12 @@ type AllowlistScope = "dm" | "group" | "all";
 type AllowlistAction = "list" | "add" | "remove";
 type AllowlistTarget = "both" | "config" | "store";
 type AllowlistCommand =
-  | {
-      action: "list";
+  | ({
       scope: AllowlistScope;
       channel?: string;
       account?: string;
       resolve?: boolean;
-    }
-  | {
-      action: "add" | "remove";
-      scope: AllowlistScope;
-      channel?: string;
-      account?: string;
-      entry: string;
-      resolve?: boolean;
-      target: AllowlistTarget;
-    }
+    } & ({ action: "list" } | { action: "add" | "remove"; entry: string; target: AllowlistTarget }))
   | { action: "error"; message: string };
 
 const ACTIONS = new Set(["list", "add", "remove"]);
@@ -186,11 +176,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     DEFAULT_ACCOUNT_ID;
   const originChannelId =
     params.command.channelId ?? normalizeChatChannelId(resolveCommandSurfaceChannel(params));
-  const originAccountId = resolveChannelAccountId({
-    cfg: params.cfg,
-    ctx: params.ctx,
-    command: params.command,
-  });
+  const originAccountId = resolveChannelAccountId(params);
   const plugin = getChannelPlugin(channelId);
 
   if (parsed.action === "list") {

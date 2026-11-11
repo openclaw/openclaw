@@ -49,11 +49,9 @@ export function resolveSelectedAndActiveModel(params: {
   const active = runtimeModel
     ? normalizeModelRef(runtimeModel, runtimeProvider || selected.provider, !runtimeProvider)
     : selected;
-  const activeDiffers = active.provider !== selected.provider || active.model !== selected.model;
-
   return {
     selected,
     active,
-    activeDiffers,
+    activeDiffers: active.provider !== selected.provider || active.model !== selected.model,
   };
 }

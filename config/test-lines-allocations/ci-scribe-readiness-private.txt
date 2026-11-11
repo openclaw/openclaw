@@ -1,0 +1,2 @@
+# Exercise the existing readiness assertions through source detection and its actual plugin read.
+11

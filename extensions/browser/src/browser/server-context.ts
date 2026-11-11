@@ -1,11 +1,8 @@
 import fs from "node:fs";
-import {
-  resolveCdpControlPolicy,
-  resolveCdpReachabilityPolicy,
-} from "./cdp-reachability-policy.js";
+import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
-import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
+import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { getOwnBrowserProfile, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import {
   BrowserProfileNotFoundError,
@@ -92,8 +89,6 @@ function createProfileContext(
     return runtimeState;
   };
 
-  const configRevision = getProfileLifecycle(profileState).configRevision;
-
   const rawTabOps = createProfileTabOps({
     profile,
     state,
@@ -105,7 +100,6 @@ function createProfileContext(
     profile,
     state,
     runtime: profileState,
-    configRevision,
   });
 
   const rawSelection = createProfileSelectionOps({
@@ -125,7 +119,6 @@ function createProfileContext(
     await withProfileOperationLease({
       state: state(),
       runtime: profileState,
-      configRevision,
       signal: callerSignal,
       run: async (lifecycleSignal) => await run(lifecycleSignal, profileState),
       commit: options?.commit,
@@ -182,7 +175,7 @@ function createProfileContext(
         );
       }
       const userDataDir = resolveOpenClawUserDataDir(profile.name);
-      assertProfileLifecycleContext({ state: state(), runtime: profileState, configRevision });
+      assertProfileLifecycleContext({ state: state(), runtime: profileState });
       profileState.managedLaunchFailure = undefined;
       let result: Awaited<ReturnType<ProfileContext["resetProfile"]>> = {
         moved: false,
@@ -248,83 +241,46 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         continue;
       }
       profileState ??= getOrCreateProfileRuntime(current, profile);
-      let statusProfile = profile;
+      let statusProfile = profileState.profile;
       let unavailableReason: string | null = null;
-      let running = false;
-      let tabCount = 0;
+      let running: boolean;
+      let tabCount: number;
 
-      for (let attempt = 0; attempt < 2; attempt += 1) {
+      const profileCtx = createProfileContext(opts, current, profileState, statusProfile);
+      try {
+        const snapshot = await runProfileContextOperation(
+          profileCtx,
+          undefined,
+          async (signal, runtime) => {
+            const activeProfile = runtime.profile;
+            let activeTabCount = 0;
+            const probeTimeoutMs = usesFastLoopbackCdpProbeClass({
+              profileIsLoopback: activeProfile.cdpIsLoopback,
+              attachOnly: activeProfile.attachOnly,
+            })
+              ? 200
+              : current.resolved.remoteCdpTimeoutMs;
+            const activeRunning = await profileCtx
+              .isTransportAvailable(probeTimeoutMs, signal, {
+                onResult: (observedTabCount) => (activeTabCount = observedTabCount ?? 0),
+              })
+              .catch(() => false);
+            signal.throwIfAborted();
+            return { profile: activeProfile, running: activeRunning, tabCount: activeTabCount };
+          },
+        );
+        statusProfile = snapshot.profile;
+        running = snapshot.running;
+        tabCount = snapshot.tabCount;
+      } catch (err) {
         statusProfile = profileState.profile;
-        const profileCtx = createProfileContext(opts, current, profileState, statusProfile);
-        try {
-          const snapshot = await runProfileContextOperation(
-            profileCtx,
-            undefined,
-            async (signal, runtime) => {
-              const activeProfile = runtime.profile;
-              const capabilities = getBrowserProfileCapabilities(activeProfile);
-              let activeRunning = Boolean(runtime.running);
-              let activeTabCount = 0;
-
-              if (capabilities.usesChromeMcp) {
-                try {
-                  activeRunning = await profileCtx.isTransportAvailable(300, signal, {
-                    onResult: (observedTabCount) => (activeTabCount = observedTabCount ?? 0),
-                  });
-                } catch {
-                  activeRunning = false;
-                }
-              } else {
-                if (!activeRunning) {
-                  try {
-                    const probeTimeoutMs = usesFastLoopbackCdpProbeClass({
-                      profileIsLoopback: activeProfile.cdpIsLoopback,
-                      attachOnly: activeProfile.attachOnly,
-                    })
-                      ? 200
-                      : current.resolved.remoteCdpTimeoutMs;
-                    activeRunning =
-                      capabilities.mode === "local-extension"
-                        ? await profileCtx.isTransportAvailable(probeTimeoutMs, signal)
-                        : await isChromeReachable(
-                            activeProfile.cdpUrl,
-                            probeTimeoutMs,
-                            resolveCdpReachabilityPolicy(
-                              activeProfile,
-                              current.resolved.ssrfPolicy,
-                            ),
-                            signal,
-                          );
-                  } catch {
-                    activeRunning = false;
-                  }
-                }
-                if (activeRunning) {
-                  const tabs = await profileCtx.listTabs({ signal }).catch(() => []);
-                  activeTabCount = tabs.filter((tab) => tab.type === "page").length;
-                }
-              }
-              signal.throwIfAborted();
-              return { profile: activeProfile, running: activeRunning, tabCount: activeTabCount };
-            },
-          );
-          statusProfile = snapshot.profile;
-          running = snapshot.running;
-          tabCount = snapshot.tabCount;
-          break;
-        } catch (err) {
-          if (attempt === 0) {
-            continue;
-          }
-          statusProfile = profileState.profile;
-          const actor = getProfileLifecycle(profileState);
-          unavailableReason = actor.blockedReason ?? actor.transitionReason ?? actor.terminal;
-          if (!unavailableReason && !toBrowserErrorResponse(err)) {
-            throw err;
-          }
-          running = Boolean(profileState.running);
-          tabCount = 0;
+        const actor = getProfileLifecycle(profileState);
+        unavailableReason = actor.blockedReason ?? actor.transitionReason ?? actor.terminal;
+        if (!unavailableReason && !toBrowserErrorResponse(err)) {
+          throw err;
         }
+        running = Boolean(profileState.running);
+        tabCount = 0;
       }
 
       const capabilities = getBrowserProfileCapabilities(statusProfile);

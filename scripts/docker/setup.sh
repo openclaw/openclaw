@@ -22,8 +22,8 @@ RAW_SKIP_ONBOARDING="${OPENCLAW_SKIP_ONBOARDING:-}"
 SKIP_ONBOARDING=""
 DOCKER_PULL_TIMEOUT="${OPENCLAW_DOCKER_SETUP_PULL_TIMEOUT:-600s}"
 OFFLINE_MODE=""
-DEFAULT_SANDBOX_IMAGE="openclaw-sandbox:bookworm-slim"
-DEFAULT_SANDBOX_BROWSER_IMAGE="openclaw-sandbox-browser:bookworm-slim"
+DEFAULT_SANDBOX_IMAGE="openclaw-sandbox:trixie-slim"
+DEFAULT_SANDBOX_BROWSER_IMAGE="openclaw-sandbox-browser:trixie-slim"
 SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH="2026-05-12-cdp-relay-auth"
 
 fail() {

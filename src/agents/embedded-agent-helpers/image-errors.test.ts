@@ -21,7 +21,6 @@ describe("image dimension errors", () => {
       maxDimensionPx: 2000,
       messageIndex: 84,
       contentIndex: 1,
-      raw,
     });
   });
 });

@@ -1,16 +1,15 @@
 import type { Message } from "grammy/types";
-import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  resolveTelegramNonTextBody,
   resolveTelegramPrimaryMedia,
   resolveTelegramRichMessageBody,
   type TelegramMediaKind,
 } from "./bot/body-helpers.js";
 import {
   buildSenderName,
-  extractTelegramLocation,
   getTelegramTextParts,
   normalizeForwardedContext,
   type TelegramThreadSpec,
@@ -78,18 +77,6 @@ export function isTelegramMessageFromCurrentBot(msg: Message, botUserId?: number
   return msg.from?.id === currentBotUserId || msg.sender_business_bot?.id === currentBotUserId;
 }
 
-function resolveMessageBody(msg: Message, preserveWhitespace: boolean): string | undefined {
-  const text = getTelegramTextParts(msg).text;
-  if (text.trim()) {
-    return preserveWhitespace ? text : text.trim();
-  }
-  const location = extractTelegramLocation(msg);
-  if (location) {
-    return formatLocationText(location);
-  }
-  return resolveTelegramRichMessageBody(msg);
-}
-
 function resolveMessageTimestamp(msg: MessageWithPromptContextTimestamp): number | undefined {
   return (
     asFiniteNumber(msg.openclaw_prompt_context_timestamp_ms) ??
@@ -111,7 +98,15 @@ export function normalizeMessageNode(
   const fileId = media?.fileRef.file_id;
   const forwardedFrom = normalizeForwardedContext(msg);
   const replyMessage = resolveReplyMessage(msg);
-  const body = resolveMessageBody(msg, params.promptContextProjectionMarker !== undefined);
+  const preserveWhitespace = params.promptContextProjectionMarker !== undefined;
+  const text = getTelegramTextParts(msg).text;
+  let body: string | undefined;
+  if (text.trim()) {
+    body = preserveWhitespace ? text : text.trim();
+  } else {
+    const nonText = resolveTelegramNonTextBody(msg);
+    body = nonText ? nonText.text : resolveTelegramRichMessageBody(msg);
+  }
   const threadBinding = normalizeTelegramMessageThreadBinding(params.threadBinding);
   const threadId =
     threadBinding?.threadSpec.scope === "none"

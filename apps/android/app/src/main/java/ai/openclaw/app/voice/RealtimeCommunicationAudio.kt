@@ -5,7 +5,6 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import kotlinx.coroutines.CancellationException
 import java.util.concurrent.atomic.AtomicReference
 
@@ -61,7 +60,6 @@ internal class RealtimeCommunicationAudio private constructor(
     AudioManager.OnModeChangedListener { value ->
       if (!closed) {
         mode = value
-        Log.d("TalkAudio", "communication mode=$value")
       }
     }
   private val focusRequest =
@@ -72,7 +70,6 @@ internal class RealtimeCommunicationAudio private constructor(
       .setOnAudioFocusChangeListener({ change ->
         if (!closed) {
           focus.set(if (change == AudioManager.AUDIOFOCUS_GAIN) Focus.Granted else Focus.Lost)
-          Log.d("TalkAudio", "communication focus=$change")
           if (change != AudioManager.AUDIOFOCUS_GAIN) {
             handler.post {
               if (!closed && isCurrent()) onFocusLost()

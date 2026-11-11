@@ -11,8 +11,8 @@ vi.mock("../../state/user-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profiles.js")>()),
   listProfiles,
 }));
-vi.mock("../../state/user-profile-reads.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/user-profile-reads.js")>()),
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
   readUserProfileSnapshot,
 }));
 

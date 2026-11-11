@@ -20,13 +20,11 @@ export async function startDeliveryProducerLease(params: {
   id: string;
   renew: () => Promise<number | undefined>;
 }): Promise<DeliveryProducerLease> {
-  let confirmedExpiresAt: number;
   try {
     const initialExpiry = await params.renew();
-    if (initialExpiry === undefined || initialExpiry <= Date.now()) {
+    if (initialExpiry === undefined) {
       throw lostProducerLeaseError(params.id);
     }
-    confirmedExpiresAt = initialExpiry;
   } catch (error) {
     if (error instanceof DeliveryProducerLeaseLostError) {
       throw error;
@@ -37,18 +35,10 @@ export async function startDeliveryProducerLease(params: {
   const lost = new AbortController();
   let stopResult: Promise<void> | undefined;
   let pendingRenewal: Promise<void> | undefined;
-  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   const abortLost = (cause?: unknown): void => {
     if (!stopResult && !lost.signal.aborted) {
       lost.abort(lostProducerLeaseError(params.id, cause));
     }
-  };
-  const scheduleExpiry = (): void => {
-    if (expiryTimer) {
-      clearTimeout(expiryTimer);
-    }
-    expiryTimer = setTimeout(() => abortLost(), Math.max(1, confirmedExpiresAt - Date.now()));
-    expiryTimer.unref?.();
   };
   const renew = async (): Promise<void> => {
     if (stopResult || lost.signal.aborted) {
@@ -61,20 +51,12 @@ export async function startDeliveryProducerLease(params: {
       }
       if (expiresAt === undefined) {
         abortLost();
-        return;
       }
-      confirmedExpiresAt = expiresAt;
-      scheduleExpiry();
     } catch (error) {
-      // A transient storage failure does not revoke the last confirmed lease.
-      // Its expiry timer remains authoritative while later heartbeats retry.
-      if (!stopResult && Date.now() >= confirmedExpiresAt) {
-        abortLost(error);
-      }
+      abortLost(error);
     }
   };
 
-  scheduleExpiry();
   const heartbeat = setInterval(() => {
     if (!pendingRenewal) {
       pendingRenewal = renew().finally(() => {
@@ -90,9 +72,6 @@ export async function startDeliveryProducerLease(params: {
       if (!stopResult) {
         stopResult = pendingRenewal ?? Promise.resolve();
         clearInterval(heartbeat);
-        if (expiryTimer) {
-          clearTimeout(expiryTimer);
-        }
       }
       return stopResult;
     },

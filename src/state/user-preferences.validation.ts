@@ -1,5 +1,9 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
+  normalizeBackgroundPreference,
+  USER_BACKGROUND_PREFERENCE_KEY,
+} from "../../packages/gateway-protocol/src/schema/background-preferences.js";
+import {
   USER_PREFS_ENTRY_LIMIT,
   USER_PREFS_VALUE_BYTES,
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
@@ -28,7 +32,14 @@ function prepareEntries(
     }
     let valueJson: string | undefined;
     try {
-      valueJson = JSON.stringify(value);
+      const background =
+        prefKey === USER_BACKGROUND_PREFERENCE_KEY
+          ? normalizeBackgroundPreference(value)
+          : undefined;
+      if (prefKey === USER_BACKGROUND_PREFERENCE_KEY && !background) {
+        return err({ code: "invalid-value", key: prefKey });
+      }
+      valueJson = JSON.stringify(background ?? value);
     } catch {
       return err({ code: "invalid-value", key: prefKey });
     }

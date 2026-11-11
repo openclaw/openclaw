@@ -3,12 +3,12 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { normalizeConfigPaths } from "./normalize-paths.js";
+import { materializeRuntimeConfig } from "./materialize.js";
 
-describe("normalizeConfigPaths", () => {
+describe("materializeRuntimeConfig path normalization", () => {
   it("expands tilde for path-ish keys only", async () => {
     await withTempHome(async (home) => {
-      const cfg = normalizeConfigPaths({
+      const cfg = materializeRuntimeConfig({
         worktreeRoot: "~/worktrees",
         tools: { exec: { pathPrepend: ["~/bin"] } },
         plugins: { load: { paths: ["~/plugins/a"] } },
