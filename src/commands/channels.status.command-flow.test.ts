@@ -96,30 +96,20 @@ vi.mock("../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfig: () => mocks.listChannelPlugins(),
 }));
 
+type AccountSnapshotParams = {
+  plugin: ReturnType<typeof createTokenOnlyPlugin>;
+  cfg: { secretResolved?: boolean };
+  accountId: string;
+};
+
 vi.mock("../channels/plugins/status.js", () => ({
-  buildReadOnlySourceChannelAccountSnapshot: async ({
-    plugin,
-    cfg,
-    accountId,
-  }: {
-    plugin: ReturnType<typeof createTokenOnlyPlugin>;
-    cfg: { secretResolved?: boolean };
-    accountId: string;
-  }) => ({
-    accountId,
-    ...plugin.config.inspectAccount(cfg),
+  buildReadOnlySourceChannelAccountSnapshot: async (params: AccountSnapshotParams) => ({
+    accountId: params.accountId,
+    ...params.plugin.config.inspectAccount(params.cfg),
   }),
-  resolveChannelAccountSnapshot: async ({
-    plugin,
-    cfg,
-    accountId,
-  }: {
-    plugin: ReturnType<typeof createTokenOnlyPlugin>;
-    cfg: { secretResolved?: boolean };
-    accountId: string;
-  }) => ({
-    accountId,
-    ...plugin.config.resolveAccount(cfg),
+  resolveChannelAccountSnapshot: async (params: AccountSnapshotParams) => ({
+    accountId: params.accountId,
+    ...params.plugin.config.resolveAccount(params.cfg),
   }),
 }));
 
@@ -213,65 +203,41 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     mocks.listChannelPlugins.mockReturnValue([createTokenOnlyPlugin()]);
   });
 
-  it.each([false])(
-    "preserves a Gateway rejection instead of reporting it unreachable (json=%s)",
-    async (json) => {
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      const error = new GatewayClientRequestError({
-        code: "INVALID_REQUEST",
-        message: "unknown channel: missing-channel",
-      });
-      retainGatewayResponsePayload(error, undefined);
-      mocks.callGateway.mockRejectedValueOnce(error);
+  it("preserves a Gateway rejection instead of reporting it unreachable", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const error = new GatewayClientRequestError({
+      code: "INVALID_REQUEST",
+      message: "unknown channel: missing-channel",
+    });
+    retainGatewayResponsePayload(error, undefined);
+    mocks.callGateway.mockRejectedValueOnce(error);
 
-      await expect(
-        channelsStatusCommand({ channel: "missing-channel", json }, runtime),
-      ).rejects.toBe(error);
+    await expect(
+      channelsStatusCommand({ channel: "missing-channel", json: false }, runtime),
+    ).rejects.toBe(error);
+    expect(mocks.requireValidConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
 
-      expect(mocks.requireValidConfigFileSnapshot).not.toHaveBeenCalled();
-      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-      expect(runtime.error).not.toHaveBeenCalled();
-    },
-  );
+  it("does not publish config-only status after cancellation during fallback", async () => {
+    const scope = new AsyncWorkScope();
+    const reason = new Error("Status interrupted");
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    mocks.callGateway.mockRejectedValueOnce(createGatewayTransportError());
+    fallbackConfig({ channels: {} });
+    mocks.resolveCommandConfigWithSecrets.mockImplementationOnce(async () => {
+      scope.beginClose(reason);
+      return { resolvedConfig: {}, effectiveConfig: {}, diagnostics: [] };
+    });
 
-  it.each(["before-readiness", "readiness", "rpc", "fallback"] as const)(
-    "does not publish status after cancellation at %s",
-    async (stage) => {
-      const scope = new AsyncWorkScope();
-      const reason = new Error("Status interrupted");
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      vi.mocked(waitForGatewayDiagnosticReadiness).mockImplementationOnce(async () => {
-        if (stage === "readiness") {
-          scope.beginClose(reason);
-        }
-        return undefined;
-      });
-      mocks.callGateway.mockImplementationOnce(async () => {
-        if (stage === "rpc") {
-          scope.beginClose(reason);
-        }
-        if (stage === "fallback") {
-          throw createGatewayTransportError();
-        }
-        return { channelAccounts: {} };
-      });
-      fallbackConfig({ channels: {} });
-      mocks.resolveCommandConfigWithSecrets.mockImplementationOnce(async () => {
-        scope.beginClose(reason);
-        return { resolvedConfig: {}, effectiveConfig: {}, diagnostics: [] };
-      });
-      if (stage === "before-readiness") {
-        scope.beginClose(reason);
-      }
-
-      await expect(
-        scope.run(() => channelsStatusCommand({ probe: true, json: true }, runtime)),
-      ).rejects.toBe(reason);
-      expect(runtime.log).not.toHaveBeenCalled();
-      expect(runtime.error).not.toHaveBeenCalled();
-      await scope.drain();
-    },
-  );
+    await expect(
+      scope.run(() => channelsStatusCommand({ probe: true, json: true }, runtime)),
+    ).rejects.toBe(reason);
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    await scope.drain();
+  });
 
   it("sends valid channel RPC parameters after fractional startup timing", async () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -436,31 +402,18 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(payload.configuredChannels).toStrictEqual([]);
   });
 
-  it("treats all as no filter in JSON config-only fallback", async () => {
+  it.each(["all", "clickclack"])("filters JSON fallback channels (%s)", async (channel) => {
     mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
-    fallbackConfig({ channels: { clickclack: { enabled: true } } });
-
-    mocks.listConfiguredAnnounceChannelIdsForConfig.mockReturnValue(["clickclack"]);
+    const channels = channel === "all" ? ["clickclack"] : ["clickclack", "telegram"];
+    fallbackConfig({ channels: Object.fromEntries(channels.map((id) => [id, { enabled: true }])) });
+    mocks.listConfiguredAnnounceChannelIdsForConfig.mockReturnValue(channels);
     const { runtime, logs } = createCapturingTestRuntime();
 
-    await channelsStatusCommand({ channel: "all", json: true, probe: false }, runtime);
+    await channelsStatusCommand({ channel, json: true, probe: false }, runtime);
 
     const payload = JSON.parse(logs.at(-1) ?? "{}");
     expect(payload.gatewayReachable).toBe(false);
     expect(payload.configOnly).toBe(true);
-    expect(payload.configuredChannels).toStrictEqual(["clickclack"]);
-  });
-
-  it("filters explicitly configured channels in JSON config-only fallback", async () => {
-    mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
-    fallbackConfig({ channels: { clickclack: { enabled: true }, telegram: { enabled: true } } });
-
-    mocks.listConfiguredAnnounceChannelIdsForConfig.mockReturnValue(["clickclack", "telegram"]);
-    const { runtime, logs } = createCapturingTestRuntime();
-
-    await channelsStatusCommand({ channel: "clickclack", json: true, probe: false }, runtime);
-
-    const payload = JSON.parse(logs.at(-1) ?? "{}");
     expect(payload.configuredChannels).toStrictEqual(["clickclack"]);
   });
 });

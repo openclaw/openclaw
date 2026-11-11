@@ -1,3 +1,0 @@
-# Invocation cancellation before readiness, after readiness/RPC, and during fallback.
-# Extends the existing owner suite; normal fallback controls and native PTY proof stay separate.
-42
