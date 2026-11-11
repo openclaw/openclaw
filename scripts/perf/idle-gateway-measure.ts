@@ -4,6 +4,7 @@
 // syscall totals; readFile/open can overlap and SQLite bypasses these wrappers.
 // --compile-cache enables the launcher's worker cache and native read diagnostics.
 // Keep both counting options separate from uninstrumented CPU/latency acceptance.
+// --write-interval-ms exercises real shared-state commits through voicewake.set.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import {
@@ -62,6 +63,7 @@ const { values } = parseArgs({
     timers: { type: "boolean", default: false },
     "fs-census": { type: "boolean", default: false },
     "compile-cache": { type: "boolean", default: false },
+    "write-interval-ms": { type: "string" },
     profile: { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     subscribe: { type: "boolean", default: false },
@@ -101,7 +103,13 @@ const minutes = integer(values.minutes, "--minutes", 1);
 const settleSeconds = integer(values["settle-seconds"], "--settle-seconds", 0);
 const readyTimeoutSeconds = integer(values["ready-timeout-seconds"], "--ready-timeout-seconds", 1);
 const configReloads = integer(values["config-reloads"], "--config-reloads", 0);
-const needsDevice = values.subscribe || configReloads > 0 || values["watcher-failure"];
+const writeIntervalMs =
+  values["write-interval-ms"] === undefined
+    ? 0
+    : integer(values["write-interval-ms"], "--write-interval-ms", 1);
+const scopes = ["operator.read", ...(writeIntervalMs ? ["operator.write"] : [])];
+const needsDevice =
+  values.subscribe || configReloads > 0 || values["watcher-failure"] || writeIntervalMs > 0;
 const traceGc = configReloads === 0;
 const port = integer(values.port, "--port", 40000);
 const startAt = values["start-at"] ? integer(values["start-at"], "--start-at", 1) : undefined;
@@ -147,9 +155,7 @@ writeFileSync(
           userHeader: "x-forwarded-user",
           requiredHeaders: ["x-forwarded-proto"],
           allowUsers: ["idle-measure"],
-          ...(needsDevice
-            ? { deviceAutoApprove: { enabled: true, scopes: ["operator.read"] } }
-            : {}),
+          ...(needsDevice ? { deviceAutoApprove: { enabled: true, scopes } } : {}),
         },
       },
     },
@@ -338,7 +344,6 @@ try {
     platform: process.platform,
     mode: "ui",
   };
-  const scopes = ["operator.read"];
   let device;
   if (needsDevice) {
     const { nonce, ts } = await Promise.race([
@@ -473,10 +478,38 @@ try {
   const cpuBefore = await readGatewayCpuUsage(child);
   const start = Date.now();
   const compileLogStart = values["compile-cache"] ? statSync(logPath).size : 0;
+  const writeLatencies: number[] = [];
+  let lastTrigger: string | undefined;
+  let nextWrite = start;
   console.log(JSON.stringify({ ready: true, pid: child.pid, start, minutes, output }));
   for (let minute = 1; minute <= minutes; minute++) {
     sqlPhase(`steady-${minute}`);
-    await wait(Math.max(0, start + minute * 60_000 - Date.now()));
+    const until = start + minute * 60_000;
+    if (writeIntervalMs) {
+      while (Date.now() < until) {
+        await wait(Math.max(0, Math.min(nextWrite, until) - Date.now()));
+        if (Date.now() >= until) {
+          break;
+        }
+        const trigger = `synthetic-wake-${writeLatencies.length % 2}`;
+        const began = performance.now();
+        const reply = await client.request("voicewake.set", { triggers: [trigger] });
+        if (
+          !reply.ok ||
+          !isRecord(reply.payload) ||
+          !Array.isArray(reply.payload.triggers) ||
+          reply.payload.triggers.length !== 1 ||
+          reply.payload.triggers[0] !== trigger
+        ) {
+          throw new Error(`Shared-state write failed: ${JSON.stringify(reply)}`);
+        }
+        writeLatencies.push(performance.now() - began);
+        lastTrigger = trigger;
+        nextWrite = Math.max(nextWrite + writeIntervalMs, Date.now());
+      }
+    } else {
+      await wait(Math.max(0, until - Date.now()));
+    }
     if (failure) {
       throw failure;
     }
@@ -511,6 +544,19 @@ try {
           values.allocations ? heapProfilePath : diagnosticsId,
           values.allocations ? "heap" : "diagnostics",
         );
+  if (lastTrigger !== undefined) {
+    const reply = await client.request("voicewake.get", {});
+    if (
+      !reply.ok ||
+      !isRecord(reply.payload) ||
+      !Array.isArray(reply.payload.triggers) ||
+      reply.payload.triggers.length !== 1 ||
+      reply.payload.triggers[0] !== lastTrigger
+    ) {
+      throw new Error("Shared-state write readback did not match the final acknowledged trigger");
+    }
+  }
+  const sortedWriteLatencies = writeLatencies.toSorted((a, b) => a - b);
   writeFileSync(
     path.join(output, "result.json"),
     JSON.stringify(
@@ -534,6 +580,16 @@ try {
         durationMs: endedAt - start,
         timers: values.timers,
         fsCensus: values["fs-census"],
+        writes: writeIntervalMs
+          ? {
+              intervalMs: writeIntervalMs,
+              count: writeLatencies.length,
+              readbackVerified: lastTrigger !== undefined,
+              latenciesMs: writeLatencies,
+              medianMs: sortedWriteLatencies[Math.floor(sortedWriteLatencies.length / 2)],
+              p95Ms: sortedWriteLatencies[Math.ceil(sortedWriteLatencies.length * 0.95) - 1],
+            }
+          : undefined,
         // Native compile-cache reads bypass JS filesystem wrappers. This diagnostic
         // count covers the measured log byte range and excludes boot/shutdown.
         compileCache: values["compile-cache"]
