@@ -551,6 +551,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                     requestBudget: manualRequestBudget ?? accountingRecorder?.requestBudget,
                     requestFromEntryId: accountingRecorder?.requestFromEntryId,
                     pendingUserEntryId: accountingRecorder?.pendingUserEntryId,
+                    requestRequiresCompaction: accountingRecorder?.requestRequiresCompaction,
                     onSummaryReady: () => {
                       summaryReady = true;
                     },
