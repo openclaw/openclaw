@@ -1,0 +1,3 @@
+# PR #196968: regression test proving a native catalog acquisition finishes
+# after its starting plugin invocation scope closes (scope-closed throw fix).
+58
