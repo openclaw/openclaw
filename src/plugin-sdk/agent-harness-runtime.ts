@@ -163,6 +163,7 @@ export type {
   AgentHarnessSupportContext,
 } from "../agents/harness/types.js";
 export {
+  AgentHarnessModelRequestPolicyError,
   AgentHarnessPreflightError,
   AgentHarnessSessionCleanupError,
   AgentHarnessSessionSupersededError,

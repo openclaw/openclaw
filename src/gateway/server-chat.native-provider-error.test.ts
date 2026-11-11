@@ -5,9 +5,13 @@ import { ChatEventSchema } from "../../packages/gateway-protocol/src/schema/logs
 import { buildEmbeddedRunPayloads } from "../agents/embedded-agent-runner/run/payloads.js";
 import { handleAgentEnd } from "../agents/embedded-agent-subscribe.handlers.lifecycle.js";
 import { createContext } from "../agents/embedded-agent-subscribe.handlers.lifecycle.test-helpers.js";
+import { AgentHarnessModelRequestPolicyError } from "../agents/harness/errors.js";
 import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-message-fixtures.js";
 import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-lifecycle-terminal.js";
-import { createAgentHarnessAttemptLifecycle } from "../plugin-sdk/agent-harness-attempt-runtime.js";
+import {
+  createAgentHarnessAttemptLifecycle,
+  createAgentHarnessAssistantMessage,
+} from "../plugin-sdk/agent-harness-attempt-runtime.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
 
@@ -157,3 +161,49 @@ it.each([false, true])(
     });
   },
 );
+
+it("preserves a confirmed deployment denial through native chat publication and partial-output history", async () => {
+  vi.useFakeTimers();
+  const expected =
+    "The deployment rejected this model request. Ask the administrator to check the model access policy and request settings.";
+  const error = new AgentHarnessModelRequestPolicyError();
+  const h = createAgentEventTestHarness({ lifecycleErrorRetryGraceMs: 0 });
+  onTestFinished(() => h.handler.dispose());
+  const runId = "run-model-policy-denial";
+  h.register(runId, "session-model-policy-denial", runId);
+  const deliveries: Promise<void>[] = [];
+  let seq = 0;
+  const lifecycle = createAgentHarnessAttemptLifecycle({
+    attempt: { provider: "openai", modelId: "fixture-model" },
+    backend: "codex-app-server",
+    startedAtMs: Date.now(),
+    state: { lifecycleStarted: false, lifecycleTerminalEmitted: false },
+    emitEvent: (event) => {
+      const delivery = Promise.resolve(h.emit(runId, event.stream, event.data, { seq: ++seq }));
+      deliveries.push(delivery);
+      return delivery;
+    },
+  });
+  lifecycle.emitLifecycleStart({ provider: "openai", model: "fixture-model" });
+  lifecycle.emitLifecycleTerminal({ phase: "error", error });
+  await Promise.all(deliveries);
+  const payload = h.chat().find(([, event]) => event.state === "error")?.[1];
+  expect(Value.Check(ChatEventSchema, payload)).toBe(true);
+  expect(payload).toMatchObject({
+    errorMessage: expected,
+    errorDetail: { providerErrorCode: "model_request_policy_denied", httpStatus: 403 },
+  });
+  expect(payload?.errorDetail?.failoverReason).toBeUndefined();
+  const assistant = createAgentHarnessAssistantMessage(
+    { api: "openai-responses", provider: "openai", modelId: "fixture-model" },
+    "Partial reply",
+    { aborted: false, promptError: error },
+  );
+  expect(assistant).toMatchObject({
+    errorCode: "model_request_policy_denied",
+    errorMessage: expected,
+  });
+  const history = projectChatDisplayMessages([assistant]);
+  expect(JSON.stringify(history)).toContain(expected);
+  expect(JSON.stringify(history)).not.toContain("sign in");
+});

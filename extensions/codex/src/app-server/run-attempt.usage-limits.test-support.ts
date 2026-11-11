@@ -1,7 +1,7 @@
 import path from "node:path";
 import { saveAuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { turnCompleted } from "./protocol.test-helpers.js";
 import { readCodexRateLimitsRevision, rememberCodexRateLimitsRead } from "./rate-limit-cache.js";
@@ -82,6 +82,93 @@ function expectResetError(result: Result) {
 
 export function registerCodexUsageLimitTests() {
   describe("runCodexAppServerAttempt usage limits", () => {
+    it("keeps a confirmed denial through native finalization, history rows, and lifecycle events", async () => {
+      const harness = createStartedThreadHarness(async () => undefined);
+      const params = createUsageParams();
+      const onAgentEvent = vi.fn();
+      const run = runCodexAppServerAttempt({ ...params, onAgentEvent });
+      await waitForRequest(harness, run, "turn/start");
+      await harness.notify({
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "message-1",
+          delta: "Partial reply",
+        },
+      });
+      const message =
+        'unexpected status 403 Forbidden: {"error":"middleware_denied","reason_code":"request_credential_denied","layer":"l7","detail":"PRIVATE-BODY"}, request id: PRIVATE-ID';
+      await harness.notify({
+        method: "error",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          willRetry: false,
+          error: { message, codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 403 } } },
+        },
+      });
+      await harness.notify(turnCompleted({ id: "turn-1", status: "failed", error: { message } }));
+      const result = await run;
+      const expected =
+        "The deployment rejected this model request. Ask the administrator to check the model access policy and request settings.";
+      expect(result.lastAssistant).toMatchObject({
+        stopReason: "error",
+        errorCode: "model_request_policy_denied",
+        errorMessage: expected,
+      });
+      expect(onAgentEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stream: "lifecycle",
+          data: expect.objectContaining({
+            error: expected,
+            errorObservation: expect.objectContaining({
+              httpStatus: 403,
+              providerErrorCode: "model_request_policy_denied",
+            }),
+          }),
+        }),
+      );
+      expect(params.authProfileStore.usageStats?.["openai:work"]?.blockedUntil).toBeUndefined();
+      expect(JSON.stringify(result.lastAssistant)).not.toContain("PRIVATE");
+    });
+
+    it("does not join a notification's denial text with a different startup RPC status", async () => {
+      const message =
+        'unexpected status 403 Forbidden: {"error":"middleware_denied","reason_code":"request_credential_denied","layer":"l7"}';
+      const harness: Harness = createStartedThreadHarness(async (method) => {
+        if (method === "turn/start") {
+          await harness.notify({
+            method: "error",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              willRetry: false,
+              error: { message },
+            },
+          });
+          throw Object.assign(new Error("ordinary RPC refusal"), {
+            data: {
+              error: {
+                message: "ordinary RPC refusal",
+                codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 403 } },
+              },
+            },
+          });
+        }
+        return undefined;
+      });
+      const result = await runCodexAppServerAttempt(createUsageParams());
+      expect(readAttemptTerminal(result).promptError).toMatchObject({
+        message: "ordinary RPC refusal",
+        status: 403,
+      });
+      expect(readAttemptTerminal(result).promptError).not.toHaveProperty(
+        "code",
+        "model_request_policy_denied",
+      );
+    });
+
     it.each([
       { codexErrorInfo: "rateLimitExceeded", status: 429 },
       { codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } }, status: 429 },

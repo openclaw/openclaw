@@ -1,5 +1,6 @@
 import { AgentHarnessProjectionSettlement } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
+  AgentHarnessModelRequestPolicyError,
   classifyAgentHarnessTerminalOutcome,
   prepareAgentRunTerminalReply,
   type AgentMessage,
@@ -97,6 +98,7 @@ export abstract class CodexTurnProjection {
   /** Structured overloads may continue once the exact settled transcript is captured. */
   settledTurnFailureFinalizationAllowed = false;
   protected promptError: unknown;
+  private requestPolicyDenialMessage: string | undefined;
   protected promptErrorSource: AttemptFailureSource | null = null;
   protected providerRefusal: CodexProviderRefusal | undefined;
   protected synthesizedMissingToolResultError: string | null = null;
@@ -492,12 +494,21 @@ export abstract class CodexTurnProjection {
     if (this.providerRefusal) {
       return;
     }
+    if (
+      this.promptError instanceof AgentHarnessModelRequestPolicyError &&
+      params.codexErrorInfo == null &&
+      (!params.message || params.message === this.requestPolicyDenialMessage)
+    ) {
+      return;
+    }
     this.promptError =
       resolveCodexPromptError({
         message: params.message,
         codexErrorInfo: params.codexErrorInfo,
         rateLimits: params.rateLimits,
       }) ?? params.fallbackMessage;
+    this.requestPolicyDenialMessage =
+      this.promptError instanceof AgentHarnessModelRequestPolicyError ? params.message : undefined;
     this.promptErrorSource = params.promptErrorSource;
   }
 
