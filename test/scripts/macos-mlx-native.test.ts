@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 
 // Exercise the stdlib driver with fake tools/frames, never models, Swift, or network.
 const program = String.raw`
-import base64, hashlib, importlib.util, io, json, os, signal, stat, struct, sys, tempfile, time, unittest
+import base64, hashlib, importlib.util, io, json, os, re, shutil, signal, stat, struct, sys, tempfile, time, unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -513,6 +513,7 @@ class DriverTests(unittest.TestCase):
             self.assertIn(flag, fetch)
         self.assertEqual(fetch[-2:], ["https://github.com/openclaw/openclaw.git", m.STABLE])
         self.assertTrue(all((snapshot / p).read_bytes() == data for p in m.INPUTS))
+        self.assertTrue(all(not (snapshot / p).exists() for p in m.SELECTED_INPUTS))
 
     def test_online_profile_grants_only_exact_admitted_platform_temp_and_offline_is_unchanged(self):
         profile = self.root / "scripts/macos-health-render.sb"
@@ -584,6 +585,164 @@ class DriverTests(unittest.TestCase):
                 if fixture.is_symlink(): fixture.unlink()
                 fixture.write_bytes(original)
 
+    def xctest_output(self):
+        lines=["Test Suite 'Selected tests' started at fixture."]
+        total=0
+        for name,relative in m.SELECTED_TESTS.items():
+            target=self.root/relative
+            target.parent.mkdir(parents=True,exist_ok=True)
+            target.write_bytes((Path(sys.argv[1]).parents[1]/relative).read_bytes())
+            methods=re.findall(r"^\s+func (test\w+)\(",target.read_text(),re.M)
+            total+=len(methods)
+            lines.append("Test Suite '"+name+"' started at fixture.")
+            for method in methods:
+                for state in ["started","passed"]:
+                    lines.append("Test Case '-[OpenClawMLXTTSRuntimeTests."+name+" "+method+"]' "+state+".")
+            lines.extend(["Test Suite '"+name+"' passed at fixture."," Executed "+str(len(methods))+" tests, with 0 failures (0 unexpected) in 0 seconds"])
+        lines.extend(["Test Suite 'Selected tests' passed at fixture."," Executed "+str(total)+" tests, with 0 failures (0 unexpected) in 0 seconds","Test run with 0 tests in 0 suites passed"])
+        return "\n".join(lines)
+
+    def test_selected_preflight_inputs_do_not_become_historical_snapshot_requirements(self):
+        calls=[]
+        def command(argv,*args):
+            calls.append(argv)
+            if argv[1:]==["rev-parse","HEAD"]:return "a"*40
+            if argv[1]=="hash-object":return "blob:"+argv[-1]
+            if argv[-1].endswith("^{tree}"):return "fixture-tree"
+            return "blob:"+argv[-1].split(":",1)[1]
+        self.proof.command=command
+        result=self.proof.verify_source(self.root,"a"*40)
+        self.assertTrue(set(m.SELECTED_INPUTS)<=set(result["blobs"]))
+        self.assertTrue(set(m.SELECTED_INPUTS).isdisjoint(m.INPUTS))
+        self.assertEqual(len(m.SELECTED_TESTS),2)
+
+    def test_fixed_build_executes_both_source_derived_classes_and_rejects_missing_execution(self):
+        calls=self.fake_build()
+        self.proof.build("fixed",self.root)
+        tests=self.proof.result["variants"]["fixed"]["tests"]
+        self.assertEqual(tests["testCount"],13)
+        self.assertEqual(set(tests["classes"]),set(m.SELECTED_TESTS))
+        invocation=next(call for call in calls if call[:2]==["swift","test"])
+        selector=invocation[invocation.index("--filter")+1]
+        for name in m.SELECTED_TESTS:
+            self.assertRegex("OpenClawMLXTTSRuntimeTests."+name+"/testFixture",selector)
+        good=self.xctest_output()
+        for output in [good.replace("MLXTTSModelConfigPreflightTests","WrongClass"),
+                       "Test run with 0 tests in 0 suites passed",
+                       good.replace("testValidObjectsAndArraysDoNotRecover","testWrongMethod"),
+                       good.replace("Executed 7 tests","Executed 0 tests"),
+                       good+"\nTest Case 'fixture' skipped."]:
+            with self.subTest(output=output[-70:]),self.assertRaises(RuntimeError):
+                m.verify_fixed_xctests(self.root,output)
+
+    def fake_cache_flow(self, failure=None, seed_fault=None):
+        events=[]
+        files={name:json.dumps({"valid":"config"}).encode() if name=="config.json" else name.encode() for name in m.FILES}
+        pins={name:(len(data),hashlib.sha256(data).hexdigest() if name=="model.safetensors" else hashlib.sha1(("blob "+str(len(data))+"\0").encode()+data).hexdigest()) for name,data in files.items()}
+        override=patch.object(m,"FILES",pins);override.start();self.addCleanup(override.stop)
+        self.proof.controls=lambda variant:{"fixture":True}
+        self.proof.snapshot=lambda name,revision: name
+        self.proof.build=lambda name,source:(name,None,None)
+        def helper(name,variant,hub,offline=True):
+            child=SimpleNamespace(name=name,variant=variant[0],hub=hub,offline=offline,closed=False)
+            child.joined=lambda:child.closed
+            hub.mkdir(parents=True,exist_ok=True)
+            events.append(("helper",name,variant[0],hub.name,offline))
+            if name=="stable-cold":self.assertEqual(list(hub.iterdir()),[])
+            if name=="bad":self.assertEqual(sorted(p.name for p in hub.rglob("*") if p.is_file()),sorted(files))
+            if name=="fixed-stable-complete":self.assertTrue((hub/"hub-metadata/refs/main").is_file())
+            if name=="malformed-online":self.assertEqual((hub/"mlx-audio/mlx-community_Soprano-80M-bf16/config.json").read_bytes(),m.MALFORMED_CONFIG)
+            self.proof.cache_consumers.append((hub.resolve(),child))
+            return child
+        def pcm(child,name,stream=False,seconds=120):
+            events.append(("pcm",name))
+            if failure==name:raise RuntimeError("fixture terminal failure")
+            model=child.hub/"mlx-audio/mlx-community_Soprano-80M-bf16"
+            if not child.offline:
+                model.mkdir(parents=True,exist_ok=True)
+                for relative,data in files.items():(model/relative).write_bytes(data)
+                (model/".mlx-audio-snapshot.json").write_text(json.dumps({"revision":m.REVISION}))
+                metadata=child.hub/"hub-metadata/refs/main";metadata.parent.mkdir(parents=True,exist_ok=True);metadata.write_text(m.REVISION)
+            self.assertEqual((model/"config.json").read_bytes(),files["config.json"])
+            if name=="stable-complete-offline":(child.hub/"consumer-metadata").write_text("stable-owned")
+        def stop(child):
+            events.append(("stop",child.name));child.closed=True
+        def receive(child,deadline):
+            if child.name=="malformed-offline":
+                model=child.hub/"mlx-audio/mlx-community_Soprano-80M-bf16"
+                self.assertEqual((model/"config.json").read_bytes(),b"{ malformed config")
+                shutil.rmtree(model) # Simulate the library's owned invalid-cache retirement.
+                seed=self.proof.cache_root/"malformed-online-recovery/mlx-audio/mlx-community_Soprano-80M-bf16"
+                if seed_fault=="config":(seed/"config.json").unlink()
+                if seed_fault=="weights":(seed/"model.safetensors").write_bytes(b"wrong")
+            return {"type":"error","error":{"id":child.request,"code":"model_load_failed","message":"NSURLErrorDomain Code=-1009"}}
+        self.proof.helper=helper;self.proof.pcm=pcm;self.proof.stop_helper=stop
+        self.proof.active_cancel=lambda child,name,shutdown=False:stop(child) if shutdown else events.append(("cancel",name))
+        self.proof.request=lambda child,name:setattr(child,"request",name)
+        self.proof.receive=receive
+        response=io.BytesIO(json.dumps({"sha":m.REVISION}).encode())
+        remote=patch.object(m.urllib.request,"urlopen",return_value=response);remote.start();self.addCleanup(remote.stop)
+        return events
+
+    def test_bad_bare_cache_and_genuine_stable_metadata_handoff_are_distinct(self):
+        events=self.fake_cache_flow()
+        self.proof.extended(("fixed",None,None))
+        helpers=[event for event in events if event[0]=="helper"]
+        self.assertIn(("helper","bad","bad","bad",True),helpers)
+        self.assertIn(("helper","stable-cold","stable","stable-complete",False),helpers)
+        self.assertIn(("helper","fixed-stable-complete","fixed","stable-complete",True),helpers)
+        inventories=self.proof.result["cacheInventories"]
+        self.assertEqual(inventories["stable-offline-complete"],inventories["stable-to-fixed-handoff"])
+        self.assertTrue(any(entry["path"]=="hub-metadata/refs/main" for entry in inventories["stable-online-complete"]["entries"]))
+        self.assertTrue(self.proof.result["stableCacheHandoff"]["stableConsumerChangedMetadata"])
+        self.assertFalse(self.proof.result["stableCacheHandoff"]["harnessModifiedCache"])
+        self.assertEqual(set(self.proof.result["retiredCachePopulations"]),{"cold","stable-used","bad","stable-complete","malformed-offline-control","malformed-online-recovery"})
+
+    def test_malformed_online_seed_is_independent_and_repaired_population_reused_offline(self):
+        events=self.fake_cache_flow()
+        self.proof.extended(("fixed",None,None))
+        route=[event for event in events if event[0]=="helper" and event[1].startswith("malformed")]
+        self.assertEqual([(event[1],event[3],event[4]) for event in route],[("malformed-offline","malformed-offline-control",True),("malformed-online","malformed-online-recovery",False),("malformed-repaired-offline","malformed-online-recovery",True)])
+        for index,event in enumerate(events):
+            if event[0]=="helper" and event[1] in ["malformed-online","malformed-repaired-offline"]:
+                previous="malformed-offline" if event[1]=="malformed-online" else "malformed-online"
+                self.assertIn(("stop",previous),events[:index])
+        self.assertFalse(self.proof.result["malformedCacheRecovery"]["harnessRepairedConfig"])
+        self.assertEqual(self.proof.result["malformedCacheRed"]["id"],"malformed-offline")
+        self.assertFalse(any(self.proof.cache_root.iterdir()))
+
+    def test_offline_deletion_cannot_replace_untouched_malformed_online_seed(self):
+        for fault in ["config","weights"]:
+            with self.subTest(fault=fault):
+                events=self.fake_cache_flow(seed_fault=fault)
+                with self.assertRaises(RuntimeError):self.proof.extended(("fixed",None,None))
+                self.assertFalse(any(event[:2]==("helper","malformed-online") for event in events))
+                self.assertFalse((self.proof.cache_root/"malformed-offline-control").exists())
+                shutil.rmtree(self.proof.cache_root);self.proof.cache_root.mkdir()
+                self.proof.cache_consumers.clear()
+        with self.assertRaisesRegex(RuntimeError,"populations must differ"):
+            self.proof.malformed_cache_recovery(("fixed",None,None),self.proof.cache_root,self.proof.cache_root)
+
+    def test_failure_stops_later_native_phases_without_refreshing_budget(self):
+        events=self.fake_cache_flow(failure="stable-complete-offline")
+        deadline=self.proof.budget.work_end
+        with self.assertRaisesRegex(RuntimeError,"fixture terminal failure"):
+            self.proof.extended(("fixed",None,None))
+        self.assertEqual(self.proof.budget.work_end,deadline)
+        self.assertNotIn("offlineHelperCacheComplete",self.proof.result)
+        self.assertFalse(any(event[:2]==("helper","fixed-stable-complete") or event[:2]==("helper","malformed-offline") for event in events))
+
+    def test_population_retirement_requires_joined_consumers_and_keeps_metadata_identity(self):
+        hub=self.proof.cache_root/"fixture";hub.mkdir();(hub/"metadata").write_bytes(b"retained")
+        child=SimpleNamespace(joined=lambda:False)
+        self.proof.cache_consumers.append((hub.resolve(),child))
+        inventory=self.proof.cache_inventory("fixture",hub)
+        self.assertEqual(inventory["entries"][0]["sha256"],hashlib.sha256(b"retained").hexdigest())
+        with self.assertRaisesRegex(RuntimeError,"unjoined consumer"):self.proof.retire_cache(hub)
+        self.assertEqual((hub/"metadata").read_bytes(),b"retained")
+        child.joined=lambda:True;self.proof.retire_cache(hub)
+        self.assertFalse(hub.exists())
+
     def fake_build(self, stale=False, mutate=False, name="fixed"):
         package = self.root / m.PACKAGE
         package.mkdir(parents=True)
@@ -606,7 +765,7 @@ class DriverTests(unittest.TestCase):
                 return str(binary)
             if args[:2] == ["swift", "test" if name == "fixed" else "build"] and "--show-bin-path" not in args and mutate:
                 (package / "Package.resolved").write_text(json.dumps({"pins": pins, "mutated": True}))
-            return "fixture output"
+            return self.xctest_output() if args[:2]==["swift","test"] else "fixture output"
         self.proof.command = command
         return calls
 

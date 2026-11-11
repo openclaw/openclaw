@@ -12,7 +12,7 @@ import {
 import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
 import { NativeCiBudget } from "./lib/native-ci-budget.mts";
 
-const stableSHA = "8b18b5578f66eab1501cba4cef2310d88bfb9a41"; // Named v2026.10.9 baseline.
+const stableSHA = "847611dcaa3bf0e2783335f961dd1fd0580e4d9f"; // Named v2026.11.3 baseline.
 const overlays = [
   "test/helpers/macos-mlx-settings-producer.ts",
   "apps/macos/Tests/OpenClawIPCTests/MLXSettingsUpgradeTests.swift",
@@ -48,7 +48,7 @@ await runWithFailedTrailer("macos-mlx-settings", async () => {
   const result: Record<string, unknown> = {
     version: 1,
     complete: false,
-    stableRelease: "v2026.10.9",
+    stableRelease: "v2026.11.3",
     phases: [],
   };
   const childEnv = {

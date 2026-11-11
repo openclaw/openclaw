@@ -23,7 +23,7 @@ import urllib.request
 import uuid
 
 
-STABLE = "8b18b5578f66eab1501cba4cef2310d88bfb9a41"  # v2026.10.9, not a moving release.
+STABLE = "847611dcaa3bf0e2783335f961dd1fd0580e4d9f"  # v2026.11.3, not a moving release.
 BAD = "6d3c68afc27ba52972a76deb2cee0e483d6e1b4f"
 BAD_MANIFEST_SHA256 = "2164677fc1096873f7130346d5b595945261cf688104deaa608c02a1d2c762cf"
 BAD_LOCK_SHA256 = "0be43dc0d1edf2f7ab547c5c5ed7f99ce4f9976e5b2e87a83494c6f6383af0a0"
@@ -48,11 +48,20 @@ INPUTS = [
     f"{PACKAGE}/Sources/OpenClawMLXTTSRuntime/MLXTTSHelperService.swift",
     f"{PROTOCOL}/Sources/OpenClawMLXTTSProtocol/MLXTTSProtocol.swift",
 ]
+SELECTED_TESTS = {
+    "MLXTTSHelperServiceTests": f"{PACKAGE}/Tests/OpenClawMLXTTSRuntimeTests/MLXTTSHelperServiceTests.swift",
+    "MLXTTSModelConfigPreflightTests": f"{PACKAGE}/Tests/OpenClawMLXTTSRuntimeTests/MLXTTSModelConfigPreflightTests.swift",
+}
+SELECTED_INPUTS = [
+    f"{PACKAGE}/Sources/OpenClawMLXTTSRuntime/MLXTTSModelConfigPreflight.swift",
+    *SELECTED_TESTS.values(),
+]
 TEXT = "The quiet fox waits beside the river."
 ACTIVE_TEXT = (
     "Along the quiet river, the patient fox watches the evening light settle over the stones and waits for the wind. "
     "The path behind the old bridge stays empty while distant birds circle above the forest and the water moves below."
 )
+MALFORMED_CONFIG = b"{ malformed config"
 FRAME_LIMIT = 64 * 1024 * 1024  # The shared Swift frame codec's public limit.
 PCM_LIMIT = 16 * 1024 * 1024
 CACHE_LIMIT = 2 * 1024 * 1024 * 1024  # Includes Hub duplication and both legacy fixtures.
@@ -394,12 +403,43 @@ def decode_frames(buffer):
     return result
 
 
-def denied_cache_error(event):
+def denied_cache_error(event, request_id="bad-offline"):
     error = event.get("error", {})
-    require(event.get("type") == "error" and error.get("id") == "bad-offline" and error.get("code") == "model_load_failed", "bad variant did not fail at model load")
+    require(event.get("type") == "error" and error.get("id") == request_id and error.get("code") == "model_load_failed", "bad variant did not fail at model load")
     # A file permission or GPU failure is not the expected network/cache red.
     require(re.search(r"NSURLError|networkError|network connection|internet connection|Network is unreachable|Could not resolve host|DNS", error.get("message", ""), re.I), "bad load error does not identify denied-network path")
     return error
+
+
+def verify_fixed_xctests(source, output):
+    expected = {}
+    for name, relative in SELECTED_TESTS.items():
+        methods = re.findall(r"^\s+func (test\w+)\(", (source / relative).read_text(), re.M)
+        require(methods and len(methods) == len(set(methods)), f"{name}: missing or duplicate source test methods")
+        expected[name] = methods
+        opening = f"Test Suite '{name}' started"
+        closing = f"Test Suite '{name}' passed"
+        require(output.count(opening) == 1 and output.count(closing) == 1, f"{name}: missing XCTest suite execution")
+        start, end = output.index(opening), output.index(closing)
+        require(start < end, f"{name}: invalid XCTest suite ordering")
+        body = output[start:end]
+        pattern = rf"Test Case '-\[(?:\w+\.)?{re.escape(name)} (test\w+)\]' (started|passed|failed|skipped)"
+        events = re.findall(pattern, body)
+        for state in ("started", "passed"):
+            actual = [method for method, event in events if event == state]
+            require(sorted(actual) == sorted(methods), f"{name}: wrong or zero XCTest methods")
+        require(not any(event in ("failed", "skipped") for _, event in events), f"{name}: failed or skipped XCTest")
+        summary = output[end:].splitlines()
+        require(len(summary) > 1 and re.search(
+            rf"Executed {len(methods)} tests?, with 0 failures \(0 unexpected\)", summary[1]),
+            f"{name}: wrong XCTest suite count")
+    require(not re.search(r"^Test Case .+ (?:failed|skipped)\b", output, re.M), "selected XCTest failed or skipped")
+    # Swift Testing emits a separate zero-test footer even after XCTest succeeds.
+    total = sum(map(len, expected.values()))
+    require(re.search(
+        rf"Test Suite '(?:Selected tests|All tests)' passed[^\n]*\n\s*Executed {total} tests?, with 0 failures \(0 unexpected\)",
+        output), "missing selected XCTest aggregate closure")
+    return {"classes": expected, "testCount": total, "outputSHA256": hashlib.sha256(output.encode()).hexdigest()}
 
 
 class Budget:
@@ -653,6 +693,7 @@ class Proof:
     def __init__(self, checkout, scratch, proof_dir, budget):
         self.checkout, self.scratch, self.proof_dir, self.budget = checkout, scratch, proof_dir, budget
         self.children = []
+        self.cache_consumers = []
         self.platform_temp = None
         self.platform_destinations = []
         self.result = {
@@ -867,7 +908,7 @@ class Proof:
 
     def verify_source(self, source, revision):
         require(self.command(["git", "rev-parse", "HEAD"], 30, source) == revision, "selected checkout HEAD mismatch")
-        blobs = {p: self.command(["git", "rev-parse", f"{revision}:{p}"], 30, source) for p in [*INPUTS, BAD_RESOLUTION]}
+        blobs = {p: self.command(["git", "rev-parse", f"{revision}:{p}"], 30, source) for p in [*INPUTS, *SELECTED_INPUTS, BAD_RESOLUTION]}
         for p, expected in blobs.items():
             actual = self.command(["git", "hash-object", p], 30, source)
             require(actual == expected, f"selected helper input differs: {p}")
@@ -964,7 +1005,8 @@ class Proof:
         self.command(["swiftc", "-framework", "Metal", "-framework", "CoreGraphics", probe_source, "-o", probe], 60)
         self.command([probe, library, "optional"], 30)
         if name == "fixed":
-            self.command(["swift", "test", "--build-system", "swiftbuild", "--package-path", package, "-c", "debug", "--build-path", build, "--arch", "arm64", "--disable-index-store", "-Xswiftc", "-gline-tables-only", "--filter", "MLXTTSHelperServiceTests"], 120)
+            output = self.command(["swift", "test", "--build-system", "swiftbuild", "--package-path", package, "-c", "debug", "--build-path", build, "--arch", "arm64", "--disable-index-store", "-Xswiftc", "-gline-tables-only", "--filter", "OpenClawMLXTTSRuntimeTests\\.(MLXTTSHelperServiceTests|MLXTTSModelConfigPreflightTests)/"], 120)
+            info["tests"] = verify_fixed_xctests(source, output)
         require(before == {"manifest": digest(manifest), "lock": digest(lock)}, f"{name}: inputs changed during build/tests")
         return binary, library, probe
 
@@ -1036,10 +1078,43 @@ class Proof:
             result[name] = {"bytes": size, "digest": actual, "algorithm": "sha256" if name == "model.safetensors" else "git-blob-sha1"}
         return result
 
+    def cache_inventory(self, name, root):
+        require(root.is_dir() and not root.is_symlink() and root.parent == self.cache_root,
+                "cache inventory is not an owned population")
+        entries = []
+        for path in sorted(root.rglob("*")):
+            info = path.lstat()
+            require(path.resolve().is_relative_to(root.resolve()), "cache inventory escapes population")
+            require(stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode),
+                    "unsupported cache inventory entry")
+            entry = {"path": path.relative_to(root).as_posix(), "mode": stat.S_IMODE(info.st_mode),
+                     "type": "symlink" if path.is_symlink() else "directory" if path.is_dir() else "file",
+                     "bytes": info.st_size if not path.is_dir() else 0,
+                     "sha256": digest(path) if path.is_file() else None}
+            if path.is_symlink():
+                entry["target"] = os.readlink(path)
+                require(not Path(entry["target"]).is_absolute(), "absolute cache symlink")
+            entries.append(entry)
+        require(entries and len(entries) <= 512, "empty or oversized cache inventory")
+        self.cache_size()
+        result = {"population": root.name, "entries": entries,
+                  "sha256": hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()}
+        self.result.setdefault("cacheInventories", {})[name] = result
+        return result
+
+    def retire_cache(self, root):
+        require(root.is_dir() and not root.is_symlink() and root.parent == self.cache_root,
+                "cache retirement is not an owned population")
+        require(all(child.joined() for hub, child in self.cache_consumers if hub == root.resolve()),
+                "cache population still has an unjoined consumer")
+        shutil.rmtree(root)
+        self.result.setdefault("retiredCachePopulations", []).append(root.name)
+
     def helper(self, name, variant, hub, offline=True):
         env = self.isolated_env(self.scratch / (name + "-home"), hub)
         argv = self.sandbox([variant[0]], online=not offline)
         child = Child(argv, self.checkout, env, framed=True, owner=self.children)
+        self.cache_consumers.append((hub.resolve(), child))
         child.on_tick = self.cache_size
         require(child.event(self.budget.deadline(30)) == {"type": "ready"}, "helper did not become ready")
         return child
@@ -1140,16 +1215,29 @@ class Proof:
         self.result["model"] = {"repo": MODEL, "revision": REVISION, "license": "Apache-2.0", "files": self.model_files(model_root)}
         legacy = self.cache_root / "stable-used/mlx-audio/mlx-community_Soprano-80M-bf16"
         bad_legacy = self.cache_root / "bad/mlx-audio/mlx-community_Soprano-80M-bf16"
-        for target in [legacy, bad_legacy]:
+        malformed_offline = self.cache_root / "malformed-offline-control"
+        malformed_online = self.cache_root / "malformed-online-recovery"
+        for target in [legacy, bad_legacy, *[
+            hub / "mlx-audio/mlx-community_Soprano-80M-bf16"
+            for hub in (malformed_offline, malformed_online)
+        ]]:
             target.mkdir(parents=True)
             for name in FILES:
                 shutil.copyfile(model_root / name, target / name)
             self.model_files(target)
         self.result["legacyFixture"] = "six verified native-downloaded files; not a stable-created download; no snapshot/HTTP metadata"
+        # Independent seeds: the offline library may clear its entire invalid population.
+        for hub in (malformed_offline, malformed_online):
+            model = hub / "mlx-audio/mlx-community_Soprano-80M-bf16"
+            (model / "config.json").write_bytes(MALFORMED_CONFIG)
+            self.cache_inventory(hub.name + "-created", hub)
+        self.retire_cache(cold)
+        variants = {}
         self.cache_size()
         for name, revision in [("stable", STABLE), ("bad", BAD)]:
             source = self.snapshot(name, revision)
             variant = self.build(name, source)
+            variants[name] = variant
             self.result["controls"][name] = self.controls(variant)
             self.begin(name + ": legacy cache under enforced offline boundary")
             hub = legacy.parent.parent if name == "stable" else bad_legacy.parent.parent
@@ -1170,8 +1258,86 @@ class Proof:
         self.pcm(child, "fixed-after-cancel")
         self.active_cancel(child, "fixed-shutdown", shutdown=True)
         self.model_files(legacy)
+        self.retire_cache(legacy.parent.parent)
+        self.retire_cache(bad_legacy.parent.parent)
+        self.stable_cache_handoff(variants["stable"], fixed)
+        self.malformed_cache_recovery(fixed, malformed_offline, malformed_online)
         self.result["offlineHelperCacheComplete"] = True
         self.result["settingsUpgradeComplete"] = False
+
+    def stable_cache_handoff(self, stable, fixed):
+        self.begin("v2026.11.3: genuine empty-cache online population")
+        hub = self.cache_root / "stable-complete"
+        hub.mkdir()
+        require(not list(hub.iterdir()), "stable population did not start empty")
+        model = hub / "mlx-audio/mlx-community_Soprano-80M-bf16"
+        child = self.helper("stable-cold", stable, hub, offline=False)
+        self.pcm(child, "stable-native-download", seconds=240)
+        self.stop_helper(child)
+        self.model_files(model)
+        populated = self.cache_inventory("stable-online-complete", hub)
+        self.begin("v2026.11.3: genuine cache offline reuse")
+        child = self.helper("stable-complete-offline", stable, hub)
+        self.pcm(child, "stable-complete-offline")
+        self.stop_helper(child)
+        self.model_files(model)
+        retained = self.cache_inventory("stable-offline-complete", hub)
+        self.begin("fixed: unmodified complete stable cache handoff")
+        require(self.cache_inventory("stable-to-fixed-handoff", hub) == retained,
+                "stable cache changed before fixed consumer")
+        child = self.helper("fixed-stable-complete", fixed, hub)
+        self.pcm(child, "fixed-stable-complete-offline")
+        self.stop_helper(child)
+        self.model_files(model)
+        consumed = self.cache_inventory("fixed-stable-complete", hub)
+        self.result["stableCacheHandoff"] = {
+            "stable": STABLE, "stableRelease": "v2026.11.3",
+            "onlineInventory": populated["sha256"], "handoffInventory": retained["sha256"],
+            "fixedInventory": consumed["sha256"], "harnessModifiedCache": False,
+            "stableConsumerChangedMetadata": populated != retained,
+            "fixedConsumerChangedMetadata": retained != consumed,
+        }
+        self.retire_cache(hub)
+
+    def malformed_cache_recovery(self, fixed, offline_hub, online_hub):
+        require(offline_hub != online_hub, "malformed control and recovery populations must differ")
+        self.begin("fixed: malformed offline control under enforced network denial")
+        child = self.helper("malformed-offline", fixed, offline_hub)
+        self.request(child, "malformed-offline")
+        event = self.receive(child, self.budget.deadline(120))
+        self.result["malformedCacheRed"] = denied_cache_error(event, "malformed-offline")
+        self.stop_helper(child)
+        self.cache_inventory("malformed-offline-control-after-library-attempt", offline_hub)
+        self.retire_cache(offline_hub)
+        self.begin("fixed: untouched malformed seed, real online library recovery")
+        model = online_hub / "mlx-audio/mlx-community_Soprano-80M-bf16"
+        config = model / "config.json"
+        require(config.is_file() and config.read_bytes() == MALFORMED_CONFIG,
+                "online recovery seed is no longer deliberately malformed")
+        seed = self.result["cacheInventories"]["malformed-online-recovery-created"]
+        require(self.cache_inventory("malformed-online-seed-admission", online_hub) == seed,
+                "online recovery seed changed before its first consumer")
+        child = self.helper("malformed-online", fixed, online_hub, offline=False)
+        self.pcm(child, "malformed-online-recovery", seconds=240)
+        self.stop_helper(child)
+        self.model_files(model)
+        require(json.loads((model / ".mlx-audio-snapshot.json").read_text())["revision"] == REVISION,
+                "recovered snapshot revision mismatch")
+        recovered = self.cache_inventory("malformed-online-recovered", online_hub)
+        self.begin("fixed: same repaired online population, fresh offline reuse")
+        require(self.cache_inventory("malformed-repaired-handoff", online_hub) == recovered,
+                "repaired cache changed before offline consumer")
+        child = self.helper("malformed-repaired-offline", fixed, online_hub)
+        self.pcm(child, "malformed-repaired-offline")
+        self.stop_helper(child)
+        self.model_files(model)
+        self.cache_inventory("malformed-repaired-offline", online_hub)
+        self.result["malformedCacheRecovery"] = {
+            "offlineControlPopulation": offline_hub.name, "onlineRecoveryPopulation": online_hub.name,
+            "untouchedMalformedOnlineSeed": True, "offlineReuseSameRepairedPopulation": True,
+            "harnessRepairedConfig": False,
+        }
+        self.retire_cache(online_hub)
 
     def execute(self, extended, foundation_only=False):
         require(not foundation_only or extended, "Foundation admission-only requires extended admission")
