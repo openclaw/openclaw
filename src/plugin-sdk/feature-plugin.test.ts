@@ -151,6 +151,34 @@ describe("typed feature plugins", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    [
+      new Error("operation unavailable", { cause: new Error("private cause") }),
+      "operation unavailable",
+    ],
+    [new Error(""), ""],
+    ["string failure", "string failure"],
+    [{ message: "object failure", details: "private details" }, "object failure"],
+    [{ details: "private details" }, "[object Object]"],
+    [null, "null"],
+    [undefined, "undefined"],
+    [42, "42"],
+    [new Error("x".repeat(2001)), "x".repeat(2000)],
+  ])("returns bounded application errors for thrown value %#", async (error, message) => {
+    const action = register(() => ({
+      inspect: async () => {
+        throw error;
+      },
+    }));
+    await expect(
+      action.handler({
+        pluginId: contract.pluginId,
+        actionId: "inspect",
+        payload: { value: "valid" },
+      }),
+    ).resolves.toEqual({ ok: false, error: message, code: "OPERATION_FAILED" });
+  });
+
   it("propagates tool cancellation across awaited feature handlers", async () => {
     const { promise: pending, resolve: finish } = createDeferredCore();
     register(() => ({
@@ -214,7 +242,11 @@ describe("typed feature plugins", () => {
       };
     });
     for (const { invoke } of actions) {
-      await expect(invoke()).rejects.toThrow("emitter is unavailable");
+      await expect(invoke()).resolves.toEqual({
+        ok: false,
+        error: "Feature event emitter is unavailable until its Gateway service starts",
+        code: "OPERATION_FAILED",
+      });
     }
 
     const broadcastPluginEvent = vi.fn();
@@ -239,7 +271,7 @@ describe("typed feature plugins", () => {
       await services.stop();
     }
     for (const { invoke } of actions) {
-      await expect(invoke()).rejects.toThrow();
+      await expect(invoke()).resolves.toMatchObject({ ok: false, code: "OPERATION_FAILED" });
     }
     expect(broadcastPluginEvent).toHaveBeenCalledTimes(fixtures.length);
   });

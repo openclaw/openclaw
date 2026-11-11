@@ -1,4 +1,5 @@
 /** Registers typed feature operations on existing host-owned tools, commands, and actions. */
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
 import type { AgentToolUpdateCallback } from "../agents/runtime/index.js";
 import { jsonResult } from "../agents/tools/common.js";
@@ -193,7 +194,11 @@ export function defineFeaturePlugin<C extends FeatureContract>(
               if (error instanceof FeatureValidationError) {
                 return { ok: false, error: error.message, code: error.code };
               }
-              throw error;
+              return {
+                ok: false,
+                error: String(asOptionalObjectRecord(error)?.message ?? error).slice(0, 2000),
+                code: "OPERATION_FAILED",
+              };
             }
           },
         });
