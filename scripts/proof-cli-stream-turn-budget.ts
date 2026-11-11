@@ -34,10 +34,15 @@
  *                       snapshots are bounded in aggregate, that the blocks with
  *                       room keep their input, and that a block past the bound
  *                       still reports a tool start.
- *  6. subagent-exempt — 3x both budgets streamed as forwarded subagent traffic
- *                       (`parent_tool_use_id` set), which the parent lane
- *                       discards. Pins that no budget is spent and the parent's
- *                       own answer is still assembled normally.
+ *  6. subagent-frame-bound — forwarded subagent traffic (`parent_tool_use_id`
+ *                       set), which the parent lane discards, streamed until a
+ *                       budget is spent. Pins that it is the FRAME odometer that
+ *                       stops it (so a discarded-record flood stays bounded) at
+ *                       a point past the character budget (so upstream's fixed
+ *                       per-record allowance is in force), that the finished
+ *                       turn is still recovered with truncation reported, that
+ *                       the parent's own answer survives, and that attributed
+ *                       progress keeps flowing on both sides of exhaustion.
  *  7. progress-past-budget — after the budget IS spent by parent traffic, the
  *                       parser still emits tool start, tool result and
  *                       attributed subagent progress. Pins the liveness facts
@@ -587,7 +592,7 @@ function createLivenessParser(sinks: {
   });
 }
 
-function scenarioSubagentExempt(): void {
+function scenarioSubagentFrameBound(): void {
   const sinks = {
     assistantDeltas: [] as string[],
     toolStarts: [] as CliToolUseStartDelta[],
@@ -596,45 +601,79 @@ function scenarioSubagentExempt(): void {
   };
   const parser = createLivenessParser(sinks);
 
-  // Three times both budgets, entirely in traffic the parent lane discards.
+  // The parent streams its answer BEFORE the flood, so no assertion below can
+  // be satisfied by a reply the flood itself produced.
+  parser.push(`${textDeltaFrame(FINAL_ANSWER)}\n`);
+
+  // Forwarded child records, charged like every other frame. Streamed until the
+  // parser itself reports a budget spent rather than to a fixed count; capped so
+  // a build that charges nothing cannot loop forever.
   let streamed = 0;
   let lines = 0;
-  while (
-    streamed < CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnRawChars * 3 ||
-    lines < CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines * 3
-  ) {
+  const cap = 4 * CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines;
+  while (parser.getErrorText() === null && lines < cap) {
     const chunk = `${subagentFrame(lines, 480)}\n`;
     streamed += chunk.length;
     lines += 1;
     parser.push(chunk);
   }
+  const progressAtExhaustion = sinks.attributedProgress.length;
+  const deltasAtExhaustion = sinks.assistantDeltas.length;
 
-  parser.push(`${textDeltaFrame(FINAL_ANSWER)}\n`);
+  assert(
+    parser
+      .getErrorText()
+      ?.includes(`exceeded ${CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines} lines`) === true,
+    `subagent-frame-bound: ${lines} forwarded records / ${streamed} chars did not spend the frame budget (error text ${JSON.stringify(parser.getErrorText())}); a discarded-record flood must still be bounded by frames`,
+  );
+  // Upstream's fixed per-record allowance (#184352) is what makes FRAMES the
+  // binding odometer: at its raw size this stream would have spent the 8 MiB
+  // character budget thousands of frames earlier.
+  assert(
+    streamed > CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnRawChars,
+    `subagent-frame-bound: the frame budget was spent after only ${streamed} chars, under the ${CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnRawChars}-char budget; the per-record allowance is not in force`,
+  );
+
+  // Keep flooding past exhaustion: the frame cap stops assembly, and must not
+  // stop the progress the gateway's stall detector reads.
+  const postBudgetRecords = 512;
+  for (let index = 0; index < postBudgetRecords; index += 1) {
+    const chunk = `${subagentFrame(lines + index, 480)}\n`;
+    streamed += chunk.length;
+    parser.push(chunk);
+  }
+
   parser.push(`${terminalResultFrame()}\n`);
   parser.finish();
 
   assert(
     parser.getErrorText() === null,
-    `subagent-exempt: parser reported "${parser.getErrorText()}" for a turn whose parent lane stayed tiny`,
+    `subagent-frame-bound: parser reported "${parser.getErrorText()}"; a finished turn must survive a spent budget`,
   );
   assert(
-    parser.getOutputTruncationText() === null,
-    `subagent-exempt: a budget was spent on discarded traffic (${parser.getOutputTruncationText()})`,
+    parser
+      .getOutputTruncationText()
+      ?.includes(`exceeded ${CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines} lines`) === true,
+    `subagent-frame-bound: truncation was not reported (${parser.getOutputTruncationText()})`,
   );
   assert(
     parser.getOutput()?.text === FINAL_ANSWER,
-    `subagent-exempt: expected the parent answer, got ${JSON.stringify(parser.getOutput()?.text)}`,
+    `subagent-frame-bound: expected the parent answer, got ${JSON.stringify(parser.getOutput()?.text)}`,
   );
   assert(
-    sinks.assistantDeltas.join("").includes(FINAL_ANSWER),
-    "subagent-exempt: the parent's own streamed text was not assembled",
+    sinks.assistantDeltas.join("").includes(FINAL_ANSWER) &&
+      sinks.assistantDeltas.length === deltasAtExhaustion,
+    "subagent-frame-bound: the parent's own streamed text was lost, or child text was assembled",
   );
+  // Liveness is what the frame cap must not cost: every forwarded record still
+  // reports attributed progress, on both sides of exhaustion.
   assert(
-    sinks.attributedProgress.length === lines,
-    `subagent-exempt: expected ${lines} attributed progress signals, saw ${sinks.attributedProgress.length}`,
+    progressAtExhaustion === lines &&
+      sinks.attributedProgress.length === lines + postBudgetRecords,
+    `subagent-frame-bound: expected ${lines} attributed progress signals up to exhaustion and ${lines + postBudgetRecords} in total, saw ${progressAtExhaustion} and ${sinks.attributedProgress.length}`,
   );
   console.log(
-    `[subagent-exempt] streamed ${streamed} chars / ${lines} lines of forwarded subagent traffic (${(streamed / (1024 * 1024)).toFixed(1)} MiB, ${((lines / CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines) * 100).toFixed(0)}% of the line cap); no budget spent, parent answer intact`,
+    `[subagent-frame-bound] ${lines} forwarded subagent record(s) / ${streamed} chars (${(streamed / (1024 * 1024)).toFixed(1)} MiB) spent the ${CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines}-frame budget while charging ~64 chars each; ${postBudgetRecords} more records past exhaustion; turn recovered, parent answer intact, ${sinks.attributedProgress.length} progress signal(s)`,
   );
 }
 
@@ -1230,7 +1269,7 @@ scenarioMessagingRetentionBound();
 scenarioRecovered("recovered-raw", overflowRawCharBudget, "chars");
 scenarioRecovered("recovered-lines", overflowLineBudget, "lines");
 scenarioUnknowable();
-scenarioSubagentExempt();
+scenarioSubagentFrameBound();
 scenarioProgressPastBudget();
 scenarioToolSplitReply();
 scenarioReducedFinalFlag();

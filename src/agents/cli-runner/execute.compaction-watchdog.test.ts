@@ -308,7 +308,7 @@ const BUDGET_FILLER = {
 };
 
 it("grants compaction grace to a compaction that starts past a spent budget", async () => {
-  // A subagent-heavy Claude turn spends the parent budget and then compacts.
+  // A long Claude turn spends the parent budget and then compacts.
   // Assembly is over, but the watchdog still has to see both phases: without the
   // start it kills a healthy silent compaction at the ordinary no-output
   // deadline, and without the end it holds a grace the turn no longer has.

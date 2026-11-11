@@ -85,9 +85,9 @@ function terminalResultLine(result: string) {
 }
 
 /**
- * An ordinary parent record: not a partial-message delta (those are exempt from
- * the line odometer) and not forwarded subagent traffic (never charged), so it
- * is exactly what the line budget counts.
+ * An ordinary parent record: not a partial-message delta and not one of the
+ * control frames that share their per-frame callbacks, both of which are exempt
+ * from the line odometer. So it is exactly what the line budget counts.
  */
 function parentStatusLine() {
   return JSON.stringify({
@@ -122,24 +122,36 @@ const parentToolBlockStartLine = parentStreamEventLine({
 });
 
 describe("CLI stream-json turn budget and forwarded subagent traffic", () => {
-  it("does not charge forwarded subagent traffic against the parent line budget", () => {
+  it("charges forwarded subagent traffic against the parent line budget", () => {
+    // A discarded record still costs the parent a parse, and that is what the
+    // frame odometer bounds, so a child flood spends it exactly as parent
+    // traffic would. The same volume is pinned on the parent side by
+    // `cli-output-subagent-budget.test.ts`.
     const { parser, assistantDeltas } = createRecordingParser();
 
-    const subagentFlood = `${subagentLine("subagent chatter")}\n`.repeat(
-      CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines + 5_000,
+    parser.push(
+      `${subagentLine("subagent chatter")}\n`.repeat(
+        CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines + 1,
+      ),
     );
-    parser.push(subagentFlood);
-    parser.push(`${parentAssistantTextLine("parent answer")}\n`);
+    expect(parser.getErrorText()).toContain("JSONL output exceeded 20000 lines");
+    // None of it was ever parent reply text.
+    expect(assistantDeltas).toEqual([]);
+
+    // Charging the flood does not resurrect the discarded-turn defect: the
+    // finished turn is still recovered, with the flood reported as truncation.
     parser.push(`${terminalResultLine("parent answer")}\n`);
     parser.finish();
 
     expect(parser.getErrorText()).toBeNull();
-    expect(parser.getOutputTruncationText()).toBeNull();
-    expect(assistantDeltas.join("")).toBe("parent answer");
+    expect(parser.getOutputTruncationText()).toContain("JSONL output exceeded 20000 lines");
     expect(parser.getOutput()).toMatchObject({ text: "parent answer" });
   });
 
-  it("does not charge forwarded subagent traffic against the parent character budget", () => {
+  it("charges forwarded subagent message records a fixed allowance, not their wire length", () => {
+    // Upstream #184352's `measureClaudeSubagentRecord`, unchanged here: 8 MiB of
+    // forwarded child text costs the parent two parent-progress ids, so the
+    // character odometer is not what a long Agent call spends.
     const { parser, assistantDeltas } = createRecordingParser();
 
     const halfBudgetText = "s".repeat(Math.ceil(CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnRawChars / 2));
@@ -154,7 +166,7 @@ describe("CLI stream-json turn budget and forwarded subagent traffic", () => {
     expect(assistantDeltas.join("")).toBe("parent answer");
   });
 
-  it("still charges parent-lane records that carry an explicit null parent tool id", () => {
+  it("reports a spent line budget as truncation once the terminal result arrives", () => {
     const { parser } = createRecordingParser();
 
     // `exhaustLineBudget` streams `parent_tool_use_id: null` records and
@@ -221,26 +233,31 @@ describe("CLI stream-json turn budget and forwarded subagent traffic", () => {
     expect(assistantDeltas).toEqual([]);
   });
 
-  it("neither charges nor retains forwarded subagent partial-message deltas", () => {
-    // An exemption is only safe if the parent lane really discards the payload.
-    // These two records carry 8.6 MiB of child text past an 8 MiB budget, so if
-    // any of it is retained or emitted the exemption is unbounded retention.
+  it("charges but does not retain forwarded subagent partial-message deltas", () => {
+    // A child-attributed stream event can carry text, so upstream charges it in
+    // full rather than discounting it: these two records carry 8.6 MiB past an
+    // 8 MiB budget and spend it. What this branch changes is only the leak —
+    // none of that child text reaches the parent's reply. The same charge is
+    // pinned on the parent side by `cli-output-subagent-budget.test.ts`.
     const { parser, assistantDeltas } = createRecordingParser();
     const childChunk = "c".repeat(4_300_000);
 
     parser.push(`${subagentStreamTextLine(childChunk)}\n`);
     parser.push(`${subagentStreamTextLine(childChunk)}\n`);
 
-    expect(parser.getErrorText()).toBeNull();
+    expect(parser.getErrorText()).toContain("JSONL output exceeded 8388608 characters");
     expect(assistantDeltas).toEqual([]);
 
-    parser.push(`${parentAssistantTextLine("parent answer")}\n`);
+    // Nothing is assembled past exhaustion, but the finished turn is recovered.
+    parser.push(`${parentAssistantTextLine("dropped")}\n`);
     parser.push(`${terminalResultLine("parent answer")}\n`);
     parser.finish();
 
     expect(parser.getErrorText()).toBeNull();
-    expect(parser.getOutputTruncationText()).toBeNull();
-    expect(assistantDeltas.join("")).toBe("parent answer");
+    expect(parser.getOutputTruncationText()).toContain(
+      "JSONL output exceeded 8388608 characters",
+    );
+    expect(assistantDeltas).toEqual([]);
     expect(parser.getOutput()).toMatchObject({ text: "parent answer" });
   });
 
@@ -528,14 +545,15 @@ function parentTextLineWithNestedSubagentId(text: string) {
   });
 }
 
-describe("raw-line exemption agrees with decoded top-level ownership", () => {
+describe("child attribution is read from the top level, not from the raw line", () => {
   it("charges and assembles a parent record that nests a subagent parent tool id", () => {
     const { parser, assistantDeltas } = createRecordingParser();
 
     parser.push(`${parentTextLineWithNestedSubagentId("assembled")}\n`);
-    // The line is parent traffic, so the parent lane assembles it. Accounting
-    // has to agree: exempting it would spend nothing while it still produces
-    // parent output.
+    // `"parent_tool_use_id":` appears in the line, but only inside a payload, so
+    // the record is the parent's own and the parent lane assembles it. Any
+    // substring-level shortcut in the charge or attribution path would drop this
+    // text from the reply and under-charge the line that produced it.
     expect(assistantDeltas.join("")).toBe("assembled");
 
     parser.push(
