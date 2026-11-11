@@ -46,6 +46,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "sessionDiffBaseline",
   "sessionDiffBaselineCapture",
   "worktree",
+  "conversationLabelRefinement",
   "localWorkspaceHandoff",
   "deviceFolder",
   "projectId",

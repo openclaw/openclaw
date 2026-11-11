@@ -90,11 +90,17 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
             change.agentId === scope.agentId &&
             change.scope === "runtime"
           ) {
-            void sessionTitleRequests.get({ ...scope, sessionId })?.then((persisted) => {
-              if (persisted) {
-                titled.resolve();
-              }
-            }, titled.reject);
+            void sessionTitleRequests
+              .get({
+                ...scope,
+                sessionId,
+                lifecycleRevision: loadSessionEntry(scope)?.lifecycleRevision,
+              })
+              ?.then((persisted) => {
+                if (persisted) {
+                  titled.resolve();
+                }
+              }, titled.reject);
           }
         });
         try {

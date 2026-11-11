@@ -235,7 +235,12 @@ it("reuses unchanged descriptions across readers while sampling pending titles l
     const record = projection.describe({ agentId: "main", key: targetKey })!;
     const generation = createDeferredCore<boolean>();
     const pending = sessionTitleRequests.run(
-      { storePath: record.storeTarget.storePath, sessionKey: targetKey, sessionId: "original" },
+      {
+        storePath: record.storeTarget.storePath,
+        sessionKey: targetKey,
+        sessionId: "original",
+        lifecycleRevision: record.entry.lifecycleRevision,
+      },
       () => generation.promise,
     );
     try {

@@ -47,12 +47,14 @@ async function createTitleFixture(state: OpenClawTestState, options: TitleOption
     agentId: "main",
     sessionKey: "agent:main:dashboard:title-test",
     sessionId: "title-test",
+    lifecycleRevision: "title-test-generation",
     storePath: options.legacyPath
       ? resolveSessionStorePathCore(undefined, { agentId: "main" })
       : resolveOpenClawAgentSqlitePath({ agentId: "main" }),
   };
   await replaceSessionEntry(scope, {
     sessionId: scope.sessionId,
+    lifecycleRevision: scope.lifecycleRevision,
     updatedAt: 1,
     ...(options.titleSource ? { pendingWorktree: { titleSource: options.titleSource } } : {}),
   });
@@ -84,6 +86,7 @@ async function createTitleFixture(state: OpenClawTestState, options: TitleOption
         {
           ...scope,
           admittedSessionId: scope.sessionId,
+          entry: scope,
           cfg,
           context,
           request: { rawMessage, normalizedAttachments: [] },

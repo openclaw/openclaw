@@ -1,4 +1,5 @@
 import type { SessionLifecycleTimestamps } from "../../config/sessions/lifecycle.types.js";
+import { preserveResetSessionPresentation } from "../../config/sessions/reset-preserved-presentation.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
   evaluateSessionFreshness,
@@ -13,10 +14,11 @@ import { isAcpSessionKey, isSubagentSessionKey } from "../../routing/session-key
 
 /** Builds the durable session fields retained across a reply-session rollover. */
 export function resolveReplySessionRolloverState(
-  entry: SessionEntry,
+  entry: InternalSessionEntry,
   sessionKey: string,
 ): Partial<InternalSessionEntry> {
   const preservedSelection = resolveResetPreservedSelection({ entry });
+  const { conversationLabelRefinement } = preserveResetSessionPresentation(entry);
   // Stable ACP rows predate durable creation stamps. Preserve their restrictions
   // fail-closed so rollover cannot turn an existing child into a root session.
   const preserveSpawnLineage =
@@ -36,6 +38,7 @@ export function resolveReplySessionRolloverState(
     authProfileOverride: preservedSelection.authProfileOverride,
     authProfileOverrideSource: preservedSelection.authProfileOverrideSource,
     authProfileOverrideCompactionCount: preservedSelection.authProfileOverrideCompactionCount,
+    conversationLabelRefinement,
     label: entry.label,
     autoLabel: entry.autoLabel,
     displayName: entry.displayName,

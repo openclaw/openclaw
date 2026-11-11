@@ -8,6 +8,7 @@ import {
 } from "./runtime.test-support.js";
 import {
   getTopicCreatorUserId,
+  getTopicLabelMetadata,
   getTopicName,
   resolveTelegramDirectTopicNameCacheScope,
   updateTopicName,
@@ -31,6 +32,23 @@ describe("topic-name-cache", () => {
     clearTelegramRuntimeForTest();
     resetPluginStateStoreForTests();
     await state.cleanup();
+  });
+
+  it("persists label lifecycle and detects a same-name edit across reopening", async () => {
+    await updateTopicName(123, 42, {
+      name: "Email",
+      labelState: { sessionId: "session-1", remainingMessages: 6 },
+    });
+    const before = await getTopicLabelMetadata(123, 42);
+    await updateTopicName(123, 42, { name: "Email" });
+    resetTelegramTopicNameCacheForTest();
+    resetPluginStateStoreForTests();
+    const after = await getTopicLabelMetadata(123, 42);
+    expect(after?.nameRevision).toBe((before?.nameRevision ?? 0) + 1);
+    expect(after?.labelState).toEqual({
+      sessionId: "session-1",
+      remainingMessages: 6,
+    });
   });
 
   it("preserves a renamed topic through status-only events without inventing unnamed topics", async () => {

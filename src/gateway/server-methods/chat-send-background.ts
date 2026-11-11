@@ -13,12 +13,15 @@ import type { GatewayRequestContext } from "./types.js";
 
 type DashboardSessionTitleRequest = {
   admittedSessionId: string;
+  entry?: Pick<SessionEntry, "lifecycleRevision">;
   agentId: string;
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
-  request: Pick<NormalizedChatSendRequest, "normalizedAttachments" | "rawMessage">;
+  request: Pick<NormalizedChatSendRequest, "normalizedAttachments" | "rawMessage"> &
+    Partial<Pick<NormalizedChatSendRequest, "p">>;
   sessionKey: string;
   storePath: string;
+  awaitingFirstMessage?: boolean;
 };
 
 export function scheduleCreatedDashboardSessionTitle(
@@ -38,6 +41,8 @@ export function scheduleCreatedDashboardSessionTitle(
   }
   scheduleChatDashboardSessionTitle({
     admittedSessionId: created.entry.sessionId,
+    entry: created.entry,
+    awaitingFirstMessage: true,
     agentId: created.agentId,
     cfg,
     context,
@@ -51,6 +56,7 @@ export function scheduleChatDashboardSessionTitle(
   params: DashboardSessionTitleRequest,
   retryAfter?: Promise<void>,
 ): void {
+  const lifecycleRevision = params.entry?.lifecycleRevision;
   const titleSource = buildDashboardSessionTitleSource({
     message: params.request.rawMessage,
     attachments: params.request.normalizedAttachments,
@@ -67,9 +73,12 @@ export function scheduleChatDashboardSessionTitle(
       cfg: params.cfg,
       agentId: params.agentId,
       sessionId: params.admittedSessionId,
+      lifecycleRevision,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
       currentUserMessage: params.request.rawMessage,
+      messageId: params.request.p?.idempotencyKey,
+      awaitingFirstMessage: params.awaitingFirstMessage,
       userMessage: titleSource,
       ...(retryAfter ? { retryAfter } : {}),
       onFallback: () =>

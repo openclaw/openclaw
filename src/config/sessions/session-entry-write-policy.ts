@@ -41,6 +41,17 @@ export function applySessionEntryWritePolicy(
   if (
     canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId &&
     canonicalPreviousEntry.lifecycleRevision === normalizedEntry.lifecycleRevision &&
+    !Object.hasOwn(normalizedEntry, "conversationLabelRefinement") &&
+    canonicalPreviousEntry.conversationLabelRefinement
+  ) {
+    normalizedEntry = {
+      ...normalizedEntry,
+      conversationLabelRefinement: canonicalPreviousEntry.conversationLabelRefinement,
+    };
+  }
+  if (
+    canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId &&
+    canonicalPreviousEntry.lifecycleRevision === normalizedEntry.lifecycleRevision &&
     canonicalPreviousEntry.compactionQualityDegraded
   ) {
     normalizedEntry = { ...normalizedEntry, compactionQualityDegraded: true };

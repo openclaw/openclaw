@@ -657,6 +657,8 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Naming state follows the logical conversation; sessionId detects a cleared context. */
+  conversationLabelRefinement?: import("../../auto-reply/reply/conversation-label-refinement.js").ConversationLabelRefinementState;
   /** Atomic history-cut receipt for the exact settled local projection, cleared after adoption. */
   localWorkspaceHandoff?: {
     worktreeId: string;

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -15,8 +16,14 @@ it("samples title pending from the exact live owner without rematerializing stor
     );
     const projection = await createSessionRowProjection({ cfg });
     await projection.ensureMaterialized();
-    const record = projection.capture({ agentId: "main", key })!;
-    const target = { storePath: record.storeTarget.storePath, sessionKey: key, sessionId: "title" };
+    const record = expectDefined(projection.capture({ agentId: "main", key }), "title row");
+    const entry = expectDefined(record.entry, "stored session entry");
+    const target = {
+      storePath: record.storeTarget.storePath,
+      sessionKey: key,
+      sessionId: "title",
+      lifecycleRevision: entry.lifecycleRevision,
+    };
     const generation = createDeferredCore<boolean>();
     const snapshot = () => projection.snapshot({ agentId: "main", key }).row;
     expect(snapshot()?.titlePending).toBe(false);

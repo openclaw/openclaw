@@ -1,8 +1,17 @@
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** A logical conversation keeps its organization and display choices across reset. */
 export function preserveResetSessionPresentation(entry: SessionEntry | undefined) {
+  const name = entry?.label?.trim() || entry?.displayName?.trim() || entry?.topicName?.trim();
   return {
+    conversationLabelRefinement:
+      name && entry
+        ? {
+            sessionId: entry.sessionId,
+            ...(entry.lifecycleRevision ? { lifecycleRevision: entry.lifecycleRevision } : {}),
+            remainingMessages: 0,
+          }
+        : undefined,
     label: entry?.label,
     autoLabel: entry?.autoLabel,
     icon: entry?.icon,
