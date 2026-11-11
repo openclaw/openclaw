@@ -270,6 +270,9 @@ describe("GitHub publication index update", () => {
       allowFetch = true;
       await prepare(f.headCommit);
       expect(fetches).toBe(1);
+      expect(await git(clone, ["rev-parse", `refs/openclaw/fetched/${f.headCommit}`])).toBe(
+        f.headCommit,
+      );
       const trace = await fs.readFile(packets, "utf8");
       expect(trace).toContain(`fetch> have ${f.previousHead}`);
       if (mode !== "uncached" && mode !== "unregistered") {
