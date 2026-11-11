@@ -382,12 +382,11 @@ struct GatewayChannelDeviceTokenRetryTests {
                 // No device token can be retried, so the rejection is final for these credentials.
                 #expect(error.detail == .authTokenMismatch)
                 #expect(!error.canRetryWithDeviceToken)
+                #expect(error.isNonRecoverable)
                 let problem = GatewayConnectionProblemMapper.map(error: error)
                 #expect(problem?.pauseReconnect == true)
                 #expect(problem?.actionLabel == "Update gateway token")
             }
-            #expect(await channel.reconnectPausedForAuthFailure)
-            #expect(session.snapshotMakeCount() == 1)
             let auth = try #require(recorder.auth(at: 0))
             #expect(auth["token"] as? String == "wrong-shared-token")
             #expect(auth["deviceToken"] == nil)

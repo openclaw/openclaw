@@ -86,7 +86,7 @@ public actor GatewayChannelActor {
     private var deviceTokenRetryBudgetUsed = false
     private var receivedDeviceAuthRoles = Set<String>()
     private var persistedDeviceAuthRoles = Set<String>()
-    private(set) var reconnectPausedForAuthFailure = false
+    private var reconnectPausedForAuthFailure = false
     private let defaultRequestTimeoutMs: Double = 15000
     private let extraHeadersProvider: (@Sendable () async throws -> [String: String])?
     /// Fast state admission for clients that must inspect hello before their
