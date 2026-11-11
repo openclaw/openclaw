@@ -32,6 +32,7 @@ import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { proveResumedBaseRefresh } from "./local-workspace-base-refresh.test-support.js";
 import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
+import { registerSandboxCheckpointTests } from "./local-workspace-checkpoint.test-support.js";
 import {
   prepareLegacyArchiveRetention,
   proveAcceptedDirectoryRetention,
@@ -59,7 +60,6 @@ import {
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import { proveRejectedWorkspaceCheckpoint } from "./local-workspace-recovery.test-support.js";
 import {
-  proveUnchangedSandboxCommandCheckpoints,
   proveConcurrentWorkspacePreparation,
   proveColdPreparationCapacityIsolation,
   provePreparationObservationBoundary,
@@ -76,6 +76,19 @@ import {
   readLocalWorkspaceProjection,
 } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+
+const checkpointLog = vi.hoisted(() => vi.fn<(message: string) => void>());
+// mock-isolation: capture checkpoint diagnostics before imports create the owner logger.
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      info: checkpointLog,
+    }),
+  };
+});
 
 let root: string;
 let stateRoot: string;
@@ -188,8 +201,7 @@ afterEach(async () => {
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
 
-it("keeps unchanged commands running while checkpointing edits and deletions", () =>
-  proveUnchangedSandboxCommandCheckpoints(owner));
+registerSandboxCheckpointTests(() => owner, checkpointLog);
 
 it.each(["canonical", "projection"] as const)(
   "quarantines rejected checkpoints while allowing new agent work: %s",

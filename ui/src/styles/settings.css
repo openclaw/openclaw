@@ -1044,10 +1044,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
 /* These rows keep their control at the row's end on phones. */
 @media (max-width: 640px) {
   :is(.shell--settings, .shell--embed-settings)
-    :is(
-      .settings-row:has(> .settings-row__text .settings-row__meta),
-      .settings-disclosure > .settings-row
-    ) {
+    .settings-row:has(> .settings-row__text .settings-row__meta) {
     flex-wrap: nowrap;
 
     > .settings-row__control {
@@ -1683,15 +1680,7 @@ textarea.settings-input {
     padding-inline: var(--space-3);
   }
 
-  .shell--settings .content:not(.content--custodian) {
-    --content-inline-padding: var(--space-3);
-    --settings-header-inline-padding: 0;
-    padding: var(--space-3) var(--space-3) var(--space-4);
-  }
-
   .shell--settings .content.content--settings-workspace .content-header,
-  .shell--settings .settings-page,
-  .content.content--hub-header .settings-page,
   .shell--settings .config-lead,
   .shell--settings .config-content-callout {
     padding-inline: 0;
@@ -2480,10 +2469,9 @@ openclaw-settings-save-indicator:empty {
   margin-block-start: 8px;
 }
 
-/* Shares the page's grid cell, so nothing in the page moves when it appears. It rests
-   in the bottom gutter and lets clicks through; only its own buttons take them. */
+/* Grid-item z-index stacks feedback without a positioned wrapper. Compact
+   feedback shares the content cell and lets clicks through. */
 .settings-save-status {
-  position: relative;
   z-index: 1;
   grid-area: content;
   align-self: end;
@@ -2491,6 +2479,12 @@ openclaw-settings-save-indicator:empty {
   max-width: calc(100% - 32px);
   margin-block-end: calc(16px + var(--shell-safe-area-bottom, 0px));
   pointer-events: none;
+}
+
+/* Only failures occupy the shell’s intrinsic status row; the reason stays interactive. */
+.settings-save-status:has(.settings-save-indicator--failure) {
+  grid-area: save-status;
+  margin-block-start: 16px;
 }
 
 .settings-save-status .settings-save-indicator {
@@ -2516,8 +2510,7 @@ openclaw-settings-save-indicator:empty {
   pointer-events: auto;
 }
 
-/* The failure grows up from the same anchor as a fixed-width card, so a retry or a
-   longer reason never changes its width. It takes clicks so the reason can scroll. */
+/* A retry or longer reason keeps the card width. Its reason remains scrollable. */
 .settings-save-status .settings-save-indicator--failure {
   width: 360px;
   max-width: 100%;

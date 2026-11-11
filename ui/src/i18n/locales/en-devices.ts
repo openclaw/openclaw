@@ -70,6 +70,10 @@ const enDevices = {
       olderPairing: "{count} older pairing of {name}",
       olderPairings: "{count} older pairings of {name}",
       autoPaired: "auto-paired",
+      openclawIdLabel: "Access",
+      openclawIdManaged:
+        "Connects through OpenClaw ID. Manage people on the Access page, and your own browsers under Your devices in the account menu.",
+      openclawIdOpen: "Open Access",
       versionDrift: "Version drift",
       versionDriftTitle:
         "Device {nodeVersion}; Gateway {gatewayVersion}. Update the older version to match.",

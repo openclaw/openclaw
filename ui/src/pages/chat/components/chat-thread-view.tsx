@@ -36,7 +36,7 @@ import {
   subscribeExpansionState,
 } from "../chat-thread.ts";
 import { retainLinkFaviconCache } from "../link-favicon-cache.ts";
-import { yieldChatTask } from "../yield-chat-task.ts";
+import { splitChatConstruction, yieldChatTask } from "../yield-chat-task.ts";
 import { ChatConversationLoading } from "./chat-conversation-loading.tsx";
 import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
@@ -51,6 +51,7 @@ import {
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
 import type { ChatTranscript } from "./chat-transcript-controller.ts";
+import { resolveTranscriptAvatarPlacement } from "./chat-transcript-identity.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import type { TranscriptHeader } from "./chat-transcript-session.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
@@ -142,11 +143,20 @@ export function ChatThread(input: ChatThreadInput) {
                 <div
                   class={[
                     "chat-thread",
-                    { "chat-thread--annotations": input.props.commentAttachments !== undefined },
+                    {
+                      "chat-thread--annotations": input.props.commentAttachments !== undefined,
+                      // Before row preparation, use session identity; forwarded-row chrome resolves later.
+                      "chat-thread--direct": resolveTranscriptAvatarPlacement(input.props, [])
+                        .isDirectThread,
+                    },
                   ]}
                   ref={[elementRef(input.bindViewport)]}
                 >
-                  {!heldWarmBoot && <ChatConversationLoading route />}
+                  {!heldWarmBoot && (
+                    <div class="chat-thread-inner">
+                      <ChatConversationLoading route />
+                    </div>
+                  )}
                 </div>
               )}
             </>
@@ -237,6 +247,8 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
       return typeof visible === "object" ? visible.isPresented() : visible;
     },
   );
+  const splitColdRows = !input.props.restoring && splitChatConstruction;
+  const started = splitColdRows ? performance.now() : 0;
   const current = createMemo(() => {
     const searchState = search().read();
     const { session } = presentation();
@@ -250,6 +262,18 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
       );
     }
     return { session, projection };
+  });
+  // Sample once before choosing the first row frame; cheap preparations need no placeholder.
+  if (splitColdRows) {
+    current();
+  }
+  const [renderReady, setRenderReady] = createSignal(
+    !splitColdRows || performance.now() - started <= 15,
+  );
+  onSettled(() => {
+    if (!renderReady()) {
+      void yieldChatTask().then(() => setRenderReady(true));
+    }
   });
   const showLoadingSkeleton = createMemo(() => current().projection.showLoadingSkeleton);
   const isEmpty = createMemo(() => current().projection.isEmpty);
@@ -281,10 +305,21 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
   );
   const sentinel = () => (input.props.historyPagination ? historySentinel : undefined);
   const contents = createMemo(() => {
+    if (!renderReady()) {
+      return (
+        <div class="chat-thread-inner">
+          <ChatConversationLoading route />
+        </div>
+      );
+    }
     // Native range changes redraw this island without preparing the whole pane.
     geometry().read();
     if (routeLoading() && mobile()) {
-      return <ChatConversationLoading route />;
+      return (
+        <div class="chat-thread-inner">
+          <ChatConversationLoading route />
+        </div>
+      );
     }
     if (showLoadingSkeleton() || isEmpty()) {
       return (
