@@ -413,8 +413,12 @@ GitHub App with organization self-hosted runner write access and a dedicated
 runner group. `OPENCLAW_RELEASE_RUNNER_GROUP` continues to select the existing
 hosted runners. App token creation must succeed before a VM is provisioned;
 a missing app ID or private key stops provisioning.
-The runner group must admit the nightly workflow on `main` and Full Release
-Validation on each immutable `release-ci/` transport ref. Install a Crabbox release supporting
+The runner group must admit the nightly workflow on `main` and
+`full-release-state-watcher.yml` at `ad1621f7e9d896dfdcc202d007e766e6c30153df`.
+Full Release Validation pins that reviewed watcher definition from its immutable
+`release-ci/` refs; the watcher checks out the caller's pinned tooling and admitted
+verifier. When changing the watcher definition, update the caller pin and
+runner-group entry together. Install a Crabbox release supporting
 `actions register --receipt` and `actions unregister --receipt` before enabling
 the backend. The provisioning preflight rejects older clients before creating
 a VM.
@@ -505,6 +509,15 @@ The standalone Android Store Release job selects `boat-xlarge` when
 attempts and retries. Other backend modes retain
 `blacksmith-8vcpu-ubuntu-2404`. Scheduled and manual releases keep their existing
 canonical-main admission, protected environments, commands, and 120-minute deadline.
+
+### Hourly plugin routing
+
+Plugin Prerelease prepares hourly extension jobs for the repository-wide Boat
+backend. Its manifest translates the resolved physical two-CPU Blacksmith class
+to `boat` (four CPUs, 8 GiB) and the four-CPU class to `boat-large` (eight CPUs,
+16 GiB). Logical planner labels and test concurrency stay unchanged. Manual
+dispatches retain their existing `ubuntu-24.04` override; runner groups, coverage,
+runtime policies, artifact identities and deadlines are unchanged.
 
 ### Boat build qualification
 
