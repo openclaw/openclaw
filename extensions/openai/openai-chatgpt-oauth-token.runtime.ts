@@ -1,5 +1,6 @@
 import {
   createOAuthRefreshResponseError,
+  isProvenDeliveryNotSentError,
   type OAuthRefreshOutcome,
   resolveOAuthTokenExpiresAt,
   resolveOAuthTokenLifetimeMs,
@@ -226,11 +227,15 @@ async function requestOpenAIToken(
       operation,
       ...(operation === "refresh"
         ? {
-            oauthRefreshOutcome: {
-              version: 1,
-              phase: "token-response",
-              outcome: "unknown",
-            } as const,
+            // DNS/connect failures prove the refresh token never left the host.
+            oauthRefreshOutcome: isProvenDeliveryNotSentError(error)
+              ? ({
+                  version: 1,
+                  phase: "before-dispatch",
+                  outcome: "not-attempted",
+                  recovery: { kind: "later", evidence: "dispatch-not-started" },
+                } as const)
+              : ({ version: 1, phase: "token-response", outcome: "unknown" } as const),
           }
         : {}),
       ...(options.signal?.aborted ? { cancelled: true } : {}),

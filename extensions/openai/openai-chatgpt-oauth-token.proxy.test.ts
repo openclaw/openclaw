@@ -5,7 +5,10 @@ import { afterEach, expect, it, vi } from "vitest";
 
 const directLookup = vi.hoisted(() =>
   vi.fn(async () => {
-    throw new Error("direct DNS selected");
+    throw Object.assign(new Error("direct DNS selected"), {
+      code: "EAI_AGAIN",
+      syscall: "getaddrinfo",
+    });
   }),
 );
 
@@ -35,6 +38,7 @@ it.each([
   ["exchange", "retired owner", "HTTPS_PROXY", false],
   ["exchange", "aborted caller", "HTTPS_PROXY", false],
   ["refresh", "HTTPS_PROXY", "HTTPS_PROXY", true],
+  ["refresh", "no configured proxy", undefined, false],
   ["refresh", "aborted caller", "HTTPS_PROXY", false],
 ] as const)("preserves %s %s behavior", async (operation, name, variable, proxied) => {
   const aborted = name === "aborted caller";
@@ -94,6 +98,11 @@ it.each([
       expect(result).toMatchObject({
         summary: expect.stringContaining(retired ? "owner retired" : "direct DNS selected"),
       });
+    }
+    if (operation === "refresh" && !aborted) {
+      // Only a failed DNS lookup proves the grant was never sent; a proxy failure does not.
+      const phase = proxied ? "token-response" : "before-dispatch";
+      expect(result).toMatchObject({ oauthRefreshOutcome: { phase } });
     }
     expect(destinations).toEqual(proxied ? ["auth.openai.com:443"] : []);
     if (aborted || retired || proxied) {

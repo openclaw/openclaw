@@ -373,7 +373,11 @@ throw createOAuthRefreshError(
 ```
 
 Use that evidence only when the adapter actually knows no request began. Merely
-catching a fetch rejection before headers is insufficient. Response-level
+catching a fetch rejection before headers is insufficient. A rejection that
+`isProvenDeliveryNotSentError` (also exported there) accepts is proof: every
+transport leaf failed DNS lookup or connect, so the grant never left the host.
+MCP client OAuth and OpenAI ChatGPT sign-in report such a refresh as not
+attempted, so a short network outage keeps the sign-in. Response-level
 `unchanged` outcomes require a documented guarantee for that route and grant;
 status alone is not evidence. `owner-accepted-provider-retry` is not a reuse
 guarantee: claim it only after an explicit product decision by that provider's

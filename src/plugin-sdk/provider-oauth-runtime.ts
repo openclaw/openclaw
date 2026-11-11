@@ -18,6 +18,8 @@ export {
   type OAuthRefreshErrorReason,
 } from "../shared/oauth-refresh-outcome.js";
 
+// Pre-connect transport proof: a refresh that failed this way never carried the grant.
+export { isProvenDeliveryNotSentError } from "../infra/delivery-recovery.shared.js";
 export { CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/profile-ids.js";
 export {
   decodeOpenAICodexJwtPayload,
