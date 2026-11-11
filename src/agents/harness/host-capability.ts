@@ -430,6 +430,8 @@ export function createAgentHarnessHostCapabilities(params: {
         pluginExecutionSkillsSnapshot: skillsSnapshot,
         assertInvocationCurrent: assertCurrent,
         nativeHarnessExecution: !denyToolCalls ? nativeLocalExecution : undefined,
+        // Tool creation cannot certify the harness's additional execution gates.
+        unverifiedExecutionPolicy: true as const,
       },
       skillReadResources: resolveSkillResourceCandidates(
         skillResourceSnapshot(options),
@@ -716,8 +718,6 @@ export function createAgentHarnessHostCapabilities(params: {
         release?.();
       }
     },
-    close: () => {
-      capabilityAbortController.abort();
-    },
+    close: () => capabilityAbortController.abort(),
   };
 }

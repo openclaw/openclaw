@@ -6,6 +6,7 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { stripSummaryFloor } from "../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
@@ -380,10 +381,10 @@ describe("AgentSession loop correctness", () => {
 
     const result = await session.compact();
 
-    expect(result.summary).toBe("condensed history");
+    expect(stripSummaryFloor(result.summary)).toBe("condensed history");
     expect(sessionManager.getBranch().at(-1)).toMatchObject({
       type: "compaction",
-      summary: "condensed history",
+      summary: result.summary,
     });
   });
 

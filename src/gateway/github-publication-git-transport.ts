@@ -193,11 +193,12 @@ export async function requireGitHubPublicationCommit(
           "--recurse-submodules=no",
           // Match managed base refresh: omit unrelated session histories from negotiation.
           ...tips.map((tip) => `--negotiation-tip=${tip}`),
-          // Keep ancestry and tree metadata; callers request file contents below.
-          ...(missing ? ["--refetch", "--stdin"] : ["--filter=blob:none"]),
+          // Explicit blob wants still hydrate; retain promisor packs for both fetch paths.
+          "--filter=blob:none",
+          ...(missing ? ["--refetch", "--stdin"] : []),
           "--",
           githubRepositoryUrl(repository, host),
-          ...(missing ? [] : [sha]),
+          ...(missing ? [] : [`${sha}:refs/openclaw/fetched/${sha}`]),
         ],
         gitEnv,
         missing ? `${missing.join("\n")}\n` : undefined,
@@ -231,6 +232,10 @@ export async function requireGitHubPublicationCommit(
         (directory, objects) =>
           acquire(directory, { ...isolatedEnv, GIT_OBJECT_DIRECTORY: objects }),
       );
+    }
+    if (!missing && registered === "true") {
+      // Temporary transport metadata is discarded; retain successful acquisition in the owner.
+      await command(cwd, ["git", "update-ref", `refs/openclaw/fetched/${sha}`, sha]);
     }
   };
   if (!options.commitPresent) {
@@ -295,16 +300,17 @@ export async function requireGitHubPublicationCommit(
       .filter((line) => line.startsWith("?"))
       .map((line) => line.slice(1));
   };
-  const missing = await missingObjects();
-  if (missing.length) {
-    // A known partial-clone commit can still lack its tree contents after fetch.
-    // Hydrate through the selected authenticated URL before any offline snapshots.
+  let missing = await missingObjects();
+  // A missing tree reveals its blobs after the first filtered fetch; explicit
+  // blob wants complete the snapshot in at most one further batch.
+  for (let round = 0; missing.length && round < 2; round++) {
     await fetch(missing);
-    if ((await missingObjects("content verification")).length) {
-      throw new Error(
-        `${failure} Git content verification failed: required objects are still missing after fetching.`,
-      );
-    }
+    missing = await missingObjects("content verification");
+  }
+  if (missing.length) {
+    throw new Error(
+      `${failure} Git content verification failed: required objects are still missing after fetching.`,
+    );
   }
 }
 

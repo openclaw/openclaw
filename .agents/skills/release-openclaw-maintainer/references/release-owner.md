@@ -60,6 +60,15 @@ arbitrary later candidate. A new channel, identity, scope, or material risk
 requires a new decision. Tool access and green CI are not approval; enforced
 signing and workflow environment gates still apply.
 
+Carry explicit channel/contact restrictions and approved gate exceptions through
+candidate changes and handoffs alongside that authority. A version-wide grant
+remains scoped to that version; an attempt-bound grant does not expand to later
+attempts. Resolve eligibility from pinned P’s checked-in policy, not a fresh
+conversational approval or a blanket “performance cannot be waived” rule.
+Distinguish required failures from advisory results using the selected coverage
+and policy. Neither an advisory warning nor an optional confidence check creates
+a new approval gate; an operator instruction alone cannot bypass enforced gates.
+
 Before requesting stable/extended-stable approval, finish authorized preparation
 and present the exact version, candidate/Release SHA, qualifying run, selected
 surfaces, included/deferred changes, and remaining risks. Approval is the final
@@ -97,8 +106,12 @@ fixes go directly to the branch with an owned post-release forward-port.
 
 Make intake explicit:
 
-- **Open preparation:** batch approved changes before freezing C/Q. If the
-  operator requests early diagnostic validation while more backports arrive,
+- **Open preparation:** integrate each approved, dependency-closed group as it
+  becomes ready while independent discovery continues; do not wait for unrelated
+  audit lanes. Serialize changes to the canonical branch and record source and
+  destination commits plus focused proof before taking the next group. Finish
+  the complete inventory and resolve the final selection before freezing C/Q.
+  If the operator requests early diagnostic validation while more backports arrive,
   record that it is provisional; it qualifies publication only if the final
   candidate and all required inputs remain exactly unchanged and eligible.
 - **Frozen/validating:** new opportunities normally queue for the next release;
@@ -161,8 +174,10 @@ replace final tags or rebuild immutable published versions.
 Track every selected surface independently in the handoff table. A successful
 parent does not prove detached ClawHub or native-app completion. Preserve the
 track's scope: extended-stable excludes native apps and ClawHub. Native
-publication does not hold the priority npm/GitHub/main-closeout path; pending
-platform work still needs an owner and an accurate status.
+publication does not hold the priority npm/GitHub/main-closeout path. ClawHub
+starts at its existing dispatch point and runs independently thereafter; its
+authorization, failures, and recovery never block core or the closeout and
+retrospective PRs. Pending work still needs an owner and an accurate status.
 
 Finish the [hotfix ledger integrity check](hotfix-ledger-management.md#final-closeout-integrity-check),
 `$verify-release`, required platform work, applicable
@@ -180,9 +195,11 @@ publication approval wait “released.”
 Keep the [handoff record](release-handoff-template.md) current at meaningful
 phase changes. The outgoing owner stops new mutations and identifies any
 in-flight operations before the successor takes over; never have two writers.
-The successor acknowledges ownership and verifies branch/tag SHAs, live run
-attempts, receipts, approval scope, pending fixes, and next action. Reconcile
-uncertain writes before retrying. A predecessor's credential failure is not a
+The successor acknowledges ownership and verifies remote branch/tag SHAs, live run
+attempts, receipts, approval scope (including restrictions and gate exceptions),
+pending fixes, and next action. Local tracking refs alone do not establish remote
+freshness. Preserve frozen C/Q/P while reconciling; newer main is not a new cut.
+Reconcile uncertain writes before retrying. A predecessor's credential failure is not a
 reason to re-cut, rerun green proof, or discard publication approval.
 
 Link the predecessor's record and frozen retrospective snapshot. Preserve

@@ -29,7 +29,7 @@ or `CLAW.md` with YAML frontmatter. Other source-reading commands remain local-o
 Packages must declare `package.json.openclaw.template` as a safe package-relative
 path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. The obsolete
 `openclaw.claw` selector and JSON Template manifests are rejected, including in downloaded archives.
-`CLAW.md`, `package.json`, and OpenClaw YAML profiles must contain valid UTF-8.
+`CLAW.md` and `package.json` must contain valid UTF-8.
 If inspection reports an encoding error, re-encode the source file as UTF-8 and retry;
 Add refuses it before creating an agent or workspace.
 Publishing and searching Templates through ClawHub use the separate registry
@@ -129,7 +129,8 @@ agent:
 categories: [operations, research]
 workspace:
   bootstrapFiles: {}
-packages: []
+skills: []
+plugins: []
 mcpServers: {}
 automations: []
 ---
@@ -144,18 +145,13 @@ a concise handoff with evidence.
 catalog discovery; the receiving registry decides which category names it
 accepts. Categories do not change the agent's runtime behavior.
 
-OpenClaw automatically discovers the optional `profiles/openclaw.yml` file.
-No manifest pointer is required. Other harnesses may discover their own
-conventional profile, such as `profiles/codex.yml`, without changing the
-portable manifest.
-
-The older `metadata.openclaw.config` pointer is deprecated but still read, so
-packages published against it keep working. Reading one reports a
-`deprecated_openclaw_profile_pointer` warning; move that file to
-`profiles/openclaw.yml` and remove the metadata entry. A pointer that is not a
-package-relative `.yml`/`.yaml` path is rejected, and a pointer that references
-a different file while `profiles/openclaw.yml` also exists is rejected as a
-conflict.
+`CLAW.md` is the sole configuration entry point. Put native agent settings
+under `agent`, and dependencies in `skills` and `plugins`. Each entry selects
+either a bundled package-relative folder with `path`, or an exact ClawHub release
+with `ref` and `version`; do not combine those forms.
+The retired `packages`, `profiles`, and `metadata.openclaw.config` declarations
+are rejected with migration guidance. Remove the profile directory after moving
+its supported settings into `agent`; retain `schemaVersion: 1`.
 
 A package may add named bootstrap files and other workspace files from
 package-relative sources. These go into the new agent's dedicated workspace:
@@ -175,14 +171,12 @@ The package may also declare exact ClawHub skill and plugin requirements,
 MCP servers, and scheduled automations:
 
 ```yaml
-packages:
-  - kind: skill
-    source: clawhub
-    ref: incident-triage
+skills:
+  - path: skills/incident-checklist
+  - ref: incident-triage
     version: 1.0.0
-  - kind: plugin
-    source: clawhub
-    ref: "@acme/audit-plugin"
+plugins:
+  - ref: "@acme/audit-plugin"
     version: 2.0.0
 mcpServers:
   statuspage:
@@ -198,16 +192,37 @@ automations:
     message: Summarize active incidents.
 ```
 
-Use `automations` for scheduled work. Older published manifests using `cronJobs`
-remain readable and are normalized to `automations`. Declaring both keys is an
-error; move the declarations to `automations` and remove `cronJobs`.
+A bundled skill folder must contain a valid root `SKILL.md`. Add installs that
+folder under the new agent's ordinary workspace `skills/` directory, using its
+native skill identity. Supporting files are included automatically, including
+binary assets. Declare only folders you intend to share; undeclared skill
+folders are not installed or counted as dependencies. Bundled contents show their
+name and package-relative path; they have no invented registry version or
+standalone ClawHub verification claim.
+
+Bundled skill and plugin folders use the same bounded selection: regular files
+only, at most 1 MiB per file, 20 MiB across bundled dependencies, 4,096 entries
+per folder, 4,096 selected bundled files in total, and 16 directory levels. `.git` and `node_modules` directories are
+excluded regardless of case. Links, nonregular files, unsafe portable paths,
+overlapping bundled directories, and conflicting skill identities or workspace
+destinations are rejected. Build and Add reject changed source bytes or folder
+membership after review. File modes follow ordinary Template packaging.
+
+Use `automations` for scheduled work. The retired `cronJobs` key is rejected;
+move its declarations to `automations` and remove `cronJobs`.
 
 Environment values remain unresolved references; never package credentials.
 Shared plugins and MCP servers must match existing declarations exactly or Add
 reports the conflict without replacing them. Plugin and skill trust warnings
 require explicit consent. Automations are assigned to the new agent.
+If a declared plugin still needs setup, a referenced environment variable is
+missing, or an OAuth MCP server is not authorized, Add creates the declared
+automations paused. Their schedules, prompts, and imported scratch stay intact.
+Connect the requirement through its ordinary plugin or MCP controls, then enable
+the jobs through the agent's automation controls; Add does not create substitute
+routines or automatically enable paused jobs later.
 
-Older packages may declare `agent.heartbeat` in the OpenClaw profile or include
+A package may declare `agent.heartbeat` in `CLAW.md` or include
 `HEARTBEAT.md`. Add converts those inputs into ordinary interval automations
 and private job scratch instead of installing heartbeat configuration. Legacy
 `tasks:` entries become separate automations, and the remaining checklist stays
@@ -225,13 +240,29 @@ Add reports a partial result and keeps the new agent and jobs for inspection.
 Check their scratch and enabled state before retrying; Add does not overwrite
 concurrent edits to make the import succeed.
 
-OpenClaw discovers optional harness settings from `profiles/openclaw.yml`.
-Those settings can refine the agent's tools, sandbox, memory search, and
-extension requirements, but cannot set a model, provider, credentials, or
-named delegate agents. Host policy still constrains every grant. Foreign
-harness profiles are ignored by OpenClaw. A released older
-`metadata.openclaw.config` profile pointer is still read with a deprecation
-warning; new packages should use the conventional profile path.
+Native settings under `agent` include `groupChat`, `sandbox`, `tools`,
+`memory`, `heartbeat`, and `humanDelay`. The native `tools.profile` field
+selects a built-in tool policy; its grants are bounded and frozen when Add
+creates the agent. Host policy still constrains every grant. A Template cannot
+set a model, provider, credentials, or named delegate agents.
+
+```yaml
+agent:
+  id: incident-triage
+  tools:
+    profile: coding
+    allow: [read, write]
+    fs: { workspaceOnly: true }
+  sandbox: { mode: all, workspaceAccess: ro }
+  memory: { search: { enabled: false } }
+```
+
+Set `enabled: false` on an automation to install it paused; omitting the field
+keeps the enabled default. Jobs belong to the new agent. First-run instructions
+in `BOOTSTRAP.md` should find that agent's declared job, including disabled jobs,
+and update its timezone, tools, or timeout through ordinary automation controls.
+Enable that same job after setup and the user's activation choice; avoid creating
+a duplicate job for the same recipe.
 
 Package and workspace paths must stay inside the package root. Manifests are
 limited to 1 MiB, package metadata to 256 KiB, and workspace files have
@@ -261,6 +292,14 @@ openclaw templates add @openclaw/api-integration-engineer --dry-run --json
 openclaw templates add @openclaw/api-integration-engineer
 ```
 
+With a running Gateway, Add sends the ClawHub name to that Gateway for an exact
+version review and installation. The Gateway chooses the new workspace;
+`--workspace` is rejected instead of being ignored. Local paths still take
+precedence over registry names and require the Gateway to be stopped.
+
+Offline Add uses the same installer and local scheduler after acquiring exclusive
+state ownership. Explicitly paused automations remain paused.
+
 A registry name resolves the latest published release to an exact version and
 immutable artifact digest before planning. OpenClaw uses its existing registry
 trust checks, verifies the downloaded artifact, and safely extracts it under
@@ -277,13 +316,26 @@ approval never approves its skill or plugin dependencies: their existing trust
 acknowledgments and `--accept-capabilities` checks still apply independently.
 
 Each Add chooses an unused agent ID. The CLI reports that ID so you can open
-or configure the agent afterward. The Control UI opens the new agent's chat
-and starts with "What can you do?" after a successful Add.
+or configure the agent afterward. The Control UI opens the new agent's pending
+chat immediately. Sending becomes available when its instruction files, canonical
+conversation, and active runtime are ready, while remaining setup continues. The
+first assistant response is a normal personality/SOUL greeting, not a saved canned
+greeting or a message sent on your behalf. Later setup failure retains the exposed
+agent and conversation; completion does not replace an existing draft.
+
+The installer shows a card for each newly installed plugin and an automation-created
+notice as each routine is added. Paused routines stay paused until their setup
+prerequisites are ready. Actual installation failures appear in the plugin card or
+a concise automation-failed notice; continue setup in the same agent. Successful
+skill and MCP setup, absent optional files, and empty categories stay silent. There
+is no final setup receipt or second model recap. Declared package bootstrap still
+follows shared setup; MCP configuration alone does not prove a working connection.
 
 `--dry-run --json` remains available for automation or local-source inspection.
-`--agent-id` and `--workspace` override the default destination with an
-unused ID or new path. Ordinary Add does not require a separate plan or
-review token. Exceptional trust warnings can still require explicit consent.
+`--agent-id` selects an unused ID. `--workspace` selects a new path for local
+preview or offline Add. Ordinary Add binds its review internally and does not
+require a separate plan token. Trust warnings and plugin capabilities still
+require their separate explicit acknowledgements.
 
 For `add` and `dev`, an explicitly empty `--agent-id` is invalid. Omit the option
 to use the default unused ID.
@@ -292,11 +344,19 @@ Gateway Add review responses describe schedules as either `{ cron, timezone }`
 or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery
 values are `none`, `last-channel`, or `owner`.
 
-Add reuses matching shared dependencies, installs missing requirements,
-creates the agent and its workspace, and assigns its automations. An existing
-agent or workspace is never overwritten. If Add fails, inspect the specific
-error and retry after resolving it; newly created resources are cleaned up
-where safe, while resources that existed before Add are left alone.
+CLI Add from a local source requires exclusive offline state ownership; it refuses
+to run while a Gateway owns that state. For published ClawHub Templates, both the
+CLI and Control UI can Add through a running Gateway. Offline Add uses the same
+session, local agent runtime, and scheduler
+owners without starting scheduled execution. `--json` suppresses conversational
+terminal output but keeps the ordinary conversation and per-result install notices.
+
+Add reuses matching shared dependencies, installs missing requirements, and
+assigns the declared automations. An existing agent or workspace is never
+overwritten. If Add fails before exposing the agent, newly created resources are
+cleaned up where safe; preexisting resources remain untouched. If the result says
+the agent was retained, continue in that agent and inspect the specific error
+instead of adding another copy.
 
 ## Remove the agent
 
@@ -327,6 +387,10 @@ There is no Template ownership record or reverse-install operation.
 
 Use `--json` for experimental machine-readable output. Validation errors,
 blocked requirements, and failed additions exit `1`.
+Gateway-owned Add reports the native `agentId`, `status`, and `readiness` result.
+A partial result exits `1`. A lost Gateway reply reports an unknown outcome;
+inspect the agent and its automations before retrying, since no local fallback
+or automatic replay is attempted.
 
 Human-readable reports sanitize terminal control characters in Template fields
 and project paths. `--json` retains the original field values for machine processing.

@@ -128,13 +128,11 @@ struct DashboardWindowSmokeTests {
         #expect(controller.window?.isRestorable == false)
         #expect(controller.window?.contentViewController != nil)
         #expect(controller.window?.standardWindowButton(.closeButton) != nil)
-        // The empty unified toolbar is what grows the titlebar to 52pt so the
-        // traffic lights center against the web titlebar row; without it they
-        // hug the top edge and misalign with the hosted web buttons.
+        // The compact toolbar aligns the traffic lights with the hosted web row.
         #expect(controller.window?.toolbar != nil)
-        #expect(controller.window?.toolbarStyle == .unified)
+        #expect(controller.window?.toolbarStyle == .unifiedCompact)
         // The toolbar only exists to size the titlebar, so View > Hide Toolbar
-        // (⌥⌘T) must be refused; otherwise hiding it desyncs the 52pt web inset.
+        // (⌥⌘T) must be refused; otherwise hiding it desyncs the compact web inset.
         controller.window?.toggleToolbarShown(nil)
         #expect(controller.window?.toolbar?.isVisible == true)
         #expect((controller.window?.frame.width ?? 0) >= DashboardWindowLayout.windowMinSize.width)
@@ -717,7 +715,7 @@ extension DashboardWindowSmokeTests {
         Array.from(document.querySelectorAll('.sidebar-shell, .settings-sidebar__header'))
           .map(element => getComputedStyle(element).paddingTop)
         """) as? [String]
-        #expect(padding == ["52px", "52px"])
+        #expect(padding == ["40px", "40px"])
         #expect(try await controller.webView.evaluateJavaScript(
             "document.documentElement.classList.contains('openclaw-native-web-chrome')") as? Bool == true)
     }
