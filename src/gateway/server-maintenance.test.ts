@@ -30,6 +30,7 @@ import { createChannelThawScenario } from "./server-maintenance.thaw.test-suppor
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
+import * as worktreeMaintenance from "./worktree-maintenance.js";
 
 const {
   cleanOldMediaMock,
@@ -87,6 +88,12 @@ function createMaintenanceTimerDeps(
 type MaintenanceTimerDeps = ReturnType<typeof createMaintenanceTimerDeps>;
 
 async function createThawScenario() {
+  // Thaw timing assertions exclude unrelated root work and admission waiters.
+  vi.spyOn(worktreeMaintenance, "startWorktreeMaintenance").mockReturnValue({
+    request: vi.fn(),
+    notifyArchive: vi.fn(),
+    stop: async () => {},
+  });
   const clock = createGatewaySchedulerClock();
   let nowMs = 0;
   let cpuUsage = { user: 0, system: 0 };
