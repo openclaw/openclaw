@@ -38,12 +38,17 @@ type RequestRecord = {
   kind: string;
   route?: string;
   transport?: string;
+  callsite?: string;
 };
 
 // Materialize external GitHub responses before starting any consumer. The
 // subprocess never imports fixture clients or receives an authenticated owner.
 // The recovery graph retains the original Q receipts under a distinct P seal.
-export async function createNpmCliProcessFixture(root: string, plugins = "") {
+export async function createNpmCliProcessFixture(
+  root: string,
+  plugins = "",
+  receiptRecovery = true,
+) {
   const f = candidatePublicationFixture();
   const responses: Record<string, ResponseBytes> = {};
   const json = (route: string, value: unknown) => {
@@ -366,6 +371,7 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
   for (const [id, artifact] of artifacts) {
     json("actions/artifacts/" + id, artifact);
   }
+  const ordinaryResponses = { ...responses };
   const recovery = addRecoveryGraph({
     f,
     producer,
@@ -376,6 +382,12 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
     source,
     metadata,
   });
+  if (!receiptRecovery) {
+    for (const key of Object.keys(responses)) {
+      delete responses[key];
+    }
+    Object.assign(responses, ordinaryResponses);
+  }
   const responseFile = join(root, "responses.json");
   const log = join(root, "requests.jsonl");
   const gh = join(root, "gh");
@@ -405,7 +417,7 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
     PREPARED_NPM_PARENT_RUN_ID: "700",
     PREPARED_NPM_PARENT_RUN_ATTEMPT: "1",
     PREPARED_NPM_ARTIFACT: JSON.stringify(producer),
-    PREPARED_NPM_FRV_RUN_ID: recovery.runId,
+    PREPARED_NPM_FRV_RUN_ID: receiptRecovery ? recovery.runId : f.runId,
     PREPARED_NPM_FRV_RUN_ATTEMPT: "1",
     PREPARED_NPM_SELECTION_MODE: plugins ? "selected" : "all-publishable",
     PREPARED_NPM_PLUGINS: plugins,

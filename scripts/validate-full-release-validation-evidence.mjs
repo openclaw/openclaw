@@ -733,7 +733,11 @@ function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
   const revalidateAuthority = () => {
     evidenceClient.revalidateQualificationAdmissionAuthority(authority);
     if (authority.recoveryProducer) {
-      verifyReceiptRecoveryAuthority(authority.descriptor.repository, authority.recoveryProducer);
+      if (evidenceClient.verifyReceiptRecoveryAuthority) {
+        evidenceClient.verifyReceiptRecoveryAuthority(authority.recoveryProducer);
+      } else {
+        verifyReceiptRecoveryAuthority(authority.descriptor.repository, authority.recoveryProducer);
+      }
     }
   };
   revalidateAuthority();

@@ -52,6 +52,7 @@ export async function loadNpmEvidenceReplay({
   archivePath,
   client,
   fetchImpl,
+  shareAcquisitionReads = false,
 }) {
   const current = await client.getRun(binding.childRunId);
   if (
@@ -108,6 +109,7 @@ export async function loadNpmEvidenceReplay({
   const replay = createReleaseEvidenceReplay(
     binding,
     JSON.parse(files.get(NPM_EVIDENCE_FILE).toString("utf8")),
+    { shareAcquisitionReads },
   );
   replay.observeRun("actions/runs/" + binding.childRunId, current);
   replay.observeArchive(artifactId, metadata);

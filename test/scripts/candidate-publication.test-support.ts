@@ -12,6 +12,7 @@ import {
   publicationSourceRequest,
   type PublicationSelection,
 } from "../../scripts/full-release-publication-contract.mjs";
+import { verifyReceiptRecoveryAuthority } from "../../scripts/full-release-receipt-recovery.mjs";
 import {
   composeReleaseAttemptJobs,
   releaseExecutionPlanSha256,
@@ -314,6 +315,9 @@ export function candidatePublicationFixture(
         runGh: admission.runGh,
         downloadArchive: admission.archive,
       }),
+    verifyReceiptRecoveryAuthority(producer: Parameters<typeof verifyReceiptRecoveryAuthority>[1]) {
+      return verifyReceiptRecoveryAuthority(repository, producer);
+    },
     revalidateQualificationAdmissionAuthority: (
       authority: Parameters<typeof revalidateQualificationAdmissionAuthority>[0],
     ) => revalidateQualificationAdmissionAuthority({ ...authority, runGh: admission.runGh }),

@@ -876,7 +876,7 @@ export async function main(argv) {
       const binding = npmEvidenceBinding(adoptionParams);
       const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
       adoptionParams.immutableReads = options["--evidence-output"]
-        ? createReleaseEvidenceReplay(binding)
+        ? createReleaseEvidenceReplay(binding, undefined, { shareAcquisitionReads: true })
         : await loadNpmEvidenceReplay({
             binding,
             artifactId: process.env.PREPARED_NPM_EVIDENCE_ID,
@@ -884,6 +884,7 @@ export async function main(argv) {
             token: common.token,
             archivePath: process.env.RUNNER_TEMP + "/plugin-npm-evidence.zip",
             client: createReleaseEvidenceClient(common.repository),
+            shareAcquisitionReads: true,
           });
     }
     adoption = await authenticatePreparedNpmArtifactEvidence(adoptionParams, false);

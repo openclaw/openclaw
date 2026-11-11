@@ -19,7 +19,15 @@ const archiveIdentity = (metadata) => [
 ];
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-export function createReleaseEvidenceReplay(binding, payload) {
+export function createReleaseEvidenceReplay(
+  binding,
+  payload,
+  { shareAcquisitionReads = false } = {},
+) {
+  // CLI acquisition may share raw observations, never a validation verdict.
+  // This map is process-local, excluded from serialize(), and discarded before
+  // every effect-boundary revalidation. Public helper transports remain live.
+  const liveReads = new Map();
   const entries = new Map();
   const runs = new Map();
   const usedArchives = new Map();
@@ -89,7 +97,22 @@ export function createReleaseEvidenceReplay(binding, payload) {
   }
   const read = (route, kind, load) => {
     if (!immutableRoute.test(route)) {
-      return load();
+      if (!shareAcquisitionReads) {
+        return load();
+      }
+      const key = kind + ":" + route;
+      if (liveReads.has(key)) {
+        return liveReads.get(key);
+      }
+      const value = load();
+      if (value instanceof Promise) {
+        return value.then((raw) => {
+          liveReads.set(key, raw);
+          return raw;
+        });
+      }
+      liveReads.set(key, value);
+      return value;
     }
     if (route.endsWith("/zip") && !usedArchives.has(route)) {
       usedArchives.set(route, undefined);
@@ -166,6 +189,7 @@ export function createReleaseEvidenceReplay(binding, payload) {
       }
     },
     async revalidate(client) {
+      liveReads.clear();
       for (const [route] of runs) {
         this.observeRun(route, await client.getRun(route.split("/").at(-1)));
       }
@@ -187,6 +211,9 @@ export function createReleaseEvidenceReplay(binding, payload) {
         }
         usedArchives.set(route, metadata);
       }
+      // The authority callback runs synchronously after this async sweep. It
+      // must not reuse observations made before the last awaited artifact read.
+      liveReads.clear();
     },
     observeArchive(artifactId, metadata) {
       usedArchives.set("actions/artifacts/" + artifactId + "/zip", metadata);

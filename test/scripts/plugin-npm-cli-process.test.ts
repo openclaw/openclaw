@@ -10,6 +10,12 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // Only two identical consumers run; the 101-consumer report below is extrapolated.
 it("replays recovery-backed preview evidence through two CLI consume/authorize pairs", async () => {
   const f = await createNpmCliProcessFixture(tempDirs.make("npm-cli-recovery-"), "@openclaw/alpha");
+  const comparison = "compare/" + f.f.p + "...main";
+  const response = f.responses[comparison]!;
+  // The recovery adapter shares raw responses, not the tooling reader's small
+  // projected {status} result. Real comparison patches can exceed 1 MiB.
+  f.json(comparison, { ...JSON.parse(response.data), patch: "x".repeat(1100000) });
+  f.save();
   const success = (result: ReturnType<typeof f.preview>) => {
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
@@ -43,6 +49,7 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
   expect(new Set(starts.map((row) => row.pid)).size).toBe(5);
 
   const counts = Object.fromEntries(phases.map((name) => [name, requests(name).length]));
+  expect(phases.flatMap(requests).every((row) => row.callsite?.includes("/scripts/"))).toBe(true);
   // Authenticate the carrier producer before trusting anything inside the carrier.
   const carrierJobsRoute = "actions/runs/800/attempts/2/jobs?per_page=100";
   // The selected package downloader independently authenticates its producer.
@@ -99,6 +106,28 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
       measuredConsumers: 2,
       requestsByProcess: counts,
       categoriesByProcess,
+      callsitesByProcess: Object.fromEntries(
+        phases.map((name) => [
+          name,
+          Object.fromEntries(
+            [...new Set(requests(name).map((row) => row.callsite))].map((site) => [
+              site,
+              requests(name).filter((row) => row.callsite === site).length,
+            ]),
+          ),
+        ]),
+      ),
+      endpointsByProcess: Object.fromEntries(
+        phases.map((name) => [
+          name,
+          Object.fromEntries(
+            [...new Set(requests(name).map((row) => row.route))].map((route) => [
+              route,
+              requests(name).filter((row) => row.route === route).length,
+            ]),
+          ),
+        ]),
+      ),
       observed: { previewPlusTwoPairs: phases.reduce((sum, name) => sum + counts[name]!, 0) },
       extrapolated101IdenticalConsumers: {
         notExecuted: true,
@@ -135,13 +164,13 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
     expect(categoriesByProcess[name]!.immutable, name + " reacquired immutable evidence").toBe(0);
     const calls = requests(name);
     expect(calls, name + " total GitHub requests").toHaveLength(
-      name.startsWith("consume") ? 137 : 134,
+      name.startsWith("consume") ? 87 : 84,
     );
     // One owner refreshes original qualification; retain the later effect-boundary checks.
     for (const [route, count] of [
-      ["actions/runs/910", 4],
-      ["actions/artifacts/70", 6],
-      ["collaborators/release-operator/permission", 9],
+      ["actions/runs/910", 2],
+      ["actions/artifacts/70", 3],
+      ["collaborators/release-operator/permission", 2],
       ["actions/artifacts/6400", 2],
     ] as const) {
       expect(
@@ -255,24 +284,56 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
   // the consume effect boundary, not only when the carrier was authenticated.
   const selectedRoute = "actions/artifacts/9002/zip";
   const selected = f.responses[selectedRoute]!;
-  const authorityRoute = "collaborators/release-operator/permission";
-  const authority = f.responses[authorityRoute]!;
+  const refRoute = "git/ref/tags/release-publish/" + f.f.p.slice(0, 12) + "-10";
+  for (const [route, changed, pattern] of [
+    [
+      "collaborators/release-operator/permission",
+      { permission: "read" },
+      /qualification authority/iu,
+    ],
+    [refRoute, { object: { type: "commit", sha: "f".repeat(40) } }, /ref|SHA|identity/iu],
+    ["actions/runs/9900", { run_attempt: 2 }, /attempt|changed/iu],
+    ["actions/artifacts/91", { expired: true }, /expired|artifact/iu],
+  ] as const) {
+    const original = f.responses[route]!;
+    f.responses[selectedRoute] = {
+      ...selected,
+      after: {
+        route,
+        value: {
+          encoding: "utf8",
+          data: JSON.stringify({ ...JSON.parse(original.data), ...changed }),
+        },
+      },
+    };
+    reject("changed-after-package-" + route.replaceAll("/", "-"), pattern);
+    f.responses[route] = original;
+  }
+  // Change the recovery attempt during the final asynchronous archive sweep,
+  // after its run was refreshed. The final synchronous authority must read again.
+  const lastMetadataRoute = "actions/artifacts/9001";
+  const lastMetadata = f.responses[lastMetadataRoute]!;
+  const recoveryRun = f.responses["actions/runs/9900"]!;
   f.responses[selectedRoute] = {
     ...selected,
     after: {
-      route: authorityRoute,
+      route: lastMetadataRoute,
       value: {
-        encoding: "utf8",
-        data: JSON.stringify({
-          ...JSON.parse(f.responses[authorityRoute]!.data),
-          permission: "read",
-        }),
+        ...lastMetadata,
+        after: {
+          route: "actions/runs/9900",
+          value: {
+            encoding: "utf8",
+            data: JSON.stringify({ ...JSON.parse(recoveryRun.data), run_attempt: 2 }),
+          },
+        },
       },
     },
   };
-  reject("revoked-after-package-read", /no longer has repository qualification authority/iu);
+  reject("changed-during-final-sweep", /attempt|identity|changed/iu);
   f.responses[selectedRoute] = selected;
-  f.responses[authorityRoute] = authority;
+  f.responses[lastMetadataRoute] = lastMetadata;
+  f.responses["actions/runs/9900"] = recoveryRun;
   const archive = Buffer.from(selected.data, "base64");
   archive[0] = archive[0]! ^ 1;
   f.bytes(selectedRoute, archive);
@@ -292,3 +353,39 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
   expect(invalidCandidate.stderr).toMatch(/digest|sha.?256/iu);
   expect(invalidCandidate.stderr).not.toContain("Unconfigured external fixture request");
 }, 240_000);
+
+it("retains the ordinary CLI final authority after sharing acquisition reads", async () => {
+  const f = await createNpmCliProcessFixture(
+    tempDirs.make("npm-cli-ordinary-"),
+    "@openclaw/alpha",
+    false,
+  );
+  expect(f.preview().status).toBe(0);
+  f.sealCarrier();
+  expect(f.consume("consume", 0).status).toBe(0);
+  expect(f.authorize("authorize").status).toBe(0);
+  const counts = Object.fromEntries(
+    ["preview", "consume", "authorize"].map((phase) => [
+      phase,
+      f.records().filter((row) => row.kind === "request" && row.invocation === phase).length,
+    ]),
+  );
+  expect(counts).toEqual({ preview: 52, consume: 41, authorize: 38 });
+  console.log(JSON.stringify({ scenario: "ordinary-cli", requestsByProcess: counts }));
+  const selectedRoute = "actions/artifacts/9002/zip";
+  f.responses[selectedRoute] = {
+    ...f.responses[selectedRoute]!,
+    after: {
+      route: "collaborators/release-operator/permission",
+      value: {
+        encoding: "utf8",
+        data: JSON.stringify({ permission: "read", user: f.f.admission.actor }),
+      },
+    },
+  };
+  f.save();
+  const revoked = f.consume("revoked-after-download", 0);
+  expect(revoked.status, revoked.stderr).not.toBe(0);
+  expect(revoked.stderr).toMatch(/permission|write|authority/iu);
+  expect(existsSync(revoked.output)).toBe(false);
+}, 60_000);
