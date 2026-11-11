@@ -210,10 +210,13 @@ it("refreshes source changes once, isolates clones, and rebuilds changed lockfil
   await git(source, "replace", sourceCommit, baseCommit);
   let refreshed: string[];
   try {
-    refreshed = await Promise.all([
-      clone("updated-a", sourceCommit),
-      clone("updated-b", sourceCommit),
-    ]);
+    refreshed = await withWorktreePreparationTiming("managed", () =>
+      Promise.all([clone("updated-a", sourceCommit), clone("updated-b", sourceCommit)]),
+    );
+    expect(mocks.preparation.mock.lastCall?.[0].details).toMatchObject({
+      templateClone: expect.any(Number),
+      templateValidateOutput: expect.any(Number),
+    });
   } finally {
     await git(source, "replace", "--delete", sourceCommit);
   }

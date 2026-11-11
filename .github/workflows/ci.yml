@@ -797,6 +797,7 @@ jobs:
                   "scripts/lib/ci-blacksmith-capacity.mjs",
                   "scripts/ci-adaptive-priors.mjs",
                   "scripts/lib/actions-artifact-archive.mjs",
+                  "scripts/lib/plain-gh.mjs",
                   "scripts/lib/changed-path-facts.mjs",
                   "scripts/lib/ci-test-observations.mjs",
                   "scripts/lib/ci-ios-smoke-plan.mjs",
@@ -2677,6 +2678,8 @@ jobs:
           install-bun: "false"
           dependency-cache: &trusted_first_attempt_dependency_cache ${{ ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || runner.environment != 'self-hosted' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           restore-test-caches: *restore_test_caches
+          vitest-worker-cache: ${{ matrix.task == 'control-ui' && needs.preflight.outputs.frozen_target != 'true' && 'true' || 'false' }}
+          vitest-worker-preset: runtime
 
       - *install_playwright_chromium
 
