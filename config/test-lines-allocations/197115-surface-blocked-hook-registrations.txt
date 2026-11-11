@@ -1,0 +1,4 @@
+# Regression coverage for surfacing blocked plugin hook registrations in loader, status, health, and
+# plugin inspection output, plus the extracted conversation-access loader test helpers.
+# Exact net growth for PR #197115.
+358
