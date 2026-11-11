@@ -163,6 +163,7 @@ export function projectTranscriptChain(
     bubbleMode?: boolean;
     messages?: readonly unknown[];
     activeRunId?: string | null;
+    activeRunIds?: readonly string[];
     session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
   },
 ): TranscriptChain {
@@ -178,6 +179,7 @@ export function projectTranscriptChain(
     options.bubbleMode,
     options.messages,
     options.activeRunId,
+    JSON.stringify(options.activeRunIds),
     session?.key,
     session?.lastRunId,
     session?.status,

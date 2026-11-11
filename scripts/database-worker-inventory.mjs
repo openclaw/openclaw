@@ -1893,7 +1893,7 @@ const reviewedOperations = new Map([
           "hasSessionStateWatchersInDatabase",
           "isSessionStateUpstreamCurrentInDatabase",
         ],
-        evidence: "session-state-events.worker.ts and session-upstream-links.worker.ts",
+        evidence: "session-state-events-record.worker.ts and session-upstream-links.worker.ts",
       },
       {
         tier: "W",
@@ -1909,13 +1909,13 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["readCursor", "readMaterialCursors", "updateMaterialCursor"],
         evidence:
-          "Watch commands and event recording execute only in session-state-events.worker.ts and subagent-registry.store.worker.ts",
+          "Watch/record workers and subagent-registry.store.worker.ts execute these queries",
       },
       {
         tier: "W",
         operations: ["recordSessionStateEventsInDatabase"],
         evidence:
-          "All producers await sessionState.record; the only direct production kernel callers are session-state-events.worker.ts and subagent-registry.store.worker.ts",
+          "sessionState.record dispatches to session-state-events-record.worker.ts; subagent-registry.store.worker.ts is the other direct caller",
       },
     ],
   ],
@@ -3515,6 +3515,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/config/sessions/session-transcript-replay.kernel.ts", // Only session-history-read-operation.worker.ts and openclaw-agent-execution-transcript.worker.ts import and call this reader.
   "src/plugins/installed-plugin-snapshot-candidates.kernel.ts", // Only plugins/state.worker.ts mutates the journal; installed-index commits transfer ownership inside that worker's transaction.
   "src/config/sessions/session-accessor.sqlite-compaction.ts", // Only session-manager-metadata.worker.ts calls the required-worker entry point; the async facade imports its type only.
   "src/agents/sandbox/persistent-exec-store.kernel.ts", // Mutations and registry removal checks run in persistent-exec-store.worker.ts and registry-write.worker.ts; reads dispatch through openclaw-state-read-operation-registry.ts in the read worker.

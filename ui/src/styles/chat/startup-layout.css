@@ -477,12 +477,6 @@ div.chat-thread:where(.chat-thread--annotations) {
     justify-self: stretch;
   }
 
-  /* Match the pending title slot so its adjacent menu stays still on hydration. */
-  & .chat-pane__session-title-text {
-    width: 9.5em;
-    min-width: 0;
-  }
-
   & .chat-pane__identity-actions {
     display: flex;
     flex: 0 0 auto;

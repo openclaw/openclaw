@@ -1084,8 +1084,16 @@
   }
 }
 
+/* Completed work reads as a quiet heading over what follows: a medium label and
+   a resting chevron, with no divider. Two extra pixels below the uniform
+   run-block gap keep the label from crowding the reply or a leading code block. */
+.chat-work-group {
+  margin-block-end: 2px;
+}
+
 .chat-work-group .chat-activity-group__label {
   color: inherit;
+  font-weight: var(--control-ui-font-weight-semibold);
 }
 
 .chat-work-group__total {
@@ -1130,12 +1138,6 @@
         text-shimmer var(--text-shimmer-duration) var(--text-shimmer-easing) infinite;
     }
   }
-}
-
-.chat-work-group__separator {
-  width: 100%;
-  height: 1px;
-  background: var(--border);
 }
 
 @media (pointer: coarse) {
