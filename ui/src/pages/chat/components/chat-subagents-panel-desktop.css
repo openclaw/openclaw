@@ -36,7 +36,7 @@
   font-size: calc(12px * var(--control-ui-text-scale));
   font-weight: 400;
   font-variant-numeric: tabular-nums;
-  line-height: calc(20px * var(--control-ui-text-scale));
+  line-height: 20px;
 }
 
 .subagents-desktop__count {
@@ -174,7 +174,7 @@
 .subagents-desktop__name {
   overflow: hidden;
   font-weight: 500;
-  line-height: calc(18px * var(--control-ui-text-scale));
+  line-height: 18px;
   text-overflow: clip;
   white-space: nowrap;
 }
@@ -184,7 +184,7 @@
   color: var(--muted);
   font-size: calc(12px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
-  line-height: calc(18px * var(--control-ui-text-scale));
+  line-height: 18px;
 }
 
 .subagents-desktop__elapsed {

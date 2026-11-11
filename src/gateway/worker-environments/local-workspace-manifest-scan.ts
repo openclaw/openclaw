@@ -107,6 +107,10 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
       : input.action.kind === "archive"
         ? "canonical"
         : undefined;
+  // Conversion preserves admission; discovery and repair consume it. Other actions
+  // must not inflate inline/CAS path documents into the compressed worker snapshot.
+  const needsSourcePaths =
+    target !== undefined || input.action.kind === "convert" || input.action.kind === "repair";
   const row = executeSqliteQueryTakeFirstSync(
     db,
     query
@@ -115,7 +119,6 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
         "revision",
         "projection_path",
         "base_commit",
-        "source_paths_json",
         "baseline_json",
         "baseline_ref",
         "tree_root_digest",
@@ -124,6 +127,7 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
       ])
       // Keep the snapshot shape without materializing fingerprints this action never consumes.
       .select((eb) => [
+        (needsSourcePaths ? eb.ref("source_paths_json") : eb.val("[]")).as("source_paths_json"),
         (target === "projection" || input.action.kind === "scan"
           ? eb.ref("canonical_fingerprints")
           : eb.val(null)
@@ -139,7 +143,7 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
   if (!row || row.revision !== input.revision) {
     throw new Error("Local workspace binding changed");
   }
-  if (row.source_paths_digest) {
+  if (needsSourcePaths && row.source_paths_digest) {
     row.source_paths_json = readLocalWorkspaceSourcePaths(db, row.source_paths_digest);
   }
   if (

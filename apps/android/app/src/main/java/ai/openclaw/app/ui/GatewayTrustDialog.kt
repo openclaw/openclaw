@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.R
+import ai.openclaw.app.gateway.formatGatewayAuthority
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawTheme
@@ -62,6 +63,13 @@ internal fun GatewayTrustDialog(
     title = stringResource(R.string.trust_this_gateway),
     text = {
       Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(
+          text =
+            formatGatewayAuthority(prompt.endpoint.host, prompt.endpoint.port) +
+              prompt.endpoint.contextPath,
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.text,
+        )
         Text(message, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         if (prompt.systemTrustAvailable) {
           Text(
