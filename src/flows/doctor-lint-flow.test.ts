@@ -1,5 +1,4 @@
-import { expect, it, vi } from "vitest";
-import { withCommandProcessScope } from "../process/exec-spawn.js";
+import { expect, it } from "vitest";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { exitCodeFromFindings, runDoctorLintChecks } from "./doctor-lint-flow.js";
 import * as registry from "./health-check-registry.js";
@@ -29,34 +28,6 @@ function throwingCheck(id: string, error: Error): HealthCheck {
     throw error;
   });
 }
-
-it.each(["before", "success", "failure"])(
-  "does not turn owner cancellation into lint findings during %s",
-  async (phase) => {
-    const controller = new AbortController();
-    const cancellation = new Error("lint owner cancelled");
-    const detect = vi.fn(async () => {
-      controller.abort(cancellation);
-      if (phase === "failure") {
-        throw new Error("late diagnostic failure");
-      }
-      return [errorFinding("cancelled", "late finding")];
-    });
-    const next = vi.fn(async () => []);
-    await expect(
-      withCommandProcessScope(async () => {
-        if (phase === "before") {
-          controller.abort(cancellation);
-        }
-        return runDoctorLintChecks(ctx, {
-          checks: [check("cancelled", detect), check("next", next)],
-        });
-      }, controller.signal),
-    ).rejects.toBe(cancellation);
-    expect(detect).toHaveBeenCalledTimes(phase === "before" ? 0 : 1);
-    expect(next).not.toHaveBeenCalled();
-  },
-);
 
 it("reports conflicting selectors for a registered health check", async () => {
   const ids = ["plugin/example/first", "plugin/example/second"];

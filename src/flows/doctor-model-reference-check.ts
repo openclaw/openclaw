@@ -1,8 +1,6 @@
 import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { resolveKnownModelRefMigrationTarget } from "../commands/doctor/shared/codex-route-warnings.js";
 import { getModelCatalogWarnings, readModelCatalog } from "../commands/models/catalog-warnings.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
-import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
@@ -17,13 +15,7 @@ export const modelReferenceCheck: HealthCheck = {
     const catalogSkipped =
       ctx.allowExecSecretRefs !== true &&
       (await hasActiveGatewayExecCredential({ cfg: ctx.cfg, env: ctx.env }));
-    const catalog = catalogSkipped
-      ? undefined
-      : await readModelCatalog(
-          ctx.cfg,
-          undefined,
-          resolveCommandProcessSignal(resolveSqliteInspectionSignal()),
-        );
+    const catalog = catalogSkipped ? undefined : await readModelCatalog(ctx.cfg);
     const findings = inspectConfiguredModelReferences({
       cfg: ctx.cfg,
       env: ctx.env,

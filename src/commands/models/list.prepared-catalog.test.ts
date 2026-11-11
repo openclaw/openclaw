@@ -19,7 +19,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as gateway from "../../gateway/call.js";
 import * as gatewayLock from "../../infra/gateway-lock.js";
 import * as proxyLifecycle from "../../infra/net/proxy/proxy-lifecycle.js";
-import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { modelsListCommand } from "./list.list-command.js";
 import type { ModelRow } from "./list.types.js";
@@ -220,43 +219,13 @@ describe("models list published transport", () => {
     );
   });
 
-  it.each(["authorization", "pre-aborted", "success", "failure", "refresh"])(
-    "keeps the selected Gateway's result custody during %s",
-    async (mode) => {
-      const work = new AsyncWorkScope();
-      const cancellation = new Error("catalog read cancelled");
-      const failure = new Error("Gateway rejected authorization");
-      if (mode === "pre-aborted") {
-        work.beginClose(cancellation);
-      }
-      vi.mocked(gateway.callGateway).mockImplementationOnce(async (options) => {
-        expect(options.signal).toBe(mode === "refresh" ? undefined : work.signal);
-        if (mode !== "authorization") {
-          work.beginClose(cancellation);
-        }
-        if (mode === "authorization" || mode === "failure") {
-          throw failure;
-        }
-        return { models: [model] };
-      });
-      const result = work.run(() => list({ all: true, json: true, refresh: mode === "refresh" }));
-      if (mode === "refresh") {
-        await result;
-        expectModelRows([{ key: "catalog-provider/Reader" }]);
-      } else {
-        if (mode === "authorization") {
-          await expect(result).rejects.toBe(failure);
-        } else {
-          await result;
-        }
-        for (const writeOutput of Object.values(runtime)) {
-          expect(writeOutput).not.toHaveBeenCalled();
-        }
-      }
-      expect(gateway.callGateway).toHaveBeenCalledTimes(mode === "pre-aborted" ? 0 : 1);
-      expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
-    },
-  );
+  it("does not substitute local inventory after Gateway authorization fails", async () => {
+    const failure = new Error("Gateway rejected authorization");
+    vi.mocked(gateway.callGateway).mockRejectedValue(failure);
+    await expect(list({ all: true, json: true })).rejects.toBe(failure);
+    expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
+    expect(runtime.writeJson).not.toHaveBeenCalled();
+  });
 
   it("treats an explicit Gateway port as a selected target even without a local lock", async () => {
     await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "19002" }, () =>

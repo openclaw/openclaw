@@ -100,14 +100,13 @@ export async function runDoctorLintCliInProcess(
   opts: DoctorLintCliOptions,
   worker?: { commandStartedAtMs?: number },
 ): Promise<number> {
-  const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
   let reported: DoctorLintExecution | undefined;
   const report = (execution: DoctorLintExecution) => {
-    signal?.throwIfAborted();
     execution.writeOutput();
     reported = execution;
   };
   try {
+    const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
     const execution = await withSqliteReadOnlyWorkerScope(
       () =>
         withArtifactPreservingStateReads(

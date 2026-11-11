@@ -2,7 +2,6 @@ import type { Command } from "commander";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { TRIAGE_EXTERNAL_AGENTS } from "../../commands/triage-handoff.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
-import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { formatErrorMessage as formatError, runCommandWithRuntime } from "../cli-utils.js";
 import { listExplicitOptionFlagsExcept } from "../command-options.js";
 import { isDoctorMachineOutput } from "../doctor-output-mode.js";
@@ -291,9 +290,6 @@ export function registerMaintenanceCommands(
         // Completed reports retain their status and the shared output-drain lifecycle.
         if (error instanceof ExitError || (!lintMode && !opts.json)) {
           throw error;
-        }
-        if (lintMode && getAsyncWorkSignal()?.aborted) {
-          exitCliAfterOutput(defaultRuntime, 2);
         }
         if (lintMode && (opts.json === true || !process.stdout.isTTY)) {
           const { formatDoctorLintFailure } = await import("../../commands/doctor-lint-output.js");
