@@ -206,6 +206,28 @@ describe("buildExportSessionReply", () => {
     },
   );
 
+  it("preserves parentless legacy ancestry and explicit branch roots", async () => {
+    hoisted.sessionTranscriptEvents = [
+      { type: "session", version: 3, id: "legacy", timestamp: "2026-05-16T00:00:00Z" },
+      messageEntry("question", { role: "user", content: "question" }),
+      messageEntry("answer", { role: "assistant", content: "answer" }, 1),
+      {
+        ...messageEntry("separate-root", { role: "user", content: "new branch" }, 2),
+        parentId: null,
+      },
+    ];
+
+    expect(sessionDataFromHtml(await exportHtml())).toMatchObject({
+      entries: [
+        { id: "question", parentId: null },
+        { id: "answer", parentId: "question" },
+        { id: "separate-root", parentId: null },
+      ],
+      leafId: "separate-root",
+      hasLeafControl: false,
+    });
+  });
+
   it("preserves an explicitly empty branch selected by a terminal leaf control", async () => {
     const entries = [
       {

@@ -1,0 +1,2 @@
+# Exact net regression-test growth for #197304: exported legacy ancestry and explicit roots.
+22
