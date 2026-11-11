@@ -27,7 +27,7 @@
 
 .transcripts-layout:not(.transcripts-layout--selected) .transcripts-library {
   width: 100%;
-  max-width: 960px;
+  max-width: 1120px;
   margin-inline: auto;
 }
 

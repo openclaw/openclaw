@@ -8,6 +8,7 @@ import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   recordWorktreePreparationFailure,
+  setWorktreePreparationCopyDetails,
   startWorktreePreparationPhase,
 } from "./preparation-timing.js";
 
@@ -88,6 +89,9 @@ export async function copyProvisionedPathsInWorker(
         },
       },
     );
+    if ("copyDetails" in reply && reply.copyDetails) {
+      setWorktreePreparationCopyDetails(reply.copyDetails);
+    }
     if (failure) {
       throw failure.error;
     }

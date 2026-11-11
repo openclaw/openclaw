@@ -1401,7 +1401,7 @@ jobs:
 
       - name: Upload npm 12 installed tree inventory
         if: always() && steps.npm12_install.outcome == 'success'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm12-installed-tree-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/npm12-installed-tree.jsonl

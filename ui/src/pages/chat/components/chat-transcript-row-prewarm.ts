@@ -13,7 +13,7 @@ import { resolveCappedMessageId } from "../chat-message-recovery.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import { messageMarkdownRenderOptions } from "./chat-message-bubble-presentation.ts";
 import { prepareMarkdownMediaSource } from "./chat-message-media-markdown.ts";
-import { projectMessageMedia } from "./chat-message-media.ts";
+import { projectMessageMedia } from "./chat-message-media-projection.ts";
 import type { TranscriptContent, TranscriptRow } from "./chat-transcript-layout.ts";
 import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
 

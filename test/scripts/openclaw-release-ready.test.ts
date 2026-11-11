@@ -381,7 +381,7 @@ function bridgeFixture(releaseRunAttempt = 1, conclusion = "success") {
       `${moduleName}.mjs`,
       `
       import { trace, preparedPackage } from './fixture-trace.mjs';
-      export { prepared${prefix}ArtifactName${target === "npm" ? ", validatePreparedNpmArtifactDescriptor" : ""} } from ${JSON.stringify(pathToFileURL(resolve(`scripts/${moduleName}.mjs`)).href)};
+      export { prepared${prefix}ArtifactName${target === "npm" ? ", validatePreparedNpmArtifactDescriptor, createPreparedNpmCapacityObserver" : ""} } from ${JSON.stringify(pathToFileURL(resolve(`scripts/${moduleName}.mjs`)).href)};
       ${
         target === "npm"
           ? `
@@ -809,6 +809,7 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
     resolve("scripts/release-tooling-identity.mjs"),
     join(fixture.scripts, "release-tooling-identity.mjs"),
   );
+  copyFileSync(resolve("scripts/lib/plain-gh.mjs"), join(fixture.scripts, "lib/plain-gh.mjs"));
   copyFileSync(
     resolve("scripts/linux-app-channel.mjs"),
     join(fixture.scripts, "linux-app-channel.mjs"),

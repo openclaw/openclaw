@@ -439,9 +439,8 @@ vi.mock("../../cache-trace.js", () => ({
 }));
 
 // mock-isolation: Exercise attempt workspace routing without constructing unrelated tools.
-vi.mock("../../agent-tools.js", () => ({
+vi.mock("../../agent-tools.async.js", () => ({
   createOpenClawCodingToolsInternalAsync: hoisted.createOpenClawCodingToolsMock,
-  resolveToolLoopDetectionConfig: () => undefined,
 }));
 
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
