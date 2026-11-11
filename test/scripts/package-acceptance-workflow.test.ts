@@ -7813,7 +7813,7 @@ NODE
         });
       }
       writeJson(runPath, {
-        workflowName: "OpenClaw Release Publish",
+        path: ".github/workflows/openclaw-release-publish.yml",
         event: "workflow_dispatch",
         status: "completed",
         conclusion: "failure",
