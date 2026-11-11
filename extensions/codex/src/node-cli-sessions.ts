@@ -3,7 +3,10 @@ import path from "node:path";
 import process from "node:process";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { floorPositiveFiniteNumber, resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import {
+  floorPositiveFiniteNumber,
+  resolveIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
