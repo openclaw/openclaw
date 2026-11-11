@@ -431,7 +431,12 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
             Type.Null(),
           ]),
         ),
-        idleOnly: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+        idleOnly: Type.Optional(
+          Type.Union([Type.Boolean(), Type.Null()], {
+            description:
+              "True waits for agent-wide quiet, including other cron jobs and foreground sessions, not just the target session; continuations may defer indefinitely on busy shared agents. False/unset uses normal admission; null clears.",
+          }),
+        ),
         ...(triggersEnabled ? { trigger: createCronTriggerSchema() } : {}),
         sessionTarget: Type.Optional(
           Type.String({

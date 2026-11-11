@@ -9,6 +9,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { requestCheckoutSnapshot } from "../../lib/checkout-snapshot.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -237,6 +238,11 @@ export class DraftPlaceBrowser {
 
   get projectId(): string {
     return this.projectSelection?.kind === "local" ? this.projectSelection.id : "";
+  }
+
+  /** Remote and pasted repositories open through operator.write projectGitUrl. */
+  get canOpenRemoteProjects(): boolean {
+    return hasOperatorWriteAccess(this.read().context?.gateway.snapshot.hello?.auth ?? null);
   }
 
   get remoteProject(): DraftRemoteProject | null {

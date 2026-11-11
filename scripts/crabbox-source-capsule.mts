@@ -211,6 +211,7 @@ export function prepareCrabboxSourceCapsule(options: {
   syncRoot: string;
   base: string;
   reuseMirror?: boolean;
+  seedFromBase?: boolean;
   syncPlan: { command: string; args: string[]; windowsVerbatimArguments?: boolean };
 }): CrabboxSourceCapsule {
   const startedAt = Date.now();
@@ -1065,6 +1066,11 @@ export function prepareCrabboxSourceCapsule(options: {
       privateEnv,
     );
     refreshIndex([...paths.filter((path) => !warm || !retained.has(path)), bundleFile]);
+    if (options.seedFromBase) {
+      // Boat seeds this disposable checkout from the base; the sealed capsule
+      // still carries the original source identity and exact candidate bytes.
+      git(directory, ["update-ref", "--no-deref", "HEAD", baseSha], privateEnv);
+    }
     if (cache) {
       copyFileSync(
         join(directory, ".git", "index"),

@@ -238,6 +238,16 @@ describe("Telegram typed command delivery", () => {
 });
 
 describe("Telegram native argument menus", () => {
+  it("dispatches bare ACP to help without an incomplete spawn keyboard", async () => {
+    harness.replySpy.mockResolvedValue({ text: "ACP command help." });
+    await dispatchCommand(commandConfig(), "/acp", 3102);
+    expect(harness.replySpy).toHaveBeenCalled();
+    expectSend({ text: "ACP command help." });
+    expect(apiCalls).not.toHaveBeenCalledWith(
+      "sendMessage",
+      expect.objectContaining({ reply_markup: expect.anything() }),
+    );
+  });
   it("records native menus in the configured store despite a stale default binding", async () => {
     const cfg = commandConfig();
     const sessionKey = "agent:main:main";

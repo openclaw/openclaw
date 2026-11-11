@@ -380,16 +380,25 @@ describe("runDiscordGatewayLifecycle", () => {
     );
   });
 
-  it("rejects on a live lifecycle stop event and disconnects", async () => {
-    const h = createHarness();
-    const lifecycle = runDiscordGatewayLifecycle(h.params);
-    const outcome = expect(lifecycle).rejects.toThrow("discord gateway fatal: Error: boom");
-    await h.listening;
-    h.emitGatewayEvent(gatewayEvent("fatal", "boom"));
-    await outcome;
-    expect(h.gateway.disconnect).toHaveBeenCalledOnce();
-    expectCleanup(h, 1);
-  });
+  it.each(["fatal", "reconnect-exhausted"] as const)(
+    "settles live %s without disabling account recovery",
+    async (type) => {
+      const h = createHarness();
+      const lifecycle = runDiscordGatewayLifecycle(h.params);
+      const outcome = expect(lifecycle).rejects.toThrow(`discord gateway ${type}: Error: boom`);
+      await h.listening;
+      h.emitGatewayEvent(gatewayEvent(type, "boom"));
+      await outcome;
+      expect(h.gateway.disconnect).toHaveBeenCalledOnce();
+      expect(h.statusSink).not.toHaveBeenCalledWith(
+        expect.objectContaining({ terminalDisconnect: true }),
+      );
+      expect(h.statusSink).not.toHaveBeenCalledWith(
+        expect.objectContaining({ lifecycle: "blocked" }),
+      );
+      expectCleanup(h, 1);
+    },
+  );
 
   it("force-stops through the runtime readiness deadline and disconnects", async () => {
     vi.useFakeTimers();

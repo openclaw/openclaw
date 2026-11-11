@@ -83,8 +83,10 @@ describe("channel ingress drain", () => {
         return await fail(...args);
       };
       const dispatched: string[] = [];
+      const onDeadLetter = vi.fn();
       const drain = createChannelIngressDrain<Payload>({
         queue,
+        onDeadLetter,
         retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0 },
         dispatchClaimedEvent: async (event, lifecycle) => {
           dispatched.push(event.id);
@@ -99,6 +101,7 @@ describe("channel ingress drain", () => {
       const idle = drain.waitForIdle();
       await vi.advanceTimersByTimeAsync(0);
       expect(failAttempts).toBe(1);
+      expect(onDeadLetter).not.toHaveBeenCalled();
       expect(drain.activeLaneKeys()).toEqual(new Set(["shared"]));
       expect(await drain.drainOnce()).toEqual({ started: 0 });
       expect(dispatched).toEqual(["poison"]);
@@ -106,6 +109,7 @@ describe("channel ingress drain", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       await idle;
       expect(failAttempts).toBe(3);
+      expect(onDeadLetter).toHaveBeenCalledOnce();
       expect(await drain.drainOnce()).toEqual({ started: 1 });
       await drain.waitForIdle();
       expect(dispatched).toEqual(["poison", "follower"]);
@@ -709,7 +713,7 @@ describe("channel ingress drain ownership", () => {
     });
   });
 
-  it.each(["complete", "fail"] as const)(
+  it.each(["complete", "fail", "queue-cap-old", "queue-cap-new"] as const)(
     "recovers only an unadopted peer after failed %s custody",
     async (method) => {
       await withTempState(async (stateDir) => {
@@ -719,11 +723,13 @@ describe("channel ingress drain ownership", () => {
         const writing = createDeferredCore();
         const finish = createDeferredCore();
         const failure = new Error("completion write failed");
-        const write = vi.spyOn(queue, method).mockImplementation(async () => {
-          writing.resolve();
-          await finish.promise;
-          throw failure;
-        });
+        const write = vi
+          .spyOn(queue, method === "complete" ? "complete" : "fail")
+          .mockImplementation(async () => {
+            writing.resolve();
+            await finish.promise;
+            throw failure;
+          });
         const abort = new AbortController();
         const drain = createChannelIngressDrain(
           {
@@ -735,7 +741,9 @@ describe("channel ingress drain ownership", () => {
                 ? { kind: "deferred" }
                 : method === "complete"
                   ? lifecycle.onAdopted()
-                  : lifecycle.onFailed?.(new Error("poison")),
+                  : method === "fail"
+                    ? lifecycle.onFailed?.(new Error("poison"))
+                    : lifecycle.onDropped?.(method),
           },
           true,
         );

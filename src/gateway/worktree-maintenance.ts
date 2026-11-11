@@ -22,9 +22,15 @@ import { toErrorObject } from "../infra/errors.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createHostIoPressureProbe } from "../infra/host-io-pressure.js";
 import {
+  cleanScratch,
+  closeScratchCleanupCursor,
+  type ScratchCleanupCursor,
+} from "../infra/scratch-cleanup.js";
+import {
   isGatewayWorkAdmissionClosed,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { prepareScratchMaintenanceTargets } from "./scratch-maintenance-custody.js";
 import { sweepLocalWorkspaceManifests } from "./worker-environments/local-workspace-gc.js";
 
 type MaintenanceRequest = { jobId?: string; retryDeferred?: boolean };
@@ -76,6 +82,7 @@ export function startWorktreeMaintenance(params: {
   let receipt: ManagedWorktreeGcReceipt | undefined;
   let archivePending = false;
   let nextRemovalAt = 0;
+  const scratchCursor: ScratchCleanupCursor = {};
   const hasIoPressure = createHostIoPressureProbe();
   const isActive = () =>
     !scheduler.signal.aborted &&
@@ -229,6 +236,20 @@ export function startWorktreeMaintenance(params: {
             current.startedAt = scheduler.now();
             let batchStartedAt = scheduler.now();
             let batchItems = 0;
+            const beforeRemoval = async () => {
+              assertCurrent();
+              if (scheduler.now() < nextRemovalAt) {
+                await pause(nextRemovalAt - scheduler.now());
+              }
+              while (await hasIoPressure()) {
+                assertCurrent();
+                await pause(PRESSURE_BACKOFF_MS);
+              }
+              assertCurrent();
+              nextRemovalAt = scheduler.now() + REMOVAL_INTERVAL_MS;
+              batchStartedAt = scheduler.now();
+              batchItems = 0;
+            };
             // The scheduler already detaches this job and joins its tracked cleanup.
             // Preserve that work scope when admitting the maintenance root.
             return runWithGatewayIndependentRootWorkAdmission(
@@ -240,20 +261,11 @@ export function startWorktreeMaintenance(params: {
                   retryDeferred,
                   signal: scheduler.signal,
                   commitGuard: assertCurrent,
-                  beforeRemoval: async () => {
-                    assertCurrent();
-                    if (scheduler.now() < nextRemovalAt) {
-                      await pause(nextRemovalAt - scheduler.now());
-                    }
-                    while (await hasIoPressure()) {
-                      assertCurrent();
-                      await pause(PRESSURE_BACKOFF_MS);
-                    }
-                    assertCurrent();
-                    nextRemovalAt = scheduler.now() + REMOVAL_INTERVAL_MS;
-                    batchStartedAt = scheduler.now();
-                    batchItems = 0;
+                  beforeRemoval: async (record) => {
+                    await closeScratchCleanupCursor(scratchCursor, record.path);
+                    await beforeRemoval();
                   },
+                  beforeTemplateRemoval: beforeRemoval,
                   checkpoint: async (progress) => {
                     Object.assign(current, progress);
                     assertCurrent();
@@ -268,6 +280,22 @@ export function startWorktreeMaintenance(params: {
                 });
                 assertCurrent();
                 await sweepLocalWorkspaceManifests({ signal: scheduler.signal, assertCurrent });
+                assertCurrent();
+                const scratch = await prepareScratchMaintenanceTargets(config);
+                try {
+                  result.scratch = await cleanScratch({
+                    targets: scratch.targets,
+                    now: scheduler.now(),
+                    assertCurrent,
+                    pause,
+                    cursor: scratchCursor,
+                    onProgress: (progress) => {
+                      current.scratch = progress;
+                    },
+                  });
+                } finally {
+                  scratch.release();
+                }
                 assertCurrent();
                 Object.assign(current, result);
                 params.onComplete(result);
@@ -309,6 +337,7 @@ export function startWorktreeMaintenance(params: {
       warmPending.clear();
       // Aborting also wakes a paused batch before joining worker settlement.
       await scheduler.stop();
+      await closeScratchCleanupCursor(scratchCursor);
       await previousDrain;
       if (owners.get(params.getRuntimeConfig) === owner) {
         owners.delete(params.getRuntimeConfig);

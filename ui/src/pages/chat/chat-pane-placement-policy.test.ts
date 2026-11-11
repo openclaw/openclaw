@@ -172,7 +172,7 @@ it.each(["dispatch", "move"] as const)(
     const gateway = document.querySelector<HTMLButtonElement>('[data-value="gateway"]');
     if (mode === "move") {
       expect(gateway!.disabled).toBe(true);
-      expect(gateway!.getAttribute("aria-pressed")).toBe("false");
+      expect(gateway!.getAttribute("aria-checked")).toBe("false");
     } else {
       expect(gateway).toBeNull();
     }

@@ -38,6 +38,7 @@ type GatewayStartupActivationParams = PluginStartupActivationParams & {
   configuredSpeechProviderIds: ReadonlySet<string>;
   configuredWebSearchProviderIds: ReadonlySet<string>;
   autoSelectWebSearchProvider: boolean;
+  autoSelectSpeechProvider: boolean;
   configuredModelProviderIds: ReadonlySet<string>;
   configuredGenerationProviderIds: ConfiguredGenerationProviderIds;
   configuredVoiceProviderIds: ConfiguredVoiceProviderIds;
@@ -56,7 +57,8 @@ type StartupActivationPolicy =
   | "harness"
   | "hook"
   | "tool"
-  | "web-search-auto";
+  | "web-search-auto"
+  | "credentialed-auto";
 type StartupContractKey =
   | keyof ConfiguredGenerationProviderIds
   | keyof ConfiguredVoiceProviderIds
@@ -131,6 +133,21 @@ function isProviderCompatStartupPolicy(policy: StartupActivationPolicy): boolean
     policy === "storage" ||
     policy === "speech" ||
     policy === "implicit-external"
+  );
+}
+
+/**
+ * Auto-selected capabilities (unpinned web search or TTS) choose among loaded owners, so an owner
+ * whose own setup credential is already present must load at startup like an explicitly enabled
+ * one. Owners without a credential stay lazy.
+ */
+function hasManifestSetupCredential(
+  manifest: PluginManifestRecord | undefined,
+  env: NodeJS.ProcessEnv | undefined,
+): boolean {
+  const source = env ?? process.env;
+  return (manifest?.setup?.providers ?? []).some((provider) =>
+    (provider.envVars ?? []).some((name) => Boolean(source[name.trim()]?.trim())),
   );
 }
 
@@ -210,6 +227,9 @@ function passesPluginStartupPolicy(
   if (policy === "web-search-auto") {
     return activationState.explicitlyEnabled;
   }
+  if (policy === "credentialed-auto") {
+    return bundled || activationState.explicitlyEnabled;
+  }
   if (policy === "hook") {
     return (
       activationState.explicitlyEnabled ||
@@ -279,6 +299,12 @@ export function canStartGatewayStartupPlugin(params: GatewayStartupActivationPar
     (params.autoSelectWebSearchProvider &&
       (manifest?.contracts?.webSearchProviders?.length ?? 0) > 0 &&
       passesPluginStartupPolicy(params, "web-search-auto")) ||
+    (((params.autoSelectWebSearchProvider &&
+      (manifest?.contracts?.webSearchProviders?.length ?? 0) > 0) ||
+      (params.autoSelectSpeechProvider &&
+        (manifest?.contracts?.speechProviders?.length ?? 0) > 0)) &&
+      hasManifestSetupCredential(manifest, params.env) &&
+      passesPluginStartupPolicy(params, "credentialed-auto")) ||
     (manifestOwnsConfiguredModelProvider({
       manifest,
       configuredModelProviderIds: params.configuredModelProviderIds,

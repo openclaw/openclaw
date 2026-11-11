@@ -187,6 +187,9 @@ struct LowCoverageHelperTests {
             + "-o ExitOnForwardFailure=yes -n -N -L 18789:127.0.0.1:18789 -- user@host"
         #expect(PortGuardian.isTunnelCommand(full, localPort: 18789))
         #expect(PortGuardian.isTunnelCommand("ssh -N -L18789:127.0.0.1:18789 user@host", localPort: 18789))
+        // v2026.11.1 shares this ledger and drops receipts it cannot match, so the matcher stays exactly its
+        // shape and RemotePortTunnel never names a bind address.
+        #expect(!PortGuardian.isTunnelCommand("ssh -N -L 127.0.0.1:18790:127.0.0.1:18790 user@host", localPort: 18790))
 
         // Wrong local port, missing -N (interactive forward), other binaries, or a
         // forward to a non-loopback host are not ours to kill.

@@ -152,12 +152,12 @@ type ReleasedPersonalAction = ReleasedPersonalConnectionAction & {
   agentId: string;
   lifecycleRevision: string | null;
 };
-expectTypeOf<
-  Parameters<Publications["requestForClaim"]>[0]["requester"]
->().toEqualTypeOf<ReleasedRequester>();
-expectTypeOf<
-  Parameters<Publications["requestForSession"]>[0]["requester"]
->().toEqualTypeOf<ReleasedRequester>();
+type ClaimRequester = Parameters<Publications["requestForClaim"]>[0]["requester"];
+type SessionRequester = Parameters<Publications["requestForSession"]>[0]["requester"];
+expectTypeOf<ClaimRequester>().toEqualTypeOf<SessionRequester>();
+// Additive optional metadata must preserve released requester inputs and outputs.
+expectTypeOf<ReleasedRequester>().toExtend<SessionRequester>();
+expectTypeOf<SessionRequester>().toExtend<ReleasedRequester>();
 expectTypeOf<
   Parameters<Publications["requestPersonalForSession"]>[1]
 >().toEqualTypeOf<ReleasedPersonalAction>();
