@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
 import * as publication from "../../scripts/full-release-publication-contract.mjs";
 import * as validation from "../../scripts/full-release-validation-at-sha.mts";
@@ -13,12 +14,144 @@ const waitMinutes = validation.FULL_RELEASE_WAIT_TIMEOUT_MINUTES;
 
 it("schedules nightly qualification every 3 hours without overlaps, with manual dispatch", () => {
   expect(nightly.on.schedule).toEqual([{ cron: "7 */3 * * *" }]);
-  expect(nightly.concurrency).toEqual({
-    group: "full-release-validation-nightly",
-    "cancel-in-progress": false,
+  expect(nightly.concurrency["cancel-in-progress"]).toBe(false);
+  for (const eventName of ["schedule", "workflow_dispatch"] as const) {
+    expect(workflow.evaluateWorkflow(nightly.concurrency.group, { eventName })).toBe(
+      "full-release-validation-nightly",
+    );
+  }
+  expect(nightly.on.workflow_dispatch?.inputs?.operation).toMatchObject({
+    default: "full-release-validation",
+    options: ["full-release-validation", "runner-canary"],
   });
-  expect(nightly.on).toHaveProperty("workflow_dispatch");
-  expect(nightly.on.workflow_dispatch?.inputs).toBeUndefined();
+});
+
+it("isolates the main-only scheduling canary while preserving cleanup admission", () => {
+  const canary = nightly.jobs.runner_canary;
+  const context = {
+    eventName: "workflow_dispatch" as const,
+    runnerBackend: "hybrid" as const,
+    inputs: { operation: "runner-canary" },
+    boatReleaseRunnerGroup: "boat-watchers",
+    additionalNeeds: {
+      boat_nightly_runner: {
+        result: "success" as const,
+        outputs: { nightly_label: "owned-label" },
+      },
+    },
+  };
+  expect(workflow.evaluateWorkflow(nightly.concurrency.group, context)).toBe(
+    "full-release-validation-nightly-canary",
+  );
+  expect(workflow.evaluateWorkflow(canary["runs-on"], context)).toEqual({
+    group: "boat-watchers",
+    labels: "owned-label",
+  });
+  expect(canary["timeout-minutes"]).toBe(10);
+  expect(canary.permissions).toEqual({ contents: "read" });
+  const admits = (name: string, override = {}) =>
+    workflow.evaluateWorkflow(`\${{ ${nightly.jobs[name].if} }}`, { ...context, ...override });
+  expect(admits("boat_nightly_runner")).toBe(true);
+  expect(admits("runner_canary")).toBe(true);
+  expect(admits("validate")).toBe(false);
+  expect(admits("cleanup_boat_nightly_runner", { cancelled: true, failed: true })).toBe(true);
+  for (const override of [
+    { repository: "fork/openclaw" },
+    { ref: "refs/heads/topic" },
+    { eventName: "schedule" },
+    { additionalNeeds: { boat_nightly_runner: { result: "failure", outputs: {} } } },
+  ]) {
+    expect(admits("runner_canary", override)).toBe(false);
+  }
+});
+
+it.each([
+  ["watch", "queued", true],
+  ["watch", "queued", false],
+  ["watch", "in_progress", false],
+  ["cancel", "in_progress", true],
+  ["cancel", "in_progress", false],
+] as const)("bounds canary %s from %s (completes=%s)", async (phase, status, completes) => {
+  const cleanup = nightly.jobs.cleanup_boat_nightly_runner;
+  const cleanupSteps: workflow.WorkflowStep[] = cleanup.steps;
+  const step = cleanupSteps.find((candidate) =>
+    phase === "watch"
+      ? candidate.id === "canary_wait"
+      : candidate.name === "Cancel an unfinished canary before cleanup",
+  )!;
+  const outputs = new Map<string, unknown>();
+  const failures: string[] = [];
+  let now = 0;
+  let calls = 0;
+  let cancelled = false;
+  const script = step.with?.script;
+  if (typeof script !== "string") {
+    throw new Error("Missing canary script");
+  }
+  const execution = runInNewContext(`(async () => { ${script} })()`, {
+    context: { repo: { owner: "openclaw", repo: "openclaw" }, runId: 123, sha: "source" },
+    process: { env: { GITHUB_RUN_ATTEMPT: "2", CANARY_LABEL: "owned-label" } },
+    Date: { now: () => now },
+    setTimeout: (callback: () => void, delay: number) => {
+      now += delay;
+      callback();
+    },
+    core: {
+      setOutput: (key: string, value: unknown) => outputs.set(key, value),
+      setFailed: (message: string) => failures.push(message),
+    },
+    github: {
+      rest: {
+        actions: {
+          cancelWorkflowRun: async (request: unknown) => {
+            expect(request).toMatchObject({ run_id: 123, request: { timeout: 10_000 } });
+            cancelled = true;
+          },
+          listJobsForWorkflowRunAttempt: async (request: unknown) => {
+            expect(request).toMatchObject({
+              run_id: 123,
+              attempt_number: 2,
+              request: { timeout: 10_000 },
+            });
+            return {
+              data: {
+                jobs: [
+                  {
+                    name: "Verify Boat runner scheduling",
+                    head_sha: "source",
+                    labels: ["owned-label"],
+                    status: completes && calls++ > 0 ? "completed" : status,
+                    conclusion: "success",
+                    runner_id: 7,
+                    runner_name: "owned-label",
+                  },
+                ],
+              },
+            };
+          },
+        },
+      },
+    },
+  });
+  if (phase === "cancel" && !completes) {
+    await expect(execution).rejects.toThrow("Canary cancellation did not settle");
+  } else {
+    await execution;
+  }
+  if (phase === "watch") {
+    expect(outputs.get("terminal")).toBe(String(completes));
+    expect(outputs.get("succeeded")).toBe(completes || "false");
+    expect(failures).toHaveLength(completes ? 0 : 1);
+  }
+  expect(cancelled).toBe(phase === "cancel");
+  expect(now).toBe(completes ? 5_000 : 300_000);
+  expect(cleanup.needs).not.toContain("runner_canary");
+  const cancel = cleanupSteps.findIndex(
+    (candidate) => candidate.name === "Cancel an unfinished canary before cleanup",
+  );
+  expect(cancel).toBeLessThan(cleanupSteps.findIndex((candidate) => candidate.id === "nightly"));
+  expect(cleanupSteps[cancel]?.if).toContain("always()");
+  expect(cleanupSteps.find((candidate) => candidate.id === "nightly")!.if).toBe("always()");
 });
 
 it.each(["schedule", "workflow_dispatch"] as const)("restricts %s to main", (eventName) => {
@@ -35,11 +168,12 @@ it.each(["schedule", "workflow_dispatch"] as const)("restricts %s to main", (eve
 
 it("pins candidate, tooling and qualification inputs through the SHA-pinned helper", () => {
   const text = workflow.readTrackedText(nightlyPath);
-  expect(text).not.toMatch(/createWorkflowDispatch|gh workflow run|github-script/u);
+  expect(text).not.toMatch(/createWorkflowDispatch|gh workflow run/u);
   expect(text).toContain("--trusted-workflow-ref main");
   expect(text).not.toMatch(/--ref\s+main|ref:\s*["']?main["']?\s*$/mu);
   expect(Object.keys(nightly.jobs)).toEqual([
     "boat_nightly_runner",
+    "runner_canary",
     "validate",
     "cleanup_boat_nightly_runner",
   ]);
