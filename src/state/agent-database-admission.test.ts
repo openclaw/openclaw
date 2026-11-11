@@ -269,27 +269,30 @@ it("retains merged inspection causes without changing public refusals", () => {
   );
 });
 
-it("retains its selected agent and state while observing current refusal publications", () => {
-  const env = makeEnv();
-  const stateDir = env.OPENCLAW_STATE_DIR;
-  const assertAdmitted = captureAdmission("  MAIN  ", { env });
-  expect(assertAdmitted).not.toThrow();
-  env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-other-admission-");
-  const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-  const refusal = inspectionRefusal({
-    agentId: "main",
-    paths: [],
-    reason: "Original admission refused",
-  });
-  recordAdmissions([refusal], options);
-  expect(assertAdmitted).toThrow(expect.objectContaining({ refusal }));
-  expect(readRefusal("main", { env })).toBeUndefined();
-  const replacement = { ...refusal, reason: "Replacement admission refused" };
-  recordAdmissions([replacement], options);
-  expect(assertAdmitted).toThrow(expect.objectContaining({ refusal: replacement }));
-  recordAdmissions([], options);
-  expect(assertAdmitted).not.toThrow();
-});
+it.each(["read", "write"] as const)(
+  "retains its selected agent and state while observing current %s refusal publications",
+  (access) => {
+    const env = makeEnv();
+    const stateDir = env.OPENCLAW_STATE_DIR;
+    const assertAdmitted = captureAdmission("  MAIN  ", { env, access });
+    expect(assertAdmitted).not.toThrow();
+    env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-other-admission-");
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const refusal = inspectionRefusal({
+      agentId: "main",
+      paths: [],
+      reason: "Original admission refused",
+    });
+    recordAdmissions([refusal], options);
+    expect(assertAdmitted).toThrow(expect.objectContaining({ refusal }));
+    expect(readRefusal("main", { env })).toBeUndefined();
+    const replacement = { ...refusal, reason: "Replacement admission refused" };
+    recordAdmissions([replacement], options);
+    expect(assertAdmitted).toThrow(expect.objectContaining({ refusal: replacement }));
+    recordAdmissions([], options);
+    expect(assertAdmitted).not.toThrow();
+  },
+);
 
 it("uses the current preparation scope and refuses an escaped scope after preparation ends", async () => {
   const env = makeEnv();

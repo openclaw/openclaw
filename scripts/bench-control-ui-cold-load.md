@@ -24,6 +24,19 @@ check; positions and directions rotate. Split compound actions before attributin
 a gap. Fix validation requires 20 rotated pairs plus A/A and unchanged engines
 within the campaign's acceptance band.
 
+For the chat model picker, select `model-picker-first-open`, `model-picker-open`,
+`model-picker-search`, and `model-picker-search-paste` separately. Opening ends
+with mounted choices and focused search; paste uses one native edit, while search
+types the same query character by character. The compound
+`model-picker-first-open-search` retains the driver gaps between those phases.
+The explicit desktop `session-icon-first-custom-input` scenario prepares an empty,
+focused custom icon field and measures its first emoji input through enabled Set;
+it leaves the draft unapplied and sends no appearance mutation.
+Use a separate WebKit `--trace` run to attribute layout and the first content
+paint; application time is not a paint timestamp. `sidebar-open` and
+`sidebar-close` split one activation on desktop and mobile and await the relevant
+navigation animations.
+
 Firefox retains the same browser-local application elapsed clock and boot/route
 readiness milestones. These measure neither CPU nor paint. CPU counters, native
 traces, throttling, forced GC, and heap snapshots are unavailable in this harness;
@@ -40,6 +53,41 @@ event to one page, so an arbitrarily large delta is not a portable jump-to-top.
 The measured journey includes the driver gaps between gestures; it is not
 single-wheel latency. Mobile retains the programmatic scrollport jump because
 Playwright's mobile WebKit driver does not support wheel input.
+
+The explicit desktop `completed-direct-run-{400,2000}-wheel` scenarios use the
+same completed-run fixtures as the interpolated `-scroll` scenarios. They send
+90 trusted wheel commands per direction, targeting 60 Hz with a delta of 0.75
+viewport height; this is a sustained wheel sequence, not OS kinetic momentum.
+Reports separate offered/accepted commands from browser-observed events and
+actual scroll distance. Coverage uses the first-to-last movement window, with
+the preceding frame gap and first-input-to-movement latency retained; stationary
+tail zero/partial coverage and final coverage are reported separately. The
+scenario drains commands and waits for stable scrolling without forcing an
+endpoint. These are geometric row-box observations, not painted-content proof.
+
+For transcript geometry attribution, add `--transcript-layout-audit`
+to a separate run. This records native scroll writes and offsets,
+retained-row coordinates, visible bubble IDs and text rectangles, streaming block
+coordinates, and mutation ancestry beside each observation, plus a bounded JPEG
+filmstrip in Chromium, Firefox, and WebKit. The capture adds layout reads and is
+not timing evidence. Geometry describes DOM readiness, not painted coverage;
+inspect the filmstrip for blank, partial, or stale content. Image counts are not
+display refresh counts. Firefox and WebKit image clocks have an approximate
+initial alignment with the DOM clock. Layout-shift sources retain their
+row identity at observer delivery, before virtualization can remove them.
+
+For separate paint attribution, add `--transcript-paint-marker` with
+`--transcript-layout-audit`. A small bottom-left canvas encodes each JavaScript
+scroll-write revision in the captured pixels; the audit records its mapping to
+the requested and actual offsets. The marker adds paint work and can alter the
+captured path. Use unmarked filmstrips for blank-frame acceptance and marked
+captures only to resolve frame/offset identity.
+
+`streaming-645-deltas` types into the composer every 500 ms. Use the explicit
+`streaming-645-deltas-no-input` scenario to measure the same reply without typing.
+Report both CLS and `allShiftSum`: recent input excludes shifts from CLS, including
+ordinary Markdown word wrapping and growing tables. A zero CLS while typing does
+not prove that content stayed still; compare the filmstrip and source rectangles.
 
 ## Native browser work and composited layers
 
@@ -815,6 +863,40 @@ changes execution cost. Source maps and the exact saved bundle allow attribution
 of the unused ranges; preload transfer budgets remain the performance checker's
 authority, including assets that have not executed.
 
+Attribute that capture to emitted modules with the exact build and its source maps:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/analyze-control-ui-coverage.mts \
+  --dist dist/control-ui --coverage .artifacts/cold/run-1.coverage.json \
+  --summary .artifacts/cold/summary.json --run 1 \
+  --output .artifacts/cold/modules.json
+```
+
+The console ranks the top 30 modules by unused UTF-8 bytes; JSON retains all modules,
+per-asset totals, and unmapped bytes. Generated source-map columns and V8 ranges are
+UTF-16 offsets. Nested zero-count ranges override enclosing executed ranges, and
+byte counts come from emitted text, never `sourcesContent`. A captured loaded-byte
+count that differs from the supplied asset fails instead of silently attributing a
+wrong build.
+
+`--summary` prefers the selected run's `coverageResources` snapshot, captured at
+the coverage cutoff, to include fetched-only scripts (such as modulepreloads)
+absent from V8 coverage. Only resources with positive `decodedBytes` contribute
+complete fetched payloads; V8 entries remain included even without such a resource
+entry. Repeated URLs count once per asset, and fetched-only bytes remain explicit
+with zero observed executed bytes. The JSON and console identify this inventory as
+`coverage cutoff`. For older captures without that snapshot, the tool falls back
+to `http.waterfall` and explicitly labels the scope `whole-run (may include later
+fetches)`: those totals must not be described as readiness bytes. Without a summary,
+the scope is `V8 only` and excludes fetched-only scripts. `javaScriptResources` is
+an aggregate and cannot identify modules. Coverage indicates which ranges ran,
+not CPU cost or whether a module can safely be removed.
+Compare separate settled-readiness and `--coverage-after-ready-ms 5000` captures
+to distinguish boot-only observations from code used shortly afterward; keep the
+same route, fixture, and exact build for both. This cutoff follows the harness's
+existing content and quiet-event-queue checks, not the first enabled composer;
+idle preloads begun during that quiet window are included.
+
 On a noisy host, run an A/A control before interpreting candidate differences.
 First copy the baseline bundle to a separate directory (`cp -R <base> <control>`):
 the runner temporarily swaps comparison bundles, so both slots cannot use the same
@@ -828,6 +910,15 @@ counts; thread CPU does not measure compositor presentation or server work.
 modules and mapping coverage. It gzips source-mapped generated ranges independently,
 so those scores identify expensive modules but are not additive transfer costs;
 the existing shipped gzip sidecars remain the route budget authority.
+
+Run the absolute checker as well as `ui:check-performance:base`: a passing delta
+against the base does not prove the artifact fits its fixed ceilings. The document
+budget includes early locale preload metadata and the self-contained recovery
+shell. Locale namespace data uses one content generation per language so those
+hints stay compact without delaying translated Chat behind another request.
+Changing any namespace invalidates that language's namespace set; base catalogs
+and config hints retain their own chunk identities. Generated data assets have
+no source maps, so module attribution reports their bytes as unmapped.
 
 Every reload replays the warm visit's persisted sidebar and trimmed v8 transcript
 (after unloading the app), local storage and session storage. `--gateway-http`

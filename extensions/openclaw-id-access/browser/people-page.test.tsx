@@ -223,6 +223,10 @@ describe("Access page", () => {
     );
     expect(container.querySelector("header")?.textContent?.trim()).toBe("Remote access");
     expect(container.querySelector("#ocid-access-people")?.textContent).toBe("People");
+    expect(button(container, "Add node")?.disabled).toBe(false);
+    expect(
+      container.querySelector('[aria-labelledby="ocid-access-people"] #ocid-nodes'),
+    ).toBeNull();
     expect(button(container, "Refresh")).toBeUndefined();
     // Owner devices live in the account menu, not on the Access page.
     expect(container.textContent).not.toContain("Old laptop");
@@ -360,6 +364,7 @@ describe("Access page", () => {
     );
     expect(request).not.toHaveBeenCalledWith("openclawId.people", {});
     expect(container.textContent).not.toContain("member@example.test");
+    expect(button(container, "Add node")).toBeUndefined();
   });
 
   it("is read-only in a browser that is not an owner device", async () => {
@@ -371,6 +376,7 @@ describe("Access page", () => {
       expect(container.textContent).toContain("can view people but cannot change access"),
     );
     expect(button(container, "Approve")?.disabled).toBe(true);
+    expect(button(container, "Add node")).toBeUndefined();
   });
 
   it("registers only owner Pages navigation, and removes it on disconnect", async () => {

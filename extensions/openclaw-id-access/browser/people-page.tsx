@@ -11,6 +11,8 @@ import { fingerprint, type MemberRole, type PublicKeyText } from "@openclaw/open
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { createSignal, latest, onSettled, Show, untrack } from "solid-js";
 import { createInvite, decideInvite, removeMember } from "./invites.js";
+import { NodeSection } from "./node-section.js";
+import { createNodeInvite, decideNodeInvite, removeNode } from "./nodes.js";
 import { thisOwnerDevice } from "./owner-signing.js";
 import { peopleError, type PeopleError, type PeopleErrorAction } from "./people-error.js";
 import { memberName, removalNote } from "./people-format.js";
@@ -245,6 +247,32 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                     }
                   />
                 </section>
+                <Show when={latest(ownDevicePub)}>
+                  <NodeSection
+                    host={host}
+                    link={current().link}
+                    disabled={!canManage()}
+                    error={latest(error)?.message}
+                    canCreate={Boolean(current().status.tunnel?.relayUrl)}
+                    onCreate={(label) =>
+                      run((link) =>
+                        createNodeInvite(
+                          host.request,
+                          link,
+                          label,
+                          current().status.tunnel?.relayUrl ?? "",
+                        ),
+                      )
+                    }
+                    onDecide={(invite, approve) =>
+                      run(
+                        (link) => decideNodeInvite(host.request, link, invite, approve),
+                        approve ? "approve" : "update",
+                      )
+                    }
+                    onRemove={(node) => void run((link) => removeNode(host.request, link, node))}
+                  />
+                </Show>
               </Show>
             </Show>
           </Show>
