@@ -278,7 +278,11 @@ function readCodexTurnStartUsageLimitErrorSource(
 function readCodexErrorNotification(
   notification: CodexServerNotification | undefined,
 ): { message?: string; codexErrorInfo?: JsonValue | null } | undefined {
-  if (notification?.method !== "error" || !isJsonObject(notification.params)) {
+  if (
+    notification?.method !== "error" ||
+    !isJsonObject(notification.params) ||
+    notification.params.willRetry === true
+  ) {
     return undefined;
   }
   const error = notification.params.error;

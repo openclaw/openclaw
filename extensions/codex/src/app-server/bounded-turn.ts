@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { AgentHarnessModelRequestPolicyError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -416,10 +417,18 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           resolveCodexBoundedTurnAbortError(abortController.signal, params.taskLabel, timeoutError),
       });
       if (result.error || result.turn?.status === "failed") {
-        const source = result.error
+        const notification = result.error
           ? readCodexErrorNotification(result.error)?.error
-          : result.turn?.error;
-        const failure = source ? resolveCodexPromptError(source) : undefined;
+          : undefined;
+        const priorFailure = notification ? resolveCodexPromptError(notification) : undefined;
+        const completed = result.turn?.error;
+        // A detail-less snapshot must not erase a confirmed same-turn refusal.
+        const retainPrior =
+          priorFailure instanceof AgentHarnessModelRequestPolicyError &&
+          completed?.codexErrorInfo == null &&
+          (!completed?.message || completed.message === notification?.message);
+        const failure =
+          completed && !retainPrior ? resolveCodexPromptError(completed) : priorFailure;
         throw failure instanceof Error
           ? failure
           : new Error(failure ?? `codex app-server ${params.taskLabel} turn failed`);

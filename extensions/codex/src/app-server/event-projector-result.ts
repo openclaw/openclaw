@@ -492,6 +492,11 @@ export abstract class CodexTurnProjection {
       this.providerRefusal = refusal;
     }
     if (this.providerRefusal) {
+      if (this.promptError instanceof AgentHarnessModelRequestPolicyError) {
+        this.promptError = undefined;
+        this.promptErrorSource = null;
+        this.requestPolicyDenialMessage = undefined;
+      }
       return;
     }
     if (

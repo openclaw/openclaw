@@ -277,6 +277,20 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     },
   );
 
+  it("retires a deployment denial when a later provider refusal wins", async () => {
+    const projector = await createProjector();
+    await fail(projector, { message: denialMessage, codexErrorInfo: denialInfo });
+    const message = "This request was blocked by the provider's cyber policy.";
+    await fail(projector, { message, codexErrorInfo: "cyberPolicy" }, true);
+    const result = fixture.result(projector);
+    expectTerminal(result, null, null);
+    expect(result.currentAttemptAssistant).toMatchObject({
+      errorMessage: message,
+      diagnostics: [{ type: "provider_refusal", details: { category: "cyber" } }],
+    });
+    expect(result.currentAttemptAssistant).not.toHaveProperty("errorCode");
+  });
+
   it("keeps missing tool detail without overriding an explicit abort", async () => {
     const projector = await createProjector();
     projector.markAborted();

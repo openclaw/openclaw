@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { AgentHarnessModelRequestPolicyError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
@@ -148,6 +149,46 @@ it.each([true, false])(
     } else {
       await expect(run).rejects.toThrow("returned no text");
     }
+  },
+);
+
+const policyDenial = {
+  message:
+    'unexpected status 403 Forbidden: {"error":"middleware_denied","reason_code":"request_credential_denied","layer":"l7"}',
+  codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 403 } },
+};
+it.each([
+  {
+    notice: policyDenial,
+    completion: {
+      message: "ordinary refusal",
+      codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } },
+    },
+    denied: false,
+  },
+  { notice: { message: "incomplete notice" }, completion: policyDenial, denied: true },
+  { notice: policyDenial, completion: { message: policyDenial.message }, denied: true },
+  { notice: policyDenial, completion: undefined, denied: true },
+])(
+  "selects available terminal evidence in a bounded turn: %j",
+  async ({ notice, completion, denied }) => {
+    const fake = createClientFactory({
+      errorBeforeCompletion: { ...notice, willRetry: false },
+      terminalStatus: "failed",
+      terminalError: completion,
+    });
+    const error = await runRestricted(fake).then(
+      () => {
+        throw new Error("Expected failed bounded turn");
+      },
+      (error: unknown) => error,
+    );
+    expect(error instanceof AgentHarnessModelRequestPolicyError).toBe(denied);
+    expect(error).toMatchObject(
+      denied
+        ? { code: "model_request_policy_denied", status: 403 }
+        : { message: "ordinary refusal", status: 401 },
+    );
   },
 );
 

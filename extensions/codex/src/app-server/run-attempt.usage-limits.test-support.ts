@@ -1,4 +1,5 @@
 import path from "node:path";
+import { AgentHarnessModelRequestPolicyError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { saveAuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
@@ -88,6 +89,7 @@ export function registerCodexUsageLimitTests() {
       const onAgentEvent = vi.fn();
       const run = runCodexAppServerAttempt({ ...params, onAgentEvent });
       await waitForRequest(harness, run, "turn/start");
+      await harness.notify(rateLimitsUpdated(Math.ceil(Date.now() / 1000) + 120));
       await harness.notify({
         method: "item/agentMessage/delta",
         params: {
@@ -133,41 +135,50 @@ export function registerCodexUsageLimitTests() {
       expect(JSON.stringify(result.lastAssistant)).not.toContain("PRIVATE");
     });
 
-    it("does not join a notification's denial text with a different startup RPC status", async () => {
-      const message =
-        'unexpected status 403 Forbidden: {"error":"middleware_denied","reason_code":"request_credential_denied","layer":"l7"}';
-      const harness: Harness = createStartedThreadHarness(async (method) => {
-        if (method === "turn/start") {
-          await harness.notify({
-            method: "error",
-            params: {
-              threadId: "thread-1",
-              turnId: "turn-1",
-              willRetry: false,
-              error: { message },
-            },
-          });
-          throw Object.assign(new Error("ordinary RPC refusal"), {
-            data: {
-              error: {
-                message: "ordinary RPC refusal",
-                codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 403 } },
+    it.each([false, true])(
+      "uses the terminal startup RPC instead of incomplete or retrying notice (retry: %s)",
+      async (willRetry) => {
+        const message =
+          'unexpected status 403 Forbidden: {"error":"middleware_denied","reason_code":"request_credential_denied","layer":"l7"}';
+        const harness: Harness = createStartedThreadHarness(async (method) => {
+          if (method === "turn/start") {
+            await harness.notify({
+              method: "error",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                willRetry,
+                error: {
+                  message,
+                  ...(willRetry
+                    ? { codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 403 } } }
+                    : {}),
+                },
               },
-            },
-          });
-        }
-        return undefined;
-      });
-      const result = await runCodexAppServerAttempt(createUsageParams());
-      expect(readAttemptTerminal(result).promptError).toMatchObject({
-        message: "ordinary RPC refusal",
-        status: 403,
-      });
-      expect(readAttemptTerminal(result).promptError).not.toHaveProperty(
-        "code",
-        "model_request_policy_denied",
-      );
-    });
+            });
+            throw Object.assign(new Error("ordinary RPC refusal"), {
+              data: {
+                error: {
+                  message: "ordinary RPC refusal",
+                  codexErrorInfo: {
+                    httpConnectionFailed: { httpStatusCode: willRetry ? 401 : 403 },
+                  },
+                },
+              },
+            });
+          }
+          return undefined;
+        });
+        const result = await runCodexAppServerAttempt(createUsageParams());
+        expect(readAttemptTerminal(result).promptError).toMatchObject({
+          message: "ordinary RPC refusal",
+          status: willRetry ? 401 : 403,
+        });
+        expect(readAttemptTerminal(result).promptError).not.toBeInstanceOf(
+          AgentHarnessModelRequestPolicyError,
+        );
+      },
+    );
 
     it.each([
       { codexErrorInfo: "rateLimitExceeded", status: 429 },
