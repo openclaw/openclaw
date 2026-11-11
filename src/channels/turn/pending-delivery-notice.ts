@@ -8,6 +8,7 @@ import {
   deliveryContextKey,
   normalizeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
+import { hasActiveDirectPendingFinalDelivery } from "./direct-delivery-active.js";
 
 const PENDING_DELIVERY_NOTICE =
   "I couldn’t confirm whether my previous reply reached this chat, so I won’t resend it automatically. Please ask for any missing remainder.";
@@ -15,6 +16,7 @@ const PENDING_DELIVERY_NOTICE =
 export async function deliverPendingDeliveryNotice(
   sessionKey: string,
   storePath: string,
+  expectedIntentId?: string,
 ): Promise<void> {
   const entry = await readSessionEntryReadOnlyInWorker({
     sessionKey,
@@ -30,6 +32,8 @@ export async function deliverPendingDeliveryNotice(
     !runtime ||
     !notice ||
     notice.state !== "owed" ||
+    (expectedIntentId !== undefined && notice.intentId !== expectedIntentId) ||
+    hasActiveDirectPendingFinalDelivery(entry.sessionId, notice.intentId) ||
     !context?.channel ||
     !context.to ||
     deliveryContextKey(context) !== deliveryContextKey(deliveryContextFromSession(entry))

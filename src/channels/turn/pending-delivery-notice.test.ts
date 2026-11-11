@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { trackActiveDirectPendingFinalDelivery } from "./direct-delivery-active.js";
 import { deliverPendingDeliveryNotice } from "./pending-delivery-notice.js";
 
 const PENDING_DELIVERY_NOTICE =
@@ -56,6 +57,30 @@ describe("pending delivery notice", () => {
         },
       },
     );
+  });
+
+  it("leaves a replacement intent owed when an older queue entry settles", async () => {
+    await deliverPendingDeliveryNotice(sessionKey, storePath, "older-intent");
+    expect(sendRecoveryNotice).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe("owed");
+  });
+
+  it("defers notice debt while its direct send retains live custody", async () => {
+    const release = trackActiveDirectPendingFinalDelivery({
+      sessionId: "session-1",
+      intentId: "intent-1",
+    });
+    try {
+      await deliverPendingDeliveryNotice(sessionKey, storePath);
+      expect(sendRecoveryNotice).not.toHaveBeenCalled();
+      expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(
+        "owed",
+      );
+    } finally {
+      release();
+    }
+    await deliverPendingDeliveryNotice(sessionKey, storePath);
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
   });
 
   it("retains acknowledgment after the stable notice is recorded", async () => {

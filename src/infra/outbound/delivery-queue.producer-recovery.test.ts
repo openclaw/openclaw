@@ -27,6 +27,10 @@ import {
   readQueuedEntry,
 } from "./delivery-queue.test-helpers.js";
 
+const sendRecoveryNotice = vi.hoisted(() => vi.fn());
+vi.mock("../../gateway/server-recovery-runtime-context.js", () => ({
+  getGatewayRecoveryRuntime: () => ({ sendRecoveryNotice }),
+}));
 const resolveAdapter = vi.hoisted(() => vi.fn());
 vi.mock("./channel-resolution.js", () => ({
   resolveOutboundChannelMessageAdapter: resolveAdapter,
@@ -37,9 +41,11 @@ describe("exhausted delivery producer recovery", () => {
 
   beforeEach(() => {
     resolveAdapter.mockReset();
+    sendRecoveryNotice.mockReset().mockResolvedValue({ suppressed: false });
   });
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     closeOpenClawAgentDatabasesForTest();
   });
 
@@ -203,6 +209,38 @@ describe("exhausted delivery producer recovery", () => {
     return completion;
   }
 
+  it("delivers uncertainty notice when exhausted final recovery stops without replay", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir());
+    const id = "notice-after-exhaustion";
+    const completion = await preparePendingFinal(id);
+    const scope = { ...completion, env: resolveDeliveryQueueStateEnv(tmpDir()) };
+    const entry = sessionAccessor.loadSessionEntry(scope)!;
+    await sessionAccessor.replaceSessionEntry(scope, {
+      ...entry,
+      delivery: {
+        kind: "external",
+        route: { channel: "directchat", accountId: "default" },
+        context: { channel: "directchat", to: "recipient" },
+        origin: {},
+      },
+    });
+    await recover("startup");
+    expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith({
+      channel: "directchat",
+      to: "recipient",
+      accountId: undefined,
+      threadId: undefined,
+      text: expect.stringContaining("I couldn’t confirm whether my previous reply"),
+      idempotencyKey: "main-session-restart-recovery:pending-final:pending-final-intent",
+    });
+    expect(sessionAccessor.loadSessionEntry(scope)?.pendingDeliveryNotice?.state).toBe(
+      "acknowledged",
+    );
+    expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("deliveryCompletion");
+    await recover("recurring");
+    expect(sendRecoveryNotice).toHaveBeenCalledTimes(1);
+  });
+
   it("settles a producer-claimed entry whose durable completion has gone stale", async () => {
     const id = "stale-producer-claimed";
     const completion = await prepareSession(id, true);
@@ -266,6 +304,7 @@ describe("exhausted delivery producer recovery", () => {
         },
       });
       vi.restoreAllMocks();
+      vi.unstubAllEnvs();
       closeOpenClawStateDatabaseForTest();
       closeOpenClawAgentDatabasesForTest();
       await recoverPendingDeliveries(options);

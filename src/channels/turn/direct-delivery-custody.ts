@@ -9,6 +9,7 @@ import {
 } from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
+import { trackActiveDirectPendingFinalDelivery } from "./direct-delivery-active.js";
 import type { ChannelDeliveryInfo } from "./types.js";
 
 type DirectPendingFinalCustody = Pick<ChannelDeliveryInfo, "bindPendingFinalDelivery"> & {
@@ -52,6 +53,7 @@ export async function createDirectPendingFinalCustody(
   );
   const identity = completion ? (({ kind: _kind, ...value }) => value)(completion) : undefined;
   let admission: Promise<void> | undefined;
+  let releaseActiveDelivery: (() => void) | undefined;
   return {
     bindPendingFinalDelivery: (nextPayload) =>
       setReplyPayloadMetadata(nextPayload, {
@@ -59,13 +61,18 @@ export async function createDirectPendingFinalCustody(
         ...(authority ? { sessionWriterDeliveryAuthority: authority } : {}),
       }),
     assertPlatformSendAuthorized: () => assertSessionWriterDeliveryAuthorized(authority),
-    release,
+    release: () => {
+      releaseActiveDelivery?.();
+      release();
+    },
     onPlatformSendDispatch: async () => {
       // One logical delivery retains custody across all of its physical posts.
       await (admission ??= (async () => {
         if (!completion) {
           return;
         }
+        // Keep crash-safe debt, but defer its notice until this live send settles.
+        releaseActiveDelivery = trackActiveDirectPendingFinalDelivery(completion);
         const result = await settlePendingFinalDelivery(completion, "unknown", [
           "prepared",
           "queued",

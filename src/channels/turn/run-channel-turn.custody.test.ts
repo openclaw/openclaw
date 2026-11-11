@@ -3,6 +3,7 @@ import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/rep
 import type { DispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import { hasActiveDirectPendingFinalDelivery } from "./direct-delivery-active.js";
 import { createDirectPendingFinalCustody } from "./direct-delivery-custody.js";
 import { dispatchRoutedChannelTurn } from "./lifecycle.js";
 import { createCtx } from "./run-channel-turn.delivery.test-helpers.js";
@@ -170,14 +171,23 @@ describe("channel turn failed-send custody", () => {
     if (!custody) {
       throw new Error("expected pending-final custody");
     }
+    expect(hasActiveDirectPendingFinalDelivery(completion.sessionId, completion.intentId)).toBe(
+      false,
+    );
     await custody.onPlatformSendDispatch();
     await custody.onPlatformSendDispatch();
+    expect(hasActiveDirectPendingFinalDelivery(completion.sessionId, completion.intentId)).toBe(
+      true,
+    );
     expect(settlePendingFinalDelivery).toHaveBeenCalledOnce();
     currentEntry = replacementWriter;
     await expect(custody.onPlatformSendDispatch()).rejects.toBeInstanceOf(
       PlatformMessageNotDispatchedError,
     );
     custody.release();
+    expect(hasActiveDirectPendingFinalDelivery(completion.sessionId, completion.intentId)).toBe(
+      false,
+    );
   });
 
   it.each([
