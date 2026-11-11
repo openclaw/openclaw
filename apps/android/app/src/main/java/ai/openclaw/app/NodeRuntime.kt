@@ -1064,6 +1064,8 @@ class NodeRuntime internal constructor(
         SensitiveFeatureConfig.accessibilityControlEnabled && mobileUiHandler.isConnected.value
       },
       voiceWakeAvailable = ::isVoiceWakeCapabilityEnabled,
+      incomingCallAvailable = { prefs.isIncomingCallAllowed(prefs.gatewayRegistry.activeStableId.value) },
+      incomingCallInvoke = { command, params -> incomingCalls.invoke(command, params) },
     )
 
   private val connectionManager: ConnectionManager =
@@ -1444,6 +1446,7 @@ class NodeRuntime internal constructor(
         operatorAgentBootstrapJob?.cancel()
         operatorAgentBootstrapJob = null
         if (wearRealtimeTalkControllerLazy.isInitialized()) wearRealtimeTalkController.abort()
+        incomingCalls.transportInterrupted()
         clearOperatorGatewayState(retirePendingCronRuns = false)
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
@@ -1456,6 +1459,7 @@ class NodeRuntime internal constructor(
         publishOperatorConnection(connected = false, status = message, failure = { wearFailure })
       },
       onConnectFailure = { error, pauseReconnect ->
+        if (pauseReconnect) incomingCalls.invalidate()
         operatorAgentBootstrapJob?.cancel()
         operatorAgentBootstrapJob = null
         if (wearRealtimeTalkControllerLazy.isInitialized()) wearRealtimeTalkController.abort()
@@ -1490,6 +1494,7 @@ class NodeRuntime internal constructor(
     publishOperatorConnection(connected = true, status = "Connected")
     // Bootstrap can connect the node before operator access is ready.
     refreshNodesDevices()
+    incomingCalls.transportConnected()
     scope.launch {
       val gatewayScope = captureGatewayDataScope() ?: return@launch
       val lease = operatorSession.captureRequestLease(gatewayScope.stableId) ?: return@launch
@@ -1834,7 +1839,7 @@ class NodeRuntime internal constructor(
     }
   }
 
-  private val nodeSession =
+  private val nodeSession: GatewaySession =
     GatewaySession(
       scope = scope,
       identityStore = identityStore,
@@ -1847,6 +1852,7 @@ class NodeRuntime internal constructor(
           _nodeConnected.value = true
           nodeStatusText = "Connected"
         }
+        incomingCalls.transportConnected()
         notificationOutbox.onConnected()
         publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Connect)
         startNodeHostStatsReporting()
@@ -1861,6 +1867,7 @@ class NodeRuntime internal constructor(
       },
       onDisconnected = { message ->
         invalidateNodeCapabilityApprovalState()
+        incomingCalls.transportInterrupted()
         nodeHostStatsJob?.cancel()
         nodeHostStatsJob = null
         updateStatus {
@@ -1870,6 +1877,7 @@ class NodeRuntime internal constructor(
         }
       },
       onConnectFailure = { error, pauseReconnect ->
+        if (pauseReconnect) incomingCalls.invalidate()
         updateStatus {
           nodeConnectionProblem = gatewayConnectionProblem(error, pauseReconnect)
           nodeStatusText = nodeConnectionProblem?.message ?: error.message
@@ -2182,21 +2190,100 @@ class NodeRuntime internal constructor(
       },
       onBeforeSpeak = { micCapture.pauseForTts() },
       onAfterSpeak = { micCapture.resumeAfterTts() },
-      captureRelayStopNotification = {
-        val ownershipEpoch = voiceCaptureOwnershipEpoch.get()
+      captureRelayStopNotification = { captureIncomingRelayStop(recoverable = false) },
+      captureRelayInterruptionNotification = { captureIncomingRelayStop(recoverable = true) },
+    )
+  }
 
-        fun(isCurrent: () -> Boolean) {
-          finishTalkModeAfterRelayClose(ownershipEpoch, isCurrent)
+  private fun captureIncomingRelayStop(recoverable: Boolean): (() -> Boolean) -> Unit {
+    val ownershipEpoch = voiceCaptureOwnershipEpoch.get()
+    val callId = incomingCallCaptureId
+    return { isCurrent ->
+      // Stopping capture clears Talk's diagnostic status; retain the producer's failure first.
+      val failureDetail = if (recoverable) null else talkMode.failureNotice.value?.text
+      scope.launch(Dispatchers.Main.immediate) {
+        val ownsCapture =
+          synchronized(voiceCaptureOwnershipLock) {
+            voiceCaptureOwnershipEpoch.get() == ownershipEpoch && incomingCallCaptureId == callId && isCurrent()
+          }
+        if (ownsCapture) {
+          if (callId != null) {
+            if (recoverable) incomingCalls.transportInterrupted() else incomingCalls.audioStopped(callId, failureDetail)
+          } else {
+            finishTalkModeAfterRelayClose(ownershipEpoch, isCurrent)
+          }
+        }
+      }
+    }
+  }
+
+  @Volatile private var incomingCallCaptureId: String? = null
+
+  internal val incomingCalls: ai.openclaw.app.calls.IncomingCallController by lazy {
+    ai.openclaw.app.calls.IncomingCallController(
+      context = appContext,
+      scope = scope,
+      prefs = prefs,
+      gatewayId = { connectedEndpoint?.stableId?.takeIf { nodeSession.isReady() && operatorSession.isReady() } },
+      captureAuthority = {
+        val nodeLease = nodeSession.captureRequestLease(connectedEndpoint?.stableId)
+        val operatorLease = operatorSession.captureRequestLease(connectedEndpoint?.stableId)
+        if (nodeLease == null || operatorLease == null) null else ({ nodeLease.isCurrent() && operatorLease.isCurrent() })
+      },
+      captureRecoveryAuthority = {
+        val connection = activeGatewayConnection
+        val endpointId = connectedEndpoint?.stableId
+        if (connection == null || endpointId == null) {
+          null
+        } else {
+          {
+            activeGatewayConnection === connection && connectedEndpoint?.stableId == endpointId &&
+              prefs.gatewayRegistry.activeStableId.value == endpointId && prefs.isIncomingCallAllowed(endpointId)
+          }
         }
       },
+      isBusy = {
+        _voiceCaptureMode.value != VoiceCaptureMode.Off || hasActiveGatewaySwitchAudio() || gatewayConnectionHandoff.value.pending
+      },
+      startAudio = { callId, sessionKey, resuming, interruptedAtMs, beforeCapture ->
+        synchronized(voiceCaptureOwnershipLock) {
+          check(incomingCallCaptureId == null && _voiceCaptureMode.value == VoiceCaptureMode.Off && localMicOwner == null) { "Microphone busy" }
+          incomingCallCaptureId = callId
+          talkMode.prepareIncomingCall(sessionKey, resuming, beforeCapture, interruptedAtMs)
+          talkMode.setIncomingCallMuted(incomingCalls.muted.value)
+          setVoiceCaptureMode(VoiceCaptureMode.TalkMode)
+        }
+        talkMode.awaitIncomingCallReady()
+      },
+      stopAudio = { callId ->
+        synchronized(voiceCaptureOwnershipLock) {
+          if (incomingCallCaptureId == callId) {
+            incomingCallCaptureId = null
+            setVoiceCaptureMode(VoiceCaptureMode.Off)
+            talkMode.prepareIncomingCall(null)
+            talkMode.setPlaybackEnabled(speakerEnabled.value)
+          }
+        }
+      },
+      setMuted = { muted -> talkMode.setIncomingCallMuted(muted) },
     )
+  }
+
+  fun setIncomingCallsEnabled(
+    enabled: Boolean,
+    gatewayStableId: String? = prefs.gatewayRegistry.activeStableId.value,
+  ) {
+    if (gatewayStableId == null || gatewayStableId != prefs.gatewayRegistry.activeStableId.value) return
+    prefs.setIncomingCallsEnabled(enabled, gatewayStableId)
+    if (!enabled) incomingCalls.invalidate()
+    refreshAcceptedGatewayConnection()
   }
 
   val talkModeEnabled: StateFlow<Boolean>
     get() = talkMode.isEnabled
 
   val talkMicrophoneMuted: StateFlow<Boolean>
-    get() = talkMode.isMicrophoneMuted
+    get() = talkMode.effectiveMicrophoneMuted
 
   val talkModeListening: StateFlow<Boolean>
     get() = talkMode.isListening
@@ -3086,7 +3173,7 @@ class NodeRuntime internal constructor(
       }
     } else {
       stopMessageSpeech()
-      stopActiveVoiceSession()
+      stopActiveVoiceSession(preserveIncomingCall = true)
       publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Background, throttleRecentSuccess = true)
     }
   }
@@ -3577,7 +3664,14 @@ class NodeRuntime internal constructor(
 
   fun setTalkModeEnabled(value: Boolean): Unit = setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
 
-  fun setTalkMicrophoneMuted(value: Boolean): Unit = talkMode.setMicrophoneMuted(value)
+  fun setTalkMicrophoneMuted(value: Boolean) {
+    val callId = synchronized(voiceCaptureOwnershipLock) { incomingCallCaptureId }
+    if (callId != null) {
+      scope.launch(Dispatchers.Main.immediate) { incomingCalls.setLocalMuted(callId, value) }
+    } else {
+      talkMode.setMicrophoneMuted(value)
+    }
+  }
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
     runTalkPttCommand {
@@ -3673,6 +3767,7 @@ class NodeRuntime internal constructor(
     block: suspend (ownershipEpoch: Long) -> T,
   ): T =
     voiceCapturePreparationMutex.withLock {
+      check(incomingCallCaptureId == null) { "CALL_BUSY: end the active data call before push-to-talk" }
       // Preparation suspends while gateway config loads. Serialize ownership so
       // a stale command cannot clean up a newer command before capture starts.
       check(isTalkPttCommandCurrent(lifecycleEpoch, commandEpoch)) {
@@ -4034,6 +4129,7 @@ class NodeRuntime internal constructor(
     mode: VoiceCaptureMode,
     persistManualMic: Boolean = true,
   ) {
+    if (incomingCallCaptureId != null && mode != VoiceCaptureMode.TalkMode) incomingCalls.invalidate()
     var startAfterSuppression: VoiceCaptureMode? = null
     var ownershipEpoch = 0L
     val suppressionUpdate =
@@ -4082,8 +4178,8 @@ class NodeRuntime internal constructor(
             }
             micCapture.setMicEnabled(false)
             NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
-            talkMode.ttsOnAllResponses = true
-            talkMode.setPlaybackEnabled(speakerEnabled.value)
+            talkMode.ttsOnAllResponses = incomingCallCaptureId == null
+            talkMode.setPlaybackEnabled(incomingCallCaptureId != null || speakerEnabled.value)
             scope.launch { talkMode.refreshConfig() }
             talkMode.stopAllCapture()
             startAfterSuppression = VoiceCaptureMode.TalkMode
@@ -4130,9 +4226,12 @@ class NodeRuntime internal constructor(
     setVoiceCaptureMode(VoiceCaptureMode.Off)
   }
 
-  private fun stopActiveVoiceSession() {
+  private fun stopActiveVoiceSession(preserveIncomingCall: Boolean = false) {
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
+        // Only Answer assigns this owner, after the call's microphone foreground service is ready.
+        // Its lifetime belongs to the call, not MainActivity visibility; ordinary Talk still stops.
+        if (preserveIncomingCall && incomingCallCaptureId != null) return
         talkPttCommandEpoch.incrementAndGet()
         voiceCaptureOwnershipEpoch.incrementAndGet()
         talkPttOwnership.set(null)
@@ -5073,6 +5172,7 @@ class NodeRuntime internal constructor(
           prefs.clearGatewayCustomHeaders(normalized)
           prefs.clearGatewayTlsFingerprint(normalized)
           prefs.clearNotificationForwardingSessionKey(normalized)
+          prefs.clearIncomingCallConsent(normalized)
         }.onFailure { err ->
           runCatching { clientDatabases.cancelGatewayRemoval(normalized) }
           Log.e("OpenClawRuntime", "Failed to retire forgotten gateway authentication", err)
@@ -5182,6 +5282,7 @@ class NodeRuntime internal constructor(
     micCapture.onGatewayScopeChanging()
     stopActiveVoiceSession()
     talkMode.onGatewayScopeChanging()
+    incomingCalls.invalidate()
     if (voiceReplySpeakerLazy.isInitialized()) {
       voiceReplySpeaker.onGatewayScopeChanging()
     }
@@ -7468,7 +7569,7 @@ class NodeRuntime internal constructor(
           definitiveFailure = verbatimText(err.gatewayError.message)
           false
         } catch (err: GatewayRequestDefinitiveFailure) {
-          definitiveFailure = verbatimText(err.message ?: "Gateway request failed.")
+          definitiveFailure = verbatimText(err.message)
           false
         } catch (_: Throwable) {
           false

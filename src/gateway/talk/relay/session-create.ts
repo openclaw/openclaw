@@ -28,6 +28,7 @@ import {
   submitRealtimeAgentConsultWorkingResponse,
 } from "./forced-consults.js";
 import { resolveTalkRealtimeRelayPresentation } from "./issues.js";
+import { createRelayOpeningGreeting } from "./opening-greeting.js";
 import {
   adoptTalkRealtimeRelaySession,
   cancelTalkRealtimeRelayProviderToolCall,
@@ -151,6 +152,7 @@ export function createTalkRealtimeRelaySession(
     );
   };
   const bridgeRef: { current?: ReturnType<typeof harness.createBridge> } = {};
+  const openingGreeting = createRelayOpeningGreeting(params, getActiveRelay, bridgeRef);
   const outputOwnership = new TalkRealtimeRelayOutputOwnership(
     () => harness.talk.activeTurnId,
     () => harness.ensureTurn(),
@@ -550,15 +552,18 @@ export function createTalkRealtimeRelaySession(
       }
     },
     onReady: () => {
-      if (!getActiveRelay()) {
+      const active = getActiveRelay();
+      if (!active || active.closing) {
         return;
       }
       ready = true;
       markTalkVoiceSessionReady(relaySessionId, params.connId, relayAgentId);
       continuityResetActive = false;
       emit({ type: "ready" }, { type: "session.ready", payload: null });
+      openingGreeting.noteProviderReady();
     },
     onError: (error) => {
+      openingGreeting.close();
       const active = getActiveRelay();
       if (!active) {
         if (!relayRef.current) {
@@ -665,6 +670,8 @@ export function createTalkRealtimeRelaySession(
     transcriptReadiness,
     runAuthority: params.runAuthority,
     failSession,
+    noteClientAudioAdmitted: openingGreeting.noteClientAudioAdmitted,
+    closeOpeningGreeting: openingGreeting.close,
   };
   relayRef.current = relay;
   adoptTalkRealtimeRelaySession(relay, {

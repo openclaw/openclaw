@@ -35,6 +35,10 @@ import { retainTalkClientRunAuthority } from "../client-run-authority.js";
 import { resolveTalkAgentConsultAuthority } from "../client-tool-authority.js";
 import { createTalkHandoff, getTalkHandoff, revokeTalkHandoff } from "../handoff.js";
 import {
+  prepareRelayOpeningOptions,
+  validateRelayOpeningCreateParams,
+} from "../relay/opening-greeting.js";
+import {
   acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
   sendTalkRealtimeRelayAudio,
@@ -96,11 +100,12 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         hasCurrentClientAuthority,
       } = request;
       const requester = readGatewayRequestMutationAuthority(request);
+      const receivedAt = performance.now();
       const mode = params.mode ?? (params.transport === "managed-room" ? "stt-tts" : "realtime");
       const transport = params.transport ?? (mode === "stt-tts" ? "managed-room" : "gateway-relay");
       const brain = params.brain ?? (mode === "transcription" ? "none" : "agent-consult");
       if (
-        !operatorScopeSatisfied("operator.talk", client?.connect.scopes ?? []) &&
+        !operatorScopeSatisfied("operator.talk", client?.connect?.scopes ?? []) &&
         resolveSessionMethodScope("talk.session.create", params) !== "operator.sessions.write"
       ) {
         respondInvalidRequest(
@@ -118,6 +123,11 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         return;
       }
       sessionMutationAuthorization?.assertCurrent();
+      const openingError = validateRelayOpeningCreateParams(params, mode, transport);
+      if (openingError) {
+        respondInvalidRequest(respond, openingError);
+        return;
+      }
       if (params.voiceChangeId && (mode !== "realtime" || transport !== "gateway-relay")) {
         respondInvalidRequest(respond, "A voice replacement requires a realtime relay session");
         return;
@@ -322,9 +332,10 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           });
           replacement?.assertCurrent(target);
         };
-        const initialItems = replacement
-          ? await readTalkRealtimeInitialItems(target, assertEnsuredTargetCurrent)
-          : [];
+        const initialItems =
+          replacement || params.greeting !== undefined || params.recovery !== undefined
+            ? await readTalkRealtimeInitialItems(target, assertEnsuredTargetCurrent)
+            : [];
         assertEnsuredTargetCurrent();
         const model =
           normalizeOptionalString(providerConfig.model) ?? resolution.provider.defaultModel;
@@ -339,9 +350,18 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           context,
           hasCurrentClientAuthority,
         }).then((runAuthority) => {
+          let opening: ReturnType<typeof prepareRelayOpeningOptions> | undefined;
           try {
             assertEnsuredTargetCurrent();
             runAuthority.accept();
+            opening = prepareRelayOpeningOptions({
+              greeting: params.greeting,
+              recovery: params.recovery,
+              receivedAt,
+              retainAuthority: () => sessionMutationAuthorization?.retain?.(),
+              hasCurrentClientAuthority,
+              assertEnsuredTargetCurrent,
+            });
             return createTalkRealtimeRelaySession({
               runAuthority,
               context,
@@ -355,6 +375,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
               clientCapabilities: params.capabilities,
               voiceChangeId: params.voiceChangeId,
               initialItems,
+              ...opening,
               voiceSelectionVoices: voices,
               instructions:
                 (controlSource === "delegation"
@@ -372,6 +393,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
               forceAgentConsultOnFinalTranscript,
             });
           } catch (error) {
+            opening?.releaseGreetingAuthority?.();
             runAuthority.release();
             throw error;
           }
@@ -486,7 +508,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
     async ({ params, respond, client }) => {
       const session = getUnifiedTalkSession(params.sessionId);
       if (
-        !operatorScopeSatisfied("operator.talk", client?.connect.scopes ?? []) &&
+        !operatorScopeSatisfied("operator.talk", client?.connect?.scopes ?? []) &&
         (session.kind !== "transcription-relay" || !session.sessionTarget)
       ) {
         respondInvalidRequest(respond, "Session dictation cannot control a Talk session");
@@ -650,7 +672,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
     async ({ params, respond, client }) => {
       const session = getUnifiedTalkSession(params.sessionId);
       if (
-        !operatorScopeSatisfied("operator.talk", client?.connect.scopes ?? []) &&
+        !operatorScopeSatisfied("operator.talk", client?.connect?.scopes ?? []) &&
         (session.kind !== "transcription-relay" || !session.sessionTarget)
       ) {
         respondInvalidRequest(respond, "Session dictation cannot control a Talk session");

@@ -1,0 +1,4 @@
+# PR #154093: protocol/CLI, prepared-call/relay, real provider-wire, operator SDK
+# transport, and real admission-to-deferred-opening lifecycle regressions.
+# Exactly this feature's net tracked LF growth against 9c37f542045; no inherited debt.
+1638

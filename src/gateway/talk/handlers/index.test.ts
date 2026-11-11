@@ -39,6 +39,7 @@ import {
 } from "./config-realtime.test-support.js";
 import { createTalkHandlerCaller } from "./handler-invocation.test-support.js";
 import { talkHandlers } from "./index.js";
+import { definePreparedCallSessionTests } from "./prepared-call.test-support.js";
 import {
   expectRecordFields,
   expectRespondError,
@@ -1003,6 +1004,7 @@ describe("talk.config handler", () => {
 });
 
 describe("talk.session unified handlers", () => {
+  definePreparedCallSessionTests({ callTalkHandler, mocks });
   it.each(["transcription", "realtime-relay", "realtime-browser"])(
     "applies requested models before automatic provider validation for %s",
     async (surface) => {
