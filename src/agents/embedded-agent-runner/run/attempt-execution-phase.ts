@@ -157,8 +157,14 @@ export async function runEmbeddedAttemptExecutionPhase(
   const preparedStream = prepareEmbeddedAttemptStream({
     attempt,
     agentSession: sessionRuntime.agentSession,
-    projectSessionForkMessages: (messages) =>
-      replayToolResultPromptProjections(messages, sessionRuntime.toolResultPromptProjectionState),
+    projectSessionForkMessages: (messages) => {
+      const projected = replayToolResultPromptProjections(
+        messages,
+        sessionRuntime.toolResultPromptProjectionState,
+      );
+      // Foreground requests normalize tool-call IDs last; a fork with raw IDs loses their cache.
+      return normalizeToolCallIds?.(projected, attempt.model) ?? projected;
+    },
     readSessionForkBoundary: () => ({
       timezone: sessionRuntime.boundary.boundaryTimezone,
       includeTimestamp: sessionRuntime.boundary.includeBoundaryTimestamp,
