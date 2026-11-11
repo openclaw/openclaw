@@ -18,9 +18,11 @@ text that a newer claim contradicts.
 A page whose introduction describes its subject, whose State is current and
 whose sections fit its type is left alone apart from targeted fixes: a broken
 citation, a stale fact that a newer claim contradicts, or a new fact folded into
-the topic it bears on. Do not reorganize it, rename its sections, move its text
-under the layout's headings, or add a section the layout lists but the page
-lacks. A missing optional section is not a failure.
+the topic it bears on. Do not reorganize it or rename its sections. Sections fit
+its type when its decisions, milestones and open commitments sit in the type's
+sections rather than in State, and its type's leading section is present
+whenever the claims support it. Any other section the layout lists but the page
+lacks is optional; its absence is not a failure.
 
 Restructuring a page or splitting it needs one of these reasons, named in your
 report:
@@ -48,8 +50,10 @@ the August 17 roster"), and never a placeholder ("Contact from the network").
 
 ## State
 
-Where things stand now, in short `###` topics, one topic per subject. Open with
-the most important current fact, not the most recent mention. When a fact
+The short current picture: a few `###` topics, one per subject, each leading
+with what is true now, not the most recent mention. Specifics (decisions,
+milestones, people, commitments, open questions) go in the type's sections, not
+in State. When a fact
 changes, rewrite the topic it belongs to so it reads as current. Never append a
 topic, paragraph or section named for a date, meeting, capture or source, and
 never write Timeline entries: a page has no Timeline section. Knowledge builds

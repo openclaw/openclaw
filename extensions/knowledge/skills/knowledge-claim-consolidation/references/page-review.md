@@ -29,8 +29,15 @@ Check each part and note which fail:
   among the newer claims missing, or does a newer claim contradict the text?
 - **Dated material:** is there a written Timeline, a section named for a date or
   source, or a paragraph that summarizes one meeting?
-- **Layout:** do the sections fit the page's type? Another type's headings fail
-  (project headings on a concept page). A missing optional section does not.
+- **Layout:** do the sections fit the page's type? It fails when another
+  type's headings appear (project headings on a concept page); when decisions,
+  outcomes, dated milestones or open commitments sit in State instead of the
+  type's sections; or when the type's leading section is missing although the
+  claims support it (company Relationship, project Key decisions). A section no
+  claims support is optional, and its absence does not fail.
+- **Prose:** it fails on a hedge repeated across sentences ("is not proof",
+  "does not establish") or a sentence carrying more than about three
+  citations.
 - **Citations:** does every `[[id|label]]` resolve to a current record?
   `knowledge_connections` `direction: "links"` on the page lists the current
   records it links to; a body link missing from that list is broken or points
@@ -54,8 +61,12 @@ expected result for a current page, not a missed opportunity.
   ([retire dated sections](retire-dated.md)). This is part of every review that
   finds one, not optional cleanup. Synthesize: several dated reports about one
   subject become one current sentence in its topic, not a rearranged list.
-- **Layout:** move the affected text under the type's headings
-  ([sections by type](profiles.md#sections-by-type)).
+- **Layout:** move the misplaced items from State into the type's sections,
+  adding the leading section the claims support
+  ([sections by type](profiles.md#sections-by-type)). This moves items; it is not
+  a rewrite of the page.
+- **Prose:** state a qualifier once, where it matters. Merge duplicate
+  citations and move the rest beside the specific facts they support.
 - **Broken citation:** repoint it to the record that now holds the same fact
   (a duplicate's survivor, or the page an extraction moved it to). When the
   replacement says something different (an outcome superseding a snapshot),
