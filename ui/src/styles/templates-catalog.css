@@ -1,4 +1,4 @@
-[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
+section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   -webkit-line-clamp: 1;
 }
 .templates-add-consent {
