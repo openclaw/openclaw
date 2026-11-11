@@ -344,9 +344,10 @@ Gateway Add review responses describe schedules as either `{ cron, timezone }`
 or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery
 values are `none`, `last-channel`, or `owner`.
 
-The CLI Add path requires exclusive offline state ownership; it refuses to run
-while a Gateway owns that state. Use the Control UI to Add through a running
-Gateway. Offline Add uses the same session, local agent runtime, and scheduler
+CLI Add from a local source requires exclusive offline state ownership; it refuses
+to run while a Gateway owns that state. For published ClawHub Templates, both the
+CLI and Control UI can Add through a running Gateway. Offline Add uses the same
+session, local agent runtime, and scheduler
 owners without starting scheduled execution. `--json` suppresses conversational
 terminal output but keeps the ordinary conversation and per-result install notices.
 
