@@ -26,42 +26,45 @@ function discoveredCatalog(ids: readonly string[]): ModelCatalogSnapshot {
   return catalog;
 }
 
-async function publish(config: OpenClawConfig, ids: readonly string[]) {
-  mocks.runPreparedModelCatalogWorker.mockResolvedValue(discoveredCatalog(ids));
-  await refreshPreparedModelRuntimeSnapshots(config, {
-    gatewayLifecycle: true,
-    catalogMode: "static",
-  });
-  const owner = getPreparedModelRuntimeSnapshot({
-    config,
-    agentId: "pro",
-    agentDir: fixture.state.agentDir("pro"),
-  })!;
-  await owner.loadFullModelCatalog!({ refresh: true });
-}
-
-it("reads the configured agent's published discovery rows from a project workspace", async () => {
-  mocks.configuredAgentIds = ["pro"];
-  mocks.preparedAuthStore = { version: 1, profiles: {} };
-  const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
-  // sessions_spawn, /model and other read-only lookups pass the session's project cwd.
-  const readProjectCatalog = (current: OpenClawConfig) =>
-    withPreparedModelCatalogOwner(
-      { config: current, agentId: "pro", workspaceDir: "/tmp/project-checkout", readOnly: true },
-      (owner) => owner.modelCatalog.entries.map(({ provider, id }) => `${provider}/${id}`),
+it.each([true, false])(
+  "reads published discovery rows from a project workspace (gateway=%s)",
+  async (gatewayLifecycle) => {
+    mocks.configuredAgentIds = ["pro"];
+    mocks.preparedAuthStore = { version: 1, profiles: {} };
+    const publish = async (config: OpenClawConfig, ids: readonly string[]) => {
+      mocks.runPreparedModelCatalogWorker.mockResolvedValue(discoveredCatalog(ids));
+      await refreshPreparedModelRuntimeSnapshots(config, {
+        gatewayLifecycle,
+        catalogMode: "static",
+      });
+      const input = { config, agentId: "pro", agentDir: fixture.state.agentDir("pro") };
+      await getPreparedModelRuntimeSnapshot(input)!.loadFullModelCatalog!({ refresh: true });
+    };
+    // sessions_spawn, /models and other read-only lookups pass the session's project cwd.
+    const readProjectCatalog = (config: OpenClawConfig) =>
+      withPreparedModelCatalogOwner(
+        { config, agentId: "pro", workspaceDir: "/tmp/project-checkout", readOnly: true },
+        (owner) => owner.modelCatalog.entries.map(({ provider, id }) => `${provider}/${id}`),
+      );
+    const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
+    await publish(config, ["shipped-row", "discovered-row"]);
+    const discoveries = mocks.runPreparedModelCatalogWorker.mock.calls.length;
+    const rows = await readProjectCatalog(config);
+    if (!gatewayLifecycle) {
+      // Standalone hosts keep discovery scoped to the requested workspace.
+      expect(rows).not.toContain("runtime-demo/discovered-row");
+      return;
+    }
+    expect(rows).toEqual(
+      expect.arrayContaining(["runtime-demo/shipped-row", "runtime-demo/discovered-row"]),
     );
-
-  await publish(config, ["shipped-row", "discovered-row"]);
-  const discoveries = mocks.runPreparedModelCatalogWorker.mock.calls.length;
-  expect(await readProjectCatalog(config)).toEqual(
-    expect.arrayContaining(["runtime-demo/shipped-row", "runtime-demo/discovered-row"]),
-  );
-  // Plugin hot reload publishes a replacement generation; project reads follow it.
-  const reloaded: OpenClawConfig = { ...config, plugins: { entries: { demo: { enabled: true } } } };
-  await publish(reloaded, ["shipped-row", "reloaded-row"]);
-  expect(await readProjectCatalog(reloaded)).toEqual(
-    expect.arrayContaining(["runtime-demo/shipped-row", "runtime-demo/reloaded-row"]),
-  );
-  // Read-only lookups never start discovery themselves.
-  expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(discoveries + 1);
-});
+    // Plugin hot reload publishes a replacement generation; project reads follow it.
+    const reloaded = { ...config, plugins: { entries: { demo: { enabled: true } } } };
+    await publish(reloaded, ["shipped-row", "reloaded-row"]);
+    expect(await readProjectCatalog(reloaded)).toEqual(
+      expect.arrayContaining(["runtime-demo/shipped-row", "runtime-demo/reloaded-row"]),
+    );
+    // Read-only lookups never start discovery themselves.
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(discoveries + 1);
+  },
+);

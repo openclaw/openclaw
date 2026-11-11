@@ -261,6 +261,11 @@ export function getPendingPreparedModelRuntimeReplacement(): Promise<void> | und
   return getBlockingReplacement()?.promise;
 }
 
+/** True while a Gateway owns inventory for its configured agents; standalone hosts stay workspace-scoped. */
+export function isPreparedModelRuntimeGatewayLifecycleActive(): boolean {
+  return gatewayLifecycleActive;
+}
+
 /** Fence new execution while plugin work drains, without withdrawing the active catalog. */
 export const beginPreparedModelRuntimePluginDrain = modelRuntimeDrain.begin;
 
