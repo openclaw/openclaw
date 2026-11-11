@@ -50,6 +50,11 @@ import {
   resolveLocalPairingFallback,
 } from "./devices-cli-fallback.js";
 import {
+  callDevicesGateway as callGatewayCli,
+  readUnlessAborted,
+  type DevicesRpcOpts,
+} from "./devices-cli-gateway.js";
+import {
   findPairedDevicePendingNodeApprovalNotices,
   formatKeptOpenClawIdNote,
   formatOpenClawIdListNote,
@@ -57,7 +62,6 @@ import {
   pairedDeviceMatchesNodeApprovalQuery,
   stringsMatch,
 } from "./devices-cli-paired-notices.js";
-import { callDevicesGateway, type DevicesRpcOpts } from "./devices-cli.rpc.js";
 import { isUnknownRequestIdError } from "./devices-cli.unknown-id.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
 import { prepareCliGatewayStateAccess } from "./gateway-rpc.runtime.js";
@@ -94,12 +98,16 @@ function redactLocalPairedDevice(device: InfraPairedDevice): PairedDevice {
   };
 }
 
-async function listPairingWithFallback(opts: DevicesRpcOpts): Promise<DevicePairingList> {
+async function listPairingWithFallback(
+  opts: DevicesRpcOpts,
+  signal?: AbortSignal,
+): Promise<DevicePairingList> {
   try {
     return parseDevicePairingList(
-      await callDevicesGateway("device.pair.list", opts, {}, { scopes: [PAIRING_SCOPE] }),
+      await callGatewayCli("device.pair.list", opts, {}, { scopes: [PAIRING_SCOPE], signal }),
     );
   } catch (error) {
+    signal?.throwIfAborted();
     const fallback = resolveLocalPairingFallback(opts, error);
     if (!fallback) {
       throw error;
@@ -125,7 +133,7 @@ async function approvePairingWithFallback(
 ): Promise<Record<string, unknown> | null> {
   const { scopes, originalRequest } = context;
   try {
-    return await callDevicesGateway(
+    return await callGatewayCli(
       "device.pair.approve",
       opts,
       { requestId },
@@ -134,7 +142,7 @@ async function approvePairingWithFallback(
   } catch (error) {
     if (isDevicePairingApprovalDenied(error) && !scopes?.includes(ADMIN_SCOPE)) {
       try {
-        return await callDevicesGateway(
+        return await callGatewayCli(
           "device.pair.approve",
           opts,
           { requestId },
@@ -401,7 +409,7 @@ async function resolveTokenManagementScopes(
   if (target.role !== OPERATOR_ROLE) {
     return [ADMIN_SCOPE];
   }
-  const list = parseDevicePairingList(await callDevicesGateway("device.pair.list", opts, {}));
+  const list = parseDevicePairingList(await callGatewayCli("device.pair.list", opts, {}));
   const paired = list.paired.find((device) => device.deviceId === target.deviceId);
   if (!paired) {
     // Pairing-scoped device-token lists expose only self; a hidden target needs
@@ -515,9 +523,9 @@ function failDevicesCommand(json: boolean | undefined, ...lines: string[]): void
 }
 
 export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void> {
-  let list: DevicePairingList;
+  let list: DevicePairingList | null;
   try {
-    list = await listPairingWithFallback(opts);
+    list = await readUnlessAborted((signal) => listPairingWithFallback(opts, signal));
   } catch (error) {
     if (opts.json) {
       const payload = formatGatewayTransportErrorJson(error);
@@ -528,6 +536,9 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
       }
     }
     throw error;
+  }
+  if (!list) {
+    return;
   }
   const pairedByDeviceId = indexPairedDevices(list.paired);
   if (opts.json) {
@@ -631,7 +642,7 @@ export async function runDevicesDeleteCommand(
   }
   let result: unknown;
   try {
-    result = await callDevicesGateway(
+    result = await callGatewayCli(
       `device.pair.${operation}`,
       opts,
       { [field]: trimmed },
@@ -662,7 +673,7 @@ export async function runDevicesClearCommand(opts: DevicesRpcOpts): Promise<void
     failDevicesCommand(opts.json, "Refusing to clear pairing table without --yes");
     return;
   }
-  const list = parseDevicePairingList(await callDevicesGateway("device.pair.list", opts, {}));
+  const list = parseDevicePairingList(await callGatewayCli("device.pair.list", opts, {}));
   const removedDeviceIds: string[] = [];
   const rejectedRequestIds: string[] = [];
   // The Gateway refuses to remove OpenClaw ID browsers; the Access page manages them.
@@ -672,7 +683,7 @@ export async function runDevicesClearCommand(opts: DevicesRpcOpts): Promise<void
     if (!deviceId || device.managedBy === "openclaw-id") {
       continue;
     }
-    await callDevicesGateway(
+    await callGatewayCli(
       "device.pair.remove",
       opts,
       { deviceId },
@@ -686,7 +697,7 @@ export async function runDevicesClearCommand(opts: DevicesRpcOpts): Promise<void
       if (!requestId) {
         continue;
       }
-      await callDevicesGateway("device.pair.reject", opts, { requestId });
+      await callGatewayCli("device.pair.reject", opts, { requestId });
       rejectedRequestIds.push(requestId);
     }
   }
@@ -722,7 +733,10 @@ export async function runDevicesApproveCommand(
   const usingImplicitSelection = !resolvedRequestId || Boolean(opts.latest);
   let selectedRequest: PendingDevice | null = null;
   if (usingImplicitSelection) {
-    pairingList = await listPairingWithFallback(opts);
+    pairingList = await readUnlessAborted((signal) => listPairingWithFallback(opts, signal));
+    if (!pairingList) {
+      return;
+    }
     selectedRequest = selectLatestPendingRequest(pairingList.pending);
     resolvedRequestId = selectedRequest?.requestId?.trim();
   }
@@ -854,7 +868,7 @@ export async function runDevicesRenameCommand(opts: DevicesRpcOpts): Promise<voi
     );
     return;
   }
-  const result = await callDevicesGateway("device.pair.rename", opts, { deviceId, label });
+  const result = await callGatewayCli("device.pair.rename", opts, { deviceId, label });
   if (opts.json) {
     defaultRuntime.writeJson(result);
     return;
@@ -883,7 +897,7 @@ export async function runDevicesTokenCommand(
     operation === "rotate" ? (opts.scopes === false ? [] : opts.scope) : undefined;
   const params = operation === "rotate" ? { ...required, scopes: requestedScopes } : required;
   const scopes = await resolveTokenManagementScopes(opts, required, requestedScopes);
-  const result = await callDevicesGateway(`device.token.${operation}`, opts, params, { scopes });
+  const result = await callGatewayCli(`device.token.${operation}`, opts, params, { scopes });
   defaultRuntime.writeJson(result);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

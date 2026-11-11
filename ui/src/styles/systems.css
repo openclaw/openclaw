@@ -36,14 +36,14 @@ openclaw-systems-page {
 }
 .systems-heading h2 {
   margin: 0;
-  font-size: calc(15px * var(--control-ui-text-scale));
+  font-size: 15px;
   font-weight: 600;
   overflow-wrap: anywhere;
   color: var(--text-strong);
 }
 .systems-heading > span {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 .systems-icon-button {
   display: inline-grid;
@@ -139,7 +139,7 @@ openclaw-systems-page {
   gap: 4px 12px;
   margin-top: 6px;
   color: var(--muted);
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
 }
 .systems-sample-time {
   margin-left: auto;
@@ -148,25 +148,25 @@ openclaw-systems-page {
   margin: 0;
   padding: 10px 18px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   border-bottom: 1px solid var(--border);
 }
 .systems-backups {
   padding: 12px 18px;
   border-bottom: 1px solid var(--border);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   line-height: 1.5;
 }
 .systems-backups h2 {
   margin: 0 0 8px;
   color: var(--text-strong);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 600;
 }
 .systems-backups h3 {
   margin: 12px 0 4px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 500;
 }
 .systems-backups__targets,
@@ -237,7 +237,7 @@ openclaw-systems-page {
   border-radius: 4px;
   background: transparent;
   color: var(--text);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 .systems-body {
   display: flex;
@@ -270,13 +270,13 @@ openclaw-systems-page {
   height: 34px;
 }
 .systems-state h2 {
-  font-size: calc(18px * var(--control-ui-text-scale));
+  font-size: 18px;
   color: var(--text-strong);
   font-weight: 550;
   margin: 18px 0 10px;
 }
 .systems-state p {
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   max-width: 430px;
   line-height: 1.7;
   margin: 0;
@@ -288,11 +288,11 @@ openclaw-systems-page {
   border-radius: var(--radius-sm);
   color: var(--text);
   margin-top: 18px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 .systems-callout {
   padding: 8px 18px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.5;
   color: var(--muted);
   background: var(--bg-elevated);
@@ -327,13 +327,13 @@ openclaw-systems-page {
   gap: 8px;
 }
 .systems-details h2 {
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-strong);
   margin: 0;
 }
 .systems-details h3 {
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 600;
   color: var(--text);
   margin: 22px 0 9px;
@@ -343,7 +343,7 @@ openclaw-systems-page {
   grid-template-columns: 1fr;
   gap: 4px;
   margin: 18px 0;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 .systems-details dt {
   color: var(--muted);
@@ -370,13 +370,13 @@ openclaw-systems-page {
   line-height: 1.6;
 }
 .systems-details ul {
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   padding-left: 15px;
   overflow-wrap: anywhere;
   color: var(--muted);
 }
 .systems-detail-hint {
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   line-height: 1.6;
   color: var(--muted);
   margin: 7px 0;
@@ -391,7 +391,7 @@ openclaw-systems-page {
   border-radius: 4px;
   padding: 3px 5px;
   font-family: var(--mono);
-  font-size: calc(9px * var(--control-ui-text-scale));
+  font-size: 9px;
   overflow-wrap: anywhere;
 }
 .systems-session-link {
@@ -400,7 +400,7 @@ openclaw-systems-page {
   gap: 4px;
   margin: 10px 0;
   text-decoration: none;
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   overflow-wrap: anywhere;
 }
 .systems-session-link__title {
@@ -696,7 +696,7 @@ openclaw-systems-page {
     letter-spacing: normal;
   }
   .systems-vital .sparkline-tile__value {
-    font-size: var(--control-ui-text-md);
+    font-size: 14px;
     white-space: nowrap;
   }
 }
@@ -795,7 +795,7 @@ openclaw-systems-page {
 .systems-volume-summary {
   margin-top: 6px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 .systems-volume-summary ul {
   padding: 0;
@@ -806,8 +806,8 @@ openclaw-systems-page {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  min-height: calc(20px * var(--control-ui-text-scale));
-  line-height: calc(20px * var(--control-ui-text-scale));
+  height: 20px;
+  line-height: 20px;
 }
 .systems-volume-summary li > span:first-child {
   min-width: 0;
@@ -825,7 +825,7 @@ openclaw-systems-page {
   background: transparent;
   color: var(--accent);
   font: inherit;
-  line-height: calc(20px * var(--control-ui-text-scale));
+  line-height: 20px;
   text-decoration: underline;
 }
 .systems-summary-link:focus-visible {

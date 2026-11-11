@@ -168,21 +168,36 @@ function parseClaudeJsonlRecord(line: string): Record<string, unknown> | null {
   }
 }
 
+function readClaudeTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
 /** Project Claude-owned lifecycle records without widening the legacy parser event union. */
 export const parseClaudeCliJsonlLifecycleEvent: CliBackendParseJsonlLifecycleEvent = (line) => {
   if (!/compacting|compact_result|compact_boundary/u.test(line)) {
     return null;
   }
   const parsed = parseClaudeJsonlRecord(line);
-  if (
-    parsed?.compact_result === "success" ||
-    parsed?.compact_result === "failed" ||
-    (parsed?.type === "system" &&
-      parsed.subtype === "compact_boundary" &&
-      isRecord(parsed.compact_metadata) &&
-      parsed.compact_metadata.trigger === "auto")
-  ) {
-    return { kind: "compaction", phase: "end", completed: parsed.compact_result !== "failed" };
+  if (parsed?.compact_result === "failed") {
+    return { kind: "compaction", phase: "end", completed: false };
+  }
+  // Claude Code closes every successful compaction, automatic or manual, with this boundary right
+  // after its `compact_result: "success"` status. Only the boundary carries the sizes, so it alone
+  // ends the compaction and the status is progress only.
+  if (parsed?.type === "system" && parsed.subtype === "compact_boundary") {
+    const metadata = isRecord(parsed.compact_metadata) ? parsed.compact_metadata : {};
+    const tokensBefore = readClaudeTokenCount(metadata.pre_tokens);
+    const tokensAfter = readClaudeTokenCount(metadata.post_tokens);
+    return {
+      kind: "compaction",
+      phase: "end",
+      completed: true,
+      ...(metadata.trigger === "auto" || metadata.trigger === "manual"
+        ? { trigger: metadata.trigger }
+        : {}),
+      ...(tokensBefore !== undefined ? { tokensBefore } : {}),
+      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
+    };
   }
   return parsed?.type === "system" && parsed.subtype === "status" && parsed.status === "compacting"
     ? { kind: "compaction", phase: "start" }

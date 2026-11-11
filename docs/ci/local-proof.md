@@ -456,13 +456,20 @@ Local changed-test routing lives in `scripts/test-projects.test-support.mts` and
 
 Follow the canonical
 [proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy).
-For its remote exceptions, `.crabbox.yaml` defaults to `blacksmith-testbox`.
-That workflow hydrates credentials: untrusted contributor/fork code requires
+For its remote exceptions, `.crabbox.yaml` defaults to `boat` and local Actions
+hydration. The OpenClaw wrapper selects `class: fast` (8 vCPU / 16 GB) for new
+Boat leases unless sizing or an alternate `CRABBOX_CONFIG` is explicit. The
+repository keeps `class: standard`: native Crabbox uses 4 vCPU / 8 GB on Boat,
+and other providers retain their existing sizing. Boat account environment secrets
+are disabled with `asciiBox.noEnv`; `asciiBox.noSnapshots` disables snapshots and
+`asciiBox.visibility: private` keeps new VMs private. The configured Crabbox
+environment allowlist still applies. Explicit Blacksmith Testbox workflows
+hydrate credentials: untrusted contributor/fork code requires
 secretless fork CI or sanitized direct AWS, never local execution or Testbox.
 The wrapper uses the bundled Crabbox plugin's binary manager. All providers and
-cloud-worker profiles require Crabbox 0.82.0 or newer. This includes task-owned
+cloud-worker profiles require Crabbox 0.83.0 or newer. This includes task-owned
 Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
-Testboxes alive. Missing or older binaries use a verified managed 0.82.0 release
+Testboxes alive. Missing or older binaries use a verified managed 0.83.0 release
 before provider discovery or lease work. The original binary stays untouched.
 
 For native Linux/WSL command-lifecycle or cancellation proof, verify the selected
@@ -633,14 +640,15 @@ node scripts/crabbox-wrapper.mjs run --help | sed -n '1,120p'
 The repo wrapper validates the selected Crabbox binary and provider before running. In Codex worktrees or linked/sparse checkouts, avoid the local `pnpm crabbox:run` script because pnpm may reconcile dependencies before Crabbox starts; invoke the node wrapper directly instead:
 
 ```bash
-node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --timing-json --shell -- "pnpm test <path-or-filter>"
+node scripts/crabbox-wrapper.mjs run --timing-json --shell -- "pnpm test <path-or-filter>"
 ```
 
 A supported sibling or `PATH` binary can run directly. The wrapper automatically
 replaces an outdated selection with the plugin-managed binary; rebuilding the
 sibling checkout is no longer a prerequisite for proof.
 
-The `blacksmith:` block in `.crabbox.yaml` pins the org, workflow, and job defaults.
+For explicitly selected Testbox proof, the `blacksmith:` block in `.crabbox.yaml`
+pins the org, workflow, and job defaults.
 The wrapper enforces workflow ref `main` while syncing the selected local source,
 so the explicit flags below are optional. Explicit clean-machine changed-gate parity:
 
@@ -756,17 +764,18 @@ For admission/queue handling, follow the canonical proof policy above.
 For explicitly selected AWS capacity, use the
 [direct-provider commands](https://github.com/openclaw/openclaw/blob/main/.agents/skills/crabbox/references/operations.md#direct-aws).
 
-Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-class CPU. A `beast` request starts at 192 vCPUs and is the easiest way to trip regional EC2 Spot or On-Demand Standard quota. The repo-owned `.crabbox.yaml` defaults to `class: standard`, on-demand market, and `capacity.hints: true` so brokered AWS leases print selected region/market, quota pressure, Spot fallback, and high-pressure class warnings. Use `fast` for heavier broad checks, `large` only after standard/fast are not enough, and `beast` only for exceptional CPU-bound lanes such as full-suite or all-plugin Docker matrices, explicit release/blocker validation, or high-core performance profiling. Do not use `beast` for `pnpm check:changed`, focused tests, docs-only work, ordinary lint/typecheck, small E2E repros, or Blacksmith outage triage. Use `--market on-demand` for capacity diagnosis so Spot market churn is not mixed into the signal.
+Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-class CPU. A `beast` request starts at 192 vCPUs and is the easiest way to trip regional EC2 Spot or On-Demand Standard quota. The repo-owned `.crabbox.yaml` keeps `class: standard` for explicit AWS proof; on-demand market and `capacity.hints: true` retain AWS capacity diagnostics. Use `fast` for heavier broad checks, `large` only after standard/fast are not enough, and `beast` only for exceptional CPU-bound lanes such as full-suite or all-plugin Docker matrices, explicit release/blocker validation, or high-core performance profiling. Do not use `beast` for `pnpm check:changed`, focused tests, docs-only work, ordinary lint/typecheck, small E2E repros, or Blacksmith outage triage. Use `--market on-demand` for capacity diagnosis so Spot market churn is not mixed into the signal.
 
 `.crabbox.yaml` owns provider, sync, and GitHub Actions hydration defaults. Crabbox sync never transfers `.git`, so the hydrated Actions checkout keeps its own remote Git metadata instead of syncing maintainer-local remotes and object stores, and the repo config additionally excludes local runtime/build artifacts (such as `.artifacts` and test reports) that should never be transferred. `.github/workflows/crabbox-hydrate.yml` owns checkout, Node/pnpm setup, `origin/main` fetch, and the non-secret environment handoff for owned-cloud `crabbox run --id <cbx_id>` commands.
 
-Direct leases require Crabbox 0.82.0 or newer. TTL counts from creation, including hydration; idle timeout counts inactivity. The earlier deadline wins. Defaults are 30 minutes each, with a four-hour maximum unless an owner or organization override allows more. Effective policy may clamp requests and live leases; inspect the lease and read policy notices. The Azure `prewarm` and `changed` jobs request four hours total and 90 minutes idle explicitly. The hydration workflow's keepalive holds its Actions job open; it does not renew a Crabbox lease. `keep` and `stop: never` do not prevent expiry.
+Direct leases require Crabbox 0.83.0 or newer. TTL counts from creation, including hydration; idle timeout counts inactivity. The earlier deadline wins. Defaults are 30 minutes each, with a four-hour maximum unless an owner or organization override allows more. Effective policy may clamp requests and live leases; inspect the lease and read policy notices. The Azure `prewarm` and `changed` jobs request four hours total and 90 minutes idle explicitly. The hydration workflow's keepalive holds its Actions job open; it does not renew a Crabbox lease. `keep` and `stop: never` do not prevent expiry.
 
 Plain heartbeats, setup, synchronization, and desktop activity do not extend total lifetime. `run` may extend only while a command executes, subject to provider support, budget, and policy. Creation-fixed providers need sufficient TTL at allocation. `directLeases: deny` requires the configured coordinator route. Do not change providers to avoid that policy. `crabbox list --retained` adds kept terminal resources with unconfirmed cleanup to the default live listing; use exact-ID inspection and a waiting stop to prove cleanup.
 
 Linux hydration keeps physical workspace `node_modules` directories and pnpm's
-default `.pnpm` virtual store. Only the package-content store uses the persistent
-`/var/cache/crabbox/pnpm/store` volume; its fallback lives at
+default `.pnpm` virtual store. Providers with cache-volume support can persist the
+package-content store at `/var/cache/crabbox/pnpm/store`; Boat uses lease-local
+disk, not the optional 80/40-GB volumes. The fallback store lives at
 `.cache/openclaw-pnpm-store` beside the workspace dependencies. Ordinary POSIX
 sync preserves these ignored directories, so frozen reinstalls and later build
 commands use the same owned install. Hydration checks the tooling loader before

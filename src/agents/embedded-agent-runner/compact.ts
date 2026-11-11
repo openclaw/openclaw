@@ -56,7 +56,7 @@ import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compact
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { resolveSharedPluginRuntimeWorkspace } from "./run/prepared-runtime-context.js";
-import type { EmbeddedAgentCompactResult } from "./types.js";
+import type { EmbeddedAgentCompactResult, EmbeddedAgentMeta } from "./types.js";
 
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 
@@ -145,9 +145,10 @@ export async function compactNativeCliSession(params: {
     sessionAgentId,
     "agents.native-compaction",
   );
+  let compactedMeta: EmbeddedAgentMeta | undefined;
   try {
     const runControlOperation = async () => {
-      await runCliAgent({
+      const result = await runCliAgent({
         replyOperation: params.replyOperation,
         preparedRunAdmission,
         sessionId: params.compactParams.sessionId,
@@ -181,6 +182,7 @@ export async function compactNativeCliSession(params: {
         allowEmptyAssistantReplyAsSilent: true,
         abortSignal: params.compactParams.abortSignal,
       });
+      compactedMeta = result.meta.agentMeta;
     };
     await (params.runControlOperation
       ? params.runControlOperation(runControlOperation)
@@ -196,10 +198,15 @@ export async function compactNativeCliSession(params: {
   } finally {
     preparedRunAdmission.close();
   }
+  // Sizes come from the backend's own compaction record, when it reports one.
+  const tokensBefore = compactedMeta?.compactionTokensBefore;
   return {
     ok: true,
     compacted: true,
     reason: `CLI backend "${runtime}" compacted its native session.`,
+    ...(tokensBefore !== undefined
+      ? { result: { tokensBefore, tokensAfter: compactedMeta?.compactionTokensAfter } }
+      : {}),
   };
 }
 

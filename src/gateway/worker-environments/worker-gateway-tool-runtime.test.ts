@@ -581,7 +581,7 @@ it("preserves error text through worker tool execution", async () => {
   const { invoke } = await issued([tool("remote", execute)]);
   const result = await invoke();
   expect(result).toEqual({
-    content: [{ type: "text", text: JSON.stringify({ status: "error", error: message }, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify({ status: "error", error: message }) }],
     details: { status: "error", error: message },
     isError: true,
   });
