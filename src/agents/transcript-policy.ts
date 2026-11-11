@@ -102,6 +102,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
     validateGeminiTurns: isGoogle || isStrictOpenAiCompatible ? true : undefined,
     validateAnthropicTurns: isStrictOpenAiCompatible || isClaudeOpenAiResponses ? true : undefined,
     allowSyntheticToolResults: isGoogle || isOpenAiResponses ? true : undefined,
+    appendOnlyRuntimeContext: isOpenAiResponses ? true : undefined,
   };
 }
 

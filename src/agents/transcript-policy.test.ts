@@ -157,7 +157,11 @@ describe("resolveTranscriptPolicy", () => {
       "custom-openai-proxy",
       "gpt-5.4",
       "openai-responses",
-      { validateAnthropicTurns: false, dropReasoningFromHistory: false },
+      {
+        validateAnthropicTurns: false,
+        dropReasoningFromHistory: false,
+        appendOnlyRuntimeContext: true,
+      },
     ],
     ["ollama", "llama3.2", "ollama", { preserveSignatures: false, appendOnlyRuntimeContext: true }],
     [
