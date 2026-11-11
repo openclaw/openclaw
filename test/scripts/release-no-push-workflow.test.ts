@@ -2114,6 +2114,7 @@ describe("release validation no-push transport", () => {
     expect(validation.env?.EXPECTED_SHA).toBe("${{ steps.ref.outputs.sha }}");
     expect(validation.run).toContain('--consumer publisher --manifest "$manifest"');
     expect(job(releasePublish, "finalize_github_release").needs).toEqual([
+      "resolve_release_target",
       "publish",
       "publish_docker",
       "approve_github_release",
@@ -2206,13 +2207,14 @@ describe("release validation no-push transport", () => {
       clawhub: { artifact: "original-clawhub" },
     };
     const intent = { corePluginDeferrals: [{ packageName: "@openclaw/demo" }] };
-    for (const [input, expected] of [
+    const cases: [string, string][] = [
       ["", ""],
       [JSON.stringify(intent), ""],
       [JSON.stringify(descriptors), JSON.stringify(descriptors)],
       [JSON.stringify({ ...descriptors, ...intent }), JSON.stringify(descriptors)],
       ["{}", "{}"],
-    ]) {
+    ];
+    for (const [input, expected] of cases) {
       const root = tempDirs.make("release-intent-route-");
       const output = join(root, "output");
       const result = runWorkflowShellScript(projection, {
