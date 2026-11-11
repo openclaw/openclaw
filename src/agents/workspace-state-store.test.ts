@@ -93,6 +93,26 @@ it("migrates v39 databases without deferred bootstrap custody before the workspa
   });
 });
 
+it("keeps deferred bootstrap custody when a v39 database already has the column", async () => {
+  await seed();
+  await mergeWorkspaceSetupState(dir, { bootstrapDeferred: true }, 2000);
+  const before = await read(dir);
+  const pathname = openOpenClawStateDatabase().path;
+  await closeOpenClawStateDatabaseAsync();
+  {
+    using legacy = new DatabaseSync(pathname);
+    legacy.exec("PRAGMA user_version = 39");
+  }
+  fs.copyFileSync(pathname, `${pathname}.legacy`);
+  fs.renameSync(`${pathname}.legacy`, pathname);
+  const { db } = openOpenClawStateDatabase();
+  expect(db.prepare("PRAGMA user_version").get()).toEqual({
+    user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+  });
+  expect(await read(dir)).toEqual(before);
+  expect(before.setup?.bootstrapDeferred).toBe(true);
+});
+
 function observeFacts() {
   const observed = new Map<string, unknown>();
   const unsubscribe = workspaceStatePublication.subscribeFacts((change) => {

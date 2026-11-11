@@ -1,2 +1,2 @@
-99
-# PostgreSQL v39-to-v40 workspace bootstrap deferral (#196966): both exact v39 source shapes upgrade with rows and values kept, drifted column definitions are refused, and migration-scope fixtures declare the table.
+119
+# PostgreSQL and SQLite v39-to-v40 workspace bootstrap deferral (#196966): both exact v39 source shapes upgrade with rows and values kept, drifted column definitions are refused, and migration-scope fixtures declare the table.
