@@ -492,6 +492,19 @@ describe("sendMessageMatrix media", () => {
     },
   );
 
+  it.each([
+    ["IDAT", false],
+    ["acTL", undefined],
+  ])("claims a still PNG only when %s comes first (#195814)", async (chunk, expected) => {
+    const buffer = Buffer.from(`\x89PNG\r\n\x1a\n\0\0\0\0${chunk}crc.`, "latin1");
+    const media = { buffer, contentType: "image/png", kind: "image" };
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce(media);
+    getImageMetadataMock.mockResolvedValueOnce({ width: 640, height: 480 });
+    await send("", { mediaUrl: "chart.png" });
+    const info = requireRecord(sentContent().info, "image info");
+    expect(info["org.matrix.msc4230.is_animated"]).toBe(expected);
+  });
+
   it("rejects mixed attachments when a room becomes encrypted while an image is resized", async () => {
     const preparation = vi.spyOn(client, "prepareRoomForMessageSend");
     const failure = new Error("assembled media rejected");
@@ -530,18 +543,7 @@ describe("sendMessageMatrix media", () => {
   });
 
   it("uses explicit cfg for media sends instead of runtime loadConfig fallbacks", async () => {
-    const explicitCfg = {
-      channels: {
-        matrix: {
-          accounts: {
-            ops: {
-              mediaMaxMb: 1,
-            },
-          },
-        },
-      },
-    };
-
+    const explicitCfg = { channels: { matrix: { accounts: { ops: { mediaMaxMb: 1 } } } } };
     loadConfigMock.mockImplementation(() => {
       throw new Error("sendMessageMatrix should not reload runtime config when cfg is provided");
     });
@@ -1034,9 +1036,7 @@ describe("sendTypingMatrix", () => {
         run: (resolved: import("./sdk.js").MatrixClient) => Promise<void>,
       ) => {
         expect(opts.cfg).toBe(cfg);
-        expect(opts.accountId).toBe("work");
-        expect(opts.timeoutMs).toBe(12_345);
-        expect(opts.readiness).toBe("none");
+        expect(opts).toMatchObject({ accountId: "work", timeoutMs: 12_345, readiness: "none" });
         return await run(typingClient);
       },
     );

@@ -11,6 +11,7 @@ import {
   createOperationalRunInstanceRef,
 } from "./admitted-run-context.js";
 import { createOpenClawCodingToolsInternalAsync } from "./agent-tools.js";
+import { createAgentTurnTaintState } from "./embedded-agent-runner/run/turn-taint-state.js";
 import {
   withGatewayToolCallerIdentity,
   getGatewayToolCallerIdentity,
@@ -36,17 +37,24 @@ it.each([
   "mobile_ui",
   "openclaw",
   "portal",
+  "owner-admin",
+  "owner-admin-already-tainted",
+  "owner-policy-denied",
+  "owner-narrow",
+  "owner-revoked",
 ] as const)(
-  "retained owner-only tool keeps sender attribution false and authorizes %s at effect",
+  "owner-only tool preserves sender attribution and validates current admitted authority for %s",
   (state) =>
     withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
       const unsupported = state === "mobile_ui" || state === "openclaw" || state === "portal";
-      const toolName = unsupported ? state : "gateway";
+      const senderIsOwner = state.startsWith("owner-");
+      const toolName = senderIsOwner ? "openclaw" : unsupported ? state : "gateway";
+      const policyDenied = state === "policy-denied" || state === "owner-policy-denied";
       const config = {
         tools: {
           profile: "full" as const,
           allow: [toolName],
-          ...(state === "policy-denied" ? { deny: ["gateway"] } : {}),
+          ...(policyDenied ? { deny: [toolName] } : {}),
         },
       };
       setRuntimeConfigSnapshot(config);
@@ -55,14 +63,26 @@ it.each([
       replaceSessionEntrySync({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
       const lifetime = new AbortController();
       let current = true;
-      let tainted = state === "tainted";
+      const taint = createAgentTurnTaintState(state === "tainted");
+      const networkObservation = {
+        toolName: "web_fetch",
+        argsHash: "github-profile-request",
+        resultHash: "public-profile-result",
+        resultContentSource: "network" as const,
+      };
+      if (state === "owner-admin-already-tainted") {
+        taint.observe(networkObservation);
+      }
       const authority =
         state === "unowned"
           ? undefined
           : createAdmittedRunOperatorAuthority({
               profileId: "authenticated-person",
               signal: lifetime.signal,
-              scopes: state === "narrow" ? ["operator.write"] : ["operator.admin"],
+              scopes:
+                state === "narrow" || state === "owner-narrow"
+                  ? ["operator.write"]
+                  : ["operator.admin"],
               assertCurrent: () => {
                 if (!current) {
                   throw new Error("Original operator grant revoked");
@@ -88,11 +108,15 @@ it.each([
                 sessionKey,
                 sessionId,
                 workspaceDir: fixture.workspaceDir,
-                senderIsOwner: false,
-                trigger: "event",
-                inputProvenance: { kind: "internal_system" },
+                senderIsOwner,
+                ...(senderIsOwner
+                  ? {}
+                  : {
+                      trigger: "event" as const,
+                      inputProvenance: { kind: "internal_system" as const },
+                    }),
                 pluginExecutionAuthority: authority,
-                isTurnTainted: () => tainted,
+                isTurnTainted: taint.isTainted,
                 toolConstructionPlan: {
                   includeBaseCodingTools: false,
                   includeShellTools: false,
@@ -102,7 +126,7 @@ it.each([
                 },
               });
               const gateway = tools.find((tool) => tool.name === toolName);
-              if (state === "policy-denied") {
+              if (policyDenied) {
                 expect(gateway).toBeUndefined();
                 expect(request).not.toHaveBeenCalled();
                 return;
@@ -129,13 +153,41 @@ it.each([
                 return;
               }
               expect(getGatewayToolCallerIdentity()?.operatorAuthority).toBe(authority);
-              if (state === "revoked") {
+              if (state === "revoked" || state === "owner-revoked") {
                 current = false;
                 lifetime.abort(new Error("Original operator grant revoked"));
                 expect(() => authority?.assertCurrent()).toThrow(/revoked/);
               }
-              if (state === "tainted-later") {
-                tainted = true;
+              if (state === "tainted-later" || senderIsOwner) {
+                taint.observe(networkObservation);
+                expect(taint.isTainted()).toBe(true);
+              }
+              if (senderIsOwner) {
+                const dispatch = vi
+                  .spyOn(scopedGateway, "callInProcessGatewayTool")
+                  .mockResolvedValue({ reply: "Delegated requested role assignment" });
+                try {
+                  const pending = gateway.execute("owner-role-assignment", {
+                    message: "Assign fixture-contributor the Contributor role.",
+                  });
+                  if (state === "owner-admin" || state === "owner-admin-already-tainted") {
+                    expect(JSON.stringify(await pending)).toContain(
+                      "Delegated requested role assignment",
+                    );
+                    expect(dispatch).toHaveBeenCalledOnce();
+                    expect(taint.isTainted()).toBe(true);
+                  } else if (state === "owner-revoked") {
+                    await expect(pending).rejects.toThrow(/revoked/);
+                    expect(dispatch).not.toHaveBeenCalled();
+                  } else {
+                    expect(JSON.stringify(await pending)).toContain("gated");
+                    expect(dispatch).not.toHaveBeenCalled();
+                  }
+                  expect(request).not.toHaveBeenCalled();
+                } finally {
+                  dispatch.mockRestore();
+                }
+                return;
               }
               const invoke = () =>
                 gateway.execute("protected-owner-call", { action: "config.get" });

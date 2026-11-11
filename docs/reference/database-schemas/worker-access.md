@@ -654,6 +654,10 @@ hot state inside the existing agent writer queue. The main thread keeps an
 immutable receipt-maintained replica, shared across short-lived caller handles.
 A cold actor hydrates entry, membership, pending-input custody, and transcript
 metadata in one statement; a cold mutation hydrates inside its own transaction.
+Pending-input hot state contains only unconsumed custody. Consumed source receipts
+remain in SQLite and use indexed exact-key reads for replay; an absent hot row
+does not prove an input is new. Consumption removes source rows from resident
+state without deleting their durable receipts or changing retention.
 Warm readers use the replica. Complete committed postimages install before the
 command acknowledgement; eviction, replacement, incomplete coverage, and unknown
 outcomes return reads to the canonical worker. Bounded transcript payload reads
@@ -6173,6 +6177,12 @@ through synchronous prompt publication and core entry. Current run ownership,
 permission generation, cancellation, and one-time replay consumption remain live
 checks after waits. The core run settles outside reader custody. This changes no
 schema, stored bytes, retention, durability, or update behavior.
+
+Bounded transcript cohorts validate the selected session's entry keys and transcript
+ID against the existing scoped write receipts. Unrelated worker commits do not
+restart hydration or model-context reads. Same-session and unclassified writes
+retain retry and serialized fallback; native mutation witnesses and FIFO acceptance
+remain unchanged.
 
 Orphan preparation under a selected transcript owner skips hydration when the
 persisted current input already matches the model tail or is excluded from model

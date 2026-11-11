@@ -420,6 +420,7 @@ export function prepareSessionTranscriptHydration(
               () =>
                 readSessionTranscriptCohort(
                   database,
+                  resolved,
                   () =>
                     readPrepared(
                       owner,

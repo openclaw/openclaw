@@ -11,6 +11,9 @@ import type { AnthropicOptions } from "../provider-options.js";
 import {
   usesClaudeStreamingRefusalContract,
   mapAnthropicStopReason,
+  isUnsupportedClaudeFastModeError,
+  raiseClaudeCodeVersionFloor,
+  readRequiredClaudeCodeVersion,
 } from "../providers/anthropic-model-contract.js";
 import { applyAnthropicRefusal } from "../providers/anthropic-refusal.js";
 import {
@@ -61,26 +64,43 @@ import {
 
 type LifecycleOptions = AnthropicOptions & { authProfileId?: string };
 
+// Owner callbacks record learned facts; a failing recorder must not fail the request.
+function notifyOwner(callback: () => void): void {
+  try {
+    callback();
+  } catch {
+    // Best effort; this request already proceeds with the learned behavior.
+  }
+}
+
+type PreparedAnthropicRequest = {
+  context: Context;
+  options: LifecycleOptions | undefined;
+  isOAuthToken: boolean;
+  serverSideFallback: boolean;
+  directApiKeyBetaHeader?: string;
+  claudeCodeVersion?: string;
+  request: (
+    body: MessageCreateParamsStreaming,
+    headers: Record<string, string> | undefined,
+    encodeBody: () => string | Blob,
+  ) => Promise<{ response: Response; events: AsyncIterable<object> | Iterable<object> }>;
+  checkResponse?: (response: Response) => Promise<void>;
+};
+
+type SentAnthropicRequest = {
+  prepared: PreparedAnthropicRequest;
+  built: Awaited<ReturnType<typeof buildAnthropicRequest>>;
+  events: AsyncIterable<object> | Iterable<object>;
+};
+
 /** Entry points retain their SDK/fetch adapters; request and terminal ownership is shared. */
 export async function runAnthropicStreamLifecycle(params: {
   model: Model<"anthropic-messages">;
   stream: WritableTransportStream;
   options?: LifecycleOptions;
   profile: "provider" | "transport";
-  prepare: () => MaybePromise<{
-    context: Context;
-    options: LifecycleOptions | undefined;
-    isOAuthToken: boolean;
-    serverSideFallback: boolean;
-    directApiKeyBetaHeader?: string;
-    claudeCodeVersion?: string;
-    request: (
-      body: MessageCreateParamsStreaming,
-      headers: Record<string, string> | undefined,
-      encodeBody: () => string | Blob,
-    ) => Promise<{ response: Response; events: AsyncIterable<object> | Iterable<object> }>;
-    checkResponse?: (response: Response) => Promise<void>;
-  }>;
+  prepare: () => MaybePromise<PreparedAnthropicRequest>;
 }): Promise<void> {
   const { model, stream, options, profile } = params;
   const output = createAssistantOutput(model, "anthropic-messages");
@@ -90,33 +110,64 @@ export async function runAnthropicStreamLifecycle(params: {
     : undefined;
   let replayedCompaction: AnthropicCompactionBlock | undefined;
   try {
-    const prepared = await params.prepare();
-    const built = await buildAnthropicRequest(
-      model,
-      prepared.context,
-      prepared.options,
-      profile,
-      prepared.isOAuthToken,
-      prepared.serverSideFallback,
-      prepared.claudeCodeVersion,
-    );
-    replayedCompaction = built.replayedCompaction;
-    const {
-      params: body,
-      headers,
-      messageSources,
-    } = await prepareAnthropicRequest(
-      built.params,
-      model,
-      prepared.options,
-      prepared.directApiKeyBetaHeader,
-    );
-    const wireBody = { ...body, stream: true as const };
-    const { response, events } = await prepared.request(wireBody, headers, () =>
-      serializeAnthropicRequestBody(wireBody, messageSources),
-    );
-    await notifyProviderHttpResponse({ options: prepared.options, response, model });
-    await prepared.checkResponse?.(response);
+    const send = async (retry: {
+      version: boolean;
+      speed: boolean;
+    }): Promise<SentAnthropicRequest> => {
+      const prepared = await params.prepare();
+      const built = await buildAnthropicRequest(
+        model,
+        prepared.context,
+        prepared.options,
+        profile,
+        prepared.isOAuthToken,
+        prepared.serverSideFallback,
+        prepared.claudeCodeVersion,
+      );
+      replayedCompaction = built.replayedCompaction;
+      const {
+        params: body,
+        headers,
+        messageSources,
+      } = await prepareAnthropicRequest(
+        built.params,
+        model,
+        prepared.options,
+        prepared.directApiKeyBetaHeader,
+      );
+      const wireBody = { ...body, stream: true as const };
+      if (!retry.speed) {
+        delete wireBody.speed;
+      }
+      try {
+        const { response, events } = await prepared.request(wireBody, headers, () =>
+          serializeAnthropicRequestBody(wireBody, messageSources),
+        );
+        await notifyProviderHttpResponse({ options: prepared.options, response, model });
+        await prepared.checkResponse?.(response);
+        return { prepared, built, events };
+      } catch (error) {
+        // Anthropic names the Claude Code version a model needs. Adopt it and
+        // resend once instead of shipping a release for every new model.
+        const required = prepared.isOAuthToken ? readRequiredClaudeCodeVersion(error) : undefined;
+        if (retry.version && required && raiseClaudeCodeVersionFloor(required)) {
+          notifyOwner(() => prepared.options?.onClaudeCodeVersionRequired?.(required));
+          return send({ ...retry, version: false });
+        }
+        // New models are offered fast mode by default; one that lacks it answers
+        // with this 400. Resend at standard speed and let the owner stop offering it.
+        if (
+          retry.speed &&
+          wireBody.speed !== undefined &&
+          isUnsupportedClaudeFastModeError(error)
+        ) {
+          notifyOwner(() => prepared.options?.onFastModeUnsupported?.(model.id));
+          return send({ ...retry, speed: false });
+        }
+        throw error;
+      }
+    };
+    const { prepared, built, events } = await send({ version: true, speed: true });
     await (async () => {
       const reducerOptions = prepared.options ?? {};
       const isOAuthToken = prepared.isOAuthToken;

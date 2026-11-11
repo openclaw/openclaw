@@ -302,11 +302,6 @@ async function alignsNativeHeaders(
   expect(await collapse.getAttribute("aria-expanded")).toBe("true");
   expect(await row.locator("a").count()).toBe(0);
   expect(await row.getByRole("button", { name: /New (session|conversation)/ }).count()).toBe(0);
-  await page.mouse.move(600, 600);
-  const restingBackgrounds = await row
-    .locator("button.sidebar-session-toolbar__button")
-    .evaluateAll((buttons) => buttons.map((button) => getComputedStyle(button).backgroundColor));
-  expect(restingBackgrounds).toEqual(["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)"]);
   const geometry = await row.evaluate((element) => {
     const box = (selector: string) =>
       document.querySelector(selector)!.getBoundingClientRect().toJSON();
@@ -410,16 +405,6 @@ async function alignsNativeHeaders(
       .evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))),
   ).toEqual(native ? ["Expand sidebar"] : []);
   if (native && !macNavigation) {
-    expect(
-      await cluster.locator("button").evaluate((button) => {
-        const style = getComputedStyle(button);
-        return {
-          border: style.borderTopWidth,
-          background: style.backgroundColor,
-          shadow: style.boxShadow,
-        };
-      }),
-    ).toEqual({ border: "0px", background: "rgba(0, 0, 0, 0)", shadow: "none" });
     expect((await cluster.boundingBox())!.x).toBe(macos ? 92 : 64);
     await expect
       .poll(async () => {

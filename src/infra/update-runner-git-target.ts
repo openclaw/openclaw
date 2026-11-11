@@ -256,9 +256,7 @@ export async function withGitTargetInspectionRoot<T>(
               "-C",
               // Publication may move a new checkout after validation. Cleanup
               // owns only the private Git dir and needs no source-relative transport.
-              argv[3] === "worktree" && (argv[4] === "remove" || argv[4] === "prune")
-                ? inspectionRoot
-                : params.root,
+              argv[3] === "worktree" && argv[4] === "remove" ? inspectionRoot : params.root,
               `--git-dir=${inspectionRoot}`,
               ...argv.slice(3),
             ]
