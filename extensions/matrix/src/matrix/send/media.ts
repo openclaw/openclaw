@@ -3,6 +3,41 @@ import type { DimensionalFileInfo, EncryptedFile, MatrixClient } from "../sdk.js
 
 const THUMBNAIL_MAX_SIDE = 800;
 const THUMBNAIL_QUALITY = 80;
+// MSC4230: Element badges PNG/WebP/GIF/APNG/AVIF as "GIF" unless the event says they are still.
+const MSC4230_IS_ANIMATED = "org.matrix.msc4230.is_animated";
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** True only when the bytes prove a single-frame JPEG, PNG or WebP; unknown stays unclaimed. */
+function isStillImageBuffer(buffer: Buffer): boolean {
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return true;
+  }
+  if (buffer.subarray(0, 8).equals(PNG_SIGNATURE)) {
+    // An APNG declares acTL before its first IDAT.
+    for (let offset = 8; offset + 12 <= buffer.length;) {
+      const type = buffer.toString("latin1", offset + 4, offset + 8);
+      if (type === "acTL") {
+        return false;
+      }
+      if (type === "IDAT") {
+        return true;
+      }
+      offset += 12 + buffer.readUInt32BE(offset);
+    }
+    return false;
+  }
+  if (
+    buffer.length >= 21 &&
+    buffer.toString("latin1", 0, 4) === "RIFF" &&
+    buffer.toString("latin1", 8, 12) === "WEBP"
+  ) {
+    const chunk = buffer.toString("latin1", 12, 16);
+    // Simple lossy/lossless WebP is single-frame; VP8X carries the animation flag.
+    return chunk === "VP8 " || chunk === "VP8L" || (chunk === "VP8X" && (buffer[20]! & 0x02) === 0);
+  }
+  return false;
+}
+
 export async function prepareImageInfo(params: {
   buffer: Buffer;
   client: MatrixClient;
@@ -14,7 +49,11 @@ export async function prepareImageInfo(params: {
   if (!meta) {
     return undefined;
   }
-  const imageInfo: DimensionalFileInfo = { w: meta.width, h: meta.height };
+  const imageInfo: DimensionalFileInfo & { [MSC4230_IS_ANIMATED]?: boolean } = {
+    w: meta.width,
+    h: meta.height,
+    ...(isStillImageBuffer(params.buffer) ? { [MSC4230_IS_ANIMATED]: false } : {}),
+  };
   const maxDim = Math.max(meta.width, meta.height);
   if (maxDim > THUMBNAIL_MAX_SIDE) {
     try {

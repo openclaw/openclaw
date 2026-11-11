@@ -1731,13 +1731,21 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
                 counter.record(String(describing: event))
             }
         }
+        let statuses = await store.loadCommandStatusesIfAvailable()
+        let statusReadCount = counter.count
         let loaded = await store.loadCommandsIfAvailable()
         try await databases.stateQueue.writeWithoutTransaction { db in
             db.trace(options: [])
         }
         let commands = try #require(loaded)
-        #expect(counter.count > 0)
-        #expect(counter.count <= 2)
+        let observed = try #require(statuses)
+        #expect(statusReadCount == 1)
+        #expect(observed.map { Data($0.id.utf8) } == [
+            Data("earlier".utf8), Data("later".utf8), Data(composedID.utf8), Data(decomposedID.utf8),
+        ])
+        #expect(observed.map(\.status) == [.queued, .queued, .queued, .queued])
+        #expect(counter.count > statusReadCount)
+        #expect(counter.count - statusReadCount <= 2)
         #expect(commands.map { Data($0.id.utf8) } == [
             Data("earlier".utf8), Data("later".utf8), Data(composedID.utf8), Data(decomposedID.utf8),
         ])
@@ -1849,6 +1857,7 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
         await retired.retire()
 
         #expect(await retired.recoverInterruptedSends() == false)
+        #expect(await retired.loadCommandStatusesIfAvailable() == nil)
         let replacement = databases.store(gatewayID: "gw-a")
         #expect(await replacement.loadCommands().map(\.status) == [.sending])
     }
@@ -1887,6 +1896,8 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
                 arguments: [old, "gw-a", "old-ack"])
         }
 
+        let statuses = try #require(await store.loadCommandStatusesIfAvailable())
+        #expect(statuses.map(\.status) == [.failed, .failed])
         let commands = await store.loadCommands()
         let commandsByID = Dictionary(uniqueKeysWithValues: commands.map { ($0.id, $0) })
         #expect(commandsByID["old-queued"]?.status == .failed)

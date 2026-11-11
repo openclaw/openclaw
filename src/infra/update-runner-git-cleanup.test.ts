@@ -165,6 +165,16 @@ it("keeps a successful update successful when cleanup reporting is unavailable",
   });
   expect(result.status).toBe("ok");
   expect(fixture.git(fixture.install, "rev-parse", "HEAD")).toBe(fixture.target);
+  const cleanup = removals(fixture);
+  expect(cleanup).toHaveLength(1);
+  const command = cleanup[0]!;
+  expect(command.slice(4, -1)).toEqual(["worktree", "remove", "--force", "--force"]);
+  expect(command[3]).toBe(`--git-dir=${command[2]}`);
+  expect(fixture.calls.some((argv) => argv.includes("worktree") && argv.includes("prune"))).toBe(
+    false,
+  );
+  expect(fs.existsSync(path.dirname(command.at(-1)!))).toBe(false);
+  expect(fs.existsSync(path.dirname(command[2]!))).toBe(false);
   expect(result.steps.find(({ name }) => name === "preflight-cleanup-reporting")).toMatchObject({
     exitCode: 0,
     advisory: { kind: "recoverable-maintenance" },

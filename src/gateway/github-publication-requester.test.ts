@@ -17,6 +17,10 @@ import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   ensureCanonicalUserProfileForEmail,
@@ -26,7 +30,11 @@ import {
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { createGitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
-import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
+import {
+  prepareGitHubPublicationRequesterV2,
+  prepareGitHubPublicationTaskRequester,
+  restoreGitHubPublicationRequester,
+} from "./github-publication-requester.js";
 import {
   createGitHubPublicationRequesterFixture,
   capturePublicationGuest as guestRequester,
@@ -170,6 +178,86 @@ describe("shared GitHub publication requester authority", () => {
         session,
       ),
     ).rejects.toThrow("no longer active");
+    expect(f.externalWrites).toEqual([]);
+  });
+
+  it("restores task publication under the original scope ceiling and exact parent lifecycle", async () => {
+    const f = await createRequesterPolicyFixture();
+    const parent = f.guestSource.session;
+    const entry = loadSessionEntryReadOnly(parent)!;
+    const source = { agentId: parent.agentId, sessionKey: "agent:main:publication:source" };
+    await upsertSessionEntryCore(source, {
+      sessionId: "publication-source",
+      updatedAt: 1,
+      createdActor: entry.createdActor,
+      owner: entry.owner,
+      parentSessionKey: parent.sessionKey,
+    });
+    const origin = {
+      ...parent,
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision ?? null,
+      runId: "publication-parent-run",
+    };
+    const transferred = await prepareGitHubPublicationTaskRequester(
+      f.guest,
+      source,
+      origin,
+      f.guestSource.context.getCommittedRuntimeConfig,
+    );
+    onTestFinished(transferred.release);
+    expect(transferred.requester.snapshot).toEqual({ ...f.guest.snapshot, origin });
+    expect(transferred.requester.assertCurrent).not.toThrow();
+    const restored = await restoreGitHubPublicationRequester(
+      JSON.stringify(transferred.requester.snapshot),
+      source,
+      f.guestSource.context.getCommittedRuntimeConfig,
+    );
+    onTestFinished(restored.release);
+    f.guestSource.release();
+    expect(transferred.requester.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
+    expect(restored.assertCurrent).not.toThrow();
+    await upsertSessionEntryCore(parent, { ...entry, lifecycleRevision: "parent-reset" });
+    expect(restored.assertCurrent).toThrow(GitHubPublicationRecoveryPendingError);
+    await expect(
+      restoreGitHubPublicationRequester(
+        JSON.stringify(transferred.requester.snapshot),
+        source,
+        f.guestSource.context.getCommittedRuntimeConfig,
+      ),
+    ).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
+    expect(f.externalWrites).toEqual([]);
+  });
+
+  it("refuses task publication for a different parent or another creator's source", async () => {
+    const f = await createRequesterPolicyFixture();
+    const parent = f.guestSource.session;
+    const entry = loadSessionEntryReadOnly(parent)!;
+    const source = { agentId: parent.agentId, sessionKey: "agent:main:publication:other-source" };
+    await upsertSessionEntryCore(source, {
+      sessionId: "other-publication-source",
+      updatedAt: 1,
+      createdActor: { type: "human", source: "profile", id: f.maintainerProfile },
+    });
+    const origin = {
+      ...parent,
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision ?? null,
+    };
+    for (const target of [
+      { ...origin, sessionKey: "agent:main:unrelated-parent" },
+      { ...origin, sessionId: "another-parent-incarnation" },
+      origin,
+    ]) {
+      await expect(
+        prepareGitHubPublicationTaskRequester(
+          f.guest,
+          source,
+          target,
+          f.guestSource.context.getCommittedRuntimeConfig,
+        ),
+      ).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
+    }
     expect(f.externalWrites).toEqual([]);
   });
 

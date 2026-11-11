@@ -39,6 +39,11 @@ export function isMigrationsMemoryApplyParams(
 ): value is import("typebox").Static<
   typeof import("../../schema/migrations.js").MigrationsMemoryApplyParamsSchema
 >;
+export function isDiagnosticsCpuProfileParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema/diagnostics-schemas.js").DiagnosticsCpuProfileParamsSchema
+>;
 export function isDiagnosticsHeapProfileParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2441,6 +2446,11 @@ export function isDevicePairRemoveParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").DevicePairRemoveParamsSchema
+>;
+export function isDevicePairCodeParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").DevicePairCodeParamsSchema
 >;
 export function isDevicePairSetupCodeParams(
   value: unknown,
