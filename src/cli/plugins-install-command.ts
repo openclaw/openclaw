@@ -7,7 +7,7 @@ import type {
   PluginsInstallParams,
   PluginsInstallResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
-import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { sanitizeTerminalText, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { assertConfigWriteAllowedInCurrentMode, replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -62,13 +62,22 @@ import { runWithLocalPluginState } from "./plugins-local-state.js";
 const DEPRECATED_DANGEROUS_FORCE_UNSAFE_INSTALL_WARNING =
   "--dangerously-force-unsafe-install is deprecated and no longer affects plugin installs because built-in install-time dangerous-code scanning has been removed. Configure security.installPolicy for operator-owned install decisions.";
 
+/**
+ * Install failures carry npm output and composed remedy lines. Sanitize each line and
+ * indent continuations so multi-line reasons stay readable while terminal controls
+ * inside a line stay neutralized.
+ */
+function sanitizeInstallFailureText(value: string): string {
+  return value.split("\n").map(sanitizeTerminalText).join("\n  ");
+}
+
 /** Validate intent and select the runtime owner before either process acquires its lease. */
 export async function runPluginInstallCommand(params: RunPluginInstallCommandParams) {
   assertConfigWriteAllowedInCurrentMode();
   const runtime = params.runtime ?? defaultRuntime;
   const preflight = await resolvePluginInstallPreflight(params);
   if (!preflight.ok) {
-    runtime.error(terminalText`${preflight.error}`);
+    runtime.error(sanitizeInstallFailureText(preflight.error));
     return runtime.exit(1);
   }
   const { raw, opts, sourcePlan } = preflight;
@@ -112,7 +121,7 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
       mode: preflight.installMode,
     };
     if (sourcePlan?.warning) {
-      runtime.log(theme.warn(terminalText`${sourcePlan.warning}`));
+      runtime.log(theme.warn(sanitizeInstallFailureText(sourcePlan.warning)));
     }
     result = await installPluginWithHookFallback({
       request: { ...request, ...(opts.enable === false ? { enable: false } : {}) },
@@ -236,7 +245,7 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
       },
     });
   } catch (error) {
-    runtime.error(terminalText`${formatErrorMessage(error)}`);
+    runtime.error(sanitizeInstallFailureText(formatErrorMessage(error)));
     return runtime.exit(1);
   }
   if (!result.ok) {
@@ -244,7 +253,7 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
       result.code !== CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_DOWNLOAD_BLOCKED ||
       !result.warning?.trim()
     ) {
-      runtime.error(terminalText`${result.error}`);
+      runtime.error(sanitizeInstallFailureText(result.error));
     }
     return runtime.exit(1);
   }
@@ -502,7 +511,9 @@ async function installInspectedHookPack(
     ) {
       (params.runtime ?? defaultRuntime).log(
         theme.warn(
-          terminalText`Hook-pack fallback skipped: package inspection failed: ${probe.error}`,
+          sanitizeInstallFailureText(
+            `Hook-pack fallback skipped: package inspection failed: ${probe.error}`,
+          ),
         ),
       );
     }
