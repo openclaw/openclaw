@@ -268,17 +268,15 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     super.start();
     const mountGatewayOwner = this.context.gateway.snapshot.client;
     this.stagedAttachmentGatewayOwner = mountGatewayOwner;
-    if (typeof ResizeObserver === "function") {
-      this.paneResizeObserver = new ResizeObserver((entries) => {
-        const width = entries.at(-1)?.contentRect.width;
-        // Hidden panes (narrow split view) report 0; keep the last real width.
-        if (typeof width === "number" && width > 0 && width !== this.paneWidth) {
-          this.transcript.syncViewportGeometry();
-          this.paneWidth = width;
-        }
-      });
-      this.paneResizeObserver.observe(this.element);
-    }
+    this.paneResizeObserver = new ResizeObserver((entries) => {
+      const width = entries.at(-1)?.contentRect.width;
+      // Hidden panes (narrow split view) report 0; keep the last real width.
+      if (typeof width === "number" && width > 0 && width !== this.paneWidth) {
+        this.transcript.syncViewportGeometry();
+        this.paneWidth = width;
+      }
+    });
+    this.paneResizeObserver.observe(this.element);
     const chatState = this.chatState;
     chatState.addCleanup(() => publishChatWorkContext(this.context, this));
     chatState.addCleanup(listen(this.element, "pointerdown", this.handlePaneFocus));

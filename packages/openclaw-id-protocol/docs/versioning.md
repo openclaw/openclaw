@@ -3,6 +3,11 @@
 **Status: v1-draft.** Code: `src/version.ts`, `src/statements/validate.ts`,
 `src/statements/envelope.ts`, `src/discovery/descriptor.ts`.
 
+Node key classes, node invitations, `node_peer_keys` and node Discovery endpoints are part of
+this unshipped v1-draft. They do not bump a version. Every consumer updates its draft schema
+and regenerates/re-signs snapshots together; there is no compatibility parser for older draft
+shapes. The rules below apply **after release**, not to revising this draft.
+
 This document says how the protocol changes after release: what carries a version, what a
 reader does with a version it does not implement, which changes need a new version, and how
 long an old version stays supported.

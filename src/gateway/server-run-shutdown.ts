@@ -29,7 +29,7 @@ export async function prepareGatewayRunShutdown(
   params: GatewayRunShutdownParams & {
     warnings: string[];
   },
-): Promise<{ released: Promise<void>; failure?: { error: unknown } }> {
+) {
   const sources = listRpcSourceEntries().filter(([, entry]) =>
     hasGatewayContextOwner(entry.input, params.resolveGatewayContext),
   );
@@ -124,5 +124,19 @@ export async function prepareGatewayRunShutdown(
     interrupted.released,
     ...terminalPersistence,
   ]).then((results) => throwIfSettledRejected(results, "Session shutdown persistence failed"));
-  return { failure, released };
+  return {
+    failure,
+    released,
+    inspectPending: () => {
+      const pending = interrupted.inspectPending();
+      return {
+        effects: pending.effects,
+        phase: pending.phase ?? "none",
+        sourcePhase: pending.sourcePhase ?? "none",
+        operationPhase: pending.operationPhase ?? "none",
+        interrupted: pending.interrupted ?? null,
+        settling: pending.settling ?? null,
+      };
+    },
+  };
 }

@@ -181,6 +181,20 @@ suite.define(() => {
         const sidebar = page.locator("openclaw-app-sidebar");
         const selected = sidebar.locator(`[data-session-key="${key}"]`);
         await roster.getByText("Initial rate proof", { exact: true }).first().waitFor();
+        await chooseSidebarOwner(page, "owner:" + viewerId);
+        await expect
+          .poll(() =>
+            [
+              lists.find(
+                ({ params }) => params.source === "sidebar" && params.ownerId === viewerId,
+              ),
+              lists.find(
+                ({ params }) =>
+                  params.source === "sidebar" && params.spawnedBy === "agent:main:main",
+              ),
+            ].every((request) => request !== undefined && responses.has(request.id)),
+          )
+          .toBe(true);
         await selected.waitFor();
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
         expect(

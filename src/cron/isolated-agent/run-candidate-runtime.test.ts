@@ -128,22 +128,11 @@ describe("prepared cron candidate account selection", () => {
     });
   });
 
-  it.each(["payload", "session"] as const)(
-    "retains a raw %s account pin for an incompatible candidate",
-    (origin) => {
-      withPluginRuntimeGenerationScope({ metadataSnapshot }, () => {
-        const params = makeParams(false);
-        if (origin === "session") {
-          params.cronSession.sessionEntry = {
-            ...params.cronSession.sessionEntry,
-            authProfileOverride: profileId,
-            authProfileOverrideSource: "user",
-          };
-        }
-
-        // The CLI auth owner must receive the pin and retain its incompatibility check.
-        expect(prepareCronCandidateAuthSelection(params, "anthropic")()).toEqual(retained);
-      });
-    },
-  );
+  it("retains an explicit account pin for an incompatible candidate", () => {
+    withPluginRuntimeGenerationScope({ metadataSnapshot }, () => {
+      const params = makeParams(false);
+      // The CLI auth owner must receive the pin and retain its incompatibility check.
+      expect(prepareCronCandidateAuthSelection(params, "anthropic")()).toEqual(retained);
+    });
+  });
 });

@@ -29,6 +29,7 @@ import {
   markdownInlineChildren,
   replaceMarkdownTextMatches,
 } from "./markdown-text-replacements.ts";
+import { installMarkdownWindowsPaths } from "./markdown-windows-paths.ts";
 
 // formatAudioTranscriptForAgent stores this model-facing label in conversation history.
 const AUDIO_TRANSCRIPT_PREFIX = '[Audio transcript (machine-generated, untrusted)]: "';
@@ -174,6 +175,7 @@ export function createMarkdownParser(): MarkdownItParser {
   installAssistantTranscriptRoleMarkdown(markdownParser);
   installMarkdownDetails(markdownParser);
   installMarkdownTables(markdownParser);
+  installMarkdownWindowsPaths(markdownParser);
 
   // Bare filenames such as README.md are not web destinations.
   markdownParser.linkify.set({ fuzzyLink: false });

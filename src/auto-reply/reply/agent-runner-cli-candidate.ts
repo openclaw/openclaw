@@ -20,7 +20,8 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
-import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
+import { resolveCyberAccessProgramForProvider } from "../../agents/model-catalog-access-programs.js";
+import { findModelByNativeAlias, findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { readConfiguredModelAuthProfileProvider } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -67,10 +68,11 @@ export async function runCliFallbackCandidate(
     onCompactionAccounting: (fact: CompactionAccountingFact) => void;
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
-  if (
-    params.candidateRun.cyberAccessProgram !== undefined &&
-    params.candidateRun.cyberAccessProgram !== "standard"
-  ) {
+  const accessProgram = resolveCyberAccessProgramForProvider(
+    params.candidateRun.cyberAccessProgram,
+    params.provider,
+  ).program;
+  if (accessProgram !== undefined && accessProgram !== "standard") {
     throw new Error(
       "Daybreak access is unsupported by this CLI runtime. Select Standard or use the OpenClaw or native Codex runtime.",
     );
@@ -98,11 +100,14 @@ export async function runCliFallbackCandidate(
     );
   };
   const expectedLifecycleRevision = turn.getActiveSessionEntry()?.lifecycleRevision;
-  const selectedModelEntry = findModelInCatalog(
+  const nativeAliasEntry = findModelByNativeAlias(
     params.candidateRun.thinkingCatalog ?? [],
-    params.provider,
+    params.cliExecutionProvider,
     params.model,
   );
+  const selectedModelEntry =
+    findModelInCatalog(params.candidateRun.thinkingCatalog ?? [], params.provider, params.model) ??
+    nativeAliasEntry;
   const modelHasVision = await resolveRunModelHasVision({
     run: params.candidateRun,
     provider: params.provider,
@@ -477,6 +482,7 @@ export async function runCliFallbackCandidate(
             requesterModel: { provider: params.provider, model: params.model },
             modelHasVision,
             modelContextWindow: selectedModelEntry?.contextWindow,
+            ...(nativeAliasEntry ? { nativeModelId: nativeAliasEntry.id } : {}),
             modelContextTokens: selectedModelEntry?.contextTokens,
             contextWindow: sessionEntry?.contextWindow,
             provider: params.cliExecutionProvider,

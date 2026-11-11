@@ -41,7 +41,7 @@ export function captureQueuedChatInputRunIds(
         runId.length > PENDING_INPUT_CORRELATION_MAX_CHARS ||
         !matchesScope(source) ||
         !isRpcSourceQueued(source) ||
-        source.input.custody.enqueued !== true ||
+        source.input.phase !== "waiting" ||
         source.input.injection !== undefined
       ) {
         return [];

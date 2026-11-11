@@ -36,7 +36,7 @@
           "env": { "STATUSPAGE_TOKEN": "${STATUSPAGE_TOKEN}" },
         },
     },
-  "cronJobs":
+  "automations":
     [
       {
         "id": "heartbeat-summary",

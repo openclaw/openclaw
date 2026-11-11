@@ -5,7 +5,6 @@ import type { SandboxContext } from "../agents/sandbox/types.js";
 import { listSubagentRunsForRequester } from "../agents/subagents/registry/subagent-registry-read.js";
 import { captureWorkspaceStateFilesystemGuard } from "../agents/workspace-state-guard.js";
 import { resolveCanonicalWorkspacePath } from "../agents/workspace-state-identity.js";
-import { requireGit } from "../agents/worktrees/git.js";
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { isCompetingSessionControllerWorkActive } from "../sessions/session-controller.context.js";
@@ -17,7 +16,6 @@ import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionFileWorkspace } from "./session-file-workspace.js";
 import { commitPreparedSessionWorkspace } from "./session-lifecycle-preparation.js";
-import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 
 /** The yielded caller owns admission; siblings keep their original shared source. */
@@ -25,23 +23,16 @@ export async function adoptUnboundPullRequestWorkspace(params: {
   context: GatewayRequestContext;
   target: { agentId: string; sessionKey: string; storePath: string };
   entry: InternalSessionEntry;
-  sandbox?: SandboxContext;
-  localSource?: string;
+  sandbox: SandboxContext;
   assertCurrent: () => void;
   verifyBeforeBinding?: () => Promise<void>;
   signal?: AbortSignal;
 }) {
   const { context, target, entry, sandbox } = params;
-  if (sandbox) {
-    assertLocalSandboxWorkspaceBackend(sandbox.backendId);
-  } else if (!params.localSource) {
-    throw new Error("Workspace preparation requires an admitted source.");
-  }
+  assertLocalSandboxWorkspaceBackend(sandbox.backendId);
   const cfg = context.getRuntimeConfig();
-  const workspaceDir =
-    (!sandbox && resolveSessionWorkspaceRoots(cfg, target.agentId, entry).root) ||
-    resolveAgentWorkspaceDir(cfg, target.agentId);
-  const originalRoot = sandbox?.workspaceDir ?? workspaceDir;
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, target.agentId);
+  const originalRoot = sandbox.workspaceDir;
   const prior = entry.priorWorkspace;
   const recovering =
     prior?.worktreeId === entry.worktree?.id &&
@@ -69,47 +60,60 @@ export async function adoptUnboundPullRequestWorkspace(params: {
     params.assertCurrent();
     assertWorkspaceCurrent();
     // The handoff holds queued follow-ups; only competing execution blocks adoption.
-    const busy =
-      isCompetingSessionControllerWorkActive(target.storePath, identities, target.agentId) ||
-      isCompetingSessionControllerWorkActive(
-        `agent:${target.agentId}`,
-        identities,
-        target.agentId,
-      ) ||
-      listExecSessionsForCancellation().some(
-        (process) =>
-          process.agentId === target.agentId &&
-          (process.sessionKey === target.sessionKey || process.scopeKey === target.sessionKey) &&
-          (!process.exited ||
-            process.finalizing ||
-            process.cleanupUncertain ||
-            process.finalizationFailed ||
-            (process.backgrounded && !process.terminalPollObserved && !process.requestCancelled)),
-      ) ||
+    // An exited, finalized process cannot compete, and its output stays readable
+    // through process log, so an unread result (including a requested stop) is not busy.
+    const process = listExecSessionsForCancellation().find(
+      (candidate) =>
+        candidate.agentId === target.agentId &&
+        (candidate.sessionKey === target.sessionKey || candidate.scopeKey === target.sessionKey) &&
+        (!candidate.exited ||
+          candidate.finalizing ||
+          candidate.cleanupUncertain ||
+          candidate.finalizationFailed),
+    );
+    const describeProcess = (exec: NonNullable<typeof process>) =>
+      !exec.exited
+        ? `background exec ${exec.id} is still running; poll or kill it`
+        : exec.finalizing
+          ? `background exec ${exec.id} is still cleaning up; poll it until it settles`
+          : `background exec ${exec.id} could not confirm its cleanup; inspect it with process log`;
+    const child = () =>
       listSubagentRunsForRequester(target.sessionKey, {
         requesterSessionId: entry.sessionId,
         requesterLifecycleRevision: entry.lifecycleRevision,
         requesterAgentId: target.agentId,
         requesterStorePath: target.storePath,
-      }).some(
-        (child) =>
-          child.execution.endedAt === undefined ||
-          child.killReconciliation ||
-          child.requesterSettleWake ||
-          child.delivery?.status === "pending" ||
-          child.delivery?.status === "in_progress",
-      ) ||
-      Boolean(
-        context.terminalSessions?.listAgent({
-          kind: "agent",
-          agentId: target.agentId,
-          agentSessionKey: target.sessionKey,
-          agentSessionId: entry.sessionId,
-        }).length,
+      }).find(
+        (run) =>
+          run.execution.endedAt === undefined ||
+          run.killReconciliation ||
+          run.requesterSettleWake ||
+          run.delivery?.status === "pending" ||
+          run.delivery?.status === "in_progress",
       );
-    if (busy) {
+    const blockingChild = process ? undefined : child();
+    const blocker = process
+      ? describeProcess(process)
+      : blockingChild
+        ? `child ${blockingChild.childSessionKey} has not finished or delivered its result`
+        : context.terminalSessions?.listAgent({
+              kind: "agent",
+              agentId: target.agentId,
+              agentSessionKey: target.sessionKey,
+              agentSessionId: entry.sessionId,
+            }).length
+          ? "a terminal is still open for this conversation"
+          : isCompetingSessionControllerWorkActive(target.storePath, identities, target.agentId) ||
+              isCompetingSessionControllerWorkActive(
+                `agent:${target.agentId}`,
+                identities,
+                target.agentId,
+              )
+            ? "another run of this conversation is still active"
+            : undefined;
+    if (blocker) {
       throw new Error(
-        "This conversation still has background work, a child or a terminal. Finish or observe that work, then retry workspace preparation; nothing was stopped or moved.",
+        `This conversation still has background work, a child or a terminal: ${blocker}. Finish that work, then retry workspace preparation; nothing was stopped or moved.`,
       );
     }
   };
@@ -155,19 +159,10 @@ export async function adoptUnboundPullRequestWorkspace(params: {
           "The conversation's message boundary is unavailable; retry PR preparation.",
         );
       }
-      const source = params.localSource;
-      const gitOptions = { signal: params.signal, beforeRun: assertIdle };
-      if (source && (await requireGit(source, ["status", "--porcelain"], gitOptions))) {
-        throw new Error("Commit the task changes before publishing this checkout.");
-      }
-      const checkoutCommit = source
-        ? await requireGit(source, ["rev-parse", "HEAD"], gitOptions)
-        : undefined;
       const prepared = await prepareSessionWorktree({
         cfg,
         target: { ...target, key: target.sessionKey, entry },
-        workspace: source ?? { kind: "empty" },
-        checkoutCommit,
+        workspace: { kind: "empty" },
         runSetupScript: false,
         signal: params.signal,
         commitGuard: assertIdle,

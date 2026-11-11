@@ -1,6 +1,6 @@
 # Private Template draft format
 
-Write only the request-specific JSON draft at `.openclaw/template-drafts/<draftId>.json`, using the `draftId` attached to this skill invocation's working context. Never infer a target from creation time or a shared pointer. Keep these fields:
+Write only the request-specific JSON draft at `.openclaw/template-drafts/<draftId>.json`, using the `draftId` returned by `templates draft` or attached to this skill invocation's working context. Never infer a target from creation time or a shared pointer. Keep these fields:
 
 ```json
 {

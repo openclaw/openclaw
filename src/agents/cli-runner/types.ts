@@ -15,6 +15,7 @@ import type {
   CliBackendExecutionMode,
   CliBackendPromptContext,
 } from "../../plugins/cli-backend.types.js";
+import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
 import type { PluginInstanceConsumer } from "../../plugins/plugin-instance.types.js";
 import type { SpawnSecretInput } from "../../process/supervisor/types.js";
 import type { AdmittedRunContext } from "../admitted-run-context.js";
@@ -25,6 +26,7 @@ import type { AgentRunExecutionContext } from "../command/execution-context.type
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type { RunEmbeddedAgentParams } from "../embedded-agent-runner/run/params.js";
+import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { AgentExecutionAuthBinding } from "../execution-auth-binding.js";
 import type { FailoverReason } from "../failover/signal.js";
@@ -84,6 +86,7 @@ export type RunCliAgentParams = Pick<
   runtimeFactsInTurn?: true;
   /** Undecorated current-turn prompt used to merge inline and offloaded images. */
   imagePrompt?: string;
+  mediaImageLayout?: MediaImageLayout;
   /**
    * Execution mode for the generic CLI runner. Side questions are one-shot
    * background answers and must not reuse or mutate normal agent sessions.
@@ -110,6 +113,8 @@ export type RunCliAgentParams = Pick<
   requesterModel?: ProviderModelRef;
   /** Native context window resolved by the run owner from its prepared model catalog. */
   modelContextWindow?: number;
+  /** Catalog model a CLI-native alias selects, taken from the CLI's own model menu. */
+  nativeModelId?: string;
   /** Effective context cap resolved by the run owner from its prepared model catalog. */
   modelContextTokens?: number;
   provider: string;
@@ -236,6 +241,8 @@ export type PreparedCliRunContext = {
   cwd?: string;
   backendResolved: ResolvedCliBackend;
   hostOwnedTools?: readonly string[];
+  /** Host-minted memory audience for this turn's hooks; its leases release with run cleanup. */
+  memoryAudience?: MemoryAudience;
   preparedBackend: CliPreparedBackend;
   /** Enforced timeout of this run's managed Claude MCP server, when present. */
   managedMcpToolTimeoutMs?: number;

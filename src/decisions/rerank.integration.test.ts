@@ -3,7 +3,6 @@ import {
   resetDecisionTestRuntime,
   decisionOptions,
 } from "../agents/decision-inference.test-support.js";
-import { refreshPreparedModelRuntimeCatalog } from "../agents/prepared-model-runtime.js";
 import { listDecisionModels } from "../gateway/server-methods/models-list-capabilities.js";
 import { withRerank } from "./rerank.test-support.js";
 import { evaluateDecisionV2InRegistry } from "./runtime.js";
@@ -52,8 +51,8 @@ it.each([
           },
           provenance: { providerId: "rerank" },
         });
-        // The live catalog the Decision picker reads lists the configured row.
-        const catalog = await refreshPreparedModelRuntimeCatalog(run.snapshot);
+        // Await publication; foreground reads may return while discovery is still pending.
+        const catalog = await run.snapshot.loadFullModelCatalog!({ refresh: true, wait: true });
         expect(
           listDecisionModels({
             config,

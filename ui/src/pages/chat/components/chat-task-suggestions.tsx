@@ -5,6 +5,7 @@ import type {
   TaskSuggestionsAcceptParams,
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
 import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
@@ -272,12 +273,12 @@ function TaskSuggestionCard(props: {
         </details>
         <Show when={failure()}>
           {(value) => (
-            <div class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               <span>
                 {repository() ? undefined : t("chat.taskSuggestions.startUnconfirmed")}{" "}
                 {value().error}
               </span>
-            </div>
+            </InlineAlert>
           )}
         </Show>
         <Show when={repository()?.open}>

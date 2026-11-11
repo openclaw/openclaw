@@ -1,0 +1,3 @@
+# Warm reload fixture installs history before reconnect and verifies bounded
+# automatic refill without removing manual pagination or transcript assertions.
+7

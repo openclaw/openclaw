@@ -1,6 +1,7 @@
 import { Errored, For, Loading, Show } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
@@ -11,8 +12,8 @@ import { PluginInstallAction } from "../plugins/install-action.tsx";
 import { renderPluginCapabilitySection, renderPublisherIdentity } from "../plugins/overview.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import type { TemplateAddReviewPlan } from "./templates-catalog-client.ts";
-import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import "../../styles/templates-trust-warning.css";
+import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplateWorkspaceFiles } from "./templates-workspace-files.tsx";
 
 registerEnglishCatalog(registerPluginConsentEnglish);
@@ -68,7 +69,7 @@ function renderTemplateTrustWarning(warning: string) {
         ? `${t("templatesTrustWarning.title")}: ${audit.outcome}`
         : "";
   return (
-    <div class="callout warn templates-trust-warning" role="alert">
+    <InlineAlert tone="warning" class="templates-trust-warning" role="alert">
       {audit ? (
         <>
           <strong class="templates-trust-warning__title">{title}</strong>
@@ -82,7 +83,7 @@ function renderTemplateTrustWarning(warning: string) {
       ) : (
         <span class="templates-trust-warning__plain">{warning}</span>
       )}
-    </div>
+    </InlineAlert>
   );
 }
 
@@ -277,8 +278,7 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
             Boolean(detail()) &&
             !view().applying &&
             !view().consentWarning &&
-            !view().reviewPlan &&
-            !view().addedAgentId;
+            !view().reviewPlan;
           return (
             <SettingsPage wide carapace>
               <PluginDetailShell
@@ -314,7 +314,7 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                       {() => (
                         <Errored
                           fallback={(error) => (
-                            <div class="callout danger" role="alert">
+                            <InlineAlert tone="danger" role="alert">
                               {formatUiError(error())}
                               <button
                                 type="button"
@@ -323,7 +323,7 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                               >
                                 {t("templatesCatalog.retry")}
                               </button>
-                            </div>
+                            </InlineAlert>
                           )}
                         >
                           <Loading
@@ -371,18 +371,12 @@ export function TemplateAddFeedback(props: { view: TemplatesCatalogViewProps }) 
   return (
     <>
       <Show when={props.view.addError}>
-        <div class="callout danger" role="alert">
-          {props.view.addError}
-          <Show when={props.view.addedAgentId}>
-            <button
-              type="button"
-              class="btn btn--sm"
-              onClick={() => void props.view.onRetryOpenChat()}
-            >
-              {t("templatesCatalog.openChat")}
-            </button>
-          </Show>
-        </div>
+        <InlineAlert tone="danger" role="alert">
+          <span>{props.view.addError}</span>{" "}
+          <button type="button" class="btn btn--sm" onClick={() => props.view.onRetryDetail()}>
+            {t("common.retry")}
+          </button>
+        </InlineAlert>
       </Show>
       <Show when={!props.view.consentWarning}>
         <ReviewWarning view={props.view} />

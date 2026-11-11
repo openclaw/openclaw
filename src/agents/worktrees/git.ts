@@ -31,6 +31,7 @@ export { findGitCheckoutRoot, insideGitCheckout } from "../workspace-git.js";
 // Materializing checkout objects gets extra time without extending other Git commands or setup.
 export const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
 const REPAIRABLE_FETCH_FLAGS = new Set([
+  "--quiet",
   "--no-auto-maintenance",
   "--refetch",
   "--no-tags",
@@ -84,14 +85,10 @@ export function gitEnvironment(
         CYGWIN: withNoGlob(resolveEnvironmentValue(effectiveWindowsEnv, "CYGWIN", platform)),
       }
     : {};
-  return {
-    ...baseEnv,
-    ...windowsNoGlob,
-    ...appendGitConfig(gitMaintenanceEnvironment(), [
-      ["core.hooksPath", os.devNull],
-      ["core.fsmonitor", "false"],
-    ]),
-  };
+  return appendGitConfig(gitMaintenanceEnvironment({ ...baseEnv, ...windowsNoGlob }), [
+    ["core.hooksPath", os.devNull],
+    ["core.fsmonitor", "false"],
+  ]);
 }
 
 export async function runGit(
@@ -167,7 +164,7 @@ async function runOwnedGitCommand<
       // Unknown option values (such as --server-option origin) cannot select a remote.
       const [remote, refspec, ...extra] = args
         .slice(1)
-        .filter((arg) => !REPAIRABLE_FETCH_FLAGS.has(arg));
+        .filter((arg) => !REPAIRABLE_FETCH_FLAGS.has(arg) && !arg.startsWith("--negotiation-tip="));
       if (
         remote !== "origin" ||
         extra.length > 0 ||

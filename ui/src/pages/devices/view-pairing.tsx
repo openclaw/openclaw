@@ -3,7 +3,10 @@ import { action, createOptimistic, For, Show, until } from "solid-js";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import "../../components/modal-dialog.tsx";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { Radio } from "../../components/solid/radio.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import type {
   DevicePairSetupAccess,
@@ -165,7 +168,7 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
               {/* Help is wanted at any step, so it sits beside close instead of under the title. */}
               <openclaw-tooltip prop:content={t("devices.pairing.help")}>
                 <a
-                  class="oc-dialog__icon-button device-pair-setup__help"
+                  class="oc-icon-button oc-icon-button--28 oc-dialog__icon-button device-pair-setup__help"
                   href={isNodeSetup() ? NODE_PAIRING_DOCS_URL : MOBILE_PAIRING_DOCS_URL}
                   target={EXTERNAL_LINK_TARGET}
                   rel={buildExternalLinkRel()}
@@ -174,14 +177,14 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                   <Icon name="circleQuestionMark" />
                 </a>
               </openclaw-tooltip>
-              <button
+              <IconButton
+                size={28}
                 class="oc-dialog__close device-pair-setup__close"
-                type="button"
-                aria-label={t("common.dismiss")}
+                icon="x"
+                label={t("common.dismiss")}
+                tooltip={false}
                 onClick={() => props.onClose()}
-              >
-                <Icon name="x" />
-              </button>
+              />
             </div>
             {/* A finished state says its result once, in the body. */}
             <Show when={!outcome()}>
@@ -196,18 +199,16 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                 <legend>{t("devices.pairing.accessTitle")}</legend>
                 <For each={PAIRING_ACCESS_OPTIONS}>
                   {(option) => (
-                    <label>
-                      <input
-                        type="radio"
-                        name="device-pair-access"
-                        checked={props.lifecycle.access === option[0]}
-                        onChange={() => props.onAccessChange(option[0])}
-                      />
+                    <Radio
+                      name="device-pair-access"
+                      checked={props.lifecycle.access === option[0]}
+                      onChange={() => props.onAccessChange(option[0])}
+                    >
                       <span>
                         <strong>{t(option[1])}</strong>
                         <small>{t(option[2])}</small>
                       </span>
-                    </label>
+                    </Radio>
                   )}
                 </For>
               </fieldset>
@@ -232,7 +233,7 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
             </Show>
             <Show when={error()}>
               {(failure) => (
-                <div class="callout danger device-pair-setup__error" role="alert">
+                <InlineAlert tone="danger" class="device-pair-setup__error" role="alert">
                   <strong>
                     {t(
                       failure().source === "status"
@@ -241,7 +242,7 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                     )}
                   </strong>
                   <span>{failure().message}</span>
-                </div>
+                </InlineAlert>
               )}
             </Show>
             <Show when={setup()}>
@@ -321,10 +322,14 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                       </For>
                     </div>
                     <Show when={current().accessDowngraded}>
-                      <div class="callout warn device-pair-setup__access-warning" role="status">
+                      <InlineAlert
+                        tone="warning"
+                        class="device-pair-setup__access-warning"
+                        role="status"
+                      >
                         <strong>{t("devices.pairing.transportLimitedTitle")}</strong>
                         <span>{t("devices.pairing.transportLimitedHint")}</span>
-                      </div>
+                      </InlineAlert>
                     </Show>
                     {/* Stays mounted while empty so the first request updates an existing live region. */}
                     <div

@@ -484,6 +484,8 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}cron`);
       await jobTitle(page, selectedJob.name).waitFor({ timeout: 10_000 });
 
+      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
+      await expectRunCount(page, "Overview history", 1);
       const previousHistoryRequestCount = (await gateway.getRequests("cron.runs")).length;
       await gateway.deferNext("cron.runs");
       await gateway.emitGatewayEvent("cron", {});
@@ -491,6 +493,7 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("cron.runs")).length)
         .toBeGreaterThan(previousHistoryRequestCount);
 
+      await page.getByRole("tab", { name: "All", exact: true }).click();
       await jobTitle(page, selectedJob.name).click();
       await page.locator('[data-test-id="cron-detail-tab-history"]').click();
       await expectRunCount(page, "Selected task history", 1);

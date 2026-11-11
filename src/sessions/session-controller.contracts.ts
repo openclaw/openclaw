@@ -551,11 +551,13 @@ export type SessionControllerInput = {
     settled: Promise<boolean>;
     settle(accepted: boolean): void;
     admitted?: boolean;
-    steerNow?: {
-      target: ReplyMessageInjectionTarget;
-      queueIdentity: string;
-      result?: ReplySteerNowResult;
-    };
+  };
+  /** The accepted steer's captured run survives withdrawal into followup custody. */
+  steerNow?: {
+    target: ReplyMessageInjectionTarget;
+    queueIdentity: string;
+    result?: ReplySteerNowResult | Promise<ReplySteerNowResult>;
+    retry?: (assertCurrent: () => void) => Promise<ReplyMessageInjectionAttempt | undefined>;
   };
   claim?: SessionControllerMailboxClaim;
   ready?: (claim: SessionControllerMailboxClaim) => void;

@@ -1,0 +1,2 @@
+# Route preload and connected navigation must defer schema until a configuration surface needs it.
+70

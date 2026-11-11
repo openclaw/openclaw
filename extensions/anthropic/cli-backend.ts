@@ -80,9 +80,11 @@ function projectClaudeNativeToolAuthority(nativeTools: readonly string[]): reado
   ];
 }
 
-// Orchestration tools whose descendants inherit the parent's tool list, so they confer
-// no capability of their own. Order is canonical: equivalent selections launch one argv.
-const CLAUDE_MANAGED_NATIVE_TOOLS = ["Agent", "Workflow"] as const;
+// Agent and Workflow descendants inherit the parent's tool list, so they confer no
+// capability of their own. WebSearch runs on Anthropic's servers and confers web_search,
+// which core keeps only while the turn's OpenClaw policy offers it. Order is canonical:
+// equivalent selections launch one argv.
+const CLAUDE_MANAGED_NATIVE_TOOLS = ["Agent", "Workflow", "WebSearch"] as const;
 
 /** Operator selection under `plugins.entries.anthropic.config.managedNativeTools`. */
 function resolveClaudeManagedNativeTools(
@@ -318,7 +320,7 @@ export function buildAnthropicCliBackend(
             : {}),
           ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
           ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
-          ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
+          ...resolveClaudeCliThinkingEnv(context.thinkingLevel),
           ...authInput?.env,
         };
         return {

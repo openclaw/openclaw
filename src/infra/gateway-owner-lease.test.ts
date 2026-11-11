@@ -230,7 +230,7 @@ describe("Gateway owner lease", () => {
           owner: "previous-generation",
           state: "dead",
         });
-        expect(copy).toHaveBeenCalledExactlyOnceWith(databasePath);
+        expect(copy).toHaveBeenCalledExactlyOnceWith(databasePath, undefined, { reuse: true });
         const prepared = copy.mock.results[0];
         if (prepared?.type !== "return") {
           throw new Error("Expected one recovered private lease snapshot");

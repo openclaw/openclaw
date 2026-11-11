@@ -10,6 +10,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WorktreeAllocationGuard } from "./allocation.js";
 import type { WorktreeGcProgress } from "./gc-progress.js";
 import {
+  collectOrphanWorktreeBranches,
+  hasUnregisteredManagedBranches,
+} from "./orphan-branches.js";
+import {
   canonicalPathKey,
   resolveManagedWorktreePathKeys,
   shouldPreserveOrphanCandidate,
@@ -103,7 +107,25 @@ export async function collectRetiredWorktreeArtifacts({
   if (entries && !hasOrphanCandidates) {
     orphanFailures.clear();
   }
-  if (hasOrphanCandidates || expired.length > 0 || pending.length > 0) {
+  const branchOwners = [...records, ...pending.map(({ record }) => record)];
+  const repositories = new Set<string>();
+  for (const repoRoot of new Set(branchOwners.map((record) => record.repoRoot))) {
+    try {
+      if (
+        await hasUnregisteredManagedBranches(
+          repoRoot,
+          branchOwners,
+          context.admission.assertCurrent,
+        )
+      ) {
+        repositories.add(repoRoot);
+      }
+    } catch (error) {
+      context.admission.assertCurrent();
+      progress.error("orphans", error, repoRoot);
+    }
+  }
+  if (hasOrphanCandidates || expired.length > 0 || pending.length > 0 || repositories.size > 0) {
     try {
       await withAllocationLease(async (guard) => {
         const slots = await readPendingWorktrees(context.environment);
@@ -139,6 +161,25 @@ export async function collectRetiredWorktreeArtifacts({
           } catch (error) {
             progress.error("orphans", error);
             log.warn(`worktree orphan cleanup deferred: ${String(error)}`);
+          }
+        }
+        for (const repoRoot of repositories) {
+          try {
+            const cleanup = await collectOrphanWorktreeBranches({ env, repoRoot, ...guard });
+            const deleted = cleanup.branches.filter(
+              (branch) => branch.outcome === "deleted",
+            ).length;
+            if (deleted > 0) {
+              log.info(`Removed ${deleted} orphaned managed branches in ${repoRoot}.`);
+            }
+            for (const branch of cleanup.branches) {
+              if (branch.outcome === "failed") {
+                progress.error("orphans", branch.reason, branch.branch);
+              }
+            }
+          } catch (error) {
+            guard.commitGuard();
+            progress.error("orphans", error, repoRoot);
           }
         }
         for (const record of expired) {

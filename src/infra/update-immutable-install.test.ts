@@ -108,11 +108,13 @@ beforeEach(async () => {
   });
   mocks.command.mockImplementation(async (argv) => ({
     code: 0,
-    stdout: argv.includes("ls-remote")
-      ? `${nextSha}\trefs/heads/main\n`
-      : argv[0] === "/usr/bin/getent"
-        ? "openclaw-fixture:x:1002:1002::/home/fixture:/bin/sh"
-        : "",
+    stdout: argv.includes("version")
+      ? "git version 2.45.0"
+      : argv.includes("ls-remote")
+        ? `${nextSha}\trefs/heads/main\n`
+        : argv[0] === "/usr/bin/getent"
+          ? "openclaw-fixture:x:1002:1002::/home/fixture:/bin/sh"
+          : "",
     stderr: "",
   }));
   mocks.build.mockImplementation(async ({ stage, sha }) => {
@@ -169,16 +171,25 @@ it.each([
   expectUncalled(mocks.record);
 });
 
-it("resolves a dry-run target without filesystem or receipt changes", async () => {
-  const before = new Set(await fs.readdir(root));
-  const result = await prepareImmutableUpdate({ root, dryRun: true });
-  expect(result.status, result.reason).toBe("dry-run");
-  expect(result).toMatchObject({ status: "dry-run", targetSha: nextSha });
-  expect(result.coverage?.target).toEqual({ sha: nextSha, preparation: "unknown" });
-  expect(new Set(await fs.readdir(root))).toEqual(before);
-  await expectUnchanged(mocks.build, mocks.record);
-  expect(mocks.command.mock.calls.filter(([argv]) => argv.includes("ls-remote"))).toHaveLength(1);
-});
+it.each([false, true])(
+  "resolves a dry-run target without changes (legacy Git: %s)",
+  async (legacy) => {
+    const execute = mocks.command.getMockImplementation()!;
+    mocks.command.mockImplementation((argv, options) =>
+      legacy && argv.includes("--no-lazy-fetch")
+        ? Promise.resolve({ code: 129, stdout: "", stderr: "unknown option: --no-lazy-fetch" })
+        : execute(argv, options),
+    );
+    const before = new Set(await fs.readdir(root));
+    const result = await prepareImmutableUpdate({ root, dryRun: true });
+    expect(result.status, result.reason).toBe("dry-run");
+    expect(result).toMatchObject({ status: "dry-run", targetSha: nextSha });
+    expect(result.coverage?.target).toEqual({ sha: nextSha, preparation: "unknown" });
+    expect(new Set(await fs.readdir(root))).toEqual(before);
+    await expectUnchanged(mocks.build, mocks.record);
+    expect(mocks.command.mock.calls.filter(([argv]) => argv.includes("ls-remote"))).toHaveLength(1);
+  },
+);
 
 it("refuses abbreviated targets before fetching or building", async () => {
   expect(await prepareImmutableUpdate({ root, sha: "abcdef", dryRun: true })).toMatchObject({

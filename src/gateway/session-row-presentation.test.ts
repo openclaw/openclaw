@@ -17,6 +17,9 @@ import {
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import { markReplyOperationExecutionStarted } from "../sessions/session-controller.state.js";
 import {
   rpcSourceTesting,
   setRpcSourceIdentityForTest,
@@ -37,6 +40,7 @@ import {
 } from "./expected-profile.js";
 import { serializeGatewayFrame } from "./serialized-json.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { captureSessionRowGeneration } from "./session-row-identity.js";
@@ -60,6 +64,55 @@ import { listProjectedSessions } from "./session-utils-list.js";
 import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("shares live run display facts across one publication and refreshes the next publication", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const keys = ["agent:main:running", "agent:main:idle"];
+    keys.forEach((key) => seedRow(key, { sessionId: key, updatedAt: 1 }));
+    using projection = await createTestProjection({ cfg: {}, modelCatalog: [] });
+    await projection.ensureMaterialized();
+    const records = keys.map((key) => projection.describe({ key, agentId: "main" })!);
+    const target = captureSessionTarget({
+      storeScope: records[0]!.storeTarget.storePath,
+      sessionKey: keys[0]!,
+      incarnation: keys[0]!,
+      agentId: "main",
+    });
+    const operation = createReplyOperation({
+      sessionKey: target.sessionKey,
+      sessionId: keys[0]!,
+      agentId: "main",
+      target,
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    markReplyOperationExecutionStarted(operation);
+    try {
+      const projectRun = vi.fn(createVisibleActiveSessionRunProjector());
+      const publication = prepareSessionRowPublication(projection, Date.now());
+      for (let audience = 0; audience < 2; audience++) {
+        const presentation = publication(undefined, projectRun).getPresentation();
+        expect(records.map((row) => presentation.active(row)?.active)).toEqual([true, false]);
+        expect(records.map((row) => presentation.present(row)?.hasActiveRun)).toEqual([
+          true,
+          false,
+        ]);
+      }
+      expect(projectRun).toHaveBeenCalledTimes(records.length);
+      operation.complete();
+      await operation.ownerSettlement;
+      const next = prepareSessionRowPublication(projection, Date.now())(
+        undefined,
+        projectRun,
+      ).getPresentation();
+      expect(next.present(records[0]!)?.hasActiveRun).toBe(false);
+      expect(projectRun).toHaveBeenCalledTimes(records.length + 1);
+    } finally {
+      operation.complete();
+      await operation.ownerSettlement;
+    }
+  });
+});
 
 it("reads background processes once per presentation and refreshes counts after exit", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
