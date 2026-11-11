@@ -175,6 +175,7 @@ The bundled catalog also includes the stable `google/gemini-3.8-flash`, with a
 | Capability             | Supported                     |
 | ---------------------- | ----------------------------- |
 | Chat completions       | Yes                           |
+| Decision models        | Yes (Gemini Decision)         |
 | Image generation       | Yes                           |
 | Music generation       | Yes                           |
 | Text-to-speech         | Yes                           |
@@ -197,6 +198,43 @@ candidate finish reason is still required for a successful result. First-frame
 quota errors participate in API-key rotation. For Gemini's first-response retry,
 usage metadata, response IDs, and empty or unspecified finish states do not count
 as generated output or disable the existing retry deadline.
+
+## Decision models
+
+The bundled `google` plugin supports the Gemini Decisions API through
+OpenClaw's [Decision model role](/concepts/decision-models). Configure
+`GEMINI_API_KEY`, `GOOGLE_API_KEY`, or a `google` API-key auth profile, then
+select `google/gemini-decision-1` in the Decision picker or set:
+
+```json5
+{
+  agents: { defaults: { decisionModel: "google/gemini-decision-1" } },
+}
+```
+
+Gemini Decision is a typed-only model. It stays out of the chat model pickers,
+and selecting it does not replace the primary chat model or enable automatic
+Decision assistance. Requests go to `POST /v1beta/decisions` on the Gemini
+Developer API; Vertex AI and other base URLs do not serve this endpoint.
+
+Boolean questions map to native `noul` questions, and their `true` and `false`
+criteria become `true_description` and `false_description`. Choice questions
+keep their labels; a `null` description marks a self-explanatory option. Score
+levels use zero-based rubric positions. Each question needs instructions,
+because the model never sees question keys. Question keys must match
+`[A-Za-z0-9_-]`, up to 64 characters. OpenClaw returns `unsupported-input` for
+any other request without calling the API.
+
+The adapter accepts text, JSON, or one inline PNG, JPEG, or WebP image up to
+4 MiB, with optional text. OpenClaw serializes JSON state as text, as Google
+recommends. It does not send audio, video, PDF, or remote URLs. Choice and Score
+questions take 2 to 255 options. Probabilities, fractional scores, confidence,
+and input token usage are preserved. The API reports zero output tokens.
+
+Gemini returns HTTP 400 for limit, key-validation, and input-safety rejections.
+OpenClaw reports these as `unsupported-input`. Decision cost stays unknown
+unless reported; chat token prices do not price this endpoint. Evaluations send
+the supplied evidence to Google and use your Gemini API billing.
 
 ## Web search
 
