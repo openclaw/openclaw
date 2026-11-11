@@ -15,6 +15,7 @@ import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import * as cleanupPolicy from "./subagent-registry-cleanup.js";
 import {
   createSubagentTestGate,
   readLifecycleRun,
@@ -447,6 +448,48 @@ export function registerRequesterSettleRetirementTests({
 }: LifecycleTestDrivers & {
   completeRun: CompleteLifecycleRun;
 }): void {
+  it("does not hold a completion for a descendant whose delivery is suspended", async () => {
+    const worker = createRunEntry({
+      runId: "suspended-gate-worker",
+      childSessionKey: "agent:main:subagent:suspended-gate-worker",
+      endedAt: Date.now(),
+      expectsCompletionMessage: true,
+      retainAttachmentsOnKeep: true,
+    });
+    // An older grandchild gave up delivering to the worker; its row is retained, never settled.
+    const grandchild = createRunEntry({
+      runId: "suspended-gate-grandchild",
+      childSessionKey: "agent:main:subagent:suspended-gate-grandchild",
+      requesterSessionKey: worker.childSessionKey,
+      requesterAgentId: "main",
+      endedAt: Date.now() - 60_000,
+      expectsCompletionMessage: true,
+      delivery: { status: "suspended", suspendedAt: Date.now() - 1_000, suspendedReason: "expiry" },
+    });
+    for (const entry of [worker, grandchild]) {
+      subagentRuns.set(entry.runId, entry);
+    }
+    const decide = vi.spyOn(cleanupPolicy, "resolveDeferredCleanupDecision");
+    const controller = createLifecycleController({
+      entry: worker,
+      runs: subagentRuns,
+      getLatestRunForChildSession: getLatestLiveSubagentRunByChildSessionKey,
+      countPendingDescendantRuns,
+      runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
+    });
+    try {
+      controller.startSubagentAnnounceCleanupFlow(worker);
+      await waitForLifecycleState(() => expect(decide).toHaveBeenCalled());
+      expect(decide.mock.calls[0]?.[0].activeDescendantRuns).toBe(0);
+    } finally {
+      controller.clearRuntimeState();
+      decide.mockRestore();
+      for (const entry of [worker, grandchild]) {
+        subagentRuns.delete(entry.runId);
+      }
+    }
+  });
+
   it.each([false, true])(
     "resumes an ancestor after requester-settle retirement (persistence fails: %s)",
     async (persistenceFails) => {
