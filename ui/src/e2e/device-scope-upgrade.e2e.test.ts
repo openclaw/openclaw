@@ -272,7 +272,6 @@ suite.define(() => {
       .poll(() => dismissPage.locator(".sidebar-issues-button").getAttribute("aria-label"))
       .toBe("0 inbox items");
     await dismissPage.close();
-
     const clearedPage = await context.newPage();
     await installMockGateway(clearedPage, {
       operatorScopes: FULL_SCOPES,
@@ -280,16 +279,17 @@ suite.define(() => {
     });
     await clearedPage.goto(`${suite.server.baseUrl}settings/appearance`);
     await waitForControlUiSettingsTakeover(clearedPage);
-    expect(await clearedPage.locator("openclaw-sidebar-attention").count()).toBe(0);
+    await expect.poll(() => gatewayPhase(clearedPage)).toBe("connected");
+    await expect
+      .poll(() => evaluateControlUiContext(clearedPage, (app) => app.scopeUpgrade.state.phase))
+      .toBe("hidden");
     await clearedPage.close();
-
     const recurrencePage = await context.newPage();
     await installMockGateway(recurrencePage, {
       operatorScopes: LIMITED_SCOPES,
       presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
     });
     await recurrencePage.goto(`${suite.server.baseUrl}activity`);
-
     const inbox = recurrencePage.locator(".sidebar-issues-button");
     await expect.poll(() => inbox.getAttribute("aria-label")).toBe("1 inbox item");
     const recurrentItem = await openLimitedAccessItem(await openInbox(recurrencePage));
@@ -307,7 +307,6 @@ suite.define(() => {
       },
     });
     await page.goto(`${suite.server.baseUrl}new`);
-
     const item = await openLimitedAccessItem(await openInbox(page));
     expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
     await item.getByRole("button", { name: "Request admin" }).click();
@@ -321,7 +320,6 @@ suite.define(() => {
       "desktop-inbox-upgrade-pending.png",
       page.locator("#sidebar-issues-panel"),
     );
-
     await closeInbox(page);
     await page.locator('[data-navigation-view][aria-pressed="true"]').click();
     const collapsedItem = await openLimitedAccessItem(await openInbox(page));
@@ -340,7 +338,9 @@ suite.define(() => {
       .getByRole("menuitem", { exact: true, name: "Settings" })
       .click();
     await waitForControlUiSettingsTakeover(page);
-    expect(await page.locator(".sidebar-issues-button").count()).toBe(0);
+    await expect
+      .poll(() => evaluateControlUiContext(page, (app) => app.scopeUpgrade.state))
+      .toEqual({ phase: "pending", requestId: "upgrade-1" });
     await captureProof(
       page,
       "settings-without-inbox-pending.png",
