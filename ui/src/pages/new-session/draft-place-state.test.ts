@@ -109,6 +109,45 @@ describe("DraftPlaceState agent selection", () => {
 
 describe("DraftPlaceState repository selection", () => {
   it.each([
+    { savedProjectId: "shared-clone", savedWorktree: undefined, expected: true },
+    { savedProjectId: "", savedWorktree: false, expected: true },
+    { savedProjectId: "another-project", savedWorktree: false, expected: true },
+    { savedProjectId: "shared-clone", savedWorktree: false, expected: false },
+    { savedProjectId: "shared-clone", savedWorktree: true, expected: true },
+  ])(
+    "preserves cloned-project checkout intent (saved=$savedWorktree, project=$savedProjectId)",
+    async ({ savedProjectId, savedWorktree, expected }) => {
+      const f = createRepositoryFixture();
+      const projectId = "shared-clone";
+      vi.spyOn(f.browser, "projects", "get").mockReturnValue([
+        { id: projectId, displayName: "Shared clone", source: "cloned" },
+        { id: "second-clone", displayName: "Second clone", source: "cloned" },
+      ]);
+      vi.spyOn(f.browser, "projectsReady", "get").mockReturnValue(true);
+      f.readPreference.mockReturnValue({ projectId: savedProjectId, worktree: savedWorktree });
+      f.request.mockResolvedValue({ current: true, worktree: true });
+      f.state.adoptAgentDefaults();
+      f.state.restorePreferenceSelections();
+      f.state.selectProjectId(projectId);
+      await vi.waitFor(() => expect(f.state.folderSubmissionBlocked()).toBe(false));
+      expect(f.state.worktree).toBe(expected);
+      expect(f.state.currentCheckoutUnavailableReason).toBeUndefined();
+      f.state.selectWorktree(false);
+      expect(createParams(f.state, "Review existing work")).toMatchObject({
+        projectId,
+        worktree: false,
+        message: "Review existing work",
+      });
+      f.state.selectProjectId("second-clone");
+      await vi.waitFor(() => expect(f.state.folderSubmissionBlocked()).toBe(false));
+      expect(createParams(f.state, "A separate task")).toMatchObject({
+        projectId: "second-clone",
+        worktree: true,
+      });
+    },
+  );
+
+  it.each([
     { source: "registered", redacted: false, current: false, savedWorktree: false },
     { source: "registered", redacted: true, current: false, savedWorktree: false },
     { source: "workspace", redacted: true, current: true, savedWorktree: true },

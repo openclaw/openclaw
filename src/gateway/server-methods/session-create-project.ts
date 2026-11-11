@@ -78,8 +78,8 @@ export async function resolveRequestedSessionProject(
   if (!project) {
     return invalidSessionRequest(`unknown project id: ${projectId}`);
   }
-  // Product-owned clones are maintenance sources, never session checkouts.
-  const worktree = project.source === "cloned" || params.worktree === true;
+  // Keep shared clones isolated by default; direct checkout is an explicit choice.
+  const worktree = params.worktree ?? project.source === "cloned";
   const root = await resolveSessionProjectRootForRecord(project, worktree);
   return root.ok ? ok({ root: root.value, worktree }) : root;
 }

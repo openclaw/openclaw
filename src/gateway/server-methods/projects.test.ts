@@ -305,7 +305,7 @@ test("registered anonymous native search does not borrow the service credential"
 });
 
 test.each(["registered", "cloned"] as const)(
-  "checkout options keep %s project placement with its owner",
+  "checkout options preserve permitted %s current checkouts",
   async (source) => {
     await withProjectState(async (state) => {
       const workspace = await initializeRepository(state.root, "workspace");
@@ -339,7 +339,7 @@ test.each(["registered", "cloned"] as const)(
           ),
         ).toEqual({
           ok: true,
-          payload: { current: source !== "cloned", worktree: true },
+          payload: { current: true, worktree: true },
           error: undefined,
         });
         expect(gitReads).not.toHaveBeenCalled();

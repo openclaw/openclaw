@@ -72,6 +72,7 @@ function initialRepositoryState(snapshot: DraftRepositorySnapshot): DraftReposit
 /** Owns synchronous checkout intent and pending discovery across draft handoffs. */
 export class DraftRepositoryStateOwner {
   private worktreeValue = false;
+  private currentCheckoutProjectId = "";
   private readonly details: { baseRef?: string; worktreeName: string } = { worktreeName: "" };
   private repositoryValue: DraftRepositoryState = { kind: "idle" };
   private readController = new AbortController();
@@ -150,7 +151,7 @@ export class DraftRepositoryStateOwner {
       !this.matchesProjectCheckout() ||
       !options ||
       typeof options === "string" ||
-      !(this.worktreeValue ? options.worktree : options.current)
+      !(this.worktree ? options.worktree : options.current)
     );
   }
 
@@ -172,11 +173,14 @@ export class DraftRepositoryStateOwner {
   }
 
   get worktree(): boolean {
-    return this.worktreeValue;
+    const project = this.read().selectedProject;
+    return project?.source === "cloned" && this.currentCheckoutProjectId !== project.id
+      ? true
+      : this.worktreeValue;
   }
 
   get preferenceWorktree(): boolean {
-    return this.worktreeValue || this.preferredWorktreeRestore;
+    return this.worktree || this.preferredWorktreeRestore;
   }
 
   get worktreeName(): string {
@@ -212,6 +216,13 @@ export class DraftRepositoryStateOwner {
   adoptPreference(preference: NewSessionPreference | null) {
     if (!this.worktreeSelectedByUser) {
       this.worktreeValue = false;
+      // A folder's saved Current choice must not opt another shared clone into direct use.
+      this.currentCheckoutProjectId =
+        preference?.worktree === false &&
+        (!preference.where || preference.where.kind === "local") &&
+        !preference.remoteProject
+          ? (preference.projectId ?? "")
+          : "";
       // Remote worktree flags describe placement isolation, not a local checkout choice.
       this.preferredWorktreeRestore =
         preference?.worktree === true && (!preference.where || preference.where.kind === "local");
@@ -242,6 +253,7 @@ export class DraftRepositoryStateOwner {
     this.invalidate();
     this.worktreeValue = false;
     this.clearDetails();
+    this.currentCheckoutProjectId = "";
     this.preferredWorktreeRestore = false;
     this.worktreeSelectedByUser = false;
   }
@@ -270,6 +282,7 @@ export class DraftRepositoryStateOwner {
     this.preferredWorktreeRestore = false;
     this.worktreeSelectedByUser = true;
     this.worktreeValue = value;
+    this.currentCheckoutProjectId = !value ? (this.read().selectedProject?.id ?? "") : "";
     if (clearName) {
       this.clearDetails(true);
     }
@@ -283,7 +296,7 @@ export class DraftRepositoryStateOwner {
 
   select(value: boolean): boolean {
     if (
-      this.worktreeValue === value ||
+      this.worktree === value ||
       this.read().remotePlacement ||
       (value ? !this.available() : Boolean(this.currentCheckoutUnavailable))
     ) {
@@ -517,7 +530,7 @@ export class DraftRepositoryStateOwner {
     ) {
       return;
     }
-    const selectedAvailable = this.worktreeValue ? options.worktree : options.current;
+    const selectedAvailable = this.worktree ? options.worktree : options.current;
     if (!selectedAvailable && (options.current || options.worktree)) {
       this.worktreeValue = options.worktree;
       this.preferredWorktreeRestore = false;

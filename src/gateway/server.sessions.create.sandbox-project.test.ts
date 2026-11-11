@@ -10,6 +10,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { runGitReadOperation } from "../infra/git-read-cache.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
+import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -69,19 +70,31 @@ function stubRepositoryVisibility(visibility: Record<string, string>) {
   return fetchImpl;
 }
 
-test.each(["all", "off"] as const)(
-  "guest project checkout eligibility preserves creation admission (agent sandbox=%s)",
-  async (mode) => {
+test.each([
+  { mode: "all", source: "registered" },
+  { mode: "off", source: "registered" },
+  { mode: "all", source: "cloned" },
+  { mode: "off", source: "cloned" },
+] as const)(
+  "guest $source project checkout eligibility preserves creation admission (agent sandbox=$mode)",
+  async ({ mode, source }) => {
     const root = tempDirs.make("openclaw-session-sandbox-project-");
     const workspace = await initializeRepository(root, "workspace");
     const outside = await initializeRepository(root, "outside");
-    const repository = `openclaw/sandbox-project-${mode}`;
+    const repository = `openclaw/sandbox-project-${source}-${mode}`;
     await publishOrigin(outside, repository);
     const visibility = { [repository]: "public" };
     stubRepositoryVisibility(visibility);
     testState.agentConfig = { workspace, sandbox: { mode } };
     const { storePath } = await createSessionStoreDir();
-    const project = await registerProjectRegistry({ path: outside });
+    const project =
+      source === "cloned"
+        ? await registerClonedProjectRegistry({
+            path: outside,
+            name: "Shared clone",
+            originUrl: "https://github.com/" + repository + ".git",
+          })
+        : await registerProjectRegistry({ path: outside });
 
     const profile = ensureProfileForEmail("project-guest@example.test");
     const client = identifiedClient(profile.id);
@@ -172,7 +185,7 @@ test.each(["all", "off"] as const)(
     ]) {
       const [ok, result, error] = (await request("sessions.create", {
         projectId,
-        ...(worktree ? { worktree: true } : {}),
+        worktree,
       }))!;
       if (worktree && projectId === project.id) {
         expect(ok, JSON.stringify(error)).toBe(true);
