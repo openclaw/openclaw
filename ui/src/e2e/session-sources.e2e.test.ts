@@ -125,7 +125,7 @@ suite.define(() => {
       await sidebar.getByRole("link", { name: /Session sources/ }).click();
       await gateway.waitForRequest("plugins.list");
       const section = page.locator("#settings-session-sources");
-      await expectText(section, "Loading");
+      await section.getByRole("status", { name: "Loading…", exact: true }).waitFor();
       expect(await section.getByRole("switch").count()).toBe(0);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
       await gateway.resolveDeferred("plugins.list");
@@ -206,9 +206,15 @@ suite.define(() => {
             ? { methodResponses: { "config.schema": { schema: objectSchema({}), uiHints: {} } } }
             : { operatorScopes: ["operator.read"] },
         );
-        await expectCount(section.getByRole("switch"), 2);
+        await expectCount(section.locator(".settings-row"), 2);
+        await expectCount(section.getByRole("switch"), missingSchema ? 1 : 2);
         if (missingSchema) {
-          await expectText(section, "Couldn’t load session sources");
+          const known = section.locator(".settings-row", { hasText: "Show Codex sessions" });
+          const unknown = section.locator(".settings-row", { hasText: "Show Pi sessions" });
+          expect(await known.getByRole("switch").isChecked()).toBe(false);
+          await expectText(unknown, "Couldn’t load session sources");
+          await expectCount(unknown.locator('[aria-busy="true"]'), 0);
+          await expectCount(unknown.getByRole("switch"), 0);
         }
         for (const toggle of await section.getByRole("switch").all()) {
           expect(await toggle.isDisabled()).toBe(true);

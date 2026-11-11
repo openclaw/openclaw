@@ -277,6 +277,7 @@ export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) 
   const recorder = turn.userTurnTranscriptRecorder;
   const receipt = recorder?.getAdmissionReceipt();
   const admission = receipt ? { ...receipt } : undefined;
+  // Unpersisted input is admitted after the policy gate; persisted input must already be readable.
   if (recorder?.hasPersisted() && !admission) {
     throw new Error("Cloud worker turn has no readable canonical user admission");
   }
@@ -289,9 +290,9 @@ export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) 
     provider: modelRef.provider,
     model: modelRef.model,
   });
-  // The recorder owns later persistence; its preparation needs only the selected branch.
+  // Recorder-owned input writes through the recorder after policy approval, not this view.
   let manager =
-    userMessageAlreadyPersisted || recorder
+    recorder || userMessageAlreadyPersisted
       ? await SessionManager.openModelContextAsync(transcriptTarget, {
           admission,
           signal: turn.abortSignal,

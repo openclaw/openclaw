@@ -313,6 +313,7 @@ export function bootstrapApplication(
   });
   const sidebarAttention = createSidebarAttentionStore({
     gateway,
+    config,
     agentSelection,
     agents,
     overlays,

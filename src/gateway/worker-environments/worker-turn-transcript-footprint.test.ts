@@ -154,7 +154,6 @@ describe("Gateway worker-turn selected transcript preparation", () => {
           inactiveLoadedMessages: 0,
         });
         if (recorder) {
-          // Preparing history must not approve input before the worker policy gate.
           expect(recorder.hasPersisted()).toBe(false);
           expect(recorder.getAdmissionReceipt()).toBeUndefined();
         }

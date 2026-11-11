@@ -346,8 +346,18 @@ or otherwise partial output schemas omit the hint and remain available through
 ### Describe
 
 `tool_describe` accepts the `id` of a search result and loads its full metadata,
-including the exact input schema and the trusted full `outputSchema` when the
-tool declares one.
+including the exact input schema and complete MCP server instructions.
+
+By default the model-facing result omits the tool's `outputSchema`. Output
+schemas can run to tens of thousands of characters, and the model learns a
+result's shape by reading the result. Choosing arguments needs only the
+description and input schema. The optional
+`includeRarelyNeededOutputSchema: true` input adds the trusted full
+`outputSchema` for the rare case where the model must know the result shape
+before calling, for example to plan code over the result. The parameter's own
+description carries that guidance; search results and the directory prompt do
+not mention it. The control result's structured `details` keep the full
+description, including `outputSchema`, for runtime consumers.
 
 ```json
 { "id": "mcp:calendar:calendar__create_event" }

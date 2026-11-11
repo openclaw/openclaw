@@ -538,6 +538,25 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
               : undefined,
         });
       }
+      // Native login has no saved profile. Project the already-prepared display facts;
+      // a status read must never probe a CLI or manufacture a removable account.
+      for (const [provider, mode] of Object.entries(preparedSnapshot.authModes)) {
+        if (typeof mode !== "object" || !mode.display) {
+          continue;
+        }
+        const existing = providers.find((entry) => entry.provider === provider);
+        if (existing) {
+          existing.nativeAuth = mode.display;
+        } else {
+          providers.push({
+            provider,
+            displayName: providerDisplayName(provider),
+            status: "ok",
+            profiles: [],
+            nativeAuth: mode.display,
+          });
+        }
+      }
       const result: ModelAuthStatusResult = {
         ts: now,
         providers,

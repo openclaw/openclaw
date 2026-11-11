@@ -996,10 +996,13 @@ into model rows.
 
 Doctor reports model rows under `models.providers.*.models` that still pin
 `maxTokens` to 4096 or 8192 as information (`core/doctor/legacy-output-cap`), grouped
-per provider, when removing the value would raise the cap. It skips providers with a
+per provider, when the context-sized default is higher than the saved value. This
+is not a prediction that removing the value will increase the cap: a provider
+catalog limit may keep it unchanged or lower it. Doctor skips providers with a
 provider-level `maxTokens` and Mistral, whose 8192 cap is intentional. A saved cap may
-be deliberate, so Doctor proposes no repair and never rewrites it: remove `maxTokens`
-from those rows to use the catalog limit or the new default.
+be deliberate, so Doctor proposes no repair and never rewrites it. Remove
+`maxTokens` only if you want the catalog limit or default instead; keep the saved
+value if your server needs it.
 
 ## Missing plugins during migration
 
