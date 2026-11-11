@@ -6,11 +6,15 @@ import type {
   CronScratchSetResult,
 } from "../../../packages/gateway-protocol/src/schema/cron.types.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
-import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { CronCliError } from "./cron-cli-error.js";
 import { createCronOutputCommand } from "./output-mode.js";
-import { handleCronCliError, printCronJson, requireCronJobId } from "./shared.js";
+import {
+  callCronReadFromCli,
+  handleCronCliError,
+  printCronJson,
+  requireCronJobId,
+} from "./shared.js";
 import { readCronScratchContent } from "./trigger-options.js";
 
 export function registerCronScratchCommand(cron: Command) {
@@ -23,15 +27,13 @@ export function registerCronScratchCommand(cron: Command) {
       .option("--unset", "Remove the scratch row", false)
       .option("--expected-revision <n>", "Require the current scratch revision")
       .action(async (idArg, opts) => {
-        const mutations = [
-          opts.set !== undefined,
-          opts.file !== undefined,
-          opts.unset === true,
-        ].filter(Boolean).length;
-        const signal = mutations === 0 ? getAsyncWorkSignal() : undefined;
         try {
-          signal?.throwIfAborted();
           const id = requireCronJobId(idArg);
+          const mutations = [
+            opts.set !== undefined,
+            opts.file !== undefined,
+            opts.unset === true,
+          ].filter(Boolean).length;
           if (mutations > 1) {
             throw new CronCliError("choose only one of --set, --file, or --unset");
           }
@@ -46,12 +48,9 @@ export function registerCronScratchCommand(cron: Command) {
               ? parseStrictNonNegativeInteger(opts.expectedRevision)
               : undefined;
           if (expectedRevision === undefined) {
-            const current = (
-              signal
-                ? await callGatewayFromCli("cron.scratch.get", opts, { id }, { signal })
-                : await callGatewayFromCli("cron.scratch.get", opts, { id })
-            ) as CronScratchGetResult;
-            signal?.throwIfAborted();
+            const current = (await callCronReadFromCli("cron.scratch.get", opts, {
+              id,
+            })) as CronScratchGetResult;
             if (mutations === 0) {
               if (opts.json) {
                 printCronJson(current);
@@ -84,9 +83,7 @@ export function registerCronScratchCommand(cron: Command) {
           }
           printCronJson(result);
         } catch (error) {
-          if (!signal?.aborted) {
-            handleCronCliError(error);
-          }
+          handleCronCliError(error);
         }
       }),
   );

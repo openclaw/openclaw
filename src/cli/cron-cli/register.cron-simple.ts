@@ -15,6 +15,7 @@ import { CronCliError } from "./cron-cli-error.js";
 import { findCronJobByIdOrName } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import {
+  callCronReadFromCli,
   enrichCronJsonWithStatus,
   formatCronLookupMiss,
   handleCronCliError,
@@ -117,17 +118,12 @@ export function registerCronSimpleCommands(cron: Command) {
         .description(description)
         .argument("<id>", "Job id")
         .action(async (id, opts) => {
-          const signal = method === "cron.get" ? getAsyncWorkSignal() : undefined;
           try {
-            signal?.throwIfAborted();
-            const params = {
+            const call = method === "cron.get" ? callCronReadFromCli : callGatewayFromCli;
+            const res = await call(method, opts, {
               id: requireCronJobId(id),
               ...(method === "cron.update" ? { patch: { enabled: name === "enable" } } : {}),
-            };
-            const res = signal
-              ? await callGatewayFromCli(method, opts, params, { signal })
-              : await callGatewayFromCli(method, opts, params);
-            signal?.throwIfAborted();
+            });
             printCronJson(res);
             if (name === "disable" && process.stderr.isTTY) {
               process.stderr.write(
@@ -138,9 +134,7 @@ export function registerCronSimpleCommands(cron: Command) {
               await warnIfCronSchedulerDisabled(opts);
             }
           } catch (err) {
-            if (!signal?.aborted) {
-              handleCronCliError(err);
-            }
+            handleCronCliError(err);
           }
         }),
     );
@@ -200,9 +194,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .addOption(new Option("--sort <direction>", "Sort by run time").choices(["asc", "desc"]))
       .option("--limit <n>", "Max entries (default 50)", "50")
       .action(async (idArg, opts) => {
-        const signal = getAsyncWorkSignal();
         try {
-          signal?.throwIfAborted();
           const argId = normalizeOptionalString(idArg);
           const flagId = normalizeOptionalString(opts.id);
           if (argId && flagId && argId !== flagId) {
@@ -221,29 +213,21 @@ export function registerCronSimpleCommands(cron: Command) {
           if (typeof opts.runId === "string" && !opts.runId.trim()) {
             throw new CronCliError("--run-id must not be blank");
           }
-          const res = await callGatewayFromCli(
-            "cron.runs",
-            opts,
-            {
-              ...(opts.all ? { scope: "all" } : { id }),
-              ...(typeof opts.runId === "string" && opts.runId.trim() ? { runId: opts.runId } : {}),
-              ...(typeof opts.status === "string" ? { status: opts.status } : {}),
-              ...(typeof opts.deliveryStatus === "string"
-                ? { deliveryStatus: opts.deliveryStatus }
-                : {}),
-              ...(typeof opts.query === "string" ? { query: opts.query } : {}),
-              ...(offset !== undefined ? { offset } : {}),
-              ...(typeof opts.sort === "string" ? { sortDir: opts.sort } : {}),
-              limit,
-            },
-            { signal },
-          );
-          signal?.throwIfAborted();
+          const res = await callCronReadFromCli("cron.runs", opts, {
+            ...(opts.all ? { scope: "all" } : { id }),
+            ...(typeof opts.runId === "string" && opts.runId.trim() ? { runId: opts.runId } : {}),
+            ...(typeof opts.status === "string" ? { status: opts.status } : {}),
+            ...(typeof opts.deliveryStatus === "string"
+              ? { deliveryStatus: opts.deliveryStatus }
+              : {}),
+            ...(typeof opts.query === "string" ? { query: opts.query } : {}),
+            ...(offset !== undefined ? { offset } : {}),
+            ...(typeof opts.sort === "string" ? { sortDir: opts.sort } : {}),
+            limit,
+          });
           printCronJson(res);
         } catch (err) {
-          if (!signal?.aborted) {
-            handleCronCliError(err);
-          }
+          handleCronCliError(err);
         }
       }),
   );

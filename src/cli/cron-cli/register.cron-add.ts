@@ -7,7 +7,6 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { CronCliError } from "./cron-cli-error.js";
@@ -21,6 +20,7 @@ import {
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   assertCronCliJobSpec,
+  callCronReadFromCli,
   assertCronTimeoutSupported,
   buildCronCommandShellArgvForGateway,
   coerceCronDeliveryPreviews,
@@ -45,16 +45,11 @@ export function registerCronStatusCommand(cron: Command) {
     createCronOutputCommand(cron, "status")
       .description("Show automations scheduler status")
       .action(async (opts) => {
-        const signal = getAsyncWorkSignal();
         try {
-          signal?.throwIfAborted();
-          const res = await callGatewayFromCli("cron.status", opts, {}, { signal });
-          signal?.throwIfAborted();
+          const res = await callCronReadFromCli("cron.status", opts, {});
           printCronJson(res);
         } catch (err) {
-          if (!signal?.aborted) {
-            handleCronCliError(err);
-          }
+          handleCronCliError(err);
         }
       }),
   );

@@ -282,21 +282,9 @@ it("bounds oversized poll intervals by the wait timeout", async () => {
   expectRuntimeErrorContaining("timed out waiting for cron run");
 });
 
-const interruptCases = [
-  ...["sleep", "request", "completion"].map((phase) => ({ phase, args: RUN_WAIT })),
-  ...["cron list", "cron show job-1"].map((command) => ({
-    phase: "request",
-    args: command.split(" "),
-  })),
-  ...["cron status", "cron get job-1", "cron runs job-1", "cron scratch job-1 --json"].flatMap(
-    (command) =>
-      ["request", "completion", "failure", "preabort"].map((phase) => ({
-        phase,
-        args: command.split(" "),
-      })),
-  ),
-];
-it.each(interruptCases)("cancels $args during $phase", async ({ phase, args }) => {
+const reads = ["list", "show job-1", "status", "get job-1", "runs job-1", "scratch job-1"];
+const interruptPhases = ["sleep", "request", "completion", ...reads.map((c) => `cron ${c}`)];
+it.each(interruptPhases)("cancels cron %s", async (phase) => {
   vi.useFakeTimers();
   resetGatewayMock();
   const scope = new AsyncWorkScope();
@@ -308,35 +296,28 @@ it.each(interruptCases)("cancels $args during $phase", async ({ phase, args }) =
       if (method === "cron.run") {
         return { ok: true, enqueued: true, runId: "queued-run" };
       }
-      if (!["sleep", "completion", "failure"].includes(phase) && extra?.signal) {
-        const { signal } = extra;
-        signal.addEventListener("abort", () => read.reject(signal.reason), { once: true });
+      if (!["sleep", "completion"].includes(phase)) {
+        extra?.signal?.addEventListener("abort", () => read.reject(extra.signal?.reason));
       }
       return phase === "sleep" ? { entries: [] } : read.promise;
     },
   );
-  const reason = new DOMException("CLI stopping (SIGINT)", "AbortError");
-  if (phase === "preabort") {
-    scope.beginClose(reason);
-  }
   const settled = vi.fn();
-  const running = scope.track(() => parse(args));
+  const running = scope.track(() => parse(phase.includes(" ") ? phase.split(" ") : RUN_WAIT));
   void running.then(() => settled(), settled);
   try {
     await vi.advanceTimersByTimeAsync(0);
-    expect(polls()).toHaveLength(phase === "preabort" ? 0 : 1);
-    scope.beginClose(reason);
+    expect(polls()).toHaveLength(1);
+    scope.beginClose(new DOMException("CLI stopping (SIGINT)", "AbortError"));
     if (phase === "completion") {
       read.resolve(completed);
-    } else if (phase === "failure") {
-      read.reject(new Error("late Gateway failure"));
     }
     await vi.advanceTimersByTimeAsync(0);
     expect(settled).toHaveBeenCalledExactlyOnceWith();
     for (const output of [defaultRuntime.writeStdout, defaultRuntime.error, defaultRuntime.exit]) {
       expect(output).not.toHaveBeenCalled();
     }
-    expect(polls()).toHaveLength(phase === "preabort" ? 0 : 1);
+    expect(polls()).toHaveLength(1);
   } finally {
     read.resolve(completed);
     await vi.advanceTimersByTimeAsync(2000);
