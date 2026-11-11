@@ -8,6 +8,9 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { stubTargetRetainingObserver } from "../../../test-helpers/resize-observer.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createGatewayBrowserClientFixture } from "../chat-application-context.test-support.ts";
+import { readChatTranscriptAttachmentSource } from "../chat-history-state.ts";
+import { createState } from "../chat-history.inflight.test-support.ts";
+import { loadChatHistory } from "../chat-history.ts";
 import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
@@ -25,6 +28,7 @@ import type {
   TranscriptAttachments,
 } from "./chat-sidebar-content-types.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
+import { projectTranscriptAttachments } from "./chat-transcript-attachments.ts";
 
 type List = NonNullable<SessionWorkspaceProps["list"]>;
 type WorkspaceFixture = Omit<Partial<SessionWorkspaceProps>, "list"> & {
@@ -857,6 +861,39 @@ function transcriptAttachments(
   };
   return source;
 }
+
+it.each(["desktop", "mobile"] as const)(
+  "retains %s no-match presentation while accepted attachment history refreshes",
+  async (presentation) => {
+    setupDesktopLayout();
+    const history = { messages: [], sessionId: "attachment-session" };
+    const state = createState(history);
+    await loadChatHistory(state);
+    const attachments = () =>
+      projectTranscriptAttachments(readChatTranscriptAttachmentSource(state), {}, () => {});
+    const workspace = createWorkspace({
+      presentation,
+      browserSearch: "absent",
+      navigation: { searchOpen: true },
+      list: { root: "/workspace", files: [], browser: { path: "", search: "absent", entries: [] } },
+      transcriptAttachments: attachments(),
+    });
+    const mounted = await mountWorkspace(workspace);
+    const empty = mounted.getByText("No files match your search.");
+    const response = createDeferred<typeof history>();
+    vi.spyOn(state.client!, "request").mockReturnValueOnce(response.promise);
+    const pending = loadChatHistory(state);
+    try {
+      mounted.update({ ...workspace, transcriptAttachments: attachments() });
+      expect(mounted.queryByText("Loading attachments…")).toBeNull();
+      expect(mounted.getByText("No files match your search.")).toBe(empty);
+    } finally {
+      response.resolve(history);
+      await pending;
+      mounted.unmount();
+    }
+  },
+);
 
 function transcriptImage(label: string | undefined, key = label ?? "untitled") {
   return {
