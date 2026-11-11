@@ -6,9 +6,11 @@ finished work, working around a blocker it could fix, drifting beyond the
 request, or claiming results the tools do not show.
 
 A review forks the conversation on the session's own model and asks whether the
-agent is on track. The reply is `NO_CHANGE` or `CORRECTION` followed by one
-short correction, which steers the active run under its own permissions. If the
-run already ended, the correction is dropped. Reviews run when a trigger is due:
+agent is on track. The reply is `NO_CHANGE`, or `BLOCKER` or `CORRECTION`
+followed by one short correction. A `BLOCKER` steers the active run now, under
+its own permissions; if the run already ended, it is dropped. A `CORRECTION`
+does not interrupt: it is queued for the conversation's next user turn and
+expires after 24 hours. Reviews run when a trigger is due:
 
 ```json
 {
@@ -32,9 +34,11 @@ run already ended, the correction is dropped. Reviews run when a trigger is due:
 A due review waits until every running tool call has its result, so the fork never
 sees a missing or synthetic tool outcome. Only the main agent's user-triggered runs
 are reviewed; subagent sessions are not, because the main agent sees their results
-and can redirect them. A later review in the same run is told the correction it
-already gave and does not repeat it. Each conversation has at most one review
+and can redirect them. A later review in the same run is told the corrections it
+already gave. A repeat is dropped unless it escalates a `CORRECTION` to a
+`BLOCKER`; texts that differ only in case, spacing, or punctuation count as
+repeats. Each conversation has at most one review
 in flight; the run ending or a new user message cancels it. Gateway info logs
-record review token usage and whether a correction was steered.
+record review token usage and whether a correction was steered, queued, or dropped.
 
 Docs: https://docs.openclaw.ai/concepts/experimental-features#advisor

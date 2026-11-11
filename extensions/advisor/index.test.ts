@@ -34,6 +34,9 @@ async function startAdvisor(everyToolCalls = 1, reply = "NO_CHANGE", runTrigger 
   const steer = vi
     .spyOn(api.session.workflow, "steerActiveRun")
     .mockResolvedValue({ steered: true });
+  const queue = vi
+    .spyOn(api.session.workflow, "enqueueNextTurnInjection")
+    .mockResolvedValue({ enqueued: true, id: "queued", sessionKey: "agent:main:main" });
   api.runContext.setRunContext = ({ runId, namespace, value }) => {
     if (value !== undefined) {
       runContexts.set(`${runId}:${namespace}`, value);
@@ -86,21 +89,16 @@ async function startAdvisor(everyToolCalls = 1, reply = "NO_CHANGE", runTrigger 
   };
   await service?.start({ config: {}, stateDir: "/tmp/advisor-test", logger, scheduler });
   await startRun("run-1", runTrigger);
-  return { forkSession, steer, warn, service, send, flush, startRun, tool };
+  return { forkSession, steer, queue, warn, service, send, flush, startRun, tool };
 }
 
 it("reviews complete tools at the threshold, rechecking queued and native calls", async () => {
-  const run = await startAdvisor(2, "CORRECTION\nStop polling.");
+  const run = await startAdvisor(2, "BLOCKER\nStop polling.");
   await run.tool(0);
   await run.tool();
   await run.send("tool", "start", { toolCallId: "late" }, 0);
   await run.send("tool", "result", { toolCallId: "late" }, 1);
-  expect(run.forkSession).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      sessionKey: "agent:main:main",
-      message: expect.stringContaining(DEFAULT_REVIEW_INSTRUCTIONS),
-    }),
-  );
+  expect(run.forkSession.mock.calls[0]?.[0].message).toContain(DEFAULT_REVIEW_INSTRUCTIONS);
   expect(run.steer).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ sessionKey: "agent:main:main", displayText: "Stop polling." }),
   );
@@ -109,17 +107,26 @@ it("reviews complete tools at the threshold, rechecking queued and native calls"
   await run.tool(1);
   await run.send("tool", "result", native, 1);
   await run.send("codex_app_server.item", "completed", native, 2);
-  // The same run's next review is told the delivered advice so it does not repeat it.
-  expect(run.forkSession.mock.calls[1]?.[0].message).toContain('"Stop polling." Do not repeat it.');
+  // The same run's next review is told the delivered advice, and code drops its repeat.
+  expect(run.forkSession.mock.calls[1]?.[0].message).toContain('["Stop polling."] Do not repeat');
+  expect(run.steer).toHaveBeenCalledOnce();
   await run.startRun("run-2");
-  for (const [toolCallId, reviews] of [
-    ["next-1", 2],
-    ["next-2", 3],
-  ] as const) {
-    await run.send("tool", "start", { toolCallId }, undefined, "run-2");
-    await run.send("tool", "result", { toolCallId }, reviews, "run-2");
+  for (const reviews of [2, 3]) {
+    await run.send("tool", "start", { toolCallId: `next-${reviews}` }, undefined, "run-2");
+    await run.send("tool", "result", { toolCallId: `next-${reviews}` }, reviews, "run-2");
   }
-  expect(run.forkSession.mock.calls[2]?.[0].message).not.toContain("Do not repeat it.");
+  expect(run.forkSession.mock.calls[2]?.[0].message).not.toContain("Do not repeat");
+});
+
+it("queues a deferred correction once and lets only a blocker repeat it", async () => {
+  const run = await startAdvisor(1, "CORRECTION\nUse rg.");
+  await run.tool(1);
+  await run.tool(2);
+  expect(run.queue).toHaveBeenCalledOnce();
+  expect(run.queue.mock.calls[0]?.[0].text).toContain("Use rg.");
+  run.forkSession.mockResolvedValue({ text: "BLOCKER\nUse  RG!" });
+  await run.tool(3);
+  expect(run.steer.mock.calls.map(([call]) => call.displayText)).toEqual(["Use  RG!"]);
 });
 
 it.each([
@@ -127,28 +134,20 @@ it.each([
   ["function_call", "shared-id", "shared-id"],
 ])("settles %s after its child", async (call, outerId, childId) => {
   const run = await startAdvisor();
-  await run.send("codex_app_server.item", "started", { itemId: outerId, type: call });
+  const item = (phase: string, itemId: string, type: string, reviews?: number) =>
+    run.send("codex_app_server.item", phase, { itemId, type }, reviews);
+  await item("started", outerId, call);
   await run.send("tool", "start", { toolCallId: childId, itemId: childId });
-  await run.send(
-    "codex_app_server.item",
-    "completed",
-    { itemId: childId, type: "commandExecution" },
-    0,
-  );
-  await run.send(
-    "codex_app_server.item",
-    "completed",
-    { itemId: outerId, type: `${call}_output` },
-    1,
-  );
+  await item("completed", childId, "commandExecution", 0);
+  await item("completed", outerId, `${call}_output`, 1);
 });
 
 it.each(["Looks fine to me.", "CORRECTION", "NO_CHANGE"])(
-  "does not steer on a reply of %j",
+  "ignores a reply of %j",
   async (reply) => {
     const run = await startAdvisor(1, reply);
     await run.tool(1);
-    expect(run.steer).not.toHaveBeenCalled();
+    expect([...run.steer.mock.calls, ...run.queue.mock.calls]).toEqual([]);
   },
 );
 

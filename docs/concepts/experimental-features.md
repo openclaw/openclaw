@@ -245,10 +245,17 @@ failing steps, waiting on finished work, working around a blocker it could fix,
 drifting beyond what you asked, or claiming results the tools do not show.
 
 A review forks the conversation on the session's own model and asks whether the
-agent is on track. When it is not, Advisor steers the active run with one short
-correction, which the agent sees before its next step under the run's own
-permissions. If the run already ended, the correction is dropped. When the agent
-is on track, nothing happens.
+agent is on track. When it is not, the advisor gives one short correction and
+marks how urgent it is:
+
+- A **blocker**, such as repeating an unchanged action, polling work that already
+  finished, or acting against something you said, steers the active run. The
+  agent sees it before its next step, under the run's own permissions. If the run
+  already ended, it is dropped.
+- Anything that can wait does not interrupt. It is added to the agent's context
+  with your next message, and expires after 24 hours.
+
+When the agent is on track, nothing happens.
 
 Turn it on in **Settings → Agents & Tools → Labs → Advisor**. Its **Configure**
 button opens the plugin's settings page (**Settings → Plugins → Advisor**), where
@@ -283,8 +290,9 @@ Behavior and limits:
   other automatic runs are not, and neither are subagent sessions: the main
   agent sees what its subagents report, so Advisor corrects the main agent,
   which can redirect the subagent.
-- After a correction steers a run, later reviews in that run are told what was
-  already said and stay quiet unless they find a different problem.
+- Later reviews in the same run are told what was already said and stay quiet
+  unless they find a different problem. A repeated correction is dropped unless
+  it escalates a deferred correction to a blocker.
 - A due review waits until every running tool call has its result, so the fork
   never sees a missing or synthetic tool outcome. A stalled call delays the
   review rather than forcing it.
