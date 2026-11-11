@@ -532,6 +532,7 @@ describe("SystemAgentChatEngine approval", () => {
           path: "gateway.port",
           value: "19001",
           cliOptions: {},
+          onRuntimeApplication: expect.any(Function),
           runtime: expect.objectContaining({ exit: expect.any(Function) }),
           throwOnError: false,
         });
