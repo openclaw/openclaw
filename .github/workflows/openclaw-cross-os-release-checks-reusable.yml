@@ -1190,16 +1190,30 @@ jobs:
         shell: bash
         run: pnpm test src/infra/update-recovery-backup-reader.test.ts --maxWorkers=1
 
-  scope_semantic_checks:
+  scope_semantic_prepare:
     if: ${{ inputs.scope_checks_only }}
-    name: Recovery scope targeted source checks
+    name: Prepare identical formatted recovery source
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
     steps:
       - name: Checkout repaired source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Record exact source
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Checkout workflow-pinned diagnostic adapter
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: diagnostic-workflow
+          sparse-checkout: scripts/diagnostic-recovery-scope.mjs
+          sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -1207,7 +1221,133 @@ jobs:
           semantic-checks: true
           install-bun: false
           cache-mode: restore
-      - name: Select changed-file checks
-        run: node scripts/check-changed.mjs --dry-run -- src/infra/update-recovery-backup-reader.ts src/infra/update-recovery-backup-reader.test.ts docs/install/updating.md
-      - name: Check changed source
-        run: node scripts/check-changed.mjs --timed -- src/infra/update-recovery-backup-reader.ts src/infra/update-recovery-backup-reader.test.ts docs/install/updating.md
+      - name: Format only the reported test and preserve its patch
+        env:
+          INPUT: ${{ runner.temp }}/recovery-scope-input
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_file=src/infra/update-recovery-backup-reader.test.ts
+          mkdir -p "$INPUT/src/infra"
+          pnpm exec oxfmt --write --threads=1 "$test_file"
+          cp "$test_file" "$INPUT/$test_file"
+          git diff --binary -- "$test_file" > "$INPUT/format.patch"
+          cp diagnostic-workflow/scripts/diagnostic-recovery-scope.mjs "$INPUT/diagnostic-recovery-scope.mjs"
+          node --import ./scripts/tsx.mjs "$INPUT/diagnostic-recovery-scope.mjs" plan "$INPUT"
+          cd "$INPUT"
+          sha256sum "$test_file" format.patch plan.json diagnostic-recovery-scope.mjs > SHA256SUMS
+          cat SHA256SUMS
+      - name: Upload formatted source, patch, hashes and complete plan
+        if: always()
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: recovery-scope-input-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/recovery-scope-input
+          if-no-files-found: error
+
+  scope_semantic_checks:
+    if: ${{ inputs.scope_checks_only }}
+    needs: scope_semantic_prepare
+    name: Recovery scope semantic (${{ matrix.row }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        row: [checks, stripe-1, stripe-2, stripe-3, stripe-4, stripe-5]
+    steps:
+      - name: Checkout exact prepared source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.scope_semantic_prepare.outputs.source_sha }}
+          persist-credentials: false
+      - name: Download immutable formatted input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.scope_semantic_prepare.outputs.artifact_id }}
+          path: ${{ runner.temp }}/recovery-scope-input
+          merge-multiple: true
+      - name: Verify and install identical formatted bytes
+        env:
+          INPUT: ${{ runner.temp }}/recovery-scope-input
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd "$INPUT" && sha256sum --check --strict SHA256SUMS)
+          cp "$INPUT/src/infra/update-recovery-backup-reader.test.ts" src/infra/update-recovery-backup-reader.test.ts
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          semantic-checks: true
+          install-bun: false
+          cache-mode: restore
+      - name: Setup ripgrep for canonical ratchets
+        if: matrix.row == 'checks'
+        uses: ./.github/actions/setup-ripgrep
+      - name: Fetch and verify the pinned pre-fix ratchet base
+        if: matrix.row == 'checks'
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=d9751e2ff705fab4c43a078d60a96f1e9682cefd
+          git fetch --no-tags --depth=1 https://github.com/openclaw/openclaw.git "$base"
+          test "$(git rev-parse FETCH_HEAD)" = "$base"
+          git cat-file -e "$base^{tree}"
+      - name: Execute canonical plan partition and record every result
+        env:
+          INPUT: ${{ runner.temp }}/recovery-scope-input
+          ROW: ${{ matrix.row }}
+        run: node --import ./scripts/tsx.mjs "$INPUT/diagnostic-recovery-scope.mjs" run "$INPUT" "$ROW"
+      - name: Upload command receipt even after a check failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: recovery-scope-receipt-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.row }}
+          path: ${{ runner.temp }}/recovery-scope-receipts
+          if-no-files-found: error
+
+  scope_semantic_accounting:
+    if: ${{ always() && inputs.scope_checks_only }}
+    needs: [scope_semantic_prepare, scope_semantic_checks]
+    name: Recovery scope complete command accounting
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require all preparation and execution jobs
+        env:
+          PREPARE_RESULT: ${{ needs.scope_semantic_prepare.result }}
+          CHECKS_RESULT: ${{ needs.scope_semantic_checks.result }}
+        run: test "$PREPARE_RESULT" = success && test "$CHECKS_RESULT" = success
+      - name: Download immutable formatted input
+        if: always() && needs.scope_semantic_prepare.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.scope_semantic_prepare.outputs.artifact_id }}
+          path: ${{ runner.temp }}/recovery-scope-input
+          merge-multiple: true
+      - name: Download all command receipts
+        if: always() && needs.scope_semantic_prepare.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: recovery-scope-receipt-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: ${{ runner.temp }}/recovery-scope-receipts
+          merge-multiple: true
+      - name: Verify exact coverage and formatted-source SHA
+        if: always() && needs.scope_semantic_prepare.result == 'success'
+        env:
+          INPUT: ${{ runner.temp }}/recovery-scope-input
+          RECEIPTS: ${{ runner.temp }}/recovery-scope-receipts
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd "$INPUT" && sha256sum --check --strict SHA256SUMS)
+          node "$INPUT/diagnostic-recovery-scope.mjs" collect "$INPUT" "$RECEIPTS" | tee "$RUNNER_TEMP/recovery-scope-accounting.json"
+      - name: Upload accounting proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: recovery-scope-accounting-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/recovery-scope-accounting.json
+          if-no-files-found: error
