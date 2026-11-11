@@ -114,6 +114,7 @@ function RolePicker(props: {
 export function InviteForm(props: {
   components: ControlUiHost["components"];
   disabled: boolean;
+  busy?: boolean;
   locale: string;
   error?: PeopleError | null;
   onCreate: (email: string, role: MemberRole) => Promise<CreatedInvite | undefined>;
@@ -186,8 +187,12 @@ export function InviteForm(props: {
                 type="submit"
                 class="btn primary"
                 disabled={props.disabled || !EMAIL.test(email().trim())}
+                aria-busy={props.busy ? "true" : undefined}
               >
-                Create invite link
+                <span class="btn__label">Create invite link</span>
+                <Show when={props.busy}>
+                  <span class="btn__spinner" aria-hidden="true" />
+                </Show>
               </button>
             </form>
           }

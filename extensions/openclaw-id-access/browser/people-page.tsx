@@ -65,12 +65,13 @@ export function PeoplePage(props: { host: ControlUiHost }) {
   const [fingerprints, setFingerprints] = createSignal<ReadonlyMap<string, string>>(new Map());
   const [nowMs, setNowMs] = createSignal(Date.now());
   const [busy, setBusy] = createSignal(false);
+  const [creatingInvite, setCreatingInvite] = createSignal(false);
   const [error, setError] = createSignal<PeopleOperationError | null>(null);
   const [notice, setNotice] = createSignal<RemovedMemberNotice | null>(null);
   const [readError, setReadError] = createSignal<PeopleError | null>(null);
   let observer: ReturnType<typeof observePeople> | undefined;
   let disposed = false;
-  let actionInFlight = false;
+  const actionsInFlight = new Set<"invite" | "update">();
   let refreshedError: PeopleOperationError | null = null;
 
   // Reads link state (the owner view when this client is an owner) and which
@@ -129,11 +130,20 @@ export function PeoplePage(props: { host: ControlUiHost }) {
     action: (link: Link) => Promise<T>,
     kind: PeopleErrorAction = "update",
   ): Promise<T | undefined> => {
-    if (disposed || !state()?.link || actionInFlight || !host.connection.connected) {
+    // InviteCap registration has no membership seq; it need not block node or
+    // member actions. Membership changes still run one at a time.
+    const operation = target === "invite" ? "invite" : "update";
+    const setPending = operation === "invite" ? setCreatingInvite : setBusy;
+    if (
+      disposed ||
+      !state()?.link ||
+      actionsInFlight.has(operation) ||
+      !host.connection.connected
+    ) {
       return undefined;
     }
-    actionInFlight = true;
-    setBusy(true);
+    actionsInFlight.add(operation);
+    setPending(true);
     setError(null);
     setNotice(null);
     try {
@@ -148,9 +158,9 @@ export function PeoplePage(props: { host: ControlUiHost }) {
       }
       return undefined;
     } finally {
-      actionInFlight = false;
+      actionsInFlight.delete(operation);
       if (!disposed) {
-        setBusy(false);
+        setPending(false);
         await observer?.refresh();
       }
     }
@@ -221,7 +231,8 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                   <Show when={latest(ownDevicePub)}>
                     <InviteForm
                       components={host.components}
-                      disabled={!canManage()}
+                      disabled={!canManage() || latest(creatingInvite)}
+                      busy={latest(creatingInvite)}
                       error={latest(error)?.target === "invite" ? latest(error) : null}
                       locale={host.locale}
                       onCreate={(email, role: MemberRole) =>

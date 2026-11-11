@@ -341,6 +341,20 @@
   min-width: 0;
 }
 
+.ocid-access__node-info {
+  min-width: 0;
+}
+
+.ocid-access__node-details {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ocid-access__node-info + .ocid-access__actions {
+  flex-shrink: 0;
+}
+
 .ocid-access__title {
   overflow-wrap: anywhere;
   color: var(--text-strong);
@@ -570,12 +584,15 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .ocid-access__remove {
+  .ocid-access__remove,
+  .ocid-access__node-remove {
     opacity: 0;
   }
 
   .ocid-access__row:hover .ocid-access__remove,
-  .ocid-access__row:focus-within .ocid-access__remove {
+  .ocid-access__row:focus-within .ocid-access__remove,
+  .ocid-access__row:hover .ocid-access__node-remove,
+  .ocid-access__row:focus-within .ocid-access__node-remove {
     opacity: 1;
   }
 }

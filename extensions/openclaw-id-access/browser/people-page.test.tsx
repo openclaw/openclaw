@@ -282,6 +282,70 @@ describe("Access page", () => {
     expect(container.textContent).not.toContain("Old laptop");
   });
 
+  it("keeps node controls usable while only the invite card is creating", async () => {
+    const pending = Promise.withResolvers<object>();
+    const { container, request } = await mountPage(
+      [
+        linked({
+          rootPub: pendingInvite.pending!.devicePub,
+          nodes: [
+            {
+              peerKey: "iroh:node",
+              label: "Office",
+              description: { display_name: "office", platform: "linux", commands: [], caps: [] },
+              addedBy: "root",
+              lastSeen: 1_800_000_000,
+              inviteId: "old",
+            },
+          ],
+          nodeInvites: [
+            {
+              inviteId: "node-open",
+              label: "Build box",
+              status: "open",
+              createdAt: 1_800_000_000,
+              expiresAt: 1_800_600_000,
+            },
+          ],
+        }),
+      ],
+      pending.promise,
+    );
+    await vi.waitFor(() => expect(button(container, "Add node")?.disabled).toBe(false));
+    const input = container.querySelector("input")!;
+    input.value = "friend@example.test";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    const create = button(container, "Create invite link")!;
+    create.click();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "openclawId.authority",
+        expect.objectContaining({ action: "register_invite" }),
+      ),
+    );
+    expect(create.disabled).toBe(true);
+    expect(create.getAttribute("aria-busy")).toBe("true");
+    expect(create.querySelector(".btn__spinner")).not.toBeNull();
+    expect(input.disabled).toBe(true);
+    expect(container.querySelector("select")?.disabled).toBe(true);
+    for (const label of ["Add node", "Remove node", "Review node", "Approve", "Deny"]) {
+      expect(button(container, label)?.disabled, label).toBe(false);
+    }
+    button(container, "Remove node")!.click();
+    await vi.waitFor(() => expect(button(container, "Remove Office")).toBeDefined());
+    button(container, "Remove Office")!.click();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("openclawId.authority", {
+        action: "submit",
+        statement: { signed: { op: "remove_node", peer_key: "iroh:node" } },
+      }),
+    );
+    pending.resolve({});
+    await vi.waitFor(() => expect(container.textContent).toContain("Send this link privately."));
+    expect(button(container, "Add node")?.disabled).toBe(false);
+  });
+
   it("approves a pending request with an owner-signed change", async () => {
     const { container, request } = await mountPage([
       linked(),
