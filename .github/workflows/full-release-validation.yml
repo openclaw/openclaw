@@ -2632,7 +2632,8 @@ jobs:
       ]
     if: always() && !cancelled() && vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && needs.resolve_target.result == 'success'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # Two sequential runners: each can take 15 minutes to provision and 10 to register.
+    timeout-minutes: 55
     outputs:
       decision_vm: ${{ steps.decision.outputs.vm }}
       decision_runner: ${{ steps.decision.outputs.runner }}
