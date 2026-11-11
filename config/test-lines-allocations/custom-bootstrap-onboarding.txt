@@ -1,2 +1,2 @@
-# Public fresh Add through first workspace preparation and explicit consumption.
-47
+# Manually preseeded custom onboarding without a Template receipt across restart and consumption.
+22

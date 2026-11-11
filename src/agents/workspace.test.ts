@@ -331,6 +331,28 @@ it("propagates a transient profile read after the retry budget is exhausted", as
   await expect(ensureWorkspace()).rejects.toMatchObject({ code: "EAGAIN" });
 });
 
+it("keeps manually preseeded custom onboarding pending without a Template receipt", async () => {
+  const bootstrap = "Ask which competitors to monitor before starting research.\n";
+  await writeWorkspaceFile(BOOTSTRAP, bootstrap);
+  await writeWorkspaceFile(IDENTITY, "# IDENTITY.md\n\n- **Name:** Competitor Watch\n");
+  await writeWorkspaceFile(USER, "Research public product releases.\n");
+  expect((await readWorkspaceStateSnapshot(tempDir)).setupExists).toBe(false);
+
+  for (let restart = 0; restart < 2; restart++) {
+    closeOpenClawStateDatabaseForTest();
+    await expect(ensureWorkspace()).resolves.toMatchObject({ bootstrapPending: true });
+    expect(await readWorkspaceFile(BOOTSTRAP)).toBe(bootstrap);
+    const snapshot = await readWorkspaceStateSnapshot(tempDir);
+    expect(snapshot.setup.setupCompletedAt).toBeUndefined();
+    expect(snapshot.attestation?.generatedHashes.get(BOOTSTRAP)).toBeUndefined();
+    await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
+  }
+
+  await fs.unlink(workspacePath(BOOTSTRAP));
+  await expect(ensureWorkspace()).resolves.toMatchObject({ bootstrapPending: false });
+  await expectCompletedWithoutBootstrap(tempDir);
+});
+
 it("records stale bootstrap completion when BOOTSTRAP.md cleanup fails", async () => {
   await ensureWorkspace();
   await writeWorkspaceFile(IDENTITY, "# IDENTITY.md\n\n- **Name:** Example\n");
