@@ -29,6 +29,7 @@ import {
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
 import { resolveExecDefaultsAsync } from "../exec-defaults.js";
 import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
+import { buildHarnessHostRequester } from "../harness/host-requester.js";
 import { resolveExecToolConfig } from "../lazy-exec-tool.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import {
@@ -50,7 +51,7 @@ import { createSteeredCliMessageInjection } from "./execute-plugin.steered-trans
 import { attachCliReplyBackend, createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError as failover } from "./exit-error.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
-import { normalizeCliToolName } from "./tool-policy.js";
+import { isCliNativeToolCallable, normalizeCliToolName } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 function denyTool(message: string): CliBackendToolPermissionResult {
@@ -89,11 +90,7 @@ async function createPluginToolPermissionHandler(params: {
       return denyTool("OpenClaw denied an unnamed native tool.");
     }
     const discoveryOnly = run.cliToolAvailability?.discovery?.includes(toolName) === true;
-    if (
-      run.cliToolAvailability &&
-      !run.cliToolAvailability.native.includes(toolName) &&
-      !discoveryOnly
-    ) {
+    if (!discoveryOnly && !isCliNativeToolCallable(run, toolName, params.context.backendResolved)) {
       return denyTool(`OpenClaw denied native tool ${toolName}: it is unavailable to this run.`);
     }
 
@@ -134,14 +131,7 @@ async function createPluginToolPermissionHandler(params: {
       }
     }
 
-    const requester = {
-      ...((run.messageChannel ?? run.messageProvider)
-        ? { channel: run.messageChannel ?? run.messageProvider }
-        : {}),
-      ...(run.agentAccountId ? { accountId: run.agentAccountId } : {}),
-      ...(run.senderId ? { senderId: run.senderId } : {}),
-      ...(run.senderIsOwner !== undefined ? { senderIsOwner: run.senderIsOwner } : {}),
-    };
+    const requester = buildHarnessHostRequester(run);
     const hookResult = await runBeforeToolCallHook({
       toolName: canonicalToolName,
       params: policyInput,

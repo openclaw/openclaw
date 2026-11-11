@@ -79,6 +79,7 @@ const RUNTIME_COORDINATION_FAILURE_CODE_COPY: Readonly<Record<string, string>> =
     "The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
 };
 
+export const API_KEY_EXPIRED_ERROR_CODE = "api_key_expired";
 const API_KEY_EXPIRED_USER_TEXT =
   "This API key has expired. Create a new API key in your provider's console and replace it in OpenClaw or its secret store. Signing in again will not renew this key.";
 
@@ -121,7 +122,7 @@ export function renderAssistantRequestFailureCopy(
   if (facts.storageFailure) {
     return `⚠️ ${STORAGE_FAILURE_COPY[facts.storageFailure]} ${ERROR_DETAILS_HINT}`;
   }
-  if (facts.code === "api_key_expired") {
+  if (facts.code === API_KEY_EXPIRED_ERROR_CODE) {
     return `⚠️ ${API_KEY_EXPIRED_USER_TEXT}`;
   }
   if (facts.code === "incomplete_tool_call") {

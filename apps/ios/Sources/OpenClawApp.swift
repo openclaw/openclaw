@@ -594,6 +594,8 @@ struct OpenClawApp: App {
         GatewaySettingsStore.bootstrapPersistence()
         (UserDefaults(suiteName: OpenClawAppGroup.identifier) ?? .standard)
             .removeObject(forKey: "share.defaultInstruction")
+        // Settings used to persist pasted setup codes (which carry Gateway credentials) here.
+        UserDefaults.standard.removeObject(forKey: "gateway.setupCode")
         OpenClawType.installUIKitAppearance()
         let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false, restoringSavedGatewayRoute: true)
         #if DEBUG

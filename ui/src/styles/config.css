@@ -78,7 +78,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 10px 16px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-strong);
   list-style: none;
@@ -113,7 +113,7 @@
   display: flex;
   align-items: baseline;
   gap: 12px;
-  font-size: calc(11.5px * var(--control-ui-text-scale));
+  font-size: 11.5px;
   font-family: var(--mono);
 }
 
@@ -710,7 +710,7 @@
 .config-raw-field textarea {
   min-height: 500px;
   font-family: var(--mono);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.55;
 }
 

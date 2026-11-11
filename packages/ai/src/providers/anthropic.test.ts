@@ -1022,19 +1022,22 @@ describe("Anthropic provider", () => {
     const opening = await capture("alpha", [user("hello")]);
     expect(opening.system).toEqual([
       { type: "text", text: "Stable prefix", cache_control: { type: "ephemeral" } },
-      { type: "text", text: "Reactions guidance", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "\nReactions guidance", cache_control: { type: "ephemeral" } },
       { type: "text", text: "\nRuntime: session=alpha" },
     ]);
     const shared = opening.system[1] as { text: string };
     const owned = opening.system[2] as { text: string };
-    expect(shared.text + owned.text).toBe("Reactions guidance\nRuntime: session=alpha");
+    expect(shared.text + owned.text).toBe("\nReactions guidance\nRuntime: session=alpha");
+    expect((opening.system as Array<{ text: string }>).map((block) => block.text).join("")).toBe(
+      "Stable prefix\nReactions guidance\nRuntime: session=alpha",
+    );
     const another = await capture("beta", [user("hello")]);
     expect(another.system.slice(0, 2)).toEqual(opening.system.slice(0, 2));
     expect(another.system[2]).toEqual({ type: "text", text: "\nRuntime: session=beta" });
     expect(JSON.stringify(opening.messages).split('"cache_control"')).toHaveLength(2);
     const reply = makeAnthropicAssistantMessage([{ type: "text", text: "hi" }]);
     const later = await capture("alpha", [user("hello"), reply, user("again")]);
-    expect(later.system[1]).toEqual({ type: "text", text: "Reactions guidance" });
+    expect(later.system[1]).toEqual({ type: "text", text: "\nReactions guidance" });
     expect(JSON.stringify(later.messages).split('"cache_control"')).toHaveLength(3);
   });
 

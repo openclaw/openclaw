@@ -634,18 +634,9 @@ serveOwnedWorkerTasks(
             const target = { ...request.target, database: request.database };
             return readSessionHistoryRequest(request.request, target, channel);
           }
-          if (request.kind === "session-reset-recall") {
-            const { readSessionResetRecallCutoffInProcess } =
-              await import("../../../packages/memory-host-sdk/src/host/session-reset-recall-read.worker.js");
-            return { cutoff: readSessionResetRecallCutoffInProcess(request.scope) };
-          }
-          if (request.mode === "snapshot") {
-            const { readSessionEntrySnapshotRequest } =
-              await import("./session-transcript-hydration-read.worker.js");
-            return readSessionEntrySnapshotRequest(request);
-          }
-          const { prepareSessionMemoryEntry } = await import("./session-memory-entry.worker.js");
-          return prepareSessionMemoryEntry(request);
+          const { readSessionResetRecallCutoffInProcess } =
+            await import("../../../packages/memory-host-sdk/src/host/session-reset-recall-read.worker.js");
+          return { cutoff: readSessionResetRecallCutoffInProcess(request.scope) };
         },
       );
     };
