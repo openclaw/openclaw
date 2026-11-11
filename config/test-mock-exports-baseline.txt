@@ -5144,7 +5144,6 @@
 ["src/gateway/test/server-sessions.test-helpers.ts","../../plugin-sdk/browser-maintenance.js","d7427ec9030cf6d9b76ccdd0cd5fad828def4eccf5f91165064596bda10130fc",1]
 ["src/gateway/test/talk-client-agent-consult.requester-final.test.ts","../../agents/admitted-run-context.js","3041c9a0e2f61adabf32ae6c9c7766bf2ef9607f9f21af36d8bed1ef95a1c198",1]
 ["src/gateway/test/talk-client-agent-consult.requester-final.test.ts","../../agents/embedded-agent.js","31e50203b3c36a0c5088d134131416e3da9a9aa3e9a877a60b6124811a8bbdd7",1]
-["src/gateway/tool-resolution.exclude.test.ts","../agents/lazy-exec-tool.js","0b4cd085df0b771d752c105bfc7f6d63c8e0bbf2cebbc0aa06da7c6112e7e547",1]
 ["src/gateway/tool-resolution.exclude.test.ts","../channels/plugins/index.js","5ede4cc2635c88159fce98d3d188aacf66cdfd54ca755977c0af813d4560249e",1]
 ["src/gateway/tools-invoke-authorization.test.ts","../agents/agent-tools.before-tool-call.js","92a2da4141961eddf19b61b753d3743f3a531c7c8932ef6d0d1f51e3947fa2bd",1]
 ["src/gateway/tools-invoke-authorization.test.ts","../agents/agent-tools.js","5ef46ae8de909390ce5710a824839095b01c90f05d0f94fe4d1570d5e716f2e8",1]
