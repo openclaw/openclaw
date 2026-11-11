@@ -550,6 +550,7 @@ export async function resolveBackupAgentRoots(config: OpenClawConfig): Promise<B
 export async function resolveBackupPlanFromDisk(
   params: {
     includeWorkspace?: boolean;
+    sqliteHeaderProbeTimeoutMs?: number;
     excludeWorktreeTemplates?: boolean;
     localCompanion?: boolean;
     onlyConfig?: boolean;
@@ -580,6 +581,7 @@ export async function resolveBackupPlanFromDisk(
 
 async function resolveBackupPlanFromState(params: {
   includeWorkspace?: boolean;
+  sqliteHeaderProbeTimeoutMs?: number;
   excludeWorktreeTemplates?: boolean;
   localCompanion?: boolean;
   onlyConfig?: boolean;
@@ -630,6 +632,7 @@ async function resolveBackupPlanFromState(params: {
     env: process.env,
     stateDir,
     workspaceDirs: discoveredWorkspaceDirs,
+    sqliteHeaderProbeTimeoutMs: params.sqliteHeaderProbeTimeoutMs,
   };
   const pluginInventory = postgresState
     ? (

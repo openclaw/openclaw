@@ -73,6 +73,7 @@ export const FIELD_LABELS: Record<string, string> = {
   update: "Updates",
   "update.channel": "Update Channel",
   "update.checkOnStart": "Update Check on Start",
+  "update.sqliteHeaderProbeTimeoutMs": "Update SQLite Header Probe Timeout (ms)",
   "update.auto.enabled": "Auto Update Enabled",
   "update.auto.schedule": "Automatic Update Schedule",
   telemetry: "Telemetry",

@@ -62,7 +62,12 @@ type UpdateStateInspectionInput = { resultPath?: string; stagingTokenDirectory?:
       typeof import("./update-database-restore-source.js").prepareUpdateDatabaseRestoreSourceInProcess
     >[0] & { mode: "database-restore-preparation" })
   | { mode: "sqlite-generations"; paths: string[]; stateDir: string }
-  | { mode: "migration-filesystem-backup"; output: string; userPathBaseDirectory: string }
+  | {
+      mode: "migration-filesystem-backup";
+      output: string;
+      userPathBaseDirectory: string;
+      config: import("../config/types.openclaw.js").OpenClawConfig;
+    }
   | {
       mode: "database-generations";
       paths: string[];
@@ -91,6 +96,7 @@ async function inspectCandidateState(input: UpdateStateInspectionInput): Promise
       createBackupArchive({
         output: input.output,
         preserveSourceArtifacts: true,
+        sqliteHeaderProbeTimeoutMs: input.config.update?.sqliteHeaderProbeTimeoutMs,
       }),
     );
     await verifyBackupArchive(archive.archivePath);

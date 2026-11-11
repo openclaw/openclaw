@@ -68,6 +68,12 @@ function configAt(path: string, value: unknown): unknown {
   return path.split(".").reduceRight<unknown>((child, key) => ({ [key]: child }), value);
 }
 const schemaCases: Array<[string, unknown, boolean]> = [
+  ["update.sqliteHeaderProbeTimeoutMs", 120000, true],
+  ["update.sqliteHeaderProbeTimeoutMs", 1, true],
+  ["update.sqliteHeaderProbeTimeoutMs", 0, false],
+  ["update.sqliteHeaderProbeTimeoutMs", -1, false],
+  ["update.sqliteHeaderProbeTimeoutMs", 1.5, false],
+  ["update.sqliteHeaderProbeTimeoutMs", "120000", false],
   ["update.auto.schedule", "30 3 * * *", true],
   ["update.auto.schedule", "15 4 * * MON", true],
   ["update.auto.schedule", "*/5 * * * *", true],

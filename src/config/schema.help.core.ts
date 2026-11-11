@@ -88,6 +88,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). Extended-stable is package-only: installation is foreground-only, with optional read-only startup hints.',
   "update.checkOnStart":
     "Checks for updates when the Gateway starts, including read-only extended-stable hints (default: true). Set false to disable automatic Gateway and headless-node update checks, applies, and anonymous update pings.",
+  "update.sqliteHeaderProbeTimeoutMs":
+    "Timeout in milliseconds for each isolated SQLite header probe during update discovery and migration captures (default: 10000). Timed-out batches still split and retry; an unreadable single path still refuses capture. Does not change the overall update deadline or standalone backup commands.",
   "update.auto.enabled":
     "Enable background auto-update for stable and beta package installs; extended-stable never auto-applies (default: false).",
   "update.auto.schedule":

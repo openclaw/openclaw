@@ -21,9 +21,17 @@ export async function preparePostgresBackupDiscovery(input: BackupDatabaseDiscov
     maxWorkers: 1,
   });
   try {
-    const { stateDir, config, env, agentRegistry, workspaceDirs } = input;
+    const { stateDir, config, env, agentRegistry, workspaceDirs, sqliteHeaderProbeTimeoutMs } =
+      input;
     return await pool.run(
-      { stateDir, config, env: env && { ...env }, agentRegistry, workspaceDirs },
+      {
+        stateDir,
+        config,
+        env: env && { ...env },
+        agentRegistry,
+        workspaceDirs,
+        sqliteHeaderProbeTimeoutMs,
+      },
       {},
     );
   } finally {

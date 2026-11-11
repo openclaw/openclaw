@@ -74,6 +74,8 @@ const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
 export type BackupCreateOptions = {
   /** Internal lifecycle cancellation for backup preparation, not admitted repairs. */
   signal?: AbortSignal;
+  /** Per-child header deadline supplied by update/migration capture owners. */
+  sqliteHeaderProbeTimeoutMs?: number;
   /**
    * Internal capture in an isolated backup process: inspect only private SQLite copies.
    * Preserves row IDs instead of compacting; free-page bytes may remain in the archive.
@@ -242,6 +244,7 @@ async function createConsistentStateSnapshotPlan(params: {
   stateDir?: string;
   tempDir: string;
   onlyConfig: boolean;
+  sqliteHeaderProbeTimeoutMs?: number;
   preserveSourceArtifacts?: boolean;
   localCompanion?: boolean;
 }): Promise<BackupStateSnapshotPlan> {
@@ -250,6 +253,7 @@ async function createConsistentStateSnapshotPlan(params: {
       resources: params.resources,
       tempDir,
       legacyAuditSnapshots: [],
+      sqliteHeaderProbeTimeoutMs: params.sqliteHeaderProbeTimeoutMs,
       preserveSourceArtifacts: params.preserveSourceArtifacts,
       localCompanion: params.localCompanion,
     });
@@ -282,6 +286,7 @@ async function createConsistentStateSnapshotPlan(params: {
     resources: params.resources,
     stateDir,
     tempDir: params.tempDir,
+    sqliteHeaderProbeTimeoutMs: params.sqliteHeaderProbeTimeoutMs,
     preserveSourceArtifacts: params.preserveSourceArtifacts,
   });
 }
@@ -310,6 +315,7 @@ async function createBackupArchiveInScope(
     preparedPlan ??
     (await resolveBackupPlanFromDisk({
       includeWorkspace,
+      sqliteHeaderProbeTimeoutMs: opts.sqliteHeaderProbeTimeoutMs,
       excludeWorktreeTemplates: opts.excludeWorktreeTemplates,
       localCompanion: opts.localCompanion,
       onlyConfig,
@@ -433,6 +439,7 @@ async function createBackupArchiveInScope(
       onlyConfig,
       preserveSourceArtifacts: opts.preserveSourceArtifacts,
       localCompanion: opts.localCompanion,
+      sqliteHeaderProbeTimeoutMs: opts.sqliteHeaderProbeTimeoutMs,
     });
     const inventory = stateSqliteBackup.inventory;
     snapshotFacts = describeCapturedBackupSqliteSnapshots(
@@ -508,7 +515,7 @@ async function createBackupArchiveInScope(
       }
       const sqliteSourceKind = onlyConfig
         ? undefined
-        : classifyBackupSqliteSource(resolvedEntryPath, inventory);
+        : classifyBackupSqliteSource(resolvedEntryPath, inventory, opts.sqliteHeaderProbeTimeoutMs);
       if (sqliteSourceKind === "opaque-skip") {
         opaqueSqliteSourcePaths.set(resolvedEntryPath, "skipped");
         return false;

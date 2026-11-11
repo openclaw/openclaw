@@ -120,6 +120,7 @@ export const OpenClawSchemaShape = {
         ])
         .optional(),
       checkOnStart: z.boolean().optional(),
+      sqliteHeaderProbeTimeoutMs: z.number().int().positive().optional(),
       auto: z
         .strictObject({
           enabled: z.boolean().optional(),

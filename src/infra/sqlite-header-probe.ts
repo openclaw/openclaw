@@ -14,6 +14,7 @@ function probeSqliteHeaderBatch(
   workerArgv: string[],
   batch: string[],
   results: Map<string, boolean>,
+  timeoutMs: number,
 ): void {
   // Closing a raw descriptor could release another connection's POSIX locks
   // on the same inode. Bound each child’s work while preserving that isolation.
@@ -21,15 +22,15 @@ function probeSqliteHeaderBatch(
     input: JSON.stringify(batch),
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
-    timeout: SQLITE_HEADER_PROBE_TIMEOUT_MS,
+    timeout: timeoutMs,
   });
   if (result.error) {
     // Cold or slow storage can miss one child's deadline without being stuck.
     // Splitting keeps each deadline, so only a path that cannot answer alone fails.
     if (hasErrnoCode(result.error, "ETIMEDOUT") && batch.length > 1) {
       const middle = Math.ceil(batch.length / 2);
-      probeSqliteHeaderBatch(workerArgv, batch.slice(0, middle), results);
-      probeSqliteHeaderBatch(workerArgv, batch.slice(middle), results);
+      probeSqliteHeaderBatch(workerArgv, batch.slice(0, middle), results, timeoutMs);
+      probeSqliteHeaderBatch(workerArgv, batch.slice(middle), results, timeoutMs);
       return;
     }
     throw result.error;
@@ -63,7 +64,10 @@ function probeSqliteHeaderBatch(
 }
 
 /** Probe discovery batches without disturbing live SQLite file locks. */
-export function probeSqliteDatabaseHeaders(pathnames: Iterable<string>): Map<string, boolean> {
+export function probeSqliteDatabaseHeaders(
+  pathnames: Iterable<string>,
+  timeoutMs = SQLITE_HEADER_PROBE_TIMEOUT_MS,
+): Map<string, boolean> {
   const paths = [...new Set(pathnames)];
   if (paths.length === 0) {
     return new Map();
@@ -78,6 +82,7 @@ export function probeSqliteDatabaseHeaders(pathnames: Iterable<string>): Map<str
         workerArgv,
         paths.slice(start, start + SQLITE_HEADER_PROBE_BATCH_SIZE),
         results,
+        timeoutMs,
       );
     }
     return results;
@@ -89,7 +94,7 @@ export function probeSqliteDatabaseHeaders(pathnames: Iterable<string>): Map<str
         : " Check that the backup worker can run and the source files are readable, then retry the backup.";
     throw new Error(
       hasErrnoCode(cause, "ETIMEDOUT")
-        ? `SQLite header probe timed out after ${SQLITE_HEADER_PROBE_TIMEOUT_MS} ms while checking ${paths.length} backup paths. ` +
+        ? `SQLite header probe timed out after ${timeoutMs} ms while checking ${paths.length} backup paths. ` +
             "For a blocked update, preserve a verified backup and follow the manual package-manager hop: " +
             "https://docs.openclaw.ai/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun"
         : `Could not determine whether backup files are SQLite databases.${hint}`,

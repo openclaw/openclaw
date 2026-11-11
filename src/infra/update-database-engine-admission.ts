@@ -45,6 +45,7 @@ export async function assertUpdateDatabaseEngineContexts(
       ...context,
       stateDir,
       agentRegistry: [],
+      sqliteHeaderProbeTimeoutMs: context.config.update?.sqliteHeaderProbeTimeoutMs,
     });
     const postgres = paths.filter((pathname) => readBackupEngine(pathname).engine === "postgres");
     if (
