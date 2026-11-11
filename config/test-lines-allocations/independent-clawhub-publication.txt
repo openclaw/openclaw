@@ -2,4 +2,4 @@
 # Includes removal of superseded ClawHub runtime-state tests.
 # +58: execute the workflow dispatch writer through the real postpublish verifier;
 # prevent false completion for core while preserving explicit deferral and no-op lanes.
-61
+54
