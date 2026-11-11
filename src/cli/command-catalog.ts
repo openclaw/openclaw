@@ -91,6 +91,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   // The message runner selects config preparation from the action's execution mode.
   { commandPath: ["message"], policy: { configGuard: "defer", loadPlugins: "never" } },
   { commandPath: ["docs"], policy: { configGuard: "skip" } },
+  { commandPath: ["tools", "usage"], policy: PASSIVE_STARTUP_POLICY },
   // Destructive maintenance owns a validity-aware, non-observing config read.
   // Startup migrations would mutate the SQLite state these commands may refuse to remove.
   { commandPath: ["reset"], policy: { configGuard: "skip" } },

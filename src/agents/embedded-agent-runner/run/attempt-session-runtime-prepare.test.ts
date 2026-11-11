@@ -276,7 +276,7 @@ function createFixture() {
       toolSearchRunPlan: { replayAllowedToolNames: new Set(["read"]) },
     },
     bundleTools: { clientTools: [], uncompactedEffectiveTools: [] },
-    systemPrompt: { systemPromptText: "initial prompt" },
+    prepareSystemPrompt: async () => ({ systemPromptText: "initial prompt" }),
     sessionLock: {
       transcriptLifecycle: {},
       ownedTranscriptWriteContext: {
@@ -408,7 +408,11 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
           abortSignal: fixture.input.runAbortSignal,
           executeCodeModeTool: async () => ({ content: [], details: {} }),
         });
-        fixture.input.systemPrompt.prepareToolPrompt = async () => (prompt) => prompt;
+        fixture.input.prepareSystemPrompt = async () =>
+          ({
+            systemPromptText: "initial prompt",
+            prepareToolPrompt: async () => (prompt: string) => prompt,
+          }) as never;
         const prepared = await fixture.prepare();
         const publication =
           runtime.toolSearchCatalogRef?.current?.entries.find(
@@ -473,6 +477,47 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       });
     },
   );
+  it("passes the frozen ranking to renderers after disabling the lab without a boundary", async () => {
+    const fixture = createFixture();
+    const first = await fixture.prepare();
+    const snapshot = {
+      version: 1 as const,
+      at: 100,
+      orderedToolIds: ["openclaw:core:read"],
+      newcomers: { "openclaw:core:read": 100 },
+    };
+    first.sessionPromptState.usageRanking!.snapshot = snapshot;
+    fixture.input.toolBase.toolSearchCatalogRef = {
+      current: {
+        entries: [
+          {
+            id: "openclaw:core:read",
+            name: "read",
+            source: "core",
+            description: "read",
+            tool: {
+              name: "read",
+              label: "read",
+              description: "read",
+              parameters: Type.Object({}),
+              execute: async () => ({ content: [], details: {} }),
+            },
+          },
+        ],
+        counterScope: "synthetic",
+        searchCount: 0,
+        describeCount: 0,
+        callCount: 0,
+      },
+    };
+    const render = vi.fn<PrepareInput["prepareSystemPrompt"]>(async () => ({
+      systemPromptText: "unchanged",
+    }));
+    fixture.input.prepareSystemPrompt = render;
+    await fixture.prepare();
+    expect(render.mock.calls[0]?.[0]?.()).toBe(snapshot);
+  });
+
   it("clears an unsent prompt without reading history when prompt updates remain enabled", async () => {
     const fixture = createHistoryFixture();
     const first = await prepareEmbeddedAttemptSessionRuntime(fixture.input);

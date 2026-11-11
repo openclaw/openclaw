@@ -60,6 +60,7 @@ function createHarness(params: Parameters<typeof subscribeHarness>[0]) {
       harness.executeTool({
         tool: target,
         toolName: target.name,
+        toolId: `openclaw:${overrides.sourceName ?? "core"}:${target.name}`,
         source: "openclaw",
         toolCallId,
         input: {},

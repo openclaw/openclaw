@@ -140,6 +140,7 @@ it.each([
               ? prepared.toolSearchCatalogExecutor({
                   tool: progress,
                   toolName: progress.name,
+                  toolId: "openclaw:core:progress_card",
                   toolCallId: "nested-plan",
                   parentToolCallId: id,
                   source: "openclaw",

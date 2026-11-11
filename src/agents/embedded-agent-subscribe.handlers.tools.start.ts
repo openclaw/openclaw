@@ -57,6 +57,7 @@ function reserveQuestionPromptDelivery(
 
 type ToolStartRecord = {
   startTime: number;
+  toolUsageId?: string;
   args: unknown;
   hideFromChannelProgress?: boolean;
   parentToolCallId?: string;
@@ -305,6 +306,9 @@ export function handleToolExecutionStart(
     const startedAt = Date.now();
     toolStartData.set(buildToolStartKey(runId, toolCallId), {
       startTime: startedAt,
+      ...(ctx.params.toolUsageRecorder
+        ? { toolUsageId: ctx.params.toolUsageIdsByName?.get(rawToolName) }
+        : {}),
       args,
       hideFromChannelProgress: evt.hideFromChannelProgress,
       parentToolCallId: evt.parentToolCallId,

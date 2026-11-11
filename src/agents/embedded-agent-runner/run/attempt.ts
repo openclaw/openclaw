@@ -33,6 +33,10 @@ import {
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
+import {
+  createRunToolUsageRecorder,
+  isToolUsageRecordingEnabled,
+} from "../../tool-usage-recorder.js";
 import { log } from "../logger.js";
 import { remapSkillReferencePaths } from "../sandbox-skills.js";
 import { prepareEmbeddedSkills } from "../skill-runtime.js";
@@ -191,6 +195,20 @@ async function runEmbeddedAttemptOwned(
     params.abortSignal,
   );
   try {
+    if (isToolUsageRecordingEnabled(params)) {
+      params = {
+        ...params,
+        toolUsageRecorder: await prepare("attempt.tool-usage", () =>
+          createRunToolUsageRecorder({
+            agentId: sessionAgentId,
+            runId: params.runId,
+            config: params.config,
+            sessionKey: params.sessionKey,
+            log,
+          }),
+        ),
+      };
+    }
     const preparedSkills = await prepare("attempt.skills", () =>
       prepareEmbeddedSkills({
         assertCurrent: () => {
@@ -348,25 +366,32 @@ async function runEmbeddedAttemptOwned(
     const { effectiveTools, toolSearch, toolSearchRunPlan, deferredDirectoryToolsCallable } =
       preparedToolCatalog;
     toolSearchCatalogApplied = toolSearch.catalogRegistered;
-    const preparedSystemPrompt = await prepare("attempt.system-prompt", () =>
-      prepareEmbeddedAttemptSystemPrompt({
-        activeContextEngine,
-        attempt: params,
-        setup,
-        bootstrap: preparedBootstrap,
-        capabilityToolNames: toolSearchRunPlan.capabilityToolNames,
-        effectiveTools,
-        isRawModelRun,
-        modelToolsEnabled: toolsEnabled,
-        skillsPrompt,
-        codeModeActive: codeModeControlsEnabledForRun,
-        webSearchUnconfigured: () => preparedToolBase.webSearchUnconfigured,
-        toolSearchCatalogRef,
-        toolSearchDirectoryEnabled: toolSearchControlsEnabledForRun && toolSearch.catalogRegistered,
-        deferredToolsDirectlyCallable: deferredDirectoryToolsCallable,
-        toolSearchRuntimeConfig,
-      }),
-    );
+    const prepareSystemPrompt = (
+      getUsageRanking: () =>
+        | import("../../tool-usage-ranking.js").ToolUsageRankingSnapshot
+        | undefined,
+    ) =>
+      prepare("attempt.system-prompt", () =>
+        prepareEmbeddedAttemptSystemPrompt({
+          getUsageRanking,
+          activeContextEngine,
+          attempt: params,
+          setup,
+          bootstrap: preparedBootstrap,
+          capabilityToolNames: toolSearchRunPlan.capabilityToolNames,
+          effectiveTools,
+          isRawModelRun,
+          modelToolsEnabled: toolsEnabled,
+          skillsPrompt,
+          codeModeActive: codeModeControlsEnabledForRun,
+          webSearchUnconfigured: () => preparedToolBase.webSearchUnconfigured,
+          toolSearchCatalogRef,
+          toolSearchDirectoryEnabled:
+            toolSearchControlsEnabledForRun && toolSearch.catalogRegistered,
+          deferredToolsDirectlyCallable: deferredDirectoryToolsCallable,
+          toolSearchRuntimeConfig,
+        }),
+      );
     const sessionLock = await prepare("attempt.transcript-lifecycle", () =>
       prepareEmbeddedAttemptTranscriptLifecycle({
         attempt: params,
@@ -386,7 +411,7 @@ async function runEmbeddedAttemptOwned(
           toolBase: preparedToolBase,
           toolCatalog: preparedToolCatalog,
           bundleTools: preparedBundleTools,
-          systemPrompt: preparedSystemPrompt,
+          prepareSystemPrompt,
           sessionLock,
           runAbortSignal: runAbortController.signal,
           externalAbortController,
@@ -444,6 +469,7 @@ async function runEmbeddedAttemptOwned(
           },
         }),
       );
+      const preparedSystemPrompt = preparedSessionRuntime.systemPrompt;
       const promptToolPolicy = createPromptBuildToolPolicy({
         diagnosticIdentity: {
           agentId: sessionAgentId,
@@ -627,8 +653,15 @@ async function runEmbeddedAttemptOwned(
           }
         });
       } finally {
-        setup[Symbol.dispose]();
-        externalAbortController.dispose();
+        try {
+          const recorder = params.toolUsageRecorder;
+          if (recorder) {
+            await cleanupStep("embedded-tool-usage", () => recorder.settle());
+          }
+        } finally {
+          setup[Symbol.dispose]();
+          externalAbortController.dispose();
+        }
       }
     };
     if (resolveCleanupReason() === "completion") {

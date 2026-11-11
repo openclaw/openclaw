@@ -2,6 +2,7 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
@@ -17,7 +18,14 @@ import {
   sessionManagerReadToolResultProjectionEntries,
   sessionManagerReadTranscriptBranch,
 } from "../../sessions/session-manager-view-types.js";
+import { resolveToolSearchConfig } from "../../tool-search-config.js";
+import {
+  readToolUsageRankingSnapshot,
+  type ToolUsageRankingSnapshot,
+} from "../../tool-usage-ranking.js";
+import { decayToolUsage } from "../../tool-usage.js";
 import type { AnyAgentTool } from "../../tools/common.js";
+import { log } from "../logger.js";
 import { declarePromptToolPin } from "../prompt-cache-observability.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
 import {
@@ -25,6 +33,7 @@ import {
   beginSessionSystemPrompt,
   buildSystemPromptRouteKey,
   prepareSessionSystemPrompt,
+  prepareSessionToolUsageRanking,
   prepareSessionToolSurface,
   prepareSessionPublicationToolListing,
   retireSessionSystemPrompt,
@@ -75,7 +84,9 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   toolBase: Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>>;
   toolCatalog: Awaited<ReturnType<typeof prepareEmbeddedAttemptToolCatalog>>;
   bundleTools: Awaited<ReturnType<typeof prepareEmbeddedAttemptBundleTools>>;
-  systemPrompt: Awaited<ReturnType<typeof prepareEmbeddedAttemptSystemPrompt>>;
+  prepareSystemPrompt: (
+    getUsageRanking: () => ToolUsageRankingSnapshot | undefined,
+  ) => Promise<Awaited<ReturnType<typeof prepareEmbeddedAttemptSystemPrompt>>>;
   sessionLock: Awaited<ReturnType<typeof prepareEmbeddedAttemptTranscriptLifecycle>>;
   runAbortSignal: AbortSignal;
   externalAbortController: Pick<EmbeddedAttemptExternalAbortController, "setActiveSessionAbort">;
@@ -109,8 +120,6 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     toolSearchCatalogRef,
     toolSearchRuntimeConfig,
   } = toolBase;
-  const { systemPromptReport } = input.systemPrompt;
-  let systemPromptText = input.systemPrompt.systemPromptText;
   const sessionPreparation = {
     attempt,
     assertCurrent: () => {
@@ -163,7 +172,82 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     inHistorySystemUpdates: transcriptPolicy.inHistorySystemUpdates === true,
     // Personal bootstrap follows the session's selected human, not only the session ID.
     personalProfile: attempt.bootstrapUserProfileId,
+    harness: attempt.agentHarnessRuntimeOverride ?? attempt.agentHarnessId ?? "openclaw",
+    surface: codeModeControlsEnabledForRun
+      ? "code-mode"
+      : toolBase.toolSearchControlsEnabledForRun
+        ? resolveToolSearchConfig(toolSearchRuntimeConfig).mode
+        : "direct",
   });
+  const rankingEnabled =
+    usesSystemPromptSeries &&
+    attempt.config?.agents?.defaults?.experimental?.usageRankedToolIndex === true;
+  const initialEntries = rankingEnabled ? sessionManager[sessionManagerReadTranscriptBranch]() : [];
+  const inheritedRanking =
+    rankingEnabled &&
+    !initialEntries.some(
+      (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
+    )
+      ? readToolUsageRankingSnapshot(
+          (
+            await getReplyOperationSessionReader(attempt.replyOperation)?.readEntry(
+              sessionPreparation.assertCurrent,
+              "list",
+            )
+          )?.entry?.toolUsageRankingSeed,
+        )
+      : undefined;
+  let usageRanking: ToolUsageRankingSnapshot | undefined;
+  const prepareUsageRanking = async () => {
+    if (
+      !usesSystemPromptSeries ||
+      (!rankingEnabled &&
+        sessionPromptState.usageRanking &&
+        !sessionPromptState.usageRanking.snapshot)
+    ) {
+      return undefined;
+    }
+    const now = Date.now();
+    usageRanking = await prepareSessionToolUsageRanking({
+      state: sessionPromptState,
+      routeKey: promptRouteKey,
+      entries: sessionManager[sessionManagerReadTranscriptBranch](),
+      historyBoundaryCount: sessionManager.getBoundaryCount(),
+      enabled: rankingEnabled,
+      catalogIds:
+        toolSearchCatalogRef?.current?.entries
+          .filter((entry) => entry.source !== "mcp")
+          .map((entry) => entry.id) ?? [],
+      inherited: inheritedRanking,
+      now,
+      readRankedIds: async () => {
+        try {
+          const { readAgentToolUsage } = await import("../../../config/sessions/tool-usage.js");
+          const usage = await readAgentToolUsage({
+            agentId: sessionAgentId,
+            config: attempt.config,
+          });
+          sessionPreparation.assertCurrent();
+          return usage
+            .toSorted(
+              (a, b) =>
+                decayToolUsage(b, now) - decayToolUsage(a, now) ||
+                (a.toolId < b.toolId ? -1 : a.toolId > b.toolId ? 1 : 0),
+            )
+            .map((row) => row.toolId);
+        } catch (error) {
+          log.warn(`Tool usage ranking unavailable: ${String(error)}`);
+          return [];
+        }
+      },
+    });
+    sessionPreparation.assertCurrent();
+    return usageRanking;
+  };
+  await prepareUsageRanking();
+  const systemPrompt = await input.prepareSystemPrompt(() => usageRanking);
+  const { systemPromptReport } = systemPrompt;
+  let systemPromptText = systemPrompt.systemPromptText;
   // Retire old overrides before new carriers without checkpointing unadmitted notices.
   const retireSystemPromptUpdates = () =>
     sessionLock.withOwnedTranscriptWrite(() =>
@@ -207,7 +291,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       }),
     );
     if (changed) {
-      const prepare = input.systemPrompt.prepareToolPrompt;
+      const prepare = systemPrompt.prepareToolPrompt;
       if (!prepare) {
         throw new Error("Restoring a session tool listing requires prompt preparation support.");
       }
@@ -219,10 +303,24 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   let freshSystemPrompt = systemPromptText;
   let projectedSystemPrompt: string | undefined;
   const prepareSystemPromptUpdate =
-    usesSystemPromptSeries && transcriptPolicy.inHistorySystemUpdates
-      ? async (systemPrompt: string, freshlyRendered = false) => {
-          if (freshlyRendered || systemPrompt !== projectedSystemPrompt) {
-            freshSystemPrompt = systemPrompt;
+    usesSystemPromptSeries && (transcriptPolicy.inHistorySystemUpdates || rankingEnabled)
+      ? async (nextPrompt: string, freshlyRendered = false) => {
+          let preparedPrompt = nextPrompt;
+          let wasFreshlyRendered = freshlyRendered;
+          const previousRanking = usageRanking;
+          await prepareUsageRanking();
+          if (usageRanking !== previousRanking && systemPrompt.prepareToolPrompt) {
+            const refresh = await systemPrompt.prepareToolPrompt(
+              resources.session?.agent.state.tools ?? effectiveTools,
+            );
+            preparedPrompt = refresh(nextPrompt);
+            wasFreshlyRendered = true;
+          }
+          if (wasFreshlyRendered || preparedPrompt !== projectedSystemPrompt) {
+            freshSystemPrompt = preparedPrompt;
+          }
+          if (!transcriptPolicy.inHistorySystemUpdates) {
+            return { systemPrompt: freshSystemPrompt };
           }
           const prepared = prepareSessionSystemPrompt({
             state: sessionPromptState,
@@ -535,6 +633,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   });
 
   return {
+    systemPrompt,
     agentSession: preparedAgentSession,
     anthropicPayloadLogger,
     boundary,
