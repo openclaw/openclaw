@@ -9,7 +9,7 @@ import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { isUsageCacheIncomplete } from "./cache-status.ts";
 import { UsageMosaic } from "./metrics-view.tsx";
 import { buildPeakErrorHours, formatUsageCost, formatUsageTokens } from "./metrics.ts";
-import { renderUsageEmptyState } from "./page-shell.tsx";
+import { UsageEmptyState } from "./page-shell.tsx";
 import { createUsagePhoneLayout } from "./phone-layout.ts";
 import { buildProviderSeries } from "./provider-series.ts";
 import { createUsageRead, UsagePending, UsageReadStatus, type UsageRead } from "./read-status.tsx";
@@ -238,7 +238,10 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
             </div>
           ) : undefined
         ) : isEmpty() ? (
-          renderUsageEmptyState(() => void props.callbacks.filters.onRefresh())
+          <UsageEmptyState
+            loading={loading()}
+            onRefresh={() => void props.callbacks.filters.onRefresh()}
+          />
         ) : undefined}
         <Show when={showAnalytics() || retainedCharts()}>
           {(_shown) => (
