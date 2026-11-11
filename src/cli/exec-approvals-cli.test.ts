@@ -107,6 +107,8 @@ describe("exec approvals CLI", () => {
     expect(output).toContain("State");
     expect(output).toContain("defaults (no stored overrides)");
     expect(output).not.toContain("Exists");
+    expect(output).toMatch(/security=full +│/u);
+    expect(output).not.toMatch(/\\n(?:ask|askFallback)=/u);
   });
 
   it("sanitizes stored allowlist patterns in human output without changing JSON", async () => {
