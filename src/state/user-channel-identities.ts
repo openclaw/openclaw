@@ -96,16 +96,15 @@ export function publishUserChannelPolicyInDatabase(
   configuredOwnersHash?: string,
 ) {
   let profiles: string[] = [];
+  let policyChanged = false;
   const channels: string[] = [];
   updateConfigMachineStateInDatabase(
     db,
     POLICY_KEY,
     (current: unknown) => {
       const previous = splitPolicy(current);
-      if (
-        !isDeepStrictEqual(previous.policy, policy) &&
-        tableExists(db, "user_profile_identities")
-      ) {
+      policyChanged = !isDeepStrictEqual(previous.policy, policy);
+      if (policyChanged && tableExists(db, "user_profile_identities")) {
         profiles = executeSqliteQuerySync(
           db,
           userProfilesDb(db)
@@ -133,7 +132,7 @@ export function publishUserChannelPolicyInDatabase(
     },
     Date.now(),
   );
-  return { profiles, channels };
+  return { profiles, channels, policyChanged: policyChanged || channels.length > 0 };
 }
 
 /** The reference names this uninterrupted channel link; it carries no permission by itself. */
