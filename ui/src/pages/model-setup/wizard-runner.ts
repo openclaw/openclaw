@@ -21,15 +21,27 @@ import type { FirstRunSetup } from "./first-run-setup.ts";
 import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
   MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
-  type ModelSetupWizardStartMethod,
-  type ModelSetupWizardCompletion,
   type ModelSetupWizardResult,
   type ModelSetupWizardRecovery,
   type ModelSetupWizardState,
   wizardStateFromResult,
 } from "./state.ts";
 
-export type { ModelSetupWizardStartMethod, ModelSetupWizardCompletion } from "./state.ts";
+export type ModelSetupWizardStartMethod =
+  | "mcp.authLogin"
+  | "models.authLogin"
+  | "openclaw.setup.auth.start"
+  | "openclaw.setup.prepare.start"
+  | "openclaw.setup.activate.start"
+  | "openclaw.setup.runtime.start";
+
+export type ModelSetupWizardCompletion = {
+  startMethod: ModelSetupWizardStartMethod;
+  preparedModelRef?: string;
+  activationTargetId?: string;
+  modelActivation?: WizardNextResult["modelActivation"];
+  isCurrent?: () => boolean;
+};
 
 type WizardTerminalObserver = (result: ModelSetupWizardResult) => (() => boolean) | void;
 
@@ -591,7 +603,6 @@ export class ModelSetupWizardRunner {
     }
     return {
       startMethod: session.startMethod,
-      ...(session.cancellationRequested ? { cancellationRequested: true as const } : {}),
       ...(session.activationTargetId ? { activationTargetId: session.activationTargetId } : {}),
       ...(isCurrent ? { isCurrent } : {}),
       ...(result.preparedModelRef ? { preparedModelRef: result.preparedModelRef } : {}),

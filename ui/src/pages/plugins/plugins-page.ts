@@ -141,8 +141,7 @@ export function createPluginsPage(options: {
   const skillPreview = createPluginPreview(gateway, publish);
   const mcpLogin = createPluginMcpLogin(gateway, {
     getDetail: () => state.detail,
-    context,
-    getSearch: () => routeData?.location.search,
+    getName: (pluginId) => state.result?.plugins.find((plugin) => plugin.id === pluginId)?.name,
     refresh: showDetails,
     setMessage,
   });

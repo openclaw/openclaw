@@ -59,24 +59,6 @@ export type ModelSetupVerifyState =
   | { phase: "ok"; modelRef: string; modelTarget?: "utility"; latencyMs?: number }
   | { phase: "failed"; status: ModelSetupVerifyFailure["status"]; error: string };
 
-export type ModelSetupWizardStartMethod =
-  | "mcp.authLogin"
-  | "models.authLogin"
-  | "openclaw.setup.auth.start"
-  | "openclaw.setup.prepare.start"
-  | "openclaw.setup.activate.start"
-  | "openclaw.setup.runtime.start";
-
-export type ModelSetupWizardCompletion = {
-  startMethod: ModelSetupWizardStartMethod;
-  /** A protected credential write may finish even after the user asked to cancel. */
-  cancellationRequested?: true;
-  preparedModelRef?: string;
-  activationTargetId?: string;
-  modelActivation?: WizardNextResult["modelActivation"];
-  isCurrent?: () => boolean;
-};
-
 export type ModelSetupWizardResult =
   | WizardNextResult
   | { done: true; status: "not-admitted"; error: string };

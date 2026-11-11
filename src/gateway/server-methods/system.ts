@@ -303,14 +303,6 @@ export const systemHandlers: GatewayRequestHandlers = {
       : resolveSystemMainSessionTarget(cfg);
     const { agentId: eventOwnerAgentId, sessionKey } = systemTarget;
     const wake = params.wake === true;
-    if (params.expectedSessionId && (!wake || !requestedSessionKey)) {
-      respondError(
-        respond,
-        ErrorCodes.INVALID_REQUEST,
-        "expectedSessionId requires a targeted wake",
-      );
-      return;
-    }
     const authority = readGatewayRequestMutationAuthority(options);
     const isNodePresenceLine = text.startsWith("Node:");
     if (wake && isNodePresenceLine) {
@@ -369,14 +361,6 @@ export const systemHandlers: GatewayRequestHandlers = {
           })
         : undefined;
     assertAcceptanceCurrent();
-    if (params.expectedSessionId && eventTarget?.sessionId !== params.expectedSessionId) {
-      respondError(
-        respond,
-        ErrorCodes.INVALID_REQUEST,
-        "The original session changed. The task was not resumed.",
-      );
-      return;
-    }
     const reason = params.reason;
     const lastInputSeconds = params.tags?.includes(SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG)
       ? null

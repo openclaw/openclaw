@@ -20,7 +20,6 @@ type PluginLifecycleProps = {
   /** First account the operator can still sign in to; it owns the primary action. */
   signInServer?: string;
   mcpLoginBusy?: boolean;
-  mcpResumeTask?: boolean;
   onMcpLogin?: (serverName: string) => void;
 };
 export function PluginLifecycle(props: PluginLifecycleProps & { plugin: PluginCatalogItem }) {
@@ -76,17 +75,10 @@ export function PluginLifecycle(props: PluginLifecycleProps & { plugin: PluginCa
             type="button"
             class="btn primary plugin-catalog-detail__sign-in"
             aria-label={t("pluginsPage.auth.connectAccount", { name: serverName() })}
-            aria-description={
-              props.mcpResumeTask ? t("pluginsPage.auth.connectAndResume") : undefined
-            }
             disabled={props.mcpLoginBusy}
             onClick={() => props.onMcpLogin?.(serverName())}
           >
-            {t(
-              props.mcpResumeTask
-                ? "pluginsPage.auth.connectAndResume"
-                : "pluginsPage.auth.connect",
-            )}
+            {t("pluginsPage.auth.connect")}
           </button>
         )}
       </Show>

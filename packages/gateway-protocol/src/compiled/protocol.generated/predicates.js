@@ -691,7 +691,7 @@ var External = [
     /(^action$|^slug$|^sizeBytes$|^sha256$)/u,
     /(^action$|^uploadId$|^offset$|^data$)/u,
     /(^action$|^uploadId$)/u,
-    /(^text$|^idempotencyKey$|^sessionKey$|^expectedSessionId$|^wake$|^deviceId$|^instanceId$|^host$|^ip$|^mode$|^version$|^platform$|^deviceFamily$|^modelIdentifier$|^lastInputSeconds$|^reason$|^roles$|^scopes$|^tags$)/u,
+    /(^text$|^idempotencyKey$|^sessionKey$|^wake$|^deviceId$|^instanceId$|^host$|^ip$|^mode$|^version$|^platform$|^deviceFamily$|^modelIdentifier$|^lastInputSeconds$|^reason$|^roles$|^scopes$|^tags$)/u,
     /(^agentId$|^modelProvider$|^modelId$)/u,
     /\S/u,
     /(^agentId$|^modelProvider$|^modelId$|^query$|^providerId$)/u,
@@ -3157,9 +3157,6 @@ var External = [
       !("idempotencyKey" in value) ||
       check_63(value.idempotencyKey)) &&
     (value.sessionKey === void 0 || !("sessionKey" in value) || check_276(value.sessionKey)) &&
-    (value.expectedSessionId === void 0 ||
-      !("expectedSessionId" in value) ||
-      check_63(value.expectedSessionId)) &&
     (value.wake === void 0 || !("wake" in value) || check_181(value.wake)) &&
     (value.deviceId === void 0 || !("deviceId" in value) || check_276(value.deviceId)) &&
     (value.instanceId === void 0 || !("instanceId" in value) || check_276(value.instanceId)) &&

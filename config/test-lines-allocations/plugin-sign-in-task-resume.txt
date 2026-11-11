@@ -1,2 +1,0 @@
-# Real Gateway/UI OAuth+MCP+scripted-model flow proves success-only continuation without repeating prior effects; regressions cover original session identity and cancellation after protected credential save.
-565

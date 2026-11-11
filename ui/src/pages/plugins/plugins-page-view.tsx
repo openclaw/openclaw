@@ -265,7 +265,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
           installProgress={page().consent.getActiveInstall(pluginRowKey(detailProps.pluginId))}
           inspection={page().state.detail?.inspection ?? null}
           mcpLoginBusy={page().mcpLogin.busy}
-          mcpResumeTask={Boolean(page().mcpLogin.returnSessionKey())}
           canMcpLogin={canCallGatewayMethod(
             page().gateway.snapshot,
             "mcp.authLogin",

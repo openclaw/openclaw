@@ -792,3 +792,46 @@ describe("ask_user", () => {
     await pending;
   });
 });
+
+it.each(["ready", "declined", "cancelled", "expired", "pending"] as const)(
+  "keeps required manual work distinct from optional decisions: %s",
+  async (outcome) => {
+    const gateway = registeredGateway({
+      "question.resolve": async () => ({ status: "cancelled" }),
+      "question.waitAnswer": async () =>
+        outcome === "ready" || outcome === "declined"
+          ? {
+              status: "answered",
+              answers: {
+                answers: {
+                  required_action: [outcome === "ready" ? "Ready to recheck" : "Stop this task"],
+                },
+              },
+            }
+          : { status: outcome },
+    });
+    const result = await createAskUserTool({ sessionKey: `agent:main:manual-${outcome}` }).execute(
+      `manual-${outcome}`,
+      {
+        requiredAction: {
+          reason: "A manual step is required.",
+          instructions: "Complete it in the existing browser panel.",
+        },
+      },
+    );
+    expect(
+      gateway.mock.mock.calls.find(([method]) => method === "question.request")?.[2],
+    ).toMatchObject({
+      questions: [{ questionId: "required_action", isOther: false }],
+    });
+    expect(result.details).toMatchObject(
+      outcome === "ready"
+        ? { status: "ready_to_verify" }
+        : { status: "action_unresolved", reason: outcome === "pending" ? "expired" : outcome },
+    );
+    expect(JSON.stringify(result)).not.toContain("proceed with best judgment");
+    if (outcome === "ready") {
+      expect(JSON.stringify(result)).toContain("not proof");
+    }
+  },
+);
