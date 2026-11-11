@@ -16,7 +16,7 @@ export async function requestTalkCatalog<T>(
     resolveSafeTimeoutDelayMs(options?.timeoutMs ?? 10_000, { minMs: 0 }),
     10_000,
   );
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   const signal = options?.signal
     ? AbortSignal.any([options.signal, connectionSignal])
     : connectionSignal;
@@ -35,11 +35,11 @@ export async function requestTalkCatalog<T>(
         throw error;
       }
       const delay = resolveSafeTimeoutDelayMs(error.retryAfterMs ?? 250, { minMs: 250 });
-      if (Date.now() + delay >= deadline) {
+      if (deadline - performance.now() <= delay) {
         throw error;
       }
       await sleepWithAbort(delay, signal);
-      const remaining = deadline - Date.now();
+      const remaining = deadline - performance.now();
       if (remaining <= 0) {
         throw error;
       }

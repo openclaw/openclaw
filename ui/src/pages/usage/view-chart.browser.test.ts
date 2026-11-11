@@ -15,7 +15,6 @@ function chart(
     dailyChartMode,
     selectedDays: [],
     chartMode: "tokens",
-    onDailyChartModeChange: () => {},
     providerSeries: [],
     onSelectDay: () => {},
     range: { startDate: dailyEntries[0]!.date, endDate: dailyEntries.at(-1)!.date, complete: true },

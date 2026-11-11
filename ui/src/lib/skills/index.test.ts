@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SkillStatusReport } from "../../api/types.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { createProps, createSkill } from "../../pages/skills/view.test-support.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -644,4 +645,31 @@ it("retires presentation before selecting the roster default after the selected 
   expect(state.skillsAgentRevision).toBe(1);
   expect(state.skillsReport).toBeNull();
   expect(state.skillOperation).toEqual({ kind: "clawhub", ref: "calendar" });
+});
+
+it.each([true, false])("localizes skill toggle feedback (enabled=%s)", async (enabled) => {
+  request.mockResolvedValue(statusReport());
+  const translate = vi.spyOn(i18n, "t").mockReturnValue("localized skill feedback");
+  onTestFinished(() => translate.mockRestore());
+  await updateSkillEnabled(state, "github", enabled);
+  expect(translate).toHaveBeenCalledWith(
+    enabled ? "skillsPage.skillEnabled" : "skillsPage.skillDisabled",
+  );
+  expect(state.skillMessages.github?.message).toBe("localized skill feedback");
+});
+
+it("localizes only the UI-authored ClawHub installation fallback", async () => {
+  request.mockImplementation(async (method) => (method === "skills.install" ? {} : statusReport()));
+  const translate = vi.spyOn(i18n, "t").mockReturnValue("localized installation feedback");
+  onTestFinished(() => translate.mockRestore());
+  await installFromClawHub(state, "publisher/skill-name");
+  expect(translate).toHaveBeenCalledWith("skillsPage.installedRef", {
+    ref: "publisher/skill-name",
+  });
+  expect(state.clawhubInstallMessage?.text).toBe("localized installation feedback");
+  request.mockImplementation(async (method) =>
+    method === "skills.install" ? { message: "Publisher feedback" } : statusReport(),
+  );
+  await installFromClawHub(state, "publisher/skill-name");
+  expect(state.clawhubInstallMessage?.text).toBe("Publisher feedback");
 });

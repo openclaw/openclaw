@@ -452,7 +452,8 @@ describe("buildGatewayInstallPlan", () => {
 
   it("adds the active openclaw command bin directory to the managed service PATH", async () => {
     const originalArgv = process.argv;
-    const openclawBinPath = path.join(isolatedHome, ".npm-global", "bin", "openclaw");
+    // Outside the temp dir: temp folders are disposable and stay off the service PATH.
+    const openclawBinPath = path.resolve("/home/test/.npm-global/bin/openclaw");
     process.argv = ["node", openclawBinPath, "gateway", "install"];
     try {
       await buildNodePlan({

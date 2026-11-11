@@ -126,7 +126,7 @@ suite.define(() => {
       const rawOnly = page.locator(".settings-row").filter({
         has: page.locator(".settings-row__title").getByText("Agent code mode", { exact: true }),
       });
-      await revealControl(rawOnly);
+      await revealControl(rawOnly, ["Tools"]);
       expect(await rawOnly.textContent()).toContain("Unsupported schema node. Use Raw mode.");
       expect(await rawOnly.locator("input,select,textarea").count()).toBe(0);
 
@@ -276,7 +276,9 @@ suite.define(() => {
       await gateway.rejectDeferred("config.set", rejection);
 
       const status = page.locator("openclaw-settings-save-indicator").getByRole("status");
-      await expect.poll(() => status.textContent()).toContain("Settings not applied");
+      await expect
+        .poll(() => status.textContent())
+        .toContain("Couldn’t apply settings. Review your changes.");
       // The reason is in view; clicking it blurs the edited field without resubmitting it.
       await status
         .getByText(

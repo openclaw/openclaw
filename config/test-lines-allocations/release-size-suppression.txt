@@ -1,0 +1,2 @@
+# Strict unused-directive regression preserving release-size and correctness checks.
+34

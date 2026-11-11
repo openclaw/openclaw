@@ -488,6 +488,42 @@ describe("createOpenClawTools browser plugin integration", () => {
     },
   );
 
+  it("narrows tool auth queries to one stored credential type without other fallbacks", async () => {
+    vi.stubEnv("ACME_API_KEY", "env-key");
+    const config = authConfig("ACME_API_KEY");
+    config.auth = { order: { acme: ["acme:paid", "acme:subscription"] } };
+    const paid = { type: "api_key", provider: "acme", key: "paid-key" } as const; // pragma: allowlist secret
+    const subscription = {
+      type: "oauth",
+      provider: "acme",
+      access: "subscription-access",
+      refresh: "subscription-refresh",
+      expires: Date.now() + 3_600_000,
+    } as const;
+    const resolveWith = (profiles: Record<string, typeof paid | typeof subscription>) => {
+      hoisted.resolvePluginTools.mockClear();
+      return resolveTools({
+        config,
+        agentDir: TEST_AGENT_DIR,
+        authProfileStore: { version: 1, profiles },
+      }).context;
+    };
+
+    const both = resolveWith({ "acme:paid": paid, "acme:subscription": subscription });
+    expect(both.hasAuthForProvider?.("acme", { credentialType: "oauth" })).toBe(true);
+    await expect(both.resolveApiKeyForProvider?.("acme")).resolves.toBe("paid-key");
+    await expect(
+      both.resolveApiKeyForProvider?.("acme", { credentialType: "oauth" }),
+    ).resolves.toBe("subscription-access");
+
+    const paidOnly = resolveWith({ "acme:paid": paid });
+    expect(paidOnly.hasAuthForProvider?.("acme")).toBe(true);
+    expect(paidOnly.hasAuthForProvider?.("acme", { credentialType: "oauth" })).toBe(false);
+    await expect(
+      paidOnly.resolveApiKeyForProvider?.("acme", { credentialType: "oauth" }),
+    ).resolves.toBeUndefined();
+  });
+
   it("keeps the plugin tool getter live across authored source reloads", () => {
     const sourceConfig = { gateway: { publicOrigin: "https://first.example" } };
     const firstRuntimeConfig = { ...sourceConfig, plugins: { allow: ["memory-core"] } };

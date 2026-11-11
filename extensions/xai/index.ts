@@ -53,6 +53,7 @@ import {
   resolveCodeExecutionEnabled,
 } from "./src/code-execution-config.js";
 import {
+  hasXaiSubscriptionToolAuth,
   isXaiToolEnabled,
   resolveFallbackXaiAuth,
   type XaiToolAuthContext,
@@ -300,8 +301,27 @@ function createLazyCodeExecutionTool(ctx: OpenClawPluginToolContext) {
   );
 }
 
+/**
+ * Grok OAuth runs x_search on the user's SuperGrok/X Premium subscription, so a known
+ * non-xAI model needs no cross-provider billing opt-in. Execution then uses only that
+ * OAuth credential; an explicit `enabled: false` still wins.
+ */
+function canExposeXSearchWithSubscription(ctx: OpenClawPluginToolContext): boolean {
+  const enabled = resolveEffectiveXSearchConfig(ctx.runtimeConfig ?? ctx.config)?.enabled;
+  return (
+    Boolean(ctx.activeModel?.provider?.trim()) &&
+    enabled === undefined &&
+    hasXaiSubscriptionToolAuth(ctx)
+  );
+}
+
 function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
-  if (!canExposeXaiBilledTool(ctx, resolveEffectiveXSearchConfig, isXSearchEnabled)) {
+  const subscriptionOnly = !canExposeXaiBilledTool(
+    ctx,
+    resolveEffectiveXSearchConfig,
+    isXSearchEnabled,
+  );
+  if (subscriptionOnly && !canExposeXSearchWithSubscription(ctx)) {
     return null;
   }
 
@@ -313,6 +333,7 @@ function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
       config: ctx.config as never,
       runtimeConfig: (ctx.runtimeConfig as never) ?? null,
       auth: ctx,
+      subscriptionOnly,
     });
     if (!tool) {
       return jsonResult(buildMissingXSearchApiKeyPayload());

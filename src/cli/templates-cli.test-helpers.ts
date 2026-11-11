@@ -16,8 +16,8 @@ export async function writeManifestFile(
   value: unknown = minimalManifest,
 ): Promise<string> {
   const dir = tempDirs.make("openclaw-templates-cli-");
-  const path = join(dir, "openclaw.template.json");
-  await writeFixtureJson(path, value);
+  const path = join(dir, "CLAW.md");
+  await writeFile(path, `---\n${JSON.stringify(value)}\n---\n`);
   return path;
 }
 
@@ -30,22 +30,25 @@ export async function writePackageFixture(tempDirs: {
   await writeFixtureJson(join(root, "package.json"), {
     name: "@acme/demo-agent",
     version: "1.2.3",
-    openclaw: { template: "openclaw.template.json" },
+    openclaw: { template: "CLAW.md" },
   });
-  await writeFixtureJson(join(root, "openclaw.template.json"), {
-    schemaVersion: 1,
-    agent: { id: "demo-agent", name: "Demo Agent" },
-    workspace: {
-      bootstrapFiles: { "AGENTS.md": { source: "workspace/AGENTS.md" } },
-    },
-    packages: [
-      {
-        kind: "skill",
-        source: "clawhub",
-        ref: "@acme/demo-skill",
-        version: "1.0.0",
+  await writeFile(
+    join(root, "CLAW.md"),
+    `---\n${JSON.stringify({
+      schemaVersion: 1,
+      agent: { id: "demo-agent", name: "Demo Agent" },
+      workspace: {
+        bootstrapFiles: { "AGENTS.md": { source: "workspace/AGENTS.md" } },
       },
-    ],
-  });
+      packages: [
+        {
+          kind: "skill",
+          source: "clawhub",
+          ref: "@acme/demo-skill",
+          version: "1.0.0",
+        },
+      ],
+    })}\n---\n`,
+  );
   return { root, workspace: join(root, "target-workspace") };
 }

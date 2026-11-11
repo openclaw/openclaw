@@ -162,9 +162,9 @@ describe("Agents effective-tools read", () => {
     const descriptions = [...view.container.querySelectorAll(".settings-section__desc")].map(
       (element) => element.textContent,
     );
-    expect(descriptions.some((text) => /permissions\. \d+\/\d+ enabled\./.test(text ?? ""))).toBe(
-      true,
-    );
+    expect(
+      descriptions.some((text) => /permissions\. \d+\/\d+ enabled(?:$|\s)/.test(text ?? "")),
+    ).toBe(true);
     expect(descriptions.some((text) => /Session: \S/.test(text ?? ""))).toBe(true);
   });
 
@@ -180,7 +180,7 @@ describe("Agents effective-tools read", () => {
       agentId: "main",
       sessionKey: "main",
     });
-    expect(view.container.textContent).toContain("Loading…");
+    expect(view.container.textContent).toContain("Loading preview…");
     await waitForSolid(() =>
       expect(view.container.querySelector(".agent-tools-group")).not.toBeNull(),
     );
@@ -221,7 +221,7 @@ describe("Agents effective-tools read", () => {
       reason: "patch",
     });
     await waitForSolid(() => expect(view.calls()).toHaveLength(2));
-    expect(view.container.textContent).toContain("Loading…");
+    expect(view.container.textContent).toContain("Loading preview…");
     expect(view.container.querySelector("#agent-tool-read")).toBe(card);
     expect(card.open).toBe(true);
     expect(group.open).toBe(true);

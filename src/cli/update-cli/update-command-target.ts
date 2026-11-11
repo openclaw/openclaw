@@ -7,6 +7,7 @@ import { isBunRuntime } from "../../daemon/runtime-binary.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
 import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-readonly-worker-protocol.js";
 import { assessInitialUpdateSnapshotCapacity } from "../../infra/update-candidate-snapshot.js";
 import {
@@ -16,11 +17,7 @@ import {
   resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
-import {
-  compareSemverStrings,
-  resolveExtendedStablePackage,
-  resolveNpmChannelTag,
-} from "../../infra/update-check.js";
+import { resolveExtendedStablePackage, resolveNpmChannelTag } from "../../infra/update-check.js";
 import { readDevUpdateTarget } from "../../infra/update-dev-target.js";
 import {
   canResolveRegistryVersionForPackageTarget,
@@ -565,7 +562,9 @@ export async function resolveUpdateCommandTarget(
             });
             if (targetMetadata.error || targetMetadata.version !== targetVersion) {
               const failure = createUpdatePreflightFailure(
-                targetMetadata.error ? "target-registry-metadata" : "target-version-resolution",
+                targetMetadata.error && !targetMetadata.versionMissing
+                  ? "target-registry-metadata"
+                  : "target-version-resolution",
                 `Could not inspect exact package target openclaw@${targetVersion}: ${targetMetadata.error ?? `registry returned version ${targetMetadata.version ?? "unknown"}`}.`,
               );
               await refuseUpdate(

@@ -21,6 +21,8 @@ async function main() {
       plugins: args.pluginSelection,
       token: process.env.GH_TOKEN,
       cacheDir,
+      parentRunId: Number(process.env.GITHUB_RUN_ID),
+      parentRunAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
     });
     for (const line of await verifyBetaRelease(args, { pluginNpmReadback })) {
       console.log(line);

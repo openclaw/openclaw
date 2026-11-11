@@ -1,6 +1,7 @@
 import type { CDPSession, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import { scrollChatThreadToTop, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
@@ -278,9 +279,36 @@ suite.define(() => {
           state: "delta",
           message: { role: "assistant", content: "More visualization detail.\n\n".repeat(30) },
         });
-        await expect.poll(() => thread.textContent()).toContain("More visualization detail.");
+        await expect
+          .poll(() =>
+            page.evaluate(() => {
+              const pane = document.querySelector<
+                HTMLElement & {
+                  state: Pick<ChatPageHost, "sessionKey" | "chatRunId" | "chatStream">;
+                }
+              >("openclaw-chat-pane.chat-pane-cache__pane--active");
+              return {
+                sessionKey: pane?.state.sessionKey,
+                runId: pane?.state.chatRunId,
+                text: pane?.state.chatStream,
+              };
+            }),
+          )
+          .toEqual({ sessionKey, runId, text: "More visualization detail.\n\n".repeat(30) });
         await waitForChatScrollIdle(page);
         expect(await thread.evaluate((element) => element.scrollTop)).toBe(upward.settled);
+        await page.getByRole("button", { name: "Scroll to latest" }).click();
+        await expect
+          .poll(() =>
+            thread.evaluate(
+              (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+            ),
+          )
+          .toBeLessThanOrEqual(4);
+        await thread
+          .getByText("More visualization detail.", { exact: true })
+          .last()
+          .waitFor({ state: "visible" });
       },
     );
   });

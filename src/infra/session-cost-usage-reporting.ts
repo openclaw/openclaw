@@ -7,7 +7,6 @@ import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
 import { isToolCallContentType } from "../chat/tool-content.js";
-import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import {
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
@@ -417,11 +416,9 @@ async function* readTranscriptRecords(
     yield* options.countedOnly ? dropInheritedTranscriptEvents(records, visible) : visible;
     return;
   }
-  // Durable byte-offset scans own their checkpoint reader. Diagnostic history
-  // shares the canonical transcript stream and materializes archive bytes once.
+  // Diagnostic history and durable scans decode archives without plaintext files.
   // Legacy JSONL transcripts predate the inherited-history marker, as in their rollup scan.
-  const transcriptPath = materializeSessionArchiveForRead(filePath);
-  for await (const line of streamSessionTranscriptLines(transcriptPath)) {
+  for await (const line of streamSessionTranscriptLines(filePath)) {
     try {
       const parsed: unknown = JSON.parse(line);
       if (isRecord(parsed)) {

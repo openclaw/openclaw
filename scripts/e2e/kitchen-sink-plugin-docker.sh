@@ -13,6 +13,7 @@ TARGET_ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" && pwd)"
 KITCHEN_SINK_ASSERTIONS="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
   scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs \
   "$ROOT_DIR/scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs")"
+KITCHEN_SINK_NPM_VERSION_FILE="$TARGET_ROOT_DIR/scripts/e2e/lib/kitchen-sink-plugin/npm-version.txt"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-kitchen-sink-plugin-e2e" OPENCLAW_KITCHEN_SINK_PLUGIN_E2E_IMAGE)"
 OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES="$(
   docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536
@@ -22,14 +23,27 @@ CLAW_HUB_FIXTURE_WAIT_ATTEMPTS="$(
 )"
 
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 kitchen-sink-plugin empty)"
-KITCHEN_SINK_NPM_SPEC="${OPENCLAW_KITCHEN_SINK_NPM_SPEC:-npm:@openclaw/kitchen-sink@latest}"
+if [[ -n "${OPENCLAW_KITCHEN_SINK_NPM_SPEC:-}" ]]; then
+  KITCHEN_SINK_NPM_SPEC="$OPENCLAW_KITCHEN_SINK_NPM_SPEC"
+else
+  if [[ ! -f "$KITCHEN_SINK_NPM_VERSION_FILE" ]]; then
+    echo "Frozen target is missing its branch-recorded Kitchen Sink npm version: $KITCHEN_SINK_NPM_VERSION_FILE" >&2
+    exit 2
+  fi
+  KITCHEN_SINK_NPM_VERSION="$(tr -d '[:space:]' <"$KITCHEN_SINK_NPM_VERSION_FILE")"
+  if [[ ! "$KITCHEN_SINK_NPM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+    echo "Invalid branch-recorded Kitchen Sink npm version: $KITCHEN_SINK_NPM_VERSION" >&2
+    exit 2
+  fi
+  KITCHEN_SINK_NPM_SPEC="npm:@openclaw/kitchen-sink@$KITCHEN_SINK_NPM_VERSION"
+fi
 KITCHEN_SINK_NPM_MISSING_SPEC="${OPENCLAW_KITCHEN_SINK_NPM_MISSING_SPEC:-npm:@openclaw/kitchen-sink@beta}"
 
 DEFAULT_KITCHEN_SINK_SCENARIOS="$(
   cat <<SCENARIOS
-npm-latest-full|${KITCHEN_SINK_NPM_SPEC}|openclaw-kitchen-sink-fixture|npm|success|full
-npm-latest-conformance|${KITCHEN_SINK_NPM_SPEC}|openclaw-kitchen-sink-fixture|npm|success|conformance|conformance
-npm-latest-adversarial|${KITCHEN_SINK_NPM_SPEC}|openclaw-kitchen-sink-fixture|npm|success|adversarial|adversarial
+npm-pinned-full|${KITCHEN_SINK_NPM_SPEC}|openclaw-kitchen-sink-fixture|npm|success|full
+npm-pinned-conformance|${KITCHEN_SINK_NPM_SPEC}|openclaw-kitchen-sink-fixture|npm|success|conformance|conformance
+npm-pinned-adversarial|${KITCHEN_SINK_NPM_SPEC}|openclaw-kitchen-sink-fixture|npm|success|adversarial|adversarial
 npm-beta|${KITCHEN_SINK_NPM_MISSING_SPEC}|openclaw-kitchen-sink-fixture|npm|failure|none
 clawhub-latest|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic
 clawhub-beta|clawhub:@openclaw/kitchen-sink@beta|openclaw-kitchen-sink-fixture|clawhub|failure|none

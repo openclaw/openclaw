@@ -41,7 +41,10 @@ import {
   isChatHistoryLoading,
   synchronizeInitialChatSnapshotConnection,
 } from "./chat-history-state.ts";
-import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
+import {
+  disposeSelectedSessionMessageSubscription,
+  syncSelectedSessionMessageSubscription,
+} from "./chat-history-subscription.ts";
 import { applyChatAgentsList, resumePendingChatHistoryLoad } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import { resolvePlacementComposer } from "./chat-pane-placement.ts";
@@ -358,6 +361,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.sessionCompanionThreads.retire();
     }
     if (sourceChanged) {
+      if (state.chatSessionMessageSubscription) {
+        disposeSelectedSessionMessageSubscription(state);
+      }
       this.retireTranscriptReads(true);
       this.retireDetailsOutputs();
       this.resetSessionReadAcknowledgements();

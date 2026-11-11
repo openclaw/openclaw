@@ -583,7 +583,8 @@ async function runSettledFailureClientReplacementTest(
   );
   const { run, started } = startClockControlledAttempt(createParams(sessionFile, workspaceDir));
   await failedThreadRead.promise;
-  await vi.advanceTimersByTimeAsync(2_000);
+  // Codex's 10s unload confirmation window (thread-lifecycle-adoption.ts).
+  await vi.advanceTimersByTimeAsync(10_000);
   const [readyClient] = await Promise.all([turnStarted.promise, started]);
   readyClient.notify({
     method: "turn/completed",
@@ -2341,8 +2342,8 @@ describe("runCodexAppServerAttempt", () => {
     setAgentWorkspaceForTest(params, workspaceDir);
     const harness = createStartedThreadHarness();
     const result = await finishRun(runCodexAppServerAttempt(params), harness);
-    const threadDeveloperInstructions =
-      getRequestParams(harness.requests, "thread/start")?.developerInstructions ?? "";
+    const threadStart = getRequestParams(harness.requests, "thread/start");
+    const threadDeveloperInstructions = threadStart?.developerInstructions ?? "";
     const collaborationInstructions =
       getRequestParams(harness.requests, "turn/start")?.collaborationMode?.settings
         ?.developer_instructions ?? "";
@@ -2374,7 +2375,9 @@ describe("runCodexAppServerAttempt", () => {
     );
     expect(threadDeveloperInstructions).not.toContain(memorySummary);
     expect(inputText).toBe("hello");
-    expect(systemPromptReport.systemPrompt.chars).toBe(threadDeveloperInstructions.length);
+    expect(systemPromptReport.systemPrompt.chars).toBe(
+      `${threadStart?.baseInstructions}\n\n${threadDeveloperInstructions}`.length,
+    );
     const fileStats = new Map(
       systemPromptReport.injectedWorkspaceFiles.map((file) => [file.name, file]),
     );

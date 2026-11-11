@@ -20,6 +20,7 @@ import {
 } from "../../../../src/agents/tool-policy-shared.js";
 import type { ToolsCatalogResult } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsSection,
   SettingsRow,
@@ -35,6 +36,7 @@ import {
   resolveToolSections,
   type AgentToolEntry,
 } from "../../lib/agents/tool-catalog.ts";
+import { resolveAgentConfigEntryTarget } from "../../lib/config/config-state-model.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
@@ -58,6 +60,7 @@ export function AgentTools(
     Pick<AgentsPageView, "readData"> & {
       agentId: string;
       configForm: Record<string, unknown> | null;
+      canReadConfig: boolean;
     },
 ) {
   const toolGroups = new Map<
@@ -116,12 +119,9 @@ export function AgentTools(
     const tools = globalTools();
     return Array.isArray(tools.allow) && tools.allow.length > 0;
   };
-  const editable = () =>
-    params.canUpdateConfig &&
-    Boolean(params.configForm) &&
-    !params.configLoading &&
-    !params.configSaving &&
-    !hasAgentAllow();
+  const hasConfig = () => params.canReadConfig && params.configForm !== null;
+  const canEdit = () => hasConfig() && params.canUpdateConfig && !hasAgentAllow();
+  const editable = () => canEdit() && !params.configLoading && !params.configSaving;
   const alsoAllow = createMemo(() => {
     const tools = agentTools();
     return hasAgentAllow() ? [] : Array.isArray(tools.alsoAllow) ? tools.alsoAllow : [];
@@ -237,14 +237,31 @@ export function AgentTools(
         <For
           each={
             [
-              [!params.configForm, "agentTools.loadConfig"],
-              [hasAgentAllow(), "agentTools.explicitAllowlist"],
-              [hasGlobalAllow(), "agentTools.globalAllowlist"],
-              [props.failed, "agentTools.catalogFallback"],
+              [
+                hasAgentAllow(),
+                "agentTools.explicitAllowlist",
+                resolveAgentConfigEntryTarget(params.configForm, params.agentId)
+                  ?.path.concat("tools", "allow")
+                  .join("."),
+              ],
+              [hasGlobalAllow(), "agentTools.globalAllowlist", "tools.allow"],
+              [props.failed, "agentTools.catalogFallback", undefined],
             ] as const
           }
         >
-          {(entry) => (entry[0] ? <div class="callout info">{t(entry[1])}</div> : undefined)}
+          {(entry) =>
+            entry[0] ? (
+              <InlineAlert tone="info">
+                {t(entry[1])}
+                {entry[2] ? (
+                  <>
+                    {" "}
+                    <code>{entry[2]}</code>
+                  </>
+                ) : undefined}
+              </InlineAlert>
+            ) : undefined
+          }
         </For>
         <SettingsSection
           title={t("agentTools.title")}
@@ -268,15 +285,17 @@ export function AgentTools(
                   onClick={() => params.onRetryCatalog()}
                 />
               </Show>
-              <For each={[true, false]}>
-                {(enabled) => (
-                  <AgentPanelAction
-                    label={t(enabled ? "agentTools.enableAll" : "agentTools.disableAll")}
-                    disabled={!editable() || (props.pending ?? false)}
-                    onClick={() => handleToolsUpdate(toolIds(), enabled)}
-                  />
-                )}
-              </For>
+              <Show when={canEdit()}>
+                <For each={[true, false]}>
+                  {(enabled) => (
+                    <AgentPanelAction
+                      label={t(enabled ? "agentTools.enableAll" : "agentTools.disableAll")}
+                      disabled={!editable() || (props.pending ?? false)}
+                      onClick={() => handleToolsUpdate(toolIds(), enabled)}
+                    />
+                  )}
+                </For>
+              </Show>
             </>
           }
         >
@@ -296,31 +315,33 @@ export function AgentTools(
               </EffectiveBoundary>,
             ],
           ])}
-          <SettingsRow
-            title={t("agentTools.quickPresets")}
-            stackedOnNarrow
-            control={
-              <div class="agent-tools-buttons">
-                <SettingsSegmented
-                  mode="buttons"
-                  ariaLabel={t("agentTools.quickPresets")}
-                  value={profile()}
-                  options={profileOptions().map((option) => ({
-                    value: option.id,
-                    label: option.label,
-                  }))}
-                  disabled={!editable() || props.pending}
-                  onChange={(id) => params.onProfileChange(params.agentId, id, true)}
-                  onReselect={(id) => params.onProfileChange(params.agentId, id, true)}
-                />
-                <AgentPanelAction
-                  label={t("agentTools.inherit")}
-                  disabled={!editable() || (props.pending ?? false)}
-                  onClick={() => params.onProfileChange(params.agentId, null, false)}
-                />
-              </div>
-            }
-          />
+          <Show when={canEdit()}>
+            <SettingsRow
+              title={t("agentTools.quickPresets")}
+              stackedOnNarrow
+              control={
+                <div class="agent-tools-buttons">
+                  <SettingsSegmented
+                    mode="buttons"
+                    ariaLabel={t("agentTools.quickPresets")}
+                    value={profile()}
+                    options={profileOptions().map((option) => ({
+                      value: option.id,
+                      label: option.label,
+                    }))}
+                    disabled={!editable() || props.pending}
+                    onChange={(id) => params.onProfileChange(params.agentId, id, true)}
+                    onReselect={(id) => params.onProfileChange(params.agentId, id, true)}
+                  />
+                  <AgentPanelAction
+                    label={t("agentTools.inherit")}
+                    disabled={!editable() || (props.pending ?? false)}
+                    onClick={() => params.onProfileChange(params.agentId, null, false)}
+                  />
+                </div>
+              }
+            />
+          </Show>
         </SettingsSection>
       </>
     );
@@ -482,23 +503,27 @@ export function AgentTools(
                                     {tool().description}
                                   </div>
                                 </div>
-                                <span
-                                  class="agent-tool-toggle"
-                                  onClick={(event: Event) => event.stopPropagation()}
-                                  onKeyDown={(event: KeyboardEvent) => event.stopPropagation()}
-                                >
-                                  <SettingsToggle
-                                    checked={resolved().allowed}
-                                    disabled={!editable()}
-                                    ariaLabel={t(
-                                      resolved().allowed
-                                        ? "agentTools.disableNamed"
-                                        : "agentTools.enableNamed",
-                                      { name: tool().label },
-                                    )}
-                                    onChange={(checked) => handleToolsUpdate([tool().id], checked)}
-                                  />
-                                </span>
+                                <Show when={canEdit()}>
+                                  <span
+                                    class="agent-tool-toggle"
+                                    onClick={(event: Event) => event.stopPropagation()}
+                                    onKeyDown={(event: KeyboardEvent) => event.stopPropagation()}
+                                  >
+                                    <SettingsToggle
+                                      checked={resolved().allowed}
+                                      disabled={!editable()}
+                                      ariaLabel={t(
+                                        resolved().allowed
+                                          ? "agentTools.disableNamed"
+                                          : "agentTools.enableNamed",
+                                        { name: tool().label },
+                                      )}
+                                      onChange={(checked) =>
+                                        handleToolsUpdate([tool().id], checked)
+                                      }
+                                    />
+                                  </span>
+                                </Show>
                               </summary>
                               <div class="agent-tool-details">
                                 {renderAgentPanelFacts([
@@ -539,7 +564,17 @@ export function AgentTools(
 
   return (
     <>
-      <Show when={params.catalogRequest ?? params.agentId} keyed>
+      <Show
+        when={hasConfig() && (params.catalogRequest ?? params.agentId)}
+        keyed
+        fallback={
+          params.canReadConfig && params.configLoading ? (
+            <SettingsSection title={t("agentTools.title")}>
+              <SettingsLoadingSkeleton label={t("common.loading")} />
+            </SettingsSection>
+          ) : undefined
+        }
+      >
         <Errored fallback={(_error) => <Configuration catalog={null} failed />}>
           <Loading fallback={<Configuration catalog={null} pending />}>
             <Configuration catalog={params.readCatalog()} />
@@ -551,7 +586,7 @@ export function AgentTools(
           <ToolRuntime
             preview={preview}
             sessionKey={params.runtimeSessionKey}
-            onJump={jumpToTool}
+            onJump={hasConfig() ? jumpToTool : undefined}
           />
         )}
       </EffectiveBoundary>
@@ -559,7 +594,7 @@ export function AgentTools(
         identity={params.githubIdentity}
         onOpenConnections={params.onOpenGitHubConnections}
       />
-      <Show when={params.catalogRequest ?? params.agentId} keyed>
+      <Show when={hasConfig() && (params.catalogRequest ?? params.agentId)} keyed>
         <Errored fallback={(_error) => <Catalog catalog={null} />}>
           <Loading
             fallback={

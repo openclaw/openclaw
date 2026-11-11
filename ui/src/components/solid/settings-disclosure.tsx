@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createSignal, Show } from "solid-js";
+import { IconButton } from "./icon-button.tsx";
 import { Icon } from "./icon.tsx";
 import { SettingsRow } from "./settings-ui.tsx";
 
@@ -88,15 +89,16 @@ export function SettingsDetailsRow(props: {
             {props.control}
             <Show when={available()}>
               <openclaw-tooltip prop:content={props.detailsLabel}>
-                <button
-                  type="button"
-                  class="btn btn--icon btn--ghost settings-details-toggle"
-                  aria-label={props.detailsLabel}
+                <IconButton
+                  size={28}
+                  glyph="row"
+                  class="settings-details-toggle"
+                  icon="chevronRight"
+                  label={props.detailsLabel}
+                  tooltip={false}
                   aria-expanded={open() ? "true" : "false"}
                   onClick={() => setOpen(!open())}
-                >
-                  <Icon name="chevronRight" />
-                </button>
+                />
               </openclaw-tooltip>
             </Show>
           </>

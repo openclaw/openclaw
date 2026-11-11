@@ -2,6 +2,8 @@
  * Compare built prepared-plugin lease owners, excluding Gateway/model/network latency.
  * node --expose-gc scripts/perf/prepared-plugin-lease-measure.mjs --dist <built-dist>
  *   --arm base|candidate --overlap=false|true --mode timing|allocation|counts --output <report.json>
+ * Source comparisons: node --import ./scripts/tsx.mjs --expose-gc <this-script>
+ *   --source-root <checkout> --arm candidate ... (actual lease owner in each checkout).
  * Defaults: 40 plugins, 4000 leases, 16 calls per lease, 200 warmup leases.
  * Base uses the former lease literal with that build's real generation-retention API;
  * candidate calls its actual built lease factory. Imports/setup are not measured.
@@ -23,6 +25,7 @@ import { parseArgs } from "node:util";
 const { values } = parseArgs({
   options: {
     dist: { type: "string" },
+    "source-root": { type: "string" },
     arm: { type: "string" },
     mode: { type: "string", default: "timing" },
     overlap: { type: "string", default: "false" },
@@ -33,7 +36,7 @@ const { values } = parseArgs({
     calls: { type: "string", default: "16" },
   },
 });
-assert(values.dist && values.output);
+assert((values.dist || values["source-root"]) && values.output);
 assert(["base", "candidate"].includes(values.arm));
 assert(["timing", "allocation", "counts"].includes(values.mode));
 assert(["false", "true"].includes(values.overlap), "--overlap must be false or true");
@@ -45,7 +48,8 @@ if (values.mode !== "counts") {
     "A runtime with main-thread CPU accounting is required",
   );
 }
-const dist = path.resolve(values.dist);
+const dist = values.dist && path.resolve(values.dist);
+const sourceRoot = values["source-root"] && path.resolve(values["source-root"]);
 const output = path.resolve(values.output);
 const numeric = (name) => {
   const value = Number(values[name]);
@@ -56,9 +60,23 @@ const iterations = numeric("iterations");
 const warmup = numeric("warmup");
 const plugins = numeric("plugins");
 const calls = numeric("calls");
-const entries = await readdir(dist);
+const entries = dist ? await readdir(dist) : [];
 const imports = [];
 async function builtExport(prefix, name) {
+  if (sourceRoot) {
+    const relative =
+      name === "PluginInstance"
+        ? "src/plugins/plugin-instance.ts"
+        : name === "createEmptyPluginRegistry"
+          ? "src/plugins/registry-empty.ts"
+          : "src/agents/prepared-model-runtime.plugin-lifetime.ts";
+    const file = path.join(sourceRoot, relative);
+    const source = await readFile(file, "utf8");
+    const module = await import(pathToFileURL(file).href);
+    assert.equal(typeof module[name], "function", `${name} export`);
+    imports.push({ name, file, sha256: createHash("sha256").update(source).digest("hex") });
+    return module[name];
+  }
   for (const filename of entries.filter(
     (file) => file.startsWith(prefix) && file.endsWith(".mjs"),
   )) {
@@ -134,8 +152,10 @@ const generation = {
 const snapshot = { pluginRegistry: registry };
 const releasePublication = ownGeneration(generation).retain();
 const inspector = new Session();
+let latencies = [];
 async function run(count) {
   for (let operation = 0; operation < count; operation++) {
+    const started = performance.now();
     const lease = createLease
       ? createLease(snapshot, generation)
       : {
@@ -158,6 +178,7 @@ async function run(count) {
     } finally {
       await lease[Symbol.asyncDispose]();
     }
+    latencies.push(performance.now() - started);
     if (operation % 100 === 99) {
       await nextTurn();
     }
@@ -190,6 +211,7 @@ try {
           [Symbol.asyncDispose]: retainGeneration(generation),
         };
     let held;
+    let resolved;
     try {
       held = readHolds();
       const execute = () => {
@@ -203,6 +225,7 @@ try {
       } else {
         execute();
       }
+      resolved = readHolds();
     } finally {
       await lease[Symbol.asyncDispose]();
     }
@@ -222,13 +245,14 @@ try {
       mode: values.mode,
       node: process.version,
       dist,
+      sourceRoot,
       imports,
       iterations: 1,
       warmup: 0,
       plugins,
       callsPerLease: calls,
       observedCalls,
-      counts: { before, held, after },
+      counts: { before, held, resolved, after },
       verified: {
         toolIdentity: true,
         noResidualWorkOrConsumerHolds: true,
@@ -253,6 +277,7 @@ try {
     await nextTurn();
     const expectedCalls = iterations * calls;
     observedCalls = 0;
+    latencies = [];
     let profile;
     const memoryBefore = process.memoryUsage();
     const hostLoadBefore = os.loadavg();
@@ -311,6 +336,7 @@ try {
       mode: values.mode,
       node: process.version,
       dist,
+      sourceRoot,
       imports,
       startedAt,
       iterations,
@@ -319,6 +345,10 @@ try {
       callsPerLease: calls,
       observedCalls,
       elapsedMs,
+      leaseLatencyMs: {
+        median: latencies.toSorted((a, b) => a - b)[Math.floor(iterations / 2)],
+        p95: latencies.toSorted((a, b) => a - b)[Math.ceil(iterations * 0.95) - 1],
+      },
       mainThreadCpu: { ms: threadMs, usPerLease: (threadMs * 1000) / iterations },
       processCpu: { ms: (processCpu.user + processCpu.system) / 1000 },
       allocation,

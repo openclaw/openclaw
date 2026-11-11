@@ -515,7 +515,7 @@ function noWidenThenAssertRule({ roots }) {
         return {};
       }
 
-      let scopes = [];
+      let scopes;
       const checkAssertion = (node) => {
         if (isNestedAssertion(node)) {
           return;
@@ -525,6 +525,7 @@ function noWidenThenAssertRule({ roots }) {
           return;
         }
 
+        scopes ??= context.sourceCode.scopeManager.scopes;
         const variable = resolvedVariableForIdentifier(scopes, expression);
         if (variable === null) {
           return;
@@ -553,9 +554,6 @@ function noWidenThenAssertRule({ roots }) {
       };
 
       return {
-        Program() {
-          scopes = context.sourceCode.scopeManager.scopes;
-        },
         TSAsExpression: checkAssertion,
         TSTypeAssertion: checkAssertion,
       };

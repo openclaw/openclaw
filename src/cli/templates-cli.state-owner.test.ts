@@ -26,22 +26,36 @@ describe("Template Add CLI state ownership", () => {
 
   beforeEach(async () => {
     root = path.dirname(process.env.OPENCLAW_STATE_DIR!);
-    source = path.join(root, "template.json");
+    source = path.join(root, "CLAW.md");
     output.length = 0;
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => output.push(value));
-    await fs.writeFile(source, JSON.stringify({ schemaVersion: 1, agent: { id: "demo" } }));
+    await fs.writeFile(
+      source,
+      `---\n${JSON.stringify({ schemaVersion: 1, agent: { id: "demo" } })}\n---\n`,
+    );
   });
 
-  it("refuses Add and dry-run while another process owns the Gateway state", async () => {
+  it("permits read-only preview but refuses Add while another process owns Gateway state", async () => {
+    await fs.writeFile(
+      process.env.OPENCLAW_CONFIG_PATH!,
+      JSON.stringify({ gateway: { controlUi: { experimental: { templates: true } } } }),
+    );
     await fixture.startOwner();
     const before = await snapshotTree(root);
-    for (const dryRun of [false, true]) {
-      await expect(runTemplatesAddCommand(source, { dryRun, json: true })).rejects.toThrow(
-        /exclusive offline state ownership.*stop the Gateway/s,
-      );
-      expect(await snapshotTree(root)).toEqual(before);
-    }
+    await expect(runTemplatesAddCommand(source, { json: true })).rejects.toThrow(
+      /exclusive offline state ownership.*stop the Gateway/s,
+    );
     expect(output).toEqual([]);
+    expect(await snapshotTree(root)).toEqual(before);
+
+    await runTemplatesAddCommand(source, { dryRun: true, json: true });
+    expect(output).toEqual([
+      expect.objectContaining({
+        agent: expect.objectContaining({ finalId: "demo" }),
+        blockers: [],
+      }),
+    ]);
+    expect(await snapshotTree(root)).toEqual(before);
     expect(fixture.transport.request).not.toHaveBeenCalled();
   });
 });

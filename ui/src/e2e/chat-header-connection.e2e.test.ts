@@ -150,13 +150,47 @@ suite.define(() => {
         await page.clock.fastForward(2_000);
         await status.waitFor({ state: "visible" });
         expect.soft(await geometry()).toEqual(before);
+        // The indicator floats at the pane's top center, above the transcript, and
+        // the pane notice lane starts below it.
         expect(
           await status.evaluate((element) => {
             const indicator = element.getBoundingClientRect();
-            const bounds = element.closest(".chat-pane__header")!.getBoundingClientRect();
-            return indicator.top >= bounds.top && indicator.bottom <= bounds.bottom;
+            const headerBounds = element.closest(".chat-pane__header")!.getBoundingClientRect();
+            const hit = document.elementFromPoint(
+              indicator.left + indicator.width / 2,
+              indicator.top + indicator.height / 2,
+            );
+            const lanes = [
+              ...element
+                .closest(".chat-pane-cache__pane--visible")!
+                .querySelectorAll(
+                  ".chat-gutter-stack, .chat-main__conversation-column > .chat-topbar-notices",
+                ),
+            ].filter((lane) => lane.getClientRects().length > 0);
+            return {
+              belowHeader: indicator.top >= headerBounds.bottom,
+              centerOffset: Math.round(
+                Math.abs(
+                  indicator.left +
+                    indicator.width / 2 -
+                    (headerBounds.left + headerBounds.width / 2),
+                ),
+              ),
+              onTop: hit !== null && element.contains(hit),
+              lanesBelow:
+                lanes.length > 0 &&
+                lanes.every(
+                  (lane) =>
+                    lane.getBoundingClientRect().top +
+                      Number.parseFloat(getComputedStyle(lane).paddingTop) >=
+                    indicator.bottom,
+                ),
+            };
           }),
-        ).toBe(true);
+        ).toEqual({ belowHeader: true, centerOffset: 0, onTop: true, lanesBelow: true });
+        expect(await status.locator(".chat-pane__connection-state").textContent()).toMatch(
+          / · Saved conversation$/,
+        );
         await capture("slow");
         await gateway.resolveDeferred("connect");
         await status.waitFor({ state: "hidden" });

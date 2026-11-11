@@ -160,9 +160,9 @@ describe("Codex agent harness supports()", () => {
 
   it("keeps computer-control denies out of the native-surface exemption", () => {
     expect(harness.conversationToolPolicySafeDenyTools).toContain("image_generate");
-    expect(harness.conversationToolPolicySafeDenyTools).not.toEqual(
-      expect.arrayContaining(["browser", "computer", "mobile_ui", "nodes", "screen"]),
-    );
+    for (const name of ["browser", "computer", "mobile_ui", "nodes", "screen"]) {
+      expect(harness.conversationToolPolicySafeDenyTools).not.toContain(name);
+    }
   });
 
   it.each([
@@ -209,14 +209,14 @@ describe("Codex agent harness supports()", () => {
     },
   );
 
-  it("keeps V2 host authorization on the prepared direct transport", async () => {
-    const nativeCallCount = runCodexIsolatedCompletion.mock.calls.length;
+  it("sends V2 host authorization to native Codex without a direct fallback", async () => {
+    const directCallCount = runHostPreparedIsolatedCompletion.mock.calls.length;
     const assistant = {
       role: "assistant",
       content: [{ type: "text", text: "done" }],
       stopReason: "stop",
     };
-    runHostPreparedIsolatedCompletion.mockResolvedValueOnce({ assistant });
+    runCodexIsolatedCompletion.mockResolvedValueOnce({ assistant });
     const websocketHarness = makeHarness({
       pluginConfig: {
         appServer: { transport: "websocket", url: "ws://127.0.0.1:4501" },
@@ -240,8 +240,11 @@ describe("Codex agent harness supports()", () => {
     await expect(websocketHarness.runIsolatedCompletionV2?.(params)).resolves.toEqual({
       assistant,
     });
-    expect(runHostPreparedIsolatedCompletion).toHaveBeenLastCalledWith(params);
-    expect(runCodexIsolatedCompletion).toHaveBeenCalledTimes(nativeCallCount);
+    expect(runCodexIsolatedCompletion).toHaveBeenLastCalledWith(params, expect.any(Object));
+    expect(runHostPreparedIsolatedCompletion).toHaveBeenCalledTimes(directCallCount);
+    expect(
+      websocketHarness.resolveIsolatedCompletionRuntime?.({ authorizationOwner: "host" }),
+    ).toBe("self");
   });
 
   it("delegates locked-session execution only to the voice-call plugin", () => {

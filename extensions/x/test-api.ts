@@ -3,3 +3,4 @@ export { openXAllowlist } from "./src/allowlist.js";
 export { createXPublicationPreparation, resolveXIngress } from "./src/ingress.js";
 export { setXRuntime } from "./src/runtime.js";
 export { createKeyedState } from "./src/test-support/monitor.js";
+export const loadXReadinessFixture = () => import("./src/test-support/readiness.js");

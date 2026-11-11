@@ -152,6 +152,44 @@ const toolFact = (root: Element | null | undefined, label: string) =>
     ?.nextElementSibling?.textContent?.trim();
 
 describe("agents tools panel (browser)", () => {
+  it.each([false, true])(
+    "does not invent configured facts while config is absent (loading: %s)",
+    (configLoading) => {
+      const { container } = mountTools({ configForm: null, configLoading, effective: toolPreview });
+      expect(container.querySelector(".agent-tools-buttons")).toBeNull();
+      expect(container.querySelector(".agent-tools-group")).toBeNull();
+      expect(
+        [...container.querySelectorAll(".settings-kv dt")].map((term) => text(term)),
+      ).not.toContain("Tool profile");
+      expect(container.querySelector(".agent-tools-runtime-chip")?.textContent).toContain("read");
+    },
+  );
+
+  it("does not present retained config as readable after access is lost", () => {
+    const { container } = mountTools({
+      canReadConfig: false,
+      configForm: {},
+      effective: toolPreview,
+    });
+    expect(container.querySelector(".agent-tools-buttons")).toBeNull();
+    expect(container.querySelector(".agent-tools-group")).toBeNull();
+    expect(container.querySelector(".settings-kv")).toBeNull();
+    expect(container.querySelector(".agent-tools-runtime-chip")?.textContent).toContain("read");
+  });
+
+  it("retains accepted default configuration facts without read-only editor controls", () => {
+    const { container } = mountTools({ configForm: {}, canUpdateConfig: false });
+    const facts = container.querySelector(".settings-kv");
+    expect(facts?.textContent).toContain("full");
+    expect(facts?.textContent).toContain("Default");
+    expect(container.querySelector(".agent-tools-group")).not.toBeNull();
+    expect(container.querySelector(".agent-tools-buttons")).toBeNull();
+    expect(container.querySelector("input.settings-toggle__input")).toBeNull();
+    expect(
+      [...container.querySelectorAll("button")].some((control) => text(control) === "Enable all"),
+    ).toBe(false);
+  });
+
   it("updates preset and catalog labels when the mounted panel changes language", async () => {
     const restoreI18n = captureI18nStateForTesting();
     try {
@@ -228,8 +266,8 @@ describe("agents tools panel (browser)", () => {
 
     const included = container.querySelector("#agent-tool-read");
     const absent = container.querySelector("#agent-tool-exec");
-    expect(toolFact(included, "Tool preview")).toBe("Listed in preview via Built-In.");
-    expect(included?.textContent).toContain("Listed in preview via Built-In.");
+    expect(toolFact(included, "Tool preview")).toBe("Listed in preview via Built-in.");
+    expect(included?.textContent).toContain("Listed in preview via Built-in.");
     expect(toolFact(absent, "Tool preview")).toBe("Not listed");
     expect(absent?.querySelector<HTMLInputElement>("input.settings-toggle__input")?.checked).toBe(
       true,
@@ -246,7 +284,7 @@ describe("agents tools panel (browser)", () => {
       },
     });
     expect(container.querySelectorAll(".settings-kv dd")[3]?.textContent?.trim()).toBe("0");
-    expect(container.textContent).toContain("No tools are listed in this preview.");
+    expect(container.textContent).toContain("No tools in this preview.");
     expect(container.querySelector(".agent-tools-runtime-chip")).toBeNull();
   });
 
@@ -292,8 +330,8 @@ describe("agents tools panel (browser)", () => {
     expect(container.textContent).toContain(
       "Based on saved session settings and discovered tools.",
     );
-    expect(container.textContent).toContain("additional tools may become available");
-    expect(container.textContent).toContain("unsaved edits are not included");
+    expect(container.textContent).toContain("more tools may become available");
+    expect(container.textContent).toContain("unsaved edits aren’t included");
     expect(texts(container, ".agent-tools-runtime-chip .mono")).toEqual([
       "Message Actions",
       "Probe Tool",
@@ -305,7 +343,7 @@ describe("agents tools panel (browser)", () => {
     expect(texts(container, ".agent-tools-group__title > .settings-row__value")).toEqual([
       "Plugin: voice-call",
     ]);
-    expect(toolFact(container.querySelector("#agent-tool-tts"), "Source")).toBe("Built-In");
+    expect(toolFact(container.querySelector("#agent-tool-tts"), "Source")).toBe("Built-in");
     expect(toolFact(container.querySelector("#agent-tool-voice_call"), "Source")).toBe(
       "Plugin: voice-call · Optional",
     );
@@ -350,25 +388,25 @@ describe("agents tools panel (browser)", () => {
       expect(section.textContent).toContain(inherited ? "@system-user" : "@octocat");
       expect(content(section, ".settings-status")).toBe("Verified");
       const details = section.querySelector<HTMLButtonElement>(
-        'button[aria-label="Connection details"]',
+        'button[aria-label="Account details"]',
       );
-      assert(details, "Missing connection details button");
+      assert(details, "Missing account details button");
       details.click();
       await waitForSolid(() => {
         const authorRow = Array.from(section.querySelectorAll(".settings-row")).find((row) =>
-          row.querySelector(".settings-row__title")?.textContent?.includes("Git Author"),
+          row.querySelector(".settings-row__title")?.textContent?.includes("Git author in use"),
         );
         expect(authorRow?.querySelector(".settings-row__value")?.textContent?.trim()).toBe(
           inherited ? "System Author · system@example.com" : "Not set",
         );
       });
       if (inherited) {
-        expect(section.textContent).toContain("Managed GitHub authorization");
+        expect(section.textContent).toContain("GitHub sign-in");
         expect(section.textContent).toContain("repo, workflow");
         expect(section.textContent).toContain("System GitHub");
       }
       expect(section.querySelector(".settings-secret input")).toBeNull();
-      expect(section.textContent).toContain("Manage connections in Profile");
+      expect(section.textContent).toContain("Manage accounts in Profile");
       expect(section.textContent).not.toMatch(
         /system-detected|github-api|OS account running the Gateway|Advanced: agent GitHub override/,
       );
@@ -439,7 +477,7 @@ describe("agents tools panel (browser)", () => {
     await Promise.resolve();
 
     expect(container.textContent).toContain(
-      "Full selects tools; it does not grant Full access execution permissions.",
+      "“Full” includes all tools, but doesn’t grant command permissions.",
     );
     const toggle = toolSwitch(container, "openclaw");
     expect(toggle.checked).toBe(false);
@@ -633,7 +671,7 @@ describe("agents tools panel (browser)", () => {
       { allow: ["group:fs"], deny: ["write"] },
       { read: true, write: false, apply_patch: true },
     ],
-  ] as const)("renders policy-controlled switches: %s", async (_name, tools, expected) => {
+  ] as const)("renders configured tool policy: %s", async (_name, tools, expected) => {
     const { container } = mountTools({
       configForm: {
         agents: { entries: { main: { tools } } },
@@ -644,10 +682,15 @@ describe("agents tools panel (browser)", () => {
 
     expect(
       Object.fromEntries(
-        Array.from(container.querySelectorAll(".agent-tool-card"), (card) => [
-          content(card, ".agent-tool-title"),
-          card.querySelector<HTMLInputElement>("input.settings-toggle__input")?.checked,
-        ]),
+        Array.from(container.querySelectorAll(".agent-tool-card"), (card) => {
+          const toggle = card.querySelector<HTMLInputElement>("input.settings-toggle__input");
+          expect(Boolean(toggle)).toBe(!("allow" in tools));
+          expect(toolFact(card, "Agent setting")).toBeDefined();
+          return [
+            content(card, ".agent-tool-title"),
+            toggle ? toggle.checked : toolFact(card, "Agent setting")?.startsWith("Enabled by "),
+          ];
+        }),
       ),
     ).toEqual(expected);
   });

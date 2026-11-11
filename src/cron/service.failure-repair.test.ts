@@ -532,6 +532,22 @@ describe("CronService failure repair", () => {
       ["unowned hourly", false, 3_600_000, 0, 1],
       ["owned every-minute", true, 60_000, 1, 0],
       [
+        "owned thread-only failure alert",
+        true,
+        3_600_000,
+        0,
+        1,
+        { failureAlert: { after: 1, threadId: 42 } },
+      ],
+      [
+        "owned thread-only failure destination",
+        true,
+        3_600_000,
+        0,
+        1,
+        { delivery: { ...createTelegramDelivery(), failureDestination: { threadId: 42 } } },
+      ],
+      [
         "owned explicit destination",
         true,
         3_600_000,

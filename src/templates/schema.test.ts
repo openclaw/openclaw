@@ -10,10 +10,12 @@ import type { TemplateManifest, TemplateOpenClawProfile, TemplateSourceIdentity 
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const minimalManifest = { schemaVersion: 1, agent: { id: "triage" } };
-const emptyGroups = "workspace: {}\npackages: []\nmcpServers: {}\ncronJobs: []";
+const emptyGroups = "workspace: {}\npackages: []\nmcpServers: {}\nautomations: []";
 const markdown = (agent = "agent: { id: triage }", body = "", groups = emptyGroups) =>
   `---\nschemaVersion: 1\n${agent}\n${groups}\n---${body}`;
 const writeJson = (path: string, value: unknown) => writeFile(path, JSON.stringify(value), "utf8");
+const writeManifest = (path: string, value: unknown) =>
+  writeFile(path, `---\n${JSON.stringify(value)}\n---\n`, "utf8");
 
 async function writePackage(root: string, template = "CLAW.md") {
   await writeJson(join(root, "package.json"), {
@@ -74,7 +76,7 @@ const baseManifest = {
       timeout: 30,
     },
   },
-  cronJobs: [
+  automations: [
     {
       id: "weekday-triage",
       name: "Weekday triage",
@@ -134,7 +136,7 @@ describe("parseTemplateManifest", () => {
       workspace: { bootstrapFiles: {}, files: [] },
       packages: [],
       mcpServers: {},
-      cronJobs: [],
+      automations: [],
     });
   });
 
@@ -252,7 +254,7 @@ describe("parseTemplateManifest", () => {
 
     const duplicateCron = parseTemplateManifest({
       ...baseManifest,
-      cronJobs: [baseManifest.cronJobs[0], baseManifest.cronJobs[0]],
+      automations: [baseManifest.automations[0], baseManifest.automations[0]],
     });
     expect(duplicateCron.ok).toBe(false);
   });
@@ -269,16 +271,16 @@ describe("parseTemplateManifest", () => {
 
     const cron = parseTemplateManifest({
       ...baseManifest,
-      cronJobs: [
+      automations: [
         {
-          ...baseManifest.cronJobs[0],
+          ...baseManifest.automations[0],
           schedule: { cron: "not a cron expression", timezone: "UTC" },
         },
       ],
     });
     expect(cron.ok).toBe(false);
     expect(cron.diagnostics).toContainEqual(
-      expect.objectContaining({ path: "$.cronJobs[0].schedule.cron" }),
+      expect.objectContaining({ path: "$.automations[0].schedule.cron" }),
     );
   });
 });
@@ -286,8 +288,8 @@ describe("parseTemplateManifest", () => {
 describe("readTemplateManifestFile", () => {
   it("takes published identity from package.json", async () => {
     const root = tempDirs.make("openclaw-template-package-");
-    await writePackage(root, "openclaw.template.json");
-    await writeJson(join(root, "openclaw.template.json"), minimalManifest);
+    await writePackage(root);
+    await writeManifest(join(root, "CLAW.md"), minimalManifest);
 
     const result = await readTemplateManifestFile(root);
 
@@ -323,7 +325,6 @@ describe("readTemplateManifestFile", () => {
       source: { kind: "package", name: "@acme/github-triage", version: "3.2.1" },
     });
     assert(result.ok, "expected package to parse");
-    expect(result.source).not.toHaveProperty("manifestFormatPath");
     expect(result.templateMarkdownBody?.toString("utf8")).toBe("\n# GitHub Triage");
     const plan = await buildTemplateAddPlan({
       manifest: result.manifest,
@@ -388,7 +389,7 @@ describe("readTemplateManifestFile", () => {
       markdown(
         undefined,
         "\nPortable soul",
-        "workspace:\n  bootstrapFiles:\n    SOUL.md: { source: workspace/SOUL.md }\npackages: []\nmcpServers: {}\ncronJobs: []",
+        "workspace:\n  bootstrapFiles:\n    SOUL.md: { source: workspace/SOUL.md }\npackages: []\nmcpServers: {}\nautomations: []",
       ),
     );
     expectDiagnostic(result, "template_body_soul_conflict");
@@ -396,14 +397,15 @@ describe("readTemplateManifestFile", () => {
 
   it("synthesizes explicit development identity for a standalone manifest", async () => {
     const { result } = await readFixture(
-      JSON.stringify({ schemaVersion: 1, agent: { id: "demo-agent" } }),
-      "demo.template.json",
+      ["---", JSON.stringify({ schemaVersion: 1, agent: { id: "demo-agent" } }), "---", ""].join(
+        "\n",
+      ),
     );
 
     assert(result.ok, "expected development manifest to parse");
     expect(result.source).toMatchObject({
       kind: "development",
-      name: "local:demo.template",
+      name: "local:CLAW.md",
       version: "0.0.0-development",
     });
   });
@@ -417,8 +419,8 @@ describe("readTemplateManifestFile", () => {
       join(root, "workspace-link"),
       process.platform === "win32" ? "junction" : "dir",
     );
-    const manifestPath = join(root, "demo.template.json");
-    await writeJson(manifestPath, {
+    const manifestPath = join(root, "CLAW.md");
+    await writeManifest(manifestPath, {
       schemaVersion: 1,
       agent: { id: "symlink-agent" },
       workspace: { bootstrapFiles: { "AGENTS.md": { source: "workspace-link/AGENTS.md" } } },
@@ -432,8 +434,8 @@ describe("readTemplateManifestFile", () => {
   it("rejects a workspace source over the per-file byte limit", async () => {
     const root = tempDirs.make("openclaw-template-reader-file-limit-");
     await writeFile(join(root, "large.md"), Buffer.alloc(1024 * 1024 + 1));
-    const manifestPath = join(root, "demo.template.json");
-    await writeJson(manifestPath, {
+    const manifestPath = join(root, "CLAW.md");
+    await writeManifest(manifestPath, {
       schemaVersion: 1,
       agent: { id: "large-agent" },
       workspace: { files: [{ source: "large.md", path: "large.md" }] },
@@ -452,8 +454,8 @@ describe("readTemplateManifestFile", () => {
       await writeFile(join(root, source), Buffer.alloc(1024 * 1024, index));
       files.push({ source, path: source });
     }
-    const manifestPath = join(root, "demo.template.json");
-    await writeJson(manifestPath, {
+    const manifestPath = join(root, "CLAW.md");
+    await writeManifest(manifestPath, {
       schemaVersion: 1,
       agent: { id: "large-agent" },
       workspace: { files },
@@ -486,17 +488,30 @@ describe("readTemplateManifestFile", () => {
     const parent = tempDirs.make("openclaw-template-escape-");
     const root = join(parent, "package");
     await mkdir(root);
-    await writeJson(join(parent, "outside.json"), { schemaVersion: 1, agent: { id: "outside" } });
+    await writeManifest(join(parent, "outside.md"), { schemaVersion: 1, agent: { id: "outside" } });
     await writeJson(join(root, "package.json"), {
       name: "@acme/escape",
       version: "1.0.0",
-      openclaw: { template: "../outside.json" },
+      openclaw: { template: "../outside.md" },
     });
 
     const result = await readTemplateManifestFile(root);
 
-    expectDiagnostic(result, "manifest_escapes_package");
+    expectDiagnostic(result, "invalid_package_metadata");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a canonical CLAW.md symlink outside the package",
+    async () => {
+      const parent = tempDirs.make("openclaw-template-canonical-escape-");
+      const root = join(parent, "package");
+      await mkdir(root);
+      await writePackage(root);
+      await writeManifest(join(parent, "outside.md"), minimalManifest);
+      await symlink("../outside.md", join(root, "CLAW.md"));
+      expectDiagnostic(await readTemplateManifestFile(root), "manifest_escapes_package");
+    },
+  );
 });
 
 describe("buildTemplateAddPlan", () => {
