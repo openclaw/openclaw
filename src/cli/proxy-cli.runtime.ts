@@ -5,6 +5,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { throwCollectedErrors } from "../infra/error-graph-internal.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { runProxyValidation } from "../infra/net/proxy/proxy-validation.js";
 import { spawnCommand } from "../process/exec-spawn.js";
 import { ensureDebugProxyCa } from "../proxy-capture/ca.js";
@@ -14,7 +15,7 @@ import { startDebugProxyServer } from "../proxy-capture/proxy-server.js";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { throwExpectedCliError } from "./expected-cli-error.js";
+import { ExpectedCliError, throwExpectedCliError } from "./expected-cli-error.js";
 import { withProxyCaptureOwner } from "./proxy-capture-owner.js";
 import { resolveSubprocessExitCode } from "./subprocess-exit-code.js";
 
@@ -165,7 +166,26 @@ export async function runDebugProxyRunCommand(opts: {
         try {
           const result = await child;
           if (result.failed && result.exitCode === undefined && result.signal === undefined) {
-            throw toErrorObject(result, "Proxy child failed during launch or output capture");
+            const launchError = toErrorObject(
+              result,
+              "Proxy child failed during launch or output capture",
+            );
+            const launchReason = hasErrnoCode(launchError, "ENOENT")
+              ? "command not found"
+              : hasErrnoCode(launchError, "EACCES")
+                ? "permission denied"
+                : undefined;
+            if (launchReason) {
+              // The child never ran, so name the launch failure instead of the generic CLI error.
+              const message = `proxy run could not start "${command}": ${launchReason}.`;
+              throw new ExpectedCliError({
+                message,
+                humanOutput: message,
+                machineOutput: message,
+                cause: launchError,
+              });
+            }
+            throw launchError;
           }
           process.exitCode = resolveSubprocessExitCode(result.exitCode, result.signal);
         } finally {
