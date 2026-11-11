@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 
@@ -21,14 +22,11 @@ describe("family admission precedes mutable update preparation", () => {
       const directory = path.join(root, route);
       fixtures.set(route, directory);
       await fs.mkdir(path.join(directory, "leases"), { recursive: true });
-      await fs.writeFile(
-        path.join(directory, "package.json"),
-        JSON.stringify({
-          version: "2026.10.16",
-          packageManager: "pnpm@12.10.1",
-          openclaw: { databaseEngines: ["sqlite", "postgres"] },
-        }),
-      );
+      await writeFixtureJson(path.join(directory, "package.json"), {
+        version: "2026.10.16",
+        packageManager: "pnpm@12.10.1",
+        openclaw: { databaseEngines: ["sqlite", "postgres"] },
+      });
     }
   });
 

@@ -9,10 +9,17 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
 import { setA2aChannelRuntime } from "./runtime.js";
+import * as taskStores from "./task-store.js";
+import { createTerminalStoreFixture } from "./task-store.test-support.js";
 import type { A2aChannelConfig, ResolvedA2aChannelAccount } from "./types.js";
 
 export function createA2aGatewayFixture(
-  options: { cfg?: OpenClawConfig; config?: A2aChannelConfig; version?: string } = {},
+  options: {
+    cfg?: OpenClawConfig;
+    config?: A2aChannelConfig;
+    version?: string;
+    terminalStore?: ReturnType<typeof createTerminalStoreFixture>;
+  } = {},
 ) {
   const registry = createTestRegistry([]);
   setActivePluginRegistry(registry);
@@ -20,6 +27,9 @@ export function createA2aGatewayFixture(
     ...createPluginRuntimeMock(),
     ...(options.version ? { version: options.version } : {}),
   };
+  vi.spyOn(taskStores, "openTerminalStore").mockReturnValue(
+    options.terminalStore ?? createTerminalStoreFixture(),
+  );
   setA2aChannelRuntime(runtime);
   const controller = new AbortController();
   const account: ResolvedA2aChannelAccount = {

@@ -24,8 +24,8 @@ import { closeSkillsWatchers } from "../runtime/refresh.js";
 import { readSkillResourceFiles } from "../runtime/resources.js";
 import { recordSkillFileHost } from "../skill-file-host.js";
 import { runCommandWithTimeoutMock as runCommand } from "../test-support/install-test-mocks.js";
+import { resolveWorkshopSkillsDir } from "../test-support/workshop-config.test-support.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
-import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { installSkill, installSkillDependencies } from "./install.js";
 
 // mock-isolation: Keep package-manager commands synthetic; never invoke host installers.
@@ -33,8 +33,10 @@ vi.mock("../../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommand(...args),
 }));
 
-vi.mock("../loading/plugin-skills.js", () => ({
+vi.mock("../loading/plugin-skills.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../loading/plugin-skills.js")>()),
   resolvePluginSkillRoots: () => [],
+  resolvePluginAgentSkillsDirs: () => ["workshop-skills"],
 }));
 
 vi.mock("../loading/config.js", { spy: true });

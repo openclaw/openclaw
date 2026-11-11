@@ -184,6 +184,7 @@ export function maintainSessionTranscriptIndexStatus(db: EngineConnection): {
     state.after_session = null;
     state.sibling_write_revision = siblingWriteRevision ?? -1;
   }
+  let statusChanged = resetPending || !state.complete;
   const candidates = new Set(
     resetPending
       ? []
@@ -240,45 +241,52 @@ export function maintainSessionTranscriptIndexStatus(db: EngineConnection): {
             )
             .orderBy("candidate.value"),
         ).rows;
-  const pending: { session_id: string; state: number }[] = [];
-  const remainingRows = projectionTables.map(() => MAX_ORPHAN_ROWS);
-  for (const row of classified) {
-    const sessionId = row.session_id!;
-    let unfinished = false;
-    if (row.needs_reconcile === null) {
-      for (const [index, table] of projectionTables.entries()) {
-        const budget = remainingRows[index]!;
-        const rows = executeSqliteQuerySync(
+  const orphanIds = classified
+    .filter((row) => row.needs_reconcile === null)
+    .map((row) => row.session_id!);
+  let unfinishedFrom = orphanIds.length;
+  if (orphanIds.length > 0) {
+    for (const table of projectionTables) {
+      const rows = executeSqliteQuerySync(
+        db,
+        kysely
+          .selectFrom(table)
+          .select(["session_id", "rowid as rowId"])
+          .where("session_id", "in", orphanIds)
+          .orderBy("session_id")
+          .limit(MAX_ORPHAN_ROWS + 1),
+      ).rows;
+      const overflow = rows[MAX_ORPHAN_ROWS];
+      if (overflow) {
+        // Later candidates may have unseen rows; retain the database's ordering.
+        unfinishedFrom = Math.min(unfinishedFrom, orphanIds.indexOf(overflow.session_id));
+      }
+      const selected = rows.slice(0, MAX_ORPHAN_ROWS);
+      // Empty cleanup must not publish a write receipt that invalidates clean search hits.
+      if (selected.length > 0) {
+        withSqliteDatabaseWriteScope(
           db,
-          kysely
-            .selectFrom(table)
-            .select("rowid as rowId")
-            .where("session_id", "=", sessionId)
-            .limit(budget + 1),
-        ).rows;
-        unfinished ||= rows.length > budget;
-        const selected = rows.slice(0, budget);
-        // Empty cleanup must not publish a write receipt that invalidates clean search hits.
-        if (selected.length > 0) {
-          const removed =
-            withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () =>
-              executeSqliteQuerySync(
-                db,
-                kysely.deleteFrom(table).where(
-                  "rowid",
-                  "in",
-                  selected.map((orphanRow) => orphanRow.rowId),
-                ),
+          selected.map((row) => sqliteSessionIdWriteScope(row.session_id)),
+          () =>
+            executeSqliteQuerySync(
+              db,
+              kysely.deleteFrom(table).where(
+                "rowid",
+                "in",
+                selected.map((orphanRow) => orphanRow.rowId),
               ),
-            ).numAffectedRows ?? 0n;
-          remainingRows[index]! -= Number(removed);
-        }
+            ),
+        );
       }
     }
-    if (row.needs_reconcile || unfinished) {
-      pending.push({ session_id: sessionId, state: unfinished ? 0 : 1 });
-    }
   }
+  const unfinished = new Set(orphanIds.slice(unfinishedFrom));
+  const pending = classified
+    .filter((row) => row.needs_reconcile || unfinished.has(row.session_id!))
+    .map((row) => ({
+      session_id: row.session_id!,
+      state: unfinished.has(row.session_id!) ? 0 : 1,
+    }));
   // Cleanup triggers can requeue candidates; consume after all bounded deletions.
   if (candidates.size > 0) {
     executeSqliteQuerySync(
@@ -318,20 +326,23 @@ export function maintainSessionTranscriptIndexStatus(db: EngineConnection): {
     state.complete = 0;
     state.after_session = null;
     state.sibling_write_revision = siblingWriteRevision ?? -1;
+    statusChanged = true;
   }
-  executeSqliteQuerySync(
-    db,
-    temporary
-      .updateTable("openclaw_transcript_index_status")
-      .set({
-        sibling_write_revision: state.sibling_write_revision,
-        schema_version: schema.schemaVersion,
-        complete: state.complete,
-        after_session: state.after_session,
-        completed_traversals: state.completed_traversals,
-      })
-      .where("id", "=", 1),
-  );
+  if (statusChanged) {
+    executeSqliteQuerySync(
+      db,
+      temporary
+        .updateTable("openclaw_transcript_index_status")
+        .set({
+          sibling_write_revision: state.sibling_write_revision,
+          schema_version: schema.schemaVersion,
+          complete: state.complete,
+          after_session: state.after_session,
+          completed_traversals: state.completed_traversals,
+        })
+        .where("id", "=", 1),
+    );
+  }
   const sessionIds = resetPending
     ? pending.filter((row) => row.state === 1).map((row) => row.session_id)
     : executeSqliteQuerySync(

@@ -109,7 +109,6 @@ it("keeps a bounded, redacted profile label transient for opt-in run auditing", 
   });
 
   const invoker = localUserIngress.facts.invoker;
-  expect(invoker).toMatchObject({ state: "present" });
   if (invoker?.state !== "present") {
     throw new Error("expected present invoker");
   }

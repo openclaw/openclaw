@@ -79,6 +79,12 @@ also carry `reason: "navigation_blocked"`. Raw blocked URLs and DNS details are
 not included in that metadata. Tab listings are observations, not authorization:
 every subsequent content read or action still enforces its own checks.
 
+Closing is the exception. `DELETE /tabs/:targetId` (including
+`targetIdMode=raw`) and `POST /tabs/action` with `action: "close"` do not
+check the tab's URL, because closing never contacts that address. Agents and
+session cleanup can therefore always end a tab, including one whose URL is
+blocked or could not be validated.
+
 If shared-secret gateway auth is configured, browser HTTP routes require auth too:
 
 - `Authorization: Bearer <gateway token>`
@@ -566,7 +572,8 @@ These are useful for "make the site behave like X" workflows:
 - `openclaw browser evaluate --fn` accepts a function source, an expression, or
   a statement body. Statement bodies are wrapped as async functions, so use
   `return` for the value you want back. Use `--timeout-ms <ms>` when the
-  page-side function may need longer than the default evaluate timeout.
+  page-side function may need longer than the default evaluate timeout. The Gateway
+  parses this input for routing; supplied JavaScript runs only inside the page.
 - For logins and anti-bot notes (X/Twitter, etc.), see [Browser login + X/Twitter posting](/tools/browser-login).
 - Keep the Gateway/node host private (loopback or tailnet-only).
 - Remote CDP endpoints are powerful. Tunnel and protect them.

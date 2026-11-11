@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { MessageChannel } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
+import { renderStorageFailureSummary } from "../agents/failover/assistant-request-failure-copy.js";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { WorktreeRemovalContentionError } from "../agents/worktrees/errors.js";
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
@@ -10,6 +12,7 @@ import {
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import {
+  classifyGatewayStorageFailure,
   isSqliteNativeOpenFailure,
   withSqliteNativeOpen,
 } from "../infra/sqlite-error-diagnostics.js";
@@ -22,6 +25,17 @@ import {
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { receiveSqliteWorkerReply } from "../infra/sqlite-worker-broker-reply.js";
 import type { Job } from "../infra/sqlite-worker-broker.types.js";
+import {
+  hasSqliteWorkerOutcomeUnknown,
+  isSqliteWorkerError,
+  retainSqliteWorkerErrorCode,
+  SqliteWorkerError,
+} from "../infra/sqlite-worker-contract.js";
+import {
+  exchangeSqliteDatabaseAdmissions,
+  withSqliteDatabaseAdmissionWait,
+} from "../infra/sqlite-worker-database-admission-relay.js";
+import { hasSqliteWorkerErrorCode } from "../infra/sqlite-worker-error.js";
 import { SqliteWorkerSlotCustody } from "../infra/sqlite-worker-request-custody.js";
 import {
   findStartupMaintenanceRequiredError,
@@ -62,6 +76,151 @@ function roundTrip(error: Error): Error {
   expect(decoded).toMatchObject({ name: error.name, message: error.message });
   return decoded;
 }
+
+it("retains canonical uncertainty on an ordinary diagnostic wrapper", () => {
+  const error = retainSqliteWorkerErrorCode(
+    new Error("Synthetic wrapper"),
+    new SqliteWorkerError("Synthetic outcome", "outcome-unknown"),
+  );
+  const payload = encodeOpenClawStateWorkerError(error);
+  expect(payload).toBeDefined();
+  const decoded = hydrateOpenClawStateWorkerError(remoteError(structuredClone(payload)));
+  expect(isSqliteWorkerError(decoded, "outcome-unknown")).toBe(true);
+});
+
+it("preserves pre-execution admission-relay unavailability through the broker reply", () => {
+  const channel = new MessageChannel();
+  let original: unknown;
+  try {
+    withSqliteDatabaseAdmissionWait({ deadlineAtMs: Date.now() - 1 }, () =>
+      exchangeSqliteDatabaseAdmissions(channel.port1, []),
+    );
+  } catch (error) {
+    original = error;
+  } finally {
+    channel.port1.close();
+    channel.port2.close();
+  }
+  assert(original instanceof Error);
+  expect(isSqliteWorkerError(original, "unavailable")).toBe(true);
+  const sharedState = encodeOpenClawStateWorkerError(original, { includeOrdinary: true });
+  assert(sharedState);
+  const custody = new SqliteWorkerSlotCustody().createRequest();
+  custody.activate();
+  custody.accept();
+  const job: Job = {
+    custody,
+    observation: { started() {}, completed() {} },
+    request: {
+      type: "execute",
+      id: 1,
+      actor: 1,
+      input: new Uint8Array(),
+      stateContext: { environment: { OPENCLAW_STATE_DIR: "/fixture" } },
+    },
+    bytes: 0,
+    result: createDeferredCore().promise,
+    resolve() {},
+    reject() {},
+    detach() {},
+  };
+  let failure: unknown;
+  receiveSqliteWorkerReply(
+    { current: job, actors: new Set(), worker: { postMessage() {} } },
+    {
+      id: 1,
+      ok: false,
+      error: {
+        name: original.name,
+        message: original.message,
+        code: "unavailable",
+        sharedState: structuredClone(sharedState),
+      },
+    },
+    {
+      fail(error) {
+        throw error;
+      },
+      finish(_job, error) {
+        failure = error;
+      },
+      dispatch() {},
+    },
+  );
+  expect(isSqliteWorkerError(failure, "unavailable")).toBe(true);
+  expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(false);
+  const storageFailure = classifyGatewayStorageFailure(failure);
+  expect(storageFailure).toBe("unavailable");
+  expect(renderStorageFailureSummary(storageFailure)).toBeTruthy();
+});
+
+it.each([
+  ["outcome-unknown", false],
+  ["outcome-unknown", true],
+  ["unavailable", false],
+  ["unavailable", true],
+] as const)(
+  "retains %s marked directly on cleanup aggregates (ordinary: %s)",
+  (code, includeOrdinary) => {
+    const original = retainSqliteWorkerErrorCode(
+      new AggregateError([], "Synthetic cleanup"),
+      new SqliteWorkerError("Synthetic outcome", code),
+    );
+    const options = { includeOrdinary };
+    const payload = encodeOpenClawStateWorkerError(original, options);
+    assert(payload);
+    const decoded = hydrateOpenClawStateWorkerError(remoteError(structuredClone(payload)), options);
+    expect(decoded).toBeInstanceOf(AggregateError);
+    expect(hasSqliteWorkerOutcomeUnknown(decoded)).toBe(code === "outcome-unknown");
+    expect(hasSqliteWorkerErrorCode(decoded, code)).toBe(true);
+    expect(isSqliteWorkerError(decoded, code)).toBe(false);
+  },
+);
+
+it.each([false, true])(
+  "retains canonical unknown outcomes through worker graphs (nested: %s)",
+  (nested) => {
+    const primary = new SqliteWorkerError("Synthetic lost acknowledgment", "outcome-unknown");
+    const error = nested
+      ? new AggregateError([primary, new Error("Synthetic cleanup failure")], "Operation failed", {
+          cause: primary,
+        })
+      : primary;
+    const decoded = roundTrip(error);
+    expect(hasSqliteWorkerOutcomeUnknown(decoded)).toBe(true);
+    expect(hasSqliteWorkerErrorCode(decoded, "outcome-unknown")).toBe(!nested);
+    expect(isSqliteWorkerError(decoded, "outcome-unknown")).toBe(!nested);
+    if (decoded instanceof AggregateError) {
+      expect(decoded.cause).toBe(decoded.errors[0]);
+      expect(isSqliteWorkerError(decoded.cause, "outcome-unknown")).toBe(true);
+    }
+  },
+);
+
+it.each([
+  ["outcome-unknown", false],
+  ["outcome-unknown", true],
+  ["unavailable", false],
+  ["unavailable", true],
+] as const)(
+  "does not promote ordinary worker error lookalikes into canonical %s (aggregate: %s)",
+  (code, aggregate) => {
+    const ordinary = Object.assign(
+      aggregate
+        ? new AggregateError([], "Synthetic provider failure")
+        : new Error("Synthetic provider failure"),
+      { name: "SqliteWorkerError", code },
+    );
+    const payload = encodeOpenClawStateWorkerError(ordinary, { includeOrdinary: true });
+    assert(payload);
+    const decoded = hydrateOpenClawStateWorkerError(remoteError(structuredClone(payload)), {
+      includeOrdinary: true,
+    });
+    expect(hasSqliteWorkerOutcomeUnknown(decoded)).toBe(false);
+    expect(hasSqliteWorkerErrorCode(decoded, code)).toBe(false);
+    expect(isSqliteWorkerError(decoded, code)).toBe(false);
+  },
+);
 
 describe("shared-state worker error transport", () => {
   const syntaxCause = new SyntaxError("Synthetic malformed JSON");

@@ -137,6 +137,8 @@ it("admits schema and integrity once, then warm turns request only their writes"
   expect(requests).toEqual(
     expect.arrayContaining(["open", "prepare:agent-validation-start", "commit"]),
   );
+  // Cold opening needs three grants, without another refresh of its admitted schema.
+  expect(requests.filter((request) => request === "open")).toHaveLength(3);
   requests.length = 0;
   await turn("second-turn");
   await turn("third-turn");

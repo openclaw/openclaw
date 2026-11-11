@@ -27,7 +27,8 @@ vi.mock("../../infra/gateway-lock-legacy.js", () => ({
   readLegacyGatewayLockIdentity: mocks.legacyLock,
 }));
 vi.mock("../../infra/ports-inspect.js", () => ({ inspectPortUsage: mocks.portUsage }));
-vi.mock("../../daemon/systemd-maintenance.js", () => ({
+vi.mock("../../daemon/systemd-stop-policy.js", async (actual) => ({
+  ...(await actual<typeof import("../../daemon/systemd-stop-policy.js")>()),
   readSystemdGatewayStopTimeout: mocks.managerTimeout,
 }));
 vi.mock("../../gateway/local-http-probe.js", () => ({
@@ -412,6 +413,30 @@ it.each([
   await vi.advanceTimersByTimeAsync(1);
   expect(f.events).toContain("handoff");
   await expect(running).resolves.toBe("stopped");
+});
+
+it("keeps the handoff transport open while late writes settle within the drain budget", async () => {
+  const f = fixture({ observations: [{ ...ready(), expiresAtMs: Date.now() + 45_000 }] });
+  wrapCall((request, call) => {
+    if (request.method !== "gateway.suspend.handoff") {
+      return call(request);
+    }
+    return new Promise((resolve, reject) => {
+      const deadline = setTimeout(
+        () => reject(new Error("transport deadline")),
+        request.timeoutMs ?? undefined,
+      );
+      setTimeout(() => {
+        clearTimeout(deadline);
+        resolve(call(request));
+      }, 20_000);
+    });
+  });
+  const outcome = f.interrupt({ timeoutMs: undefined }).catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(await outcome).toBe("stopped");
+  expect(f.events).toContain("handoff");
+  expect(f.events).not.toContain("resume");
 });
 
 it.each([

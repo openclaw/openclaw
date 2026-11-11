@@ -1,0 +1,2 @@
+20
+# Message send boundary: preserve code escapes and retain plain-text newline expansion.

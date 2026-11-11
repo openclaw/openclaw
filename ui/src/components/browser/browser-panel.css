@@ -106,7 +106,7 @@ openclaw-browser-panel {
     min-width: 0;
     align-items: center;
     gap: 8px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
   }
   .bp-toolbar[data-mobile="false"] .bp-toolbar-location {
     height: auto;
@@ -242,32 +242,11 @@ openclaw-browser-panel {
     color: var(--text);
     font-size: 12px;
     font-family: inherit;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     padding: 3px 10px;
   }
   .bp-btn:hover {
     background: color-mix(in srgb, var(--text) 10%, transparent);
-  }
-  .bp-empty-action {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-2);
-    min-height: var(--rail-header-action-size);
-    padding: 6px 12px;
-    border-radius: var(--radius-full);
-    background: var(--bg-hover);
-    font-size: var(--font-size-sm);
-    line-height: 18px;
-  }
-  .bp-empty-action > svg {
-    width: var(--rail-header-action-glyph-size);
-    height: var(--rail-header-action-glyph-size);
-    flex: none;
-  }
-  .bp-empty-action:focus-visible {
-    outline: var(--control-ui-focus-ring);
-    outline-offset: var(--control-ui-focus-ring-offset);
   }
   .bp-btn--primary {
     border-color: var(--accent);
@@ -295,7 +274,7 @@ openclaw-browser-panel {
     display: block;
     padding: var(--space-2);
     color: var(--muted);
-    font-size: var(--font-size-xs);
+    font-size: var(--control-ui-text-xs);
   }
   .bp-shot {
     display: block;
@@ -334,7 +313,7 @@ openclaw-browser-panel {
     z-index: 3;
     max-width: 320px;
     padding: 8px 10px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     border: 1px solid var(--border);
     background: var(--bg);
     box-shadow: var(--shadow-md);

@@ -85,22 +85,15 @@ function formatSeconds(value) {
   return value === null ? "" : `${value}s`;
 }
 
-function percentile(values, percentileValue) {
-  if (values.length === 0) {
-    return null;
-  }
-  const sorted = [...values].toSorted((left, right) => left - right);
-  const index = Math.min(sorted.length - 1, Math.ceil(sorted.length * percentileValue) - 1);
-  return sorted[index];
-}
-
 function summarizeDistribution(values) {
+  const sorted = values.toSorted((left, right) => left - right);
+  const percentile = (fraction) => sorted[Math.ceil(sorted.length * fraction) - 1] ?? null;
   return {
     count: values.length,
     max: values.length === 0 ? null : Math.max(...values),
-    p50: percentile(values, 0.5),
-    p90: percentile(values, 0.9),
-    p95: percentile(values, 0.95),
+    p50: percentile(0.5),
+    p90: percentile(0.9),
+    p95: percentile(0.95),
   };
 }
 
@@ -245,7 +238,7 @@ function listRecentSuccessfulCiRuns(limit) {
       "--limit",
       String(Math.max(limit * 4, limit)),
       "--json",
-      "databaseId,headSha,event,status,conclusion",
+      "databaseId,headSha,event,status,conclusion,createdAt,updatedAt,attempt",
     ],
     { encoding: "utf8" },
   );
@@ -263,7 +256,7 @@ function listRecentSuccessfulCiRuns(limit) {
 function loadRunJobs(runId, runAttempt = null) {
   const repository = process.env.GITHUB_REPOSITORY || DEFAULT_GITHUB_REPOSITORY;
   const runPath = runAttempt === null ? `runs/${runId}` : `runs/${runId}/attempts/${runAttempt}`;
-  const pages = [];
+  const jobs = [];
   let totalCount = null;
   let requestCount = 0;
   for (let page = 1; page <= RUN_JOBS_MAX_PAGES; page += 1) {
@@ -278,17 +271,14 @@ function loadRunJobs(runId, runAttempt = null) {
         requestCount += 1;
       },
     );
-    pages.push(payload);
-    const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+    const pageJobs = collectRunJobsFromPages([payload]);
+    jobs.push(...pageJobs);
     totalCount = typeof payload.total_count === "number" ? payload.total_count : totalCount;
-    if (
-      jobs.length === 0 ||
-      (totalCount !== null && collectRunJobsFromPages(pages).length >= totalCount)
-    ) {
+    if (pageJobs.length === 0 || (totalCount !== null && jobs.length >= totalCount)) {
       break;
     }
   }
-  return { jobs: collectRunJobsFromPages(pages), requestCount };
+  return { jobs, requestCount };
 }
 
 function loadRun(runId) {
@@ -362,6 +352,7 @@ function summarizeJobs(run) {
     .filter((job) => job.status === "completed" && job.conclusion === "success")
     .map((job) => job.durationSeconds)
     .filter((duration) => duration !== null);
+  const distribution = summarizeDistribution(successfulDurations);
   const firstStart = Math.min(...completedJobs.map((job) => job.started));
   const lastComplete = Math.max(...completedJobs.map((job) => job.completed));
 
@@ -380,10 +371,10 @@ function summarizeJobs(run) {
     firstStartDelaySeconds: Number.isFinite(firstStart)
       ? secondsBetween(created, firstStart)
       : null,
-    jobCount: successfulDurations.length,
-    maxDurationSeconds: successfulDurations.length === 0 ? null : Math.max(...successfulDurations),
-    p90DurationSeconds: percentile(successfulDurations, 0.9),
-    p95DurationSeconds: percentile(successfulDurations, 0.95),
+    jobCount: distribution.count,
+    maxDurationSeconds: distribution.max,
+    p90DurationSeconds: distribution.p90,
+    p95DurationSeconds: distribution.p95,
     wallSeconds: secondsBetween(created, updated),
   };
 }
@@ -994,7 +985,11 @@ async function main() {
   }
   if (recentLimit !== null) {
     for (const run of listRecentSuccessfulCiRuns(recentLimit)) {
-      const summary = summarizeJobs(loadRun(run.databaseId));
+      // Keep metadata and jobs on the listed attempt if another rerun starts.
+      const summary = summarizeJobs({
+        ...run,
+        jobs: loadRunJobs(run.databaseId, run.attempt).jobs,
+      });
       console.log(
         [
           `CI run ${run.databaseId}`,

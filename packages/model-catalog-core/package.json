@@ -8,6 +8,9 @@
   "type": "module",
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
+  "scripts": {
+    "build": "node --import ../../scripts/tsx.mjs ../../scripts/build-workspace-package.mts model-catalog-core"
+  },
   "dependencies": {
     "@openclaw/normalization-core": "workspace:*",
     "zod": "4.6.7"
@@ -42,6 +45,11 @@
       "types": "./dist/model-catalog-types.d.mts",
       "import": "./dist/model-catalog-types.mjs",
       "default": "./dist/model-catalog-types.mjs"
+    },
+    "./model-inference-capabilities": {
+      "types": "./dist/model-inference-capabilities.d.mts",
+      "import": "./dist/model-inference-capabilities.mjs",
+      "default": "./dist/model-inference-capabilities.mjs"
     },
     "./provider-id": {
       "types": "./dist/provider-id.d.mts",

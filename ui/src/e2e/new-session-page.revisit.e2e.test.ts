@@ -1,6 +1,9 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  type ControlUiMockGatewayScenario,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "New Session revisit" });
@@ -40,11 +43,14 @@ type DraftFixture = {
   composer: ReturnType<Page["locator"]>;
 };
 
-function withDraft(run: (fixture: DraftFixture) => Promise<void>, awaitInitialRoster = true) {
+function withDraft(
+  run: (fixture: DraftFixture) => Promise<void>,
+  scenario: ControlUiMockGatewayScenario = {},
+) {
   return suite.withPage(
     { viewport: { width: 1280, height: 900 }, locale: "en-US" },
     async ({ page }) => {
-      const gateway = await installMockGateway(page, { awaitInitialRoster });
+      const gateway = await installMockGateway(page, { awaitInitialRoster: true, ...scenario });
       await run({ page, gateway, composer: page.locator(".new-session-page__message") });
     },
   );
@@ -53,7 +59,7 @@ function withDraft(run: (fixture: DraftFixture) => Promise<void>, awaitInitialRo
 const openDraft = (page: Page, route = "new?agent=main") => page.goto(suite.server.baseUrl + route);
 const openChat = (page: Page) => page.locator("openclaw-chat-page").waitFor({ state: "visible" });
 const returnToDraft = async (page: Page) => {
-  await page.getByRole("link", { name: "New conversation" }).first().click();
+  await page.getByRole("link", { name: "New session" }).first().click();
   await page.locator(".new-session-page__message").waitFor({ state: "visible" });
 };
 
@@ -142,7 +148,7 @@ async function visitChats({ page, gateway, composer }: DraftFixture) {
     await composer.press("Enter");
     await gateway.waitForRequest("sessions.create", { after: visit });
     await openChat(page);
-    await page.getByRole("link", { name: "New conversation" }).first().click();
+    await page.getByRole("link", { name: "New session" }).first().click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
     await composer.waitFor({ state: "visible", timeout: 5000 });
     expect(await composer.isEnabled()).toBe(true);
@@ -152,13 +158,17 @@ async function visitChats({ page, gateway, composer }: DraftFixture) {
 suite.define(() => {
   it.each([false, true])(
     "restores the composer after a render failure (persistent: %s)",
-    (persistent) => withDraft((fixture) => recoverComposer(fixture, persistent), false),
+    (persistent) =>
+      withDraft((fixture) => recoverComposer(fixture, persistent), { awaitInitialRoster: false }),
   );
   it("keeps a draft and avoids automatic reload after the composer was usable", () =>
     withDraft(preserveDraft));
   it.each(["chat.startup", "sessions.create"] as const)(
     "returns to plus after interrupted %s",
-    (method) => withDraft((fixture) => interruptNavigation(fixture, method)),
+    (method) =>
+      withDraft((fixture) => interruptNavigation(fixture, method), {
+        subscriptionInitialHistory: method !== "chat.startup",
+      }),
   );
   it("keeps the plus destination populated across repeated chat visits", () =>
     withDraft(visitChats));

@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, expect, it, vi } from "vitest";
 import type * as Catalog from "../capability-catalog-context.types.js";
+import { createCatalogContextFixture } from "../capability-catalog.test-support.js";
 
 const rejectRuntimeImport = vi.hoisted(() => () => {
   throw new Error("cold catalog imported host runtime/auth");
@@ -41,28 +42,8 @@ const fixtures = fs.readdirSync(extensions).flatMap((dir) => {
   return contracts.length ? [{ dir, root, manifest, contracts }] : [];
 });
 
-const context: Catalog.PluginCapabilityCatalogHostContext = {
-  isProviderApiKeyConfigured: rejectRuntimeImport,
-  isProviderApiKeyConfiguredAsync: rejectRuntimeImport,
-  isProviderAuthProfileConfigured: rejectRuntimeImport,
-  isProviderAuthProfileConfiguredAsync: rejectRuntimeImport,
-  resolveAgentDir: rejectRuntimeImport,
-  createRealtimeTranscriptionWebSocketSession: rejectRuntimeImport,
-  resolveProviderRequestHeaders: rejectRuntimeImport,
-  resolveProviderAuthProfileApiKey: rejectRuntimeImport,
-  resolveApiKeyForProvider: rejectRuntimeImport,
-  captureWsEvent: rejectRuntimeImport,
-  captureWsEventAsync: rejectRuntimeImport,
-  createDebugProxyWebSocketAgent: rejectRuntimeImport,
-  resolveDebugProxySettings: rejectRuntimeImport,
-  fetchWithSsrFGuard: rejectRuntimeImport,
-  createProviderHttpError: rejectRuntimeImport,
-  readProviderJsonResponse: rejectRuntimeImport,
-  readProviderTextResponse: rejectRuntimeImport,
-  formatErrorMessage: rejectRuntimeImport,
-  warn: rejectRuntimeImport,
-  redactSensitiveText: rejectRuntimeImport,
-};
+const context: Catalog.PluginCapabilityCatalogHostContext =
+  createCatalogContextFixture(rejectRuntimeImport);
 
 it.each(fixtures)(
   "constructs $dir descriptors without runtime or auth discovery",

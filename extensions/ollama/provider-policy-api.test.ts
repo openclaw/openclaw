@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { createModel } from "./model.test-support.js";
 import {
   normalizeConfig,
-  projectConfiguredModelRow,
   resolveThinkingProfile,
   resolveToolSearchMode,
 } from "./provider-policy-api.js";
@@ -27,19 +26,6 @@ describe("ollama provider policy public artifact", () => {
     ["openai", {}, {}],
   ] as const)("normalizes %s configuration %j", (provider, providerConfig, expected) => {
     expect(normalizeConfig({ provider, providerConfig })).toStrictEqual(expected);
-  });
-
-  it.each([
-    [" OLLAMA-CLOUD ", null],
-    ["openai", undefined],
-  ] as const)("projects configured rows for %s", (provider, expected) => {
-    const model = {
-      ...createModel("configured", "Configured", { reasoning: true }),
-      provider: provider.trim().toLowerCase(),
-      api: "ollama",
-      baseUrl: OLLAMA_DEFAULT_BASE_URL,
-    };
-    expect(projectConfiguredModelRow({ provider, modelId: model.id, model })).toBe(expected);
   });
 
   it.each([

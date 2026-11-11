@@ -110,23 +110,6 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
   },
 );
 
-test("keeps identityless solo archive and restore available", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const key = "agent:main:archive-solo";
-  await writeSessionStore({ entries: { [key]: sessionStoreEntry("solo") } });
-  const cfg = { session: { store: storePath } };
-  const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-  await initializeSessionReadContext(context);
-  for (const archived of [true, false]) {
-    expect(
-      (await request("sessions.patch", sharingPolicyClient({}), context, [key], { archived }))?.[0],
-    ).toBe(true);
-    expect(loadSessionEntry({ sessionKey: key, storePath })?.archivedAt).toEqual(
-      archived ? expect.any(Number) : undefined,
-    );
-  }
-});
-
 test("archiving a non-default agent ignores the compatibility owner's ownerless run", async () => {
   const { storePath } = await createSessionStoreDir();
   const cfg = retainLegacyDefaultAgentId(

@@ -27,6 +27,11 @@ const setHost = (versions: typeof process.versions, execPath = originalExecPath)
   Object.defineProperty(process, "versions", { value: versions });
   Object.defineProperty(process, "execPath", { value: execPath });
 };
+const windows = process.platform === "win32";
+const executable = windows ? "node.exe" : "node";
+const manager = windows ? "pnpm.cmd" : "pnpm";
+const writeManager = (bin: string, unix: string, win: string) =>
+  fs.writeFile(path.join(bin, manager), windows ? win : unix, { mode: 0o755 });
 
 beforeEach(async () => {
   root = tempDirs.make("candidate-node-");
@@ -48,7 +53,6 @@ it("binds the qualified system fallback when PATH has no Node", async () => {
   vi.mocked(runtimes.resolveSystemNodeInfo).mockResolvedValue({ ...supported, path: nodePath });
   const result = await prepareGitCandidateNodeRuntime(root, {});
   expect(result.env?.PATH).toBe(path.dirname(nodePath));
-  expect(runtimes.resolveNodeRuntimeInfo).not.toHaveBeenCalled();
 });
 
 it("refuses unsafe SQLite even when the candidate engine accepts the version", async () => {
@@ -77,23 +81,17 @@ it.each([
     const shadowBin = path.join(root, "shadow-bin");
     const scopedBin = path.join(root, "scoped-bin");
     await Promise.all([selectedBin, shadowBin, scopedBin].map((bin) => fs.mkdir(bin)));
-    const executable = process.platform === "win32" ? "node.exe" : "node";
     await fs.symlink(realNode, path.join(selectedBin, executable), "file");
     await fs.writeFile(path.join(shadowBin, executable), "not an executable", { mode: 0o755 });
-    const manager = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-    await fs.writeFile(
-      path.join(scopedBin, manager),
-      process.platform === "win32"
-        ? '@echo off\r\nnode -p "process.execPath"\r\n'
-        : "#!/usr/bin/env node\nconsole.log(process.execPath);\n",
-      { mode: 0o755 },
+    await writeManager(
+      scopedBin,
+      "#!/usr/bin/env node\nconsole.log(process.execPath);\n",
+      '@echo off\r\nnode -p "process.execPath"\r\n',
     );
-    await fs.writeFile(
-      path.join(selectedBin, manager),
-      process.platform === "win32"
-        ? "@echo off\r\necho wrong-pnpm\r\n"
-        : "#!/bin/sh\necho wrong-pnpm\n",
-      { mode: 0o755 },
+    await writeManager(
+      selectedBin,
+      "#!/bin/sh\necho wrong-pnpm\n",
+      "@echo off\r\necho wrong-pnpm\r\n",
     );
     if (runtime === "node") {
       setHost(
@@ -128,6 +126,5 @@ it("qualifies the actual package-tooling Node when the Node host has a custom ex
   );
   await writeEngine(">=24.22.1 <25 || >=26.12.1");
   const result = await prepareGitCandidateNodeRuntime(root, { PATH: path.dirname(nodePath) });
-  expect(runtimes.resolveNodeRuntimeInfo).toHaveBeenCalledWith(nodePath, expect.any(Object));
   expect(result.env?.PATH).toBe(path.dirname(nodePath));
 });

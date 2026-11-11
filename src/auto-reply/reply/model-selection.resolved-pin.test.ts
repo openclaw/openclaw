@@ -18,68 +18,49 @@ vi.mock("../../agents/auth-profiles.runtime.js", () => ({
 
 afterEach(() => resetPluginRuntimeStateForTest());
 
-test.each([
-  { name: "configured selection", originProvider: "openai", originModel: "gpt-x", reset: false },
-  { name: "trimmed selection", originProvider: " openai ", originModel: " gpt-x ", reset: false },
-  { name: "legacy fallback", reset: true },
-  { name: "another model", originProvider: "openai", originModel: "gpt-old", reset: true },
-  { name: "another provider", originProvider: "other", originModel: "gpt-x", reset: true },
-  { name: "incomplete origin", originProvider: "openai", reset: true },
-  { name: "case-distinct model", originProvider: "openai", originModel: "GPT-X", reset: true },
-  {
-    name: "blank override provider",
-    provider: " ",
-    originProvider: "openai",
-    originModel: "gpt-x",
-    reset: true,
-  },
-  {
-    name: "missing override provider",
-    missingProvider: true,
-    originProvider: "openai",
-    originModel: "gpt-x",
-    reset: true,
-  },
-])("Codex model cleanup preserves only complete self-origin selections: $name", async (fixture) => {
-  await withStateDirEnv("reply-codex-self-origin-", async () => {
-    const entry: SessionEntry = {
-      sessionId: "child",
-      updatedAt: 1,
-      providerOverride: fixture.missingProvider ? undefined : (fixture.provider ?? "openai"),
-      modelOverride: "gpt-x",
-      modelOverrideSource: "auto",
-      modelOverrideRouteResolution: "resolved",
-      modelOverrideFallbackOriginProvider: fixture.originProvider,
-      modelOverrideFallbackOriginModel: fixture.originModel,
-    };
-    const before = { ...entry };
-    const selection = await createModelSelectionState({
-      agentId: "main",
-      cfg: {
-        plugins: { enabled: false },
-        agents: { defaults: { models: { "openai/gpt-x": { agentRuntime: { id: "codex" } } } } },
-      },
-      agentCfg: undefined,
-      sessionEntry: entry,
-      sessionStore: { child: entry },
-      sessionKey: "child",
-      defaultProvider: "openai",
-      defaultModel: "gpt-x",
-      provider: "openai",
-      model: "gpt-x",
-      hasModelDirective: false,
-    });
-    expect(selection.resetModelOverride).toBe(fixture.reset);
-    expect(entry.modelOverride).toBe(fixture.reset ? undefined : "gpt-x");
-    if (!fixture.reset) {
-      expect(entry).toEqual(before);
-    }
-    expect(selection).toMatchObject({
-      provider: "openai",
-      model: "gpt-x",
-    });
-  });
-});
+test.each<[string, string | undefined, string | undefined, boolean, string | undefined]>([
+  ["configured selection", "openai", "gpt-x", false, "openai"],
+  ["trimmed selection", " openai ", " gpt-x ", false, "openai"],
+  ["another provider", "other", "gpt-x", true, "openai"],
+  ["incomplete origin", "openai", undefined, true, "openai"],
+  ["case-distinct model", "openai", "GPT-X", true, "openai"],
+  ["blank override provider", "openai", "gpt-x", true, " "],
+])(
+  "Codex cleanup preserves only complete self-origin selections: %s",
+  async (_name, originProvider, originModel, reset, providerOverride) =>
+    withStateDirEnv("reply-codex-self-origin-", async () => {
+      const entry: SessionEntry = {
+        sessionId: "child",
+        updatedAt: 1,
+        providerOverride,
+        modelOverride: "gpt-x",
+        modelOverrideSource: "auto",
+        modelOverrideRouteResolution: "resolved",
+        modelOverrideFallbackOriginProvider: originProvider,
+        modelOverrideFallbackOriginModel: originModel,
+      };
+      const before = { ...entry };
+      const selection = await selectModel({
+        cfg: {
+          plugins: { enabled: false },
+          agents: { defaults: { models: { "openai/gpt-x": { agentRuntime: { id: "codex" } } } } },
+        },
+        sessionEntry: entry,
+        sessionStore: { child: entry },
+        sessionKey: "child",
+        defaultProvider: "openai",
+        defaultModel: "gpt-x",
+        provider: "openai",
+        model: "gpt-x",
+      });
+      expect(selection.resetModelOverride).toBe(reset);
+      expect(entry.modelOverride).toBe(reset ? undefined : "gpt-x");
+      if (!reset) {
+        expect(entry).toEqual(before);
+      }
+      expect(selection).toMatchObject({ provider: "openai", model: "gpt-x" });
+    }),
+);
 function selectModel(params: Partial<Parameters<typeof createModelSelectionState>[0]>) {
   return createModelSelectionState({
     agentId: "main",
@@ -94,8 +75,8 @@ function selectModel(params: Partial<Parameters<typeof createModelSelectionState
   });
 }
 
-test("keeps thinking defaults separate for distinct literal model IDs", async () => {
-  await withStateDirEnv("reply-thinking-identities-", async () => {
+test("keeps thinking defaults separate for distinct literal model IDs", async () =>
+  withStateDirEnv("reply-thinking-identities-", async () => {
     const selection = await selectModel({
       preparedModelCatalog: {
         routeVariants: [],
@@ -113,14 +94,13 @@ test("keeps thinking defaults separate for distinct literal model IDs", async ()
       });
     expect(await thinking("model")).toBe("off");
     expect(await thinking("custom/model")).toBe("medium");
-  });
-});
+  }));
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture({
   plugins: [
     {
       id: "fixture",
-      providers: ["custom", "demo-cli"],
+      providers: ["custom"],
       modelIdNormalization: {
         providers: { custom: { aliases: { latest: "middle", middle: "final" } } },
       },
@@ -155,8 +135,8 @@ test.each<[string, string, string, SelectionOptions]>([
   ["locked resolved prefix", literal, literal, { allow: exactAllow, locked: true }],
   ["inherited namespace wildcard", literal, literal, { allow: wildcardAllow, inherited: true }],
   ["exact configured ref", literal, literal, { allow: configuredAllow, configuredProvider: true }],
-])("selects %s through the reply owner", async (_name, pin, expected, fixture) => {
-  await withStateDirEnv("reply-resolved-pin-", async () => {
+])("selects %s through the reply owner", async (_name, pin, expected, fixture) =>
+  withStateDirEnv("reply-resolved-pin-", async () => {
     const allow = fixture.allow;
     const inherited = fixture.inherited || fixture.operator === "inherited";
     const cfg: OpenClawConfig = {
@@ -197,11 +177,7 @@ test.each<[string, string, string, SelectionOptions]>([
       ...(inherited ? { [parentSessionKey]: pinnedEntry } : {}),
     };
     const entries = ["default", "model", "custom/model", "middle", "final", "scheduled"].map(
-      (id) => ({
-        provider: "custom",
-        id,
-        name: id,
-      }),
+      (id) => ({ provider: "custom", id, name: id }),
     );
     await withPluginRuntimeGenerationScope(
       { metadataSnapshot, pluginRegistry: registry },
@@ -248,5 +224,5 @@ test.each<[string, string, string, SelectionOptions]>([
         }
       },
     );
-  });
-});
+  }),
+);

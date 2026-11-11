@@ -99,6 +99,15 @@ function createHarness(params?: {
   };
 }
 
+function verificationParams(client: ReturnType<typeof createHarness>["client"], rootDir: string) {
+  return {
+    client: client as never,
+    auth: createAuth(),
+    accountConfig: {},
+    stateFilePath: createStateFilePath(rootDir),
+  };
+}
+
 describe("ensureMatrixStartupVerification", () => {
   beforeEach(() => {
     setMatrixRuntime({
@@ -119,10 +128,7 @@ describe("ensureMatrixStartupVerification", () => {
     const harness = createHarness({ verified: true });
 
     const result = await ensureMatrixStartupVerification({
-      client: harness.client as never,
-      auth: createAuth(),
-      accountConfig: {},
-      stateFilePath: createStateFilePath(tempHome),
+      ...verificationParams(harness.client, tempHome),
     });
 
     expect(result.kind).toBe("verified");
@@ -139,10 +145,7 @@ describe("ensureMatrixStartupVerification", () => {
     });
 
     const result = await ensureMatrixStartupVerification({
-      client: harness.client as never,
-      auth: createAuth(),
-      accountConfig: {},
-      stateFilePath: createStateFilePath(tempHome),
+      ...verificationParams(harness.client, tempHome),
     });
 
     expect(result.kind).toBe("requested");
@@ -164,10 +167,7 @@ describe("ensureMatrixStartupVerification", () => {
     });
 
     const result = await ensureMatrixStartupVerification({
-      client: harness.client as never,
-      auth: createAuth(),
-      accountConfig: {},
-      stateFilePath: createStateFilePath(tempHome),
+      ...verificationParams(harness.client, tempHome),
     });
 
     expect(result.kind).toBe("pending");
@@ -179,19 +179,13 @@ describe("ensureMatrixStartupVerification", () => {
     const harness = createHarness();
     const initialNowMs = Date.parse("2026-03-08T12:00:00.000Z");
     await ensureMatrixStartupVerification({
-      client: harness.client as never,
-      auth: createAuth(),
-      accountConfig: {},
-      stateFilePath: createStateFilePath(tempHome),
+      ...verificationParams(harness.client, tempHome),
       nowMs: initialNowMs,
     });
     expect(harness.client.crypto.requestVerification).toHaveBeenCalledTimes(1);
 
     const second = await ensureMatrixStartupVerification({
-      client: harness.client as never,
-      auth: createAuth(),
-      accountConfig: {},
-      stateFilePath: createStateFilePath(tempHome),
+      ...verificationParams(harness.client, tempHome),
       nowMs: initialNowMs + 60_000,
     });
 
@@ -264,10 +258,7 @@ describe("ensureMatrixStartupVerification", () => {
     const harness = createHarness();
 
     const result = await ensureMatrixStartupVerification({
-      client: harness.client as never,
-      auth: createAuth(),
-      accountConfig: {},
-      stateFilePath: createStateFilePath(tempHome),
+      ...verificationParams(harness.client, tempHome),
       nowMs: Date.parse("2026-03-08T12:00:00.000Z"),
     });
 
@@ -290,10 +281,7 @@ describe("ensureMatrixStartupVerification", () => {
     });
 
     const result = await ensureMatrixStartupVerification({
-      client: harness.client as never,
-      auth: createAuth(),
-      accountConfig: {},
-      stateFilePath: createStateFilePath(tempHome),
+      ...verificationParams(harness.client, tempHome),
     });
 
     expect(result.kind).toBe("request-failed");
@@ -303,10 +291,7 @@ describe("ensureMatrixStartupVerification", () => {
     expect(result.error).toContain("no other verified session");
 
     const cooledDown = await ensureMatrixStartupVerification({
-      client: harness.client as never,
-      auth: createAuth(),
-      accountConfig: {},
-      stateFilePath: createStateFilePath(tempHome),
+      ...verificationParams(harness.client, tempHome),
       nowMs: Date.now() + 60_000,
     });
 

@@ -105,7 +105,6 @@
 
 .chat-details .chat-environment__branch .chat-environment__branch-name {
   text-overflow: clip;
-  mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
 }
 
 .chat-environment-desktop__summary

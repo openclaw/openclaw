@@ -1,5 +1,6 @@
 import type { ApplicationConfigCapability } from "../../../app/config.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { showToast } from "../../../lib/toast.ts";
@@ -15,6 +16,8 @@ import {
   type ChatAttachmentLimits,
 } from "./chat-attachment-admission.ts";
 import { resizeChatAttachmentImage } from "./chat-attachment-image.ts";
+
+registerChatComposerEnglish();
 
 const CHAT_ATTACHMENT_READ_TIMEOUT_MS = 15_000;
 

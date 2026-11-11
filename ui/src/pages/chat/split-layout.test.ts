@@ -12,6 +12,7 @@ import {
   resizePanes,
   setActivePane,
   setPaneSession,
+  singlePaneLayout,
 } from "./split-layout.ts";
 
 const makePane = <Id extends string | number>(id: Id, sessionKey: string) => ({ id, sessionKey });
@@ -22,12 +23,7 @@ const makeColumn = <Id extends string | number>(
 ) => ({ id, panes, paneWeights });
 
 function createSplitLayout(sessionKey = "main"): ChatSplitLayout {
-  const layout = {
-    columns: [makeColumn("c1", [makePane("p1", sessionKey)], [1])],
-    columnWeights: [1],
-    activePaneId: "p1",
-  };
-  return insertPane(layout, "p1", sessionKey, "right");
+  return insertPane(singlePaneLayout("c1", "p1", sessionKey), "p1", sessionKey, "right");
 }
 
 function threePaneLayout(): ChatSplitLayout {
@@ -75,11 +71,7 @@ describe("chat split layout", () => {
     expect(panesOf(layout)).not.toBe(layout.columns.at(0)?.panes);
     const split = applyUiCommandToSplitLayout(
       initial,
-      {
-        kind: "split",
-        direction: "down",
-        sessionKey: "agent:main:new",
-      },
+      { kind: "split", direction: "down", sessionKey: "agent:main:new" },
       "source",
     );
     expect(split && panesOf(split).map((pane) => pane.sessionKey)).toEqual([
@@ -89,10 +81,7 @@ describe("chat split layout", () => {
     ]);
     expect(split?.activePaneId).toBe("p3");
 
-    const focused = applyUiCommandToSplitLayout(split!, {
-      kind: "focus",
-      sessionKey: "main",
-    });
+    const focused = applyUiCommandToSplitLayout(split!, { kind: "focus", sessionKey: "main" });
     expect(focused?.activePaneId).toBe("p1");
   });
 
@@ -142,10 +131,53 @@ describe("chat split layout", () => {
     expect(normalizeChatSplitLayout(layout)).toBeUndefined();
   });
 
-  it("returns an unchanged clone when the target pane is unknown", () => {
+  it("retains layout identity when an operation changes nothing", () => {
     const layout = createSplitLayout();
-    const unchanged = insertPane(layout, "missing", "new", "right");
-    expect(unchanged).toEqual(layout);
-    expect(unchanged).not.toBe(layout);
+    expect(insertPane(layout, "missing", "new", "right")).toBe(layout);
+    expect(closePane(layout, "missing")).toBe(layout);
+    expect(setPaneSession(layout, "missing", "new")).toBe(layout);
+    expect(setPaneSession(layout, "p1", "main")).toBe(layout);
+    expect(setActivePane(layout, "missing")).toBe(layout);
+    expect(setActivePane(layout, layout.activePaneId)).toBe(layout);
+    expect(resizeColumns(layout, 5, 0.2)).toBe(layout);
+    expect(resizeColumns(layout, 0, 0.5)).toBe(layout);
+    expect(resizePanes(layout, "missing", 0, 0.2)).toBe(layout);
+    expect(resizePanes(layout, "c1", 0, 0.2)).toBe(layout);
+  });
+
+  it("keeps unchanged pane identities while editing frozen layouts", () => {
+    const layout = threePaneLayout();
+    for (const column of layout.columns) {
+      column.panes.forEach(Object.freeze);
+      Object.freeze(column.panes);
+      Object.freeze(column.paneWeights);
+      Object.freeze(column);
+    }
+    Object.freeze(layout.columns);
+    Object.freeze(layout.columnWeights);
+    Object.freeze(layout);
+
+    const focused = setActivePane(layout, "p1");
+    expect(focused.columns).toBe(layout.columns);
+    const selected = setPaneSession(layout, "p2", "changed");
+    expect(selected.columns[0]).toBe(layout.columns[0]);
+    expect(selected.columns[1]?.panes[1]).toBe(layout.columns[1]?.panes[1]);
+    expect(selected.columnWeights).toBe(layout.columnWeights);
+
+    const inserted = insertPane(layout, "p2", "new", "down");
+    expect(inserted.columns[0]).toBe(layout.columns[0]);
+    expect(inserted.columns[1]?.panes[0]).toBe(layout.columns[1]?.panes[0]);
+    expect(inserted.columnWeights).toBe(layout.columnWeights);
+    const closed = closePane(layout, "p3");
+    expect(closed?.columns[0]).toBe(layout.columns[0]);
+    expect(closed?.columns[1]?.panes[0]).toBe(layout.columns[1]?.panes[0]);
+
+    const columns = resizeColumns(layout, 0, 0.2);
+    expect(columns.columns).toBe(layout.columns);
+    const panes = resizePanes(layout, "c2", 0, 0.2);
+    expect(panes.columns[0]).toBe(layout.columns[0]);
+    expect(panes.columns[1]?.panes).toBe(layout.columns[1]?.panes);
+    expect(panes.columnWeights).toBe(layout.columnWeights);
+    expect(resizePanes(layout, "c2", 0, 0.5)).toBe(layout);
   });
 });

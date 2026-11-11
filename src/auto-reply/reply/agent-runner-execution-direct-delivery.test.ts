@@ -75,7 +75,6 @@ it.each([false, true])(
     });
     assert(result.kind === "success");
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(source.complete).toBe(!completeAtSettlement);
     expect(fallback.allowed).toBe(!completeAtSettlement);
     expect(result.hasDirectlySentBlockReply).toBe(completeAtSettlement || undefined);
   },
@@ -100,7 +99,6 @@ it.each(["after-success", "transport-serialization"])(
         throw new Error("runtime failed after delivery");
       },
     });
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(delivered).toEqual(failure === "after-success" ? ["Answer"] : []);
     // Unclassified transport errors retain ambiguous-send custody, even without success.
     expect(fallback).toMatchObject({

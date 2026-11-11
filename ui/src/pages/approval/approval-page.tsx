@@ -19,7 +19,8 @@ import {
   type ApprovalResolveResult,
   type ApprovalSnapshot,
 } from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
@@ -29,7 +30,12 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
-import { ApprovalContent, approvalTitle, type ResolutionOrigin } from "./approval-presentation.tsx";
+import {
+  ApprovalContent,
+  approvalSeverity,
+  approvalTitle,
+  type ResolutionOrigin,
+} from "./approval-presentation.tsx";
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_MIN_POLL_DELAY_MS = 250;
 const APPROVAL_REQUIRED_SCOPE = "operator.approvals";
@@ -95,7 +101,6 @@ function createApprovalPage(
     completion.resolve();
     completion = Promise.withResolvers<void>();
     setRequest({ completion: completion.promise });
-    return completion.resolve;
   }
   const [optimisticDecision, setOptimisticDecision] = createOptimistic<ApprovalDecision | null>(
     null,
@@ -119,6 +124,10 @@ function createApprovalPage(
   });
   let clientOwner: GatewayBrowserClient | null = null;
   let operationGeneration = 0;
+  // Refreshes during an in-flight approval.get queue one follow-up instead of another request.
+  let activeLookup:
+    | { client: GatewayBrowserClient; id: string; generation: number; followUp: boolean }
+    | undefined;
   let pollTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   let boundApprovalId: string | undefined;
   let heading: HTMLHeadingElement | undefined;
@@ -245,11 +254,26 @@ function createApprovalPage(
     if (!client || !state.connected || !id || !hasApprovalAccess()) {
       return;
     }
+    if (
+      activeLookup?.generation === operationGeneration &&
+      activeLookup.client === client &&
+      activeLookup.id === id
+    ) {
+      activeLookup.followUp = true;
+      if (!options.background) {
+        beginRead();
+        notify();
+      }
+      return;
+    }
     const generation = ++operationGeneration;
+    const lookup = (activeLookup = { client, id, generation, followUp: false });
     const previousStatus = state.approval?.status;
     let shouldFocusTerminal = false;
     clearPollTimer();
-    const completeRead = options.background ? completion.resolve : beginRead();
+    if (!options.background) {
+      beginRead();
+    }
     notify();
     try {
       const result = await client.request<ApprovalGetResult>("approval.get", { id });
@@ -280,11 +304,19 @@ function createApprovalPage(
         state.requestError = "connection";
       }
     } finally {
+      if (activeLookup === lookup) {
+        activeLookup = undefined;
+      }
       if (isCurrentOperation(client, generation, id)) {
-        completeRead();
+        // Retry can attach a foreground read receipt to this same lookup.
+        completion.resolve();
         schedulePoll();
         notify();
       }
+    }
+    // Stale lookups returned above; a queued follow-up replaces the poll just armed.
+    if (lookup.followUp && pollTimer !== undefined) {
+      void loadApproval({ background: true });
     }
     if (shouldFocusTerminal && isCurrentOperation(client, generation, id)) {
       await focusTerminalState();
@@ -518,15 +550,7 @@ export const ApprovalPage = defineSolidBridge<ApprovalPageProps>(
             : disconnected()
               ? "connection-error"
               : (read().approval?.status ?? "loading");
-      const severity = () => {
-        const active = read().approval?.presentation;
-        const raw = active?.kind === "plugin" ? active.severity?.trim().toLowerCase() : null;
-        return active?.kind === "exec" || raw === "warning" || raw === "warn"
-          ? "warning"
-          : raw === "danger" || raw === "critical" || raw === "error"
-            ? "danger"
-            : "info";
-      };
+      const severity = () => approvalSeverity(read().approval?.presentation);
       const retry = (className: string) => (
         <button
           type="button"

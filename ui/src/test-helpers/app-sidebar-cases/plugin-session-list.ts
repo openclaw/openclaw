@@ -9,6 +9,7 @@ import {
 } from "../../plugins/control-ui-runtime.ts";
 import * as S from "../app-sidebar.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
+import { gatewayHelloForMethods } from "../gateway-methods.ts";
 import { patchRows, settleRoster, toggleRoster } from "./roster.test-support.ts";
 import "../../plugins/control-ui-view.solid.tsx";
 import "../../plugins/control-ui-contributions.solid.tsx";
@@ -22,11 +23,12 @@ function div(parent: HTMLElement, data: Record<string, string> = {}, text = "") 
 }
 
 it.each([false, true])("AppSidebar replacement sessions (delegates: %s)", async (delegates) => {
-  const client = createTestGatewayClient(async () => ({}));
+  const client = createTestGatewayClient(async () => ({ plugins: [], diagnostics: [] }));
   const initialKeys = ["agent:main:main", "agent:main:first"];
   const nextKeys = ["agent:main:main", "agent:main:next"];
   const sessions = S.createSessionsHarness("main", initialKeys);
   const context = S.createContext(S.createGateway(client), sessions.sessions, S.TWO_AGENTS);
+  context.gateway.snapshot.hello = gatewayHelloForMethods(["plugins.controlUi.list"]);
   const reportError = vi.fn();
   Object.assign(context.plugins, { reportError });
   const pluginListeners = new Set<() => void>();
@@ -47,6 +49,7 @@ it.each([false, true])("AppSidebar replacement sessions (delegates: %s)", async 
       actions: new Map(),
       accessories: new Map(),
       widgets: new Map(),
+      inlineViews: new Map(),
       replacements: new Map(),
     },
     selections: new Map(),

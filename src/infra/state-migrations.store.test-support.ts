@@ -13,14 +13,6 @@ export const expectFile = (file: string, contents: string) =>
 export const expectMissing = (file: string) =>
   expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
 
-export async function writeFiles(root: string, files: Record<string, string>) {
-  for (const [relative, contents] of Object.entries(files)) {
-    const file = path.join(root, relative);
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, contents);
-  }
-}
-
 export async function expectFiles(root: string, files: Record<string, string>) {
   for (const [file, contents] of Object.entries(files)) {
     await expectFile(path.join(root, file), contents);

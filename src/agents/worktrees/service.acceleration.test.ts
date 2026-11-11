@@ -1,9 +1,7 @@
-import { execFile } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { hostname } from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { probeTreeClone, readCloneFileMetadata } from "@openclaw/fs-safe/copy";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
@@ -22,12 +20,17 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { captureWorktreeMutationHeartbeat } from "./allocation.test-support.js";
-import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
+import {
+  createWorktreeCapacityStatfs,
+  useInProcessWorktreeCapacityTransport,
+} from "./capacity.test-support.js";
 import { addManagedWorktree } from "./checkout.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import type { WorktreeFilesystemBackend } from "./filesystem-backend.types.js";
+import { git } from "./git-fixture.test-support.js";
 import { readPendingWorktrees } from "./pending-slots.js";
 import * as preparationTiming from "./preparation-timing.js";
 import { updateRegistryWorktree } from "./registry.js";
@@ -39,6 +42,7 @@ import {
 import {
   listTemplatesAsync,
   markTemplateReadyAsync,
+  readTemplateAsync,
   releaseTemplateReaderAsync,
   retainTemplateReaderAsync,
 } from "./template-registry-async.js";
@@ -47,11 +51,7 @@ vi.mock("./filesystem-backend.js", () => ({
   detectWorktreeFilesystemBackend: vi.fn(),
 }));
 
-const execFileAsync = promisify(execFile);
 const realRunCommand = commandExec.runCommandWithTimeout;
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
-}
 
 describe("ManagedWorktreeService filesystem acceleration", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
@@ -177,6 +177,11 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       true,
     );
     expect(await listTemplatesAsync(env)).toEqual([
+      expect.objectContaining({
+        status: "preparing",
+        id: template.id,
+        cacheKey: `retired:${template.id}`,
+      }),
       expect.objectContaining({ status: "ready", id: expect.not.stringMatching(template.id) }),
     ]);
   });
@@ -253,16 +258,9 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       }
       const available = 4 * 1024 ** 3 + (mode === "small" ? 1 : 24) * 1024 ** 2;
       const stats = fsSync.statfsSync(repo);
-      vi.spyOn(fsSync, "statfsSync").mockReturnValue({
-        type: stats.type,
-        files: stats.files,
-        ffree: stats.ffree,
-        frsize: stats.frsize,
-        bsize: 4096,
-        blocks: 1024 ** 4 / 4096,
-        bavail: available / 4096,
-        bfree: available / 4096,
-      });
+      vi.spyOn(fsSync, "statfsSync").mockReturnValue(
+        createWorktreeCapacityStatfs(stats, available),
+      );
       const result = restoreId
         ? service.restore({ id: restoreId })
         : service.create({ repoRoot: repo, name: "limited", baseRef: "HEAD" });
@@ -310,16 +308,9 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     const before = await service.listRegistryRecords();
     const stats = fsSync.statfsSync(repo);
     let available = 4 * 1024 ** 3 + 24 * 1024 ** 2;
-    vi.spyOn(fsSync, "statfsSync").mockImplementation(() => ({
-      type: stats.type,
-      files: stats.files,
-      ffree: stats.ffree,
-      frsize: stats.frsize,
-      bsize: 4096,
-      blocks: 1024 ** 4 / 4096,
-      bavail: available / 4096,
-      bfree: available / 4096,
-    }));
+    vi.spyOn(fsSync, "statfsSync").mockImplementation(() =>
+      createWorktreeCapacityStatfs(stats, available),
+    );
     let advanced = false;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
       if (
@@ -619,10 +610,10 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         provisionIgnoredFiles,
       });
 
-      const replacement = (await listTemplatesAsync(env))[0];
+      const replacement = await readTemplateAsync(env, original.cacheKey);
       assert(replacement);
       expect(replacement.id).not.toBe(original.id);
-      await expect(fs.access(original.path)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(original.path)).resolves.toBeUndefined();
       expect((await fs.readdir(created.path)).toSorted()).toEqual([
         ".git",
         ".gitignore",
@@ -869,14 +860,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
           queued.resolve();
           return enqueue(...args);
         });
-        return {
-          stdout: "",
-          stderr: "native checkout failed",
-          code: 1,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        return createCommandResult({ stderr: "native checkout failed", code: 1 });
       }
       return await realRunCommand(argv, options);
     });

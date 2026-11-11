@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { parseBunCliLauncher, renderBunCliLauncher } from "../../scripts/lib/bun-cli-launcher.mjs";
 import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
+import { hasErrnoCode } from "./errors.js";
 import { isPathInside } from "./path-guards.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 
@@ -86,6 +87,50 @@ export function relocateRuntimePath(value: string, relocations: RuntimeRelocatio
   return value;
 }
 
+async function isOptionalPackageLink(file: string): Promise<boolean> {
+  const parent = path.dirname(file);
+  const modules = path.basename(parent).startsWith("@") ? path.dirname(parent) : parent;
+  if (path.basename(modules) !== "node_modules") {
+    return false;
+  }
+  const name = path.relative(modules, file).split(path.sep).join("/");
+  const owner = path.dirname(modules);
+  const roots = [owner];
+  if (path.basename(path.dirname(owner)) === ".pnpm") {
+    // pnpm puts a package's dependencies beside its payload in the virtual store.
+    // Inspect only real payload directories, never follow sibling dependency links.
+    for (const entry of await fs.readdir(modules, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith(".")) {
+        continue;
+      }
+      const directory = path.join(modules, entry.name);
+      if (entry.name.startsWith("@")) {
+        for (const child of await fs.readdir(directory, { withFileTypes: true })) {
+          if (child.isDirectory()) {
+            roots.push(path.join(directory, child.name));
+          }
+        }
+      } else {
+        roots.push(directory);
+      }
+    }
+  }
+  for (const root of roots) {
+    const content = await fs
+      .readFile(path.join(root, "package.json"), "utf8")
+      .catch(ignoreMissingUpdateCandidateFile);
+    const manifest: unknown = content === undefined ? undefined : JSON.parse(content);
+    if (
+      isRecord(manifest) &&
+      isRecord(manifest.optionalDependencies) &&
+      typeof manifest.optionalDependencies[name] === "string"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export async function relocateRuntimeSymlink(
   file: string,
   sourceFile: string,
@@ -103,8 +148,21 @@ export async function relocateRuntimeSymlink(
   }
   // Copied relative links still describe their original location. Inspect that
   // source before rebinding; Windows junctions require the final absolute target.
-  const type =
-    process.platform === "win32" && (await fs.stat(sourceFile)).isDirectory() ? "junction" : "file";
+  let type: "junction" | "file" = "file";
+  if (process.platform === "win32") {
+    try {
+      type = (await fs.stat(sourceFile)).isDirectory() ? "junction" : "file";
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT") || !(await isOptionalPackageLink(sourceFile))) {
+        throw error;
+      }
+      // Platform-filtered optional payloads may leave dangling pnpm links.
+      // Keep them absent in the copy instead of publishing a stale staging path.
+      assertBeforeMutation?.();
+      await fs.unlink(file);
+      return;
+    }
+  }
   assertBeforeMutation?.();
   await fs.unlink(file);
   assertBeforeMutation?.();

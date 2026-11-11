@@ -145,6 +145,17 @@ export type AnthropicContextManagementOptions = {
 /** Provider options shared by the Anthropic provider and canonical transport. */
 export interface AnthropicOptions extends StreamOptions, AnthropicContextManagementOptions {
   /**
+   * Called when Anthropic rejected an OAuth request with claude_code_version_too_old
+   * and the transport adopted the version it named. Owners persist it so the next
+   * process starts at that version instead of being rejected again.
+   */
+  onClaudeCodeVersionRequired?: (version: string) => void;
+  /**
+   * Called when Anthropic rejected `speed: "fast"` for this model; the transport
+   * already resent the request at standard speed. Owners stop offering fast mode.
+   */
+  onFastModeUnsupported?: (modelId: string) => void;
+  /**
    * Enable extended thinking.
    * For Opus 4.6+ and Sonnet 4.6: uses adaptive thinking (model decides when/how much to think).
    * For older models: uses budget-based thinking with thinkingBudgetTokens.

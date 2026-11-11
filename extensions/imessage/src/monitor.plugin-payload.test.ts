@@ -117,68 +117,11 @@ describe("iMessage plugin payload attachments", () => {
     }
   });
 
-  it("does not count Apple rich-link plugin payloads as user media", async () => {
-    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
-    const client = {
-      request: vi.fn(async () => ({ subscription: 1 })),
-      waitForClose: vi.fn(async () => {
-        onNotification?.({
-          method: "message",
-          params: {
-            message: {
-              id: 1,
-              guid: "plugin-payload-guid-1",
-              chat_id: 123,
-              sender: "+15550001111",
-              is_from_me: false,
-              text: "https://example.com/article",
-              attachments: [
-                {
-                  original_path:
-                    "/Users/openclaw/Library/Messages/Attachments/AA/BB/link.pluginPayloadAttachment",
-                  mime_type: null,
-                  missing: false,
-                  transfer_name: "link.pluginPayloadAttachment",
-                  uti: "com.apple.messages.pluginPayloadAttachment",
-                },
-              ],
-              is_group: false,
-            },
-          },
-        });
-        await Promise.resolve();
-      }),
-      stop: vi.fn(async () => {}),
-    };
-    createIMessageRpcClientMock.mockImplementation(async (params) => {
-      if (!params?.onNotification) {
-        throw new Error("expected iMessage notification handler");
-      }
-      onNotification = params.onNotification;
-      return client as never;
-    });
-
-    await monitorIMessageProvider({
-      scheduler: createTestPluginServiceScheduler(),
-      config: {
-        channels: { imessage: { includeAttachments: true, dmPolicy: "open" } },
-        session: { mainKey: "main" },
-      } as never,
-    });
-
-    expect(shouldDebounceTextInboundMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "https://example.com/article",
-        hasMedia: false,
-      }),
-    );
-  });
-
   it.each([
     { kind: "final", text: "provider-visible ordinary final", visible: true },
     { kind: "tool", text: "<thinking>private reasoning</thinking>", visible: false },
   ] as const)(
-    "settles direct $kind delivery through actual provider, hooks, and SQLite ($visible)",
+    "settles rich-link $kind delivery through actual provider, hooks, and SQLite ($visible)",
     async ({ kind, text, visible }) => {
       directDeliveryProof.flush = true;
       const flushed = Promise.withResolvers<void>();
@@ -260,6 +203,11 @@ describe("iMessage plugin payload attachments", () => {
 
       const nativeClient = {
         request: vi.fn(async (method: string) => {
+          if (method === "chats.list") {
+            return {
+              chats: [{ id: 123, guid: "iMessage;-;+15550001111", identifier: "+15550001111" }],
+            };
+          }
           if (method !== "send") {
             throw new Error(`unexpected native iMessage method ${method}`);
           }
@@ -280,7 +228,17 @@ describe("iMessage plugin payload attachments", () => {
                 chat_id: 123,
                 sender: "+15550001111",
                 is_from_me: false,
-                text: "exercise actual direct delivery",
+                text: "https://example.com/article",
+                attachments: [
+                  {
+                    original_path:
+                      "/Users/openclaw/Library/Messages/Attachments/AA/BB/link.pluginPayloadAttachment",
+                    mime_type: null,
+                    missing: false,
+                    transfer_name: "link.pluginPayloadAttachment",
+                    uti: "com.apple.messages.pluginPayloadAttachment",
+                  },
+                ],
                 is_group: false,
                 created_at: new Date().toISOString(),
               },
@@ -308,6 +266,7 @@ describe("iMessage plugin payload attachments", () => {
                 imessage: {
                   dmPolicy: "allowlist",
                   allowFrom: ["+15550001111"],
+                  includeAttachments: true,
                   sendReadReceipts: false,
                 },
               },
@@ -323,17 +282,20 @@ describe("iMessage plugin payload attachments", () => {
       }
 
       expect(errors.mock.calls).toEqual([]);
+      expect(shouldDebounceTextInboundMock).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "https://example.com/article", hasMedia: false }),
+      );
       if (!visible) {
         expect(nativeClient.request).not.toHaveBeenCalled();
         expect(messageSent).not.toHaveBeenCalled();
         return;
       }
       expect(dispatch).toHaveBeenCalledOnce();
-      expect(nativeClient.request).toHaveBeenCalledExactlyOnceWith(
-        "send",
-        expect.objectContaining({ text }),
-        expect.any(Object),
-      );
+      // Destination-history routing resolves chat_id selectors after the confirmed send (#182329).
+      expect(nativeClient.request.mock.calls).toEqual([
+        ["send", expect.objectContaining({ chat_id: 123, text }), expect.any(Object)],
+        ["chats.list", { limit: 1000 }, expect.any(Object)],
+      ]);
       expect(messageSent).toHaveBeenCalledOnce();
       expect(messageSent).toHaveBeenCalledWith(
         expect.objectContaining({ content: text, success: true, messageId: `native-${kind}-guid` }),

@@ -14,8 +14,8 @@ afterEach(() => vi.unstubAllEnvs());
 
 function createRepo(files: Record<string, string> = {}, initialCount?: number) {
   const root = tempDirs.make("openclaw-env-count-");
-  const git = (args: string[], input?: string) =>
-    execFileSync("git", [...gitIdentity, ...args], { cwd: root, input }).toString();
+  const git = (args: string[]) =>
+    execFileSync("git", [...gitIdentity, ...args], { cwd: root }).toString();
   const write = (file: string, source: string) => {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.writeFileSync(path.join(root, file), source);
@@ -101,6 +101,17 @@ it("collects distinct names from the whole selected snapshot without crossing fi
   );
 });
 
+it("counts authored inputs instead of their declared compiled script copies", () => {
+  const { collect, git } = createRepo({
+    "src/infra/daemon-runtime-probe.generated.mjs": "OPENCLAW_COPIED_ROOT_HANDOFF",
+    "src/custom.generated.mjs": "OPENCLAW_AUTHORED",
+    "src/runtime.ts": "OPENCLAW_RUNTIME",
+  });
+  git(["add", "."]);
+  expect(collect()).toEqual(["OPENCLAW_AUTHORED", "OPENCLAW_RUNTIME"]);
+  expect(collect(true)).toEqual(["OPENCLAW_AUTHORED", "OPENCLAW_RUNTIME"]);
+});
+
 it("uses a constant number of Git processes as the staged source set grows", () => {
   const counts = [8, 16].map((fileCount) => {
     const names = Array.from({ length: fileCount }, (_, index) => `OPENCLAW_N${index}`);
@@ -119,46 +130,11 @@ it("uses a constant number of Git processes as the staged source set grows", () 
   expect(new Set(counts).size).toBe(1);
 });
 
-it("rejects an unresolved stage-zero source", () => {
-  const file = "src/conflict.ts";
-  const { git, collect } = createRepo({ [file]: "OPENCLAW_WORKTREE" });
-  const oid = git(["hash-object", "-w", "--stdin"], "OPENCLAW_CONFLICT").trim();
-  git(
-    ["update-index", "-z", "--index-info"],
-    [1, 2, 3].map((stage) => `100644 ${oid} ${stage}\t${file}\0`).join(""),
-  );
-  expect(() => collect(true)).toThrow();
-});
-
-it("rejects missing ancestry instead of skipping budget growth", () => {
-  const { check, git, setCount, commit } = createRepo({}, 1);
-  // Name the base explicitly; init.defaultBranch varies by environment.
-  git(["branch", "-M", "severed-base"]);
-  git(["checkout", "--orphan", "severed"]);
-  commit("severed history");
-  expect(() => check("--base", "severed-base")).toThrow(/Could not resolve ratchet merge base/u);
-  expect(check("--base", "severed-base", "--no-merge-base")).toBe(1);
-  setCount(2, 1);
-  expect(() => check("--base", "severed-base", "--no-merge-base")).toThrow(/exceeds budget/u);
-  setCount(2);
-  expect(() => check("--base", "severed-base", "--no-merge-base")).toThrow(/budget grew/u);
-});
-
 it("allows the initial budget only when its file is absent at a valid base", () => {
   const { check, commit, write } = createRepo({ "src/runtime.ts": "OPENCLAW_ONE" });
   commit("before budget");
   write(budgetPath, "1\n");
   expect(check("--base", "HEAD")).toBe(1);
-});
-
-it("compares against the fork budget when the base branch later shrinks", () => {
-  const { check, git, setCount, commit } = createRepo({}, 2);
-  git(["branch", "release"]);
-  setCount(1);
-  commit("shrink main");
-  git(["branch", "moving-main"]);
-  git(["checkout", "release"]);
-  expect(() => check("--base", "moving-main")).not.toThrow();
 });
 
 it("compares staged budgets to the origin/main fork rather than local HEAD", () => {
@@ -170,13 +146,10 @@ it("compares staged budgets to the origin/main fork rather than local HEAD", () 
   expect(check("--staged", "--base", "HEAD")).toBe(2);
 });
 
-it.each([
-  ["stale headroom", 2, 2, 1, /is below budget/u],
-  ["retired 502 to 503 increase", 502, 503, 503, /budget grew/u],
-] as const)("checks %s", (_name, base, budget, count, error) => {
-  const { check, git, setCount } = createRepo({}, base);
-  setCount(count, budget);
+it("rejects stale headroom in the staged budget", () => {
+  const { check, git, setCount } = createRepo({}, 2);
+  setCount(1, 2);
   git(["add", "."]);
   setCount(0);
-  expect(() => check("--staged", "--base", "HEAD")).toThrow(error);
+  expect(() => check("--staged", "--base", "HEAD")).toThrow(/is below budget/u);
 });

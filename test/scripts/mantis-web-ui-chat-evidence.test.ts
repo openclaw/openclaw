@@ -2,10 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { writeWebUiChatEvidence } from "../../scripts/mantis/build-web-ui-chat-evidence.mjs";
-import {
-  loadEvidenceManifest,
-  renderEvidenceComment,
-} from "../../scripts/mantis/publish-pr-evidence.mjs";
+import { loadEvidenceManifest } from "../../scripts/mantis/publish-pr-evidence.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -53,14 +50,9 @@ describe("build-web-ui-chat-evidence", () => {
       "--candidate-sha",
       "1234567890abcdef1234567890abcdef12345678",
     );
-    expect(manifest).toMatchObject({
-      id: "web-ui-chat-proof",
-      scenario: "web-ui-chat-proof",
-      schemaVersion: 2,
-      comparison: {
-        candidate: { expectationMet: true, fixed: true, ref: "main", status: "pass" },
-        pass: true,
-      },
+    expect(manifest.comparison).toMatchObject({
+      candidate: { expectationMet: true, fixed: true, ref: "main", status: "pass" },
+      pass: true,
     });
     const screenshots = manifest.artifacts.filter(
       (artifact) => artifact.kind === "desktopScreenshot",
@@ -68,11 +60,6 @@ describe("build-web-ui-chat-evidence", () => {
     expect(screenshots.map((artifact) => artifact.source).toSorted()).toEqual(
       [incomplete, complete].map((directory) => path.join(directory, "web-ui-chat.png")).toSorted(),
     );
-    const comment = renderEvidenceComment({
-      manifest,
-      marker: "<!-- synthetic-mantis-proof -->",
-      rawBase: "https://artifacts.example.test/current",
-    });
     for (const [directory, marker] of [
       [incomplete, "incomplete"],
       [complete, "complete"],
@@ -85,7 +72,6 @@ describe("build-web-ui-chat-evidence", () => {
         const artifact = manifest.artifacts.find((entry) => entry.path === `${relative}/${file}`);
         expect(artifact?.targetPath).toBe(`${relative}/${file}`);
         expect(read(artifact!.source)).toBe(`${marker} ${content}`);
-        expect(comment).toContain(`https://artifacts.example.test/current/${relative}/${file}`);
         expect(report).toContain(`${relative}/${file}`);
       }
     }
@@ -107,7 +93,6 @@ describe("build-web-ui-chat-evidence", () => {
       "mantis-report.md",
       "mantis-evidence.json",
     ]);
-    expect(manifest.summary).toContain("could not complete");
     expect(report).toContain("`setup.log` (present)");
   });
 

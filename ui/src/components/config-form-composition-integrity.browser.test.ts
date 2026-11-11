@@ -120,22 +120,19 @@ describe("config form composition integrity", () => {
     });
 
     const modeControl = container.querySelector(
-      '.settings-segmented[role="radiogroup"][aria-label="Native Commands"]',
+      '.settings-segmented[role="radiogroup"][aria-label="Native commands"]',
     );
     expect(modeControl).not.toBeNull();
     const modeOptions = [...(modeControl?.querySelectorAll(".settings-segmented__btn") ?? [])];
     expect(modeOptions.map((option) => option.textContent?.trim())).toEqual(["On", "Off", "Auto"]);
-    expect(
-      modeOptions.map((option) => option.querySelector<HTMLInputElement>("input")?.value),
-    ).toEqual(["0", "1", "2"]);
     const plainModeControl = container.querySelector(
-      '.settings-segmented[role="radiogroup"][aria-label="Plain Mode"]',
+      '.settings-segmented[role="radiogroup"][aria-label="Plain mode"]',
     );
     expect(
       [...(plainModeControl?.querySelectorAll(".settings-segmented__btn") ?? [])].map((option) =>
         option.textContent?.trim(),
       ),
-    ).toEqual(["auto", "manual"]);
+    ).toEqual(["Auto", "Manual"]);
     const offOption = modeControl?.querySelector<HTMLInputElement>(
       'input[type="radio"][value="1"]',
     );

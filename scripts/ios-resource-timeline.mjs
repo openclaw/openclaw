@@ -28,6 +28,7 @@ const qualificationPhases = [
   "simulator-create",
   "simulator-boot",
   "simulator-ready",
+  "simulator-headroom",
   "simulator-slim",
   "simulator-delete",
   "fixture-server",
@@ -58,6 +59,7 @@ const phases = new Set([
       "build",
       "host-idle",
       "simulator-idle",
+      "headroom",
       "create",
       "boot",
       "shutdown",
@@ -207,11 +209,14 @@ function delta(current, previous) {
 
 function processRows(output, previous, elapsedMs) {
   const rows = output.split("\n").flatMap((line) => {
-    const match = /^\s*(\d+)\s+(\d+)\s+([\d:.-]+)\s+(\d+)\s+([A-Za-z+<>=-]+)\s+(.+)$/u.exec(line);
+    const match =
+      /^\s*(\d+)\s+(\d+)\s+([\d:.-]+)\s+(\d+)\s+([A-Za-z+<>=-]+)\s+(\d+(?:\.\d+)?)\s+(.+)$/u.exec(
+        line,
+      );
     if (!match) {
       return [];
     }
-    const [, pid, ppid, time, rss, state, command] = match;
+    const [, pid, ppid, time, rss, state, recent, command] = match;
     const [day, clock] = time.includes("-") ? time.split("-") : ["0", time];
     const cpuMs =
       (Number(day) * 86_400 + clock.split(":").reduce((s, n) => s * 60 + Number(n), 0)) * 1_000;
@@ -252,6 +257,7 @@ function processRows(output, previous, elapsedMs) {
         rssBytes: Number(rss) * 1024,
         cpuMs,
         cpuDeltaMs,
+        cpuRecentPercent: Number(recent),
         cpuPercent:
           cpuDeltaMs === null ? null : Math.round((cpuDeltaMs / elapsedMs) * 10_000) / 100,
       },
@@ -274,8 +280,10 @@ function processSummary(rows) {
       count: 0,
       cpuObservedCount: 0,
       cpuDeltaMs: 0,
+      cpuRecentPercent: 0,
     };
     group.count += 1;
+    group.cpuRecentPercent += row.cpuRecentPercent;
     if (row.cpuDeltaMs !== null) {
       group.cpuObservedCount += 1;
       group.cpuDeltaMs += row.cpuDeltaMs;
@@ -287,7 +295,7 @@ function processSummary(rows) {
     runnableCount: rows.filter((row) => row.state.startsWith("R")).length,
     uninterruptibleCount: rows.filter((row) => row.state.startsWith("U")).length,
     // All observed rows contribute, including those outside the top-process display.
-    groups: [...groups.values()].toSorted((a, b) => b.cpuDeltaMs - a.cpuDeltaMs),
+    groups: [...groups.values()].toSorted((a, b) => b.cpuRecentPercent - a.cpuRecentPercent),
   };
 }
 
@@ -354,7 +362,8 @@ function startTimeline(output) {
     unavailableProbes = 0,
     outputLimitReached = false;
   let probeStatus = {};
-  let timer, pending;
+  let timer;
+  const pending = new Map();
   const started = performance.now();
   const cpuStart = process.cpuUsage();
   let previousCpu = cpuTimes(),
@@ -364,7 +373,6 @@ function startTimeline(output) {
   let previousAt = started;
   let previousProcessAt = started;
   let nextProcessAt = started;
-  let processSamplingStopped = false;
   const phase = () => {
     try {
       const value = readFileSync(phaseFile, "utf8").trim();
@@ -404,37 +412,59 @@ function startTimeline(output) {
         resolve("");
         return;
       }
+      const name = path.basename(command);
+      if (pending.has(name)) {
+        probeStatus[name] = { wallMs: 0, outcome: "pending-after-timeout" };
+        resolve("");
+        return;
+      }
       const at = performance.now();
+      let settled = false;
+      const observation = { child: undefined, deadline: undefined };
+      const finish = (outcome, stdout = "") => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(observation.deadline);
+        const wallMs = performance.now() - at;
+        commandWallMs += wallMs;
+        probeStatus[name] = { wallMs: Math.round(wallMs), outcome };
+        if (outcome !== "ok") {
+          unavailableProbes += 1;
+        }
+        resolve(outcome === "ok" ? stdout : "");
+      };
+      pending.set(name, observation);
       // Only observation subprocesses are deprioritized; the wrapped workload is unchanged.
-      pending = execFile(
+      observation.child = execFile(
         "/usr/bin/nice",
         ["-n", "10", command, ...args],
         {
-          timeout: 2_000,
           killSignal: "SIGKILL",
           maxBuffer: 256 * 1024,
           env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LC_ALL: "C" },
         },
         (error, stdout) => {
-          pending = undefined;
-          const wallMs = performance.now() - at;
-          commandWallMs += wallMs;
-          probeStatus[path.basename(command)] = {
-            wallMs: Math.round(wallMs),
-            outcome: !error
+          pending.delete(name);
+          finish(
+            !error
               ? "ok"
               : error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
                 ? "output-limit"
                 : error.killed
                   ? "timeout"
                   : "unavailable",
-          };
-          if (error) {
-            unavailableProbes += 1;
-          }
-          resolve(error ? "" : stdout);
+            stdout,
+          );
         },
       );
+      observation.deadline = setTimeout(() => {
+        // Child output closure can stall after SIGKILL. Stop waiting without
+        // starting another copy of this probe until its callback releases it.
+        finish("timeout");
+        observation.child.kill("SIGKILL");
+      }, 2_000);
     });
   async function sample() {
     const at = performance.now();
@@ -446,12 +476,13 @@ function startTimeline(output) {
     const diskRows = disks(await probe("/usr/sbin/iostat", ["-Id"]));
     let rows = [];
     let processIntervalMs = null;
-    if (processSamplingStopped) {
-      probeStatus.ps = { wallMs: 0, outcome: "disabled-after-timeout" };
-    } else if (performance.now() < nextProcessAt) {
+    if (performance.now() < nextProcessAt) {
       probeStatus.ps = { wallMs: 0, outcome: "not-due" };
     } else {
-      const processOutput = await probe("/bin/ps", ["-axo", "pid=,ppid=,time=,rss=,state=,comm="]);
+      const processOutput = await probe("/bin/ps", [
+        "-axo",
+        "pid=,ppid=,time=,rss=,state=,%cpu=,comm=",
+      ]);
       // Intentional skips retain the CPU baseline; earlier probes may delay the next observation.
       const processAt = performance.now();
       processIntervalMs = previousProcesses.size ? Math.round(processAt - previousProcessAt) : null;
@@ -459,8 +490,6 @@ function startTimeline(output) {
       previousProcessAt = processAt;
       previousProcesses = new Map(rows.map((row) => [row.pid, row.cpuMs]));
       nextProcessAt = processAt + processSampleIntervalMs;
-      // Under contention, ps termination can itself stall. Do not keep adding process scans.
-      processSamplingStopped = probeStatus.ps?.outcome === "timeout";
     }
     if (!active) {
       return;
@@ -470,7 +499,8 @@ function startTimeline(output) {
       Object.keys(cpu).map((key) => [key, delta(cpu[key], previousCpu[key])]),
     );
     const total = Object.values(cpuDeltas).reduce((sum, n) => sum + n, 0);
-    const topCpu = rows.toSorted((a, b) => (b.cpuDeltaMs ?? 0) - (a.cpuDeltaMs ?? 0)).slice(0, 6);
+    // Native decaying CPU averages also rank new processes and fresh post-timeout baselines.
+    const topCpu = rows.toSorted((a, b) => b.cpuRecentPercent - a.cpuRecentPercent).slice(0, 6);
     const topMemory = rows.toSorted((a, b) => b.rssBytes - a.rssBytes).slice(0, 6);
     const selected = [...new Map([...topCpu, ...topMemory].map((row) => [row.pid, row])).values()];
     samples += 1;
@@ -554,7 +584,10 @@ function startTimeline(output) {
     stop(code, signal) {
       active = false;
       clearTimeout(timer);
-      pending?.kill("SIGKILL");
+      for (const observation of pending.values()) {
+        clearTimeout(observation.deadline);
+        observation.child.kill("SIGKILL");
+      }
       // Do not await native probes at workload completion, even if the host is overloaded.
       emit({
         type: "end",

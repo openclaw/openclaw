@@ -49,7 +49,6 @@ type FilePolicyDecision =
   | {
       ok: true;
       reason: "ask-always";
-      askMode: FilePolicyAskMode;
       maxBytes?: number;
       followSymlinks: boolean;
       pendingReapprovalSelector?: string;
@@ -59,7 +58,6 @@ type FilePolicyDecision =
       code: "NO_POLICY" | "POLICY_DENIED" | "POLICY_MIGRATION_REQUIRED";
       reason: string;
       askable: boolean;
-      askMode?: FilePolicyAskMode;
       maxBytes?: number;
       followSymlinks?: boolean;
       pendingReapprovalSelector?: string;
@@ -313,7 +311,6 @@ function evaluateFilePolicyInternal(
       code: "POLICY_DENIED",
       reason: "path matches a denyPaths pattern",
       askable: false,
-      askMode,
       maxBytes,
       followSymlinks,
     };
@@ -334,7 +331,6 @@ function evaluateFilePolicyInternal(
     return {
       ok: true,
       reason: "ask-always",
-      askMode,
       maxBytes,
       followSymlinks,
       pendingReapprovalSelector: pendingReapproval?.selector,
@@ -380,7 +376,6 @@ function evaluateFilePolicyInternal(
       code: "POLICY_DENIED",
       reason: "path requires exact reapproval",
       askable: true,
-      askMode,
       maxBytes,
       followSymlinks,
       pendingReapprovalSelector: pendingReapproval.selector,
@@ -395,7 +390,6 @@ function evaluateFilePolicyInternal(
         ? `no allow${input.kind === "read" ? "Read" : "Write"}Paths configured`
         : `path does not match any allow${input.kind === "read" ? "Read" : "Write"}Paths pattern`,
     askable: askMode === "on-miss",
-    askMode,
     maxBytes,
     followSymlinks,
   };

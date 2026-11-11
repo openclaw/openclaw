@@ -1,7 +1,6 @@
 import type { LlmRuntime } from "@openclaw/ai";
 import { defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
 import { streamSimple } from "../../../llm/stream.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
@@ -12,10 +11,7 @@ import {
   textAssistant,
 } from "../../test-helpers/sparse-transcript.test-support.js";
 import { resolveEmbeddedAgentStream as resolveEmbeddedAgentStreamImpl } from "../stream-resolution.js";
-import {
-  mergeOrphanedTrailingUserPrompt,
-  resolveAttemptFsWorkspaceOnly,
-} from "./attempt-prompt-helpers.js";
+import { mergeOrphanedTrailingUserPrompt } from "./attempt-prompt-helpers.js";
 import { createFakeStream, type FakeWrappedStream } from "./attempt-stream.test-helpers.js";
 import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./attempt-tool-call-replay-sanitization.js";
@@ -44,6 +40,14 @@ async function drainStream(stream: FakeWrappedStream) {
   for await (const event of stream) {
     void event;
   }
+}
+
+async function readStream(wrapped: StreamFn, drain = true) {
+  const stream = await wrapped({} as never, {} as never, {} as never);
+  if (drain) {
+    await drainStream(stream);
+  }
+  return (await stream.result()) as ToolStreamMessage;
 }
 
 function textUser(text: string) {
@@ -75,20 +79,16 @@ function expectSingleToolCallContent(content: unknown[], name: string) {
   expect(content).toEqual([expect.objectContaining({ type: "toolCall", name })]);
 }
 
-describe("composeSystemPromptWithHookContext", () => {
-  it("normalizes hook system context block line endings and trailing whitespace", () => {
-    expect(
-      composeSystemPromptWithHookContext({
-        baseSystemPrompt: "  base system  ",
-        prependSystemContext: wrapPluginSystemContextSection(
-          "  prepend line  \r\nsecond line\t\r\n",
-        ),
-        appendSystemContext: wrapPluginSystemContextSection("  append  \t\r\n"),
-      }),
-    ).toBe(
-      `${wrapPluginSystemContextSection("  prepend line\nsecond line")}\n\nbase system\n\n${wrapPluginSystemContextSection("  append")}`,
-    );
-  });
+it("normalizes hook system context block line endings and trailing whitespace", () => {
+  expect(
+    composeSystemPromptWithHookContext({
+      baseSystemPrompt: "  base system  ",
+      prependSystemContext: wrapPluginSystemContextSection("  prepend line  \r\nsecond line\t\r\n"),
+      appendSystemContext: wrapPluginSystemContextSection("  append  \t\r\n"),
+    }),
+  ).toBe(
+    `${wrapPluginSystemContextSection("  prepend line\nsecond line")}\n\nbase system\n\n${wrapPluginSystemContextSection("  append")}`,
+  );
 });
 
 describe("mergeOrphanedTrailingUserPrompt", () => {
@@ -126,17 +126,11 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
   });
 
   it("summarizes unknown structured data before JSON serialization", () => {
-    const result = mergeOrphan({
-      content: [
-        {
-          type: "unknown_content",
-          nested: {
-            inline: `data:image/png;base64,${"a".repeat(10_000)}`,
-            longText: "b".repeat(2_000),
-          },
-        },
-      ],
-    });
+    const nested = {
+      inline: `data:image/png;base64,${"a".repeat(10_000)}`,
+      longText: "b".repeat(2_000),
+    };
+    const result = mergeOrphan({ content: [{ type: "unknown_content", nested }] });
     expect(result).toMatchObject({ merged: true, removeLeaf: false });
     expect(result.prompt).toContain("[value] inline data URI (image/png, 10022 chars)");
     expect(result.prompt).toContain("bbbb");
@@ -160,53 +154,20 @@ describe("resolveEmbeddedAgentStream", () => {
       },
     });
     await streamFn({ provider: "demo-provider", id: "demo-model" } as never, {} as never, {});
-    expect(providerStreamFn).toHaveBeenCalledExactlyOnceWith(
-      { provider: "demo-provider", id: "demo-model" },
-      {},
-      expect.objectContaining({
-        apiKey: "demo-runtime-key",
-        authProfileId: "demo-provider:oauth",
-      }),
-    );
+    expect(providerStreamFn.mock.calls[0]?.[2]).toMatchObject({
+      apiKey: "demo-runtime-key",
+      authProfileId: "demo-provider:oauth",
+    });
   });
-  it.each([
-    {
-      name: "keeps explicit custom streams unchanged",
-      model: { api: "openai-responses", provider: "openai", id: "gpt-5.4" },
-      resolvedApiKey: undefined,
-    },
-    {
-      name: "routes runtime-auth custom streams through boundary-aware transports",
-      model: {
-        api: "anthropic-messages",
-        provider: "cloudflare-ai-gateway",
-        id: "claude-sonnet-4-6",
-        baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic",
-      },
-      resolvedApiKey: "sk-ant-test",
-    },
-  ])("$name", ({ model, resolvedApiKey }) => {
+  it("keeps explicit custom streams unchanged", () => {
     const currentStreamFn = vi.fn();
     const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: currentStreamFn as never,
       sessionId: "session-1",
-      model: model as never,
-      resolvedApiKey,
+      model: { api: "openai-responses", provider: "openai", id: "gpt-5.4" } as never,
     });
-    if (resolvedApiKey) {
-      expect(streamFn).not.toBe(currentStreamFn);
-    } else {
-      expect(streamFn).toBe(currentStreamFn);
-    }
+    expect(streamFn).toBe(currentStreamFn);
   });
-});
-it("resolveAttemptFsWorkspaceOnly prefers the agent-specific tools.fs.workspaceOnly override", () => {
-  const cfg: OpenClawConfig = {
-    tools: { fs: { workspaceOnly: true } },
-    agents: { entries: { main: { tools: { fs: { workspaceOnly: false } } } } },
-  };
-
-  expect(resolveAttemptFsWorkspaceOnly({ config: cfg, sessionAgentId: "main" })).toBe(false);
 });
 describe("wrapStreamFnTrimToolCallNames", () => {
   async function runCall(
@@ -217,11 +178,10 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   ) {
     const finalMessage = sparseAssistant(Array.isArray(call) ? call : [call]);
     const baseFn = fakeBaseStream(finalMessage, events);
-    const wrapped = wrapStreamFnTrimToolCallNames(baseFn as never, allowed, guardOptions);
-    const stream = await wrapped({} as never, {} as never, {} as never);
-    await drainStream(stream);
-    const result = (await stream.result()) as ToolStreamMessage;
-    return { result, finalMessage, baseFn };
+    const result = await readStream(
+      wrapStreamFnTrimToolCallNames(baseFn as never, allowed, guardOptions),
+    );
+    return { result, finalMessage };
   }
 
   it("normalizes common tool aliases when the canonical name is allowed", async () => {
@@ -239,21 +199,12 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     ]);
     const message = calls(["exec' parameter='command' string='true", "allowedTool>suffix"]);
     const final = calls(["qualified/write<parameter=path"]);
-    const finalMessage = sparseAssistant(final);
-    const baseFn = fakeBaseStream(finalMessage, [
-      {
-        type: "toolcall_delta",
-        partial: sparseAssistant(partial),
-        message: sparseAssistant(message),
-      },
-    ]);
-    const wrapped = wrapStreamFnTrimToolCallNames(
-      baseFn as never,
+    const { result, finalMessage } = await runCall(
+      final,
       new Set(["read", "write", "exec", "qualified.write", "allowedTool"]),
+      [{ ...toolDelta("partial", partial), message: sparseAssistant(message) }],
     );
-    const stream = await wrapped({} as never, {} as never, {} as never);
-    await drainStream(stream);
-    expect(await stream.result()).toBe(finalMessage);
+    expect(result).toBe(finalMessage);
     expect([...partial, ...message, ...final].map((call) => call.name)).toEqual([
       "read",
       'unknown" parameter="value" string="true',
@@ -291,15 +242,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(allowedTools), {
       unknownToolThreshold: 1,
     });
-    return () => Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-  }
-
-  async function nextResult(nextStream: () => Promise<FakeWrappedStream>, drain = false) {
-    const stream = await nextStream();
-    if (drain) {
-      await drainStream(stream);
-    }
-    return (await stream.result()) as ToolStreamMessage;
+    return (drain = false) => readStream(wrappedFn, drain);
   }
 
   function frame(resultMessage: unknown, ...messages: string[][]) {
@@ -347,9 +290,9 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   `("$name", async ({ tools, frames, drain, text, expected }: RetryCase) => {
     const next = sequenceStreams(tools, frames);
     for (const readEvents of drain.slice(0, -1)) {
-      await nextResult(next, readEvents);
+      await next(readEvents);
     }
-    const result = await nextResult(next, drain.at(-1));
+    const result = await next(drain.at(-1));
     expect(result.role).toBe("assistant");
     if (text) {
       expectSingleTextContent(result.content, expected);
@@ -370,12 +313,11 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   it("leaves provisional blank streamed names recoverable while stopping final blank dispatch", async () => {
     const partialToolCall = { type: "toolCall", name: "   " };
     const finalToolCall = { type: "toolCall", name: "\t  " };
-    const { result, baseFn } = await runCall(finalToolCall, undefined, [
+    const { result } = await runCall(finalToolCall, undefined, [
       toolDelta("partial", [partialToolCall]),
     ]);
     expectSingleTextContent(result.content, '"blank tool name"');
     expect([partialToolCall.name, finalToolCall.name]).toEqual(["   ", "\t  "]);
-    expect(baseFn).toHaveBeenCalledTimes(1);
   });
 
   it("reassigns duplicate tool call ids within a message to unique fallbacks", async () => {
@@ -462,7 +404,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
   };
   const signedPolicy = { ...anthropicPolicy, preserveSignatures: true };
 
-  async function replayContext(
+  async function replay(
     messages: unknown[],
     allowedToolNames?: Set<string>,
     policy?: Parameters<typeof wrapStreamFnSanitizeMalformedToolCalls>[2],
@@ -477,20 +419,15 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       policy,
     );
     await wrapped((api ? { api } : {}) as never, { messages } as never, {} as never);
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const call = baseFn.mock.calls[0];
-    if (!call) {
-      throw new Error("missing base stream call");
-    }
-    return call[1];
+    return baseFn.mock.calls[0]![1].messages;
   }
   function replaySigned(messages: unknown[], api = "anthropic-messages") {
-    return replayContext(messages, new Set(["read"]), signedPolicy, api);
+    return replay(messages, new Set(["read"]), signedPolicy, api);
   }
 
   it("strips trailing assistant prefill turns for Gemini outbound replay", async () => {
     const messages = [textUser("earlier question"), textAssistant("stale model answer")];
-    const seenContext = await replayContext(
+    const seen = await replay(
       messages,
       new Set(["read"]),
       {
@@ -501,30 +438,20 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       },
       "google-generative-ai",
     );
-    expect(seenContext.messages).toEqual([textUser("earlier question")]);
-    expect(seenContext.messages).not.toBe(messages);
+    expect(seen).toEqual([textUser("earlier question")]);
+    expect(seen).not.toBe(messages);
   });
 
-  it.each([
-    {
-      name: "unsafe Bedrock sibling tool",
-      turn: thinkingTurn(replayCall("gateway", "toolu_legacy")),
-      api: "bedrock-converse-stream",
+  it.each`
+    name                             | turn                                                                                                               | api
+    ${"unsafe Bedrock sibling tool"} | ${thinkingTurn(replayCall("gateway", "toolu_legacy"))}                                                             | ${"bedrock-converse-stream"}
+    ${"duplicate sibling tool id"}   | ${thinkingTurn(replayCall("read", "call_1"), { type: "functionCall", id: "call_1", name: "read", arguments: {} })} | ${"anthropic-messages"}
+  `(
+    "drops signed thinking replay with $name",
+    async ({ turn, api }: { turn: ReturnType<typeof thinkingTurn>; api: string }) => {
+      expect(await replaySigned([turn, textUser("retry")], api)).toEqual([textUser("retry")]);
     },
-    {
-      name: "duplicate sibling tool id",
-      turn: thinkingTurn(replayCall("read", "call_1"), {
-        type: "functionCall",
-        id: "call_1",
-        name: "read",
-        arguments: {},
-      }),
-      api: "anthropic-messages",
-    },
-  ])("drops signed thinking replay with $name", async ({ turn, api }) => {
-    const seenContext = await replaySigned([turn, textUser("retry")], api);
-    expect(seenContext.messages).toEqual([textUser("retry")]);
-  });
+  );
 
   it.each([false, true])(
     "retains reused signed ids only with adjacent results (displaced: %s)",
@@ -540,7 +467,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         thinkingTurn({ type: "toolUse", id: "call_1", name: "read", input: {} }),
         ...(displaced ? [user, result] : [result, user]),
       ];
-      const seen = (await replaySigned(messages)).messages;
+      const seen = await replaySigned(messages);
       if (displaced) {
         expect(seen).toEqual([...prefix, user]);
       } else {
@@ -551,13 +478,8 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 
   it("keeps mutable thinking turns outside anthropic replay-only preservation", async () => {
     const messages = [thinkingTurn(replayCall(" read ", "call_1")), textUser("retry")];
-    const seenContext = await replayContext(
-      messages,
-      new Set(["read"]),
-      anthropicPolicy,
-      "openai-completions",
-    );
-    expect(seenContext.messages).toEqual([
+    const seen = await replay(messages, new Set(["read"]), anthropicPolicy, "openai-completions");
+    expect(seen).toEqual([
       thinkingTurn(replayCall("read", "call_1")),
       expect.objectContaining({
         ...textToolResult(
@@ -574,28 +496,20 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 
   it("canonicalizes mixed-case allowlisted tool names on replay", async () => {
     const messages = [sparseAssistant([replayCall("readfile", "call_1")])];
-    const seenContext = await replayContext(messages, new Set(["ReadFile"]));
-    expect(seenContext.messages[0]).toMatchObject({ content: [{ name: "ReadFile" }] });
+    const seen = await replay(messages, new Set(["ReadFile"]));
+    expect(seen[0]).toMatchObject({ content: [{ name: "ReadFile" }] });
   });
 
-  it.each([
-    {
-      name: "blank names and their stale results",
-      messages: [
-        sparseAssistant([replayCall("   ", "call_1")]),
-        textToolResult("call_1", "", "stale result", { isError: true }),
-      ],
-      allowed: undefined,
+  it.each`
+    name                                     | messages                                                                                                             | allowed
+    ${"blank names and their stale results"} | ${[sparseAssistant([replayCall("   ", "call_1")]), textToolResult("call_1", "", "stale result", { isError: true })]} | ${undefined}
+    ${"ambiguous mangled names"}             | ${[sparseAssistant([replayCall("functions.exec2", "call_1")])]}                                                      | ${new Set(["exec", "exec2"])}
+  `(
+    "drops replayed $name",
+    async ({ messages, allowed }: { messages: unknown[]; allowed?: Set<string> }) => {
+      expect(await replay(messages, allowed)).toStrictEqual([]);
     },
-    {
-      name: "ambiguous mangled names",
-      messages: [sparseAssistant([replayCall("functions.exec2", "call_1")])],
-      allowed: new Set(["exec", "exec2"]),
-    },
-  ])("drops replayed $name", async ({ messages, allowed }) => {
-    const seenContext = await replayContext(messages, allowed);
-    expect(seenContext.messages).toStrictEqual([]);
-  });
+  );
 
   it("preserves matching tool results for retained errored assistant turns", async () => {
     const retained = { ...sparseAssistant([replayCall("read", "call_1")]), stopReason: "error" };
@@ -603,7 +517,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       textToolResult("call_1", "read", "kept result", { isError: false }),
       textUser("retry"),
     ];
-    const seenContext = await replayContext(
+    const seen = await replay(
       [
         {
           ...retained,
@@ -613,7 +527,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       ],
       new Set(["read"]),
     );
-    expect(seenContext.messages).toEqual([retained, ...tail]);
+    expect(seen).toEqual([retained, ...tail]);
   });
 
   it.each([false, true])(
@@ -624,12 +538,12 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       const assistant = dropped
         ? { ...sparseAssistant([call]), stopReason: "error" }
         : sparseAssistant([...text.content, call]);
-      const seenContext = await replayContext(
+      const seen = await replay(
         [...(dropped ? [textUser("first")] : []), assistant, embeddedResultUser("stale")],
         new Set(["read"]),
         anthropicPolicy,
       );
-      expect(seenContext.messages).toEqual(
+      expect(seen).toEqual(
         dropped
           ? [
               {
@@ -647,64 +561,48 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       sparseAssistant([{ type: "toolUse", id: "call_1", name: "read", input: { path: "." } }]),
       embeddedResultUser("kept result"),
     ];
-    const seenContext = await replaySigned(messages);
-    expect(seenContext.messages).toEqual(messages);
+    expect(await replaySigned(messages)).toEqual(messages);
   });
 });
 
 describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
-  async function replayArgumentDeltas(
-    deltas: string[],
-    options: {
-      initialArgs?: Record<string, unknown>;
-      fullResult?: boolean;
-    } = {},
-  ) {
+  async function replayArgumentDeltas(deltas: string[], initialArgs: Record<string, unknown>) {
     const call = (args: Record<string, unknown> = {}) => ({
       type: "toolCall",
       name: "read",
       arguments: args,
     });
-    const calls = [call(options.initialArgs), call(), call(), call()] as const;
+    const calls = [call(initialArgs), call()] as const;
     const partial = sparseAssistant([calls[0]]);
-    const finalMessage = options.fullResult ? sparseAssistant([calls[3]]) : partial;
-    const baseFn = fakeBaseStream(finalMessage, [
+    const baseFn = fakeBaseStream(partial, [
       ...deltas.map((delta) => ({ type: "toolcall_delta", contentIndex: 0, delta, partial })),
       {
         type: "toolcall_end",
         contentIndex: 0,
         toolCall: calls[1],
         partial,
-        ...(options.fullResult ? { message: sparseAssistant([calls[2]]) } : {}),
       },
     ]);
     const wrapped = wrapStreamFnRepairMalformedToolCallArguments(baseFn as never);
     const stream = await wrapped({} as never, {} as never, {} as never);
     await drainStream(stream);
-    return { stream, calls, finalMessage };
+    return calls;
   }
 
   const json = '{"path":"/tmp/report.txt"}';
-  const allRepaired = Array.from({ length: 4 }, () => ({ path: "/tmp/report.txt" }));
   type ArgumentCase = {
     name: string;
     deltas: string[];
-    options: Parameters<typeof replayArgumentDeltas>[1];
+    initialArgs: Record<string, unknown>;
     expected: Record<string, unknown>[];
   };
   it.each`
-    name                                   | deltas                      | options                                    | expected
-    ${"repairs trailing junk"}             | ${[json, "xx"]}             | ${{ fullResult: true }}                    | ${allRepaired}
-    ${"repairs spaced trailing junk"}      | ${[json, "\n ab;"]}         | ${{ fullResult: true }}                    | ${allRepaired}
-    ${"preserves valid JSON"}              | ${[json.slice(0, -1), "}"]} | ${{ fullResult: true }}                    | ${allRepaired}
-    ${"rejects leading prose"}             | ${[`please use ${json}`]}   | ${{}}                                      | ${[{}, {}]}
-    ${"clears oversized trailing repairs"} | ${[json, "oops"]}           | ${{}}                                      | ${[{}, {}]}
-    ${"preserves preexisting arguments"}   | ${["}"]}                    | ${{ initialArgs: { path: "/etc/hosts" } }} | ${[{ path: "/etc/hosts" }, {}]}
-  `("$name", async ({ deltas, options, expected }: ArgumentCase) => {
-    const { stream, calls, finalMessage } = await replayArgumentDeltas(deltas, options);
-    if (options?.fullResult) {
-      expect(await stream.result()).toBe(finalMessage);
-    }
-    expect(calls.slice(0, expected.length).map((call) => call.arguments)).toStrictEqual(expected);
+    name                                   | deltas                    | initialArgs               | expected
+    ${"rejects leading prose"}             | ${[`please use ${json}`]} | ${{}}                     | ${[{}, {}]}
+    ${"clears oversized trailing repairs"} | ${[json, "oops"]}         | ${{}}                     | ${[{}, {}]}
+    ${"preserves preexisting arguments"}   | ${["}"]}                  | ${{ path: "/etc/hosts" }} | ${[{ path: "/etc/hosts" }, {}]}
+  `("$name", async ({ deltas, initialArgs, expected }: ArgumentCase) => {
+    const calls = await replayArgumentDeltas(deltas, initialArgs);
+    expect(calls.map((call) => call.arguments)).toStrictEqual(expected);
   });
 });

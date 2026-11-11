@@ -25,6 +25,7 @@ import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
 import type { NodeSession } from "../node-session.types.js";
 import { invalidateNodeWakeState } from "../node-wake-state.js";
 import { PAIRING_SCOPE } from "../operator-scopes.js";
+import { broadcastRejectedNodePairing } from "../pairing-events.js";
 import {
   deniesCrossDeviceManagement,
   pairedDeviceHasNonOperatorRole,
@@ -43,7 +44,6 @@ function emitNodePairingDeniedSecurityEvent(params: {
   authz: DeviceManagementAuthz;
   nodeId: string;
   controlId: "node.pair.approve" | "node.pair.reject" | "node.rename";
-  reason: string;
 }): void {
   emitDeviceManagementSecurityEvent({
     action: "device.pairing.denied",
@@ -54,7 +54,7 @@ function emitNodePairingDeniedSecurityEvent(params: {
     policyId: "gateway.device-pairing",
     decision: "deny",
     controlId: params.controlId,
-    reason: params.reason,
+    reason: "device-ownership-mismatch",
     attributes: { role: "node" },
   });
 }
@@ -90,7 +90,6 @@ async function enforcePendingNodePairingOwnership(params: {
     authz,
     nodeId: pending.nodeId,
     controlId,
-    reason: "device-ownership-mismatch",
   });
   params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, deniedMessage));
   return false;
@@ -146,7 +145,7 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
     }
     const requestId = params.requestId.trim();
     // Intentionally fail closed for RPC callers without an explicit scoped session.
-    const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const callerScopes = client?.connect.scopes ?? [];
     await respondUnavailableOnThrow(respond, async () => {
       if (
         !(await enforcePendingNodePairingOwnership({
@@ -252,15 +251,10 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
         return;
       }
-      context.broadcast(
-        "node.pair.resolved",
-        {
-          requestId,
-          nodeId: rejected.nodeId,
-          decision: "rejected",
-          ts: Date.now(),
-        },
-        { dropIfSlow: true },
+      broadcastRejectedNodePairing(
+        context.broadcast,
+        { requestId, nodeId: rejected.nodeId },
+        Date.now(),
       );
       respond(true, rejected, undefined);
     });
@@ -302,7 +296,7 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const removed = await removePairedDeviceRole({ deviceId: nodeId, role: "node" });
+      const removed = await removePairedDeviceRole({ deviceId: nodeId });
       if (!removed) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
@@ -359,7 +353,6 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
           authz,
           nodeId: authz.normalizedTargetDeviceId,
           controlId: "node.rename",
-          reason: "device-ownership-mismatch",
         });
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "node rename denied"));
         return;

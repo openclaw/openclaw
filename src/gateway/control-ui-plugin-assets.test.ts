@@ -17,6 +17,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import * as userProfileCatalog from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { registerPluginCompilerLifecycleTests } from "./control-ui-plugin-assets.compiler.suite.js";
 import {
   handleControlUiPluginAssetRequest,
   listControlUiPluginCatalog,
@@ -43,9 +44,9 @@ import {
   withGatewayServer,
 } from "./server-http.test-harness.js";
 import { pluginsControlUiHandlers } from "./server-methods/plugins-control-ui.js";
-import type { GatewayRequestHandlerOptions, RespondFn } from "./server-methods/types.js";
+import type { RespondFn } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
-import { makeContextParams } from "./server-request-context.test-support.js";
+import { makeContextParams, makeGatewayClient } from "./server-request-context.test-support.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 import { withTempConfig } from "./test-temp-config.js";
@@ -69,6 +70,16 @@ function cookies(response: Response) {
   return response.setHeader.mock.calls
     .filter(([name]) => name === "Set-Cookie")
     .flatMap(([, value]) => (Array.isArray(value) ? value : [value]));
+}
+
+function expectCookie(response: Response, assetPath: string, secure: boolean) {
+  const issued = cookies(response);
+  expect(issued).toHaveLength(1);
+  expect(issued[0]).toContain(`Path=${assetPath};`);
+  expect(issued[0]).toContain("HttpOnly;");
+  expect(issued[0]).toContain("SameSite=Strict;");
+  expect(String(issued[0]).includes("; Secure;")).toBe(secure);
+  return String(issued[0]).split(";", 1)[0]!;
 }
 
 function expectBody(response: Response, source: string) {
@@ -195,9 +206,7 @@ function cookieForGrant(
         ),
     },
   );
-  const value = response.setHeader.mock.calls.find(([name]) => name === "Set-Cookie")?.[1];
-  const header = Array.isArray(value) ? value[0] : value;
-  const [cookie] = typeof header === "string" ? header.split(";", 1) : [];
+  const [cookie] = String(cookies(response)[0] ?? "").split(";", 1);
   if (!cookie) {
     throw new Error("Expected scoped Control UI cookie");
   }
@@ -214,6 +223,8 @@ beforeAll(async () => {
   await import("./control-ui.js");
 });
 
+registerPluginCompilerLifecycleTests(activateFixture);
+
 it("omits settings-only presentations from activation while keeping ordinary plugins", async () => {
   const fixture = activateFixture();
   expect((await listControlUiPluginCatalog()).plugins.map((plugin) => plugin.pluginId)).toEqual([
@@ -228,60 +239,90 @@ it("omits settings-only presentations from activation while keeping ordinary plu
   expect(listControlUiPluginActivations({})).toEqual([]);
 });
 
-it("records valid receipts in a mixed batch only from a live Control UI connection", async () => {
-  activateFixture();
-  const [entry] = (await listControlUiPluginCatalog()).plugins;
-  const report = activation(entry!.revision);
-  const client: NonNullable<GatewayRequestHandlerOptions["client"]> = {
-    connId: "activation-browser",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-        version: "test",
-        platform: "test",
-        mode: "webchat",
-      },
-    },
-  };
-  let connected = false;
-  const context = createGatewayRequestContext(makeContextParams());
-  context.getClientConnIds = (filter) =>
-    new Set(connected && (!filter || filter(client)) ? [client.connId!] : []);
-  const call = async (method: string, params: Record<string, unknown>) => {
-    const respond = vi.fn<RespondFn>();
-    await pluginsControlUiHandlers[method]!({
-      req: { type: "req", id: "activation-report", method, params },
-      params,
-      client,
-      context,
-      respond,
-      isWebchatConnect: () => true,
+it.each([
+  { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: "webchat" },
+  { id: GATEWAY_CLIENT_IDS.MACOS_APP, mode: "ui" },
+  { id: GATEWAY_CLIENT_IDS.LINUX_APP, mode: "ui" },
+  { id: GATEWAY_CLIENT_IDS.IOS_APP, mode: "ui" },
+  { id: GATEWAY_CLIENT_IDS.ANDROID_APP, mode: "ui" },
+] as const)(
+  "records current receipts only from a live $id/$mode connection",
+  async ({ id, mode }) => {
+    activateFixture();
+    const [entry] = (await listControlUiPluginCatalog()).plugins;
+    const report = activation(entry!.revision);
+    const client = makeGatewayClient({
+      connId: "activation-browser",
+      clientId: id,
+      mode,
     });
-    return respond.mock.calls[0]!;
-  };
-  expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
-  connected = true;
-  client.connect.client.id = GATEWAY_CLIENT_IDS.CLI;
-  expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
-  expect(listControlUiPluginActivations(client)).toEqual([]);
-  client.connect.client.id = GATEWAY_CLIENT_IDS.CONTROL_UI;
-  const [ok, , error] = await call("plugins.controlUi.report", {
-    reports: [{ ...report, pluginId: "retired-ui" }, report],
+    let connected = false;
+    let liveClient = client;
+    const context = createGatewayRequestContext(makeContextParams());
+    context.getClientConnIds = (filter) =>
+      new Set(connected && (!filter || filter(liveClient)) ? [liveClient.connId!] : []);
+    const call = async (method: string, params: Record<string, unknown>) => {
+      const respond = vi.fn<RespondFn>();
+      await pluginsControlUiHandlers[method]!({
+        req: { type: "req", id: "activation-report", method, params },
+        params,
+        client,
+        context,
+        respond,
+        isWebchatConnect: () => true,
+      });
+      return respond.mock.calls[0]!;
+    };
+    expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
+    connected = true;
+    liveClient = { ...client };
+    expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
+    liveClient = client;
+    client.connect.client.id = GATEWAY_CLIENT_IDS.CLI;
+    expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
+    expect(listControlUiPluginActivations(client)).toEqual([]);
+    client.connect.client.id = id;
+    if (id !== GATEWAY_CLIENT_IDS.CONTROL_UI) {
+      client.connect.client.mode = "node";
+      expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
+      expect((await call("plugins.controlUi.status", {}))[1]).toEqual({ clients: [] });
+      client.connect.client.mode = mode;
+    }
+    const [ok, , error] = await call("plugins.controlUi.report", {
+      reports: [{ ...report, pluginId: "retired-ui" }, report],
+    });
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: { rejectedPluginIds: ["retired-ui"] },
+    });
+    expect((await call("plugins.controlUi.status", {}))[1]).toEqual({
+      clients: [{ connId: client.connId, activations: [report] }],
+    });
+    expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(true);
+  },
+);
+
+it("serves enabled user-installed native UI without an experimental opt-in", async () => {
+  await withConfig(async () => {
+    const fixture = activateFixture("workspace");
+    const catalog = await listControlUiPluginCatalog();
+    expect(catalog.plugins).toEqual([expect.objectContaining({ pluginId: fixture.record.id })]);
+    expect(catalog.diagnostics).toEqual([]);
+
+    const entry = catalog.plugins[0]!;
+    const cookie = cookieForGrant();
+    const server = assetServer();
+    expectBody(await fetchAsset(server, entry.entryUrl, { headers: { cookie } }), firstSource);
+
+    fixture.record.enabled = false;
+    expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
+    expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
+    await expectStatus(fetchAsset(server, entry.entryUrl, { headers: { cookie } }), 404);
   });
-  expect(ok).toBe(false);
-  expect(error).toMatchObject({
-    code: "INVALID_REQUEST",
-    details: { rejectedPluginIds: ["retired-ui"] },
-  });
-  expect((await call("plugins.controlUi.status", {}))[1]).toEqual({
-    clients: [{ connId: client.connId, activations: [report] }],
-  });
-  expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(true);
 });
 
-it("hot-applies Custom plugin UI admission without replacing the backend plugin", async () => {
+it("hot-applies the native UI opt-out without replacing the backend plugin", async () => {
   await withConfig(async () => {
     const fixture = activateFixture("workspace");
     fixture.record.trustedOfficialInstall = true;
@@ -291,7 +332,7 @@ it("hot-applies Custom plugin UI admission without replacing the backend plugin"
       {
         pluginId: fixture.record.id,
         code: "custom-plugin-ui-disabled",
-        message: expect.stringContaining("Settings > Labs"),
+        message: expect.stringContaining("Gateway configuration"),
       },
     ]);
     expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
@@ -324,7 +365,7 @@ it("hot-applies Custom plugin UI admission without replacing the backend plugin"
     }
     expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
 
-    setRuntimeConfigSnapshot(customPlugins(true));
+    setRuntimeConfigSnapshot({});
     expect((await listControlUiPluginCatalog()).plugins).toEqual([entry]);
     expect(listControlUiPluginTabAuthGrants(["operator.read"])).toContainEqual(matchingPlugin);
     expect(listControlUiPluginWidgetKinds(["operator.read"])).toContainEqual(matchingPlugin);
@@ -334,7 +375,7 @@ it("hot-applies Custom plugin UI admission without replacing the backend plugin"
     for (const asset of [entry.entryUrl, ...entry.styles]) {
       await expectStatus(fetchAsset(server, asset, { headers: { cookie } }), 200);
     }
-  });
+  }, customPlugins(false));
 });
 
 it.each([
@@ -366,15 +407,10 @@ it.each([
             ? [{ pluginId: "native-ui", path: assetPath, match: "prefix" }]
             : [],
         });
-        const cookieHeaders = cookies(bootstrap);
-        expect(cookieHeaders).toHaveLength(requiresAuth ? 1 : 0);
-        for (const header of cookieHeaders) {
-          expect(header).toContain(`Path=${assetPath};`);
-          expect(header).toContain("HttpOnly;");
-          expect(header).toContain("SameSite=Strict;");
-          expect(header).not.toContain("; Secure;");
+        const cookie = requiresAuth ? expectCookie(bootstrap, assetPath, false) : "";
+        if (!requiresAuth) {
+          expect(cookies(bootstrap)).toEqual([]);
         }
-        const cookie = cookieHeaders.map((value) => String(value).split(";")[0]).join("; ");
         for (const { assetUrl, source } of [
           { assetUrl: entry.entryUrl, source: firstSource },
           { assetUrl: entry.styles[0]!, source: "body { color: red; }" },
@@ -400,14 +436,8 @@ it.each([
 );
 
 it("limits native asset HTTP cookies to direct loopback origins", async () => {
-  await withTempConfig({
-    cfg: {
-      gateway: {
-        controlUi: { basePath: "/openclaw" },
-        trustedProxies: ["127.0.0.1", "::1"],
-      },
-    },
-    run: async () => {
+  await withConfig(
+    async () => {
       activateFixture();
       const server = assetServer("/openclaw");
       const cases = [
@@ -443,11 +473,9 @@ it("limits native asset HTTP cookies to direct loopback origins", async () => {
           const response = createResponse();
           await dispatchRequest(server, request, response.res);
           expect(response.res.statusCode, JSON.stringify(scenario)).toBe(200);
-          const issued = cookies(response);
-          expect(issued).toHaveLength(1);
-          expect(issued[0]).toContain("Path=/openclaw/__openclaw__/plugins/control-ui/native-ui/;");
-          expect(issued[0]).toContain("SameSite=Strict;");
-          expect(String(issued[0]).includes("; Secure;"), JSON.stringify(scenario)).toBe(
+          expectCookie(
+            response,
+            "/openclaw/__openclaw__/plugins/control-ui/native-ui/",
             scenario.secure,
           );
         } finally {
@@ -456,13 +484,13 @@ it("limits native asset HTTP cookies to direct loopback origins", async () => {
         }
       }
     },
-  });
+    { gateway: { controlUi: { basePath: "/openclaw" }, trustedProxies: ["127.0.0.1", "::1"] } },
+  );
 });
 
 it("keeps native asset cookies Secure for each independently present forwarded header", async () => {
-  await withTempConfig({
-    cfg: { gateway: { controlUi: { basePath: "/openclaw" } } },
-    run: async () => {
+  await withConfig(
+    async () => {
       activateFixture();
       // Exercise the post-authentication issuer, not an earlier proxy-attribution
       // denial. Each header must prevent the HTTP exception on its own.
@@ -499,7 +527,8 @@ it("keeps native asset cookies Secure for each independently present forwarded h
         }
       }
     },
-  });
+    { gateway: { controlUi: { basePath: "/openclaw" } } },
+  );
 });
 
 it("keeps iframe grants Secure when native HTTP grants are allowed", () => {
@@ -916,4 +945,57 @@ it("refreshes UI declarations and retires receipts when browser bytes stay uncha
   const undeclared = await reloadControlUiPluginCatalog(fixture.record.id);
   expect(undeclared.plugins[0]).not.toHaveProperty("uiCapabilities");
   expect(undeclared.plugins[0]!.revision).not.toBe(next.plugins[0]!.revision);
+});
+
+it("snapshots plugin-relative panel SVGs and falls back without disabling browser modules", async () => {
+  const fixture = activateFixture();
+  fixture.record.controlUi!.panelIcon = "panel.svg";
+  const iconPath = path.join(fixture.rootDir, "panel.svg");
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 4h18v16H3z" fill="none" stroke="currentColor"/></svg>';
+  fs.writeFileSync(iconPath, svg);
+  const first = await listControlUiPluginCatalog();
+  expect(first.plugins[0]?.panelIcon).toBe("data:image/svg+xml," + encodeURIComponent(svg));
+  fs.writeFileSync(iconPath, svg.replace("M3 4", "M5 4"));
+  expect(await listControlUiPluginCatalog()).toEqual(first);
+  const next = await reloadControlUiPluginCatalog(fixture.record.id);
+  expect(next.plugins[0]?.revision).not.toBe(first.plugins[0]?.revision);
+  for (const source of ["<svg><script>alert(1)</script></svg>", "<html/>", "x".repeat(16385)]) {
+    fs.writeFileSync(iconPath, source);
+    const catalog = await reloadControlUiPluginCatalog(fixture.record.id);
+    expect(catalog.plugins).toHaveLength(1);
+    expect(catalog.plugins[0]).not.toHaveProperty("panelIcon");
+  }
+  fs.unlinkSync(iconPath);
+  expect((await reloadControlUiPluginCatalog(fixture.record.id)).plugins[0]).not.toHaveProperty(
+    "panelIcon",
+  );
+  const outside = path.join(tempDirs.make("panel-icon-outside-"), "valid.svg");
+  fs.writeFileSync(outside, svg);
+  fs.symlinkSync(outside, iconPath);
+  expect((await reloadControlUiPluginCatalog(fixture.record.id)).plugins[0]).not.toHaveProperty(
+    "panelIcon",
+  );
+});
+
+it("removes the ID plugin catalog, grants and routes immediately when its Labs switch is off", async () => {
+  await withConfig(async () => {
+    const fixture = activateFixture();
+    fixture.record.id = "openclaw-id-access";
+    setRuntimeConfigSnapshot({ gateway: { openclawId: { enabled: true } } });
+    const entry = (await listControlUiPluginCatalog()).plugins[0]!;
+    expect(entry.pluginId).toBe("openclaw-id-access");
+    const server = assetServer("", AUTH_NONE);
+    await expectStatus(fetchAsset(server, entry.entryUrl), 200);
+    for (const openclawId of [undefined, { enabled: false }]) {
+      setRuntimeConfigSnapshot({ gateway: { openclawId } });
+      const catalog = await listControlUiPluginCatalog();
+      expect(catalog.plugins).toEqual([]);
+      expect(catalog.diagnostics).toEqual([]);
+      expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
+      for (const asset of [entry.entryUrl, ...entry.styles]) {
+        await expectStatus(fetchAsset(server, asset), 404);
+      }
+    }
+  });
 });

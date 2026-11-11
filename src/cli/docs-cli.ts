@@ -4,6 +4,8 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { escapeMarkdownText } from "../shared/text/escape-markdown.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatDocsHelp } from "./help-format.js";
@@ -19,11 +21,7 @@ type DocResult = {
   snippet?: string;
 };
 
-function escapeMarkdown(text: string): string {
-  return text.replace(/[()[\]]/g, "\\$&");
-}
-
-async function fetchDocsSearch(query: string): Promise<DocResult[]> {
+async function fetchDocsSearch(query: string, signal?: AbortSignal): Promise<DocResult[]> {
   const url = new URL(SEARCH_API);
   url.searchParams.set("q", query);
   const controller = new AbortController();
@@ -31,7 +29,7 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
   try {
     const response = await fetch(url, {
       headers: { Accept: "application/json" },
-      signal: controller.signal,
+      signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
     });
     if (!response.ok) {
       // A retained capture clone can keep cancellation pending until peer EOF.
@@ -50,31 +48,28 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
     } catch (cause) {
       throw new Error("Docs search response is malformed JSON", { cause });
     }
-    return parseDocsSearchResults(payload.results);
+    const raw = payload.results;
+    if (!Array.isArray(raw)) {
+      throw new Error("Docs search response is malformed: expected results array");
+    }
+    const results: DocResult[] = [];
+    for (const item of raw) {
+      const entry = asNonArrayRecord(item);
+      if (typeof entry.title !== "string" || typeof entry.link !== "string") {
+        continue;
+      }
+      results.push({
+        title: entry.title,
+        link: entry.link,
+        snippet:
+          typeof entry.snippet === "string" && entry.snippet.trim() ? entry.snippet : undefined,
+      });
+    }
+    return results;
   } finally {
     clearTimeout(timeout);
     controller.abort();
   }
-}
-
-function parseDocsSearchResults(raw: unknown): DocResult[] {
-  if (!Array.isArray(raw)) {
-    throw new Error("Docs search response is malformed: expected results array");
-  }
-  const results: DocResult[] = [];
-  for (const item of raw) {
-    const entry = asNonArrayRecord(item);
-    if (typeof entry.title !== "string" || typeof entry.link !== "string") {
-      continue;
-    }
-    results.push({
-      title: entry.title,
-      link: entry.link,
-      snippet:
-        typeof entry.snippet === "string" && entry.snippet.trim() ? entry.snippet : undefined,
-    });
-  }
-  return results;
 }
 
 export function registerDocsCli(program: Command) {
@@ -113,12 +108,22 @@ export function registerDocsCli(program: Command) {
           return;
         }
 
+        const signal = getAsyncWorkSignal();
+        if (signal?.aborted) {
+          return;
+        }
         let results: DocResult[];
         try {
-          results = await fetchDocsSearch(query);
+          results = await fetchDocsSearch(query, signal);
         } catch (error) {
+          if (signal?.aborted) {
+            return;
+          }
           const message = error instanceof Error ? error.message : String(error);
           throw new Error(`Docs search failed: ${message}`, { cause: error });
+        }
+        if (signal?.aborted) {
+          return;
         }
         if (limit !== undefined) {
           results = results.slice(0, limit);
@@ -146,13 +151,13 @@ export function registerDocsCli(program: Command) {
           }
           return;
         }
-        const lines: string[] = [`# Docs search: ${escapeMarkdown(query)}`, ""];
+        const lines: string[] = [`# Docs search: ${escapeMarkdownText(query)}`, ""];
         if (results.length === 0) {
           lines.push("_No results._");
         }
         for (const item of results) {
-          const title = escapeMarkdown(item.title);
-          const snippet = item.snippet ? escapeMarkdown(item.snippet) : "";
+          const title = escapeMarkdownText(item.title);
+          const snippet = item.snippet ? escapeMarkdownText(item.snippet) : "";
           const suffix = snippet ? ` - ${snippet}` : "";
           lines.push(`- [${title}](${item.link})${suffix}`);
         }

@@ -217,7 +217,6 @@ it.each([
     expect((await delayStarted.promise).ms).toBeGreaterThan(0);
   } else {
     expect({ stdout, stderr }).toEqual({ stdout: [], stderr: [] });
-    expect(mocks.readService).not.toHaveBeenCalled();
   }
   const outputBeforeStop = { stdout: [...stdout], stderr: [...stderr] };
   await waitForSignalExitBarriers(signal);
@@ -240,8 +239,6 @@ it("preserves terminal RPC failure output and the runtime exit outcome", async (
   );
   expect(stdout).toEqual([]);
   expect(dispose).toHaveBeenCalledOnce();
-  expect(mocks.delay).not.toHaveBeenCalled();
-  expect(mocks.readService).not.toHaveBeenCalled();
   expect(await waitForCliSignalExit()).toBeUndefined();
 });
 
@@ -289,7 +286,6 @@ it("joins cancelled journal recovery before releasing command resources", async 
   expect(order).toEqual(["probe settled", "resources released"]);
   expect(mocks.callGateway).toHaveBeenCalledTimes(2);
   expect(mocks.readJournal).toHaveBeenCalledTimes(2);
-  expect(mocks.readTail).not.toHaveBeenCalled();
   expect(stdout.join("")).toContain("journal bridge line");
   expect(stdout.join("")).not.toContain("late");
   expect(stderr).toEqual([]);

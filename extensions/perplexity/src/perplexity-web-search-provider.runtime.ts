@@ -3,6 +3,7 @@ import {
   readProviderJsonResponse,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import {
   externalContentStamp,
   buildSearchCacheKey,
@@ -281,16 +282,18 @@ export async function executePerplexitySearch(
     Authorization: `Bearer ${runtime.apiKey}`,
   };
   const headers =
-    resolveProviderRequestHeaders({
-      provider: "perplexity",
-      // The direct Perplexity API is this provider's default endpoint. Other hosts such as
-      // OpenRouter keep their own endpoint so the policy attributes them as that vendor.
-      baseUrl:
-        !structured && !isDirectPerplexityBaseUrl(runtime.baseUrl) ? runtime.baseUrl : undefined,
-      capability: "other",
-      transport: "http",
-      defaultHeaders,
-    }) ?? defaultHeaders;
+    omitNullRequestHeaders(
+      resolveProviderRequestHeaders({
+        provider: "perplexity",
+        // The direct Perplexity API is this provider's default endpoint. Other hosts such as
+        // OpenRouter keep their own endpoint so the policy attributes them as that vendor.
+        baseUrl:
+          !structured && !isDirectPerplexityBaseUrl(runtime.baseUrl) ? runtime.baseUrl : undefined,
+        capability: "other",
+        transport: "http",
+        defaultHeaders,
+      }),
+    ) ?? defaultHeaders;
   const result = await withTrustedWebSearchEndpoint(
     {
       url: endpoint,

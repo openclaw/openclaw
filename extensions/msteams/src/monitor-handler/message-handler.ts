@@ -25,12 +25,14 @@ import type { MSTeamsIngressLifecycle } from "../msteams-ingress.js";
 import { resolveMSTeamsReplyPolicy, resolveMSTeamsRouteConfig } from "../policy.js";
 import { extractMSTeamsPollVote } from "../polls.js";
 import { createMSTeamsReplyDispatcher } from "../reply-dispatcher.js";
+import type { MSTeamsRequestDeadline } from "../request-timeout.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import {
   recordMSTeamsSentMessage,
   wasMSTeamsMessageSentWithPersistence,
 } from "../sent-message-cache.js";
+import { resolveTeamGroupId } from "../team-identity.js";
 import { admitMSTeamsMessage, resolveMSTeamsSenderAccess } from "./access.js";
 import { createMSTeamsHandlerConfigReader } from "./config.js";
 import { prepareMSTeamsInboundContent } from "./inbound-content.js";
@@ -39,7 +41,8 @@ import {
   prepareMSTeamsDebounceEntry,
   type MSTeamsDebounceEntry,
 } from "./inbound-facts.js";
-import { prepareMSTeamsThreadRouting, resolveMSTeamsThreadContext } from "./thread-context.js";
+import { resolveMSTeamsThreadContext } from "./thread-context.js";
+import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   const {
@@ -192,19 +195,52 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       return;
     }
 
-    const threadRouting = prepareMSTeamsThreadRouting({
+    const routingCore = getMSTeamsRuntime();
+    const route = routingCore.channel.routing.resolveAgentRoute({
       cfg: currentCfg,
+      channel: "msteams",
       accountId,
-      context,
-      isDirectMessage,
-      isChannel,
-      senderId,
-      conversationId,
-      conversationMessageId,
       teamId,
-      log,
+      peer: {
+        kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
+        id: isDirectMessage ? senderId : conversationId,
+      },
     });
-    const { route } = threadRouting;
+    route.sessionKey = resolveMSTeamsRouteSessionKey({
+      baseSessionKey: route.sessionKey,
+      isChannel,
+      conversationMessageId,
+      replyToId: context.activity.replyToId,
+    });
+
+    let resolvedTeamAadGroupId =
+      context.activity.channelData?.team?.aadGroupId?.trim() || undefined;
+    const conversationTeamId = isChannel ? teamId : undefined;
+    let teamGroupIdPromise: Promise<string | undefined> | undefined;
+    // The first caller's deadline bounds the shared lookup; later callers reuse its result.
+    const resolveTeamAadGroupId = async (
+      deadline: MSTeamsRequestDeadline,
+    ): Promise<string | undefined> => {
+      if (!conversationTeamId) {
+        return undefined;
+      }
+      teamGroupIdPromise ??= resolveTeamGroupId({
+        conversationTeamId,
+        aadGroupId: resolvedTeamAadGroupId,
+        getTeamDetails: context.getTeamDetails,
+        deadline,
+      }).catch((err: unknown) => {
+        log.debug?.("failed to resolve Teams AAD group ID", {
+          teamId: conversationTeamId,
+          error: formatUnknownError(err),
+        });
+        return undefined;
+      });
+      resolvedTeamAadGroupId = await teamGroupIdPromise;
+      return resolvedTeamAadGroupId;
+    };
+
+    const threadRootId = conversationMessageId ?? context.activity.replyToId;
 
     const inboundLabel = isDirectMessage
       ? `Teams DM from ${senderName}`
@@ -280,8 +316,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       conversationType,
       conversationId,
       conversationMessageId,
-      teamAadGroupId: threadRouting.getTeamAadGroupId(),
-      resolveTeamAadGroupId: threadRouting.resolveTeamAadGroupId,
+      teamAadGroupId: resolvedTeamAadGroupId,
+      resolveTeamAadGroupId,
       mediaMaxBytes,
       tokenProvider,
       mediaAllowHosts: currentMSTeamsCfg?.mediaAllowHosts,
@@ -295,7 +331,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     enqueuePrimaryMessageSystemEvent();
 
     const thread = await resolveMSTeamsThreadContext({
-      routing: threadRouting,
+      route,
+      threadRootId,
+      resolveTeamAadGroupId,
       context,
       tokenProvider,
       quoteInfo,

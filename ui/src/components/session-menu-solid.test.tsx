@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expect, it, vi } from "vitest";
-import { focusChatComposerFromPrintableKeydown } from "../pages/chat/chat-pane-shared.ts";
+import { focusChatComposerFromKeydown } from "../pages/chat/chat-pane-shared.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
   containers,
@@ -43,8 +43,7 @@ it("keeps advertised native menu shortcuts ahead of composer autotype", async ()
   const composer = root.appendChild(document.createElement("div"));
   composer.className = "agent-chat__composer-combobox";
   const input = composer.appendChild(document.createElement("textarea"));
-  const capture = (event: KeyboardEvent) =>
-    focusChatComposerFromPrintableKeydown(root, event, input);
+  const capture = (event: KeyboardEvent) => focusChatComposerFromKeydown(root, event, input);
   document.addEventListener("keydown", capture, true);
   try {
     const expected: SessionMenuAction[] = [
@@ -112,6 +111,8 @@ it("preserves focus and owner search with the Solid application provider", async
   const owner = menuItem(host, "Assign to…");
   const ownerPanel = await openSubmenu(host, "Assign to…");
   await waitForSolid(() => expect(owner.getAttribute("aria-expanded")).toBe("true"));
+  ownerPanel.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
+  await waitForSolid(() => expect(ownerPanel.querySelector('input[type="search"]')).not.toBeNull());
   const search = ownerPanel.querySelector<HTMLInputElement>('input[type="search"]')!;
   search.value = "Research";
   search.dispatchEvent(new InputEvent("input", { bubbles: true }));

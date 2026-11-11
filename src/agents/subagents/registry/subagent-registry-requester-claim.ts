@@ -11,7 +11,8 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import { getSubagentRunsForRequesterSession, subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
-import { settleRequesterAfterSessionSpawns } from "./subagent-registry.js";
+import { resumeSubagentRun, settleRequesterAfterSessionSpawns } from "./subagent-registry.js";
+import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 /** An inline terminal result consumes the same durable obligation as a late completion. */
 export async function acknowledgeSubagentResultForRequesterTurn(params: {
@@ -44,14 +45,25 @@ export async function acknowledgeSubagentResultForRequesterTurn(params: {
         delivery: { status: "delivered" as const, announcedAt: Date.now() },
       };
       return {
-        value: { runId: entry.taskRunId ?? entry.runId, childSessionKey: entry.childSessionKey },
+        value: {
+          receipt: {
+            runId: entry.taskRunId ?? entry.runId,
+            childSessionKey: entry.childSessionKey,
+          },
+          ended: hasSubagentRunEnded(entry),
+        },
         postimages: new Map([[entry.runId, next]]),
       };
     },
     { runs: subagentRuns, assertCurrent },
   );
   if (instance) {
-    retireAcceptedSessionSpawnCompletionForRun(instance, accepted);
+    retireAcceptedSessionSpawnCompletionForRun(instance, accepted.receipt);
+  }
+  // A run that ended under the live inline claim deferred its cleanup to this owner;
+  // later endings reach cleanup through their own lifecycle once the claim is released.
+  if (accepted.ended) {
+    resumeSubagentRun(params.runId);
   }
 }
 

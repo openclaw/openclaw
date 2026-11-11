@@ -31,9 +31,11 @@ describe("secret sentinels", () => {
 
   it("reports unknown sentinel-shaped values without replacing them", () => {
     const unknown = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
-    expect(swapSecretSentinelsInText(`Bearer ${unknown}`)).toEqual({
-      text: `Bearer ${unknown}`,
-      unknown: [unknown],
+    const other = "oc-sent-v2.unknown.end";
+    const text = `${unknown} ${other} ${unknown}`;
+    expect(swapSecretSentinelsInText(text, (value) => `resolved:${value}`)).toEqual({
+      text,
+      unknown: [unknown, other],
     });
   });
 
@@ -52,11 +54,15 @@ describe("secret sentinels", () => {
   });
 
   it("treats sentinel-shaped bytes inside resolved values as opaque", () => {
-    const secret = "prefix-oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
+    const secret = "prefix-oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end/$&+";
     const sentinel = mintSecretSentinel(secret, { label: "nested-shape" });
 
     expect(swapSecretSentinelsInText(`Bearer ${sentinel}`)).toEqual({
       text: `Bearer ${secret}`,
+      unknown: [],
+    });
+    expect(swapSecretSentinelsInText(`Bearer ${sentinel}`, encodeURIComponent)).toEqual({
+      text: "Bearer prefix-oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end%2F%24%26%2B",
       unknown: [],
     });
   });

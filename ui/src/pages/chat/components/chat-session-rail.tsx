@@ -1,6 +1,6 @@
 import "../../../styles/chat/session-rail.css";
 import "../../../styles/chat/working-indicator.css";
-import { createMemo, For, onSettled, Show } from "solid-js";
+import { createMemo, For, lazy, onSettled, Show } from "solid-js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
@@ -10,25 +10,82 @@ import { markdownBlocksRef } from "../../../components/markdown-element-refs-sol
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import type { SidebarPanelDefinitionParams } from "../chat-pane-embedded-types.ts";
+import { usePanePresentation } from "../chat-pane-presentation.ts";
+import { createSideChatModelControlProps } from "../chat-session-companion-model-controls.ts";
 import type {
   ChatSessionCompanionThread,
   ChatSessionCompanionTurn,
 } from "../chat-session-companion.ts";
+import { resolveChatAttachmentLimits } from "./chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { createChatAttachmentDropHandlers } from "./chat-attachments.ts";
 import { ChatCommentController } from "./chat-comment-controller.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { MessageGroup } from "./chat-message-group-view.tsx";
-import { StreamGroup } from "./chat-message-stream-view.tsx";
-import type { ChatModelControlsProps } from "./chat-model-controls.tsx";
+import type { ChatModelControlsProps } from "./chat-model-controls.types.ts";
 import { SessionRailComposer, sessionRailQuestion } from "./chat-session-rail-composer.tsx";
+import type { SidebarPanelHostRegistration } from "./chat-sidebar-region-types.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
+
+const StreamGroup = lazy(() => import("./chat-message-stream-view.tsx"), {
+  export: "StreamGroup",
+});
+
+/** Adapt pane facts only after Side Chat's first presentation loads this module. */
+export function ChatSessionRailPanel(
+  props: SidebarPanelDefinitionParams & { registerPanelHost?: SidebarPanelHostRegistration },
+) {
+  const presented = usePanePresentation(() => props.companionPresented);
+  const modelControls = createParkedProjection(
+    () =>
+      props.onCompanionModelSelect
+        ? createSideChatModelControlProps({
+            state: props.state,
+            companion: props.companion,
+            onSelect: (patch) => props.onCompanionModelSelect?.(patch),
+          })
+        : undefined,
+    presented,
+  );
+  return (
+    <ChatSessionRail
+      presentation={props.presentation}
+      data-sidebar-panel-host
+      ref={[elementRef((element: ChatSessionRailElement) => props.registerPanelHost?.(element))]}
+      presented={presented()}
+      focusRequest={props.companionFocusRequest}
+      sessionKey={props.state.sessionKey}
+      agentId={props.agentId}
+      assistantName={props.state.assistantName}
+      digest={props.digest}
+      running={Boolean(props.activeRunId)}
+      activeRunId={props.activeRunId}
+      pullRequests={props.pullRequests}
+      companion={props.companion}
+      modelControls={modelControls()}
+      client={props.state.connected ? props.state.client : null}
+      connected={props.state.connected}
+      sendShortcut={props.state.settings.chatSendShortcut ?? "enter"}
+      inputDeviceId={props.state.settings.realtimeTalkInputDeviceId}
+      onSubmit={props.onCompanionSubmit}
+      onDraftChange={props.onCompanionDraftChange}
+      onAttachmentsChange={props.onCompanionAttachmentsChange}
+      onOpenImage={props.state.handleOpenImage}
+      uploadConfig={props.state.uploadConfig}
+      attachmentLimits={resolveChatAttachmentLimits(props.state.hello?.policy)}
+    />
+  );
+}
 
 function checksSummary(pullRequest: ControlUiSessionPullRequest): string | null {
   const checks = pullRequest.checks;
@@ -184,7 +241,8 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       if (nextScrollKey !== scrollKey) {
         scrollKey = nextScrollKey;
         scheduleLayout(thread, () => {
-          const bottom = thread.scrollHeight;
+          const bottom =
+            host.companion.loading && !host.companion.turns.length ? 0 : thread.scrollHeight;
           return () => {
             thread.scrollTop = bottom;
           };
@@ -246,6 +304,9 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       )}
       <div
         class="chat-session-rail__thread"
+        style={{
+          padding: props.companion.loading && !props.companion.turns.length ? "0" : undefined,
+        }}
         aria-live="polite"
         onClick={handleMarkdownCodeBlockClick}
         ref={(element) => {
@@ -258,8 +319,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
         )}
         {!props.companion.loading && !props.companion.turns.length && (
           <PanelEmptyState
-            // Side chat keeps its native desktop empty; only mobile adopts the shared variant.
-            presentation={props.presentation === "mobile" ? "mobile" : undefined}
+            presentation={props.presentation}
             icon={<Icon name="bot" />}
             heading={t("chat.sidePanel.companion")}
             description={t("chat.rail.empty")}
@@ -300,16 +360,24 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
                       <Show when={working()}>
                         {(waiting) => (
                           // The main transcript's working group, shown while a run has no output yet.
-                          <StreamGroup
-                            parts={[
-                              {
-                                kind: "reading-indicator",
-                                key: `side-chat:${waiting().startedAt}`,
-                                startedAt: waiting().startedAt,
-                              },
-                            ]}
-                            options={{}}
-                          />
+                          <ChatLazyBoundary
+                            fallback={
+                              <div class="chat-group" role="status">
+                                {t("common.loading")}
+                              </div>
+                            }
+                          >
+                            <StreamGroup
+                              parts={[
+                                {
+                                  kind: "reading-indicator",
+                                  key: `side-chat:${waiting().startedAt}`,
+                                  startedAt: waiting().startedAt,
+                                },
+                              ]}
+                              options={{}}
+                            />
+                          </ChatLazyBoundary>
                         )}
                       </Show>
                       <Show when={failed()}>

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { isProcessAlive } from "../../test/scripts/live-process-fixture.test-support.js";
 import { nativeProcessTestEntrypoints } from "./native-process-runtime.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
@@ -18,12 +19,7 @@ const fixture = fileURLToPath(
 
 // Gateway death cannot join its surviving route owner or that owner's foreign child.
 async function waitForRouteExit(pid: number, signal: AbortSignal): Promise<void> {
-  for (;;) {
-    try {
-      process.kill(pid, 0);
-    } catch {
-      return;
-    }
+  while (isProcessAlive(pid)) {
     try {
       await setTimeout(10, undefined, { signal });
     } catch (cause) {

@@ -70,12 +70,7 @@ export {
   registerGateway,
   unregisterGateway,
 } from "./src/monitor/gateway-registry.js";
-export {
-  clearPresences,
-  getPresence,
-  presenceCacheSize,
-  setPresence,
-} from "./src/monitor/presence-cache.js";
+export { clearPresences, getPresence, setPresence } from "./src/monitor/presence-cache.js";
 export {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
   DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,

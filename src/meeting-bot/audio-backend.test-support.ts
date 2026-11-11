@@ -1,3 +1,6 @@
+import { EventEmitter } from "node:events";
+import { vi } from "vitest";
+
 export function createPulseCommands(loaded = false) {
   const devices = { sinks: loaded, sources: loaded };
   return ([command, action, ...args]: string[]) => {
@@ -21,4 +24,33 @@ export function createPulseCommands(loaded = false) {
     }
     return { status: 0, stdout, stderr: "" };
   };
+}
+
+export type TestStdin = EventEmitter & {
+  accept: (error?: Error) => void;
+  write: ReturnType<typeof vi.fn>;
+};
+
+export function createStdin(writeResult: boolean, acceptOnDrain = false): TestStdin {
+  const stdin = new EventEmitter() as TestStdin;
+  const callbacks: Array<(error?: Error | null) => void> = [];
+  stdin.write = vi.fn((_audio: Buffer, callback?: (error?: Error | null) => void) => {
+    if (callback) {
+      if (writeResult) {
+        queueMicrotask(() => callback());
+      } else {
+        callbacks.push(callback);
+      }
+    }
+    return writeResult;
+  });
+  stdin.accept = (error) => {
+    for (const callback of callbacks.splice(0)) {
+      callback(error);
+    }
+  };
+  if (acceptOnDrain) {
+    stdin.on("drain", () => stdin.accept());
+  }
+  return stdin;
 }

@@ -1,6 +1,11 @@
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
-import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
+import {
+  prepareSessionEntryReplacementDatabase,
+  withSessionEntryWorker,
+} from "./session-accessor.sqlite-replacement-worker.js";
 import type {
   SessionActor,
   SessionActorLifetime,
@@ -25,6 +30,14 @@ export function captureDurableSessionActor(params: {
   const execution = captureOpenClawAgentDatabaseExecution(database, {
     expectedIdentity: params.target.database,
   });
+  return bindDurableSessionActor({ ...params, database }, execution);
+}
+
+function bindDurableSessionActor(
+  params: Parameters<typeof captureDurableSessionActor>[0],
+  execution: OpenClawAgentDatabaseExecution,
+): SessionActor {
+  const database = params.database;
   const lifetime = {
     assertAdmission: () => params.lifetime.assertAdmission?.(),
     assertCurrent: () => {
@@ -47,6 +60,7 @@ export function captureDurableSessionActor(params: {
       },
     }),
     transport: {
+      agentId: database.agentId,
       run: (operation, authorize, concurrentBoardReads) => {
         const prepared = concurrentBoardReads
           ? execution.capturePreparedGenerationClaim()
@@ -98,7 +112,10 @@ export function captureDurableSessionActor(params: {
   });
 }
 
-type AcquisitionTarget = SessionActorTarget | { database: { kind: "memory" }; sessionKey: string };
+type AcquisitionTarget = {
+  database: SessionActorTarget["database"] | { kind: "memory" | "file" };
+  sessionKey: string;
+};
 
 /** One actor contract selects either its durable worker or memory owner at acquisition. */
 export function createSessionActorFactory(
@@ -109,7 +126,11 @@ export function createSessionActorFactory(
     env: Object.freeze({ ...(database.env ?? process.env) }),
   };
   return {
-    async acquire(requestedTarget: AcquisitionTarget, lifetime: SessionActorLifetime) {
+    async acquire(
+      requestedTarget: AcquisitionTarget,
+      lifetime: SessionActorLifetime,
+      followRegistration?: AgentDatabaseRequestExecutionSource["onRegistryChange"],
+    ) {
       lifetime.assertAdmission?.();
       lifetime.assertCurrent();
       if (requestedTarget.database.kind === "memory") {
@@ -123,15 +144,37 @@ export function createSessionActorFactory(
           lifetime,
         );
       }
-      const target = {
-        sessionKey: requestedTarget.sessionKey,
-        database: structuredClone(requestedTarget.database),
-      };
-      return captureDurableSessionActor({
-        database: captured,
-        target: { sessionKey: target.sessionKey, database: target.database },
-        lifetime,
+      const sessionKey = requestedTarget.sessionKey;
+      const execution = captureOpenClawAgentDatabaseExecution(captured, {
+        expectedIdentity:
+          "physicalIdentity" in requestedTarget.database ? requestedTarget.database : undefined,
       });
+      try {
+        if (!execution.fileIdentity) {
+          await prepareSessionEntryReplacementDatabase(
+            captured,
+            () => lifetime.assertCurrent(),
+            execution,
+            followRegistration,
+          );
+        }
+        lifetime.assertCurrent();
+        const identity = execution.fileIdentity;
+        if (!identity) {
+          throw new Error("Durable session actor has no admitted physical database");
+        }
+        return bindDurableSessionActor(
+          {
+            database: captured,
+            target: { sessionKey, database: { ...identity } },
+            lifetime,
+          },
+          execution,
+        );
+      } catch (error) {
+        await execution.release();
+        throw error;
+      }
     },
   };
 }

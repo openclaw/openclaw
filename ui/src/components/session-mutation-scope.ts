@@ -15,9 +15,9 @@ export function captureSessionMutationScope(
     !context ||
     !gateway ||
     !client ||
+    client.offlineRecoveryRetired ||
     gateway.snapshot.phase === "stopped" ||
-    (gateway.snapshot.phase !== "connected" &&
-      (!options.allowDeferred || !gateway.snapshot.hello || client.offlineRecoveryRetired))
+    (gateway.snapshot.phase !== "connected" && (!options.allowDeferred || !gateway.snapshot.hello))
   ) {
     return null;
   }
@@ -26,7 +26,7 @@ export function captureSessionMutationScope(
 
 export function isSessionMutationScopeCurrent(
   context: ApplicationContext | undefined,
-  scope: SidebarSessionMutationScope,
+  scope: Omit<SidebarSessionMutationScope, "selectedAgentId">,
   currentEpoch?: number,
 ): boolean {
   const gateway = context?.gateway;
@@ -35,11 +35,11 @@ export function isSessionMutationScopeCurrent(
     context === scope.context &&
     gateway === scope.gateway &&
     context.sessions === scope.sessions &&
+    !scope.client.offlineRecoveryRetired &&
     (gateway.snapshot.phase === "connected" ||
       (scope.allowDeferred === true &&
         gateway.snapshot.phase !== "stopped" &&
-        Boolean(gateway.snapshot.hello) &&
-        !scope.client.offlineRecoveryRetired)) &&
+        Boolean(gateway.snapshot.hello))) &&
     gateway.snapshot.client === scope.client
   );
 }

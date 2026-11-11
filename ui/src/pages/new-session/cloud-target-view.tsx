@@ -4,18 +4,14 @@ import type { WorkerMachineOption } from "../../../../packages/gateway-protocol/
 import {
   compareCloudProfiles,
   resolveCloudProfileIconData,
-} from "../../components/provider-icon-data.ts";
+} from "../../components/cloud-profile-icon-data.ts";
+import { CloudProfileIcon } from "../../components/solid/cloud-profile-icon.tsx";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
-import { CloudProfileIcon } from "../../components/solid/provider-icon.tsx";
+import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
-import {
-  machineShapeText,
-  type SessionMenuItemOptions,
-  type CloudProfileMenuItemsOptions,
-  type CloudChoiceMenuItemsOptions,
-} from "./cloud-target.ts";
+import { machineShapeText, type CloudChoiceMenuItemsOptions } from "./cloud-target.ts";
 import {
   cloudMachinesForOs,
   defaultCloudMachine,
@@ -23,11 +19,50 @@ import {
   type DraftCloudProfile,
 } from "./discovery.ts";
 
-type NativeSessionMenuItem = Omit<SessionMenuItemOptions, "icon"> & { icon?: JSX.Element };
+type NativeSessionMenuItem = {
+  value: string;
+  label: string;
+  accessibleProvider?: string;
+  description?: string;
+  icon?: JSX.Element;
+  sub?: string;
+  checked: boolean;
+  disabled?: boolean;
+  title?: string;
+  keepOpen?: boolean;
+  compact?: boolean;
+  capacityLabel?: string;
+  platform?: string;
+  summary?: string;
+  selectedSummary?: string;
+  hasSubmenu?: boolean;
+  suggested?: boolean;
+  capabilityLabels?: readonly string[];
+  hardware?: string;
+  hideDetails?: boolean;
+  remediation?: "enable-session-hosting" | "update-device";
+  provider?: string;
+  trust?: DraftCloudProfile["trust"];
+  onSelect: () => void;
+};
+
+type CloudProfileMenuItemsOptions = {
+  profiles: readonly DraftCloudProfile[];
+  selectedId: string;
+  selectedOs?: string;
+  selectedMachine?: string;
+  onSelectOs?: (osId: string) => void;
+  onSelectMachine?: (machineId: string) => void;
+  submitting: boolean;
+  disabled?: boolean;
+  disabledReason?: string;
+  profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
+  onSelect: (profileId: string, useDefaults?: boolean) => void;
+};
 
 function UnavailableReason(props: {
   reason: string;
-  remediation: SessionMenuItemOptions["remediation"];
+  remediation: NativeSessionMenuItem["remediation"];
 }) {
   return (
     <>
@@ -382,7 +417,7 @@ function CloudConfiguration(props: {
           <>
             {group().choices.length ? (
               <>
-                <div class="new-session-page__environment-heading">{group().label}</div>
+                <MenuHeading class="new-session-page__environment-heading" label={group().label} />
                 <div
                   class="new-session-page__cloud-choice-list"
                   role="group"

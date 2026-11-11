@@ -4,16 +4,6 @@ import { requestProviderUsage } from "../../lib/provider-usage-request.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import type { ModelProvidersData } from "./load.ts";
 
-type SupplementalOptions = {
-  isCoreLoading: () => boolean;
-  getGateway: () => Pick<GatewayPageBinding, "connected" | "client" | "epoch" | "isCurrent">;
-  getData: () => ModelProvidersData | null;
-  getDataClient: () => GatewayBrowserClient | null;
-  setData: (data: ModelProvidersData) => void;
-  setDataClient: (client: GatewayBrowserClient | null) => void;
-  refreshPolicy: UsageRefreshPolicy;
-};
-
 /** Loads provider usage after the provider controls have their required data. */
 export class ModelProviderSupplementalLoader {
   private request: AbortController | null = null;
@@ -21,7 +11,15 @@ export class ModelProviderSupplementalLoader {
 
   constructor(
     private readonly notify: () => void,
-    private readonly options: SupplementalOptions,
+    private readonly options: {
+      isCoreLoading: () => boolean;
+      getGateway: () => Pick<GatewayPageBinding, "connected" | "client" | "epoch" | "isCurrent">;
+      getData: () => ModelProvidersData | null;
+      getDataClient: () => GatewayBrowserClient | null;
+      setData: (data: ModelProvidersData) => void;
+      setDataClient: (client: GatewayBrowserClient | null) => void;
+      refreshPolicy: UsageRefreshPolicy;
+    },
   ) {}
 
   get loading(): boolean {

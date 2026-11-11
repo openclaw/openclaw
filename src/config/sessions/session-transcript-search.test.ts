@@ -45,6 +45,7 @@ import {
   searchSessionTranscriptsReadOnlySync,
 } from "./session-transcript-search.js";
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 
 vi.mock("../config.js", async () => ({
   ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
@@ -133,6 +134,38 @@ function agentDatabase() {
 }
 
 describe("searchSessionTranscripts", () => {
+  it.each([
+    ["明天下午开项目评审会议讨论排期", "会议"],
+    ["明日は東京で会議を開きます", "東京"],
+    ["내일서울에서회의합니다", "회의"],
+    ["明天下午开会讨论", "会"],
+  ])("finds an interior CJK substring in %s", async (text, query) => {
+    await appendUserMessage("cjk", "agent:main:main", `${"context ".repeat(100)}${text}`);
+    const result = await searchSessionTranscriptsAsync({ agentId: "main", env: env(), query });
+    expect(result.hits).toEqual([
+      expect.objectContaining({ sessionId: "cjk", snippet: expect.stringContaining(query) }),
+    ]);
+  });
+
+  it("keeps word matching and session filters when retrying CJK searches", async () => {
+    await appendUserMessage("false-positive", "agent:main:main", "明天开会议 scattered");
+    await appendUserMessage("match", "agent:main:other", "明天开会议 cat");
+    expect(search("会议 cat").hits).toEqual([expect.objectContaining({ sessionId: "match" })]);
+    expect(search("会议 cat", { sessionKeys: ["agent:main:main"] }).hits).toEqual([]);
+    expect(search("cat").hits).toEqual([expect.objectContaining({ sessionId: "match" })]);
+    for (const query of ["会议 -", "会议 →", "会议 🚀"]) {
+      expect(
+        search(query)
+          .hits.map((hit) => hit.sessionId)
+          .toSorted(),
+        query,
+      ).toEqual(["false-positive", "match"]);
+    }
+    expect(search("会议 🦞").hits).toEqual([]);
+    await appendUserMessage("symbol", "agent:main:symbol", "会议纪要 🦞");
+    expect(search("会议 🦞").hits).toEqual([expect.objectContaining({ sessionId: "symbol" })]);
+  });
+
   it.each([false, true])(
     "searches a populated closed database without reopening a writer (shared: %s)",
     async (shared) => {
@@ -552,63 +585,36 @@ describe("searchSessionTranscripts", () => {
     expect(result.hits[0]?.messageId).toBe("m-new");
   });
 
-  it("only surfaces the active branch after a deferred leaf-control rebuild", async () => {
+  it("streams bounded projections while excluding abandoned branches after a deferred rebuild", async () => {
     const scope = transcriptScope("session-1", "agent:main:main");
+    const largeText = "x".repeat(140 * 1024);
     await replaceTranscriptEvents(scope, [
-      {
-        type: "message",
-        id: "m1",
-        parentId: null,
-        message: { role: "user", content: [{ type: "text", text: "alpha origin" }] },
-      },
-      {
-        type: "message",
-        id: "m2",
-        parentId: "m1",
-        message: { role: "assistant", content: [{ type: "text", text: "beta abandoned" }] },
-      },
+      ...["alpha-stream", "beta-stream", "gamma-stream"].map((marker, index) =>
+        messageEvent(`m${index + 1}`, index === 0 ? null : `m${index}`, {
+          role: "user",
+          content: [{ type: "text", text: `${marker} ${largeText}` }],
+        }),
+      ),
+      messageEvent("abandoned", "m3", {
+        role: "assistant",
+        content: [{ type: "text", text: "abandoned branch" }],
+      }),
     ] as unknown as TranscriptEvent[]);
     await appendTranscriptEvent(scope, {
       type: "leaf",
-      id: "leaf-1",
-      parentId: "m2",
-      targetId: "m1",
-    } as unknown as TranscriptEvent);
-
-    const dirty = search("beta");
-    expect(dirty.indexing).toBe(true);
-    expect(dirty.hits).toHaveLength(0);
-    await waitForSearchReconcile("beta");
-
-    expect(search("beta").hits).toHaveLength(0);
-    expect(search("alpha").hits).toHaveLength(1);
-  });
-
-  it("streams large searchable projections to the writer in bounded chunks", async () => {
-    const scope = transcriptScope("session-1", "agent:main:main");
-    const largeText = "x".repeat(140 * 1024);
-    await replaceTranscriptEvents(
-      scope,
-      ["alpha-stream", "beta-stream", "gamma-stream"].map((marker, index) => ({
-        type: "message",
-        id: `m${index + 1}`,
-        parentId: index === 0 ? null : `m${index}`,
-        message: { role: "user", content: [{ type: "text", text: `${marker} ${largeText}` }] },
-      })) as unknown as TranscriptEvent[],
-    );
-    await appendTranscriptEvent(scope, {
-      type: "leaf",
       id: "leaf-large",
-      parentId: "m3",
+      parentId: "abandoned",
       targetId: "m3",
     } as unknown as TranscriptEvent);
 
     expect(search("gamma-stream").indexing).toBe(true);
+    expect(search("abandoned").hits).toHaveLength(0);
     await waitForSearchReconcile("gamma-stream");
 
     expect(search("alpha-stream").hits).toHaveLength(1);
     expect(search("beta-stream").hits).toHaveLength(1);
     expect(search("gamma-stream").hits).toHaveLength(1);
+    expect(search("abandoned").hits).toHaveLength(0);
   });
 
   it("detects missing, dirty, lagging, and unclassified transcript projections", async () => {

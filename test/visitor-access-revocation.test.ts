@@ -9,7 +9,7 @@ import {
 import { createFixture } from "../src/gateway/control-ui-session-pr-access.test-support.js";
 import { createRequestGatewayMethodRegistry } from "../src/gateway/server-methods.js";
 import { createPluginStateKeyedStore } from "../src/plugin-state/plugin-state-store.js";
-import { createPluginRegistry } from "../src/plugins/registry.js";
+import { createRuntimeTestRegistry } from "../src/plugins/registry-runtime.test-helpers.js";
 import { withPluginRuntimeGatewayRequestScope } from "../src/plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../src/plugins/runtime/index.js";
 import { createPluginRecord } from "../src/plugins/status.test-helpers.js";
@@ -34,19 +34,15 @@ it.each([
   ["numeric profile merge", "grant commit"],
   ["numeric profile merge", "provider dispatch"],
 ] as const)("refuses a %s before %s", async (mutation, boundary) => {
+  const committing = boundary === "grant commit";
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     const gateway = await createFixture("operator.read");
     const registry = createRequestGatewayMethodRegistry();
     gateway.context.getGatewayMethodRegistry = () => registry;
-    const plugins = createPluginRegistry({
-      runtime: createPluginRuntime(),
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
-      activateGlobalSideEffects: false,
-    });
+    const plugins = createRuntimeTestRegistry(createPluginRuntime());
     const record = createPluginRecord({ id: "visitor-access", origin: "bundled" });
     const api = plugins.createApi(record, { config: gateway.cfg });
-    plugins.registry.plugins.push(record);
     try {
       const numeric = mutation === "numeric profile merge";
       const email = "moving@example.test";
@@ -98,12 +94,7 @@ it.each([
               ...guarded,
               register(key, value, entryOptions) {
                 const pending = guarded.register(key, value, entryOptions);
-                if (
-                  boundary === "grant commit" &&
-                  reassign &&
-                  key === grantKey &&
-                  value.expiresAt === NOW
-                ) {
+                if (committing && reassign && key === grantKey && value.expiresAt === NOW) {
                   changeProfile();
                 }
                 return pending;
@@ -124,7 +115,7 @@ it.each([
           () => visitor.service.revoke({ profileId }, visitor.authority.assertCurrent),
         );
       await visitor.service.initialize();
-      if (boundary === "provider dispatch") {
+      if (!committing) {
         const update = visitor.policy.update.bind(visitor.policy);
         vi.spyOn(visitor.policy, "update").mockImplementation((change, assertCurrent) =>
           update(async (targets) => {
@@ -139,10 +130,10 @@ it.each([
       await expect(revoke(original.id)).rejects.toThrow();
       expect(reassign).toBe(false);
       expect(await store.lookup(grantKey)).toEqual(
-        boundary === "grant commit" ? grant : { ...grant, expiresAt: NOW },
+        committing ? grant : { ...grant, expiresAt: NOW },
       );
       expect(visitor.mutations()).toEqual([]);
-      if (boundary === "grant commit") {
+      if (committing) {
         expect(() =>
           visitor.service.authorize(emails, githubAccountIds).assertCurrent(),
         ).not.toThrow();

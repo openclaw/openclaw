@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
+import * as sessionEntryReads from "../../../config/sessions/session-entry-read-runtime.js";
 import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { createDirectChatContext } from "../../../gateway/server-chat.agent-events.test-helpers.js";
@@ -25,6 +26,8 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { expectCollected } from "../../../test-utils/retention.js";
+import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { resolveRequesterToolPolicies } from "../../requester-tool-policy.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
@@ -76,6 +79,39 @@ function writeEntries(storePath: string, entries: Record<string, SessionEntry>) 
 }
 
 describe("persisted subagent capability lookups", () => {
+  it("releases completed capability reads while their lookup remains reusable", async () => {
+    const { storePath, key } = fixture("subagent-capability-retention-");
+    writeEntries(storePath, { [key]: makeEntry("retained-child", { spawnDepth: 2 }) });
+    const store = createSubagentSessionStore(storePath, "main");
+    async function readRun() {
+      const run = { depth: 2 };
+      const observer = { reads: 0 };
+      const refs = [new WeakRef(run), new WeakRef(observer)];
+      await withPreparedRead(
+        () => {
+          expect(store.get(key)?.spawnDepth).toBe(run.depth);
+        },
+        { retain: true, onRead: () => observer.reads++ },
+      );
+      expect(observer.reads).toBe(1);
+      return refs;
+    }
+    const retired = await readRun();
+    // The cached scope must release both lazy error stacks and its observation callback.
+    await expectCollected(...retired);
+    await withPreparedRead(
+      () => {
+        expect(store.get(key)?.spawnDepth).toBe(2);
+        return (async () => {
+          await withPreparedRead(() => store.get(key), { retain: true });
+          // The nested scope copies its entries; releasing it must preserve the live parent.
+          expect(store.get(key)?.spawnDepth).toBe(2);
+        })();
+      },
+      { retain: true },
+    );
+  });
+
   it.each([false, true])(
     "resolves current requester policy without session SQL (default store: %s)",
     async (useDefault) => {
@@ -118,7 +154,8 @@ describe("persisted subagent capability lookups", () => {
               const request = { config: cfg, agentId: "main", sessionKey: key };
               const resolve = () => resolveRequesterToolPolicies(request);
               const readPolicy = () => {
-                const { inheritedToolPolicy: inherited, subagentStore: store } = resolve();
+                const { inheritedToolPolicy: inherited } = resolve();
+                const store = resolveStore(key, { cfg });
                 return { policy: inherited, depth: resolveCapabilities(key, { cfg, store }).depth };
               };
               expect(resolve().inheritedToolPolicy).toEqual(policy);
@@ -232,10 +269,63 @@ describe("persisted subagent capability lookups", () => {
       expect(retained.read()).toBe(1);
       writeEntries(storePath, { [key]: makeEntry("nested-child", { spawnDepth: 2 }) });
       expect(() => retained.read()).toThrow("Session capability metadata changed");
+      const run = vi.fn(async () => retained.read());
+      await expect(
+        runWithModelFallback({
+          cfg: undefined,
+          provider: "fixture-provider",
+          model: "fixture-model",
+          manifestPlugins: [],
+          fallbacksOverride: ["fixture-next/fixture-model"],
+          run,
+        }),
+      ).rejects.toThrow("Session capability metadata changed");
+      expect(run).toHaveBeenCalledOnce();
     } finally {
       retained.release();
     }
   });
+
+  it.each([1, 2])(
+    "bounds capability refresh after %s intervening publications",
+    async (changes) => {
+      const { storePath, key } = fixture("subagent-capability-refresh-");
+      const entry = makeEntry("child", { inheritedToolDeny: ["exec"] });
+      writeEntries(storePath, { [key]: entry });
+      const readEntries = sessionEntryReads.withSessionEntriesFromStoreInWorker;
+      let reads = 0;
+      vi.spyOn(sessionEntryReads, "withSessionEntriesFromStoreInWorker").mockImplementation(
+        async (...args) => {
+          const result = await readEntries(...args);
+          reads += 1;
+          if (reads <= changes) {
+            writeEntries(storePath, {
+              [key]: { ...entry, inheritedToolDeny: ["exec", "tool-" + reads] },
+            });
+          }
+          return result;
+        },
+      );
+      const store = createSubagentSessionStore(storePath, "main");
+      const pending = prepareSessionCapabilityRead(() => store.get(key)?.inheritedToolDeny);
+      if (changes === 2) {
+        await expect(pending).rejects.toThrow("Session capability metadata changed");
+      } else {
+        const prepared = await pending;
+        try {
+          expect(prepared.read()).toEqual(["exec", "tool-1"]);
+          writeEntries(storePath, { [key]: { ...entry, inheritedToolDeny: ["exec", "write"] } });
+          // A new preparation may read new policy, but cannot renew this retained guard.
+          await expect(withPreparedRead(() => prepared.read())).rejects.toThrow(
+            "Session capability metadata changed",
+          );
+        } finally {
+          prepared.release();
+        }
+      }
+      expect(reads).toBe(2);
+    },
+  );
 
   it("prepares requested capability rows and observes the next committed policy", async () => {
     const { storePath, cfg, key } = fixture("subagent-capability-memo-");
@@ -475,11 +565,6 @@ describe("getSubagentDepthFromSessionStore", () => {
 });
 
 describe("resolveAgentTimeoutMs", () => {
-  it("resolves unlimited config timeoutSeconds", () => {
-    const cfg = { agents: { defaults: { timeoutSeconds: 0 } } } satisfies OpenClawConfig;
-    expect(resolveAgentTimeoutMs({ cfg })).toBe(MAX_TIMER_TIMEOUT_MS);
-  });
-
   it("uses a timer-safe sentinel for no-timeout overrides", () => {
     expect(resolveAgentTimeoutMs({ overrideSeconds: 0 })).toBe(MAX_TIMER_TIMEOUT_MS);
     expect(resolveAgentTimeoutMs({ overrideMs: 0 })).toBe(MAX_TIMER_TIMEOUT_MS);

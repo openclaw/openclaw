@@ -13,6 +13,8 @@ import { useAccountingFixture } from "./agent-runner-accounting.test-support.js"
 import { accountAgentTurn } from "./agent-runner-result-accounting.js";
 
 const diagnostic = { provider: "primary-fixture", model: "thinking" };
+const fallback = { provider: "fallback-fixture", model: "plain" };
+const noActiveModel = { activeModelProvider: undefined, activeModel: undefined };
 const { database, createFixture: createAccounting } = useAccountingFixture(
   "openclaw-fallback-projection-",
 );
@@ -20,7 +22,10 @@ afterEach(clearRuntimeConfigSnapshot);
 
 async function createFixture(selected = diagnostic) {
   const { storePath } = database;
-  const cfg: OpenClawConfig = { session: { store: storePath } };
+  const cfg: OpenClawConfig = {
+    session: { store: storePath },
+    agents: { defaults: { model: { primary: `${selected.provider}/${selected.model}` } } },
+  };
   setRuntimeConfigSnapshot(cfg);
   const f = await createAccounting();
   const { context, sessionId } = f;
@@ -32,7 +37,6 @@ async function createFixture(selected = diagnostic) {
     modelProvider: selected.provider,
     model: selected.model,
   };
-  // Preserve the projection suite's unpinned entry and minimal runtime outcome.
   await f.replace(entry);
   context.activeSessionEntry = context.activeSessionStore![sessionKey] = entry;
   context.cfg = cfg;
@@ -111,8 +115,6 @@ it("does not persist or project a fallback for the selected model's wire identit
   const fixture = await createFixture({ provider: "arcee", model: "trinity-large-preview" });
   const { context } = fixture;
   const entry = context.activeSessionEntry!;
-  context.cfg.agents = { defaults: { model: { primary: "arcee/trinity-large-preview" } } };
-  setRuntimeConfigSnapshot(context.cfg);
   entry.fallbackNotice = {
     kind: "active",
     selectedModel: "arcee/trinity-large-preview",
@@ -135,8 +137,7 @@ it("does not persist or project a fallback for the selected model's wire identit
   expect(fixture.project(stored)).toMatchObject({
     modelProvider: "arcee",
     model: "trinity-large-preview",
-    activeModelProvider: undefined,
-    activeModel: undefined,
+    ...noActiveModel,
   });
 });
 
@@ -152,22 +153,17 @@ it.each([false, true])(
       delete entry.modelProvider;
     }
     await fixture.replace(entry);
-    context.cfg.agents = {
-      defaults: { model: { primary: `${diagnostic.provider}/${diagnostic.model}` } },
-    };
-    setRuntimeConfigSnapshot(context.cfg);
-    context.execution.resolved = { provider: "fallback-fixture", model: "plain" };
+    context.execution.resolved = fallback;
     context.execution.fallback.attempts = [
       {
-        provider: diagnostic.provider,
-        model: diagnostic.model,
+        ...diagnostic,
         error: "model not found",
         reason: "model_not_found",
       },
     ];
 
-    await fixture.account({ provider: "fallback-fixture", model: "plain" });
-    await fixture.persist({ provider: "fallback-fixture", model: "plain" });
+    await fixture.account(fallback);
+    await fixture.persist(fallback);
 
     const stored = fixture.read()!;
     expect(stored.fallbackNotice).toMatchObject({
@@ -196,11 +192,9 @@ it.each([false, true])(
       { sessionId: "another-session" },
       { providerOverride: "another-provider", modelOverride: "another-model" },
     ]) {
-      const row = await project({ ...stored, ...changed });
-      expect(row, JSON.stringify(changed)).toMatchObject({
-        activeModel: undefined,
-        activeModelProvider: undefined,
-      });
+      expect(await project({ ...stored, ...changed }), JSON.stringify(changed)).toMatchObject(
+        noActiveModel,
+      );
     }
 
     const activeRunId = `${context.runId}-active`;
@@ -211,17 +205,13 @@ it.each([false, true])(
       projectSessionActive: true,
     });
     try {
-      const row = await project(stored);
-      expect(row).toMatchObject({ activeModel: undefined, activeModelProvider: undefined });
+      expect(await project(stored)).toMatchObject(noActiveModel);
     } finally {
       clearAgentRunContext(activeRunId);
     }
 
     const recoveryRunId = `${context.runId}-recovery`;
-    await fixture.persist(
-      { provider: "fallback-fixture", model: "plain" },
-      { text: "hidden answer", display: false },
-    );
+    await fixture.persist(fallback, { text: "hidden answer", display: false });
     expect((await project(fixture.read()!)).activeModel).toBeUndefined();
     await fixture.persist(diagnostic, {
       runId: recoveryRunId,
@@ -234,12 +224,11 @@ it.each([false, true])(
     expect(await project(recovered)).toMatchObject({
       modelProvider: diagnostic.provider,
       model: diagnostic.model,
-      activeModelProvider: undefined,
-      activeModel: undefined,
+      ...noActiveModel,
     });
-    context.execution.resolved = { provider: diagnostic.provider, model: diagnostic.model };
+    context.execution.resolved = diagnostic;
     context.execution.fallback.attempts = [];
-    await fixture.account({ provider: diagnostic.provider, model: diagnostic.model });
+    await fixture.account(diagnostic);
     expect(fixture.read()?.fallbackNotice).toBeUndefined();
   },
 );

@@ -4,7 +4,7 @@ import { expect } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import { embeddedRunMock } from "../test-helpers.runtime-state.js";
+import { embeddedRunMock, createCompactionResult } from "../test-helpers.runtime-state.js";
 
 const getSessionManagerModule = createLazyRuntimeModule(
   () => import("../../agents/sessions/index.js"),
@@ -22,18 +22,7 @@ type HeldCompactionResult = {
   };
 };
 
-export function holdCompaction(
-  result: HeldCompactionResult = {
-    ok: true,
-    compacted: true,
-    result: {
-      summary: "summary",
-      firstKeptEntryId: "entry-1",
-      tokensBefore: 120,
-      tokensAfter: 80,
-    },
-  },
-) {
+export function holdCompaction(result: HeldCompactionResult = createCompactionResult()) {
   const entered = createDeferred();
   const terminal = createDeferred<HeldCompactionResult>();
   embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(() => {

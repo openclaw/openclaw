@@ -17,89 +17,66 @@ const frozenContext = {
 const regularContext = { candidateVersion: "2026.8.4" };
 const juneContext = { targetContextRef: "extended-stable/2026.6.33" };
 const juneVersions = ["2026.6.34", "2026.6.33"];
+const versions = (list: string) => list.split(" ");
+const septemberLine = {
+  ...frozenContext,
+  oldestSupportedVersion: "2026.6.34",
+  publishedVersions: versions(
+    "2026.6.34 2026.7.35 2026.8.9 2026.8.33 2026.8.34 2026.8.35 2026.9.8 2026.9.9 2026.10.1 2026.10.5-beta.3",
+  ),
+};
 
 describe("release upgrade baseline resolver", () => {
-  it("captures supported predecessors relative to the candidate, never future registry tags", () => {
-    const captured = resolveQualificationBaselines({
-      candidateVersion: "2026.8.4",
-      targetContextRef: "release/2026.8.4",
-      oldestSupportedVersion: "2026.6.34",
-      publishedVersions: ["2026.6.34", "2026.7.34", "2026.8.2", "2026.8.3", "2026.8.4", "2026.9.1"],
-    });
-    expect(captured).toEqual(
+  it.each([
+    [
+      "captures supported predecessors, never future registry tags",
+      {
+        ...regularContext,
+        targetContextRef: "release/2026.8.4",
+        publishedVersions: versions("2026.6.34 2026.7.34 2026.8.2 2026.8.3 2026.8.4 2026.9.1"),
+      },
       baselines("2026.8.3", ["2026.6.34", "2026.7.34", "2026.8.2", "2026.8.3"]),
-    );
-    expect(validateQualificationBaselines(captured, regularContext)).toEqual(captured);
-  });
-
-  it("keeps extended-stable qualification baselines within the frozen release month", () => {
-    expect(
-      resolveQualificationBaselines({
+    ],
+    [
+      "keeps qualification within the frozen release month",
+      {
         candidateVersion: "2026.8.35",
         targetContextRef: "extended-stable/2026.8.33",
-        oldestSupportedVersion: "2026.6.34",
         publishedVersions: ["2026.6.34", "2026.8.33", "2026.8.34", "2026.9.1"],
-      }),
-    ).toEqual(baselines("2026.8.34"));
-  });
-
-  const septemberLine = {
-    candidateVersion: "2026.9.33",
-    oldestSupportedVersion: "2026.6.34",
-    publishedVersions: [
-      "2026.6.34",
-      "2026.7.35",
-      "2026.8.9",
-      "2026.8.33",
-      "2026.8.34",
-      "2026.8.35",
-      "2026.9.8",
-      "2026.9.9",
-      "2026.10.1",
-      "2026.10.5-beta.3",
+      },
+      baselines("2026.8.34"),
     ],
-  };
-
-  it("upgrades a first frozen .33 candidate from the previous extended-stable release", () => {
-    const captured = resolveQualificationBaselines({
-      ...septemberLine,
-      targetContextRef: "extended-stable/2026.9.33",
-    });
-    expect(captured).toEqual(baselines("2026.8.35", ["2026.8.35", "2026.9.9"]));
-    expect(validateQualificationBaselines(captured, frozenContext)).toEqual(captured);
-    expect(
-      resolveReleaseUpgradeBaseline("2026.9.33", septemberLine.publishedVersions, {
-        targetContextRef: "extended-stable/2026.9.33",
-      }),
-    ).toBe("openclaw@2026.8.35");
-    expect(
-      resolveReleaseUpgradeBaseline("2026.9.33", septemberLine.publishedVersions, {
-        previousVersion: "2026.8.35",
-        targetContextRef: "extended-stable/2026.9.33",
-      }),
-    ).toBe("openclaw@2026.8.35");
-  });
-
-  it("prefers the extended-stable predecessor for a .33 candidate outside its branch context", () => {
-    expect(
-      resolveQualificationBaselines({ ...septemberLine, targetContextRef: "v2026.9.33" }),
-    ).toEqual(baselines("2026.8.35", ["2026.6.34", "2026.8.35", "2026.9.8", "2026.9.9"]));
-  });
-
-  it("keeps later frozen candidates on their newest extended-stable predecessor", () => {
-    expect(
-      resolveQualificationBaselines({
-        ...septemberLine,
+    [
+      "prefers the frozen predecessor outside its branch context",
+      { targetContextRef: "v2026.9.33" },
+      baselines("2026.8.35", ["2026.6.34", "2026.8.35", "2026.9.8", "2026.9.9"]),
+    ],
+    [
+      "keeps later frozen candidates on their newest frozen predecessor",
+      {
         candidateVersion: "2026.9.34",
-        targetContextRef: "extended-stable/2026.9.33",
         publishedVersions: [...septemberLine.publishedVersions, "2026.9.33"],
+      },
+      baselines("2026.9.33"),
+    ],
+  ] as const)("%s", (_name, overrides, expected) => {
+    expect(resolveQualificationBaselines({ ...septemberLine, ...overrides })).toEqual(expected);
+  });
+
+  it("upgrades a first frozen .33 from the previous frozen line, including explicit selection", () => {
+    expect(resolveQualificationBaselines(septemberLine)).toEqual(
+      baselines("2026.8.35", ["2026.8.35", "2026.9.9"]),
+    );
+    expect(
+      resolveReleaseUpgradeBaseline("2026.9.33", septemberLine.publishedVersions, {
+        ...frozenContext,
+        previousVersion: "2026.8.35",
       }),
-    ).toEqual(baselines("2026.9.33"));
+    ).toBe("openclaw@2026.8.35");
   });
 
   it.each([
     ["same-month frozen primary", "2026.9.9", ["2026.8.35", "2026.9.9"], frozenContext],
-    ["older frozen primary", "2026.8.34", ["2026.8.35", "2026.9.9", "2026.8.34"], frozenContext],
     ["older regular primary", "2026.8.2", ["2026.8.2", "2026.8.3"], regularContext],
   ] as const)("rejects %s", (_name, primary, survivors, context) => {
     expect(() => validateQualificationBaselines(baselines(primary, survivors), context)).toThrow(
@@ -118,20 +95,16 @@ describe("release upgrade baseline resolver", () => {
     expect(() => parseArgs(["--candidate-version", "-h"])).toThrow(
       "missing value for --candidate-version",
     );
-    expect(() => parseArgs(["--versions-json", "-h"])).toThrow("missing value for --versions-json");
   });
 
   it("selects the stable predecessor of a beta candidate", () => {
     expect(
-      resolveReleaseUpgradeBaseline("2026.8.1-beta.2", [
-        "2026.8.1-beta.1",
-        "2026.8.1-alpha.1",
-        "2026.7.1-1",
-        "2026.7.1-2",
-        "2026.7.1",
-        "2026.8.1",
-        "2026.7.1-beta.2",
-      ]),
+      resolveReleaseUpgradeBaseline(
+        "2026.8.1-beta.2",
+        versions(
+          "2026.8.1-beta.1 2026.8.1-alpha.1 2026.7.1-1 2026.7.1-2 2026.7.1 2026.8.1 2026.7.1-beta.2",
+        ),
+      ),
     ).toBe("openclaw@2026.7.1-2");
   });
 

@@ -121,6 +121,7 @@ type CallGatewayBaseOptions = Pick<GatewayClientOptions, "caps"> &
     expectFinal?: boolean;
     timeoutMs?: number | null;
     signal?: AbortSignal;
+    assertConnectionCurrent?: () => void;
     prepareDispatchCurrent?: () => Promise<void>;
     assertDispatchCurrent?: () => void;
     onAccepted?: GatewayClientRequestOptions["onAccepted"];
@@ -699,9 +700,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     const cleanup = () => {
       startAbort.abort();
       opts.signal?.removeEventListener("abort", abortHandler);
-      if (timer) {
-        clearTimeout(timer);
-      }
+      clearTimeout(timer);
     };
     const stopClientThenSettle = (err?: Error, value?: T) => {
       const complete = () => {
@@ -755,6 +754,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       edgeAuthHeaders,
       tlsFingerprint,
       preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
+      assertConnectionCurrent: opts.assertConnectionCurrent,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: resolveGatewayClientDisplayName(opts),

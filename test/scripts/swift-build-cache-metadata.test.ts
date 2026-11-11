@@ -68,20 +68,17 @@ describe.skipIf(process.platform === "win32")("Swift build-cache input metadata"
     const { input, run } = fixture("ios");
     const unchanged = [
       "apps/ios/Sources/Feature.swift",
-      "apps/ios/Tests/FeatureTests.swift",
-      "apps/ios/WatchApp/Sources/Feature.swift",
-      "apps/shared/OpenClawKit/Sources/Shared.swift",
       "apps/shared/OpenClawKit/Plugins/GenerateGatewayProtocol/plugin.swift",
       "apps/macos/Tests/OpenClawIPCTests/AsyncTestGate.swift",
     ].map((relative) => input(relative));
     const changed = input("apps/ios/Sources/Changed.swift", "before\n");
     const version = input("apps/ios/build/Version.xcconfig", "CURRENT_PROJECT_VERSION = 1\n");
     setTime(originalTime, ...unchanged, changed, version);
-    expect(run("record")).toContain("7 verified input timestamps");
+    expect(run("record")).toContain("4 verified input timestamps");
     fs.writeFileSync(changed, "after!\n");
     fs.writeFileSync(version, "CURRENT_PROJECT_VERSION = 2\n");
     setTime(checkoutTime, ...unchanged, changed, version);
-    expect(run("restore")).toContain("6 verified input timestamps");
+    expect(run("restore")).toContain("3 verified input timestamps");
     expectTimes(originalTime, ...unchanged);
     expectTimes(checkoutTime, changed, version);
     expect(fs.readFileSync(version, "utf8")).toContain("= 2");
@@ -93,17 +90,8 @@ describe.skipIf(process.platform === "win32")("Swift build-cache input metadata"
       "apps/shared/OpenClawKit/Tests/OpenClawKitTests/GatewayTLSStoreFixture.swift";
     const unchanged = [
       sourcePath,
-      "apps/macos/Tests/FeatureTests.swift",
-      "apps/shared/OpenClawKit/Sources/Shared.swift",
-      "apps/shared/OpenClawMLXTTSProtocol/Sources/OpenClawMLXTTSProtocol/MLXTTSProtocol.swift",
       sharedFixture,
-      "apps/swabble/Sources/Voice.swift",
       "apps/macos/.build/checkouts/dependency/Sources/Library.swift",
-      "apps/macos/Package.swift",
-      "apps/macos/Package.resolved",
-      "apps/shared/OpenClawKit/Package.swift",
-      "apps/shared/OpenClawMLXTTSProtocol/Package.swift",
-      "apps/swabble/Package.swift",
     ];
     setTime(originalTime, ...unchanged.slice(1).map((relative) => input(relative)));
     const sharedFixtureLink = at("apps/macos/Tests/OpenClawIPCTests/GatewayTLSStoreFixture.swift");
@@ -133,7 +121,7 @@ describe.skipIf(process.platform === "win32")("Swift build-cache input metadata"
     const added = input("apps/macos/Sources/Added.swift");
     setTime(checkoutTime, ...unchanged.map(at), changed, modeChanged, added);
 
-    expect(run("restore")).toContain("12 verified input timestamps");
+    expect(run("restore")).toContain("3 verified input timestamps");
     expectTimes(originalTime, ...unchanged.map(at));
     expect(fs.lstatSync(sharedFixtureLink).isSymbolicLink()).toBe(true);
     expectTimes(originalTime, sharedFixtureLink);

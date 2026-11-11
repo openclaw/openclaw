@@ -1,32 +1,17 @@
 import { getHeapSpaceStatistics, getHeapStatistics } from "node:v8";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
-import type { WorkerGcProfiles } from "../logging/diagnostic-worker-gc-profile.js";
-import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
+import type { DiagnosticWorkerRetainedData, WorkerGcStorm } from "./diagnostic-process-types.js";
 import {
   flushGcSamples,
   getOldGenerationAfterGcBytes,
   observeGcSamples,
   type GcSample,
 } from "./gc-observer.js";
-
-export type WorkerGcStorm = {
-  workerId?: string;
-  runId?: string;
-  sessionKeyHash?: string;
-  cellCount: number;
-  activeCellCount: number;
-  bridgeMethods: string[];
-  majorCollections: number;
-  intervalMs: number;
-  heapUsed: number;
-  heapTotal: number;
-  external: number;
-  arrayBuffers: number;
-  heapSizeLimitBytes: number;
-  captureStatus?: "requested" | "complete" | "unavailable";
-  captureReason?: string;
-  profiles?: WorkerGcProfiles;
-};
+import { observeSqliteReaderCounters } from "./sqlite-reader-metrics.js";
+import {
+  getTrackedPostgresBridgeCounters,
+  observeTrackedPostgresBridgeCounters,
+} from "./worker-cpu.js";
 
 let diagnosticPort: MessagePort | undefined;
 let nextGcProfileAt = 0;
@@ -57,6 +42,12 @@ export function serveWorkerMemorySamples(
 ) {
   const { port1, port2 } = new MessageChannel();
   diagnosticPort = port1;
+  const stopReaderCounters = observeSqliteReaderCounters((sqliteReaderCounter) => {
+    port1.postMessage({ sqliteReaderCounter });
+  });
+  const stopBridgeCounters = observeTrackedPostgresBridgeCounters(() => {
+    port1.postMessage({ postgresBridgeCounters: getTrackedPostgresBridgeCounters() });
+  });
   const heapSizeLimitBytes = process.versions.bun ? undefined : getHeapStatistics().heap_size_limit;
   let gc: GcSample[] | undefined;
   let taskMetrics = false;
@@ -143,13 +134,19 @@ export function serveWorkerMemorySamples(
   );
   port1.once("close", () => {
     diagnosticPort = undefined;
+    stopBridgeCounters();
+    stopReaderCounters();
     stopGc?.();
     gc = undefined;
   });
   port1.on("messageerror", () => port1.close());
   port1.unref();
   sample();
-  parent.postMessage({ status: "memory", port: port2 }, [port2]);
+  // Shared counts update without messages; only descendant registration changes travel upstream.
+  parent.postMessage(
+    { status: "memory", port: port2, postgresBridgeCounters: getTrackedPostgresBridgeCounters() },
+    [port2],
+  );
   return {
     setTaskMetrics(enabled: boolean) {
       taskMetrics = enabled;
@@ -160,6 +157,8 @@ export function serveWorkerMemorySamples(
     },
     close(this: void) {
       diagnosticPort = undefined;
+      stopBridgeCounters();
+      stopReaderCounters();
       stopGc?.();
       stopGc = undefined;
       flushGc();

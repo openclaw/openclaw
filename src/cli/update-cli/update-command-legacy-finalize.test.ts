@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { createVitestResourceOwner } from "../../../scripts/lib/vitest-resource-ownership.mts";
@@ -29,6 +28,7 @@ import * as stateDatabase from "../../state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { legacyFinalizeEntrypoint } from "./update-command-legacy-finalize-entrypoint.test-support.js";
+import { finishParams, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 
 // Cancellation ends Vitest's wrapper before the body joins; retain its inputs.
 const fixture = createFixtureLifetime();
@@ -85,16 +85,12 @@ async function closeLegacyFixture(command: LegacyCommand | undefined, release: (
 
 function assertLegacyCommandJoined(result: Awaited<LegacyCommand> | undefined) {
   if (result?.cleanup === "uncertain") {
+    const { stdout, stderr, ...processResult } = result;
     throw new Error("Legacy finalizer process cleanup is unverified", {
       cause: {
-        pid: result.pid,
-        code: result.code,
-        signal: result.signal,
-        termination: result.termination,
-        cleanup: result.cleanup,
-        killed: result.killed,
-        stdoutTail: result.stdout.slice(-8192),
-        stderrTail: result.stderr.slice(-8192),
+        ...processResult,
+        stdoutTail: stdout.slice(-8192),
+        stderrTail: stderr.slice(-8192),
       },
     });
   }
@@ -215,18 +211,6 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
     let releaseChild: (() => void) | undefined;
     try {
       const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
-      if (completed) {
-        const candidateState = new DatabaseSync(file("state/openclaw.sqlite"), {
-          readOnly: true,
-        });
-        try {
-          // v2026.9.3 supports schema 16; only the candidate may access newer state.
-          const version = candidateState.prepare("PRAGMA user_version").get()?.user_version;
-          expect(version).toBeGreaterThan(16);
-        } finally {
-          candidateState.close();
-        }
-      }
       if (legacyParent) {
         env.OPENCLAW_UPDATE_RUN_HANDOFF = "1";
         env.OPENCLAW_UPDATE_RUN_ID = runId;
@@ -325,20 +309,13 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
         executor: grantless ? undefined : executor,
         bufferedSteps: [],
         resultPath: path.join(legacyParent ? workerTemp : scratch, "result.json"),
-        params: {
+        params: finishParams({
           root: parentRoot,
           ownedManagedUpdateEnv: ownedTemp ? originalEnv : undefined,
-          mutationStarted: true,
           installKindChanged: switchedRoot,
           configSnapshot: createTestConfigSnapshot({}, {}, env.OPENCLAW_CONFIG_PATH),
-          requestedChannel: null,
-          storedChannel: "stable",
-          channel: "stable",
-          downgradeRisk: false,
-          shouldRestart: true,
           opts: { json: true, yes: true, run: { runId, env } },
-          result: {
-            status: "ok",
+          result: updateResult({
             after: completed
               ? { version: "2026.9.5", buildId: "verified-migrated-candidate" }
               : undefined,
@@ -347,9 +324,8 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
               ? { version: endsWith("-wrong-version") ? "2026.9.4" : "2026.9.3" }
               : undefined,
             root: candidateRoot,
-            steps: [],
             durationMs: 0,
-          },
+          }),
           controlPlaneUpdateSentinelMeta: legacyParent
             ? {
                 runId: endsWith("-wrong-run") ? randomUUID() : runId,
@@ -357,13 +333,11 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
                 root: endsWith("-wrong-root") ? path.join(root, "other-installation") : parentRoot,
               }
             : null,
-          preUpdatePluginInstallRecords: {},
-          startedAt: Date.now(),
           packageUpdateNodeRunner: testNodeExecPath,
           updateStepTimeoutMs: 20000,
           rollbackBlockedReason:
             scenario === "rollback-state-unverified" ? scenario : "state-migrated-no-rollback",
-        },
+        }),
       };
       command = runLegacyCommand({
         input: JSON.stringify(input),

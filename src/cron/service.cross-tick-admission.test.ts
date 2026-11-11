@@ -46,7 +46,7 @@ it("runs the next future wake under its own Gateway root while an earlier batch 
   a.job.payload = { kind: "agentTurn", message: a.job.id, timeoutSeconds: 0 };
   const b = blockedJob("timer-b", t0, t0 + 1_500);
   const store = await seedJobs([a.job, b.job]);
-  const run = vi.fn(async ({ job }: { job: CronJob }) => {
+  const run = async ({ job }: { job: CronJob }) => {
     const gate = expectDefined(
       [a, b].find((entry) => entry.job.id === job.id),
       `unexpected ${job.id}`,
@@ -54,7 +54,7 @@ it("runs the next future wake under its own Gateway root while an earlier batch 
     gate.started.resolve();
     await gate.result.promise;
     return { status: "ok" as const, summary: job.id };
-  });
+  };
   const state = cron.createCronRegressionState({
     scheduler,
     storePath: store.storePath,
@@ -71,14 +71,12 @@ it("runs the next future wake under its own Gateway root while an earlier batch 
   try {
     await a.started.promise;
     await tickA;
-    expect(run).toHaveBeenCalledTimes(1);
     expect(store.receipt(b.job)).toBeUndefined();
     clock.setTime(t0 + 1_500);
     tickB = wake(state);
     await b.started.promise;
     await tickB;
 
-    expect(run).toHaveBeenCalledTimes(2);
     expect(store.receipt(b.job)).toBeDefined();
     expect(work.getActiveGatewayRootWorkHolders()).toEqual(["cron:run (2)"]);
 

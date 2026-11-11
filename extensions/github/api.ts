@@ -5,6 +5,7 @@ export {
   discardResponse,
   fetchGitHubApi,
   fetchGitHubJson,
+  fetchGitHubJsonPage,
   formatControlUiGitHubPreviewError,
   resolveGitHubApiUrls,
   GITHUB_API_ORIGIN,

@@ -24,7 +24,7 @@ type MatrixCliAccountAddResult = {
     error?: string;
   };
   verificationBootstrap: Awaited<ReturnType<typeof maybeBootstrapNewEncryptedMatrixAccount>>;
-  profile: Omit<MatrixProfileSyncResult, "skipped" | "uploadedAvatarSource"> & {
+  profile: Omit<MatrixProfileSyncResult, "uploadedAvatarSource"> & {
     attempted: boolean;
     error?: string;
   };

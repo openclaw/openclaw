@@ -176,7 +176,7 @@ export function registerSessionsSendPrivateCompletionTests(
           expect(settled.pending).toMatchObject([
             {
               run_id: runId,
-              state: "interrupted",
+              state: "cancelled",
               message_json: expect.stringContaining(childReply),
             },
           ]);

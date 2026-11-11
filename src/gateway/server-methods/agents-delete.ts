@@ -10,7 +10,6 @@ import {
   readAgentDeleteDatabaseRegistry,
   resolveSurvivingDatabaseFilePaths,
   retireAgentDeleteRuntime,
-  type AgentDeleteDatabasePlan,
 } from "../../agents/agent-delete-databases.js";
 import {
   formatSharedAuthStoreOwnerDeleteError,
@@ -55,9 +54,16 @@ import type { ConfigWriteOptions } from "../../config/io.js";
 import { purgeAgentSessionStoreEntries } from "../../config/sessions.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isMissingPathError } from "../../infra/errors.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { formatErrorMessage, isMissingPathError } from "../../infra/errors.js";
 import { withAgentExecApprovalsRemoved } from "../../infra/exec-approvals.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { retryAsync } from "../../infra/retry.js";
+import {
+  hasSqliteWorkerOutcomeUnknown,
+  isSqliteWorkerError,
+} from "../../infra/sqlite-worker-error.js";
+import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { AgentDeletionPendingError } from "../../sessions/session-agent-work-admission.js";
 import { closeAgentWorkAdmissions } from "../../sessions/session-controller.lifecycle.js";
 import {
@@ -102,6 +108,58 @@ export async function deleteGatewayAgent(
   requestedDeleteFiles: boolean,
   context: GatewayRequestContext,
   options: { recoveryOperationId?: string; writeOptions?: ConfigWriteOptions } = {},
+): Promise<AgentsDeleteResult> {
+  // Each attempt releases its lease; retain only the journal identity it actually acquired.
+  const attemptOptions = { ...options };
+  const reportFailure = (reason: string) =>
+    context.logGateway.warn(
+      `Agent ${agentId} deletion failed: ${reason}. Resolve the reported failure, then retry agents.delete. Pending cleanup resumes after Gateway restart.`,
+    );
+  try {
+    const result = await retryAsync(
+      () => deleteGatewayAgentAttempt(agentId, requestedDeleteFiles, context, attemptOptions),
+      {
+        attempts: 3,
+        minDelayMs: 100,
+        maxDelayMs: 200,
+        jitter: 0,
+        shouldRetry: (error) =>
+          !hasSqliteWorkerOutcomeUnknown(error) &&
+          (isSqliteWorkerError(error, "overloaded") ||
+            (error instanceof WorkerTaskError && error.code === "overloaded")),
+      },
+    );
+    if (result.purgeFailed || result.failed?.length) {
+      reportFailure(
+        [
+          ...(result.purgeFailed ? ["session-store cleanup failed"] : []),
+          ...(result.failed?.map(({ path: file, reason }) => `${file}: ${reason}`) ?? []),
+        ].join("; "),
+      );
+    }
+    return result;
+  } catch (error) {
+    const causes = collectNestedErrorCandidates(error).filter(
+      (cause) => !(cause instanceof AggregateError),
+    );
+    reportFailure(
+      [
+        ...new Set(
+          causes.map((cause) =>
+            cause instanceof Error ? cause.message : formatErrorMessage(cause),
+          ),
+        ),
+      ].join("; ") || formatErrorMessage(error),
+    );
+    throw error;
+  }
+}
+
+async function deleteGatewayAgentAttempt(
+  agentId: string,
+  requestedDeleteFiles: boolean,
+  context: GatewayRequestContext,
+  options: { recoveryOperationId?: string; writeOptions?: ConfigWriteOptions },
 ): Promise<AgentsDeleteResult> {
   const { recoveryOperationId, writeOptions } = options;
   let releaseIngress: (() => void) | undefined;
@@ -159,6 +217,7 @@ export async function deleteGatewayAgent(
           },
           { recoveryOperationId },
         );
+        options.recoveryOperationId = deletion.entry.operationId;
         return { deletion, lockedJournal, config: lockedConfig };
       });
       const { deletion, lockedJournal } = prepared;
@@ -185,7 +244,7 @@ export async function deleteGatewayAgent(
         const deleteFiles = journal.deleteFiles;
         let rosterCommitted = !configured;
         let committed: Awaited<ReturnType<typeof deleteAgentConfigEntry>> | undefined;
-        let databasePlan: AgentDeleteDatabasePlan | undefined;
+        let databasePlan: Awaited<ReturnType<typeof prepareAgentDeleteDatabases>> | undefined;
         try {
           await deletion.assertCurrentAsync();
           await assertAgentSessionStoreDeletionSafe(lockedConfig, agentId);
@@ -326,6 +385,7 @@ export async function deleteGatewayAgent(
           }
           if (canReleaseFence) {
             await deletion.rollback();
+            options.recoveryOperationId = undefined;
           }
           throw error;
         }

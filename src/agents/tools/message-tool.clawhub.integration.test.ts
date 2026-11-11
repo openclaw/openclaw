@@ -35,7 +35,12 @@ function skill(displayName: string, ownerHandle: string, official = false) {
   return { slug, installRef: `@${ownerHandle}/${slug}`, ownerHandle, displayName, official };
 }
 
-async function search(clawhub: Record<string, unknown>, message?: string, workspaceDir?: string) {
+async function search(
+  clawhub: Record<string, unknown>,
+  message?: string,
+  workspaceDir?: string,
+  sendParams: Record<string, unknown> = {},
+) {
   setRuntimeConfigSnapshot({});
   const result = await createMessageTool({
     config: {},
@@ -44,7 +49,7 @@ async function search(clawhub: Record<string, unknown>, message?: string, worksp
     currentChannelProvider: "webchat",
     agentSessionKey: "agent:main:webchat:dm:clawhub-proof",
     runId: "clawhub-proof-run",
-  }).execute("clawhub-search", { action: "send", message, clawhub });
+  }).execute("clawhub-search", { action: "send", ...sendParams, message, clawhub });
   const reply = extractMessagingToolSourceReplyPayload(result);
   return { result, reply, recommendations: readClawHubRecommendations(reply?.channelData) };
 }
@@ -61,41 +66,24 @@ beforeEach(() => {
 });
 afterEach(clearRuntimeConfigSnapshot);
 
-it.each([undefined, "", " \t\n"])(
-  "excludes unverified publishers and gives a visible no-match outcome for message=%j",
-  async (message) => {
-    registry.plugins.mockResolvedValue({ items: [{ ...remotePlugin, isOfficial: false }] });
-    registry.skills.mockResolvedValue([skill("WhatsApp", "openclaw")]);
-    const { result, reply, recommendations } = await search({ query: "whatsapp" }, message);
-    expect(recommendations).toEqual([]);
-    expect(reply?.text).toContain("No official ClawHub plugin or skill match");
-    expectNotice(result, "No official ClawHub plugin or skill match");
-  },
-);
-it("preserves an explicit reply when a ClawHub search has no matches", async () => {
-  const message = "Deployment complete.\nAll requested checks passed.";
-  const { result, reply, recommendations } = await search(
-    { query: "unmatched-capability", kind: "skill" },
-    message,
-  );
-  expect(registry.skills).toHaveBeenCalled();
+it("excludes unverified publishers and replaces a blank reply with the no-match outcome", async () => {
+  registry.plugins.mockResolvedValue({ items: [{ ...remotePlugin, isOfficial: false }] });
+  registry.skills.mockResolvedValue([skill("WhatsApp", "openclaw")]);
+  const { result, reply, recommendations } = await search({ query: "whatsapp" }, " \t\n");
   expect(recommendations).toEqual([]);
-  expect(reply?.text).toBe(message);
-  expectNotice(result, "No official ClawHub skill match");
+  expect(reply?.text).toContain("No official ClawHub plugin or skill match");
+  expectNotice(result, "No official ClawHub plugin or skill match");
 });
 it("matches an official skill to its exact linked publisher instead of its display name", async () => {
   registry.skills.mockResolvedValue([{ ...skill("Calendar", "verified", true), icon: "📆" }]);
+  const link = {
+    valid: true,
+    registry: "https://clawhub.ai",
+    slug: "calendar",
+    ownerHandle: "another",
+  };
   registry.skillStatus.mockReturnValue({
-    skills: [
-      {
-        clawhub: {
-          valid: true,
-          registry: "https://clawhub.ai",
-          slug: "calendar",
-          ownerHandle: "another",
-        },
-      },
-    ],
+    skills: [{ clawhub: link }],
   });
   const message = "Here is your calendar capability.";
   const { result, reply, recommendations } = await search(
@@ -114,6 +102,20 @@ it("matches an official skill to its exact linked publisher instead of its displ
     },
   ]);
   expectNotice(result, "Calendar: Available to install.");
+});
+it("preserves a media caption alongside intentional recommendation cards", async () => {
+  const caption = "Screenshot evidence for the recommended capability.";
+  const media = "https://example.com/evidence.png";
+  const { result, reply, recommendations } = await search(
+    { query: "whatsapp", kind: "plugin" },
+    " \t\n",
+    "/workspace",
+    { caption, media },
+  );
+  expect(reply?.text).toBe(caption);
+  expect(reply?.mediaUrls).toEqual([media]);
+  expect(recommendations).toMatchObject([{ name: "WhatsApp", installed: false }]);
+  expectNotice(result, "WhatsApp: Available to install.");
 });
 it("rejects model-supplied installation and official claims", async () => {
   await expect(search({ query: "whatsapp", installed: true, official: true })).rejects.toThrow();

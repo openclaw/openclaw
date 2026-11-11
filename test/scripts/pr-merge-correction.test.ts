@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import {
   expectExit,
@@ -26,13 +27,7 @@ function publish(f: Fixture, head: string) {
   f.git(["push", "-q", "--force", "origin", ...refs]);
 }
 
-function incomingHead(f: Fixture) {
-  const incoming = f.sourceCommits[0];
-  if (!incoming) {
-    throw new Error("Missing incoming fixture commit");
-  }
-  return incoming;
-}
+const incomingHead = (f: Fixture) => expectDefined(f.sourceCommits[0], "incoming fixture commit");
 function configureCorrection(f: Fixture) {
   const incoming = incomingHead(f);
   const candidate = f.git(["rev-parse", "HEAD"], undefined, f.worktree);

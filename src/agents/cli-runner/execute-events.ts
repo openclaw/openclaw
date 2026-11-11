@@ -1,3 +1,4 @@
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripMixedSilentReplyTokens } from "../../auto-reply/reply/mixed-silent-reply-tokens.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { projectAgentToolActivity } from "../../infra/agent-activity-events.js";
@@ -8,6 +9,10 @@ import { projectProgressCardChannelUpdate } from "../../session-cards/progress-c
 import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-input.js";
 import { projectAgentActivityItem } from "../agent-activity-presentation.js";
 import { prepareAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
+import {
+  recordSkillUsed,
+  resolvedSkillUsageMatch,
+} from "../agent-tools.before-tool-call.diagnostics.js";
 import type {
   CliCompactionDelta,
   CliStreamingDelta,
@@ -23,13 +28,30 @@ import { extractToolErrorMessage, prepareToolResult } from "../embedded-agent-to
 import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
+import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
+import { isToolResultError } from "../tool-result-error.js";
 import { cliAssistantItemId } from "./assistant-identity.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
-import { normalizeCliToolName, stripOpenClawMcpToolPrefix } from "./tool-policy.js";
+import { normalizeCliToolName } from "./tool-policy.js";
+import { recordCliTrajectoryEvent } from "./trajectory.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 function resolveCliToolSource(name: string, kind?: CliToolUseStartDelta["kind"]): "core" | "mcp" {
   return kind === "mcp_tool_use" || name.startsWith("mcp__") ? "mcp" : "core";
+}
+
+// Live tool output text is read only from content block arrays; other shapes stay untouched.
+function withBrowserTabDetails(result: unknown, browserTab: unknown): unknown {
+  if (isRecord(result) && Array.isArray(result.content)) {
+    return { ...result, details: { ...asOptionalRecord(result.details), browserTab } };
+  }
+  if (Array.isArray(result)) {
+    return { content: result, details: { browserTab } };
+  }
+  if (typeof result === "string" || typeof result === "number" || typeof result === "boolean") {
+    return { content: [{ type: "text", text: String(result) }], details: { browserTab } };
+  }
+  return result;
 }
 
 export function createCliEventHandlers(params: {
@@ -47,6 +69,7 @@ export function createCliEventHandlers(params: {
   };
   let observedCliActivity = false;
   let compactionActive = false;
+  let compactionClosed = false;
   let onCompactionActiveChange: (() => void) | undefined;
   const signaledPhases = new Set<"tool_execution_started" | "assistant_output_started">();
   const signalExecutionPhase = (phase: "tool_execution_started" | "assistant_output_started") => {
@@ -95,7 +118,11 @@ export function createCliEventHandlers(params: {
     if (data.phase === "start") {
       emitAgentEvent(activity);
     }
-    emitAgentEvent({ runId: runParams.runId, stream: "tool", data });
+    emitAgentEvent({
+      runId: runParams.runId,
+      stream: "tool",
+      data: { ...data, name: stripOpenClawMcpToolPrefix(data.name) },
+    });
     if (data.phase !== "start") {
       emitAgentEvent(activity);
     }
@@ -133,6 +160,11 @@ export function createCliEventHandlers(params: {
       startedAt: Date.now(),
     });
     recordToolSummary(event, false);
+    recordCliTrajectoryEvent(context.trajectoryRecorder, "tool.call", {
+      toolCallId: event.toolCallId,
+      name: normalizeCliToolName(stripOpenClawMcpToolPrefix(event.name)),
+      args: event.args,
+    });
     signalExecutionPhase("tool_execution_started");
     if (tracked) {
       params.toolTracking.handleCliToolUseStart(event);
@@ -146,6 +178,10 @@ export function createCliEventHandlers(params: {
       });
     }
   };
+  const readNativeSkillCommand = (args: Record<string, unknown> | undefined) =>
+    typeof args?.skill === "string"
+      ? context.claudeSkillsPlugin.skillCommands?.get(args.skill.trim())
+      : undefined;
   const emitToolResult = (event: CliToolResultDelta, tracked: boolean) => {
     observedCliActivity = true;
     const readResult = prepareToolResult(event.result);
@@ -155,9 +191,44 @@ export function createCliEventHandlers(params: {
     const loopbackOutcome = tracked
       ? params.toolTracking.resolveCliLoopbackTerminalOutcome(event.toolCallId)
       : undefined;
+    if (context.trajectoryRecorder && firstTerminal) {
+      recordCliTrajectoryEvent(context.trajectoryRecorder, "tool.result", {
+        toolCallId: event.toolCallId,
+        name: normalizeCliToolName(stripOpenClawMcpToolPrefix(event.name)),
+        // The host's outcome survives CLI replies that cannot disambiguate parallel calls.
+        ...(loopbackOutcome
+          ? {
+              status: loopbackOutcome.outcome,
+              ...(loopbackOutcome.outcome === "unknown"
+                ? {}
+                : { success: loopbackOutcome.outcome === "completed" }),
+            }
+          : { success: !(event.isError || isToolResultError(event.result)) }),
+        result: readResult(),
+      });
+    }
+    // Resolve presentation metadata before the result retires loopback correlation.
+    const browserTab =
+      tracked && !event.isError && stripOpenClawMcpToolPrefix(event.name) === "browser"
+        ? params.toolTracking.resolveCliLoopbackBrowserTab(event.toolCallId)
+        : undefined;
     const executedArgs = tracked ? params.toolTracking.handleCliToolResult(event) : undefined;
     const startedCall = toolArgsByCallId.get(event.toolCallId);
     toolArgsByCallId.delete(event.toolCallId);
+    // Claude loads plugin skills through its own Skill tool, which never passes the
+    // OpenClaw tool wrapper; map the materialized command back to its canonical SKILL.md.
+    const nativeSkill =
+      event.name === "Skill" && firstTerminal && !event.isError
+        ? readNativeSkillCommand(startedCall?.args)
+        : undefined;
+    if (nativeSkill) {
+      recordSkillUsed({
+        ctx: runParams,
+        match: resolvedSkillUsageMatch({ activation: "read", skill: nativeSkill }),
+        toolName: event.name,
+        toolCallId: event.toolCallId,
+      });
+    }
     // Gateway owns loopback completion even when CLI correlation is absent or ambiguous.
     if (
       event.name.trim() &&
@@ -215,7 +286,10 @@ export function createCliEventHandlers(params: {
           name: event.name,
           toolCallId: event.toolCallId,
           isError: event.isError,
-          result: readResult(),
+          result:
+            browserTab === undefined
+              ? readResult()
+              : withBrowserTabDetails(readResult(), browserTab),
           ...(tracked && startedArgs ? { args: startedArgs } : {}),
           ...(resultContentSource ? { resultContentSource } : {}),
         },
@@ -361,6 +435,19 @@ export function createCliEventHandlers(params: {
   };
   const emitCliCompaction = (event: CliCompactionDelta) => {
     observedCliActivity = true;
+    // Claude Code resends its `compacting` status every 30 s while one compaction
+    // runs. The activity above feeds the watchdog; publish only the first start.
+    if (event.phase === "start" && compactionActive) {
+      return;
+    }
+    // Claude Code closes one successful compaction with a status `compact_result`
+    // and an automatic `compact_boundary`. Drop that one repeat; ends without a
+    // start (boundary-only streams) still publish.
+    if (event.phase === "end" && compactionClosed) {
+      compactionClosed = false;
+      return;
+    }
+    compactionClosed = event.phase === "end" && event.completed && compactionActive;
     // Native compaction is silent but busy: the no-output watchdog reads this
     // between phase boundaries, so an end event must always clear the flag,
     // even for a failed compaction (`completed: false`).
@@ -465,9 +552,17 @@ export function createCliEventHandlers(params: {
 
   // Emit-always: thinking reaches the event bus and session archive like the
   // embedded reasoning stream; /reasoning and /verbose gate presentation only.
-  const emitCliThinkingDelta = ({ text, delta, isReasoningSnapshot }: CliThinkingDelta) => {
+  const emitCliThinkingDelta = ({
+    text,
+    delta,
+    isReasoningSnapshot,
+    modelProgress,
+  }: CliThinkingDelta) => {
     if (params.toolTracking.shouldSuppressAssistantOutput()) {
       return;
+    }
+    if (modelProgress) {
+      runParams.diagnosticOwner?.watchdogAttempt?.progressModel("cli:thinking");
     }
     if (text || delta) {
       observedCliActivity = true;
@@ -479,7 +574,10 @@ export function createCliEventHandlers(params: {
     }));
   };
 
-  const emitCliThinkingProgress = ({ progressTokens }: CliThinkingProgress) => {
+  const emitCliThinkingProgress = ({ progressTokens, modelProgress }: CliThinkingProgress) => {
+    if (!params.toolTracking.shouldSuppressAssistantOutput() && modelProgress) {
+      runParams.diagnosticOwner?.watchdogAttempt?.progressModel("cli:thinking_tokens");
+    }
     observedCliActivity = true;
     emitLiveEvent("thinking", () => ({ progressTokens }));
   };

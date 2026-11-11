@@ -105,7 +105,7 @@ describe("user turn transcript persistence", () => {
   }
 
   describe("trusted human transcript ownership", () => {
-    it("keeps producer requester custody through staging, replay, and collection", async () => {
+    it("keeps producer requester custody through staging and live collection", async () => {
       const target = makeTarget();
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
       const requesterOrigin = {
@@ -164,36 +164,13 @@ describe("user turn transcript persistence", () => {
         expect(copied.getPendingInputMessage?.()).not.toHaveProperty("__openclaw.requesterOrigin");
         await copied.persistApproved();
 
-        recorder.finishPendingInput?.("interrupted");
-        await recorder.waitForPendingInputSettlement?.();
-        const replay = createUserTurnTranscriptRecorder({
-          input: { text: input.text, idempotencyKey: input.idempotencyKey },
-          assertOriginalInputCommit: Object.assign(
-            () => {
-              throw new Error("Accepted input no longer belongs to its original source");
-            },
-            {
-              prepareSessionSourceScope: async () => {
-                throw new Error("Accepted input must not prepare its original source again");
-              },
-            },
-          ),
-          trackInputCompletion: true,
-          pendingInputRequestFingerprint: "authenticated-requester-custody",
-          target,
-        });
-        recorders.push(replay);
-        expect(
-          await replay.stageApproved!({ runId: "requester-custody", assertCurrent: () => {} }),
-        ).toBe(true);
-        expect(readUserTurnRequesterOrigin(replay)).toMatchObject(original);
         const aggregate = createUserTurnTranscriptRecorder({
           input: {
             text: "Collected original request",
             idempotencyKey: "collected-custody:user",
-            requesterOrigin: readUserTurnRequesterOrigin(replay),
+            requesterOrigin: readUserTurnRequesterOrigin(recorder),
           },
-          pendingInputSources: [replay],
+          pendingInputSources: [recorder],
           target,
         });
         recorders.push(aggregate);
@@ -209,7 +186,7 @@ describe("user turn transcript persistence", () => {
       } finally {
         releaseTarget.resolve();
         for (const current of recorders) {
-          current.finishPendingInput?.("interrupted");
+          current.finishPendingInput?.("cancelled");
         }
         await Promise.all(
           recorders.map(async (current) => current.waitForPendingInputSettlement?.()),

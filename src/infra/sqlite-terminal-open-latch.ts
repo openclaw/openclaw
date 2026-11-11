@@ -1,4 +1,5 @@
 import path from "node:path";
+import { materializeErrorStack } from "./error-graph-internal.js";
 import { isPathInside } from "./path-guards.js";
 
 /**
@@ -17,6 +18,7 @@ export function createSqliteTerminalOpenLatch(options: {
     get: (pathname: string): Error | undefined => failures.get(path.resolve(pathname)),
     record: (pathname: string, error: Error): void => {
       const resolvedPath = path.resolve(pathname);
+      materializeErrorStack(error);
       failures.set(resolvedPath, error);
       options.closeByPath(resolvedPath, error);
     },

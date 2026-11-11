@@ -99,6 +99,8 @@ export function readProcessPackageIdentity(
 type ClassificationOptions = {
   command?: string;
   serviceMarker?: string;
+  /** Darwin observed a JS runtime's argv but not its environment. */
+  serviceMarkerUnavailable?: boolean;
   owner?: GatewayOwnerLeaseIdentity;
   port?: number;
   cwd?: string;
@@ -152,8 +154,7 @@ export function readProcessWorkingDirectories(pids: readonly number[]): Map<numb
           const candidate = /^p(\d+)$/.exec(field);
           pid = candidate && requested.has(Number(candidate[1])) ? Number(candidate[1]) : undefined;
         } else if (pid !== undefined && field.startsWith("n") && path.isAbsolute(field.slice(1))) {
-          if (directories.has(pid)) {
-            directories.delete(pid);
+          if (directories.delete(pid)) {
             ambiguous.add(pid);
           } else if (!ambiguous.has(pid)) {
             directories.set(pid, field.slice(1));
@@ -344,6 +345,13 @@ export function classifyOpenClawArgv(
       ))
   ) {
     return identity.kind === "openclaw" ? identity : { kind: "openclaw" };
+  }
+  if (opts.serviceMarkerUnavailable && !opts.requirePackageIdentity) {
+    return {
+      kind: "unclassified",
+      cause: "service-marker",
+      reason: "process environment is unreadable",
+    };
   }
   let marker = opts.serviceMarker;
   if (

@@ -6,6 +6,7 @@ import {
   type UpdateCheckLifecycle,
 } from "../infra/update-check-lifecycle.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import { createUpdateRunRecordFixture } from "../infra/update-run-record.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { StateSchemaPublicationBlocker } from "../state/openclaw-state-schema-publication.js";
 import {
@@ -74,25 +75,12 @@ afterEach(async () => {
 });
 
 function beginRun(runId = "b7150827-8222-4c12-bd20-9bfd6ae8e852"): UpdateRunRecord {
-  ledger.run = {
-    runId,
-    createdAtMs: 1,
-    trigger: "cli",
-    reason: null,
-    target: {},
-    before: {},
-    after: {},
-    verification: {},
-    repair: [],
-    confirmedAtMs: null,
+  ledger.run = createUpdateRunRecordFixture(runId, {
     finishedAtMs: null,
-    downtimeMs: null,
     phase: "requested",
     status: "running",
     updatedAtMs: 1,
-    steps: [],
-    origin: {},
-  };
+  });
   return ledger.run;
 }
 
@@ -259,6 +247,45 @@ describe("Gateway update run watcher", () => {
       ]);
       expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
       expect(ledger.reconcile).toHaveBeenCalledOnce();
+    } finally {
+      verification.resolve([]);
+    }
+  });
+
+  it("observes terminal completion after a transient ledger failure without another wake", async () => {
+    beginRun();
+    ledger.run!.steps = [{ step: "notice:ack", status: "completed" }];
+    const verification = createDeferredCore<UpdateRunRecord[]>();
+    ledger.reconcile.mockReturnValueOnce(verification.promise);
+    const failure = createDeferredCore();
+    const delivered = createDeferredCore();
+    const warn = vi.fn(() => failure.resolve());
+    const broadcast = vi.fn();
+    ledger.notice.mockImplementationOnce(async () => delivered.resolve());
+    const polling = nextPollSchedule();
+    watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn } });
+    try {
+      await polling;
+      ledger.reads.mockImplementation(() => {
+        throw new Error("ledger temporarily unavailable");
+      });
+      await clock.advanceBy(2_000);
+      await failure.promise;
+      expect(warn).toHaveBeenCalledOnce();
+      expect(scheduler.nextWakeAtMs).toBe(clock.clock.now() + 2_000);
+
+      ledger.reads.mockImplementation(() => {});
+      ledger.run = { ...ledger.run!, phase: "finished", status: "succeeded", updatedAtMs: 2 };
+      const idle = nextLedgerRead("status");
+      await clock.advanceBy(2_000);
+      await delivered.promise;
+      await idle;
+      expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
+      expect(ledger.notice).toHaveBeenCalledExactlyOnceWith(ledger.run);
+      const reads = ledger.reads.mock.calls.length;
+      await clock.advanceBy(60_000);
+      expect(ledger.reads).toHaveBeenCalledTimes(reads);
+      expect(scheduler.nextWakeAtMs).toBeNull();
     } finally {
       verification.resolve([]);
     }
@@ -482,8 +509,19 @@ describe("Gateway update run watcher", () => {
     beginRun();
     const initial = createDeferredCore();
     const broadcast = vi.fn(() => initial.resolve());
-    watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
+    const failure = createDeferredCore();
+    watcher = startUpdateRunWatcher({
+      lifecycle,
+      broadcast,
+      log: { warn: () => failure.resolve() },
+    });
     await initial.promise;
+    ledger.reads.mockImplementation(() => {
+      throw new Error("ledger temporarily unavailable");
+    });
+    await clock.advanceBy(2_000);
+    await failure.promise;
+    expect(scheduler.nextWakeAtMs).toBe(clock.clock.now() + 2_000);
     const sibling = vi.fn();
     scheduler.schedule({ id: "sibling", delayMs: 1_000, run: sibling });
     await watcher.stop();

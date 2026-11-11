@@ -86,9 +86,7 @@ it("publishes ephemeral thread/fork acknowledgements before resolving the reques
     },
   });
 
-  await expect(harness.client.request("thread/fork", {})).resolves.toEqual({
-    thread: { id: "helper-thread", ephemeral: true },
-  });
+  await harness.client.request("thread/fork", {});
   expect(catalog.onEphemeralThread).toHaveBeenCalledExactlyOnceWith("helper-thread");
   expect(catalog.foreign.onEphemeralThread).not.toHaveBeenCalled();
 

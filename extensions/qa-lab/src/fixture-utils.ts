@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { hasNodeErrorCode } from "openclaw/plugin-sdk/path-existence-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
@@ -200,9 +202,14 @@ async function visitSessionLogEvents(
   sessionsDir: string,
   visit: (eventJson: string) => void,
 ): Promise<void> {
-  const files = await fs.readdir(sessionsDir, { recursive: true }).catch(() => []);
-  for (const file of files) {
-    if (!file.endsWith(".jsonl")) {
+  const files = await listDirectoryTreeStrict(sessionsDir).catch((error: unknown) => {
+    if (hasNodeErrorCode(error, "ENOENT")) {
+      return [];
+    }
+    throw error;
+  });
+  for (const { relativePath: file, dirent } of files) {
+    if (!dirent.isFile() || !file.endsWith(".jsonl")) {
       continue;
     }
     const text = await fs.readFile(path.join(sessionsDir, file), "utf8").catch(() => "");

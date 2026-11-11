@@ -238,7 +238,7 @@ describe("Mattermost sender authority over HTTP", () => {
             to: mode === "text" ? "@alice" : `channel:${CHANNEL_ID}`,
             text: "authority proof",
             threadId: "thread-root",
-            ...(mode === "text" ? {} : { replyToId: "explicit-root" }),
+            ...(mode === "media" ? {} : { replyToId: "explicit-root" }),
             accountId: "default",
             assertDirectAdapterHandoff: () => {
               if (!current) {
@@ -295,7 +295,7 @@ describe("Mattermost sender authority over HTTP", () => {
               ).toMatchObject([
                 {
                   message: uploadFails ? `${ctx.text}\n${mediaUrl}` : ctx.text,
-                  root_id: mode === "text" ? "thread-root" : "explicit-root",
+                  root_id: mode === "media" ? "thread-root" : "explicit-root",
                 },
               ]);
             }

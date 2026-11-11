@@ -101,7 +101,7 @@ function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolea
   if (enabled === true) {
     return true;
   }
-  return hasConfiguredWebSearchCredential({ config: cfg, env, origin: "bundled" });
+  return hasConfiguredWebSearchCredential({ config: cfg, env });
 }
 
 function isBrowserEnabled(cfg: OpenClawConfig): boolean {

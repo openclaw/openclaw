@@ -74,6 +74,10 @@ authorization checks plus the owner check for the channel.
 ## What gets recorded
 
 Trajectory capture is on by default for OpenClaw agent runs.
+This includes conversations that stay entirely on a CLI backend, such as Claude
+Code: their runtime timeline records the session lifecycle, submitted prompt,
+observed tool calls and results, model completion, and usage without requiring a
+fallback to another runtime. Earlier CLI turns are not backfilled.
 
 Runtime events include:
 
@@ -141,6 +145,9 @@ from appends. It selects bounded batches without holding the database writer
 and rechecks the selection before each deletion. Cleanup continues through
 bounded batches; concurrent changes defer a stale selection until a later
 append.
+During a sweep, committed appends mark their session for accounting. The next
+cleanup batch refreshes each changed session once before starting its write
+transaction, rather than summarizing its retained rows after every append.
 
 Runtime export reads the SQLite capture. Pre-July 2026 `.trajectory.jsonl` and
 `.trajectory-path.json` sidecars are no longer read or followed. Existing files
@@ -190,6 +197,13 @@ The exporter also bounds input size:
 - runtime events per export: 200,000
 - total exported events: 250,000
 - individual runtime event lines are truncated above 256 KiB
+
+The general runtime string limit is 65,536 UTF-16 code units (JavaScript string
+length). Longer strings are replaced with an explicit truncation marker.
+Field-specific bounds and the separate event byte limit still apply, including
+UTF-8 and JSON escaping overhead.
+Export masks secrets and local paths without shortening text to the generic
+support-message preview length. Text discarded during capture is not recovered.
 
 Runtime capture preserves structured results within its field limits, including
 explicit truncation markers. If a tool result exceeds the event size limit,

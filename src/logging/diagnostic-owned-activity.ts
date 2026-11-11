@@ -30,6 +30,7 @@ export function resolveCurrentDiagnosticOwner(
 export function beginDiagnosticRetryWait(params: {
   owner: DiagnosticEmbeddedRunOwner;
   deadlineAtMs: number;
+  rateLimitStopMessage?: string;
   signal: AbortSignal;
   assertCurrent: () => void;
 }): (completed?: boolean) => boolean {
@@ -40,6 +41,7 @@ export function beginDiagnosticRetryWait(params: {
   const ownedWait = params.owner.watchdogAttempt?.beginWait({
     kind: "retry",
     deadlineAtMs: params.deadlineAtMs,
+    rateLimitStopMessage: params.rateLimitStopMessage,
     isCurrent: () => {
       assertCurrent();
       return true;
@@ -95,12 +97,7 @@ export function beginDiagnosticBackendActivity(params: {
   owner: DiagnosticEmbeddedRunOwner;
   noOutputTimeoutMs: number;
   assertCurrent: () => void;
-}): {
-  observeOutput: (modelProgress: boolean) => boolean;
-  observeAttributedAgentProgress: (parentToolCallId: string) => boolean;
-  setOutstandingWork: (active: boolean) => void;
-  close: () => void;
-} {
+}) {
   const { owner, noOutputTimeoutMs, assertCurrent } = params;
   const attempt = owner.watchdogAttempt;
   let closed = false;
@@ -137,7 +134,7 @@ export function beginDiagnosticBackendActivity(params: {
     return current?.backendActivity === backendActivity ? current.activity : undefined;
   };
   return {
-    observeOutput: (modelProgress) => {
+    observeOutput: (modelProgress: boolean) => {
       if (closed || (attempt && !ownsAttempt())) {
         return false;
       }
@@ -160,7 +157,7 @@ export function beginDiagnosticBackendActivity(params: {
       touchSessionActivity(activity, "model_call:stream_progress", now);
       return true;
     },
-    observeAttributedAgentProgress: (parentToolCallId) => {
+    observeAttributedAgentProgress: (parentToolCallId: string) => {
       if (closed || (attempt && !ownsAttempt())) {
         return false;
       }
@@ -184,7 +181,7 @@ export function beginDiagnosticBackendActivity(params: {
       }
       return true;
     },
-    setOutstandingWork: (active) => {
+    setOutstandingWork: (active: boolean) => {
       if (closed || (attempt ? !ownsAttempt() : !currentActivity())) {
         return;
       }

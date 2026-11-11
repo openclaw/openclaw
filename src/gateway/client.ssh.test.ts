@@ -15,13 +15,15 @@ type CapturedClient = {
 const fixture = vi.hoisted(() => ({
   clients: [] as CapturedClient[],
   startSsh: vi.fn<typeof startSshPortForward>(),
-  loadOrigin: vi.fn(),
-  storeOrigin: vi.fn(),
-  clearOrigin: vi.fn(),
-  loadDevice: vi.fn(),
-  storeDevice: vi.fn(),
-  clearDevice: vi.fn(),
-  readOnlyLoad: vi.fn(),
+  auth: {
+    loadOrigin: vi.fn(),
+    storeOrigin: vi.fn(),
+    clearOrigin: vi.fn(),
+    loadDevice: vi.fn(),
+    storeDevice: vi.fn(),
+    clearDevice: vi.fn(),
+    readOnlyLoad: vi.fn(),
+  },
   onStart: undefined as ((client: CapturedClient) => void) | undefined,
   onStop: undefined as (() => void) | undefined,
 }));
@@ -55,43 +57,27 @@ vi.mock("../../packages/gateway-client/src/client.js", () => ({
 vi.mock("../infra/ssh-tunnel.js", () => ({ startSshPortForward: fixture.startSsh }));
 vi.mock("../infra/device-auth-store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/device-auth-store.js")>()),
-  clearDeviceAuthToken: fixture.clearDevice,
-  clearOriginDeviceToken: fixture.clearOrigin,
-  loadDeviceAuthToken: fixture.loadDevice,
-  loadDeviceAuthTokenReadOnly: fixture.readOnlyLoad,
-  loadOriginDeviceToken: fixture.loadOrigin,
-  loadOriginDeviceTokenReadOnly: fixture.readOnlyLoad,
-  storeDeviceAuthToken: fixture.storeDevice,
-  storeOriginDeviceToken: fixture.storeOrigin,
+  clearDeviceAuthToken: fixture.auth.clearDevice,
+  clearOriginDeviceToken: fixture.auth.clearOrigin,
+  loadDeviceAuthToken: fixture.auth.loadDevice,
+  loadDeviceAuthTokenReadOnly: fixture.auth.readOnlyLoad,
+  loadOriginDeviceToken: fixture.auth.loadOrigin,
+  loadOriginDeviceTokenReadOnly: fixture.auth.readOnlyLoad,
+  storeDeviceAuthToken: fixture.auth.storeDevice,
+  storeOriginDeviceToken: fixture.auth.storeOrigin,
 }));
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
   ensureInheritedManagedProxyRoutingActive: vi.fn(),
   registerManagedProxyGatewayLoopbackBypass: vi.fn(),
 }));
 
-const {
-  startSsh,
-  loadOrigin,
-  storeOrigin,
-  clearOrigin,
-  loadDevice,
-  storeDevice,
-  clearDevice,
-  readOnlyLoad,
-} = fixture;
+const { startSsh } = fixture;
+const { loadOrigin, storeOrigin, clearOrigin, loadDevice, storeDevice, clearDevice, readOnlyLoad } =
+  fixture.auth;
 
 beforeEach(() => {
   fixture.clients.length = 0;
-  [
-    startSsh,
-    loadOrigin,
-    storeOrigin,
-    clearOrigin,
-    loadDevice,
-    storeDevice,
-    clearDevice,
-    readOnlyLoad,
-  ].forEach((mock) => mock.mockReset());
+  [startSsh, ...Object.values(fixture.auth)].forEach((mock) => mock.mockReset());
   Object.assign(fixture, { onStart: undefined, onStop: undefined });
 });
 
@@ -142,6 +128,16 @@ async function startClient(client: GatewayClient) {
   return started.promise;
 }
 
+function authDeps(base: CapturedClient) {
+  const deps = base.options.hostDeps;
+  assert(deps?.loadDeviceAuthToken && deps.storeDeviceAuthToken && deps.clearDeviceAuthToken);
+  return {
+    load: deps.loadDeviceAuthToken,
+    store: deps.storeDeviceAuthToken,
+    clear: deps.clearDeviceAuthToken,
+  };
+}
+
 it.each([
   [40101, "/fixture/old-key", "localhost", "localhost"],
   [40102, "/fixture/new-key", "127.0.0.1", "127.0.0.1"],
@@ -167,11 +163,10 @@ it.each([
         url: `wss://127.0.0.1:${localPort}/gateway/ws?profile=work`,
         tlsServerName,
       });
-      const deps = base.options.hostDeps;
-      assert(deps?.loadDeviceAuthToken && deps.storeDeviceAuthToken && deps.clearDeviceAuthToken);
-      expect(await deps.loadDeviceAuthToken(device)).toEqual(entry);
-      await deps.storeDeviceAuthToken({ ...device, token: "fixture-issued", scopes: [] });
-      await deps.clearDeviceAuthToken({ ...device, expectedToken: "fixture-issued" });
+      const deps = authDeps(base);
+      expect(await deps.load(device)).toEqual(entry);
+      await deps.store({ ...device, token: "fixture-issued", scopes: [] });
+      await deps.clear({ ...device, expectedToken: "fixture-issued" });
       for (const mock of [loadOrigin, storeOrigin, clearOrigin]) {
         expect(mock).toHaveBeenLastCalledWith(
           expect.objectContaining({ ...device, gatewayScope: deviceAuthScope }),
@@ -284,13 +279,7 @@ describe("GatewayClient device auth receipts", () => {
       ...(readOnly ? { sharedStateMode: "read-only" } : {}),
     });
     client.start();
-    const deps = fixture.clients[0]?.options.hostDeps;
-    assert(deps?.loadDeviceAuthToken && deps.storeDeviceAuthToken && deps.clearDeviceAuthToken);
-    return {
-      load: deps.loadDeviceAuthToken,
-      store: deps.storeDeviceAuthToken,
-      clear: deps.clearDeviceAuthToken,
-    };
+    return authDeps(fixture.clients[0]!);
   }
 
   it.each(

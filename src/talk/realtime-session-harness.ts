@@ -283,9 +283,6 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
     talkback,
     transcript,
     close() {
-      if (closed) {
-        return;
-      }
       closed = true;
       talkback?.close();
       forcedConsults.clear();

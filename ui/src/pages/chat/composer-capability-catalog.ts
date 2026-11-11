@@ -1,10 +1,31 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SkillStatusEntry } from "../../api/types.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { readOwnEntry } from "../../lib/sessions/tool-overrides.ts";
 import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
-import type { ChatComposerMenuSkill } from "./components/chat-composer-plus-menu.types.ts";
+import type {
+  ChatComposerCapabilityMenuProps,
+  ChatComposerMenuSkill,
+} from "./composer-capability-types.ts";
+
+export function composerMcpServers(
+  config: Record<string, unknown> | null,
+  options: { auth: GatewayBrowserClient["auth"]; loading: boolean },
+): Pick<ChatComposerCapabilityMenuProps, "mcpServers" | "mcpServersReadState"> {
+  const mcpServersReadState = !hasOperatorReadAccess(options.auth)
+    ? "restricted"
+    : config !== null
+      ? "ready"
+      : options.loading
+        ? "loading"
+        : "unavailable";
+  return {
+    mcpServers: mcpServersReadState === "ready" ? (summarizeMcpServers(config) ?? []) : [],
+    mcpServersReadState,
+  };
+}
 
 export function composerWebSearchBaseEnabled(config: Record<string, unknown> | null): boolean {
   return asRecord(asRecord(asRecord(config?.tools)?.web)?.search)?.enabled !== false;
@@ -23,20 +44,6 @@ export function resolveComposerSkills(
           : (readOwnEntry(toolOverrides?.skills, skill.key) ?? skill.baseEnabled),
     })) ?? null
   );
-}
-
-function toComposerSkill(skill: SkillStatusEntry): ChatComposerMenuSkill {
-  const missingDeps = Object.values(skill.missing).some((values) => values.length > 0);
-  const blocked = skill.blockedByAllowlist || skill.blockedByAgentFilter;
-  const baseEnabled = !skill.disabled;
-  return {
-    key: skill.skillKey,
-    name: skill.name,
-    enabled: baseEnabled && !missingDeps && !blocked,
-    baseEnabled,
-    ...(missingDeps ? { missingDeps: true } : {}),
-    ...(blocked ? { blocked: true } : {}),
-  };
 }
 
 export class ComposerSkillCatalog {
@@ -84,7 +91,20 @@ export class ComposerSkillCatalog {
         }
         const skills =
           report?.skills
-            .map(toComposerSkill)
+            .map((skill): ChatComposerMenuSkill => {
+              const missingDeps = Object.values(skill.missing).some((values) => values.length > 0);
+              const blocked = skill.blockedByAllowlist || skill.blockedByAgentFilter;
+              const baseEnabled = !skill.disabled;
+              return {
+                key: skill.skillKey,
+                name: skill.name,
+                emoji: skill.emoji,
+                enabled: baseEnabled && !missingDeps && !blocked,
+                baseEnabled,
+                ...(missingDeps ? { missingDeps: true } : {}),
+                ...(blocked ? { blocked: true } : {}),
+              };
+            })
             .toSorted((left, right) => left.name.localeCompare(right.name)) ?? null;
         if (skills) {
           this.skills.set(agentId, skills);

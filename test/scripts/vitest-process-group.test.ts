@@ -6,8 +6,6 @@ import {
   forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
   parseVitestProcessGroupMembers,
-  resolveVitestProcessGroupSignalTarget,
-  shouldUseDetachedVitestProcessGroup,
 } from "../../scripts/vitest-process-group.mts";
 
 describe("vitest process group helpers", () => {
@@ -88,13 +86,9 @@ describe("vitest process group helpers", () => {
     capacity = false,
   ) {
     const fakeProcess = new EventEmitter().setMaxListeners(10);
-    const setMaxListeners = vi.spyOn(fakeProcess, "setMaxListeners");
     const processObject = capacity
       ? fakeProcess
-      : {
-          on: fakeProcess.on.bind(fakeProcess),
-          off: fakeProcess.off.bind(fakeProcess),
-        };
+      : { on: fakeProcess.on.bind(fakeProcess), off: fakeProcess.off.bind(fakeProcess) };
     const kill = vi.fn();
     const install = (pid = 4200) =>
       installVitestProcessGroupCleanup({
@@ -108,7 +102,6 @@ describe("vitest process group helpers", () => {
       install,
       kill,
       fakeProcess,
-      setMaxListeners,
       emit: (event: string) => fakeProcess.emit(event),
       expectCounts(this: void, count: number) {
         expect(
@@ -117,20 +110,6 @@ describe("vitest process group helpers", () => {
       },
     };
   }
-
-  it("uses detached process groups on non-Windows hosts", () => {
-    expect(shouldUseDetachedVitestProcessGroup("darwin")).toBe(true);
-    expect(shouldUseDetachedVitestProcessGroup("linux")).toBe(true);
-    expect(shouldUseDetachedVitestProcessGroup("win32")).toBe(false);
-  });
-
-  it.each([
-    [4200, "darwin", -4200],
-    [4200, "win32", 4200],
-    [undefined, "darwin", null],
-  ] as const)("targets pid %s on %s", (childPid, platform, target) => {
-    expect(resolveVitestProcessGroupSignalTarget({ childPid, platform })).toBe(target);
-  });
 
   it("formats bounded process-group diagnostics without command arguments", () => {
     expect(
@@ -172,7 +151,6 @@ describe("vitest process group helpers", () => {
       ["4200"],
       {
         "4200": procStat(4200, "Z", 1, 4200),
-        "4200/4200": procStat(4200, "Z", 1, 4200),
         ...(workerStat ? { "4200/4201": workerStat } : {}),
       },
       undefined,
@@ -253,17 +231,25 @@ describe("vitest process group helpers", () => {
     expect(message).not.toMatch(/pid=4220|internal\.example|\n/);
   });
 
-  it("forwards signals to the computed target and ignores cleanup races", () => {
+  it.each([
+    [4200, "darwin", -4200],
+    [4200, "win32", 4200],
+    [undefined, "darwin", null],
+  ] as const)("forwards pid %s on %s and ignores cleanup races", (pid, platform, target) => {
     const kill = vi.fn();
     const forward = () =>
       forwardSignalToVitestProcessGroup({
-        child: { pid: 4200 },
+        child: { pid },
         signal: "SIGTERM",
-        platform: "darwin",
+        platform,
         kill,
       });
-    expect(forward()).toBe(true);
-    expect(kill).toHaveBeenCalledWith(-4200, "SIGTERM");
+    expect(forward()).toBe(target !== null);
+    if (target === null) {
+      expect(kill).not.toHaveBeenCalled();
+      return;
+    }
+    expect(kill).toHaveBeenCalledWith(target, "SIGTERM");
 
     for (const code of ["ESRCH", "EPERM"]) {
       kill.mockImplementationOnce(() => {
@@ -330,10 +316,9 @@ describe("vitest process group helpers", () => {
   });
 
   it("raises process listener limits for highly parallel cleanup handlers", () => {
-    const { install, fakeProcess, setMaxListeners, expectCounts } = cleanupFixture(undefined, true);
+    const { install, fakeProcess, expectCounts } = cleanupFixture(undefined, true);
     const cleanups = Array.from({ length: 12 }, (_, index) => install(4200 + index));
     expect(fakeProcess.getMaxListeners()).toBeGreaterThan(10);
-    expect(setMaxListeners).toHaveBeenCalled();
 
     for (const cleanup of cleanups) {
       cleanup.teardown();

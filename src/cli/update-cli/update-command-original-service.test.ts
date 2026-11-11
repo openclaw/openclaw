@@ -14,11 +14,13 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as runtimePins from "../../daemon/runtime-pin-state.js";
 import type { GatewayServiceState } from "../../daemon/service.js";
+import { createNpmTarget } from "../../infra/package-update-steps.test-support.js";
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import { migrateDaemonRuntimePins } from "../../infra/state-migrations.daemon-runtime-pins.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import * as stateMetadata from "../../infra/update-candidate-state.sizes.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
+import { updateRecoverySchema } from "../../infra/update-recovery.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../plugins/installed-plugin-index-record-reader.js";
 import * as commandProcess from "../../process/exec.js";
@@ -28,20 +30,18 @@ import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { createCommandResult as processResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import {
-  finishParams,
-  processResult,
-  updateResult,
-} from "./update-command-maintenance-fixtures.test-support.js";
+import { finishParams, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import { registerCurrentF3Controls } from "./update-command-original-service-current.test-support.js";
 import { observeOriginalManagedServiceRuntime } from "./update-command-original-service.js";
 import { finishUpdate } from "./update-command-post-update.js";
@@ -51,7 +51,7 @@ import type { PreManagedServiceStop } from "./update-command-service-context-typ
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
-// Real update/state/lease owners; simulated native manager, HTTP, and package transport.
+const pid = vi.hoisted(() => Number.MAX_SAFE_INTEGER); // Cannot collide with native PIDs.
 const mocks = vi.hoisted(() => ({
   state: vi.fn<() => Promise<GatewayServiceState>>(),
   stop: vi.fn(),
@@ -70,7 +70,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("../../daemon/service-process-membership.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service-process-membership.js")>()),
-  inspectServiceProcessMembershipSync: (pid: number) => (pid === 4242 ? "outside" : "unknown"),
+  inspectServiceProcessMembershipSync: (value: number) => (value === pid ? "outside" : "unknown"),
 }));
 vi.mock("../../daemon/schtasks-control.js", async (original) => ({
   ...(await original<typeof import("../../daemon/schtasks-control.js")>()),
@@ -141,7 +141,7 @@ const readPackage = (root = rootB) => fs.readFile(path.join(root, "package.json"
 function healthObservation(expectedVersion?: string, expectedBuildId?: string, healthy = true) {
   return {
     healthy,
-    runtime: { status: healthy ? "running" : "stopped", pid: healthy ? 4242 : undefined },
+    runtime: { status: healthy ? "running" : "stopped", pid: healthy ? pid : undefined },
     gatewayVersion: expectedVersion,
     gatewayBuildId: expectedBuildId,
   };
@@ -182,6 +182,7 @@ function executePackageUpdate(
     opts,
     shouldRestart,
     packageInstallSpec: "openclaw@2026.9.5",
+    packageInstallTarget: { ...createNpmTarget(path.dirname(rootB)), packageRoot: rootB },
     packageTargetVersion: "2026.9.5",
     managedServiceRootRedirect: null,
     managedServiceRoot: rootA,
@@ -198,7 +199,12 @@ function rollbackOriginal(
   return readConfigFileSnapshot({ observe: false }).then((configSnapshot) =>
     rollbackFailedUpdate({
       definitionRecovery: {},
-      result: updateResult({ status: "error", root: rootB, durationMs: 0 }),
+      result: updateResult({
+        status: "error",
+        root: rootB,
+        durationMs: 0,
+        recovery: { serviceRestartSafe: true, version: "2026.9.4" },
+      }),
       previousRoot: rootB,
       previousSchemaVersions: schemas,
       originalManagedServiceRuntime: original,
@@ -247,10 +253,9 @@ beforeEach(async () => {
     await fs.mkdir(path.join(root!, "dist"), { recursive: true });
     await writePackage(root!, version!);
     await fs.writeFile(path.join(root!, "dist", "index.js"), "export {};\n");
-    await fs.writeFile(
-      path.join(root!, "dist", "build-info.json"),
-      JSON.stringify({ buildId: root === rootA ? "build-A" : "build-B" }),
-    );
+    await writeFixtureJson(path.join(root!, "dist", "build-info.json"), {
+      buildId: root === rootA ? "build-A" : "build-B",
+    });
   }
   // The selected runner must execute with its original dynamic-library search paths.
   if (process.platform === "win32") {
@@ -280,7 +285,7 @@ beforeEach(async () => {
         ),
       ),
     },
-    runtime: { status: "running", pid: 4242, systemd: { managerUid: process.getuid?.() ?? 501 } },
+    runtime: { status: "running", pid, systemd: { managerUid: process.getuid?.() ?? 501 } },
   };
   mocks.state.mockImplementation(async () => ({
     ...serviceState,
@@ -414,7 +419,7 @@ it.for([
       const packagePath = path.join(rootA, "package.json");
       const metadata = JSON.parse(await fs.readFile(packagePath, "utf8"));
       metadata.openclaw.schemaVersions.agent = OPENCLAW_AGENT_SCHEMA_VERSION - 1;
-      await fs.writeFile(packagePath, JSON.stringify(metadata));
+      await writeFixtureJson(packagePath, metadata);
     }
     const configSnapshot = await readConfigFileSnapshot({ observe: false });
     let newerAgentBytes: Buffer | undefined;
@@ -572,14 +577,6 @@ it.for([
       });
     }
     if (scenario === "pin-migration-pending") {
-      expect(execution?.result.steps).toContainEqual(
-        expect.objectContaining({
-          advisory: expect.objectContaining({
-            message:
-              "runtime pins not yet migrated; preserved the current runtime; the post-update Doctor step migrates them",
-          }),
-        }),
-      );
       expect(execution?.originalManagedServiceRuntime?.definition.runtimePin).toBeUndefined();
       expect(mocks.nativeInstall).not.toHaveBeenCalled();
     }
@@ -638,10 +635,7 @@ it("refuses B ledger admission independently from compatible service A state", a
     OPENCLAW_STATE_DIR: parentDir,
     OPENCLAW_CONFIG_PATH: path.join(parentDir, "openclaw.json"),
   };
-  await fs.writeFile(
-    parentEnv.OPENCLAW_CONFIG_PATH,
-    JSON.stringify({ plugins: { enabled: false } }),
-  );
+  await writeFixtureJson(parentEnv.OPENCLAW_CONFIG_PATH, { plugins: { enabled: false } });
   const run: NonNullable<UpdateCommandOptions["run"]> = updateRun(parentEnv);
   await withOriginalRun(run, async (opts) => {
     const original = await observeOriginalManagedServiceRuntime({ root: rootB, opts }, before);
@@ -696,13 +690,16 @@ it.each([
   if (scenario === "missing-schema") {
     const metadata = JSON.parse(await fs.readFile(path.join(rootA, "package.json"), "utf8"));
     delete metadata.openclaw;
-    await fs.writeFile(path.join(rootA, "package.json"), JSON.stringify(metadata));
+    await writeFixtureJson(path.join(rootA, "package.json"), metadata);
   }
   if (scenario === "unverified-health") {
-    mocks.inspect.mockResolvedValue({ healthy: false, runtime: { status: "running" } });
+    mocks.health.mockResolvedValue({
+      ...healthObservation(undefined, undefined, false),
+      waitOutcome: "timeout",
+    });
   }
   mocks.package.mockImplementation(async (params) => {
-    expect(params.honorPackageRoot).toBe(true);
+    expect(params.installTarget.packageRoot).toBe(rootB);
     await params.beforeActivate();
     activated = true;
     return updateResult({
@@ -801,7 +798,11 @@ it.each([false, true])(
       expect(original.definition.reboundRuntimePin).toBe(
         mutated ? original.definition.runtimePin?.revision : undefined,
       );
-      await rollbackOriginal(opts, original, mutated);
+      const compensated = await rollbackOriginal(opts, original, mutated);
+      expect(updateRecoverySchema.parse(compensated.result.recovery)).toEqual({
+        serviceRestartSafe: false,
+        reason: "runtime-verification-failed",
+      });
       expect(mocks.nativeInstall).not.toHaveBeenCalled();
       expect(mocks.nativeRestart).toHaveBeenCalledTimes(mutated ? 1 : 0);
       expect(mocks.running).toBe(true);

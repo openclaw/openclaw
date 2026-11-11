@@ -1,6 +1,8 @@
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { patchSettings } from "../../app/settings.ts";
+import type { GatewayStatusProps } from "../../components/gateway-status.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
@@ -11,11 +13,11 @@ import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts"
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
-import type { ChatWelcomeProps } from "../chat/components/chat-welcome.tsx";
 import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import * as catalog from "./catalog-target.ts";
 import type { NewSessionComposerOptions } from "./composer.tsx";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
+import { selectedDraftProjectId } from "./draft-create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import {
   activateDraft,
@@ -27,13 +29,21 @@ import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { createNewSessionTitle } from "./draft-title.ts";
+import type { DraftWelcomeOptions } from "./draft-welcome.tsx";
 import { NewSessionDraft } from "./draft.ts";
 import { forgetInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import type { SubmissionPresentation } from "./submission-action.ts";
 
+export type NewSessionPageProps = {
+  data: NewSessionRouteData | undefined;
+  /** Shell facts for the phone header, which the draft owns as chat does. */
+  navDrawerOpen: boolean;
+  gatewayStatus: GatewayStatusProps | null;
+};
+
 export type PageHost = SolidBridgeElement<
-  { data: NewSessionRouteData | undefined },
+  NewSessionPageProps,
   {
     focusComposer(): void;
   }
@@ -109,7 +119,7 @@ export class NewSessionPageOwner {
     }
   };
   imageLightbox: ImageLightboxItem | null = null;
-  agentPickerOpen = false;
+  readAgentIdentityTargets: () => readonly string[] = () => [];
   agentPicker: HTMLSpanElement | undefined;
   readonly draft: NewSessionDraft;
   readonly gateway: DraftGatewayState;
@@ -182,6 +192,8 @@ export class NewSessionPageOwner {
     this.dictation = new DirectDictationControl({
       textarea: this.submission.composerTextarea,
       getClient: () => this.gateway.client,
+      prepareSession: () => this.submission.sessionStartup.prepareDictationSession(),
+      getSessionKey: () => this.submission.sessionStartup.dictationSessionKey(),
       isConnected: () => this.gateway.connected,
       canCommit: () => !this.submission.submitting && !this.submission.pendingPlacement.sessionKey,
       onMessage: (message) => this.setMessageFromUser(message),
@@ -224,7 +236,6 @@ export class NewSessionPageOwner {
           context.theme,
           context.agents,
           context.agentIdentity,
-          context.sessions,
           context.placementStartup,
           context.runtimeConfig,
           context.config,
@@ -296,9 +307,9 @@ export class NewSessionPageOwner {
       this.connectMachine.close();
     }
     this.gateway.retryPendingCatalogTarget();
-    void this.context?.agentIdentity.ensure(
-      this.agentPickerOpen ? this.place.agents().map((agent) => agent.id) : [this.place.agentId],
-    );
+    void this.context?.agentIdentity.ensure([
+      ...new Set([this.place.agentId, ...this.readAgentIdentityTargets()]),
+    ]);
     const agentsReady = this.draft.agentsReady();
     this.place.modelControl.loadCatalogTargets(
       this.context,
@@ -403,13 +414,12 @@ export class NewSessionPageOwner {
       context,
       isCatalogTarget,
       draftOwnerKey,
+      commandProjectId: selectedDraftProjectId(place),
       get message() {
         return submission.message;
       },
       mentions: submission.mentions,
       getMentions: () => submission.mentions,
-      visibility: submission.visibility,
-      draftAvailable: capabilities.canStartAsDraft(context),
       ...capabilities.composerProps(context, gateway, place.agentId),
       modelControl: place.modelControl,
       requiresModifier: preferences?.chatSendShortcut === "modifier-enter",
@@ -417,6 +427,8 @@ export class NewSessionPageOwner {
       get submitting() {
         return submission.submitting;
       },
+      chatMessageMaxWidth: preferences?.chatMessageMaxWidth,
+      onComposerWidthChange: (value) => patchSettings({ chatMessageMaxWidth: value }),
 
       get messageLocked() {
         return Boolean(submission.pendingPlacement.sessionKey);
@@ -427,11 +439,6 @@ export class NewSessionPageOwner {
       onInput: (message, mentions) => this.setMessageFromUser(message, mentions),
       onOpenImage: this.setImageLightbox,
       onOpenSidebar: this.openAttachmentPanel,
-      onVisibilityChange: (visibility) => {
-        if (!submission.submitting && !submission.pendingPlacement.sessionKey) {
-          submission.setVisibility(visibility);
-        }
-      },
       onSubmit: () => void this.submit(),
       onBackgroundSubmit:
         submission.visibility === "draft" || isCatalogTarget
@@ -440,7 +447,17 @@ export class NewSessionPageOwner {
     };
   }
 
-  welcomeOptions(): Omit<ChatWelcomeProps, "composer"> {
+  welcomeHint(): string {
+    return t(
+      catalog.isTarget(this.data)
+        ? "newSession.nativeTerminalHint"
+        : this.place.requiredPlacement
+          ? "newSession.requiredWorkerHint"
+          : "newSession.hint",
+    );
+  }
+
+  welcomeOptions(): DraftWelcomeOptions {
     const agent = this.place.selectedAgent();
     const identity = this.context?.agentIdentity.get(this.place.agentId);
     const gateway = this.context?.gateway.snapshot;
@@ -449,18 +466,11 @@ export class NewSessionPageOwner {
       assistantName: agent ? normalizeAgentTargetLabel(agent, identity) : "",
       assistantAvatar: resolveAgentTextAvatar(agent ?? {}, identity),
       assistantAvatarUrl: resolveAgentAvatarUrl(agent ?? {}, identity),
-      hint: t(
-        catalog.isTarget(this.data)
-          ? "newSession.nativeTerminalHint"
-          : this.place.requiredPlacement
-            ? "newSession.requiredWorkerHint"
-            : "newSession.hint",
-      ),
+      hint: this.welcomeHint(),
       hideSecondaryContent: this.submission.visibility === "incognito",
       fadeSecondaryContent: this.submission.message.trim().length > 0,
       modelSetupRequired: this.submission.requiresModelSetup(),
       onModelSetup: () => this.context?.navigate("model-setup"),
-      sessions: this.context?.sessions.state.result,
       sessionKey: buildAgentMainSessionKey({
         agentId: this.place.agentId || "main",
         mainKey: this.context?.agents.state.agentsList?.mainKey,
@@ -470,6 +480,7 @@ export class NewSessionPageOwner {
         agentsList: this.context?.agents.state.agentsList ?? null,
         hello: gateway?.hello ?? null,
       },
+      operatorAuth: gateway?.hello?.auth ?? null,
       onDraftChange: (next) => this.setMessageFromUser(next),
       onSend: () => void this.submit(),
       onOpenSession: (sessionKey) => {

@@ -6,6 +6,7 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runt
 import { createWhisperExecutable } from "../media-understanding/local-audio.test-support.js";
 import { createSafeAudioFixtureBuffer } from "../media-understanding/runner.test-utils.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -29,15 +30,12 @@ describe.skipIf(process.platform === "win32")("infer local audio executable sele
     const mediaPath = path.join(root, "input.wav");
     await fs.writeFile(mediaPath, createSafeAudioFixtureBuffer(2048, 0x52));
     const configPath = path.join(root, "openclaw.json");
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        agents: { defaults: { workspace }, entries: { main: {} } },
-        plugins: { enabled: false },
-        tools: { media: { audio: { enabled: true } } },
-        logging: { level: "silent", consoleLevel: "silent" },
-      }),
-    );
+    await writeFixtureJson(configPath, {
+      agents: { defaults: { workspace }, entries: { main: {} } },
+      plugins: { enabled: false },
+      tools: { media: { audio: { enabled: true } } },
+      logging: { level: "silent", consoleLevel: "silent" },
+    });
     const result = await runCliProcessChild({
       nodeArgs: [
         ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),

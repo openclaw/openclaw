@@ -2,6 +2,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
 import { postNativeExternalLink } from "../../app/native-link-routing.ts";
 import { t } from "../../i18n/index.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import type { BrowserRequestClient } from "./browser-client.ts";
@@ -29,6 +30,8 @@ import { BrowserPanelStream } from "./browser-panel-stream.ts";
 import { BrowserPanelViewportOwner } from "./browser-panel-viewport-owner.ts";
 import { browserRouteKey, type BrowserRoute } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
+
+registerBrowserEnglish();
 
 export type { BrowserPanelHost } from "./browser-panel-operation-ownership.ts";
 

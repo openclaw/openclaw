@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import { z } from "zod";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { createUpdateStateInspectionDiagnostics } from "../update-candidate-state.diagnostics.js";
 import * as inspection from "../update-candidate-state.inspection.js";
 import {
@@ -44,12 +45,7 @@ export async function createUpdateDatabaseBackupWithFixtureTransport(
       throw new Error(`Unexpected fixture capture mode: ${String(params.input.mode)}`);
     }
     return {
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
-      stdout: JSON.stringify(result),
-      stderr: "",
+      ...createCommandResult({ stdout: JSON.stringify(result) }),
       inspection: createUpdateStateInspectionDiagnostics({
         operation: "State schema inspection",
         phase: params.input.mode,

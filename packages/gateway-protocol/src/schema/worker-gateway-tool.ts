@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
-import { lazyCompile } from "../protocol-validator.js";
+import * as Checks from "../compiled/protocol.generated/schema-worker-gateway-tool.js";
+import { createProtocolValidator } from "../protocol-validator.js";
 import { closedObject } from "./closed-object.js";
 import {
   isWorkerFrameWithinBudget,
@@ -12,6 +13,8 @@ import {
 } from "./worker-protocol-primitives.js";
 
 export const WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE = "worker-gateway-tools-v1";
+export const WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE =
+  "worker-gateway-mcp-guest-result-v1";
 export const WORKER_GATEWAY_TOOL_METHODS = {
   invoke: "worker.gatewayTool.invoke",
   cancel: "worker.gatewayTool.cancel",
@@ -163,8 +166,13 @@ export const WorkerGatewayToolResultSchema = closedObject({
 });
 export const WorkerGatewayToolCancelResultSchema = closedObject({ cancelled: Type.Boolean() });
 
+const WorkerGatewayToolInvokeResultSchema = closedObject({
+  ...WorkerGatewayToolResultSchema.properties,
+  mcpGuestResult: Type.Optional(Type.Unknown()),
+  mcpBlockedReason: Type.Optional(LiveTextSchema),
+});
 export const WorkerGatewayToolResponseFrameSchema = workerResponseSchema(
-  WorkerGatewayToolResultSchema,
+  WorkerGatewayToolInvokeResultSchema,
 );
 export const WorkerGatewayToolCancelResponseFrameSchema = workerResponseSchema(
   WorkerGatewayToolCancelResultSchema,
@@ -180,18 +188,24 @@ export const WorkerGatewayToolUpdateFrameSchema = closedObject({
   }),
 });
 
-export const validateWorkerGatewayToolInvokeParams = lazyCompile(
+export const validateWorkerGatewayToolInvokeParams = createProtocolValidator(
   WorkerGatewayToolInvokeParamsSchema,
+  Checks.isWorkerGatewayToolInvokeParams,
 );
-export const validateWorkerGatewayToolCancelParams = lazyCompile(
+export const validateWorkerGatewayToolCancelParams = createProtocolValidator(
   WorkerGatewayToolCancelParamsSchema,
+  Checks.isWorkerGatewayToolCancelParams,
 );
-export const validateWorkerGatewayToolUpdateFrame = lazyCompile(WorkerGatewayToolUpdateFrameSchema);
+export const validateWorkerGatewayToolUpdateFrame = createProtocolValidator(
+  WorkerGatewayToolUpdateFrameSchema,
+  Checks.isWorkerGatewayToolUpdateFrame,
+);
 
 export type WorkerToolSurface = Static<typeof WorkerToolSurfaceSchema>;
 export type WorkerGatewayToolInvokeParams = Static<typeof WorkerGatewayToolInvokeParamsSchema>;
 export type WorkerGatewayToolCancelParams = Static<typeof WorkerGatewayToolCancelParamsSchema>;
 export type WorkerGatewayToolResult = Static<typeof WorkerGatewayToolResultSchema>;
+export type WorkerGatewayToolInvokeResult = Static<typeof WorkerGatewayToolInvokeResultSchema>;
 export type WorkerGatewayToolResponseFrame = Static<typeof WorkerGatewayToolResponseFrameSchema>;
 export type WorkerGatewayToolCancelResponseFrame = Static<
   typeof WorkerGatewayToolCancelResponseFrameSchema

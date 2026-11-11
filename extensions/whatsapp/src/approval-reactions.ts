@@ -285,7 +285,6 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
   cfg: OpenClawConfig;
   accountId: string;
   msg: WAMessage;
-  gatewayUrl?: string;
   selfJid?: string | null;
   selfLid?: string | null;
   resolveInboundJid: (jid: string | null | undefined) => Promise<string | null>;
@@ -356,7 +355,6 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
       channel: "whatsapp",
       accountId: params.accountId,
       senderId: actorId,
-      gatewayUrl: params.gatewayUrl,
     },
     approvers: getWhatsAppApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }),
     authorizeActorAction: (input) => whatsappApprovalAuth.authorizeActorAction(input),

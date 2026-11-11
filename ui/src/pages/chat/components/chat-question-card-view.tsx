@@ -1,9 +1,12 @@
 import { lazy, Show } from "solid-js";
 import { LoadingState } from "../../../components/solid/loading-state.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { ChatImportBoundary } from "./chat-import-boundary.tsx";
 import type { QuestionPanelProps } from "./chat-question-types.ts";
+
+registerEnglishCatalog(registerChatQuestionsEnglish);
 
 type CardProps = { props?: QuestionPanelProps };
 export type ChatQuestionCard = SolidBridgeElement<CardProps>;

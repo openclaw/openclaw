@@ -5,7 +5,7 @@ import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { createDreamingViewState } from "./dreaming.ts";
 import {
   renderDreamingView,
-  fullDreamingViewAccess,
+  createDreamingViewProps,
   installDreamingViewTestTranslations,
 } from "./view.test-helpers.ts";
 import { renderDreaming } from "./view.tsx";
@@ -26,38 +26,9 @@ afterAll(() => {
 
 function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
   const viewState = createDreamingViewState();
-  viewState.activeSubTab = "diary";
-  viewState.activeDiarySubTab = tab;
-  // Count every returned item while rendering only the small selected cluster.
-  viewState.diaryPage = 1;
+  viewState.openReviewPanel = tab;
   const clusterSizes = [2_499, 1];
-  const props: DreamingProps = {
-    access: fullDreamingViewAccess,
-    viewState,
-    active: true,
-    selectedAgentId: "main",
-    statusError: null,
-    readStatus: () => null,
-    readStatusData: () => ({
-      shortTermCount: 0,
-      promotedCount: 0,
-      shortTermEntries: [],
-      promotedEntries: [],
-      phases: undefined,
-      nextCycle: null,
-      timezone: null,
-    }),
-    readDiary: () => props.dreamDiaryContent,
-    readImports: () => props.wikiImportInsights,
-    readOverview: () => props.wikiOverview,
-    modeSaving: false,
-    dreamDiaryLoading: false,
-    dreamDiaryActionLoading: false,
-    dreamDiaryActionMessage: null,
-    dreamDiaryActionArchivePath: null,
-    dreamDiaryContent: null,
-    memoryWikiEnabled: true,
-    wikiImportInsightsLoading: false,
+  const props: DreamingProps = createDreamingViewProps(viewState, {
     wikiImportInsights:
       tab === "insights"
         ? {
@@ -92,7 +63,6 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
             })),
           }
         : null,
-    wikiOverviewLoading: false,
     wikiOverview:
       tab === "wiki"
         ? {
@@ -124,21 +94,7 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
             })),
           }
         : null,
-    onRefreshDiary: () => {},
-    onRefreshImports: () => {},
-    onRefreshWikiOverview: () => {},
-    onOpenConfig: async () => {},
-    onOpenWikiPage: async () => {},
-    onCloseWikiPreview: () => {},
-    wikiPreview: null,
-    onBackfillDiary: () => {},
-    onCopyDreamingArchivePath: () => {},
-    onDedupeDreamDiary: () => {},
-    onResetDiary: () => {},
-    onResetGroundedShortTerm: () => {},
-    onRepairDreamingArtifacts: () => {},
-    onViewStateChange: (update) => update(viewState),
-  };
+  });
   return props;
 }
 
@@ -147,7 +103,7 @@ describe("bounded Memory Wiki dashboard results", () => {
     const container = document.createElement("div");
     renderDreamingView(buildBoundedDashboardProps(tab), container);
 
-    expect(container.querySelector(".dreams-diary__bounded-result")?.textContent?.trim()).toBe(
+    expect(container.querySelector(".dreams-review__panel")?.textContent).toContain(
       "Showing the newest 2,500 of 2,501 items.",
     );
   });

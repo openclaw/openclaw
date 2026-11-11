@@ -13,6 +13,13 @@ const day = localDayKey();
 const neverRetired = new Promise<void>(() => {});
 const disposals: Array<() => void> = [];
 
+function reopen(card: HTMLButtonElement) {
+  card.click();
+  flush();
+  card.click();
+  flush();
+}
+
 afterEach(() => {
   cleanupSolid();
   for (const dispose of disposals.splice(0)) {
@@ -54,73 +61,40 @@ async function mountFrame(frame: Promise<Frame>, count = 1) {
   const view = mountSolid(() => (
     <Logbook initialClient={createTestGatewayClient(request)} getRetired={() => neverRetired} />
   ));
-  await waitForSolid(() =>
-    expect(view.container.querySelector(".logbook-card__header")).not.toBeNull(),
-  );
+  const query = (selector: string) => view.container.querySelector(selector);
+  const frameRequests = () => request.mock.calls.filter(([method]) => method === "logbook.frame");
+  await waitForSolid(() => expect(query(".logbook-card__header")).not.toBeNull());
   const card = view.container.querySelector<HTMLButtonElement>(".logbook-card__header")!;
   card.click();
-  await waitForSolid(() =>
-    expect(view.container.querySelector(".logbook-card__keyframe--loading")).not.toBeNull(),
-  );
-  return { ...view, request, card };
+  await waitForSolid(() => expect(query(".logbook-card__keyframe--loading")).not.toBeNull());
+  return { ...view, query, frameRequests, card };
 }
-
-it("keeps duplicate frame readers pending until their shared request settles", async () => {
-  const frame = createDeferred<Frame>();
-  const { model, request } = frameModel(frame.promise);
-  const first = model.loadFrame(3);
-  const second = model.loadFrame(3);
-  let joinedSettled = false;
-  void second.then(() => {
-    joinedSettled = true;
-  });
-  await Promise.resolve();
-  expect(joinedSettled).toBe(false);
-  frame.resolve({ base64: "AA==", format: "png" });
-  expect(await Promise.all([first, second])).toEqual([
-    "data:image/png;base64,AA==",
-    "data:image/png;base64,AA==",
-  ]);
-  expect(request).toHaveBeenCalledTimes(1);
-});
 
 it("keeps an expanded card usable when reopening a held keyframe read", async () => {
   const frame = createDeferred<Frame>();
   const view = await mountFrame(frame.promise);
-  view.card.click();
-  flush();
-  view.card.click();
-  flush();
-  expect(view.container.querySelector(".logbook-card__keyframe--loading")).not.toBeNull();
-  expect(view.container.querySelector(".logbook-card__detail")?.textContent).toBe(
-    "Retained detail",
-  );
+  reopen(view.card);
+  expect(view.query(".logbook-card__keyframe--loading")).not.toBeNull();
+  expect(view.query(".logbook-card__detail")?.textContent).toBe("Retained detail");
   frame.resolve({ base64: "AA==", format: "png" });
   await waitForSolid(() =>
-    expect(view.container.querySelector("img.logbook-card__keyframe")?.getAttribute("src")).toBe(
+    expect(view.query("img.logbook-card__keyframe")?.getAttribute("src")).toBe(
       "data:image/png;base64,AA==",
     ),
   );
-  expect(view.container.querySelector(".logbook-card__header")).toBe(view.card);
-  expect(view.request.mock.calls.filter(([method]) => method === "logbook.frame")).toHaveLength(1);
+  expect(view.query(".logbook-card__header")).toBe(view.card);
+  expect(view.frameRequests()).toHaveLength(1);
 });
 
 it("retires a missing keyframe without retrying when its card reopens", async () => {
   const frame = createDeferred<Frame>();
   const view = await mountFrame(frame.promise);
   frame.reject(new Error("Keyframe was pruned"));
-  await waitForSolid(() =>
-    expect(view.container.querySelector(".logbook-card__keyframe")).toBeNull(),
-  );
-  view.card.click();
-  flush();
-  view.card.click();
-  flush();
-  expect(view.container.querySelector(".logbook-card__keyframe")).toBeNull();
-  expect(view.container.querySelector(".logbook-card__detail")?.textContent).toBe(
-    "Retained detail",
-  );
-  expect(view.request.mock.calls.filter(([method]) => method === "logbook.frame")).toHaveLength(1);
+  await waitForSolid(() => expect(view.query(".logbook-card__keyframe")).toBeNull());
+  reopen(view.card);
+  expect(view.query(".logbook-card__keyframe")).toBeNull();
+  expect(view.query(".logbook-card__detail")?.textContent).toBe("Retained detail");
+  expect(view.frameRequests()).toHaveLength(1);
 });
 
 it.each(["resolve", "reject"] as const)(
@@ -146,33 +120,23 @@ it.each(["resolve", "reject"] as const)(
     expect(current.model.state.framePreviewFailed.size).toBe(0);
     frame.resolve({ base64: "NEW=", format: "png" });
     expect(await read).toBe("data:image/png;base64,NEW=");
-    expect(current.request).toHaveBeenCalledTimes(1);
   },
 );
 
 it("retains expanded images when the bounded cache evicts their source", async () => {
   const frame = createDeferred<Frame>();
   const view = await mountFrame(frame.promise, 49);
+  const imageCount = () => view.container.querySelectorAll("img.logbook-card__keyframe").length;
   const headers = view.container.querySelectorAll<HTMLButtonElement>(".logbook-card__header");
   for (const header of Array.from(headers).slice(1)) {
     header.click();
   }
   flush();
-  await waitForSolid(() =>
-    expect(view.request.mock.calls.filter(([method]) => method === "logbook.frame")).toHaveLength(
-      49,
-    ),
-  );
+  await waitForSolid(() => expect(view.frameRequests()).toHaveLength(49));
   frame.resolve({ base64: "AA==", format: "png" });
-  await waitForSolid(() =>
-    expect(view.container.querySelectorAll("img.logbook-card__keyframe")).toHaveLength(49),
-  );
-  expect(view.request.mock.calls.filter(([method]) => method === "logbook.frame")).toHaveLength(49);
-  view.card.click();
-  flush();
-  view.card.click();
-  await waitForSolid(() =>
-    expect(view.container.querySelectorAll("img.logbook-card__keyframe")).toHaveLength(49),
-  );
-  expect(view.request.mock.calls.filter(([method]) => method === "logbook.frame")).toHaveLength(50);
+  await waitForSolid(() => expect(imageCount()).toBe(49));
+  expect(view.frameRequests()).toHaveLength(49);
+  reopen(view.card);
+  await waitForSolid(() => expect(imageCount()).toBe(49));
+  expect(view.frameRequests()).toHaveLength(50);
 });

@@ -1,0 +1,2 @@
+# Generated Linux enrollment registers platform CAs without credentials, including cached runtime and failure paths.
+75

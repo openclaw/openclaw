@@ -1,9 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import { nativeMessage } from "./chat-thread-fixtures.test-support.ts";
 import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
+import * as causalBoundary from "./stream-causal-boundary.ts";
 
 type PendingInput = NonNullable<BuildChatItemsProps["pendingInputs"]>[number];
 
@@ -78,6 +80,59 @@ beforeEach(() => resetChatThreadState("input-order"));
 afterEach(() => resetChatThreadState("input-order"));
 
 describe("transcript input order", () => {
+  it("keeps interleaved tool bursts within each observed input", () => {
+    const rows = visibleRows({
+      runId: "live",
+      messages: [
+        makeMessage("user", "First input", 1, { idempotencyKey: "first:user", seq: 1 }),
+        makeMessage("user", "Second input", 2, { idempotencyKey: "second:user", seq: 2 }),
+      ],
+      toolMessages: Array.from({ length: 4 }, (_, index) => ({
+        role: "assistant",
+        content: `Tool ${index}`,
+        runId: "live",
+        timestamp: 100 + index,
+        openclawToolStreamAfterSendId: index % 2 ? "second" : "first",
+      })),
+    });
+    expect(rows).toEqual(["First input", "Tool 0", "Tool 2", "Second input", "Tool 1", "Tool 3"]);
+  });
+
+  it("bounds missing-run history scans independently of tool-burst length", () => {
+    const lookup = vi.spyOn(causalBoundary, "knownStreamCausalInterval");
+    try {
+      const rows = visibleRows({
+        runId: "live",
+        messages: [makeMessage("user", "Current input", 1, { seq: 1 })],
+        toolMessages: Array.from({ length: 40 }, (_, index) => ({
+          role: "assistant",
+          content: `Tool ${index}`,
+          runId: "live",
+          timestamp: 100 + index,
+        })),
+      });
+      expect(rows).toEqual(["Current input", ...Array.from({ length: 40 }, (_, i) => `Tool ${i}`)]);
+      expect(lookup.mock.calls.length).toBeLessThanOrEqual(3);
+    } finally {
+      lookup.mockRestore();
+    }
+  });
+
+  it("keeps a paged input separate from an unscoped lookup for the same run", () => {
+    const rows = visibleRows({
+      runId: "live",
+      messages: [makeMessage("user", "Current input", 1, { seq: 1 })],
+      toolMessages: Array.from({ length: 4 }, (_, index) => ({
+        role: "assistant",
+        content: `Tool ${index}`,
+        runId: "live",
+        timestamp: 100 + index,
+        ...(index % 2 ? { openclawToolStreamAfterSendId: "paged-input" } : {}),
+      })),
+    });
+    expect(rows).toEqual(["Tool 1", "Tool 3", "Current input", "Tool 0", "Tool 2"]);
+  });
+
   it("keeps parent output around a worker update in the same order live and saved", () => {
     const original = makeMessage("user", "Publish the change", 10, {
       id: "request",
@@ -302,14 +357,14 @@ describe("transcript input order", () => {
     },
   );
 
-  it.each(["unconfirmed", "waiting-reconnect", "accepted", "reordered"] as const)(
+  it.each(["waiting-reconnect", "accepted", "reordered"] as const)(
     "keeps an earlier %s input ahead of a new submission through custody",
     (state) => {
       const reordered = state === "reordered";
       const earlier = queuedInput(
         "Earlier input",
         reordered ? 30 : 10,
-        state === "unconfirmed" || state === "waiting-reconnect" ? state : "submitting",
+        state === "waiting-reconnect" ? state : "submitting",
       );
       const later = queuedInput("New input", reordered ? 10 : 20);
       const queue =
@@ -340,17 +395,14 @@ describe("transcript input order", () => {
 
   it.each([
     { state: "queued", label: "reversed", timestamps: [30, 20] },
-    { state: "interrupted", label: "reversed", timestamps: [30, 20] },
     { state: "cancelled", label: "equal", timestamps: [20, 20] },
   ] as const)(
     "preserves server $state input order and attached notices with $label timestamps",
     ({ state, timestamps }) => {
       const notice =
-        state === "interrupted"
-          ? "Interrupted before the agent started it. If it does not resume, copy it and send again."
-          : state === "cancelled"
-            ? "Cancelled before the agent started it. It will not run automatically; copy it and send again."
-            : null;
+        state === "cancelled"
+          ? "Cancelled before the agent started it. It will not run automatically; copy it and send again."
+          : null;
       const expectedInputs = ["First accepted input", "Second accepted input"].flatMap((text) =>
         notice ? [text, notice] : [text],
       );
@@ -421,12 +473,7 @@ describe("transcript input order", () => {
   it("reuses loaded history when a render rebuilds its pending input list", () => {
     let messageReads = 0;
     const loaded = new Proxy(
-      {
-        role: "assistant",
-        content: "Loaded history",
-        timestamp: 1,
-        __openclaw: { id: "loaded", seq: 1 },
-      },
+      nativeMessage("assistant", "Loaded history", 1, { id: "loaded", seq: 1 }),
       {
         get(target, key, receiver) {
           messageReads += 1;

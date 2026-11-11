@@ -2,7 +2,7 @@ import type { UpdateRunRecord } from "./update-run-record.js";
 
 export type UpdateRunReportHealth =
   | { kind: "unavailable" }
-  | { kind: "responding"; version: string };
+  | { kind: "responding"; version: string; buildId?: string };
 
 /** A read-only observation of the recorded endpoint, never a new update verdict. */
 export async function readUpdateRunReportHealth(
@@ -19,7 +19,11 @@ export async function readUpdateRunReportHealth(
       ...options,
     });
     return health.reachable && health.gatewayVersion
-      ? { kind: "responding", version: health.gatewayVersion }
+      ? {
+          kind: "responding",
+          version: health.gatewayVersion,
+          ...(health.gatewayBuildId ? { buildId: health.gatewayBuildId } : {}),
+        }
       : { kind: "unavailable" };
   } catch {
     return { kind: "unavailable" };

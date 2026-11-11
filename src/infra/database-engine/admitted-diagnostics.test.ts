@@ -88,6 +88,7 @@ it("projects retained SQLite facts and unknowns without reading stores or the fi
     configured: { effective: "sqlite", fixedLocal: true },
     observed: "unknown",
   });
+  expect(rows.flatMap((row) => row.nextSteps).join(" ")).not.toContain("backup diagnostics");
   revokeSqliteDatabaseAdmissions(db);
   expect(describeAdmittedDatabaseStores({}).some((row) => row.path === file)).toBe(false);
 });

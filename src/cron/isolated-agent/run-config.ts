@@ -1,35 +1,19 @@
 import { resolveAgentModelConfigForRuntime } from "../../agents/agent-scope-config.js";
 /** Builds isolated cron runner config from global defaults plus agent overrides. */
 import type { resolveAgentConfig } from "../../agents/agent-scope.js";
-import {
-  getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
-  selectApplicableRuntimeConfig,
-} from "../../config/config.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { AgentDefaultsConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 type ResolvedAgentConfig = NonNullable<ReturnType<typeof resolveAgentConfig>>;
-
-/** Selects the active reloadable config when it descends from the cron caller's snapshot. */
-export function resolveCronActiveRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const runtimeConfig = getRuntimeConfigSnapshot();
-  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
-  if (!runtimeConfig || !runtimeSourceConfig) {
-    return cfg;
-  }
-  return (
-    selectApplicableRuntimeConfig({ inputConfig: cfg, runtimeConfig, runtimeSourceConfig }) ?? cfg
-  );
-}
 
 /** Selects the active runtime snapshot, then derives isolated cron agent defaults from it. */
 export function resolveCronAgentConfig(params: {
   config: OpenClawConfig;
   agentConfigOverride?: ResolvedAgentConfig;
 }) {
-  const runtimeConfig = resolveCronActiveRuntimeConfig(params.config);
+  const runtimeConfig = selectLiveRuntimeConfig(params.config);
   const {
     model: _agentModelOverride,
     sandbox: _agentSandboxOverride,
@@ -45,7 +29,8 @@ export function resolveCronAgentConfig(params: {
   // Agent-aware resolvers merge these scopes themselves. Flattening partial maps
   // erases inherited sandbox, memory, model-runtime and request-parameter settings.
   const agentDefaults: AgentDefaultsConfig = {
-    ...Object.assign({}, runtimeConfig.agents?.defaults, definedOverrides),
+    ...runtimeConfig.agents?.defaults,
+    ...definedOverrides,
   };
   const existingModel = toAgentModelListLike(agentDefaults.model) ?? {};
   if (typeof overrideModel === "string") {

@@ -17,7 +17,8 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasProviderBrandIcon } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
   SettingsSection,
@@ -33,6 +34,7 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import {
   modelProviderConfigBusy,
   modelProviderConfigMutationBlockedReason,
@@ -525,7 +527,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
                 </span>
               }
             >
-              <ProviderBrandIcon provider={view().agent.id} class="model-providers__icon" />
+              <ModelProviderIcon provider={view().agent.id} class="model-providers__icon" />
             </Show>
           }
           title={view().agent.name}
@@ -543,7 +545,8 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
             </Show>
           }
           checked={presentation().enabled()}
-          disabled={busy() || view().blocked}
+          disabled={view().blocked}
+          saving={busy()}
           onChange={(checked) => {
             const display = presentation();
             return setEnabled(props.agent, checked, (...args) => presentToggle(display, ...args));
@@ -551,12 +554,18 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         />
         <Show when={view().message}>
           {(message) => (
-            <div
-              class={["callout", message().kind, "model-providers__installed-agent-message"]}
-              role={message().kind === "error" ? "alert" : "status"}
+            <InlineAlert
+              tone={
+                message().kind === "error"
+                  ? "danger"
+                  : message().kind === "warning"
+                    ? "warning"
+                    : "success"
+              }
+              class="model-providers__installed-agent-message"
             >
               {message().text}
-            </div>
+            </InlineAlert>
           )}
         </Show>
       </div>
@@ -591,20 +600,16 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
               </>
             }
             actions={
-              <openclaw-tooltip prop:content={label()}>
-                <button
-                  type="button"
-                  class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
-                  aria-label={label()}
-                  disabled={props.checking || view().pending.size > 0}
-                  onClick={() => {
-                    void load();
-                    retryDiscovery();
-                  }}
-                >
-                  <Icon name="refresh" />
-                </button>
-              </openclaw-tooltip>
+              <RefreshButton
+                class="model-providers__refresh-button"
+                label={label()}
+                busy={props.checking}
+                disabled={view().pending.size > 0}
+                onClick={() => {
+                  void load();
+                  retryDiscovery();
+                }}
+              />
             }
           >
             {props.children}

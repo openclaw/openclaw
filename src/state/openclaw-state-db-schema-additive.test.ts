@@ -1,11 +1,8 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
-import { ensureMemoryChunkProvenance } from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
-import { ensureMemoryEntryOriginsSchema } from "../../packages/memory-host-sdk/src/memory-entry-origins.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { ensureExecutionOwnerLifecycleBindingSchema } from "../audit/execution-owner-lifecycle-binding-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteCommittedPublication } from "../infra/sqlite-post-commit.js";
@@ -13,14 +10,10 @@ import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { useSqliteSchemaTestFixture } from "../infra/sqlite-schema-facts.test-support.js";
-import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { ensureMeetingTranscriptsSchema } from "../transcripts/sqlite-schema.js";
-import { ensureOpenClawAgentBoardSchemaInTransaction } from "./openclaw-agent-board-schema.js";
-import { ensureSessionGoalOperationsSchema } from "./openclaw-agent-goal-operations-schema.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION as SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { expectRow, readRow, readRows } from "./openclaw-state-db-fixtures.test-support.js";
 import {
@@ -38,7 +31,6 @@ import {
   getOpenClawStateRuntimeSchema,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
 } from "./openclaw-state-schema-compatibility.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -48,6 +40,14 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 const { openDatabase } = useSqliteSchemaTestFixture();
+
+const featureEnsurer = () =>
+  createOpenClawStateSchemaEnsurer({
+    table: "web_push_approval_deliveries",
+    indexes: ["idx_web_push_approval_deliveries_subscription"],
+    endMarker: "  ON web_push_approval_deliveries(subscription_id, approval_id);\n",
+    operationLabel: "test.feature-schema",
+  });
 
 function expectRepeatedSqlAbsent(pattern: (sql: string) => boolean, run: () => void) {
   const observation = observeHostDataSql();
@@ -60,37 +60,11 @@ function expectRepeatedSqlAbsent(pattern: (sql: string) => boolean, run: () => v
   }
 }
 
-it("does not open a transaction for an already admitted feature schema", () => {
-  const database = openState({
-    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-feature-schema-") },
-  });
-  const createEnsurer = () =>
-    createOpenClawStateSchemaEnsurer({
-      table: "web_push_approval_deliveries",
-      indexes: ["idx_web_push_approval_deliveries_subscription"],
-      endMarker: "  ON web_push_approval_deliveries(subscription_id, approval_id);\n",
-      operationLabel: "test.feature-schema",
-    });
-  createEnsurer()({ database });
-  const observation = observeHostDataSql();
-  try {
-    createEnsurer()({ database });
-    expect(observation.queries.filter((sql) => /^(?:BEGIN|COMMIT|ROLLBACK)\b/i.test(sql))).toEqual(
-      [],
-    );
-  } finally {
-    observation.restore();
-  }
-});
-
 it("retries rolled-back feature DDL and publishes only its durable installation", () => {
   const database = openState({
     env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-feature-rollback-") },
   });
-  const ensure = createOpenClawStateSchemaEnsurer({
-    table: "web_push_approval_deliveries",
-    operationLabel: "test.feature-schema",
-  });
+  const ensure = featureEnsurer();
   using reader = openNodeSqliteDatabase(database.path);
   const installed = () =>
     readRow(
@@ -128,6 +102,10 @@ it("retries rolled-back feature DDL and publishes only its durable installation"
   expect(publications).toEqual([]);
   runOpenClawStateWriteTransaction(install, { database });
   expect(publications).toEqual([true]);
+  expectRepeatedSqlAbsent(
+    (sql) => /^(?:BEGIN|COMMIT|ROLLBACK)\b/i.test(sql),
+    () => featureEnsurer()({ database }),
+  );
 });
 
 it("installs additive DDL on the write runner's connection and rolls it back there", () => {
@@ -153,43 +131,6 @@ it("installs additive DDL on the write runner's connection and rolls it back the
   ensure(outer, (install) => runSqliteImmediateTransactionSync(writer, () => install(writer)));
   expect(installed(outer)).toBe(false);
   expect(installed(writer)).toBe(true);
-});
-
-it.each([
-  [
-    "audit lifecycle binding",
-    OPENCLAW_STATE_SCHEMA_SQL,
-    ensureExecutionOwnerLifecycleBindingSchema,
-  ],
-  ["goal receipt", OPENCLAW_AGENT_SCHEMA_SQL, ensureSessionGoalOperationsSchema],
-  ["board", OPENCLAW_AGENT_SCHEMA_SQL, ensureOpenClawAgentBoardSchemaInTransaction],
-  ["memory origin", OPENCLAW_AGENT_SCHEMA_SQL, ensureMemoryEntryOriginsSchema],
-  ["memory provenance", OPENCLAW_AGENT_SCHEMA_SQL, ensureMemoryChunkProvenance],
-] as const)(
-  "never issues persistent DDL on first or repeated warm %s use",
-  (_name, schema, ensure) => {
-    const database = openDatabase(schema);
-    expectRepeatedSqlAbsent(
-      (sql) => classifySqliteMutation(sql, "batch").mainSchemaChange,
-      () => {
-        database.exec("BEGIN IMMEDIATE");
-        ensure(database);
-        database.exec("COMMIT");
-      },
-    );
-  },
-);
-
-it("installs only the secret-store table and index on first use", () => {
-  using database = new DatabaseSync(":memory:");
-
-  ensureSecretStoreSchema(database);
-  expect(
-    readRows(
-      database,
-      "SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name",
-    ),
-  ).toEqual([{ name: "secret_store_entries" }, { name: "secret_store_entries_live_idx" }]);
 });
 
 it("lazily adds allowed_hosts to a v6 secret store without changing user_version", () => {

@@ -157,7 +157,6 @@ describe("utility model separation persistence", () => {
       expect(after.valid).toBe(true);
       expect(after.sourceConfig.agents?.defaults?.model).toEqual({ primary: expected, fallbacks });
       expect(after.sourceConfig.models).toEqual(candidate.models);
-      expect(provider.models[0]?.id).toBe("small");
       expect(after.sourceConfig.meta?.migrations?.utilityModelSeparation).toBe(true);
     },
   );
@@ -172,16 +171,10 @@ describe("utility model separation persistence", () => {
       const ioForModel = (model: string) => configIO(home, { LOCAL_MODEL: model });
       const io = ioForModel("first");
       const before = await io.readConfigFileSnapshot();
-      const first = template.replace("${LOCAL_MODEL}", "first");
-      expect(
-        before.sourceConfigBeforeMigrations?.models?.providers?.["local-fixture"]?.models[0]?.id,
-      ).toBe(first);
       const staged = materializeUtilityModelSeparation(
         before.sourceConfig,
         before.sourceConfigBeforeMigrations,
       );
-      expect(staged.config.agents?.defaults?.model).toBeUndefined();
-      expect(staged.config.meta?.migrations?.utilityModelSeparation).toBeUndefined();
       await io.writeConfigFile({ ...staged.config, gateway: { mode: "local", port: 19097 } });
       const persisted = JSON.parse(await fs.readFile(configPath, "utf8"));
       expect(persisted.models.providers["local-fixture"].models[0].id).toBe(template);

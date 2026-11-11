@@ -28,6 +28,7 @@ import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
   buildChildCompletionFindings,
   readSubagentRunAnnounceResultUsing,
+  readSubagentRunFinalAnswerUsing,
   SubagentAnnouncePreparationConflictError,
   type ChildCompletionRow,
   type PreparedAnnounceResult,
@@ -210,7 +211,7 @@ export async function readSubagentOutput(
   const collectorTurn = options?.completedCollectorTurn;
   if (
     collectorTurn &&
-    (!options?.sessionTarget ||
+    (!options.sessionTarget ||
       !Number.isFinite(collectorTurn.startedAt) ||
       !Number.isFinite(collectorTurn.endedAt) ||
       collectorTurn.endedAt < collectorTurn.startedAt)
@@ -365,6 +366,19 @@ export async function readSubagentRunAnnounceResult(
   });
 }
 
+/** The complete final answer recorded by this run, or undefined when retention removed it. */
+export async function readSubagentRunFinalAnswer(
+  child: SubagentRunRecord,
+): Promise<string | undefined> {
+  return await readSubagentRunFinalAnswerUsing(child, {
+    findTranscriptEvent,
+    findSessionTranscriptArchiveEventReadOnly,
+    getRuntimeConfig,
+    readSubagentSessionEntry,
+    resolveSessionStorePathCore,
+  });
+}
+
 /** Prepare complete result text without changing the bounded lifecycle evidence. */
 export async function readChildCompletionFindings(
   children: SubagentRunRecord[],
@@ -494,7 +508,7 @@ export async function buildCompactAnnounceStatsLine(params: {
   const output = entry?.outputTokens;
   const hasDirectionalUsage = typeof input === "number" || typeof output === "number";
   const ioTotal = (input ?? 0) + (output ?? 0);
-  const promptCache = resolveFreshSessionTotalTokens(entry);
+  const contextTokens = resolveFreshSessionTotalTokens(entry);
   const runtimeMs =
     typeof params.startedAt === "number" && typeof params.endedAt === "number"
       ? Math.max(0, params.endedAt - params.startedAt)
@@ -504,12 +518,12 @@ export async function buildCompactAnnounceStatsLine(params: {
     `runtime ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
     hasDirectionalUsage
       ? `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`
-      : promptCache === undefined
+      : contextTokens === undefined
         ? "tokens unknown"
-        : `tokens ${formatTokenCount(promptCache)} prompt/cache`,
+        : `tokens ${formatTokenCount(contextTokens)} context`,
   ];
-  if (hasDirectionalUsage && typeof promptCache === "number" && promptCache > ioTotal) {
-    parts.push(`prompt/cache ${formatTokenCount(promptCache)}`);
+  if (hasDirectionalUsage && typeof contextTokens === "number" && contextTokens > ioTotal) {
+    parts.push(`context ${formatTokenCount(contextTokens)}`);
   }
   return `Stats: ${parts.join(" • ")}`;
 }

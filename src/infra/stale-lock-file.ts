@@ -4,15 +4,9 @@ import {
   isPidDefinitelyDead as defaultIsPidDefinitelyDead,
 } from "../shared/pid-alive.js";
 
-type LockFileOwnerPayload = {
-  pid?: number;
-  createdAt?: string;
-  starttime?: number;
-};
-
 function readLockFileOwnerPayload(
   payload: Record<string, unknown> | null,
-): LockFileOwnerPayload | null {
+): { pid?: number; createdAt?: string; starttime?: number } | null {
   if (!payload) {
     return null;
   }
@@ -37,20 +31,27 @@ type LockOwnerInspection = {
   getProcessStartTime?: (pid: number) => number | null;
 };
 
-type StaleLockOwner = {
+/** Capture only the bounded facts used by this exact stale decision. Never
+ * resample the owner after failure or copy arbitrary sidecar payload fields. */
+export function inspectStaleLockOwner(params: LockOwnerInspection): {
   reason: "owner-starttime-changed" | "owner-process-exited";
   pid: number;
   recordedStarttime: number | null;
   observedStarttime: number | null;
-};
-
-/** Capture only the bounded facts used by this exact stale decision. Never
- * resample the owner after failure or copy arbitrary sidecar payload fields. */
-export function inspectStaleLockOwner(params: LockOwnerInspection): StaleLockOwner | null {
+} | null {
   const payload = readLockFileOwnerPayload(params.payload);
   if (!payload?.pid) {
     // An incomplete sidecar can belong to a suspended live writer.
     return null;
+  }
+  if ((params.isPidDefinitelyDead ?? defaultIsPidDefinitelyDead)(payload.pid)) {
+    // Windows start-time fallback spawns subprocesses even for an absent PID.
+    return {
+      reason: "owner-process-exited",
+      pid: payload.pid,
+      recordedStarttime: payload.starttime ?? null,
+      observedStarttime: null,
+    };
   }
   const observedStarttime =
     payload.starttime === undefined
@@ -72,9 +73,7 @@ export function inspectStaleLockOwner(params: LockOwnerInspection): StaleLockOwn
   if (observedStarttime !== null && observedStarttime !== normalizedStored) {
     return { reason: "owner-starttime-changed", ...identity };
   }
-  return (params.isPidDefinitelyDead ?? defaultIsPidDefinitelyDead)(payload.pid)
-    ? { reason: "owner-process-exited", ...identity }
-    : null;
+  return null;
 }
 
 export function isLockOwnerDefinitelyStale(params: LockOwnerInspection): boolean {
@@ -85,16 +84,10 @@ export function shouldRemoveDeadOwnerOrExpiredLock(params: {
   payload: Record<string, unknown> | null;
   staleMs: number;
   nowMs?: number;
-  isPidDefinitelyDead?: (pid: number) => boolean;
-  getProcessStartTime?: (pid: number) => number | null;
 }): boolean {
   const payload = readLockFileOwnerPayload(params.payload);
   if (payload?.pid) {
-    return isLockOwnerDefinitelyStale({
-      payload: params.payload,
-      isPidDefinitelyDead: params.isPidDefinitelyDead,
-      getProcessStartTime: params.getProcessStartTime,
-    });
+    return isLockOwnerDefinitelyStale({ payload: params.payload });
   }
   if (!payload?.createdAt) {
     return false;

@@ -23,8 +23,9 @@ export function createFreshTelegramSessionEntryLoader(params: {
   const load = async (agentId: string, sessionKey: string) => {
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
     const cacheKey = `${storePath}\0${sessionKey}`;
-    if (entriesByPathAndKey.has(cacheKey)) {
-      return { storePath, entry: await entriesByPathAndKey.get(cacheKey) };
+    const cached = entriesByPathAndKey.get(cacheKey);
+    if (cached) {
+      return { storePath, entry: await cached };
     }
     const entry = getSessionEntryAsync({
       storePath,

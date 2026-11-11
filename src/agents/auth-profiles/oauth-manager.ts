@@ -17,6 +17,7 @@ import {
   isPersistedExternalCliAuthProfile,
   readExternalCliBootstrapCredential,
 } from "./external-cli-sync.js";
+import type { OAuthRefreshParams } from "./oauth-manager.types.js";
 import { withOAuthProfileLock } from "./oauth-profile-lock.js";
 import { canRefreshOAuthCredential, refreshOAuthCredential } from "./oauth-provider-operations.js";
 import {
@@ -51,7 +52,7 @@ import {
   settleOAuthRefreshPeerClaims,
   type OAuthRefreshPeerClaim,
 } from "./oauth-refresh-peers.js";
-import { createOAuthRefreshQueue, type OAuthRefreshCohort } from "./oauth-refresh-queue.js";
+import { createOAuthRefreshQueue } from "./oauth-refresh-queue.js";
 import {
   isSafeOAuthOwnerRefreshResult,
   isSafeOAuthPostClaimSettlement,
@@ -87,22 +88,6 @@ import type { AuthProfileStore, OAuthCredential, OAuthCredentials } from "./type
 import { runAuthProfileUsage } from "./usage-lifecycle.js";
 
 const oauthRefreshRecoveryBuildFailures = new WeakSet<Error>();
-
-type OAuthRefreshParams = {
-  cohort: OAuthRefreshCohort;
-  personalStore?: PersonalAuthProfileStore;
-  profileId: string;
-  provider: string;
-  agentDir?: string;
-  cfg?: OpenClawConfig;
-  signal?: AbortSignal;
-  forceRefresh?: boolean;
-  attemptedCredential: OAuthCredential;
-  attemptedCredentials?: OAuthCredential[];
-  bootstrapCredential?: OAuthCredential | null;
-  bootstrapBaseCredential?: OAuthCredential;
-  validateCredential?: (credential: OAuthCredential) => void;
-};
 
 /** Create an independent OAuth refresh queue using the native provider operations. */
 export function createOAuthManager() {
@@ -337,6 +322,7 @@ export function createOAuthManager() {
           observation = beginOAuthRefreshObservation();
           const claimed = await persistOAuthRefreshClaim({
             personalStore: params.personalStore,
+            assertAdmission: params.assertRefreshAdmission,
             assertCurrent: () => {
               params.signal?.throwIfAborted();
               assertPersonalRefreshCurrent?.();
@@ -838,6 +824,7 @@ export function createOAuthManager() {
     signal?: AbortSignal;
     forceRefresh?: boolean;
     validateCredential?: (credential: OAuthCredential) => void;
+    assertRefreshAdmission?: () => void;
   }): Promise<ResolvedOAuthAccess | null> {
     params.signal?.throwIfAborted();
     if (!isUserModelAuthProfileId(params.profileId)) {
@@ -1017,13 +1004,8 @@ export function createOAuthManager() {
     }
   }
 
-  function resetRefreshQueuesForTest(): void {
-    refreshQueue.reset();
-  }
-
   return {
     resolveOAuthAccess,
-    resetRefreshQueuesForTest,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

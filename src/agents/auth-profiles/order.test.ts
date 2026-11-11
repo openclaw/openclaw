@@ -8,6 +8,7 @@ import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.
 import { isAmbientCredentialAllowedByProviderAuthPin } from "./ambient-auth.js";
 import {
   createApiKeyCredential,
+  createUnresolvedOAuthCredential,
   createOAuthRefreshCredential as oauth,
 } from "./credential-fixtures.test-support.js";
 import { closeAuthProfileReadPool } from "./sqlite.js";
@@ -304,16 +305,7 @@ describe("resolveAuthProfileOrder", () => {
 
   it("keeps unresolved OAuth refs only in read-only profile ordering", () => {
     const store = storeWith({
-      "openai:legacy-ref": oauth({
-        access: "",
-        refresh: "",
-        expires: 0,
-        oauthRef: {
-          source: "openclaw-credentials",
-          provider: "openai-codex",
-          id: "00000000000000000000000000000000",
-        },
-      }),
+      "openai:legacy-ref": createUnresolvedOAuthCredential(),
     });
 
     expect(resolveAuthProfileOrderWithMetadata({ store, provider: "openai" })).toEqual({

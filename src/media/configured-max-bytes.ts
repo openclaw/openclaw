@@ -17,12 +17,11 @@ const TELEGRAM_DEFAULT_MEDIA_MAX_MB = 100;
  * RGBA (33.2 MB). Measured Gemini 4K photo PNGs were 27-29 MiB.
  */
 const GENERATED_IMAGE_DOWNLOAD_MAX_BYTES = 64 * MB;
-type GeneratedMediaKind = Extract<MediaKind, "audio" | "image" | "video">;
 
 /** Returns the configured media cap, falling back to the media-core per-kind default. */
 export function resolveGeneratedMediaMaxBytes(
   cfg: OpenClawConfig | undefined,
-  kind: GeneratedMediaKind,
+  kind: Extract<MediaKind, "audio" | "image" | "video">,
 ) {
   const configured = cfg?.agents?.defaults?.mediaMaxMb;
   return typeof configured === "number" && Number.isFinite(configured) && configured > 0

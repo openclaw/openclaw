@@ -95,7 +95,13 @@ export async function persistUpdatedJob(params: {
         scheduleChanged,
       });
       try {
-        if (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) {
+        if (previousJob.ownerProfileId !== nextJob.ownerProfileId) {
+          requestActiveCronJobCancellation(nextJob.id, "Cron job ownership transferred.");
+        } else if (
+          params.jobMutation.kind === "update"
+            ? params.jobMutation.patch.enabled === false
+            : isJobEnabled(previousJob) && !isJobEnabled(nextJob)
+        ) {
           requestActiveCronJobCancellation(nextJob.id, "Cron job disabled by operator.");
         }
       } finally {

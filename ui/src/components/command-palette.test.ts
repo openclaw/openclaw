@@ -122,21 +122,38 @@ describe("CommandPalette search", () => {
       methods: ["cron.list", "models.list"],
       request: catalogRequest({
         "cron.list": automations.promise,
-        "models.list": modelResult("needle", "Needle model"),
+        "models.list": modelResult("needle", "Cafe\u0301 model"),
       }),
     });
 
-    await searchPalette(palette, "needle");
-    await vi.waitFor(() => expect(findPaletteOption(palette, "Needle model")).toBeDefined());
+    await searchPalette(palette, "CAFÉ");
+    await vi.waitFor(() => expect(findPaletteOption(palette, "Cafe\u0301 model")).toBeDefined());
     expect(palette.textContent).toContain("Searching commands");
-    findPaletteOption(palette, "Needle model")?.click();
+    findPaletteOption(palette, "Cafe\u0301 model")?.click();
     expect(palette.onNavigate).toHaveBeenCalledWith("model-providers");
 
-    await searchPalette(palette, "needle");
-    automations.resolve({ jobs: [{ id: "needle-job", name: "Needle automation" }] });
-    await vi.waitFor(() => expect(findPaletteOption(palette, "Needle automation")).toBeDefined());
-    expect(findPaletteOption(palette, "Needle model")).toBeDefined();
+    await searchPalette(palette, "CAFÉ");
+    automations.resolve({ jobs: [{ id: "needle-job", name: "Café automation" }] });
+    await vi.waitFor(() => expect(findPaletteOption(palette, "Café automation")).toBeDefined());
+    expect(findPaletteOption(palette, "Cafe\u0301 model")).toBeDefined();
     expect(palette.textContent).not.toContain("Searching commands");
+  });
+
+  it("keeps a pending model search when typing refreshes an expired command catalog", async () => {
+    const pending = createDeferred<ReturnType<typeof modelResult>>();
+    const request = vi.fn().mockReturnValue(pending.promise);
+    const { palette } = await mountModels(request);
+    await searchPalette(palette, "needle");
+    expect(request).toHaveBeenCalledOnce();
+
+    vi.setSystemTime(Date.now() + 30_001);
+    setInputValue(paletteInput(palette), "needle model");
+    await settlePalette(palette);
+    expect.soft(request).toHaveBeenCalledOnce();
+
+    pending.resolve(modelResult("needle", "Needle model"));
+    await settlePalette(palette);
+    expect(findPaletteOption(palette, "Needle model")).toBeDefined();
   });
 
   it("excludes agent primary models when selection is restricted", async () => {
@@ -168,7 +185,7 @@ describe("CommandPalette search", () => {
     expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
     await settlePalette(palette);
     expect(query('.cmd-palette__search [role="status"]')?.textContent).toContain(
-      "Model search unavailable",
+      "Couldn’t search models",
     );
     expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
 
@@ -190,7 +207,7 @@ describe("CommandPalette search", () => {
       const { context, palette, provider, query } = harness;
       await searchPalette(palette, "needle");
       expect(findPaletteOption(palette, "Needle old")).toBeDefined();
-      harness.emit("config.changed");
+      harness.emit("chat.metadata.changed", { modelCatalogChanged: true });
       await vi.advanceTimersByTimeAsync(200);
       if (replacement === "agent") {
         context.agentSelection.set("reviewer");
@@ -211,7 +228,7 @@ describe("CommandPalette search", () => {
       await palette.updateComplete;
       if (replacement === "connection") {
         expect(findPaletteOption(palette, "Needle old")).toBeDefined();
-        expect(palette.textContent).toContain("Reconnect to search Gateway content.");
+        expect(palette.textContent).toContain("Reconnect to search sessions.");
       } else if (replacement !== "publication") {
         expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
       }
@@ -293,8 +310,8 @@ describe("CommandPalette search", () => {
     await searchPalette(palette, "n");
 
     expect(list).not.toHaveBeenCalled();
-    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
-    expect(query('[role="listbox"]')?.getAttribute("aria-label")).toBe(
+    expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+    expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-label")).toBe(
       query("textarea")?.getAttribute("aria-label"),
     );
     expect(palette.textContent).not.toContain("Searching sessions");
@@ -315,12 +332,11 @@ describe("CommandPalette search", () => {
       };
       const { gateway } = createGateway(true, {
         methods: ["plugins.list"],
-        request: async (rpc) => {
-          if (rpc !== "plugins.list") {
-            throw new Error(`Unexpected method: ${rpc}`);
-          }
-          return { plugins: pluginId ? [plugin] : [] };
-        },
+        request: catalogRequest({
+          "plugins.list": {
+            plugins: pluginId ? [plugin] : [],
+          },
+        }),
       });
       const context = createContext(gateway, async () => null);
       const { palette, query } = await mountPalette({
@@ -341,9 +357,7 @@ describe("CommandPalette search", () => {
   it("moves the keyboard selection through catalog groups in visible order", async () => {
     const { gateway } = createGateway(true, {
       methods: ["cron.list"],
-      request: vi.fn(async () => ({
-        jobs: [{ id: "bravo", name: "Needle Bravo" }],
-      })),
+      request: vi.fn(async () => ({ jobs: [{ id: "bravo", name: "Needle Bravo" }] })),
     });
     const context = createContext(gateway);
     const { palette, query, queryAll } = await mountPalette(
@@ -538,7 +552,7 @@ describe("CommandPalette search", () => {
     await searchPalette(palette, query);
 
     expect(list).toHaveBeenCalledOnce();
-    expect(palette.textContent).toContain("Chat search failed");
+    expect(palette.textContent).toContain("Couldn’t search sessions");
     expect(palette.textContent).not.toContain("No results");
     expect(findPaletteOption(palette, "Plugins")).toBeDefined();
 
@@ -550,7 +564,7 @@ describe("CommandPalette search", () => {
 
     setInputValue(input, "zz");
     await palette.updateComplete;
-    expect(palette.textContent).not.toContain("Chat search failed");
+    expect(palette.textContent).not.toContain("Couldn’t search sessions");
     await settlePalette(palette);
     expect(palette.textContent).toContain("Recovered chat");
   });

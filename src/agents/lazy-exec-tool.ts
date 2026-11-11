@@ -1,6 +1,6 @@
-import { Type } from "typebox";
 import { resolveExecCommandHighlighting } from "../config/exec-command-highlighting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ExecMode } from "../infra/exec-approvals-core.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { captureExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
@@ -13,9 +13,15 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
+import { canInterruptExec } from "./bash-tools.exec-target.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
-import { createExecSchema, execSchema as execExecutionSchema } from "./bash-tools.schemas.js";
+import {
+  createExecCompletionSchema,
+  createExecSchema,
+  execSchema as execExecutionSchema,
+} from "./bash-tools.schemas.js";
 import { createExecToolExecutionTimeoutResolver } from "./exec-tool-timeout.js";
+import { resolveProviderToolPolicy } from "./provider-tool-policy.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -43,7 +49,7 @@ export function createLazyExecTool(
   });
   const processToolAvailabilityRef = defaults?.processToolAvailabilityRef ?? {};
   const execSchema = createExecSchema(defaults);
-  const execCompletionSchema = Type.Omit(execSchema, ["yieldMs", "background"]);
+  const execCompletionSchema = createExecCompletionSchema(defaults);
   let loadedTool: LoadedExecTool | undefined;
   let loadingTool: Promise<LoadedExecTool> | undefined;
   const loadTool = () => {
@@ -62,6 +68,7 @@ export function createLazyExecTool(
     {
       name: "exec",
       label: "exec",
+      interruptible: (args) => canInterruptExec(args, defaults),
       displaySummary: presentation?.displaySummary ?? EXEC_TOOL_DISPLAY_SUMMARY,
       getExecutionTimeoutMs: createExecToolExecutionTimeoutResolver(defaults),
       get description() {
@@ -103,6 +110,22 @@ export function createLazyExecTool(
 }
 
 /** Resolve global and per-agent exec defaults before runtime-only overrides. */
+/** `tools.byProvider[...].exec.mode` ceilings for one model; global and agent entries both bind. */
+export function resolveModelExecCeilings(params: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+  modelProvider?: string;
+  modelId?: string;
+}): ExecMode[] {
+  const cfg = params.cfg;
+  const model = { modelProvider: params.modelProvider, modelId: params.modelId };
+  const agentByProvider =
+    cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.byProvider : undefined;
+  return [cfg?.tools?.byProvider, agentByProvider].flatMap(
+    (byProvider) => resolveProviderToolPolicy({ ...model, byProvider })?.exec?.mode ?? [],
+  );
+}
+
 export function resolveExecToolConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
   const cfg = params.cfg;
   const globalExec = cfg?.tools?.exec;

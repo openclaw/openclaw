@@ -1,11 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { prepareSessionFileWorkspace } from "../session-file-workspace.js";
-import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { authorizeSessionAgentRun, isSessionOwnRequester } from "../session-sharing-policy.js";
+import {
+  SessionFileWorkspaceChangedError,
+  SessionMutationAuthorizationChangedError,
+  sessionMutationForbiddenError,
+} from "../session-mutation-authorization-error.js";
+import { isSessionOwnRequester } from "../session-sharing-policy.js";
 import type { GatewaySessionEntryRead } from "../session-utils-store.js";
+import { authorizeSessionWorkspaceRead } from "../session-workspace-read-policy.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -37,21 +41,19 @@ export function assertSessionFileReadPolicy(
       )
     )
   ) {
-    throw new SessionMutationAuthorizationChangedError(
-      errorShape(
-        ErrorCodes.FORBIDDEN,
-        "Only this conversation's owner can open its files from before the PR workspace.",
-      ),
+    throw sessionMutationForbiddenError(
+      "Only this conversation's owner can open its files from before the PR workspace.",
     );
   }
   if (!target.unscopedHostRoot) {
     return;
   }
   readGatewayRequestMutationAuthority(options).assertCurrent();
-  const error = authorizeSessionAgentRun({
+  const error = authorizeSessionWorkspaceRead({
     cfg: options.context.getRuntimeConfig(),
     client: options.client,
     target: { agentId: target.agentId, canonicalKey: target.canonicalKey, entry: target.entry },
+    unscopedHostRoot: target.unscopedHostRoot,
   });
   if (error) {
     throw new SessionMutationAuthorizationChangedError(error);
@@ -130,16 +132,12 @@ export function createSessionFileReadAuthority(
       current.root !== source.root ||
       resolveFileRoot(current) !== source.fileRoot
     ) {
-      throw new SessionMutationAuthorizationChangedError(
-        errorShape(ErrorCodes.FORBIDDEN, "outside session boundary"),
-      );
+      throw sessionMutationForbiddenError("outside session boundary");
     }
   };
   const withHostAuthority = async <T>(consume: () => T): Promise<T> => {
     if (!options.withSessionTurnAuthority || !source.entry?.sessionId) {
-      throw new SessionMutationAuthorizationChangedError(
-        errorShape(ErrorCodes.FORBIDDEN, "outside session boundary"),
-      );
+      throw sessionMutationForbiddenError("outside session boundary");
     }
     return options.withSessionTurnAuthority(
       { sessionKey: source.canonicalKey, agentId, sessionId: source.entry.sessionId },
@@ -195,9 +193,7 @@ export function createSessionFileReadAuthority(
         resolveSessionWorkspaceRoots(context.getRuntimeConfig(), agentId, source.entry).root !==
           source.root
       ) {
-        throw new SessionMutationAuthorizationChangedError(
-          errorShape(ErrorCodes.FORBIDDEN, "Session workspace changed during file access"),
-        );
+        throw new SessionFileWorkspaceChangedError();
       }
       if (usedHostRead && source.entry) {
         assertHostEntry(source.entry);

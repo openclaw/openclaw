@@ -149,26 +149,22 @@ function asRecordArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
 }
 
+function isCompatString(value: unknown, maxLength: number): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= maxLength;
+}
+
 function readCompatNextCursor(value: unknown, method: string): string | undefined {
   if (value === null || value === undefined) {
     return undefined;
   }
-  if (
-    typeof value !== "string" ||
-    value.trim().length === 0 ||
-    value.length > MAX_COMPAT_CURSOR_LENGTH
-  ) {
+  if (!isCompatString(value, MAX_COMPAT_CURSOR_LENGTH)) {
     throw new Error(`Codex ${method} returned an invalid nextCursor`);
   }
   return value;
 }
 
 function readCompatThreadId(value: unknown, method: string, index: number): string {
-  if (
-    typeof value !== "string" ||
-    value.trim().length === 0 ||
-    value.length > MAX_COMPAT_THREAD_ID_LENGTH
-  ) {
+  if (!isCompatString(value, MAX_COMPAT_THREAD_ID_LENGTH)) {
     throw new Error(`Codex ${method} returned an invalid thread id at data[${index}]`);
   }
   return value;

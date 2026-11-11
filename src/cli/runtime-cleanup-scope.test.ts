@@ -1,5 +1,10 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as postgres from "../infra/postgres-sync/pool.js";
+import {
+  captureRuntimeWorkerSource,
+  withRuntimeWorkerGeneration,
+} from "../infra/runtime-worker-generation.js";
 import * as workers from "../infra/worker-native-lifecycle.js";
 import * as database from "../state/openclaw-state-db-cache.js";
 import * as lifecycle from "./gateway-cli/run-loop.test-support.js";
@@ -8,6 +13,7 @@ import { runCliDisposer, waitForPendingCliDisposers } from "./runtime-cleanup.js
 
 const closeDatabase = vi.spyOn(database, "closeOpenClawStateDatabaseAsync");
 const closeWorkers = vi.spyOn(workers, "closeDefaultRetainedNativeWorkerSource");
+const closePostgres = vi.spyOn(postgres, "closePostgresPool");
 const events: string[] = [];
 
 beforeEach(() => {
@@ -15,6 +21,7 @@ beforeEach(() => {
   events.length = 0;
   closeDatabase.mockReset().mockImplementation(async () => void events.push("database"));
   closeWorkers.mockReset().mockImplementation(async () => void events.push("workers"));
+  closePostgres.mockReset().mockImplementation(async () => void events.push("postgres"));
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 afterEach(() => {
@@ -30,6 +37,71 @@ const runCommand = <T>(run: () => T | Promise<T>) =>
       return run();
     }),
   );
+
+it("keeps PostgreSQL services through generation settlement and native backend close", async () => {
+  const settlement = lifecycle.createLifecycleGate();
+  const backendClose = lifecycle.createLifecycleGate();
+  const closing = runCommand(() =>
+    withRuntimeWorkerGeneration(
+      async (bind) => {
+        bind(() => new URL("file:///synthetic/retained/worker.js"));
+        const { runtimeGeneration } = captureRuntimeWorkerSource(
+          new URL("file:///synthetic/original/worker.js"),
+        );
+        if (!runtimeGeneration) {
+          throw new Error("Synthetic worker generation was not bound");
+        }
+        runtimeGeneration.retain({}, async () => {
+          await settlement.wait();
+          events.push("settled");
+          return async () => {
+            await backendClose.wait();
+            events.push("backend-close");
+          };
+        });
+      },
+      async () => void events.push("released"),
+    ),
+  );
+  try {
+    await settlement.entered;
+    expect(closePostgres).not.toHaveBeenCalled();
+    settlement.release();
+    await backendClose.entered;
+    expect(closePostgres).not.toHaveBeenCalled();
+    backendClose.release();
+    await closing;
+    expect(events).toEqual([
+      "settled",
+      "backend-close",
+      "released",
+      "database",
+      "workers",
+      "postgres",
+    ]);
+  } finally {
+    settlement.release();
+    backendClose.release();
+    await closing;
+  }
+});
+
+it.each(["database", "workers"] as const)(
+  "retains PostgreSQL services and reports a rejected %s drain",
+  async (stage) => {
+    const failure = new Error(`${stage} drain failed`);
+    const close = stage === "database" ? closeDatabase : closeWorkers;
+    close.mockRejectedValueOnce(failure);
+
+    await expect(runCommand(() => "command-result")).resolves.toBe("command-result");
+
+    expect(closePostgres).not.toHaveBeenCalled();
+    expect(closeWorkers).toHaveBeenCalledTimes(stage === "database" ? 0 : 1);
+    expect(console.error).toHaveBeenCalledWith(
+      `CLI cleanup failed: shared-state: ${failure.message}`,
+    );
+  },
+);
 
 it("defers shared-state closure until expired disposal and its late write settle", async () => {
   const parent = lifecycle.createLifecycleGate();
@@ -59,7 +131,15 @@ it("defers shared-state closure until expired disposal and its late write settle
     await lifecycle.advanceWithoutCalls(5_000, closeDatabase);
     write.release();
     await waitForPendingCliDisposers();
-    expect(events).toEqual(["write", "database", "workers", "database", "workers"]);
+    expect(events).toEqual([
+      "write",
+      "database",
+      "workers",
+      "postgres",
+      "database",
+      "workers",
+      "postgres",
+    ]);
   } finally {
     parent.release();
     write.release();
@@ -68,11 +148,12 @@ it("defers shared-state closure until expired disposal and its late write settle
   }
 });
 
-it.each(["database", "workers"] as const)("bounds %s cleanup", async (stage) => {
+it.each(["database", "workers", "postgres"] as const)("bounds %s cleanup", async (stage) => {
   const stalled = lifecycle.createLifecycleGate();
   const commandError = new Error("command failed");
   const completed = vi.fn();
-  const close = stage === "database" ? closeDatabase : closeWorkers;
+  const close =
+    stage === "database" ? closeDatabase : stage === "workers" ? closeWorkers : closePostgres;
   close.mockImplementationOnce(stalled.wait);
   const closing = runCommand(() => {
     if (stage === "database") {
@@ -95,4 +176,5 @@ it.each(["database", "workers"] as const)("bounds %s cleanup", async (stage) => 
     await waitForPendingCliDisposers();
   }
   expect(closeWorkers).toHaveBeenCalledOnce();
+  expect(closePostgres).toHaveBeenCalledOnce();
 });

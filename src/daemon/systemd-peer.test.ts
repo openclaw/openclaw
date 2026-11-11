@@ -6,6 +6,7 @@ import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { execFileUtf8 } from "./exec-file.js";
 import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import { openSystemdBroker, openSystemdPrivatePeer } from "./systemd-peer-native.js";
 import { admitSystemdServiceReadBinding } from "./systemd-peer.js";
 import { systemdManagerVersionProbe } from "./systemd-user-bus.test-support.js";
@@ -57,12 +58,11 @@ beforeEach(() => {
   vi.mocked(execFileUtf8).mockImplementation(async (command, args, options) => {
     await systemdManagerVersionProbe(command, args);
     const stale = options?.env?.DBUS_SESSION_BUS_ADDRESS === "unix:path=/tmp/dbus-stale";
-    return {
-      code: stale ? 1 : 0,
-      termination: "exit",
-      stdout: stale ? "" : 's "252.39"',
-      stderr: stale ? "No manager on this broker" : "",
-    };
+    return nativeExit(
+      stale ? "" : 's "252.39"',
+      stale ? "No manager on this broker" : "",
+      stale ? 1 : 0,
+    );
   });
   query.mockImplementation(async (args) => [
     [args[4] === "GetNameOwner" ? ":1.0" : args[4] === "GetConnectionUnixUser" ? 1000 : 1234],
@@ -204,12 +204,9 @@ it("preserves a custom abstract local Unix route", async () => {
 it("admits the selected runtime bus after a stale nonlocal address", async () => {
   const runtime = dirs.make("openclaw-nonlocal-fallback-");
   await fs.writeFile(path.join(runtime, "bus"), "");
-  vi.mocked(execFileUtf8).mockResolvedValueOnce({
-    code: 1,
-    termination: "exit",
-    stdout: "",
-    stderr: "Failed to connect to bus: Connection refused",
-  });
+  vi.mocked(execFileUtf8).mockResolvedValueOnce(
+    nativeExit("", "Failed to connect to bus: Connection refused", 1),
+  );
   const binding = await admitSystemdServiceReadBinding(
     {
       ...env,

@@ -26,23 +26,10 @@ import {
 
 registerNewSessionSetupEnglish();
 
-type WhereChipState = Readonly<{
-  kind: "local" | "device" | "auto-device" | "cloud" | "hosted";
-  label: string;
-  devices: readonly DevicePlacementOption[];
-  cloudProfiles: readonly DraftCloudProfile[];
-  cloudMachines: readonly WorkerMachineOption[];
-  selectedMachineId: string;
-  operatingSystems: readonly WorkerOperatingSystem[];
-  selectedOsId: string;
-  autoDeviceDisabledReason?: string;
-  hostedRuntimeId?: string;
-}>;
-
 export function draftWhereChipParams(
   place: DraftPlaceState,
   gateway: DraftGatewayState,
-  cloudProfiles = place.isAdmin() ? gateway.cloudProfiles : [],
+  cloudProfiles = gateway.cloudProfiles,
 ) {
   return {
     hostedEnvironment: place.hostedEnvironment
@@ -71,7 +58,18 @@ export function resolveWhereChip(params: {
   autoDevice?: boolean;
   devicePlacement?: DevicePlacementRequirement;
   deviceDisabledReason?: string;
-}): WhereChipState {
+}): Readonly<{
+  kind: "local" | "device" | "auto-device" | "cloud" | "hosted";
+  label: string;
+  devices: readonly DevicePlacementOption[];
+  cloudProfiles: readonly DraftCloudProfile[];
+  cloudMachines: readonly WorkerMachineOption[];
+  selectedMachineId: string;
+  operatingSystems: readonly WorkerOperatingSystem[];
+  selectedOsId: string;
+  autoDeviceDisabledReason?: string;
+  hostedRuntimeId?: string;
+}> {
   const devices = projectDevicePlacements(
     params.environments,
     params.devicePlacement,

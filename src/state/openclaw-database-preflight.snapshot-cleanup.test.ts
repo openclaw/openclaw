@@ -25,19 +25,22 @@ afterEach(async () => {
 it.each([
   { capable: false, code: "EBUSY", read: "success", caller: "signal", settles: "deferred" },
   { capable: false, code: "EBUSY", read: "success", caller: "none", settles: "deferred" },
-  { capable: true, code: "EBUSY", read: "success", caller: "signal", settles: "rejected" },
-  { capable: true, code: "EBUSY", read: "success", caller: "none", settles: "rejected" },
+  { capable: true, code: "EBUSY", read: "success", caller: "signal", settles: "deferred" },
+  { capable: true, code: "EBUSY", read: "success", caller: "none", settles: "deferred" },
+  { capable: true, code: "ENOTEMPTY", read: "success", caller: "signal", settles: "deferred" },
+  { capable: true, code: "ENOTEMPTY", read: "success", caller: "none", settles: "deferred" },
   { capable: false, code: "EPERM", read: "success", caller: "signal", settles: "rejected" },
   { capable: false, code: "EBUSY", read: "failure", caller: "signal", settles: "rejected" },
 ] as const)(
   "settles state preflight with $code cleanup after read $read (native close capable: $capable, caller signal: $caller)",
   async ({ capable, code, read, caller, settles }) => {
     const remove = fs.promises.rm;
-    // Bun can retain native resources after logical close; fail only this snapshot's removal.
+    // Fail final directory removal, after payload and token retirement have succeeded.
     vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
-      if ([...busyRoots].some((root) => String(target).startsWith(root))) {
+      if (busyRoots.has(String(target))) {
         throw Object.assign(new Error(`${code}: resource busy or locked, rm '${String(target)}'`), {
           code,
+          syscall: "rmdir",
         });
       }
       return remove(target, options);
@@ -79,8 +82,8 @@ it.each([
     if (settles === "deferred") {
       await expect(outcome).resolves.toEqual({ incompatible: [], indeterminate: [] });
       expect(warn).toHaveBeenCalledWith(
-        { path: cleanupRoot, errorCode: "EBUSY" },
-        "SQLite snapshot cleanup deferred until native SQLite resources are released.",
+        { path: cleanupRoot, errorCode: code },
+        "SQLite snapshot cleanup deferred until open files are released.",
       );
     } else {
       await expect(outcome).rejects.toBeInstanceOf(Error);

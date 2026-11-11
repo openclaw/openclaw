@@ -12,6 +12,7 @@ import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
 import {
   installControlUiE2ePageDiagnosticRing,
   recordControlUiE2eFailureFacts,
+  rethrowWithControlUiE2eFailureFacts,
 } from "./control-ui-e2e-diagnostics.ts";
 import { installControlUiE2eRendererStallProbe } from "./control-ui-e2e-renderer-stall.ts";
 import {
@@ -58,6 +59,58 @@ describe("shared proof capture", () => {
     vi.restoreAllMocks();
     document.body.replaceChildren();
   });
+
+  it.each(["resolve", "reject", "throw", "late resolve", "late reject"] as const)(
+    "preserves the original failure and bounded facts when a scenario read will %s",
+    async (outcome) => {
+      const { logs } = diagnosticFixture();
+      const page = pageFixture({
+        evaluate: async () => ({ failureSummary: { available: true } }),
+        screenshot: async () => Buffer.from("proof"),
+      });
+      const original = new Error("original assertion failure");
+      const pending = createDeferredCore<Record<string, number>>();
+      const read = () => {
+        if (outcome === "throw") {
+          throw new Error("diagnostic launch failed");
+        }
+        return outcome === "resolve"
+          ? Promise.resolve({ toolCards: 2 })
+          : outcome === "reject"
+            ? Promise.reject(new Error("diagnostic read failed"))
+            : pending.promise;
+      };
+      const failed = rethrowWithControlUiE2eFailureFacts(page, original, "factsRead", read).catch(
+        (error: unknown) => error,
+      );
+      const late = outcome.startsWith("late");
+      if (late) {
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      expect(await failed).toBe(original);
+      const capture = async () => {
+        await captureControlUiE2eFailureDiagnostics(page, { error: original, label: "scenario" });
+        const summary = logs.mock.calls.findLast(
+          ([message]) => message === "[control-ui-e2e] failure state",
+        );
+        return JSON.parse(String(summary?.[1])).scenarioFacts;
+      };
+      const expected =
+        outcome === "resolve" ? { factsRead: true, toolCards: 2 } : { factsRead: false };
+      expect(await capture()).toEqual(expected);
+      if (late) {
+        if (outcome === "late resolve") {
+          pending.resolve({ toolCards: 9 });
+        } else {
+          pending.reject(new Error("late diagnostic failure"));
+        }
+        await vi.runAllTimersAsync();
+        // Capture again: unchanged old artifact bytes alone cannot detect a late WeakMap write.
+        expect(await capture()).toEqual(expected);
+      }
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it.each([
     { stage: "evaluation", late: "resolve" },
@@ -134,13 +187,15 @@ describe("shared proof capture", () => {
   );
 
   it.each([
-    { stall: "script", paused: true, metrics: true },
-    { stall: "native", paused: false, metrics: true },
-    { stall: "unavailable metrics", paused: true, metrics: false },
+    { stall: "passive", captureStack: false, paused: false, metrics: true },
+    { stall: "script", captureStack: true, paused: true, metrics: true },
+    { stall: "native", captureStack: true, paused: false, metrics: true },
+    { stall: "unavailable metrics", captureStack: true, paused: true, metrics: false },
   ])(
     "publishes $stall renderer stall evidence without page origins",
-    async ({ paused, metrics }) => {
+    async ({ captureStack, paused, metrics }) => {
       const { parent } = diagnosticFixture();
+      vi.stubEnv("OPENCLAW_CAPTURE_UI_PROOF", captureStack ? "1" : "0");
       const sent: string[] = [];
       let samples = 0;
       const session = Object.assign(new EventEmitter(), {
@@ -231,8 +286,14 @@ describe("shared proof capture", () => {
         },
       });
       expect(JSON.stringify(report)).not.toMatch(/token=private|private\.invalid|private-session/u);
-      expect(sent).toContain("Debugger.pause");
-      expect(sent.slice(-2)).toEqual(["Debugger.resume", "detach"]);
+      if (captureStack) {
+        expect(sent).toContain("Debugger.pause");
+        expect(sent.slice(-2)).toEqual(["Debugger.resume", "detach"]);
+      } else {
+        expect(sent).not.toContain("Debugger.enable");
+        expect(sent).not.toContain("Debugger.pause");
+        expect(sent.at(-1)).toBe("detach");
+      }
       expect(session.listenerCount("Debugger.scriptParsed")).toBe(0);
       expect(vi.getTimerCount()).toBe(0);
       stalled.resolve(null);
@@ -345,10 +406,10 @@ describe("shared proof capture", () => {
 
   it.each([
     ["none", "Send message", "snapshot", "5", "6"],
-    ["none", "Loading chat", "none", undefined, undefined],
+    ["none", "Loading conversation…", "none", undefined, undefined],
     ["evaluation", "Send message", "list", undefined, undefined],
     ["screenshot", "private-label", "list", undefined, undefined],
-    ["storage", "Sending message...", "list", undefined, undefined],
+    ["storage", "Sending message…", "list", undefined, undefined],
   ] as const)(
     "retains safe failure state despite %s failure (%s; %s catalog; %s/%s)",
     async (failure, sendLabel, catalogSource, shardIndex, shardCount) => {
@@ -399,7 +460,7 @@ describe("shared proof capture", () => {
       });
       const storageFailed = failure === "storage";
       const screenshotFailed = failure === "screenshot";
-      const sendDisabled = failure !== "none" || sendLabel === "Loading chat";
+      const sendDisabled = failure !== "none" || sendLabel === "Loading conversation…";
       const badgeText = failure === "none" ? "Ready" : "private-badge";
       const fileText = "private-file-content";
       const dom = document.createElement("div");
@@ -646,7 +707,7 @@ describe("shared proof capture", () => {
                     send: {
                       label: sendLabel === "private-label" ? "unknown" : sendLabel,
                       labelLength: sendLabel.length,
-                      disabled: failure !== "none" || sendLabel === "Loading chat",
+                      disabled: failure !== "none" || sendLabel === "Loading conversation…",
                       busy: failure === "storage",
                     },
                   },

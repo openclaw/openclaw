@@ -20,6 +20,7 @@ import {
 } from "./session-accessor.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { ReplySessionInitializationCommitResult } from "./session-accessor.types.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 
 vi.mock("../config.js", async () => ({
   ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
@@ -308,12 +309,8 @@ async function runConcurrencyScenario<TRequest extends ConcurrencyWorkerRequest>
   );
 }
 
-const message = (id: string, content: string) => ({
-  type: "message",
-  id,
-  parentId: null,
-  message: { role: "assistant", content },
-});
+const message = (id: string, content: string) =>
+  messageEvent(id, null, { role: "assistant", content });
 const transcriptEvents = (
   sessionId: string,
   id = "rewrite-target",

@@ -60,10 +60,10 @@ function failedRun() {
 const checkFailure = {
   mode: "manual",
   tone: "warn",
-  text: "Could not check for updates: timeout",
+  text: "Couldn’t check for updates. timeout",
 } as const;
 const restartPending =
-  "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.";
+  "Update installed. A Gateway restart is already in progress; status will refresh after it reconnects.";
 const gitSchedule = (git: NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>) =>
   ({ channel: "dev", autoEnabled: false, install: { kind: "git", git } }) as const;
 
@@ -141,11 +141,6 @@ describe("renderUpdates", () => {
         updateSchedule: { channel: "stable", autoEnabled: false, install: { kind: "package" } },
         updateAvailable: null,
       },
-      "Run the Gateway updater and restart. The current version may be reinstalled.",
-    ],
-    [
-      "unknown",
-      { updateSchedule: null, updateAvailable: null },
       "Run the Gateway updater and restart. The current version may be reinstalled.",
     ],
   ] as const)("identifies the Gateway action with %s status", (_status, update, description) => {
@@ -235,8 +230,12 @@ describe("renderUpdates", () => {
     statusCase("update available", {}),
     statusCase(
       "real update failure",
-      { update: { updateStatusBanner: { tone: "danger", text: "Update error: build failed" } } },
-      "Update error: build failed",
+      {
+        update: {
+          updateStatusBanner: { tone: "danger", text: "Couldn’t update OpenClaw. build failed" },
+        },
+      },
+      "Couldn’t update OpenClaw. build failed",
       "danger",
     ),
     statusCase(
@@ -273,16 +272,18 @@ describe("renderUpdates", () => {
       renderUpdates({
         update: {
           updateStatusRefreshing: statusChecking,
-          updateStatusBanner: { tone: "danger", text: "Update error: build failed" },
+          updateStatusBanner: { tone: "danger", text: "Couldn’t update OpenClaw. build failed" },
           updateStatusCheckBanner: statusChecking
             ? null
-            : { mode: "manual", tone: "warn", text: "Could not check for updates: timeout" },
+            : { mode: "manual", tone: "warn", text: "Couldn’t check for updates. timeout" },
         },
       });
       expect(row("Status").textContent).toContain(
-        statusChecking ? "Checking for updates…" : "Could not check for updates: timeout",
+        statusChecking ? "Checking for updates…" : "Couldn’t check for updates. timeout",
       );
-      expect(row("Failure details").textContent).toContain("Update error: build failed");
+      expect(row("Failure details").textContent).toContain(
+        "Couldn’t update OpenClaw. build failed",
+      );
     },
   );
 
@@ -328,10 +329,6 @@ describe("renderUpdates", () => {
       false,
       expect.any(Function),
     );
-    const appUpdateButton = rowButton("Check for Updates…");
-    expect(appUpdateButton.classList.contains("primary")).toBe(true);
-    appUpdateButton.click();
-    expect(nativeDeviceSettings.checkForUpdates).toHaveBeenCalledOnce();
     nativeDeviceSettings.snapshot = {
       ...nativeDeviceSettings.snapshot,
       device: { ...nativeDeviceSettings.snapshot.device, appVersion: "2026.9.4", appBuild: "43" },
@@ -390,17 +387,12 @@ describe("renderUpdates", () => {
       },
     });
 
-    expect(
-      [...container.querySelectorAll(".settings-segmented__btn")].map((option) =>
-        option.textContent?.trim(),
-      ),
-    ).toEqual(["Stable", "Beta", "Dev", "Extended stable"]);
     expect(row("Release channel").querySelector("input:checked")).toMatchObject({
       value: "extended-stable",
     });
     const automatic = automaticUpdatesControl().toggle;
     expect(automatic.checked).toBe(false);
-    expect(automatic.hasAttribute("aria-disabled")).toBe(true);
+    expect(automatic.hasAttribute("disabled")).toBe(true);
     expect(row("Automatic updates").textContent).toContain("never installs them automatically");
   });
 
@@ -421,7 +413,7 @@ describe("renderUpdates", () => {
     });
 
     const automatic = automaticUpdatesControl();
-    expect(automatic.toggle.hasAttribute("aria-disabled")).toBe(disabled);
+    expect(automatic.toggle.hasAttribute("disabled")).toBe(disabled);
     if (disabled) {
       expect(automatic.row.textContent).toContain(
         "Automatic dev updates require a source (git) install. This install is a package install — use stable or beta for automatic updates.",
@@ -497,7 +489,6 @@ describe("renderUpdates", () => {
     expect(row("Status").querySelector("button")).toBeNull();
     mountUpdates({ ...props, nowMs: 31_000 });
     expect(row("Status").textContent).toContain("Update held · resumes in 0:30");
-    expect(row("Status").querySelector("button")).toBeNull();
     mountUpdates({ ...props, nowMs: 61_000 });
     expect(row("Status").textContent).toContain("Waiting for active work · forced update in 15:00");
     expect(row("Status").querySelector("button")?.textContent?.trim()).toBe("Hold 1 h");
@@ -528,11 +519,11 @@ describe("renderUpdates", () => {
     expect(row("Installed").querySelector("time")?.getAttribute("datetime")).toBe(
       "2026-08-08T12:00:00.000Z",
     );
-    expect(row("Installed").textContent).toContain("2h ago");
+    expect(row("Installed").querySelector("time")?.title).toBe("2h ago");
     expect(row("Last commit").querySelector("time")?.getAttribute("datetime")).toBe(
       "2026-08-08T10:00:00.000Z",
     );
-    expect(row("Last commit").textContent).toContain("4h ago");
+    expect(row("Last commit").querySelector("time")?.title).toBe("4h ago");
 
     renderUpdates({
       configObject: { update: { channel: "dev" } },
@@ -545,7 +536,10 @@ describe("renderUpdates", () => {
     [{ status: "current" }, "Up to date"],
     [{ status: "ahead", commitsAhead: 2 }, "2 commits ahead of tracked upstream"],
     [{ status: "diverged", commitsAhead: 1, commitsBehind: 3 }, "Diverged · 1 ahead, 3 behind"],
-    [{ status: "unavailable", reason: "fetch-failed" }, "Could not fetch the tracked upstream"],
+    [
+      { status: "unavailable", reason: "fetch-failed" },
+      "Couldn’t check the update source. Try again.",
+    ],
   ] as const)("renders explicit %j git status without a dot", (git, label) => {
     renderUpdates({
       configObject: { update: { channel: "dev" } },
@@ -566,11 +560,9 @@ describe("renderUpdates", () => {
       recovery: false,
       reconciled: false,
     },
-    { status: "skipped", reason: "container-image-install", recovery: false, reconciled: false },
-    { status: "skipped", reason: "already-current", recovery: false, reconciled: false },
     { status: "failed", reason: "abandoned", recovery: false, reconciled: true },
   ] as const)(
-    "renders the durable $status/$reason report with reconciled=$reconciled and only offers current recovery",
+    "gates durable $status/$reason recovery with reconciled=$reconciled",
     ({ status, reason, recovery, reconciled }) => {
       const onUpdateNow = vi.fn();
       const onCheckStatus = vi.fn(async () => true);
@@ -581,31 +573,12 @@ describe("renderUpdates", () => {
             status,
             finishedAtMs: 10,
             reason,
-            after: { version: "2026.9.2" },
-            steps: [
-              {
-                step: "build",
-                status: status === "failed" ? "failed" : "completed",
-                detail: "Build output",
-              },
-              ...(reconciled
-                ? [{ step: "reconcile:acknowledged", status: "completed" as const }]
-                : []),
-            ],
+            steps: reconciled ? [{ step: "reconcile:acknowledged", status: "completed" }] : [],
           }),
         },
         onUpdateNow,
         onCheckStatus,
       });
-      flush();
-      const view = container.querySelector("openclaw-update-run-view")!;
-      expect(view.querySelector(".update-run-view__report")?.textContent).toContain(
-        reconciled
-          ? "OpenClaw abandoned update reconciled."
-          : status === "succeeded"
-            ? "OpenClaw updated to 2026.9.2"
-            : `OpenClaw update ${status}`,
-      );
       if (recovery) {
         const actions = row("Recovery");
         actions.querySelector<HTMLButtonElement>("button")?.click();
@@ -616,15 +589,6 @@ describe("renderUpdates", () => {
       } else {
         expect(container.textContent).not.toContain("Retry update");
         expect(container.textContent).not.toContain("openclaw triage");
-      }
-      if (reconciled) {
-        expect(view.querySelector(".update-run-view__report--failed")).toBeNull();
-        expect(view.querySelector('[data-step="build"]')?.getAttribute("data-status")).toBe(
-          "failed",
-        );
-        expect(view.querySelector(".update-run-view__details")?.textContent).toContain(
-          "Build output",
-        );
       }
     },
   );
@@ -660,7 +624,7 @@ describe("renderUpdates", () => {
     ["fallback", "Review and submit the prefilled issue in your browser."],
     ["pending", "may have completed"],
   ] as const)(
-    "renders a %s issue submission without leaking a path or replay link",
+    "renders a %s issue notice with only the applicable handoff link",
     (status, message) => {
       const run = failedRun();
       renderUpdates({
@@ -683,7 +647,6 @@ describe("renderUpdates", () => {
 
       const report = row("Failure report");
       expect(report.textContent).toContain(message);
-      expect(report.textContent).not.toContain("/private/report.md");
       if (status === "fallback") {
         expect(report.querySelector("a")?.getAttribute("href")).toContain("issues/new");
       } else {

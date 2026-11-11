@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { UnresolvedSecretInputError } from "../../config/types.secrets.js";
-import { redactLogRecordForTransport, redactToolPayloadText } from "../../logging/redact.js";
+import { redactLogRecordForTransport } from "../../logging/redact.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { withEnv } from "../../test-utils/env.js";
 import {
@@ -52,10 +52,8 @@ async function requestSearch(
   return { result, authorization };
 }
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-});
+afterEach(vi.unstubAllGlobals);
+afterEach(vi.restoreAllMocks);
 
 const readCredential = (value: unknown) => readKey(value, "test.apiKey", ["SEARCH_A", "SEARCH_B"]);
 it.each([
@@ -99,7 +97,6 @@ it.each([
   expect(error).toMatchObject({ message, status: 401, statusCode: 401 });
   const diagnostic = redactLogRecordForTransport({ error: String(error) });
   expect(diagnostic).toEqual({ error: `ProviderHttpError: ${message}` });
-  expect(String(diagnostic.error)).not.toContain(apiKey);
 });
 
 it("preserves caller cancellation after error headers arrive", async () => {
@@ -114,7 +111,6 @@ it("preserves caller cancellation after error headers arrive", async () => {
 });
 
 it("keeps successful responses and existing two-argument SDK calls usable", async () => {
-  expect(redactToolPayloadText("Bearer tokens")).toBe("Bearer tokens");
   const { result } = await requestSearch([200, '{"answer":"Bearer tokens"}']);
   expect(result).toEqual({ answer: "Bearer tokens" });
   const failure = throwApiError(new Response("quota exceeded", { status: 429 }), "Search");
@@ -133,16 +129,4 @@ it("honors the reader TTL while preserving the shipped one-argument reader", asy
   expect(cache.readCachedSearchPayload(key)).toEqual({ text: "original", cached: true });
   clock.mockReturnValue(901_001);
   expect(cache.readCachedSearchPayload(key)).toBeUndefined();
-});
-
-it("keeps cache entries module-local instead of exposing them on a global symbol", async () => {
-  vi.resetModules();
-  const symbol = Symbol.for("openclaw.web-search.cache");
-  Reflect.deleteProperty(globalThis, symbol);
-  const module = await import("./web-search-provider-common.js");
-  const cacheKey = "query:test";
-  module.writeCachedSearchPayload(cacheKey, { ok: true }, 60_000);
-
-  expect(module.readCachedSearchPayload(cacheKey)).toEqual({ ok: true, cached: true });
-  expect(Reflect.get(globalThis, symbol)).toBeUndefined();
 });

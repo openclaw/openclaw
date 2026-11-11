@@ -3,7 +3,9 @@ import {
   type TalkVoiceSelection,
   type TalkVoiceSetResult,
 } from "../../packages/gateway-protocol/src/schema/talk-voice.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { wrapCurrentPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 export type RealtimeVoiceSelectionInfo = Omit<TalkVoiceSelection, "voiceSessionId" | "sessionKey">;
@@ -88,7 +90,10 @@ export function registerRealtimeVoiceSelection(
       }
       changing = true;
       try {
-        await registeredOwner.changeVoice(voice, { assertCurrent: assertRequestCurrent, signal });
+        // The replacement connection outlives this request; later consults must not inherit its root.
+        await runOutsideGatewayRootWorkAdmission(() =>
+          registeredOwner.changeVoice(voice, { assertCurrent: assertRequestCurrent, signal }),
+        );
         assertRequestCurrent();
         if (registeredOwner.read().voice !== voice) {
           throw new Error("The replacement call did not apply the requested voice");
@@ -127,6 +132,7 @@ export function registerRealtimeVoiceSelection(
     unregister: () => {
       active = false;
       callAbort.abort(new Error("Voice call closed"));
+      materializeErrorStack(callAbort.signal.reason);
       for (const runId of bindings) {
         if (runs.get(runId)?.owner === boundOwner) {
           runs.delete(runId);

@@ -1,6 +1,7 @@
-import { createMemo, createUniqueId, onCleanup } from "solid-js";
+import { createMemo, createUniqueId, onSettled } from "solid-js";
 import type { SessionPermissionMode } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import { Menu, type MenuHandle, type MenuItem } from "../../../components/solid/menu.tsx";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../../lib/external-link.ts";
@@ -45,6 +46,14 @@ function modeLabel(
       : t("chat.permissionControls.default");
 }
 
+function agentDefaultLabel(defaultMode?: SessionPermissionMode): string {
+  return defaultMode
+    ? t("chat.permissionControls.agentDefaultWithMode", {
+        mode: t(`chat.permissionControls.modes.${defaultMode}.label`),
+      })
+    : t("chat.permissionControls.agentDefault");
+}
+
 function permissionSelection(value: string): PermissionSelection | undefined {
   return value === DEFAULT_PERMISSION_VALUE
     ? null
@@ -60,19 +69,31 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
   let menu: MenuHandle | undefined;
   let stopSurface: (() => void) | undefined;
   let stopTrigger: (() => void) | undefined;
-  // Menu publishes its handle from onSettled; teardown registration belongs in setup.
-  onCleanup(() => {
+  // Menu publishes its handle during settlement; release its listeners with this view.
+  onSettled(() => () => {
     stopSurface?.();
     stopTrigger?.();
   });
   // Equal owner refreshes must not recreate the open menu's option content.
-  const disabled = createMemo(() => props.disabled || props.pending);
+  const pending = createMemo(() => props.pending);
+  const disabled = createMemo(() => props.disabled || pending());
   const selectedMode = createMemo(() => props.mode ?? null);
   const defaultMode = createMemo(() => props.defaultMode);
   const canSelectFull = createMemo(() => props.canSelectFull, { lazy: true });
   const selectMode = (mode: PermissionSelection) => {
     if (!disabled() && (mode !== "full" || props.canSelectFull) && mode !== (props.mode ?? null)) {
-      void props.onSelect(mode);
+      // The owner reports failures; keep its pending choice visible until settlement.
+      const result = props.onSelect(mode);
+      if (result instanceof Promise) {
+        void result.then(
+          () => menu?.close(),
+          () => menu?.close(),
+        );
+      } else {
+        menu?.close();
+      }
+    } else if (!disabled()) {
+      menu?.close();
     }
   };
   const items = createMemo<MenuItem[]>(
@@ -82,22 +103,28 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
         label: t("common.learnMore"),
         href: PERMISSION_MODES_DOCS_URL,
         attributes: { target: EXTERNAL_LINK_TARGET, rel: buildExternalLinkRel() },
-        class: "chat-controls__permission-learn-more learn-more-link",
+        class: "oc-menu-heading__action chat-controls__permission-learn-more learn-more-link",
       },
       ...PERMISSION_OPTIONS.map((mode, index): MenuItem => {
         const value = mode ?? DEFAULT_PERMISSION_VALUE;
         const selected = selectedMode() === mode;
         const locked = mode === "full" && !canSelectFull();
-        const label = modeLabel(mode, defaultMode());
+        const label = mode ? modeLabel(mode) : agentDefaultLabel(defaultMode());
+        const fullAccess = mode === "full" || (mode === null && defaultMode() === "full");
         return {
           id: value,
           label: locked ? `${label}. ${t("chat.permissionControls.fullRequiresAdmin")}` : label,
           type: "radio",
           checked: selected,
           disabled: disabled() || locked,
+          closeOnSelect: false,
           class: [
             "chat-controls__permission-option",
-            { "chat-controls__permission-option--selected": selected },
+            {
+              "chat-controls__permission-option--selected": selected,
+              "chat-controls__permission-option--full": fullAccess,
+              "chat-controls__permission-option--pending": selected && pending(),
+            },
           ],
           attributes: {
             "data-chat-permission-option": value,
@@ -113,20 +140,24 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
           content: (
             <span class="chat-controls__permission-option-copy">
               <span class="chat-controls__permission-option-title">
-                <span>{label}</span>
+                <span>{mode ? modeLabel(mode) : t("chat.permissionControls.agentDefault")}</span>
+                {mode && mode === defaultMode() && (
+                  <span class="chat-controls__permission-default-badge">
+                    {t("chat.permissionControls.default")}
+                  </span>
+                )}
               </span>
               <span class="chat-controls__permission-option-description">
-                {mode
-                  ? t(`chat.permissionControls.modes.${mode}.description`)
-                  : t("chat.permissionControls.defaultDescription")}
+                {locked
+                  ? t("chat.permissionControls.requiresAdmin")
+                  : mode
+                    ? t(`chat.permissionControls.modes.${mode}.description`)
+                    : t("chat.permissionControls.defaultDescription")}
               </span>
             </span>
           ),
           details: (
             <span class="chat-controls__permission-option-state" aria-hidden="true">
-              {!selected && !locked && (
-                <span class="chat-controls__permission-shortcut">{index + 1}</span>
-              )}
               {locked && (
                 <span class="chat-controls__permission-lock">
                   <Icon name="lock" />
@@ -134,7 +165,7 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
               )}
               {selected && !locked && (
                 <span class="chat-controls__inline-select-check">
-                  <Icon name="check" />
+                  {pending() ? <span class="btn__spinner" /> : <Icon name="check" />}
                 </span>
               )}
             </span>
@@ -163,7 +194,6 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
       event.preventDefault();
       event.stopPropagation();
       selectMode(mode);
-      menu.close();
     }
   };
   return (
@@ -173,13 +203,21 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
       label={`${t("chat.permissionControls.label")}: ${modeLabel(props.mode, props.defaultMode)}`}
       class="chat-controls__inline-select chat-controls__permission-picker"
       panelClass="chat-controls__permission-menu"
-      triggerClass={`chat-controls__inline-select-trigger chat-controls__permission-trigger${props.disabled ? " chat-controls__inline-select-trigger--disabled" : ""}${!props.mode ? " chat-controls__permission-trigger--default" : ""}${(props.mode ?? props.defaultMode) === "full" ? " chat-controls__permission-trigger--full" : ""}`}
+      triggerClass={[
+        "chat-controls__inline-select-trigger chat-controls__permission-trigger",
+        {
+          "chat-controls__permission-trigger--default": !props.mode,
+          "chat-controls__permission-trigger--full": (props.mode ?? props.defaultMode) === "full",
+        },
+      ]}
       triggerAttributes={{
         "data-chat-permission-select": "true",
         "data-chat-select-value": props.mode ?? "",
         title: props.disabledReason ?? t("chat.permissionControls.help"),
+        "aria-description": props.disabledReason,
+        "aria-busy": props.pending ? "true" : undefined,
       }}
-      disabled={Boolean(disabled())}
+      disabled={Boolean(props.disabled)}
       placement="top-start"
       pointerFocus="trigger"
       items={items()}
@@ -197,14 +235,18 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
         }
       }}
       trigger={
-        <span class="chat-controls__permission-icon" aria-hidden="true">
-          <Icon name={permissionIcon(props.mode)} />
-        </span>
+        <>
+          <span class="chat-controls__permission-icon" aria-hidden="true">
+            <Icon name={permissionIcon(props.mode ?? props.defaultMode)} />
+          </span>
+          {/* "Default (...)" belongs to the menu row; the trigger names the effective mode. */}
+          <span class="chat-controls__inline-select-label chat-controls__permission-label">
+            {modeLabel(props.mode ?? props.defaultMode)}
+          </span>
+        </>
       }
     >
-      <div class="chat-controls__popover-title chat-controls__permission-heading">
-        {t("chat.permissionControls.label")}
-      </div>
+      <MenuHeading label={t("chat.permissionControls.label")} />
     </Menu>
   );
 }

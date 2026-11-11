@@ -363,6 +363,18 @@ describe("bundled plugin build entries", () => {
     }
   });
 
+  it("ships Requesty provider runtime and metadata in the core package", () => {
+    expect(listBundledPluginPackArtifacts()).toEqual(
+      expect.arrayContaining([
+        "dist/extensions/requesty/index.js",
+        "dist/extensions/requesty/api.js",
+        "dist/extensions/requesty/provider-policy-api.js",
+        "dist/extensions/requesty/openclaw.plugin.json",
+        "dist/extensions/requesty/package.json",
+      ]),
+    );
+  });
+
   it("keeps OpenCode Go bundled until its companion artifact is available", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
@@ -378,6 +390,7 @@ describe("bundled plugin build entries", () => {
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {
     const artifacts = listBundledPluginPackArtifacts();
     const excludedPackageDirs = collectRootPackageExcludedExtensionDirs();
+    expect(excludedPackageDirs.has("node_modules")).toBe(false);
     const secretBackedPluginIds = new Set<string>();
     for (const { entryPath, entry, pluginId } of bundledChannelEntries()) {
       if (!entry.includes('exportName: "channelSecrets"')) {

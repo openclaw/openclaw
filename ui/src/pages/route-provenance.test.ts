@@ -4,9 +4,10 @@ import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
+import { createRouteLoaderOptions } from "../test-helpers/route-loader-options.ts";
 import { page as devicesPage } from "./devices/route.ts";
 import { page as modelProvidersPage } from "./model-providers/route.ts";
-import { pages as pluginPages } from "./plugins/route.tsx";
 import { pages as skillPages } from "./skills/route.ts";
 import type { SkillsRouteData } from "./skills/view-types.ts";
 import { page as usagePage } from "./usage/route.tsx";
@@ -21,28 +22,19 @@ type RouteContext = {
   settingsAgentSelection?: ReturnType<typeof selection>;
 };
 
-const loaderOptions: RouteLoaderOptions = {
-  signal: new AbortController().signal,
-  shouldRun: () => true,
-  revalidating: false,
-  location: { pathname: "/", search: "", hash: "" },
-  deps: "",
-  cause: "preload",
-};
+const loaderOptions: RouteLoaderOptions = createRouteLoaderOptions(
+  { pathname: "/", search: "", hash: "" },
+  "",
+  "preload",
+);
 
 function provenance(request: () => Promise<unknown> = vi.fn(async () => ({})), connected = true) {
   const client = { request } as unknown as GatewayBrowserClient;
-  const original: ApplicationGatewaySnapshot = {
+  const original: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client: connected ? client : null,
     phase: connected ? "connected" : "reconnecting",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   let current = original;
   const gateway = {
     get snapshot() {
@@ -61,13 +53,14 @@ function provenance(request: () => Promise<unknown> = vi.fn(async () => ({})), c
     async load<T extends Pick<SkillsRouteData, "gateway" | "gatewaySnapshot">>(
       route: Pick<PageDefinition<string, ApplicationContext, unknown, T>, "loader">,
       overrides: RouteContext = {},
+      options = loaderOptions,
     ): Promise<T> {
       if (!route.loader) {
         throw new Error("route has no loader");
       }
       const data = (await route.loader(
         { gateway, ...overrides } as unknown as ApplicationContext,
-        loaderOptions,
+        options,
       )) as T;
       expect(data.gateway).toBe(gateway);
       expect(data.gatewaySnapshot).toBe(original);
@@ -104,42 +97,37 @@ it("keeps model providers provenance from before its lazy module load", async ()
   expect(replacementRequest).not.toHaveBeenCalled();
 });
 
-it("keeps skills provenance from before its async preload", async () => {
-  const requestMethod = vi.fn(async () => ({ skills: [] }));
-  const source = provenance(requestMethod);
-  const agentsList = {
-    defaultId: "main",
-    agents: [{ id: "main" }, { id: "research" }],
-  };
-  const agentsReady = deferred<typeof agentsList>();
-  const agents = { ensureList: vi.fn(() => agentsReady.promise) };
-  const selected = selection("research", 7);
-  const request = source.load(skillPages[0], {
-    agents,
-    agentSelection: selected,
-  });
+it.each(["replaced", "metadata", "cancelled"])(
+  "keeps skills provenance when %s",
+  async (change) => {
+    const requestMethod = vi.fn(async () => ({ skills: [] }));
+    const source = provenance(requestMethod);
+    const agentsList = {
+      defaultId: "main",
+      agents: [{ id: "main" }, { id: "research" }],
+    };
+    const agentsReady = deferred<typeof agentsList>();
+    const agents = { ensureList: vi.fn(() => agentsReady.promise) };
+    const selected = selection("research", 7);
+    const request = source.load(
+      skillPages[0],
+      { agents, agentSelection: selected },
+      { ...loaderOptions, shouldRun: () => change !== "cancelled" },
+    );
 
-  source.replace();
-  selected.intentRevision += 1;
-  agentsReady.resolve(agentsList);
-  const data = await request;
+    source.replace(undefined, change !== "replaced");
+    if (change === "replaced") {
+      selected.intentRevision += 1;
+    }
+    agentsReady.resolve(agentsList);
+    const data = await request;
 
-  expect(requestMethod).toHaveBeenCalledWith("skills.status", { agentId: "research" });
-  expect(data).toMatchObject({ selectedAgentId: "research", selectionIntentRevision: 7 });
-  expect(data.agents).toBe(agents);
-});
-
-it("keeps plugins provenance from before its async preload", async () => {
-  const result = { plugins: [], diagnostics: [], mutationAllowed: true };
-  const response = deferred<typeof result>();
-  const requestMethod = vi.fn(() => response.promise);
-  const source = provenance(requestMethod);
-  const request = source.load(pluginPages[0]);
-
-  source.replace();
-  response.resolve(result);
-  const data = await request;
-
-  expect(requestMethod).toHaveBeenCalledWith("plugins.list", {});
-  expect(data.result).toEqual(result);
-});
+    if (change === "metadata") {
+      expect(requestMethod).toHaveBeenCalledWith("skills.status", { agentId: "research" });
+    } else {
+      expect(requestMethod).not.toHaveBeenCalled();
+    }
+    expect(data).toMatchObject({ selectedAgentId: "research", selectionIntentRevision: 7 });
+    expect(data.agents).toBe(agents);
+  },
+);

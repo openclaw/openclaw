@@ -35,351 +35,370 @@ function CodePointCount(value) {
   }
   return result;
 }
-var {
-    isAgentActivityItem,
-    isSessionObserverDigest,
-    isSessionNarrationEvent,
-    isSessionReactionEvent,
-  } = (() => {
-    let External = [
-        new RegExp(
-          "(^itemId$|^phase$|^kind$|^title$|^status$|^name$|^meta$|^commandBearing$|^toolCallId$|^unpairedCall$|^startedAt$|^endedAt$|^error$|^summary$|^progressText$|^suppressChannelProgress$|^hideFromChannelProgress$|^approvalId$|^approvalSlug$)",
-          "u",
-        ),
-        new RegExp(
-          "(^sessionKey$|^agentId$|^sessionId$|^lifecycleRevision$|^runId$|^revision$|^updatedAt$|^headline$|^assessment$|^health$|^planProgress$)",
-          "u",
-        ),
-        new RegExp("(^completed$|^total$)", "u"),
-        new RegExp("(^sessionKey$|^agentId$|^runId$|^text$)", "u"),
-        new RegExp(
-          "(^sessionKey$|^agentId$|^sessionId$|^messageId$|^emoji$|^action$|^actor$|^reactions$)",
-          "u",
-        ),
-        new RegExp("(^type$|^id$|^label$|^avatarUrl$|^identity$)", "u"),
-        new RegExp("(^type$|^id$)", "u"),
-        new RegExp("(^type$|^id$)", "u"),
-        new RegExp("(^type$|^pluginId$|^domain$|^idKind$|^id$)", "u"),
-        new RegExp("(^type$|^pluginId$|^accountId$|^senderKind$|^id$)", "u"),
-        new RegExp("(^type$|^actorType$|^source$|^id$)", "u"),
-        new RegExp("(^emoji$|^count$|^identities$)", "u"),
-        new RegExp("(^id$|^label$)", "u"),
-      ],
-      check_0 = (value) => check_1(value),
-      check_1 = (value) =>
-        typeof value == "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        "itemId" in value &&
-        "phase" in value &&
-        "kind" in value &&
-        "title" in value &&
-        Object.getOwnPropertyNames(value).every(
-          (var_0, var_1) => External[0].test(var_0) || check_2(value[var_0]),
-        ) &&
-        check_3(value.itemId) &&
-        check_4(value.phase) &&
-        check_8(value.kind) &&
-        check_8(value.title) &&
-        (value.status === void 0 || !("status" in value) || check_9(value.status)) &&
-        (value.name === void 0 || !("name" in value) || check_8(value.name)) &&
-        (value.meta === void 0 || !("meta" in value) || check_8(value.meta)) &&
-        (value.commandBearing === void 0 ||
-          !("commandBearing" in value) ||
-          check_15(value.commandBearing)) &&
-        (value.toolCallId === void 0 || !("toolCallId" in value) || check_8(value.toolCallId)) &&
-        (value.unpairedCall === void 0 ||
-          !("unpairedCall" in value) ||
-          check_15(value.unpairedCall)) &&
-        (value.startedAt === void 0 || !("startedAt" in value) || check_16(value.startedAt)) &&
-        (value.endedAt === void 0 || !("endedAt" in value) || check_16(value.endedAt)) &&
-        (value.error === void 0 || !("error" in value) || check_8(value.error)) &&
-        (value.summary === void 0 || !("summary" in value) || check_8(value.summary)) &&
-        (value.progressText === void 0 ||
-          !("progressText" in value) ||
-          check_8(value.progressText)) &&
-        (value.suppressChannelProgress === void 0 ||
-          !("suppressChannelProgress" in value) ||
-          check_15(value.suppressChannelProgress)) &&
-        (value.hideFromChannelProgress === void 0 ||
-          !("hideFromChannelProgress" in value) ||
-          check_15(value.hideFromChannelProgress)) &&
-        (value.approvalId === void 0 || !("approvalId" in value) || check_8(value.approvalId)) &&
-        (value.approvalSlug === void 0 ||
-          !("approvalSlug" in value) ||
-          check_8(value.approvalSlug)),
-      check_2 = (value) => !1,
-      check_3 = (value) =>
-        typeof value == "string" &&
-        (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)),
-      check_4 = (value) => check_5(value) || check_6(value) || check_7(value),
-      check_5 = (value) => typeof value == "string" && value === "start",
-      check_6 = (value) => typeof value == "string" && value === "update",
-      check_7 = (value) => typeof value == "string" && value === "end",
-      check_8 = (value) => typeof value == "string",
-      check_9 = (value) =>
-        check_10(value) || check_11(value) || check_12(value) || check_13(value) || check_14(value),
-      check_10 = (value) => typeof value == "string" && value === "running",
-      check_11 = (value) => typeof value == "string" && value === "completed",
-      check_12 = (value) => typeof value == "string" && value === "failed",
-      check_13 = (value) => typeof value == "string" && value === "blocked",
-      check_14 = (value) => typeof value == "string" && value === "skipped",
-      check_15 = (value) => typeof value == "boolean",
-      check_16 = (value) => Number.isFinite(value),
-      check_17 = (value) => check_18(value),
-      check_18 = (value) =>
-        typeof value == "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        "sessionKey" in value &&
-        "revision" in value &&
-        "updatedAt" in value &&
-        "headline" in value &&
-        "health" in value &&
-        Object.getOwnPropertyNames(value).every(
-          (var_2, var_3) => External[1].test(var_2) || check_2(value[var_2]),
-        ) &&
-        check_3(value.sessionKey) &&
-        (value.agentId === void 0 || !("agentId" in value) || check_3(value.agentId)) &&
-        (value.sessionId === void 0 || !("sessionId" in value) || check_3(value.sessionId)) &&
-        (value.lifecycleRevision === void 0 ||
-          !("lifecycleRevision" in value) ||
-          check_3(value.lifecycleRevision)) &&
-        (value.runId === void 0 || !("runId" in value) || check_3(value.runId)) &&
-        check_19(value.revision) &&
-        check_20(value.updatedAt) &&
-        check_21(value.headline) &&
-        (value.assessment === void 0 || !("assessment" in value) || check_22(value.assessment)) &&
-        check_23(value.health) &&
-        (value.planProgress === void 0 ||
-          !("planProgress" in value) ||
-          check_30(value.planProgress)),
-      check_19 = (value) =>
-        Number.isInteger(value) &&
-        (!(Number.isFinite(value) || typeof value == "bigint") || value >= 1),
-      check_20 = (value) =>
-        Number.isInteger(value) &&
-        (!(Number.isFinite(value) || typeof value == "bigint") || value >= 0),
-      check_21 = (value) =>
-        typeof value == "string" &&
-        (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
-        (value.length <= 120 || (value.length <= 240 && CodePointCount(value) <= 120)),
-      check_22 = (value) =>
-        typeof value == "string" &&
-        (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
-        (value.length <= 320 || (value.length <= 640 && CodePointCount(value) <= 320)),
-      check_23 = (value) =>
-        check_24(value) ||
-        check_25(value) ||
-        check_26(value) ||
-        check_27(value) ||
-        check_28(value) ||
-        check_29(value) ||
-        check_12(value),
-      check_24 = (value) => typeof value == "string" && value === "on-track",
-      check_25 = (value) => typeof value == "string" && value === "grinding",
-      check_26 = (value) => typeof value == "string" && value === "stuck",
-      check_27 = (value) => typeof value == "string" && value === "waiting-on-user",
-      check_28 = (value) => typeof value == "string" && value === "wrapping-up",
-      check_29 = (value) => typeof value == "string" && value === "done",
-      check_30 = (value) =>
-        typeof value == "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        "completed" in value &&
-        "total" in value &&
-        Object.getOwnPropertyNames(value).every(
-          (var_4, var_5) => External[2].test(var_4) || check_2(value[var_4]),
-        ) &&
-        check_20(value.completed) &&
-        check_20(value.total),
-      check_31 = (value) => check_32(value),
-      check_32 = (value) =>
-        typeof value == "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        "sessionKey" in value &&
-        "runId" in value &&
-        "text" in value &&
-        Object.getOwnPropertyNames(value).every(
-          (var_6, var_7) => External[3].test(var_6) || check_2(value[var_6]),
-        ) &&
-        check_3(value.sessionKey) &&
-        (value.agentId === void 0 || !("agentId" in value) || check_3(value.agentId)) &&
-        check_3(value.runId) &&
-        check_33(value.text),
-      check_33 = (value) =>
-        typeof value == "string" &&
-        (value.length <= 16384 || (value.length <= 32768 && CodePointCount(value) <= 16384)),
-      check_34 = (value) => check_35(value),
-      check_35 = (value) =>
-        typeof value == "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        "sessionKey" in value &&
-        "agentId" in value &&
-        "sessionId" in value &&
-        "messageId" in value &&
-        "emoji" in value &&
-        "action" in value &&
-        "actor" in value &&
-        "reactions" in value &&
-        Object.getOwnPropertyNames(value).every(
-          (var_8, var_9) => External[4].test(var_8) || check_2(value[var_8]),
-        ) &&
-        check_3(value.sessionKey) &&
-        check_3(value.agentId) &&
-        check_3(value.sessionId) &&
-        check_3(value.messageId) &&
-        check_36(value.emoji) &&
-        check_37(value.action) &&
-        check_40(value.actor) &&
-        check_61(value.reactions),
-      check_36 = (value) =>
-        typeof value == "string" &&
-        (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
-        (value.length <= 32 || (value.length <= 64 && CodePointCount(value) <= 32)),
-      check_37 = (value) => check_38(value) || check_39(value),
-      check_38 = (value) => typeof value == "string" && value === "added",
-      check_39 = (value) => typeof value == "string" && value === "removed",
-      check_40 = (value) =>
-        typeof value == "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        "type" in value &&
-        "id" in value &&
-        Object.getOwnPropertyNames(value).every(
-          (var_10, var_11) => External[5].test(var_10) || check_2(value[var_10]),
-        ) &&
-        check_41(value.type) &&
-        check_3(value.id) &&
-        (value.label === void 0 || !("label" in value) || check_3(value.label)) &&
-        (value.avatarUrl === void 0 || !("avatarUrl" in value) || check_3(value.avatarUrl)) &&
-        (value.identity === void 0 || !("identity" in value) || check_45(value.identity)),
-      check_41 = (value) => check_42(value) || check_43(value) || check_44(value),
-      check_42 = (value) => typeof value == "string" && value === "human",
-      check_43 = (value) => typeof value == "string" && value === "agent",
-      check_44 = (value) => typeof value == "string" && value === "system",
-      check_45 = (value) =>
-        check_46(value) || check_48(value) || check_49(value) || check_51(value) || check_58(value),
-      check_46 = (value) =>
-        typeof value == "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        "type" in value &&
-        "id" in value &&
-        Object.getOwnPropertyNames(value).every(
-          (var_12, var_13) => External[6].test(var_12) || check_2(value[var_12]),
-        ) &&
-        check_47(value.type) &&
-        check_3(value.id),
-      check_47 = (value) => typeof value == "string" && value === "profile",
-      check_48 = (value) =>
-        typeof value == "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        "type" in value &&
-        "id" in value &&
-        Object.getOwnPropertyNames(value).every(
-          (var_14, var_15) => External[7].test(var_14) || check_2(value[var_14]),
-        ) &&
-        check_43(value.type) &&
-        check_3(value.id),
-      check_49 = (value) =>
-        typeof value == "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        "type" in value &&
-        "pluginId" in value &&
-        "domain" in value &&
-        "idKind" in value &&
-        "id" in value &&
-        Object.getOwnPropertyNames(value).every(
-          (var_16, var_17) => External[8].test(var_16) || check_2(value[var_16]),
-        ) &&
-        check_50(value.type) &&
-        check_3(value.pluginId) &&
-        check_3(value.domain) &&
-        check_3(value.idKind) &&
-        check_3(value.id),
-      check_50 = (value) => typeof value == "string" && value === "remote",
-      check_51 = (value) =>
-        typeof value == "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        "type" in value &&
-        "pluginId" in value &&
-        "accountId" in value &&
-        "senderKind" in value &&
-        "id" in value &&
-        Object.getOwnPropertyNames(value).every(
-          (var_18, var_19) => External[9].test(var_18) || check_2(value[var_18]),
-        ) &&
-        check_52(value.type) &&
-        check_53(value.pluginId) &&
-        check_53(value.accountId) &&
-        check_55(value.senderKind) &&
-        check_3(value.id),
-      check_52 = (value) => typeof value == "string" && value === "observation",
-      check_53 = (value) => check_3(value) || check_54(value),
-      check_54 = (value) => value === null,
-      check_55 = (value) => check_42(value) || check_56(value) || check_57(value),
-      check_56 = (value) => typeof value == "string" && value === "bot",
-      check_57 = (value) => typeof value == "string" && value === "unknown",
-      check_58 = (value) =>
-        typeof value == "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        "type" in value &&
-        "actorType" in value &&
-        "source" in value &&
-        "id" in value &&
-        Object.getOwnPropertyNames(value).every(
-          (var_20, var_21) => External[10].test(var_20) || check_2(value[var_20]),
-        ) &&
-        check_59(value.type) &&
-        check_8(value.actorType) &&
-        check_60(value.source) &&
-        check_8(value.id),
-      check_59 = (value) => typeof value == "string" && value === "legacy",
-      check_60 = (value) => check_8(value) || check_54(value),
-      check_61 = (value) =>
-        Array.isArray(value) && value.every((element, index) => check_62(element)),
-      check_62 = (value) =>
-        typeof value == "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        "emoji" in value &&
-        "count" in value &&
-        "identities" in value &&
-        Object.getOwnPropertyNames(value).every(
-          (var_22, var_23) => External[11].test(var_22) || check_2(value[var_22]),
-        ) &&
-        check_36(value.emoji) &&
-        check_19(value.count) &&
-        check_63(value.identities),
-      check_63 = (value) =>
-        Array.isArray(value) &&
-        value.every((element, index) => check_64(element)) &&
-        value.length >= 1,
-      check_64 = (value) =>
-        typeof value == "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        "id" in value &&
-        Object.getOwnPropertyNames(value).every(
-          (var_24, var_25) => External[12].test(var_24) || check_2(value[var_24]),
-        ) &&
-        check_3(value.id) &&
-        (value.label === void 0 || !("label" in value) || check_8(value.label));
-    return {
-      isAgentActivityItem: (value) => check_0(value),
-      isSessionObserverDigest: (value) => check_17(value),
-      isSessionNarrationEvent: (value) => check_31(value),
-      isSessionReactionEvent: (value) => check_34(value),
-    };
-  })(),
-  activityKeys = new Set([
+var External = [
+    /(^delegation$|^itemId$|^phase$|^kind$|^title$|^status$|^name$|^meta$|^commandBearing$|^toolCallId$|^unpairedCall$|^startedAt$|^endedAt$|^error$|^summary$|^progressText$|^suppressChannelProgress$|^hideFromChannelProgress$|^approvalId$|^approvalSlug$)/u,
+    /(^runId$|^childSessionKey$|^label$|^groupId$|^runtimeMs$|^status$)/u,
+    /(^sessionKey$|^agentId$|^sessionId$|^lifecycleRevision$|^runId$|^revision$|^updatedAt$|^headline$|^assessment$|^health$|^planProgress$)/u,
+    /(^completed$|^total$)/u,
+    /(^sessionKey$|^agentId$|^runId$|^text$)/u,
+    /(^sessionKey$|^agentId$|^sessionId$|^messageId$|^emoji$|^action$|^actor$|^reactions$)/u,
+    /(^type$|^id$|^label$|^avatarUrl$|^identity$)/u,
+    /(^type$|^id$)/u,
+    /(^type$|^id$)/u,
+    /(^type$|^pluginId$|^domain$|^idKind$|^id$)/u,
+    /(^type$|^pluginId$|^accountId$|^senderKind$|^id$)/u,
+    /(^type$|^actorType$|^source$|^id$)/u,
+    /(^emoji$|^count$|^identities$)/u,
+    /(^id$|^label$)/u,
+  ],
+  check_0 = (value) => check_1(value),
+  check_1 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "itemId" in value &&
+    "phase" in value &&
+    "kind" in value &&
+    "title" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_0, unique_1) => External[0].test(unique_0) || check_2(value[unique_0]),
+    ) &&
+    (value.delegation === void 0 || !("delegation" in value) || check_3(value.delegation)) &&
+    check_15(value.itemId) &&
+    check_16(value.phase) &&
+    check_20(value.kind) &&
+    check_20(value.title) &&
+    (value.status === void 0 || !("status" in value) || check_21(value.status)) &&
+    (value.name === void 0 || !("name" in value) || check_26(value.name)) &&
+    (value.meta === void 0 || !("meta" in value) || check_26(value.meta)) &&
+    (value.commandBearing === void 0 ||
+      !("commandBearing" in value) ||
+      check_27(value.commandBearing)) &&
+    (value.toolCallId === void 0 || !("toolCallId" in value) || check_26(value.toolCallId)) &&
+    (value.unpairedCall === void 0 || !("unpairedCall" in value) || check_27(value.unpairedCall)) &&
+    (value.startedAt === void 0 || !("startedAt" in value) || check_28(value.startedAt)) &&
+    (value.endedAt === void 0 || !("endedAt" in value) || check_28(value.endedAt)) &&
+    (value.error === void 0 || !("error" in value) || check_26(value.error)) &&
+    (value.summary === void 0 || !("summary" in value) || check_26(value.summary)) &&
+    (value.progressText === void 0 || !("progressText" in value) || check_26(value.progressText)) &&
+    (value.suppressChannelProgress === void 0 ||
+      !("suppressChannelProgress" in value) ||
+      check_27(value.suppressChannelProgress)) &&
+    (value.hideFromChannelProgress === void 0 ||
+      !("hideFromChannelProgress" in value) ||
+      check_27(value.hideFromChannelProgress)) &&
+    (value.approvalId === void 0 || !("approvalId" in value) || check_26(value.approvalId)) &&
+    (value.approvalSlug === void 0 || !("approvalSlug" in value) || check_26(value.approvalSlug)),
+  check_2 = (value) => !1,
+  check_3 = (value) =>
+    Array.isArray(value) &&
+    value.every((unique_2, index) => check_4(unique_2)) &&
+    value.length <= 32,
+  check_4 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "runId" in value &&
+    "childSessionKey" in value &&
+    "status" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_3, unique_4) => External[1].test(unique_3) || check_2(value[unique_3]),
+    ) &&
+    check_5(value.runId) &&
+    check_6(value.childSessionKey) &&
+    (value.label === void 0 || !("label" in value) || check_7(value.label)) &&
+    (value.groupId === void 0 || !("groupId" in value) || check_7(value.groupId)) &&
+    (value.runtimeMs === void 0 || !("runtimeMs" in value) || check_8(value.runtimeMs)) &&
+    check_9(value.status),
+  check_5 = (value) =>
+    typeof value == "string" &&
+    (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
+    (value.length <= 256 || (value.length <= 512 && CodePointCount(value) <= 256)),
+  check_6 = (value) =>
+    typeof value == "string" &&
+    (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
+    (value.length <= 1024 || (value.length <= 2048 && CodePointCount(value) <= 1024)),
+  check_7 = (value) =>
+    typeof value == "string" &&
+    (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
+    (value.length <= 512 || (value.length <= 1024 && CodePointCount(value) <= 512)),
+  check_8 = (value) => Number.isFinite(value) && value >= 0 && value <= 9007199254740991,
+  check_9 = (value) =>
+    check_10(value) || check_11(value) || check_12(value) || check_13(value) || check_14(value),
+  check_10 = (value) => typeof value == "string" && value === "accepted",
+  check_11 = (value) => typeof value == "string" && value === "done",
+  check_12 = (value) => typeof value == "string" && value === "failed",
+  check_13 = (value) => typeof value == "string" && value === "killed",
+  check_14 = (value) => typeof value == "string" && value === "timeout",
+  check_15 = (value) =>
+    typeof value == "string" &&
+    (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)),
+  check_16 = (value) => check_17(value) || check_18(value) || check_19(value),
+  check_17 = (value) => typeof value == "string" && value === "start",
+  check_18 = (value) => typeof value == "string" && value === "update",
+  check_19 = (value) => typeof value == "string" && value === "end",
+  check_20 = (value) => typeof value == "string",
+  check_21 = (value) =>
+    check_22(value) || check_23(value) || check_12(value) || check_24(value) || check_25(value),
+  check_22 = (value) => typeof value == "string" && value === "running",
+  check_23 = (value) => typeof value == "string" && value === "completed",
+  check_24 = (value) => typeof value == "string" && value === "blocked",
+  check_25 = (value) => typeof value == "string" && value === "skipped",
+  check_26 = (value) => typeof value == "string",
+  check_27 = (value) => typeof value == "boolean",
+  check_28 = (value) => Number.isFinite(value),
+  check_29 = (value) => check_30(value),
+  check_30 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "sessionKey" in value &&
+    "revision" in value &&
+    "updatedAt" in value &&
+    "headline" in value &&
+    "health" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_5, unique_6) => External[2].test(unique_5) || check_2(value[unique_5]),
+    ) &&
+    check_15(value.sessionKey) &&
+    (value.agentId === void 0 || !("agentId" in value) || check_31(value.agentId)) &&
+    (value.sessionId === void 0 || !("sessionId" in value) || check_31(value.sessionId)) &&
+    (value.lifecycleRevision === void 0 ||
+      !("lifecycleRevision" in value) ||
+      check_31(value.lifecycleRevision)) &&
+    (value.runId === void 0 || !("runId" in value) || check_31(value.runId)) &&
+    check_32(value.revision) &&
+    check_33(value.updatedAt) &&
+    check_34(value.headline) &&
+    (value.assessment === void 0 || !("assessment" in value) || check_35(value.assessment)) &&
+    check_36(value.health) &&
+    (value.planProgress === void 0 || !("planProgress" in value) || check_42(value.planProgress)),
+  check_31 = (value) =>
+    typeof value == "string" &&
+    (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)),
+  check_32 = (value) =>
+    Number.isInteger(value) &&
+    (!(Number.isFinite(value) || typeof value == "bigint") || value >= 1),
+  check_33 = (value) =>
+    Number.isInteger(value) &&
+    (!(Number.isFinite(value) || typeof value == "bigint") || value >= 0),
+  check_34 = (value) =>
+    typeof value == "string" &&
+    (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
+    (value.length <= 120 || (value.length <= 240 && CodePointCount(value) <= 120)),
+  check_35 = (value) =>
+    typeof value == "string" &&
+    (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
+    (value.length <= 320 || (value.length <= 640 && CodePointCount(value) <= 320)),
+  check_36 = (value) =>
+    check_37(value) ||
+    check_38(value) ||
+    check_39(value) ||
+    check_40(value) ||
+    check_41(value) ||
+    check_11(value) ||
+    check_12(value),
+  check_37 = (value) => typeof value == "string" && value === "on-track",
+  check_38 = (value) => typeof value == "string" && value === "grinding",
+  check_39 = (value) => typeof value == "string" && value === "stuck",
+  check_40 = (value) => typeof value == "string" && value === "waiting-on-user",
+  check_41 = (value) => typeof value == "string" && value === "wrapping-up",
+  check_42 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "completed" in value &&
+    "total" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_7, unique_8) => External[3].test(unique_7) || check_2(value[unique_7]),
+    ) &&
+    check_33(value.completed) &&
+    check_33(value.total),
+  check_43 = (value) => check_44(value),
+  check_44 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "sessionKey" in value &&
+    "runId" in value &&
+    "text" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_9, unique_10) => External[4].test(unique_9) || check_2(value[unique_9]),
+    ) &&
+    check_15(value.sessionKey) &&
+    (value.agentId === void 0 || !("agentId" in value) || check_31(value.agentId)) &&
+    check_15(value.runId) &&
+    check_45(value.text),
+  check_45 = (value) =>
+    typeof value == "string" &&
+    (value.length <= 16384 || (value.length <= 32768 && CodePointCount(value) <= 16384)),
+  check_46 = (value) => check_47(value),
+  check_47 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "sessionKey" in value &&
+    "agentId" in value &&
+    "sessionId" in value &&
+    "messageId" in value &&
+    "emoji" in value &&
+    "action" in value &&
+    "actor" in value &&
+    "reactions" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_11, unique_12) => External[5].test(unique_11) || check_2(value[unique_11]),
+    ) &&
+    check_15(value.sessionKey) &&
+    check_15(value.agentId) &&
+    check_15(value.sessionId) &&
+    check_15(value.messageId) &&
+    check_48(value.emoji) &&
+    check_49(value.action) &&
+    check_52(value.actor) &&
+    check_73(value.reactions),
+  check_48 = (value) =>
+    typeof value == "string" &&
+    (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
+    (value.length <= 32 || (value.length <= 64 && CodePointCount(value) <= 32)),
+  check_49 = (value) => check_50(value) || check_51(value),
+  check_50 = (value) => typeof value == "string" && value === "added",
+  check_51 = (value) => typeof value == "string" && value === "removed",
+  check_52 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "type" in value &&
+    "id" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_13, unique_14) => External[6].test(unique_13) || check_2(value[unique_13]),
+    ) &&
+    check_53(value.type) &&
+    check_15(value.id) &&
+    (value.label === void 0 || !("label" in value) || check_31(value.label)) &&
+    (value.avatarUrl === void 0 || !("avatarUrl" in value) || check_31(value.avatarUrl)) &&
+    (value.identity === void 0 || !("identity" in value) || check_57(value.identity)),
+  check_53 = (value) => check_54(value) || check_55(value) || check_56(value),
+  check_54 = (value) => typeof value == "string" && value === "human",
+  check_55 = (value) => typeof value == "string" && value === "agent",
+  check_56 = (value) => typeof value == "string" && value === "system",
+  check_57 = (value) =>
+    check_58(value) || check_60(value) || check_61(value) || check_63(value) || check_70(value),
+  check_58 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "type" in value &&
+    "id" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_15, unique_16) => External[7].test(unique_15) || check_2(value[unique_15]),
+    ) &&
+    check_59(value.type) &&
+    check_15(value.id),
+  check_59 = (value) => typeof value == "string" && value === "profile",
+  check_60 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "type" in value &&
+    "id" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_17, unique_18) => External[8].test(unique_17) || check_2(value[unique_17]),
+    ) &&
+    check_55(value.type) &&
+    check_15(value.id),
+  check_61 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "type" in value &&
+    "pluginId" in value &&
+    "domain" in value &&
+    "idKind" in value &&
+    "id" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_19, unique_20) => External[9].test(unique_19) || check_2(value[unique_19]),
+    ) &&
+    check_62(value.type) &&
+    check_15(value.pluginId) &&
+    check_15(value.domain) &&
+    check_15(value.idKind) &&
+    check_15(value.id),
+  check_62 = (value) => typeof value == "string" && value === "remote",
+  check_63 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "type" in value &&
+    "pluginId" in value &&
+    "accountId" in value &&
+    "senderKind" in value &&
+    "id" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_21, unique_22) => External[10].test(unique_21) || check_2(value[unique_21]),
+    ) &&
+    check_64(value.type) &&
+    check_65(value.pluginId) &&
+    check_65(value.accountId) &&
+    check_67(value.senderKind) &&
+    check_15(value.id),
+  check_64 = (value) => typeof value == "string" && value === "observation",
+  check_65 = (value) => check_15(value) || check_66(value),
+  check_66 = (value) => value === null,
+  check_67 = (value) => check_54(value) || check_68(value) || check_69(value),
+  check_68 = (value) => typeof value == "string" && value === "bot",
+  check_69 = (value) => typeof value == "string" && value === "unknown",
+  check_70 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "type" in value &&
+    "actorType" in value &&
+    "source" in value &&
+    "id" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_23, unique_24) => External[11].test(unique_23) || check_2(value[unique_23]),
+    ) &&
+    check_71(value.type) &&
+    check_20(value.actorType) &&
+    check_72(value.source) &&
+    check_20(value.id),
+  check_71 = (value) => typeof value == "string" && value === "legacy",
+  check_72 = (value) => check_20(value) || check_66(value),
+  check_73 = (value) =>
+    Array.isArray(value) && value.every((unique_25, index) => check_74(unique_25)),
+  check_74 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "emoji" in value &&
+    "count" in value &&
+    "identities" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_26, unique_27) => External[12].test(unique_26) || check_2(value[unique_26]),
+    ) &&
+    check_48(value.emoji) &&
+    check_32(value.count) &&
+    check_75(value.identities),
+  check_75 = (value) =>
+    Array.isArray(value) &&
+    value.every((unique_28, index) => check_76(unique_28)) &&
+    value.length >= 1,
+  check_76 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "id" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_29, unique_30) => External[13].test(unique_29) || check_2(value[unique_29]),
+    ) &&
+    check_15(value.id) &&
+    (value.label === void 0 || !("label" in value) || check_26(value.label)),
+  isAgentActivityItem = (value) => check_0(value),
+  isSessionObserverDigest = (value) => check_29(value),
+  isSessionNarrationEvent = (value) => check_43(value),
+  isSessionReactionEvent = (value) => check_46(value);
+var activityKeys = new Set([
+    "delegation",
     "itemId",
     "phase",
     "kind",
@@ -399,10 +418,19 @@ var {
     "hideFromChannelProgress",
     "approvalId",
     "approvalSlug",
-  ]);
-function cleanAgentActivityItem(value) {
+  ]),
+  delegationKeys = new Set(["runId", "childSessionKey", "label", "groupId", "runtimeMs", "status"]);
+function cleanRecord(value, keys) {
   if (typeof value != "object" || value === null || Array.isArray(value)) return value;
-  for (let key of Object.getOwnPropertyNames(value)) activityKeys.has(key) || delete value[key];
+  for (let key of Object.getOwnPropertyNames(value)) keys.has(key) || delete value[key];
+  return value;
+}
+function cleanAgentActivityItem(value) {
+  if (
+    (cleanRecord(value, activityKeys),
+    value && typeof value == "object" && Array.isArray(value.delegation))
+  )
+    for (let receipt of value.delegation) cleanRecord(receipt, delegationKeys);
   return value;
 }
 export {

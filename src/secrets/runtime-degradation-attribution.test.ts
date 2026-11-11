@@ -89,50 +89,34 @@ async function captureFailure(config: RuntimeConfig, overrides: PrepareOverrides
 }
 
 function activate(snapshot: RuntimeSnapshot): void {
-  activateSecretsRuntimeSnapshotState({
-    snapshot,
-    refreshContext: null,
-    refreshHandler: null,
-  });
+  activateSecretsRuntimeSnapshotState({ snapshot, refreshContext: null, refreshHandler: null });
 }
 async function prepareActive(config: RuntimeConfig, overrides: PrepareOverrides = {}) {
-  const snapshot = await prepare(config, overrides);
-  activate(snapshot);
-  return snapshot;
+  activate(await prepare(config, overrides));
 }
 
 function attachAuthOwner(params: {
   snapshot: RuntimeSnapshot;
-  agentDir: string;
-  profileId: string;
   ref: SecretRef;
   refKey: string;
-  sourceConfig?: RuntimeConfig;
   contractDigest?: string;
   append?: boolean;
 }): string {
-  const ownerId = resolveAuthProfileSecretOwnerId(params);
-  if (params.sourceConfig) {
-    params.snapshot.sourceConfig = params.sourceConfig;
-    params.snapshot.config = params.sourceConfig;
-  }
-  params.snapshot.authStores = prepareRuntimeAuthProfileStoreSnapshots([
-    {
-      agentDir: params.agentDir,
-      store: createAuthProfileStoreFixture({
-        [params.profileId]: authProfile(params.ref),
-      }),
-    },
-  ]);
+  const agentDir = "/tmp/shared-secret-co-owner";
+  const profileId = "openai:shared";
+  const ownerId = resolveAuthProfileSecretOwnerId({ agentDir, profileId });
+  const store = createAuthProfileStoreFixture({ [profileId]: authProfile(params.ref) });
+  params.snapshot.authStores = prepareRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
   const owner = {
     ownerKind: "account" as const,
     ownerId,
     refKeys: [params.refKey],
     ...(params.contractDigest ? { contractDigest: params.contractDigest } : {}),
   };
-  params.snapshot.secretOwners = params.append
-    ? [...(params.snapshot.secretOwners ?? []), owner]
-    : [owner];
+  params.snapshot.secretOwners = [
+    ...(params.append ? (params.snapshot.secretOwners ?? []) : []),
+    owner,
+  ];
   return ownerId;
 }
 
@@ -161,41 +145,29 @@ describe("secrets runtime degraded-owner attribution", () => {
   });
 
   it.each([
-    ["CURRENT_REF", "stale"],
-    ["CHANGED_REF", "cold"],
-  ] as const)("classifies unresolved reload ref %s", async (candidateId, expectedState) => {
-    const config = (id: string) => asConfig({ tts: tts(envRef(id)) });
+    ["tts", false],
+    ["tts", true],
+    ["explicit", false],
+    ["explicit", true],
+    ["auto", false],
+  ] as const)("classifies %s reload (changed ref: %s)", async (mode, changed) => {
+    const config = (id: string) =>
+      asConfig(
+        mode === "tts" ? { tts: tts(envRef(id)) } : webConfig(envRef(id), false, mode === "auto"),
+      );
     await prepareActive(config("CURRENT_REF"), {
       env: { CURRENT_REF: "resolved" },
     });
-
-    const error = await captureFailure(config(candidateId), { env: {} });
-
-    expectOnlyOwner(error, {
+    const error = await captureFailure(config(changed ? "CHANGED_REF" : "CURRENT_REF"), {
+      env: {},
+    });
+    const owner = {
       ownerKind: "capability",
-      ownerId: "tts",
-      degradationState: expectedState,
-    });
-  });
-
-  it.each([
-    ["explicit", "WEB_TOOL_REF", "stale"],
-    ["explicit", "CHANGED_WEB_TOOL_REF", "cold"],
-    ["auto", "WEB_TOOL_REF", "stale"],
-  ] as const)("classifies %s web tool ref %s", async (mode, candidateId, expectedState) => {
-    const config = (id: string) => asConfig(webConfig(envRef(id), false, mode === "auto"));
-    await prepareActive(config("WEB_TOOL_REF"), {
-      env: { WEB_TOOL_REF: "resolved" },
-    });
-
-    const error = await captureFailure(config(candidateId), { env: {} });
-
-    expectOwners(error, {
-      ownerKind: "capability",
-      ownerId: "web-search:gemini",
-      degradationState: expectedState,
-      failureMatched: true,
-    });
+      ownerId: mode === "tts" ? "tts" : "web-search:gemini",
+      degradationState: changed ? "cold" : "stale",
+      ...(mode === "tts" ? {} : { failureMatched: true }),
+    };
+    (mode === "tts" ? expectOnlyOwner : expectOwners)(error, owner);
     if (mode === "auto") {
       expectOwners(error, {
         ownerId: "web-search:brave",
@@ -234,27 +206,17 @@ describe("secrets runtime degraded-owner attribution", () => {
       return;
     }
     const root = tempDirs.make("openclaw-secret-provider-active-co-owner-");
-    const provider = "missing";
-    const apiKeyRef = fileRef(provider, "/candidate");
-    const activeRef = fileRef(provider, "/active");
+    const activeRef = fileRef("missing", "/active");
     const config = asConfig({
-      secrets: {
-        providers: {
-          [provider]: fileProvider(path.join(root, "missing.json")),
-        },
-      },
-      models: models(apiKeyRef),
+      secrets: { providers: { missing: fileProvider(path.join(root, "missing.json")) } },
+      models: models(fileRef("missing", "/candidate")),
     });
-    const agentDir = path.join(root, "agent");
-    const profileId = "openai:provider-failure";
     const active = await prepare(asConfig({}));
+    active.sourceConfig = active.config = config;
     const accountOwnerId = attachAuthOwner({
       snapshot: active,
-      agentDir,
-      profileId,
       ref: activeRef,
       refKey: "file:missing:/active",
-      sourceConfig: config,
       contractDigest: combineSecretOwnerContractDigests([
         digestSecretOwnerContract(
           canonicalizeSecretRefsForOwnerContract(
@@ -287,8 +249,6 @@ describe("secrets runtime degraded-owner attribution", () => {
 
   it("includes active web-tool co-owners when strict resolution fails first", async () => {
     const sharedRef = envRef("SHARED_API_KEY");
-    const authAgentDir = "/tmp/shared-secret-co-owner";
-    const authProfileId = "openai:shared";
     const config = asConfig({
       models: models(sharedRef),
       ...webConfig(sharedRef),
@@ -296,8 +256,6 @@ describe("secrets runtime degraded-owner attribution", () => {
     const active = await prepare(config, { env: { SHARED_API_KEY: "dummy" } });
     const authOwnerId = attachAuthOwner({
       snapshot: active,
-      agentDir: authAgentDir,
-      profileId: authProfileId,
       ref: sharedRef,
       refKey: "env:default:SHARED_API_KEY",
       append: true,
@@ -324,95 +282,66 @@ describe("secrets runtime degraded-owner attribution", () => {
     );
   });
 
-  it("includes later active web-tool co-owners when web resolution fails first", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const root = tempDirs.make("openclaw-invalid-web-sibling-");
-    const secretsPath = path.join(root, "secrets.json");
-    await writeSharedSecret(secretsPath, "dummy");
-    const sharedRef = fileRef("shared", "/shared");
-    const config = asConfig({
-      secrets: sharedSecrets(secretsPath),
-      ...webConfig(sharedRef, true),
-    });
-    await prepareActive(config);
-    await fs.writeFile(secretsPath, JSON.stringify({ shared: { invalid: true } }), "utf8");
-
-    const error = await captureFailure(config);
-
-    expectOwners(
-      error,
-      {
-        ownerKind: "capability",
-        ownerId: "web-search:gemini",
-        ...invalidValue,
-        degradationState: "stale",
-      },
-      {
-        ownerKind: "capability",
-        ownerId: "web-fetch:firecrawl",
-        ...invalidValue,
-        degradationState: "stale",
-      },
-    );
-  });
-
-  it("reports every cold-start owner sharing an invalid resolved value", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const root = tempDirs.make("openclaw-shared-invalid-secretref-");
-    const secretsPath = path.join(root, "secrets.json");
-    await writeSharedSecret(secretsPath, { invalid: true });
-    const sharedRef = fileRef("shared", "/shared");
-    const error = await captureFailure(
-      asConfig({
+  it.each([true, false])(
+    "attributes a shared invalid value to every owner (active: %s)",
+    async (active) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const secretsPath = path.join(
+        tempDirs.make("openclaw-shared-invalid-secretref-"),
+        "secrets.json",
+      );
+      await writeSharedSecret(secretsPath, active ? "dummy" : { invalid: true });
+      const sharedRef = fileRef("shared", "/shared");
+      const config = asConfig({
         secrets: sharedSecrets(secretsPath),
-        models: models(sharedRef),
-        tts: tts(sharedRef),
-        skills: {
-          entries: {
-            healthy: {
-              apiKey: envRef("HEALTHY_SKILL_KEY"),
+        ...(active
+          ? webConfig(sharedRef, true)
+          : {
+              models: models(sharedRef),
+              tts: tts(sharedRef),
+              skills: { entries: { healthy: { apiKey: envRef("HEALTHY_SKILL_KEY") } } },
+            }),
+      });
+      if (active) {
+        await prepareActive(config);
+        await fs.writeFile(secretsPath, JSON.stringify({ shared: { invalid: true } }), "utf8");
+      }
+      const error = await captureFailure(
+        config,
+        active
+          ? {}
+          : {
+              env: { HEALTHY_SKILL_KEY: "healthy-skill-key" },
+              allowUnavailableSecretOwners: true,
             },
-          },
-        },
-      }),
-      {
-        env: { HEALTHY_SKILL_KEY: "healthy-skill-key" },
-        allowUnavailableSecretOwners: true,
-      },
-    );
+      );
 
-    expect(error).toBeInstanceOf(Error);
-    const owners = listSecretResolutionErrorOwners(error);
-    expect(owners).toHaveLength(2);
-    expectOwners(
-      error,
-      {
-        ownerKind: "provider",
-        ownerId: "example",
-        ...invalidValue,
-      },
-      {
-        ownerKind: "capability",
-        ownerId: "tts",
-        ...invalidValue,
-      },
-    );
-    expect(owners).not.toContainEqual(expect.objectContaining({ ownerId: "skill:healthy" }));
-  });
+      expectOwners(
+        error,
+        ...(active ? ["web-search:gemini", "web-fetch:firecrawl"] : ["example", "tts"]).map(
+          (ownerId) =>
+            Object.assign(
+              { ownerKind: ownerId === "example" ? "provider" : "capability", ownerId },
+              invalidValue,
+              active ? { degradationState: "stale" } : {},
+            ),
+        ),
+      );
+      if (!active) {
+        expect(error).toBeInstanceOf(Error);
+        const owners = listSecretResolutionErrorOwners(error);
+        expect(owners).toHaveLength(2);
+        expect(owners).not.toContainEqual(expect.objectContaining({ ownerId: "skill:healthy" }));
+      }
+    },
+  );
 
   it("still fails required gateway auth SecretRefs when env is missing", async () => {
     const error = await captureFailure(
       asConfig({
-        gateway: {
-          auth: {
-            mode: "token",
-            token: envRef("GATEWAY_TOKEN_REF"),
-          },
-        },
+        gateway: { auth: { mode: "token", token: envRef("GATEWAY_TOKEN_REF") } },
       }),
       { env: {}, allowUnavailableSecretOwners: true },
     );

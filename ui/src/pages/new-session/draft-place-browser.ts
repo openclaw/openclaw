@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   FsListDirResult,
   ProjectRecord,
@@ -8,6 +9,8 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { requestCheckoutSnapshot } from "../../lib/checkout-snapshot.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
@@ -17,7 +20,6 @@ import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
 import { PICKER_INPUT_DEBOUNCE_MS, PlaceBrowserState } from "./place-browser-state.ts";
 import { projectCloneInput, type DraftRemoteProject } from "./project-chip.ts";
-import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
 
 type ProjectSearchOutcome = { result: ProjectsSearchRemoteResult } | { error: unknown } | null;
 
@@ -120,15 +122,18 @@ export class DraftPlaceBrowser {
         }
         this.callbacks.onApprovedListing(listing);
         const snapshot = this.read();
-        const client = snapshot.context?.gateway.snapshot.client;
-        if (!snapshot.isAdmin || !client) {
+        const applicationGateway = snapshot.context?.gateway;
+        if (!snapshot.isAdmin || !applicationGateway?.snapshot.client) {
           return;
         }
-        void client
-          .request<WorktreesBranchesResult>("worktrees.branches", {
+        void requestCheckoutSnapshot<WorktreesBranchesResult>(
+          applicationGateway,
+          "worktrees.branches",
+          {
             repoRoot: listing.path,
             includeRepositoryStatus: true,
-          })
+          },
+        )
           .then((branches) => {
             // Typing keeps this listing valid; replacement or reset retires its probe.
             if (this.browser.listing === listing && branches.repositoryStatus === "git") {
@@ -196,6 +201,10 @@ export class DraftPlaceBrowser {
     return this.projectCatalog?.snapshot.ready ?? false;
   }
 
+  get projectCatalogError(): unknown {
+    return this.projectCatalog?.snapshot.error ?? null;
+  }
+
   get projectsLoading(): boolean {
     return this.projectCatalog?.loading ?? false;
   }
@@ -229,6 +238,11 @@ export class DraftPlaceBrowser {
 
   get projectId(): string {
     return this.projectSelection?.kind === "local" ? this.projectSelection.id : "";
+  }
+
+  /** Remote and pasted repositories open through operator.write projectGitUrl. */
+  get canOpenRemoteProjects(): boolean {
+    return hasOperatorWriteAccess(this.read().context?.gateway.snapshot.hello?.auth ?? null);
   }
 
   get remoteProject(): DraftRemoteProject | null {
@@ -342,7 +356,13 @@ export class DraftPlaceBrowser {
   }
 
   resolveProjectRecents(params: {
-    sessions: readonly RecentPlaceSource[];
+    sessions: readonly {
+      deviceFolder?: unknown;
+      execCwd?: unknown;
+      execNode?: unknown;
+      spawnedCwd?: string;
+      worktree?: { repoRoot?: unknown } | null;
+    }[];
     workspace: string;
     workspaceRoots: readonly string[];
     isAdmin: boolean;
@@ -354,17 +374,37 @@ export class DraftPlaceBrowser {
         ? this.projects.some((project) => project.id === recent.projectId)
         : recent.kind === "repository" || (!recent.execNode && allowGatewayFolder(recent.folder)),
     );
-    return (
-      serverRecents ??
-      recentPlaces(params.sessions, {
-        workspace: params.workspace,
-        allowGatewayFolder,
-      }).map<ProjectRecent>((recent) => ({
-        kind: "folder",
-        folder: recent.folder,
-        displayName: pathDisplayName(recent.folder),
-      }))
-    );
+    if (serverRecents !== undefined) {
+      return serverRecents;
+    }
+    const folders = new Set<string>();
+    for (const row of params.sessions) {
+      // Host sessions persist their task cwd in spawnedCwd; device-folder paths
+      // live on the paired device, not this host, so they stay off folder chips.
+      const folder =
+        normalizeOptionalString(row.execCwd) ??
+        normalizeOptionalString(row.worktree?.repoRoot) ??
+        row.spawnedCwd?.trim();
+      const execNode = normalizeOptionalString(row.execNode);
+      if (
+        !folder ||
+        execNode ||
+        row.deviceFolder ||
+        folder === params.workspace ||
+        !allowGatewayFolder(folder)
+      ) {
+        continue;
+      }
+      folders.add(folder);
+      if (folders.size >= 4) {
+        break;
+      }
+    }
+    return Array.from(folders, (folder): ProjectRecent => ({
+      kind: "folder",
+      folder,
+      displayName: pathDisplayName(folder),
+    }));
   }
 
   changeProjectQuery(query: string) {
