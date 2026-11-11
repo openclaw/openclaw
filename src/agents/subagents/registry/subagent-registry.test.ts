@@ -739,13 +739,13 @@ describe("subagent registry seam flow", () => {
     emitLifecycle(runId, { phase: "end", startedAt: startedAt + 10, endedAt: startedAt + 500 });
     await waitForFast(() => {
       const run = findRequesterRun(runId);
-      expect(run?.execution.endedAt).toBe(startedAt + 1_000);
+      expect(run?.execution.endedAt).toBe(startedAt + 500);
       expect(run?.execution.outcome).toEqual(
         expect.objectContaining({
-          status: "timeout",
-          startedAt,
-          endedAt: startedAt + 1_000,
-          elapsedMs: 1_000,
+          status: "ok",
+          startedAt: startedAt + 10,
+          endedAt: startedAt + 500,
+          elapsedMs: 490,
         }),
       );
       // The wait expired on our own clock while the child session was still

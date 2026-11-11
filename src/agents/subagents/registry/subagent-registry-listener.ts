@@ -158,7 +158,8 @@ export function createSubagentRegistryListener(config: {
           !observed ||
           (startedAt !== undefined &&
             observed.execution.startedAt !== undefined &&
-            observed.execution.startedAt !== startedAt)
+            observed.execution.startedAt !== startedAt &&
+            observed.waitExpiryObservedAt === undefined)
         ) {
           return;
         }
