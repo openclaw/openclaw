@@ -9493,9 +9493,13 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
         #expect(sent.isEmpty)
 
-        try await Task.sleep(for: .seconds(5.1))
-        await appModel.handleDeepLink(url: url)
-        await appModel.approvePendingAgentDeepLinkPrompt()
+        // A fresh model skips the 5 s prompt throttle without waiting on it.
+        let approvingModel = NodeAppModel()
+        approvingModel.gatewayConnected = true
+        approvingModel.testAgentRequestHandler = { sent.append($0) }
+        await approvingModel.handleDeepLink(url: url)
+        #expect(sent.isEmpty)
+        await approvingModel.approvePendingAgentDeepLinkPrompt()
         #expect(sent.count == 1)
         let request = try #require(sent.first)
         #expect(request.deliver == false)
