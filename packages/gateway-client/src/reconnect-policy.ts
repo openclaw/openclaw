@@ -2,6 +2,7 @@ import {
   ConnectErrorDetailCodes,
   readConnectErrorDetailCode,
   readPairingConnectErrorDetails,
+  isGatewayOperatorAccessRetryable,
 } from "@openclaw/gateway-protocol/connect-error-details";
 
 const NON_RECOVERABLE_AUTH_ERRORS = new Set<string>([
@@ -14,9 +15,7 @@ const NON_RECOVERABLE_AUTH_ERRORS = new Set<string>([
   ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
   ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
   ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH,
-  ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
   ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED,
-  ConnectErrorDetailCodes.OPERATOR_ACCESS_DENIED,
   ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
   ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
   ConnectErrorDetailCodes.PAIRING_REQUIRED,
@@ -36,6 +35,9 @@ export function shouldPauseGatewayReconnect(params: {
   const code = readConnectErrorDetailCode(params.details);
   if (!code) {
     return false;
+  }
+  if (code === ConnectErrorDetailCodes.OPERATOR_ACCESS_DENIED) {
+    return !isGatewayOperatorAccessRetryable(params.details);
   }
   const pairing = readPairingConnectErrorDetails(params.details);
   if (
