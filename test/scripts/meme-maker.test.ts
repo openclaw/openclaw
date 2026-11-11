@@ -15,7 +15,7 @@ const skillRoot = path.resolve("skills/meme-maker");
 const scriptPath = path.join(skillRoot, "scripts/meme.mjs");
 const template = templates.find((entry) => entry.id === "two-buttons")!;
 
-function renderFixture(format: "svg" | "png", isolated = false) {
+function renderFixture(format: "svg" | "png", isolated = false, extraArgs: string[] = []) {
   const root = createTempDir("openclaw-meme-maker-");
   const cache = path.join(root, "cache");
   const imageDir = path.join(cache, "openclaw/meme-maker");
@@ -41,13 +41,40 @@ globalThis.fetch = () => { throw new Error("Unexpected network access"); };
   const out = path.join(root, `meme.${format}`);
   const result = execFileAsync(
     testNodeExecPath,
-    ["--import", hook, script, "render", template.id, "--text", "Fish & chips", "--out", out],
-    { env: { ...process.env, XDG_CACHE_HOME: cache }, timeout: 30_000 },
+    [
+      "--import",
+      hook,
+      script,
+      "render",
+      template.id,
+      "--text",
+      "Fish & chips",
+      "--out",
+      out,
+      ...extraArgs,
+    ],
+    { cwd: root, env: { ...process.env, XDG_CACHE_HOME: cache }, timeout: 30_000 },
   );
-  return { image, out, result };
+  return { image, out, result, root };
 }
 
 describe("meme-maker local rendering", () => {
+  it.each(["--out", "--text"])("rejects a missing %s value before rendering", async (flag) => {
+    const { root, out, result } = renderFixture("svg", true, [flag, "--service", "local"]);
+    await expect(result).rejects.toMatchObject({
+      code: 1,
+      stderr: `error: Missing value for ${flag}\n`,
+    });
+    expect(fs.existsSync(out)).toBe(false);
+    expect(fs.existsSync(path.join(root, "--service"))).toBe(false);
+  });
+
+  it("retains option-looking caption and output literals passed with equals", async () => {
+    const { root, result } = renderFixture("svg", true, ["--text=--out", "--out=--service"]);
+    await result;
+    expect(fs.readFileSync(path.join(root, "--service"), "utf8")).toContain(">--out</tspan>");
+  });
+
   it("writes a self-contained SVG with escaped, box-centered text without optional rendering dependencies", async () => {
     const { image, out, result } = renderFixture("svg", true);
     const { stdout } = await result;
