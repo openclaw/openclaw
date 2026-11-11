@@ -8,6 +8,7 @@ import {
   deriveInviteProofKey,
   deriveRootSigner,
   ed25519SignerFromSeed,
+  encodeKit,
   formatEd25519PublicKey,
   formatIrohEndpointKey,
   generateEd25519Signer,
@@ -111,7 +112,8 @@ export async function linkedClaw(
   if ("ok" in prep) {
     throw new Error(prep.detail);
   }
-  const root = await deriveRootSigner(generateKitSecret());
+  const kitSecret = generateKitSecret();
+  const root = await deriveRootSigner(kitSecret);
   const device = await generateEd25519Signer();
   const w1 = formatIrohEndpointKey(randomBytes(32));
   const cert = await signStatement(
@@ -163,6 +165,8 @@ export async function linkedClaw(
     sign,
     clawId: prep.claw_id,
     stateDir,
+    /** The recovery kit text (`OCK1-…`) R was derived from. */
+    kit: await encodeKit(kitSecret),
   };
 }
 
