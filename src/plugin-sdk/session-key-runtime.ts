@@ -3,6 +3,7 @@
  */
 export {
   isIncognitoSessionKey,
+  parseSessionDeliveryRoute,
   resolveAgentIdFromSessionKey,
   type ParsedAgentSessionKey,
 } from "../routing/session-key.js";

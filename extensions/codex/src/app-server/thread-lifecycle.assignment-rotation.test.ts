@@ -36,10 +36,16 @@ setupRunAttemptTestHooks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(resetThreadLifecycleTestFixtures);
 
-async function fixture() {
+async function fixture(initial?: {
+  sessionKey?: string;
+  dynamicTools?: CodexStartOrResumeThreadParams["dynamicTools"];
+}) {
   const cwd = tempDirs.make("codex-assignment-rotation-");
   const params = createParams(path.join(cwd, "session.jsonl"), cwd);
   params.agentId = "main";
+  if (initial?.sessionKey) {
+    params.sessionKey = initial.sessionKey;
+  }
   const identity = {
     kind: "session" as const,
     agentId: "main",
@@ -52,7 +58,7 @@ async function fixture() {
   let starts = 0;
   let successor: (() => Promise<ReturnType<typeof threadStartResult>>) | undefined;
   const wire = createCodexLifecycleHarness({
-    respond: async (method) => {
+    respond: async (method, requestParams) => {
       if (method === "config/read") {
         return { config: {}, origins: {}, layers: [] };
       }
@@ -62,6 +68,11 @@ async function fixture() {
       if (method === "thread/start") {
         starts += 1;
         return starts > 1 && successor ? await successor() : threadStartResult(`parent-${starts}`);
+      }
+      if (method === "thread/resume") {
+        assert(requestParams && typeof requestParams === "object" && "threadId" in requestParams);
+        assert(typeof requestParams.threadId === "string");
+        return threadStartResult(requestParams.threadId);
       }
       if (method === "thread/delete") {
         return {};
@@ -78,7 +89,7 @@ async function fixture() {
     bindingStore: store,
     params,
     cwd,
-    dynamicTools: [],
+    dynamicTools: initial?.dynamicTools ?? [],
     appServer: createAppServerOptions(),
     nativeCodeModeEnabled: true,
     userMcpServersEnabled: false,
@@ -170,6 +181,90 @@ async function fixture() {
 }
 
 describe("native assignment custody across ordinary parent rotation", () => {
+  const conversationKey = "agent:main:example:channel:room:thread:42";
+  const readTool = {
+    type: "function" as const,
+    name: "read_progress",
+    description: "Read progress",
+    inputSchema: { type: "object", properties: {} },
+  };
+  const interactiveTools = [readTool, { ...readTool, name: "update_progress" }];
+
+  it.each(["scheduled check", "failure repair"])(
+    "keeps the interactive supervisor and its assignments after a %s with fewer tools",
+    async (source) => {
+      const f = await fixture({ sessionKey: conversationKey, dynamicTools: interactiveTools });
+      const before = f.readState();
+      const background = await startOrResumeThread({
+        ...f.options,
+        params: {
+          ...f.options.params,
+          ...(source === "scheduled check"
+            ? { trigger: "cron" as const }
+            : {
+                inputProvenance: {
+                  kind: "internal_system" as const,
+                  sourceTool: "cron_failure_repair",
+                },
+              }),
+        },
+        dynamicTools: [readTool],
+      });
+      expect(background.threadId).not.toBe(f.parent.threadId);
+      expect(background.lifecycle.preserveExistingBinding).toBe(true);
+      expect(background.liveThreadConfigFingerprint).toBeUndefined();
+      const starts = f.writes
+        .map((line) => JSON.parse(line) as RpcRequest)
+        .filter((rpc) => rpc.method === "thread/start");
+      expect(starts).toHaveLength(2);
+      expect(starts[1]?.params).toMatchObject({ dynamicTools: [readTool] });
+      expect(f.readState()).toEqual(before);
+      expect(f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
+      expect(f.releasePredecessor).not.toHaveBeenCalled();
+      const next = await startOrResumeThread(f.options);
+      expect(next.threadId).toBe(f.parent.threadId);
+    },
+  );
+
+  it.each(["agent:main:cron:watch:run:1", "agent:main:nightly-reports"])(
+    "still lets a scheduled job own a separate execution session (%s)",
+    async (sessionKey) => {
+      const f = await fixture({ sessionKey, dynamicTools: interactiveTools });
+      const next = await startOrResumeThread({
+        ...f.options,
+        params: { ...f.options.params, trigger: "cron" },
+        dynamicTools: [readTool],
+      });
+      expect(next.threadId).not.toBe(f.parent.threadId);
+      expect(f.store.read(f.identity)?.threadId).toBe(next.threadId);
+    },
+  );
+
+  it("does not let a background check claim a conversation before its first foreground turn", async () => {
+    const f = await fixture();
+    const params = {
+      ...f.options.params,
+      sessionId: "other-session",
+      sessionKey: conversationKey,
+      sessionFile: path.join(f.options.cwd, "other-session.jsonl"),
+    };
+    const identity = { ...f.identity, sessionId: params.sessionId, sessionKey: params.sessionKey };
+    const first = await startOrResumeThread({
+      ...f.options,
+      params: { ...params, trigger: "cron" },
+      dynamicTools: [readTool],
+    });
+    expect(first.lifecycle.preserveExistingBinding).toBe(true);
+    expect(f.store.read(identity)).toBeUndefined();
+    const human = await startOrResumeThread({
+      ...f.options,
+      params: { ...params, trigger: "user" },
+      dynamicTools: interactiveTools,
+    });
+    expect(f.store.read(identity)?.threadId).toBe(human.threadId);
+    expect(human.threadId).not.toBe(first.threadId);
+  });
+
   it("keeps imported assignments until the ordinary replacement commits", async () => {
     const f = await fixture();
     const before = f.readState();
