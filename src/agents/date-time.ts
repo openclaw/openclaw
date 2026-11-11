@@ -98,7 +98,9 @@ function normalizeTimestamp(
     if (/^\d+(\.\d+)?$/.test(trimmed)) {
       const num = Number(trimmed);
       if (Number.isFinite(num)) {
-        timestampMs = Math.round(num * (trimmed.includes(".") || trimmed.length < 13 ? 1000 : 1));
+        // Match numeric inputs by magnitude so fractional millisecond strings
+        // remain milliseconds instead of being scaled into an invalid date.
+        timestampMs = Math.round(num * (num < 1_000_000_000_000 ? 1000 : 1));
       }
     } else {
       const parsed = Date.parse(trimmed);
