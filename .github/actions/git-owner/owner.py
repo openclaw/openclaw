@@ -487,6 +487,7 @@ def checkout_harness(sha):
         "scripts/lib/ci-blacksmith-capacity.mjs",
         "scripts/ci-adaptive-priors.mjs",
         "scripts/lib/actions-artifact-archive.mjs",
+        "scripts/lib/plain-gh.mjs",
         "scripts/lib/changed-path-facts.mjs",
         "scripts/lib/ci-test-observations.mjs",
         "scripts/lib/ci-ios-smoke-plan.mjs",

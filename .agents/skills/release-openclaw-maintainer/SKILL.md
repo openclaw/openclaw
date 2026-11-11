@@ -76,16 +76,19 @@ later. This is recommended bookkeeping, not another release gate.
 
 FRV must conclude **success** under pinned P's
 [checked-in release-tooling policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
-Only exact failed live-provider or Telegram leaves may be waived, without
-skipping tests or changing C/Q. All other required lanes must succeed: Windows
+Apply only the exact exceptions in that policy, including its operator-authorized
+Kova grants; preserve each grant’s version, job, and optional attempt restrictions.
+A failed-job grant is not permission to skip the job or change C/Q. All other
+required lanes must succeed: Windows
 and macOS Node and other normal CI jobs, install smoke, survivor
 lanes, `update-first-hop-compat*`, pack/npm qualification, package integrity,
 and Linux/Windows/macOS Gateway checks, including Windows packaged
 install/upgrade checks in Release Checks. A cancelled run still blocks. Preserve
 first failures and classify each one as below before recovery. Stable
 publication requires stable/full evidence, soak, and blocking performance.
-Beta-profile evidence cannot authorize stable publication. None of those hard
-gates, soak, or performance can be waived. All nine Gateway install/upgrade
+Beta-profile evidence cannot authorize stable publication. Hard gates and soak
+remain mandatory; performance exceptions are limited to the checked-in policy.
+All nine Gateway install/upgrade
 combinations across Linux, Windows, and macOS are required for all-group
 qualification. Preserve identity, provenance, complete evidence, and existing
 publication approvals.

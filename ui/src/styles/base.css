@@ -967,7 +967,7 @@ textarea,
 
 body {
   margin: 0;
-  font: 400 var(--control-ui-text-md)/1.55 var(--font-body);
+  font: 400 14px/1.55 var(--font-body);
   letter-spacing: -0.01em;
   background: var(--bg);
   color: var(--text);
@@ -1009,7 +1009,7 @@ summary,
 
 @media (min-width: 1600px) {
   body {
-    font-size: calc(15px * var(--control-ui-text-scale));
+    font-size: 15px;
   }
 }
 
