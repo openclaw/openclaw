@@ -84,14 +84,14 @@ openclaw-youtube-video {
   }
   .provider {
     color: var(--muted);
-    font-size: var(--control-ui-text-xs);
+    font-size: 11px;
     line-height: 1.5;
     letter-spacing: 0.04em;
   }
   .title {
     margin: 2px 0 0;
     color: var(--text-strong);
-    font-size: var(--control-ui-text-md);
+    font-size: 14px;
     font-weight: 600;
     line-height: 1.4;
     overflow-wrap: anywhere;
@@ -101,7 +101,7 @@ openclaw-youtube-video {
     align-items: center;
     gap: 5px;
     color: var(--muted);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     text-decoration: none;
     cursor: pointer;
   }
@@ -129,7 +129,7 @@ openclaw-youtube-video {
     margin: 0;
     padding: 0 14px 12px;
     color: var(--muted);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     line-height: 1.5;
   }
 }

@@ -85,9 +85,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 500;
-  line-height: calc(16px * var(--control-ui-text-scale));
+  line-height: 16px;
 }
 
 .sidebar-pinned-agent__link[aria-current="page"] .sidebar-pinned-agent__name {
@@ -104,7 +104,7 @@
   gap: 10px;
   width: 240px;
   max-width: calc(100vw - 50px);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.45;
 }
 
