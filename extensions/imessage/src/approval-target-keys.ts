@@ -104,19 +104,26 @@ export function buildIMessageApprovalConversationKeyForInbound(
       : {}),
     // Group sends are keyed by chat only: the actor handle is a member, not the
     // conversation, so including it would never match the outbound key.
-    ...(message.is_group ? {} : { handle: actorHandle }),
+    // Self-sends act as the local account, so the DM peer comes from the chat.
+    ...(message.is_group
+      ? {}
+      : {
+          handle:
+            (message.is_from_me === true &&
+              normalizeIMessageHandle(message.chat_identifier ?? "")) ||
+            actorHandle,
+        }),
   };
 }
 
 export function resolveIMessageApprovalControlActor(message: IMessagePayload): string {
-  // Received rows can inherit the local identity from destination_caller_id;
-  // only authoritative self-sends may use that fallback as their actor.
   const sender = normalizeIMessageHandle(message.sender ?? "");
   const destination = normalizeIMessageHandle(message.destination_caller_id ?? "");
-  const receivedSenderIsLocalFallback =
-    message.is_from_me !== true && Boolean(sender) && sender === destination;
-  return (
-    (receivedSenderIsLocalFallback ? "" : sender) ||
-    (message.is_from_me === true ? destination : "")
-  );
+  // imsg can report the DM recipient as the sender of self-sends, so the local
+  // account in destination_caller_id is the authoritative actor.
+  if (message.is_from_me === true) {
+    return destination || sender;
+  }
+  // Received rows can inherit the local identity from destination_caller_id.
+  return sender === destination ? "" : sender;
 }
