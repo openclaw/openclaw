@@ -154,8 +154,10 @@ export function ChatThread(input: ChatThreadInput) {
                   ref={[elementRef(input.bindViewport)]}
                 >
                   {!heldWarmBoot && (
-                    <div class="chat-thread-inner">
-                      <ChatConversationLoading route />
+                    <div class="chat-thread-content">
+                      <div class="chat-thread-inner">
+                        <ChatConversationLoading route />
+                      </div>
                     </div>
                   )}
                 </div>
@@ -517,12 +519,14 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
             name: input.props.assistantName,
           }}
         />
-        {contents()}
-        <Show when={input.props.applicationContext}>
-          {(context) => (
-            <TemplateCreatorReview context={context()} sessionKey={input.props.sessionKey} />
-          )}
-        </Show>
+        <div class="chat-thread-content">
+          {contents()}
+          <Show when={input.props.applicationContext}>
+            {(context) => (
+              <TemplateCreatorReview context={context()} sessionKey={input.props.sessionKey} />
+            )}
+          </Show>
+        </div>
         <Show when={commentPins() ? getTranscriptState(paneId()) : undefined} keyed>
           {(threadState) => (
             <Loading>
