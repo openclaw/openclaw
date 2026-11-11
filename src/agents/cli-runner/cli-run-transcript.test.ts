@@ -151,6 +151,11 @@ it.each([false, true])("persists CLI usage with separate turn total=%s", async (
       : expect.objectContaining({ input: 10, output: 5, cacheRead: 100, cacheWrite: 0 }),
   );
   expect(priced.costUsd).toEqual(turnTotal ? expect.closeTo(turnCost, 12) : undefined);
+  // Known rates cannot make an unmeasured turn free; a measured zero turn still prices at $0.
+  const turn = (usage?: { input: number }) =>
+    buildCliAssistantTranscriptUsage({ runParams: pricedRunParams, modelId, usage }).costUsd;
+  expect(turnTotal ? turn() : undefined).toBeUndefined();
+  expect(turnTotal ? turn({ input: 0 }) : 0).toBe(0);
 });
 
 it.each([

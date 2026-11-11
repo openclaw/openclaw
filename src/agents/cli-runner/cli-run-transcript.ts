@@ -144,6 +144,16 @@ export function buildCliAssistantTranscriptUsage(params: {
   turnUsage?: CliUsage;
 }): { usage: Usage; costUsd?: number } {
   const counters = buildCliTranscriptCounters(params.usage, params.turnUsage);
+  // Text-output backends report no counters; their zero placeholders measure nothing.
+  const reported = params.turnUsage ?? params.usage;
+  if (
+    !reported ||
+    [reported.input, reported.output, reported.cacheRead, reported.cacheWrite].every(
+      (count) => count === undefined,
+    )
+  ) {
+    return { usage: counters };
+  }
   const rates = resolveModelCostConfig({
     provider: params.runParams.provider,
     model: params.modelId,
