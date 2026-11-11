@@ -29,6 +29,7 @@ import {
   getCronRunQueueRequests,
   launchCronRunQueueResult,
 } from "./run-queue.js";
+import { watchCronRunSlotPushback } from "./run-slots.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { captureCronSchedulerSnapshot } from "./scheduler-config.js";
 import { runCronSchedulerMaintenance } from "./scheduler-maintenance.js";
@@ -188,7 +189,8 @@ export async function startCronScheduler(
       state.deps.log.warn({ err: String(error) }, "cron: scheduling delayed; worker will retry");
     });
   });
-  connection.unsubscribe = sessionChanges.subscribe((change) => {
+  const stopPushbackWatch = watchCronRunSlotPushback();
+  const stopConfigWatch = sessionChanges.subscribe((change) => {
     if (
       !("all" in change) ||
       typeof change.scope !== "string" ||
@@ -198,6 +200,10 @@ export async function startCronScheduler(
     }
     refreshCronScheduler(state);
   });
+  connection.unsubscribe = () => {
+    stopConfigWatch();
+    stopPushbackWatch();
+  };
   let started = false;
   try {
     await lease?.ready;

@@ -441,6 +441,8 @@ function drainCronQueueInDatabase(
         delete job.state.runSlotWaitReceiptId;
         updateCronRuntimeRow(db, input.storeKey, job);
         activeCount += 1;
+      } else if (!input.schedulingPaused) {
+        result.awaitingRunSlot = true;
       }
       continue;
     }
@@ -507,9 +509,12 @@ function drainCronQueueInDatabase(
     const withoutRunSlot = checksCondition && startsWithoutRunSlot(job, receipt.receiptId);
     if (
       (input.schedulingPaused && context.mode === "scheduled") ||
-      (checksCondition && checkingCount >= MAX_CONCURRENT_CONDITION_CHECKS) ||
-      (!withoutRunSlot && activeCount >= Math.max(1, input.maxConcurrentRuns))
+      (checksCondition && checkingCount >= MAX_CONCURRENT_CONDITION_CHECKS)
     ) {
+      continue;
+    }
+    if (!withoutRunSlot && activeCount >= Math.max(1, input.maxConcurrentRuns)) {
+      result.awaitingRunSlot = true;
       continue;
     }
     // Restart continuity shares the claim transaction with the budget check and the charge.
