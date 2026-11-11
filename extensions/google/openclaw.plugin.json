@@ -67,6 +67,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "google": "google"
+    },
     "discovery": {
       "google": "runtime"
     },
@@ -874,6 +877,31 @@
         "provider": "google-vertex",
         "model": "gemini-live-2.5-flash-preview-native-audio",
         "reason": "Google shut down this Gemini Live preview. Use google-vertex/gemini-3.1-flash-live-preview."
+      },
+      {
+        "provider": "google",
+        "model": "deep-research-preview-04-2026",
+        "reason": "Deep Research is a Google research agent, not a chat model. Use the Google research tool."
+      },
+      {
+        "provider": "google",
+        "model": "deep-research-max-preview-04-2026",
+        "reason": "Deep Research is a Google research agent, not a chat model. Use the Google research tool."
+      },
+      {
+        "provider": "google",
+        "model": "gemini-2.5-computer-use-preview-10-2025",
+        "reason": "Gemini Computer Use needs Google's computer-use tool loop and is not a general chat model."
+      },
+      {
+        "provider": "google",
+        "model": "gemini-3.1-flash-live-preview",
+        "reason": "Gemini Live models serve only the Live API. Use Google realtime voice instead of chat."
+      },
+      {
+        "provider": "google",
+        "model": "gemini-3.1-flash-lite-image",
+        "reason": "Gemini image models are for image generation, not chat."
       }
     ]
   },

@@ -1,0 +1,5 @@
+88
+# One committed-write regression counts sibling store opens through real SQLite
+# writes. Remount coverage enters Gateway config preflight before credential reads.
+# A real worker regression protects timer-only measurement without filesystem census.
+# The existing picker proof joins native initialization before sampling CLI calls.
