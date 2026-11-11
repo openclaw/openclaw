@@ -401,7 +401,7 @@ it.each([
   ) {
     expect(statements.filter((sql) => /PRAGMA (?:integrity|quick)_check/i.test(sql))).toEqual([]);
     expect(logger.info).not.toHaveBeenCalledWith(
-      "agent database integrity gate",
+      expect.stringContaining("agent database integrity gate"),
       expect.anything(),
     );
     expect(readSqliteDatabaseCleanClose(first.path)).toBe(true);
@@ -419,7 +419,7 @@ it.each([
     expect(statements.filter((sql) => /PRAGMA (?:integrity|quick)_check/i.test(sql))).toEqual([]);
   } else {
     expect(logger.info).toHaveBeenCalledWith(
-      "agent database integrity gate",
+      expect.stringContaining("outcome=pending"),
       expect.objectContaining({
         agentId: "receipt-agent",
         integrityGateReason: outcome === "malformed-identity" ? "malformed-proof" : outcome,

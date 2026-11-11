@@ -1,8 +1,11 @@
 /**
  * Synthetic native agent-open benchmark. No Team data or Gateway/model readiness claim.
- * nice -n 19 node --expose-gc --import ./scripts/tsx.mjs scripts/perf/derived-index-admission-measure.ts --state-dir .local/index-admission --baseline-source /absolute/prior-agent-database-startup-integrity.ts
+ * nice -n 19 node --expose-gc --import ./scripts/tsx.mjs scripts/perf/derived-index-admission-measure.ts --state-dir .local/index-admission --baseline-dir /absolute/prepared-baseline-checkout
+ * Both arms load their complete checkout, including its dependencies and tsconfig paths.
+ * Choose a pre-fix baseline that supports the seed's schema; incompatible historical schemas refuse normally.
+ * Launch standalone samples from their arm's checkout; paired runs do this automatically.
  * Stale-lease samples run inside a native worker; thread CPU includes synchronous SQLite.
- * Stale-lease alternative: --scenario stale-lease --baseline-dir /absolute/baseline-source-tree.
+ * Stale-lease alternative: add --scenario stale-lease with its matching pre-fix baseline checkout.
  * Its real child opens an alias, commits a row, begins another write, then receives SIGKILL.
  * The admitted parent reopens the canonical file; the old lease path forces baseline FULL.
  * --mode resume reuses an explicitly prepared synthetic seed. Workspaces are not read by this owner.
@@ -26,7 +29,7 @@ import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { isMainThread, Worker } from "node:worker_threads";
 import { transformSync } from "esbuild";
@@ -37,7 +40,6 @@ import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
-    "baseline-source": { type: "string" },
     "baseline-dir": { type: "string" },
     scenario: { type: "string", default: "derived-index" },
     mode: { type: "string", default: "run" },
@@ -54,23 +56,19 @@ assert(global.gc, "Run with --expose-gc");
 const root = path.resolve(values["state-dir"]);
 const staleLease = values.scenario === "stale-lease";
 assert(staleLease || values.scenario === "derived-index", "Unknown scenario");
-const baselineSources = new Map<string, string>();
-if (staleLease && (values.arm === "baseline" || ["run", "resume"].includes(values.mode))) {
-  assert(values["baseline-dir"], "Stale-lease comparison requires --baseline-dir");
-  for (const filename of [
-    "src/state/openclaw-agent-db.ts",
-    "src/state/openclaw-agent-db-lease.ts",
-    "src/state/openclaw-agent-db-lease-provenance.ts",
-    "src/state/openclaw-agent-db-schema.ts",
-    "src/state/agent-database-startup-integrity.ts",
-    "src/infra/sqlite-integrity.ts",
-  ]) {
-    baselineSources.set(
-      new URL(`../../${filename}`, import.meta.url).href,
-      readFileSync(path.resolve(values["baseline-dir"], filename), "utf8"),
-    );
-  }
+const candidateRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
+const baselineRoot = values["baseline-dir"] && path.resolve(values["baseline-dir"]);
+if (values.arm === "baseline" || ["run", "resume"].includes(values.mode)) {
+  assert(baselineRoot, "Comparison requires --baseline-dir with a prepared baseline checkout");
 }
+const sourceRoot = values.arm === "baseline" ? baselineRoot! : candidateRoot;
+assert.equal(path.resolve(process.cwd()), sourceRoot, "Launch samples from their arm's checkout");
+assert.equal(
+  path.resolve(process.env.TSX_TSCONFIG_PATH ?? "tsconfig.json"),
+  path.join(sourceRoot, "tsconfig.json"),
+  "Samples require their checkout's tsconfig paths",
+);
+const sourceUrl = (filename: string) => pathToFileURL(path.join(sourceRoot, filename)).href;
 const number = (key: "rows" | "payload-bytes" | "samples") =>
   parseStrictIntegerOption({ raw: values[key], label: key, min: 1, fallback: 1 });
 const indexes = [
@@ -90,14 +88,12 @@ Object.assign(process.env, {
   OPENCLAW_STATE_DIR: root,
   OPENCLAW_CONFIG_PATH: options.env.OPENCLAW_CONFIG_PATH,
 });
-const startupUrl = new URL("../../src/state/agent-database-startup-integrity.ts", import.meta.url)
-  .href;
 const observation: { diagnostics?: Record<string, unknown>; fullChecks: number } = {
   fullChecks: 0,
 };
 Object.assign(globalThis, { __indexAdmissionMeasure: observation });
-const openerUrl = new URL("../../src/state/openclaw-agent-db.ts", import.meta.url).href;
-const integrityUrl = new URL("../../src/infra/sqlite-integrity.ts", import.meta.url).href;
+const openerUrl = sourceUrl("src/state/openclaw-agent-db.ts");
+const integrityUrl = sourceUrl("src/infra/sqlite-integrity.ts");
 function replaceOnce(source: string, before: string, after: string): string {
   assert.equal(
     source.split(before).length,
@@ -108,20 +104,16 @@ function replaceOnce(source: string, before: string, after: string): string {
 }
 registerHooks({
   load(url, context, nextLoad) {
-    let source = values.arm === "baseline" ? baselineSources.get(url) : undefined;
-    if (!staleLease && url === startupUrl && values.arm === "baseline") {
-      assert(values["baseline-source"], "Baseline needs --baseline-source");
-      source = readFileSync(values["baseline-source"], "utf8");
-    }
+    let source: string | undefined;
     if (url === openerUrl) {
       source = replaceOnce(
-        source ?? readFileSync(fileURLToPath(url), "utf8"),
+        readFileSync(fileURLToPath(url), "utf8"),
         "const diagnostics: SqliteIntegrityDiagnostics = {};",
         "const diagnostics: SqliteIntegrityDiagnostics = {}; globalThis.__indexAdmissionMeasure.diagnostics = diagnostics;",
       );
     } else if (url === integrityUrl) {
       source = replaceOnce(
-        source ?? readFileSync(fileURLToPath(url), "utf8"),
+        readFileSync(fileURLToPath(url), "utf8"),
         "runCheck(step.value);",
         "if (step.value.check === 'full') globalThis.__indexAdmissionMeasure.fullChecks++; runCheck(step.value);",
       );
@@ -146,10 +138,11 @@ if (values.mode === "run" || values.mode === "resume") {
   }
   const outputs: unknown[] = [];
   const child = (mode: string, arm = "candidate", allocation = false) => {
+    const checkout = arm === "baseline" ? baselineRoot! : candidateRoot;
     const args = [
       "--expose-gc",
       "--import",
-      fileURLToPath(new URL("../tsx.mjs", import.meta.url)),
+      path.join(checkout, "scripts/tsx.mjs"),
       fileURLToPath(import.meta.url),
       "--state-dir",
       root,
@@ -164,11 +157,8 @@ if (values.mode === "run" || values.mode === "resume") {
       "--payload-bytes",
       String(number("payload-bytes")),
     ];
-    if (values["baseline-source"]) {
-      args.push("--baseline-source", path.resolve(values["baseline-source"]));
-    }
-    if (values["baseline-dir"]) {
-      args.push("--baseline-dir", path.resolve(values["baseline-dir"]));
+    if (baselineRoot) {
+      args.push("--baseline-dir", baselineRoot);
     }
     if (allocation) {
       args.push("--allocation");
@@ -176,6 +166,8 @@ if (values.mode === "run" || values.mode === "resume") {
     const result = spawnSync("/usr/bin/time", ["-p", process.execPath, ...args], {
       encoding: "utf8",
       maxBuffer: 32 * 1024 * 1024,
+      cwd: checkout,
+      env: { ...process.env, TSX_TSCONFIG_PATH: path.join(checkout, "tsconfig.json") },
     });
     process.stderr.write(result.stderr);
     process.stdout.write(result.stdout);
@@ -219,22 +211,30 @@ if (values.mode === "run" || values.mode === "resume") {
   // Match the runtime worker: synchronous SQLite CPU belongs to this measured isolate.
   const worker = new Worker(new URL(import.meta.url), {
     argv: process.argv.slice(2),
-    execArgv: ["--import", fileURLToPath(new URL("../tsx.mjs", import.meta.url))],
+    execArgv: ["--import", sourceUrl("scripts/tsx.mjs")],
     name: "stale-lease-admission",
   });
   const [code] = await once(worker, "exit");
   assert.equal(code, 0, "Measurement worker failed");
 } else {
-  const { readSqliteCleanCloseSeal, writeSqliteCleanCloseSeal } =
-    await import("../../src/infra/sqlite-clean-close-seal.js");
-  const { sqliteDatabaseSealSchemaFor } =
-    await import("../../src/state/openclaw-database-seal-schema.js");
+  const {
+    readSqliteCleanCloseSeal,
+    writeSqliteCleanCloseSeal,
+  }: typeof import("../../src/infra/sqlite-clean-close-seal.js") = await import(
+    sourceUrl("src/infra/sqlite-clean-close-seal.ts")
+  );
+  const {
+    sqliteDatabaseSealSchemaFor,
+  }: typeof import("../../src/state/openclaw-database-seal-schema.js") = await import(
+    sourceUrl("src/state/openclaw-database-seal-schema.ts")
+  );
   const {
     openOpenClawAgentDatabase,
     runOpenClawAgentWriteTransaction,
     closeOpenClawAgentDatabasesAsync,
-  } = await import("../../src/state/openclaw-agent-db.js");
-  const { closeOpenClawStateDatabaseAsync } = await import("../../src/state/openclaw-state-db.js");
+  }: typeof import("../../src/state/openclaw-agent-db.js") = await import(openerUrl);
+  const { closeOpenClawStateDatabaseAsync }: typeof import("../../src/state/openclaw-state-db.js") =
+    await import(sourceUrl("src/state/openclaw-state-db.ts"));
   const record = (row: unknown) => console.log(`MEASURE ${JSON.stringify(row)}`);
   const census = (db: OpenClawAgentDatabase["db"]) => {
     const counts = Object.fromEntries(
@@ -407,13 +407,19 @@ if (values.mode === "run" || values.mode === "resume") {
       openOpenClawAgentDatabase({ ...options, path: `${options.path}.alias` });
       const holder = fork(
         fileURLToPath(import.meta.url),
-        ["--state-dir", root, "--mode", "hold", "--scenario", "stale-lease"],
+        [
+          "--state-dir",
+          root,
+          "--mode",
+          "hold",
+          "--scenario",
+          "stale-lease",
+          "--arm",
+          values.arm,
+          ...(baselineRoot ? ["--baseline-dir", baselineRoot] : []),
+        ],
         {
-          execArgv: [
-            "--expose-gc",
-            "--import",
-            fileURLToPath(new URL("../tsx.mjs", import.meta.url)),
-          ],
+          execArgv: ["--expose-gc", "--import", sourceUrl("scripts/tsx.mjs")],
           stdio: ["ignore", "ignore", "inherit", "ipc"],
         },
       );

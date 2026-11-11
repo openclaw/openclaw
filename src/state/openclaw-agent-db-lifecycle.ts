@@ -169,15 +169,18 @@ export function startAgentDatabaseOpenTiming(
     phaseDurationsMs[phase] = completedMs - elapsedMs;
     elapsedMs = completedMs;
     if (phase === "validation" && diagnostics.integrityGateReason) {
-      agentDbLog.info("agent database integrity gate", {
-        agentId,
-        path: pathname,
-        pid: process.pid,
-        threadId,
-        isMainThread,
-        admissionMode,
-        ...diagnostics,
-      });
+      agentDbLog.info(
+        `agent database integrity gate for ${agentId}: reason=${diagnostics.integrityGateReason}, mode=${diagnostics.integrityGateMode}, outcome=${diagnostics.integrityGateOutcome}, elapsedMs=${diagnostics.integrityGateMs ?? phaseDurationsMs.validation}`,
+        {
+          agentId,
+          path: pathname,
+          pid: process.pid,
+          threadId,
+          isMainThread,
+          admissionMode,
+          ...diagnostics,
+        },
+      );
     }
     // Registration is the final checkpoint; intermediate phases never emit a partial summary.
     if (phase === "registration" && elapsedMs >= OPENCLAW_AGENT_DB_SLOW_OPEN_MS) {

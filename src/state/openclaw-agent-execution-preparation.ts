@@ -6,8 +6,13 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
+import {
+  captureAgentDatabaseIntegrityObserver,
+  type AgentDatabasePreparedIntegrity,
+} from "./agent-database-preparation-context.js";
 import type { AgentDeletionWorkerGuard } from "./agent-deletion-worker-contract.js";
 import type { AgentDatabaseRegistryChange } from "./openclaw-agent-db-contract.js";
+import { getOpenClawAgentDatabaseValidationForTransfer } from "./openclaw-agent-db-validation-cache.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 
 export function readAgentDatabaseRequestPreparation(): {
@@ -150,4 +155,25 @@ export function createSharedAgentDatabasePreparation(assertCurrent: () => void) 
       };
     },
   };
+}
+
+/** Native generations retain the logical owner's observer, never a request context. */
+export function captureAgentDatabasePreparedIntegrity(
+  scope: Pick<AgentDatabasePreparedIntegrity, "agentId" | "path" | "env">,
+) {
+  const observe = captureAgentDatabaseIntegrityObserver();
+  return (
+    observe &&
+    (() => {
+      const validation = getOpenClawAgentDatabaseValidationForTransfer(scope);
+      if (validation) {
+        observe({
+          ...scope,
+          identity: validation.identity,
+          birthtime: validation.birthtime,
+          integrityVerifiedAt: validation.integrityVerifiedAt,
+        });
+      }
+    })
+  );
 }

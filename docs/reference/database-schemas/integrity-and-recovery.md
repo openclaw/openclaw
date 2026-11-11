@@ -197,9 +197,10 @@ receipt can precede that same agent's final `written` receipt: idle retained dat
 handles still hold leases even when no agent work is running. The final handle must
 release its lease after checkpoint and native close before certifying the seal.
 An `active-leases` receipt means this handle closed; peers prevent seal publication,
-not the close itself.
+not the close itself. Its message includes the first blocking lease's ID and process
+ID; structured fields also include its path, process start time, and opened time.
 Each worker coalesces unchanged outcomes for its 128 most recently observed database
-paths. Changed outcomes still log after commit; rollback cannot suppress the next
+paths. Changed outcomes or blocking leases still log after commit; rollback cannot suppress the next
 committed receipt. This diagnostic history does not change handle retention or seal checks.
 At the next admission, `no-proof` means no seal was found. Rejected seals
 report `malformed-proof`, `expired-proof`, `file-mismatch`, or `journal-present`;
@@ -236,23 +237,31 @@ preflight, or integrity verification. It also avoids a post-ready verification
 scan. Without a reusable seal, Gateway startup admits an exact current agent
 schema through SQLite's native recovery, schema/owner checks, and bounded
 page-count/freelist-count sanity checks. It then runs full integrity and foreign-key
-verification in a read-only child, with at most two background scans at once.
+verification in a read-only child at low OS process priority, with at most two
+background scans at once. Runtime admission uses that same Gateway owner when
+it accepts a physical file without a full-verification receipt.
 Readiness, session reads, and ordinary writes do not wait for that scan. Startup
 that requires schema/index repair has no background verifier and retains its
-foreground check, including when it reuses an already open connection.
+foreground check, including when it reuses an already open connection. Requests
+waiting for writable preparation receive a retryable verification/preparation-in-progress
+response after one second; the Gateway's preparation continues independently.
 Killing a writer, changing the file externally, changing its
 schema identity, or restoring a different physical file prevents seal reuse.
 The seven-day limit is checked on admission; it does not introduce a daily
 runtime scan or a new timer. Already admitted physical databases do not queue
-another post-ready integrity scan; Doctor and explicit verification remain available.
+another post-ready integrity scan. The Gateway retains completed and inconclusive
+attempts by shared-state scope and physical file, so replacing a worker does not
+restart a scan. Replacing the physical file creates a new verification obligation;
+Doctor and explicit verification remain available.
 
 Doctor, update, and other ordinary agent-database callers use bounded admission
 for a current schema regardless of a missing, expired, malformed, or mismatched
 seal, lease history, or lifecycle revocation. Canonical non-unique indexes can be
 repaired under this admission. The default QUICK maintenance policy does not add
 a whole-file scan on reopen. Admission records `deferred` / `pending`, without a
-full-verification receipt or seal, so Gateway startup still owes background
-verification. Explicit FULL verification, pending migrations, and noncanonical
+full-verification receipt or seal. A running Gateway schedules the owed verification;
+standalone callers leave it to the next Gateway startup. Explicit FULL verification,
+pending migrations, and noncanonical
 schema changes retain their required checks. Required scans from synchronous agent
 openers run in the integrity child; diagnostics report worker time rather than
 `integrityCheckSyncMs`.
@@ -265,7 +274,12 @@ failed in readiness/status, and records a durable quarantine decision. Stop the
 Gateway and run `openclaw doctor --fix` before retrying. The quarantine survives
 later file writes and restarts until Doctor clears it after verification. A
 cancelled or inconclusive scan logs its failure and supplies no verification or
-seal; it does not declare corruption. Shutdown cancels and joins the native reader.
+seal; it does not declare corruption or retry on every reopen. The next Gateway
+startup or explicit verification can try again. Shutdown cancels and joins the
+native reader. SQLite's full check has no resumable cursor in the current binding:
+an interrupted check must restart from the beginning. Low process priority is not
+an I/O bandwidth limit; the bounded concurrency and inspection deadline do not
+provide page-level pacing or resumability.
 
 This policy accepts the interval between bounded admission and a background
 corruption finding: previously untouched damaged pages can exist while ordinary

@@ -53,7 +53,7 @@ const log = createSubsystemLogger("state/agent-db");
 // Diagnostic state survives handle churn, but never owns leases or suppresses seal checks.
 const closeReceipts = resolveGlobalSingleton(
   Symbol.for("openclaw.agentDatabaseCloseReceipts"),
-  () => new LruCache<{ agentId: string; receipt: string }>(128),
+  () => new LruCache<{ agentId: string; receipt: string; blockingLeaseId?: string }>(128),
   (receipts) => receipts.clear(),
 );
 
@@ -291,6 +291,7 @@ export function releaseOpenClawAgentDatabaseLease(
       );
     }
     let receipt: string;
+    let blockingLease: ReturnType<typeof findAgentDatabasePathLease>;
     if (!held) {
       receipt = "lease-not-held";
     } else if (typeof closeOutcome !== "object") {
@@ -300,27 +301,45 @@ export function releaseOpenClawAgentDatabaseLease(
           : (closeOutcome ?? "close-unconfirmed");
     } else if (held.path !== closeOutcome.path) {
       receipt = "path-mismatch";
-    } else if (hasAgentDatabasePathLease(database, closeOutcome.path)) {
-      receipt = "active-leases";
     } else {
       // Shared-state writer admission excludes a competing claim until this release commits.
-      receipt = closeOutcome.publishSeal() ? "written" : "verification-missing";
+      blockingLease = findAgentDatabasePathLease(database, closeOutcome.path);
+      receipt = blockingLease
+        ? "active-leases"
+        : closeOutcome.publishSeal()
+          ? "written"
+          : "verification-missing";
     }
     const publish = () => {
       if (held) {
         const previous = closeReceipts.get(held.path);
-        if (previous?.agentId === held.agent_id && previous.receipt === receipt) {
+        if (
+          previous?.agentId === held.agent_id &&
+          previous.receipt === receipt &&
+          previous.blockingLeaseId === blockingLease?.lease_id
+        ) {
           return;
         }
-        closeReceipts.set(held.path, { agentId: held.agent_id, receipt });
+        closeReceipts.set(held.path, {
+          agentId: held.agent_id,
+          receipt,
+          blockingLeaseId: blockingLease?.lease_id,
+        });
       }
       log.info(
-        `agent database clean-close receipt: ${receipt}; agent=${held?.agent_id ?? "unknown"}`,
+        `agent database clean-close receipt: ${receipt}; agent=${held?.agent_id ?? "unknown"}${blockingLease ? `; blockingLeaseId=${blockingLease.lease_id}; ownerPid=${blockingLease.owner_pid}` : ""}`,
         {
           agentId: held?.agent_id,
           path: held?.path,
           leaseId,
           receipt,
+          blockingLease: blockingLease && {
+            leaseId: blockingLease.lease_id,
+            ownerPid: blockingLease.owner_pid,
+            ownerStartTime: blockingLease.owner_start_time,
+            path: blockingLease.path,
+            openedAt: blockingLease.opened_at,
+          },
         },
       );
     };
@@ -363,9 +382,9 @@ function agentDatabaseLeasePaths(database: EngineConnection): string[] {
   ).rows.map((row) => row.path);
 }
 
-function hasAgentDatabasePathLease(database: EngineConnection, pathname: string): boolean {
-  return agentDatabaseLeasePaths(database).some((held) =>
-    mayShareAgentDatabaseFile(held, pathname),
+function findAgentDatabasePathLease(database: EngineConnection, pathname: string) {
+  return readAgentDatabaseLeases(database).find((held) =>
+    mayShareAgentDatabaseFile(held.path, pathname),
   );
 }
 

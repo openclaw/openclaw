@@ -82,6 +82,7 @@ export function createAgentDatabaseNativeGeneration(
   creatingIdentity?: DatabasePathIdentity,
   creationClaim?: AgentDatabaseFileExecutionOpen["creationClaim"],
   startupPreparation = false,
+  observePreparedIntegrity?: () => void,
 ): AgentDatabaseNativeGeneration {
   const inPreparation = AsyncLocalStorage.snapshot();
   const processOwner = captureGatewayStateOwner(context.admission.databasePath);
@@ -178,7 +179,7 @@ export function createAgentDatabaseNativeGeneration(
         env: context.environment,
       });
       const assertBackgroundIntegrity = assertPreparationJournal
-        ? captureAgentDatabaseStartupVerification(pathname)
+        ? captureAgentDatabaseStartupVerification(pathname, context.environment)
         : undefined;
       const nativeLocations = [
         pathname,
@@ -525,6 +526,7 @@ export function createAgentDatabaseNativeGeneration(
           assertCurrent();
           // An eager opener has already settled registration and its topology publication.
           preparationPublished ||= nativeIdentity !== undefined;
+          observePreparedIntegrity?.();
           return store;
         } catch (error) {
           try {
@@ -647,6 +649,7 @@ export function createAgentDatabaseNativeGeneration(
           source.assertCurrent();
         });
         preparationPublished = true;
+        observePreparedIntegrity?.();
       }
       preparedStore = store;
     } finally {

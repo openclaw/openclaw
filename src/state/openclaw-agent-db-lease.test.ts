@@ -169,6 +169,7 @@ it("records admission on its held claim and refuses to resurrect a released clai
 it("reports committed close-state transitions without repeating unchanged peer receipts", () => {
   const { params, state } = createLeaseOwner();
   claimOpenClawAgentDatabaseLease(params, "peer");
+  claimOpenClawAgentDatabaseLease(params, "second-peer");
   const publishSeal = vi.fn(() => true);
   const close = (id: string, checkpoint = true) => {
     claimOpenClawAgentDatabaseLease(params, id);
@@ -182,7 +183,10 @@ it("reports committed close-state transitions without repeating unchanged peer r
     close(`warm-${iteration}`);
   }
   expect(publishSeal).not.toHaveBeenCalled();
-  expectRows(state.db, "SELECT lease_id FROM agent_database_leases", [{ lease_id: "peer" }]);
+  expectRows(state.db, "SELECT lease_id FROM agent_database_leases ORDER BY lease_id", [
+    { lease_id: "peer" },
+    { lease_id: "second-peer" },
+  ]);
   const sibling = { ...params, agentId: "sibling", path: `${params.path}.sibling` };
   claimOpenClawAgentDatabaseLease(sibling, "sibling");
   releaseOpenClawAgentDatabaseLease("sibling", { env: params.env }, "uncheckpointed");
@@ -209,6 +213,15 @@ it("reports committed close-state transitions without repeating unchanged peer r
       publishSeal,
     },
   );
+  expect(publishSeal).not.toHaveBeenCalled();
+  releaseOpenClawAgentDatabaseLease(
+    "second-peer",
+    { env: params.env },
+    {
+      path: params.path,
+      publishSeal,
+    },
+  );
   expect(publishSeal).toHaveBeenCalledOnce();
   expectRows(state.db, "SELECT lease_id FROM agent_database_leases", []);
   expect(
@@ -220,6 +233,26 @@ it("reports committed close-state transitions without repeating unchanged peer r
     ["sibling", "checkpoint-incomplete"],
     ["main", "checkpoint-incomplete"],
     ["main", "active-leases"],
+    ["main", "active-leases"],
     ["main", "written"],
   ]);
+  const blocked = logger.info.mock.calls.filter(
+    ([, detail]) => detail?.receipt === "active-leases",
+  );
+  expect(blocked.map(([, detail]) => detail.blockingLease.leaseId)).toEqual([
+    "peer",
+    "peer",
+    "second-peer",
+  ]);
+  for (const [message, detail] of blocked) {
+    expect(message).toContain(
+      `blockingLeaseId=${detail.blockingLease.leaseId}; ownerPid=${process.pid}`,
+    );
+    expect(detail.blockingLease).toMatchObject({
+      ownerPid: process.pid,
+      ownerStartTime: getFileLockProcessStartTime(process.pid),
+      path: params.path,
+      openedAt: 0,
+    });
+  }
 });

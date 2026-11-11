@@ -299,10 +299,9 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
         expect(publicationWrite).toThrow("startup inspection");
         expect(isAgentDatabaseStartupReadReady(`${pathname}.other`, { env })).toBe(false);
         const writeSettled = vi.fn();
-        const writing = Promise.resolve(admission.waitForAgentPreparation("main", { env })).then(
-          writeSettled,
-          writeSettled,
-        );
+        const writing = Promise.resolve(
+          admission.waitForAgentPreparation("main", { env, forInput: true }),
+        ).then(writeSettled, writeSettled);
         if (contents !== "missing-index") {
           const read = withinTest(
             withEntry(scope.sessionKey, scope, (row) => row.entry),
@@ -338,6 +337,14 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
           }
         }
         expect(writeSettled).not.toHaveBeenCalled();
+        if (contents === "valid") {
+          await expect(
+            admission.waitForAgentPreparation("main", { env, forWrite: true }),
+          ).rejects.toThrow("Agent database verification and preparation in progress");
+          // The caller's retryable response must not cancel or replace the original writer.
+          expect(writeSettled).not.toHaveBeenCalled();
+          expect(phases).not.toContain("migration");
+        }
         if (contents === "superseded") {
           current = false;
         }
