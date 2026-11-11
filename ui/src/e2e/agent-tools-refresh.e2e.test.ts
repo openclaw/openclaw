@@ -50,7 +50,12 @@ suite.define(() => {
             : [],
         };
         const gateway = await installMockGateway(page, {
-          featureMethods: [...defaultControlUiFeatureMethods, "tools.catalog", "tools.effective"],
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "config.get",
+            "tools.catalog",
+            "tools.effective",
+          ],
           operatorScopes: ["operator.read"],
           heldMethods: ["tools.effective"],
           methodResponses: {
