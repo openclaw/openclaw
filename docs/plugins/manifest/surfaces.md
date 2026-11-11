@@ -436,7 +436,7 @@ plugin can recreate.
 }
 ```
 
-OpenClaw includes these servers only while the owning plugin is enabled. Relative `command`, `args`, `cwd`, and `workingDirectory` paths resolve from the plugin root. User configuration remains authoritative: `mcp.servers.<name>` can replace a plugin default or set `enabled: false` to omit it. MCP App rendering and server-tool calls still require the normal MCP Apps setting and effective tool policy; declaring a server does not bypass either boundary.
+OpenClaw includes these servers only while the owning plugin is enabled. A declaration can also set `enabled: false` to advertise an optional server without activating it. Disabled defaults do not replace an active declaration from another plugin. For an optional native-plugin capability, `enabledByConfig: ["hub", "enabled"]` activates the server only when that path inside the owning plugin’s config is exactly `true`. Omitted, false, invalid, or missing paths keep the server inactive. This OpenClaw-only field is consumed before transport handoff; it never reads another plugin’s config. Relative `command`, `args`, `cwd`, and `workingDirectory` paths resolve from the plugin root. User configuration remains authoritative: `mcp.servers.<name>` can replace a plugin default or set `enabled: false` to omit it. To opt in to a disabled default, configure the complete server definition under `mcp.servers.<name>` with `enabled: true`. MCP App rendering and server-tool calls still require the normal MCP Apps setting and effective tool policy; declaring a server does not bypass either boundary.
 
 ## UI capabilities
 

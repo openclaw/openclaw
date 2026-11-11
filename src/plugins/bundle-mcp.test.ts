@@ -120,6 +120,11 @@ describe("loadEnabledBundleMcpConfig", () => {
               },
               remote: { transport: "streamable-http", url: "https://example.test/mcp" },
               events: { transport: "sse", url: "https://example.test/sse" },
+              optional: {
+                transport: "streamable-http",
+                url: "https://example.test/optional",
+                enabled: false,
+              },
             },
           }),
         ],
@@ -326,6 +331,41 @@ describe("loadEnabledBundleMcpConfig", () => {
     expect(loaded.diagnostics.every((entry) => entry.message.includes("cwd must remain"))).toBe(
       true,
     );
+  });
+
+  it("preserves active server data ownership when a later plugin declares it disabled", async ({
+    homeDir,
+    workspaceDir,
+  }) => {
+    const rootDir = await writeAgentBundle(homeDir, "active", { servers: { app: stdio() } });
+    const loaded = loadEnabledBundleMcpConfig({
+      workspaceDir,
+      cfg: createEnabledBundleConfig(["active", "optional"]),
+      manifestRegistry: {
+        plugins: [
+          createPluginManifestRecordFixture({
+            id: "active",
+            rootDir,
+            format: "bundle",
+            bundleFormat: "agent",
+            origin: "global",
+          }),
+          createPluginManifestRecordFixture({
+            id: "optional",
+            rootDir,
+            origin: "global",
+            mcpServers: { app: { transport: "stdio", command: "node", enabled: false } },
+          }),
+        ],
+      },
+    });
+    expect(loaded.pluginIdsByServer).toEqual({ app: "active" });
+    expect(loaded.prepareDataDirsByServer).toEqual({
+      app: {
+        pluginId: "active",
+        dataDir: path.join(homeDir, ".openclaw", "plugin-data", "active"),
+      },
+    });
   });
 
   it("ignores dot and inline Agent Plugins MCP config", async ({ homeDir, workspaceDir }) => {
