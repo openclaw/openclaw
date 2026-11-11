@@ -1,0 +1,2 @@
+# Exact net test-line growth from PR #187401 (create-only automation update fields fail with a readable error).
+12
