@@ -90,6 +90,39 @@ it("preserves literal requested model namespaces while deduplicating fallback ro
     candidate("custom", "model", "configured-fallback"),
   ]);
 });
+it("carries each fallback entry's @profile on the candidate it resolves to", () => {
+  const cfg: OpenClawConfig = {
+    ...createModelFallbackConfig("custom/model", [
+      "custom/other@custom:backup",
+      // A later duplicate route never replaces the first entry's account.
+      "custom/other@custom:ignored",
+      "fast@custom:aliased",
+    ]),
+    models: { providers: { custom: customProvider } },
+  };
+  cfg.agents!.defaults!.models = { "custom/third": { alias: "fast" } };
+
+  expect(
+    resolveModelCandidateChain({
+      cfg,
+      provider: "custom",
+      model: "model",
+      requestedRouteResolution: "resolved",
+      manifestPlugins: [],
+    }),
+  ).toEqual([
+    candidate("custom", "model"),
+    {
+      ...candidate("custom", "other", "configured-fallback"),
+      configuredAuthProfileId: "custom:backup",
+    },
+    {
+      ...candidate("custom", "third", "configured-fallback"),
+      configuredAuthProfileId: "custom:aliased",
+    },
+  ]);
+});
+
 describe("resolveImageFallbackCandidates", () => {
   it.each([
     { kind: "override", api: undefined },

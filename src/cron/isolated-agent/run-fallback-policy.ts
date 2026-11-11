@@ -1,7 +1,7 @@
 /** Resolves model fallback chains for isolated cron runs and preflight. */
 import type { RunEntryModelResolve } from "../../agents/embedded-agent-runner/run-entry.types.js";
 import { resolveModelCandidateChain } from "../../agents/model-fallback-candidates.js";
-import type { ModelCandidate } from "../../agents/model-fallback.types.js";
+import type { ModelFallbackCandidate } from "../../agents/model-fallback.types.js";
 import type { ModelRef } from "../../agents/model-ref-shared.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -120,7 +120,7 @@ export function resolveCronPreflightCandidates(params: {
   useSubagentFallbacks?: boolean;
   inheritDefaultFallbacksForAgentStringModel?: boolean;
   sessionModelOverrideSource?: "auto" | "user";
-}): ModelCandidate[] {
+}): ModelFallbackCandidate[] {
   const fallbacksOverride = resolveCronFallbacksOverride({
     ...params,
     selectedModel: { provider: params.provider, model: params.model },

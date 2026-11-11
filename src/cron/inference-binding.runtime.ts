@@ -11,18 +11,10 @@ import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthSelection,
 } from "../agents/cli-execution-auth.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveAgentHarnessSelectionDecision } from "../agents/harness/selection-decision.js";
 import { resolveProviderModelAuthPolicy } from "../agents/model-auth-policy.js";
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../agents/model-selection-cli.js";
-import { resolveConfiguredModelFallbacks } from "../agents/model-selection-resolve.js";
-import {
-  buildModelAliasIndex,
-  resolveConfiguredModelRef,
-  resolveModelRefFromString,
-} from "../agents/model-selection-shared.js";
 import { isConfiguredKeyAuthSource } from "../agents/provider-model-auth-source-plan.js";
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
@@ -360,9 +352,11 @@ export async function resolveCronFallbackProviderModels(
     primary.modelSource === "session"
       ? (resolveSessionModelOverrideSource(params.executionSessionEntry) ?? undefined)
       : undefined;
-  const { resolveCronFallbacksOverride, resolveCronPreflightCandidates } =
+  const { resolveCronPreflightCandidates } =
     await import("./isolated-agent/run-fallback-policy.js");
-  const policy = {
+  // The same chain a run builds: payload fallbacks first, then subagent/agent/default policy.
+  // Each candidate carries the `@profile` its configured entry named.
+  const chain = resolveCronPreflightCandidates({
     cfg: primary.cfgWithAgentDefaults,
     job: {
       payload: {
@@ -373,56 +367,18 @@ export async function resolveCronFallbackProviderModels(
       },
     },
     agentId,
+    provider: primary.provider,
+    model: primary.model,
     useSubagentFallbacks: primary.useSubagentFallbacks,
     inheritDefaultFallbacksForAgentStringModel: primary.inheritDefaultFallbacksForAgentStringModel,
     sessionModelOverrideSource,
-  };
-  // The same chain a run builds: payload fallbacks first, then subagent/agent/default policy.
-  const chain = resolveCronPreflightCandidates({
-    ...policy,
-    provider: primary.provider,
-    model: primary.model,
   });
-  // The chain builder resolves aliases but drops `@profile`. Read explicit accounts only from
-  // the effective list that produced the chain, resolved through the same alias owner.
-  const effective =
-    resolveCronFallbacksOverride({
-      ...policy,
-      selectedModel: { provider: primary.provider, model: primary.model },
-    }) ?? resolveConfiguredModelFallbacks({ cfg: policy.cfg, agentId });
-  // The candidate builder resolves providerless fallbacks against the configured default
-  // provider, not the job's primary; resolve `@profile` entries the same way.
-  const defaultProvider = resolveConfiguredModelRef({
-    cfg: policy.cfg,
-    agentId,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-    allowPluginNormalization: false,
-  }).provider;
-  const aliasIndex = buildModelAliasIndex({ cfg: policy.cfg, agentId, defaultProvider });
-  const explicitProfiles = new Map<string, string>();
-  for (const raw of effective) {
-    const { profile } = splitTrailingAuthProfile(raw);
-    const resolved = profile
-      ? resolveModelRefFromString({
-          cfg: policy.cfg,
-          agentId,
-          raw,
-          defaultProvider,
-          aliasIndex,
-        })
-      : null;
-    const key = resolved && `${resolved.ref.provider}/${resolved.ref.model}`;
-    if (key && profile && !explicitProfiles.has(key)) {
-      explicitProfiles.set(key, profile);
-    }
-  }
   const seen = new Set([params.primaryProvider]);
   const models: CronFallbackCandidate[] = [];
   for (const candidate of chain) {
     if (!seen.has(candidate.provider)) {
       seen.add(candidate.provider);
-      const profileId = explicitProfiles.get(`${candidate.provider}/${candidate.model}`);
+      const profileId = candidate.configuredAuthProfileId;
       models.push({
         provider: candidate.provider,
         model: `${candidate.provider}/${candidate.model}`,

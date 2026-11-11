@@ -32,6 +32,7 @@ import type {
   ModelFallbackRouteOrigin,
   ModelFallbackRouteResolution,
 } from "./model-fallback.types.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   type ModelManifestNormalizationContext,
   modelKey,
@@ -114,6 +115,7 @@ function createModelCandidateCollector() {
     candidate: ModelCandidate,
     routeOrigin: ModelFallbackRouteOrigin,
     routeResolution: ModelFallbackRouteResolution,
+    configuredAuthProfileId?: string,
   ) => {
     if (!candidate.provider || !candidate.model) {
       return;
@@ -123,7 +125,12 @@ function createModelCandidateCollector() {
       return;
     }
     seen.add(key);
-    candidates.push({ ...candidate, routeOrigin, routeResolution });
+    candidates.push({
+      ...candidate,
+      routeOrigin,
+      routeResolution,
+      ...(configuredAuthProfileId ? { configuredAuthProfileId } : {}),
+    });
   };
 
   return {
@@ -387,8 +394,13 @@ function resolveFallbackCandidatesUncached(
       continue;
     }
     // Fallbacks are explicit user intent; do not silently filter them by the
-    // model allowlist.
-    addCandidate(resolved.ref, "configured-fallback", "resolved");
+    // model allowlist. The entry's `@profile` travels with the candidate it resolved to.
+    addCandidate(
+      resolved.ref,
+      "configured-fallback",
+      "resolved",
+      splitTrailingAuthProfile(raw).profile,
+    );
   }
 
   if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {
