@@ -110,45 +110,51 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("keeps Files search usable during a failed owner read and retries without duplicate requests", async () => {
-  setupDesktopLayout();
-  const first = createDeferred<List>();
-  const retry = createDeferred<List>();
-  const listFiles = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
-  const state: SessionWorkspaceHost = createSessionWorkspaceHost({
-    sessionKey: "agent:main:workspace",
-    agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
-    client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
-    sessions: createSessionCapabilityFixture({ listFiles }),
-    handleOpenSidebar: () => {},
-  });
-  const props = () =>
-    createSessionWorkspaceProps(state, { expanded: true, presentation: "desktop" });
-  const [current, setCurrent] = createSignal(props());
-  const mounted = mountSolid(() => <SessionWorkspaceRail workspace={current()} />);
-  const stop = sessionWorkspaceForHost(state).subscribe(() => setCurrent(props()));
-  onTestFinished(() => {
-    stop();
-    mounted.unmount();
-  });
-  expect(button(mounted.container, "Search files")).not.toBeNull();
-  expect(mounted.container.querySelector("[aria-busy=true]")).not.toBeNull();
-  first.reject(new Error("Files unavailable; retry"));
-  await waitForSolid(() =>
-    expect(mounted.getByRole("alert").textContent).toContain("Files unavailable; retry"),
-  );
-  mounted.getByRole("button", { name: "Retry" }).click();
-  expect(listFiles).toHaveBeenCalledTimes(2);
-  retry.resolve({
-    sessionKey: state.sessionKey,
-    root: "/synthetic/workspace",
-    files: [],
-    browser: { path: "", entries: [{ path: "notes.md", name: "notes.md", kind: "file" }] },
-  });
-  await waitForSolid(() => expect(button(mounted.container, "notes.md")).not.toBeNull());
-  expect(mounted.queryByRole("alert")).toBeNull();
-  expect(listFiles).toHaveBeenCalledTimes(2);
-});
+it.each(["desktop", "mobile"] as const)(
+  "keeps %s Files search usable during a failed owner read and retries without duplicate requests",
+  async (presentation) => {
+    setupDesktopLayout();
+    const first = createDeferred<List>();
+    const retry = createDeferred<List>();
+    const listFiles = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
+    const state: SessionWorkspaceHost = createSessionWorkspaceHost({
+      sessionKey: "agent:main:workspace",
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
+      client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
+      sessions: createSessionCapabilityFixture({ listFiles }),
+      handleOpenSidebar: () => {},
+    });
+    const props = () => createSessionWorkspaceProps(state, { expanded: true, presentation });
+    const [current, setCurrent] = createSignal(props());
+    const mounted = mountSolid(() => <SessionWorkspaceRail workspace={current()} />);
+    const stop = sessionWorkspaceForHost(state).subscribe(() => setCurrent(props()));
+    onTestFinished(() => {
+      stop();
+      mounted.unmount();
+    });
+    expect(
+      presentation === "desktop"
+        ? button(mounted.container, "Search files")
+        : searchInput(mounted.container),
+    ).not.toBeNull();
+    expect(mounted.container.querySelector("[aria-busy=true]")).not.toBeNull();
+    first.reject(new Error("Files unavailable; retry"));
+    await waitForSolid(() =>
+      expect(mounted.getByRole("alert").textContent).toContain("Files unavailable; retry"),
+    );
+    mounted.getByRole("button", { name: "Retry" }).click();
+    expect(listFiles).toHaveBeenCalledTimes(2);
+    retry.resolve({
+      sessionKey: state.sessionKey,
+      root: "/synthetic/workspace",
+      files: [],
+      browser: { path: "", entries: [{ path: "notes.md", name: "notes.md", kind: "file" }] },
+    });
+    await waitForSolid(() => expect(button(mounted.container, "notes.md")).not.toBeNull());
+    expect(mounted.queryByRole("alert")).toBeNull();
+    expect(listFiles).toHaveBeenCalledTimes(2);
+  },
+);
 
 it.each(["desktop", undefined] as const)(
   "keeps available files usable after a %s refresh fails",
@@ -191,7 +197,7 @@ it.each(["desktop", undefined] as const)(
   },
 );
 
-it.each(["desktop", undefined] as const)(
+it.each(["desktop", "mobile", undefined] as const)(
   "shows loading when a ready %s workspace changes to a pending session",
   async (presentation) => {
     setupDesktopLayout();
@@ -951,4 +957,50 @@ it("remembers the session files display for every Files panel in this browser", 
     createSessionWorkspaceProps(other, { expanded: false, presentation: "desktop" })
       .sessionFilesDisplay,
   ).toEqual({ view: "grid", sort: "name" });
+});
+
+it("mobile Files clears an accepted unavailable listing on force retry and hides rows on denied refresh", async () => {
+  setupDesktopLayout();
+  const retry = createDeferred<List>();
+  const denied = createDeferred<List>();
+  const listFiles = vi
+    .fn()
+    .mockResolvedValueOnce({ sessionKey: "agent:main:workspace", files: [] })
+    .mockReturnValueOnce(retry.promise)
+    .mockReturnValueOnce(denied.promise);
+  const state = createSessionWorkspaceHost({
+    sessionKey: "agent:main:workspace",
+    agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
+    client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
+    sessions: createSessionCapabilityFixture({ listFiles }),
+    handleOpenSidebar: () => {},
+  });
+  const props = () =>
+    createSessionWorkspaceProps(state, { expanded: true, presentation: "mobile" });
+  const [current, setCurrent] = createSignal(props());
+  const mounted = mountSolid(() => <SessionWorkspaceRail workspace={current()} />);
+  const stop = sessionWorkspaceForHost(state).subscribe(() => setCurrent(props()));
+  onTestFinished(() => {
+    stop();
+    mounted.unmount();
+  });
+  await waitForSolid(() => expect(mounted.getByRole("button", { name: "Retry" })).toBeTruthy());
+  mounted.getByRole("button", { name: "Retry" }).click();
+  await waitForSolid(() =>
+    expect(mounted.container.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull(),
+  );
+  expect(mounted.queryByRole("button", { name: "Retry" })).toBeNull();
+  retry.resolve({ sessionKey: state.sessionKey, files: [file("private.md")] });
+  await waitForSolid(() => expect(button(mounted.container, "private.md")).not.toBeNull());
+  loadSessionWorkspace(state, getSessionWorkspace(state));
+  await waitForSolid(() =>
+    expect(mounted.container.querySelector("[aria-busy=true]")).not.toBeNull(),
+  );
+  expect(button(mounted.container, "private.md")).not.toBeNull();
+  denied.reject(new Error("Access denied"));
+  await waitForSolid(() =>
+    expect(mounted.getByRole("alert").textContent).toContain("Access denied"),
+  );
+  expect(button(mounted.container, "private.md")).toBeNull();
+  expect(listFiles).toHaveBeenCalledTimes(3);
 });
