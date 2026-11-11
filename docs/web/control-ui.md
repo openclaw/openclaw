@@ -289,7 +289,7 @@ Transcript history loads in parallel with the browser cache. An unchanged histor
 
 When saved row sizes match the current content, appearance, and pane width, the initial viewport and its nearby rows mount together. Rows without matching saved sizes are measured incrementally.
 
-Informational model-fallback events appear as a collapsed **system event** row in chat, even when only one occurs. Consecutive informational system and model-fallback events share a collapsed **system events** row. Expand it with a click, Enter, or Space to read the original events in order. An amber **Updates not delivered** summary stays visible when delivery needs attention; event counts do not imply a count of undelivered updates. Human and assistant messages, actionable notices, and search results remain separate. This changes presentation only, not retry or delivery behavior.
+Consecutive informational system and model-fallback events appear as a collapsed **system events** row in chat. Expand it with a click, Enter, or Space to read the original events in order. An amber **Updates not delivered** summary stays visible when delivery needs attention; event counts do not imply a count of undelivered updates. Human and assistant messages, actionable notices, and search results remain separate. This changes presentation only, not retry or delivery behavior.
 
 During connection recovery, Send shows its busy state and explains why sending is unavailable without inserting a temporary notice above the composer.
 
@@ -746,9 +746,12 @@ Local onboarding generates a Gateway secret in token mode by default, without a 
 Use the agent selector to open an agent's chat or its settings gear to configure
 that agent. Per-agent settings remain at `/settings/agents/<id>`.
 
-The agent's **Automations** panel shows an empty state only after its jobs read
-succeeds. Failed reads show an error with **Refresh** available; previously loaded
-jobs remain visible while a refresh is pending or fails.
+The agent's **Automations** panel shows loading placeholders for its initial
+scheduler and jobs reads independently, and an empty state only after its jobs
+read succeeds. Failed summary reads show **Failed** instead of an unexplained
+`n/a`, with the cause available on the value. Failed jobs reads show an error
+with **Refresh** available; previously loaded jobs remain visible while a
+refresh is pending or fails.
 
 Open **Templates** in **Pages**, or visit `/templates`, to discover official Templates.
 This page contains Templates discovery only. Enable **Templates** in **Settings → Labs**

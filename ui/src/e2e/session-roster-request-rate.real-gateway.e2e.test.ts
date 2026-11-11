@@ -201,6 +201,16 @@ suite.define(() => {
           .toEqual({
             allOwners: { present: true, acknowledged: true },
           });
+        await chooseSidebarOwner(page, "owner:" + viewerId);
+        await expect
+          .poll(() =>
+            readStatus(
+              lists.find(
+                ({ params }) => params.source === "sidebar" && params.ownerId === viewerId,
+              ),
+            ),
+          )
+          .toEqual({ present: true, acknowledged: true });
         await selected.waitFor();
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
         expect(

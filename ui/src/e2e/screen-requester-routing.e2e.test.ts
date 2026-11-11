@@ -48,6 +48,8 @@ suite.define(() => {
             "desktop.observe",
             "environments.status",
             "portal.list",
+            "tools.catalog",
+            "tools.effective",
             "ui.command.result",
           ],
           methodResponses: {

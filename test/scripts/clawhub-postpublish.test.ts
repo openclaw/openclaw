@@ -1599,6 +1599,45 @@ globalThis.fetch = async (input, init) => {
 });
 
 describe("ClawHub parent-requested recovery", () => {
+  it("retains accepted successor evidence when public readback fails", async () => {
+    const f = authenticatedParentRecoveryFixture("selected");
+    const fetchImpl = f.options.fetchImpl;
+    let accepted = false;
+    f.options.fetchImpl = async (input, init) => {
+      if (accepted && requestUrl(input).endsWith("/publication")) {
+        throw new Error("Registry observation interrupted");
+      }
+      const response = await fetchImpl(input, init);
+      if (init?.method === "POST") {
+        accepted = true;
+        return Response.json({ ...(await response.json()), publicationStatus: "pending" });
+      }
+      return response;
+    };
+    await expect(
+      recoverClawHubFromParent({
+        ...f.options,
+        evidenceClient: f.evidenceClient,
+      }),
+    ).rejects.toThrow("Registry observation interrupted");
+    const evidence = JSON.parse(
+      readFileSync(join(f.options.env.RUNNER_TEMP, "clawhub-postpublish", "evidence.json"), "utf8"),
+    );
+    expect(evidence).toMatchObject({
+      complete: false,
+      publicationAttempts: [
+        {
+          name: f.entry.name,
+          attemptId: "successor-1",
+          recoveredFromAttemptId: "attempt-1",
+          publicationStatus: "pending",
+        },
+        { name: "@openclaw/sibling", attemptId: "attempt-2" },
+      ],
+    });
+    expect(f.recoveryWrites).toEqual([f.entry.name]);
+  });
+
   it.each(["full", "selected"] as const)(
     "authenticates original FRV admission before %s parent recovery",
     async (mode) => {

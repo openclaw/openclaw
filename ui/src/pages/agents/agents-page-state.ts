@@ -4,9 +4,10 @@ import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { canDeleteAgent, deleteAgent } from "../../lib/agents/delete-agent.ts";
-import { buildToolsEffectiveRequestKey, type AgentsState } from "../../lib/agents/index.ts";
+import { buildToolsEffectiveRequestKey } from "../../lib/agents/index.ts";
 import { setDefaultAgent } from "../../lib/agents/mutations.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
+import { resolveAgentSettingsAccess } from "../../lib/agents/settings-access.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
@@ -14,7 +15,6 @@ import {
   hasCronInventoryEvents,
   isCronInventoryInvalidation,
 } from "../../lib/cron/inventory-connection.ts";
-import type { CronState } from "../../lib/cron/types.ts";
 import {
   canCallGatewayMethod,
   canPresentGatewayMethod,
@@ -30,13 +30,10 @@ import { createAgentConfigActions } from "./agent-config-actions.ts";
 import { createAgentCronPresenter } from "./agent-cron-presenter.ts";
 import { createAgentIdentityEditor } from "./agent-identity-editor.ts";
 import { createAgentModelCatalog } from "./agent-model-catalog.ts";
+import type { AgentsPageData, AgentsViewData } from "./agents-page-data.ts";
 import { createAgentsPageLifetime } from "./agents-page-lifetime.ts";
-import { createAgentFilePanel, type AgentFilesState, type AgentFilesViewState } from "./files.ts";
-import {
-  type AgentIdentityDraft,
-  type AgentIdentityOutcome,
-  resetIdentityDraft,
-} from "./identity-actions.ts";
+import { createAgentFilePanel } from "./files.ts";
+import { resetIdentityDraft } from "./identity-actions.ts";
 import type { AgentMemoryTarget } from "./memory/memory-panel-state.ts";
 import {
   navigateToAgent,
@@ -45,36 +42,8 @@ import {
 } from "./route-navigation.ts";
 import type { AgentsRouteData } from "./route.ts";
 import { createAgentSelectionDrafts } from "./selection-drafts.ts";
-import {
-  createAgentSkillsReset,
-  createAgentSkillsReader,
-  type AgentSkillsState,
-} from "./skills.ts";
+import { createAgentSkillsReset, createAgentSkillsReader } from "./skills.ts";
 import { createAgentToolsCatalog, createAgentEffectiveTools } from "./tools.ts";
-
-type AgentsPageData = Omit<AgentsState, "agentsLoading" | "agentsError" | "agentsList"> &
-  AgentFilesState &
-  AgentFilesViewState &
-  AgentSkillsState & {
-    readonly agentsList: AgentsState["agentsList"];
-    chatModelCatalogRead: Promise<void> | null;
-    identityDraft: AgentIdentityDraft;
-    identitySaving: boolean;
-    identityOutcome: Promise<AgentIdentityOutcome> | null;
-    cron: CronState;
-    sessionKey: string;
-    agentsPanel: AgentsPanel;
-  };
-type AgentsViewData = Omit<
-  AgentsPageData,
-  | "client"
-  | "connected"
-  | "agents"
-  | "sessions"
-  | "sessionsResult"
-  | "sessionKey"
-  | "agentFileWriteRevisions"
->;
 
 export type AgentsPageView = ReturnType<ReturnType<typeof createAgentsPageState>["read"]>;
 
@@ -194,6 +163,7 @@ export function createAgentsPageState(
     runExternalMutation: (task, options) =>
       context.runtimeConfig.runExternalMutation(task, options),
   });
+  let readAccessKey = "";
   const gateway = new GatewayPageBinding(() => publish(), {
     getGateway: () => context.gateway,
     // A new source or client owns a new set of drafts. A same-client reconnect
@@ -210,6 +180,11 @@ export function createAgentsPageState(
       identitySaves = selectionDrafts.bindContext(context);
       selectionDrafts.observeGateway(gatewaySnapshot);
       syncGatewayState();
+      const nextReadAccessKey = Object.values(settingsAccess().reads).join(",");
+      if (readAccessKey !== nextReadAccessKey) {
+        readAccessKey = nextReadAccessKey;
+        ensureInitialData();
+      }
       if (gatewaySnapshot.phase === "connected" && !canCall("tools.catalog", "operator.read")) {
         toolsCatalog.reset();
       }
@@ -359,7 +334,9 @@ export function createAgentsPageState(
     if (!state.connected || !state.client || !routeDataInitialized || !routeData) {
       return;
     }
-    void context.runtimeConfig.ensureLoaded();
+    if (settingsAccess().reads.config) {
+      void context.runtimeConfig.ensureLoaded();
+    }
     if (!state.agentsList && !context.agents.state.agentsLoading) {
       void refreshAgents("ensure");
       return;
@@ -385,8 +362,17 @@ export function createAgentsPageState(
     );
   }
 
+  function settingsAccess() {
+    return resolveAgentSettingsAccess(
+      context.gateway.snapshot,
+      state.agentsSelectedId === chatAgentId(),
+    );
+  }
+
   function ensureSelectedIdentity() {
-    void context.agentIdentity.ensure([state.agentsSelectedId]);
+    if (settingsAccess().reads.identity) {
+      void context.agentIdentity.ensure([state.agentsSelectedId]);
+    }
   }
 
   function loadActivePanelData() {
@@ -395,11 +381,13 @@ export function createAgentsPageState(
       return;
     }
     const agentId = state.agentsSelectedId;
-    if (!agentId) {
+    if (!agentId || settingsAccess().panels[state.agentsPanel] !== "available") {
       return;
     }
     if (state.agentsPanel === "overview") {
-      modelCatalog.ensure();
+      if (settingsAccess().reads.models) {
+        modelCatalog.ensure();
+      }
       return;
     }
     if (state.agentsPanel === "files" && state.agentFilesList?.agentId !== agentId) {
@@ -525,6 +513,7 @@ export function createAgentsPageState(
     const configState = context.runtimeConfig.state;
     const selectedAgentId = state.agentsSelectedId;
     const access = {
+      settings: settingsAccess(),
       canDeleteAgent: Boolean(selectedAgentId && canDeleteAgent(context, selectedAgentId)),
       canCreateAgent: canCall("openclaw.chat", "operator.admin"),
       canPatchConfig: canCall("config.patch", "operator.admin"),
@@ -569,7 +558,11 @@ export function createAgentsPageState(
         // Availability facts (provider keys added/removed, new models) go
         // stale in the per-agent cache; opening the picker re-reads them,
         // mirroring the chat composer's on-open refresh.
-        onModelCatalogOpen: () => modelCatalog.ensure({ refresh: true }),
+        onModelCatalogOpen: () => {
+          if (settingsAccess().reads.models) {
+            modelCatalog.ensure({ refresh: true });
+          }
+        },
       },
       agentSkills: {
         get filter() {
@@ -579,7 +572,7 @@ export function createAgentsPageState(
           setSkillsFilter(next);
         },
         onRefresh: () => {
-          if (selectedAgentId) {
+          if (selectedAgentId && canCall("skills.status", "operator.read")) {
             skills.refresh(selectedAgentId);
           }
         },
@@ -617,8 +610,12 @@ export function createAgentsPageState(
       onTogglePinnedAgent: (agentId: string) => togglePinnedAgent(context.navigation, agentId),
       // Refresh is this page's one way to pick up edits made outside it, config included.
       onRefresh: () => {
-        void refreshAgents();
-        void context.runtimeConfig.refresh({ background: true });
+        if (canCall("agents.list", "operator.read")) {
+          void refreshAgents();
+        }
+        if (settingsAccess().reads.config) {
+          void context.runtimeConfig.refresh({ background: true });
+        }
       },
       onCreateAgent: () => {
         if (canCall("openclaw.chat", "operator.admin")) {

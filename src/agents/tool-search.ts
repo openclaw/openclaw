@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
@@ -12,8 +13,11 @@ import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.j
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
   INCOMPLETE_INSTRUCTIONS_HINT,
+  TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION,
+  TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION_DESCRIPTION,
   applyToolCatalogCompaction,
   isDirectVisibleCatalogTool,
+  omitDescribedOutputSchema,
   resolveCatalog,
 } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
@@ -263,6 +267,9 @@ export { applyToolSchemaDirectoryCatalog };
 
 const describeParameters = Type.Object({
   id: Type.String({ description: "Tool search result id or tool name." }),
+  [TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION]: Type.Optional(
+    Type.Boolean({ description: TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION_DESCRIPTION }),
+  ),
 });
 const callParameters = Type.Object({
   id: Type.String({ description: "Tool search result id or tool name." }),
@@ -359,15 +366,20 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_DESCRIBE_RAW_TOOL_NAME,
       label: "Tool Describe",
       description:
-        "Load the full schema and metadata, including complete server instructions, for one tool id or name. Use this when the input is not already clear or when discovery returned instructionsHint.",
+        "Load the full input schema and metadata, including complete server instructions, for one tool id or name. Use this when the input is not already clear or when discovery returned instructionsHint.",
       parameters: describeParameters,
       prepareArguments: prepareToolSearchDispatcherArguments,
-      execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> =>
-        formatToolSearchControlResult(
-          await runtime.describe(readToolSearchId(args), { parentToolCallId: toolCallId }),
-          runtime,
-          { parentToolCallId: toolCallId },
-        ),
+      execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
+        const described = await runtime.describe(readToolSearchId(args), {
+          parentToolCallId: toolCallId,
+        });
+        const includeOutputSchema =
+          isRecord(args) && args[TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION] === true;
+        return formatToolSearchControlResult(described, runtime, {
+          parentToolCallId: toolCallId,
+          modelPayload: includeOutputSchema ? described : omitDescribedOutputSchema(described),
+        });
+      },
     },
     {
       name: TOOL_CALL_RAW_TOOL_NAME,

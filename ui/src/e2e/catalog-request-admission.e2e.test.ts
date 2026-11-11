@@ -45,6 +45,7 @@ async function client(path: string) {
     featureMethods: [
       ...(fixture.scenario.featureMethods ?? []),
       "models.list",
+      "config.get",
       "tools.catalog",
       "tools.effective",
     ],

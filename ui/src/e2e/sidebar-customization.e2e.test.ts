@@ -1,6 +1,7 @@
 // Control UI tests cover customizable sidebar navigation and persistence.
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import {
   controlUiBundledGatewayUrl,
   defaultControlUiFeatureMethods,
@@ -325,6 +326,7 @@ suite.define(() => {
     await installNativePluginMockGateway(page, {
       featureMethods: [...defaultControlUiFeatureMethods, "agents.list", "config.get"],
       controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
+      featureMethods: [...defaultControlUiFeatureMethods, "config.get", "agents.list"],
       methodResponses: {
         "config.get": {
           config: {},
