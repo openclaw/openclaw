@@ -47,6 +47,7 @@ import {
 import * as retry from "./prepared-model-runtime.discovery-retry.js";
 import { assertPreparedModelRuntimeInputCurrent } from "./prepared-model-runtime.errors.js";
 import {
+  finalizePreparedModelCatalog,
   isPreparedModelCatalogFull,
   markPreparedModelCatalogFull,
 } from "./prepared-model-runtime.full-catalog.js";
@@ -156,7 +157,10 @@ export async function createFullModelCatalogAccess(
   const worker = withRemoteModelCatalogSnapshot(params.pluginGeneration.remoteCatalog, () =>
     createPreparedModelCatalogWorker({
       pluginRegistry: params.pluginGeneration.pluginRegistry,
-      agentFacts: params.agentFacts,
+      agentFacts: {
+        ...params.agentFacts,
+        configuredRuntimeModels: params.catalogFacts.configuredRuntimeModels,
+      },
       pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
       preferBuiltPluginArtifacts: params.pluginGeneration.preferBuiltPluginArtifacts,
       isCurrent: params.isCurrent,
@@ -175,13 +179,7 @@ export async function createFullModelCatalogAccess(
   ): Publication => {
     const catalog = project(nextInventory, configuredRuntimeModels);
     setCatalogAuth(catalog, getPreparedModelFullCatalogAuth(nextInventory.catalog) ?? currentAuth);
-    catalog.authoritative = acquiredNative && !catalog.refreshFailed && catalog.authoritative;
-    if (
-      acquiredNative &&
-      eligibleProviders.every((provider) => nextInventory.providers.has(provider))
-    ) {
-      markPreparedModelCatalogFull(catalog);
-    }
+    finalizePreparedModelCatalog(catalog, nextInventory, eligibleProviders, acquiredNative);
     return {
       catalog,
       inventory: nextInventory,

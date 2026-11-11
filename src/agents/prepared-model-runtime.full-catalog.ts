@@ -43,6 +43,7 @@ import {
 import { acquirePreparedMediaCapabilityProviders } from "./prepared-model-runtime.plugin-generation.js";
 import type {
   PreparedRuntimeCapabilityModel,
+  PreparedModelCatalogInventory,
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeSnapshot,
@@ -64,7 +65,11 @@ export async function prepareFullCatalogFacts(
   >,
   catalogMode: PreparedModelRuntimeCatalogMode,
   catalogSource: PreparedModelRuntimeCatalogSource,
-  options: { includeNative?: boolean; providerIds?: readonly string[] } = {},
+  options: {
+    includeNative?: boolean;
+    providerIds?: readonly string[];
+    assertCurrent?: () => void;
+  } = {},
 ): Promise<PreparedModelRuntimeCatalogFacts & { catalogModels: readonly Model[] }> {
   const prepare = async () => {
     const { env, input, templateAuthStorage } = agentFacts;
@@ -154,10 +159,11 @@ export async function prepareFullCatalogFacts(
         { providerMetadataOwners: pluginMetadataSnapshot.owners },
       ).map((model) => completeInlineProviderModel(model, providerConfig)),
     );
-    const configuredRuntimeModels = completeConfiguredRuntimeModels(
+    const configuredRuntimeModels = await completeConfiguredRuntimeModels(
       agentFacts,
       pluginGeneration,
       templateModelRegistry,
+      options.assertCurrent,
     );
     const providerOutcomes = catalogSource.providerOutcomes ?? [];
     const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
@@ -324,6 +330,19 @@ export function materializePreparedModelCatalog(
 /** Reports whether a catalog came from the complete prepared-catalog build path. */
 export const isPreparedModelCatalogFull = (snapshot: ModelCatalogSnapshot): boolean =>
   fullModelCatalogSnapshots.has(snapshot);
+
+/** Finalizes readiness and full-inventory provenance together after projection. */
+export function finalizePreparedModelCatalog(
+  catalog: ModelCatalogSnapshot,
+  inventory: PreparedModelCatalogInventory,
+  eligibleProviders: readonly string[],
+  acquiredNative: boolean,
+): void {
+  catalog.authoritative = acquiredNative && !catalog.refreshFailed && catalog.authoritative;
+  if (acquiredNative && eligibleProviders.every((provider) => inventory.providers.has(provider))) {
+    markPreparedModelCatalogFull(catalog);
+  }
+}
 
 /** Restores process-local provenance after a complete catalog crosses a worker boundary. */
 export function markPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): ModelCatalogSnapshot {
