@@ -151,6 +151,11 @@ export interface AnthropicOptions extends StreamOptions, AnthropicContextManagem
    */
   onClaudeCodeVersionRequired?: (version: string) => void;
   /**
+   * Called when Anthropic rejected `speed: "fast"` for this model; the transport
+   * already resent the request at standard speed. Owners stop offering fast mode.
+   */
+  onFastModeUnsupported?: (modelId: string) => void;
+  /**
    * Enable extended thinking.
    * For Opus 4.6+ and Sonnet 4.6: uses adaptive thinking (model decides when/how much to think).
    * For older models: uses budget-based thinking with thinkingBudgetTokens.

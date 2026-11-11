@@ -900,6 +900,15 @@ Identity-bearing modes, such as trusted proxy auth or private-ingress `none`,
 can still honor explicit declared scopes. Use separate Gateways for real trust
 boundary separation.
 
+## Recovering from inactive authority
+
+If a turn reports that operator source or execution authority is no longer active,
+reconnect to the Gateway, then send the message again. If reconnecting denies
+access, ask an administrator to restore your access. Starting a new conversation
+does not restore a revoked connection grant. Accepted work retains its original
+authority: reconnecting admits fresh requests but never reactivates old tools or
+callbacks.
+
 ## Related
 
 - [Trusted proxy auth](/gateway/trusted-proxy-auth) — how a trusted proxy supplies the operator identity these scopes attach to

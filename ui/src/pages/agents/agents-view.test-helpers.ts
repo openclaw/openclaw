@@ -108,7 +108,7 @@ export function createAgentViewTestProps(
       onRefresh: () => undefined,
     },
     cron: {
-      read: () => ({ summary: null, jobs: null, refresh: null, command: null }),
+      read: () => ({ status: null, summary: null, jobs: null, refresh: null, command: null }),
       onRefresh: () => undefined,
       onLoadMore: () => undefined,
       onRunNow: () => undefined,
