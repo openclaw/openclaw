@@ -379,10 +379,12 @@ describe("MCP relay transport and authority", () => {
       ok: true,
       result: {},
     });
+    const issuanceId = f.state.getGrant("accepted")?.issuanceId;
+    expect(issuanceId).toMatch(/^[a-f0-9-]{36}$/u);
     const restarted = f.storage.open();
     await restarted.initialize();
     await expect(restarted.grants()).resolves.toEqual([
-      grantFixture({ grantId: "accepted", createdAt: 1_000 }),
+      grantFixture({ grantId: "accepted", createdAt: 1_000, issuanceId }),
     ]);
   });
 

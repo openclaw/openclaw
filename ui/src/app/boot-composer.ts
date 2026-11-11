@@ -25,6 +25,13 @@ let element: HTMLTextAreaElement | null = null;
 let scroll: readonly [left: number, top: number] = [0, 0];
 let stopHistory: (() => void) | undefined;
 let stopReloadGuard: (() => void) | undefined;
+const committedBootRegions = new Set<"sidebar" | "transcript">();
+
+export function finishBootFrame(region?: "sidebar" | "transcript"): void {
+  if (!region || committedBootRegions.add(region).size === 2) {
+    document.documentElement.removeAttribute("data-openclaw-warm-frame");
+  }
+}
 
 /** Takes the static element before the first app commit replaces the boot frame. */
 export function adoptBootComposer(applicationRoute: boolean): void {

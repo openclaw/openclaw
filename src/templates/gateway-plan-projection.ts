@@ -351,7 +351,7 @@ export function projectTemplateAddPlan(
           ? [
               {
                 code: "schedule_disclosure_unavailable",
-                path: "$.cronJobs",
+                path: "$.automations",
                 message: "Scheduled work cannot be reviewed safely. Refresh or repair the plan.",
               },
             ]

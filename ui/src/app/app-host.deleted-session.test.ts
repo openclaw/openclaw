@@ -439,7 +439,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       } else {
         await vi.waitFor(() =>
           expect(toast.textContent).toContain(
-            failure === "rejection" ? "delete rejected" : "Gateway connection replaced",
+            failure === "rejection" ? "delete rejected" : "The connection changed",
           ),
         );
       }

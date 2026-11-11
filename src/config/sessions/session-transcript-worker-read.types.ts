@@ -35,6 +35,7 @@ import type {
 } from "./session-history-read.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import type { SessionTranscriptAnchorEntry } from "./session-transcript-anchor-read.types.js";
+import type { SessionTranscriptReplaySelection } from "./session-transcript-replay.types.js";
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
@@ -158,6 +159,7 @@ export type SessionTranscriptDeltaWorkerInput = Omit<
 } & (
     | { kind: "transcript-raw-delta"; limits: SessionTranscriptRawDeltaLimits }
     | { kind: "transcript-visible-delta"; limits: SessionTranscriptVisibleMessageDeltaLimits }
+    | { kind: "transcript-replay-groups"; selection: SessionTranscriptReplaySelection }
   );
 
 export type SessionTranscriptLatestAssistantWorkerInput = Omit<

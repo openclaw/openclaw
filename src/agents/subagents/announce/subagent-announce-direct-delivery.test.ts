@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { GatewayClientRequestError } from "../../../../packages/gateway-client/src/request-error.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -102,8 +103,8 @@ function setup(sourceTool = "subagent_settle") {
     directOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
     sourceTool,
     requesterIsSubagent: false,
-    expectsCompletionMessage: sourceTool === "subagent_announce",
-    requireVisibleReply: true,
+    expectsCompletionMessage: sourceTool !== "subagent_settle",
+    requireVisibleReply: sourceTool !== "agent_harness_completion",
     directIdempotencyKey: sourceRunId,
     isSourceSessionEffectsAllowed: () => state.allowed,
     signal: controller.signal,
@@ -160,11 +161,9 @@ function expectNoReplay(fixture: ReturnType<typeof setup>, dispatches = 1) {
 }
 
 it("preserves the direct completion phase without replacing controller custody", async () => {
-  const fixture = setup("subagent_announce");
+  const fixture = setup("agent_harness_completion");
   const expected = { delivered: true, path: "direct" };
-  const { queueMessage, input } = steering(fixture, async () => {
-    throw new Error("Required direct delivery must not steer");
-  });
+  const { queueMessage, input } = steering(fixture, vi.fn());
   fixture.dispatchDone.resolve(response([{ text: "Completed directly" }], sentDeliveryStatus));
   const result = await deliverSubagentAnnouncement({
     ...fixture.params,
@@ -182,7 +181,8 @@ it("preserves the direct completion phase without replacing controller custody",
     },
   ]);
   expect(queueMessage).not.toHaveBeenCalled();
-  expect(fixture.dispatch.mock.calls[0]?.[2]?.controllerInput).toBe(input);
+  const options = fixture.dispatch.mock.calls[0]?.[2];
+  expect(options).toMatchObject({ controllerInput: input, replyExpectation: "optional" });
 });
 
 it("keeps the same completion input queued when timeout recovery cannot accept steering", async ({
@@ -389,43 +389,42 @@ it.each([
   expect(sendTyping).toHaveBeenCalledTimes(count);
   expect(clearTyping).toHaveBeenCalledOnce();
 });
-
 it.each([
-  {
-    name: "pending settle response",
-    input: { status: "accepted", runId: "pending-requester" },
-    expected: { ...queued, path: "direct" },
-  },
-  {
-    name: "explicit stop",
-    input: { status: "error", stopReason: "rpc" },
-    expected: { delivered: false, disposition: undefined },
-  },
-  {
-    name: "partial send failure",
-    input: Object.assign(new Error("send incomplete"), { sentBeforeError: true }),
-    expected: { delivered: false, disposition: "ambiguous" },
-  },
-])("reports the direct outcome for $name without replay", async ({ input, expected }) => {
-  const fixture = setup();
+  ["pending settle response", { status: "accepted", runId: "pending-requester" }, queued],
+  ["explicit stop", { status: "error", stopReason: "rpc" }, { disposition: undefined }],
+  [
+    "partial send failure",
+    Object.assign(new Error("send incomplete"), { sentBeforeError: true }),
+    { disposition: "ambiguous" },
+  ],
+  [
+    "archived requester",
+    'Session "agent:main:requester-settle" is archived. Restore it before starting new work.',
+    { disposition: "permanent_failure" },
+  ],
+  [
+    "pending workspace",
+    'Session "agent:main:requester-settle" workspace is not ready. Wait for setup to finish or retry in chat.',
+    { disposition: "retryable" },
+  ],
+] as const)("reports the direct outcome for %s without replay", async (_name, input, expected) => {
+  const fixture = setup(typeof input === "string" ? "image_generate" : "subagent_settle");
+  const resultInput =
+    typeof input === "string"
+      ? new GatewayClientRequestError({ code: "INVALID_REQUEST", message: input })
+      : input;
   const onDeliveryError = vi.fn();
   fixture.params.onDeliveryError = onDeliveryError;
-  const delivery = fixture.startDelivery();
-  await fixture.dispatchEntered.promise;
-  if (input instanceof Error) {
-    fixture.dispatchDone.reject(input);
+  if (resultInput instanceof Error) {
+    fixture.dispatchDone.reject(resultInput);
   } else {
-    fixture.dispatchDone.resolve(input);
+    fixture.dispatchDone.resolve(resultInput);
   }
-  const result = await delivery;
+  const result = await fixture.startDelivery();
   const { disposition, ...fields } = expected;
-  expect(result).toMatchObject(fields);
+  expect(result).toMatchObject({ delivered: false, path: "direct", ...fields });
   expect(result.disposition).toBe(disposition);
-  if (input instanceof Error) {
-    expect(onDeliveryError).toHaveBeenCalledWith(input);
-    expect(result.error).toBe(input.message);
-  } else {
-    expect(onDeliveryError).not.toHaveBeenCalled();
-  }
+  expect(onDeliveryError.mock.calls).toEqual(resultInput instanceof Error ? [[resultInput]] : []);
+  expect(result).toMatchObject(resultInput instanceof Error ? { error: resultInput.message } : {});
   expectNoReplay(fixture);
 });

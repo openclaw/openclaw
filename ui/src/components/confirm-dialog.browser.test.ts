@@ -42,12 +42,14 @@ describe("promise dialog native focus and dismissal", () => {
     });
     try {
       const result = showConfirmDialog({
-        message: "Remove synthetic device?",
+        title: "Remove synthetic device?",
+        message: "Its pairing stops working.",
+        confirmLabel: "Remove",
         canConfirm: live.connected,
         signal: controller.signal,
       });
       const { dialog } = await getRenderedModalDialog(document.body);
-      const submit = button("Confirm");
+      const submit = button("Remove");
       expect(submit.disabled).toBe(false);
       live.setConnected(false);
       flush();
@@ -67,7 +69,8 @@ describe("promise dialog native focus and dismissal", () => {
   it("aligns mobile choices, focuses Cancel, and restores the opener", async () => {
     await setViewport(390, 844);
     const result = showConfirmChoiceDialog({
-      message: "Change this session?",
+      title: "Change this session?",
+      message: "Your changes aren’t saved yet.",
       confirmLabel: "Save",
       alternativeLabel: "Discard",
       signal: controller.signal,
@@ -89,6 +92,7 @@ describe("promise dialog native focus and dismissal", () => {
     const secondary = "Archive only this session";
     const primary = "Archive all (3)";
     const result = showConfirmChoiceDialog({
+      title: "Archive nested sessions?",
       message: "Synthetic nested-session scope",
       confirmLabel: primary,
       alternativeLabel: secondary,

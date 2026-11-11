@@ -40,7 +40,7 @@ describe("command discovery English loading", () => {
     ["chat.commands.menu", "Slash commands", () => import("../lib/chat/commands.ts")],
     [
       "chat.welcome.recentSessions",
-      "Recent chats",
+      "Recent sessions",
       () => import("../pages/chat/components/chat-welcome.tsx"),
     ],
   ])("loads only %s copy before discovery opens", async (key, expected, load) => {

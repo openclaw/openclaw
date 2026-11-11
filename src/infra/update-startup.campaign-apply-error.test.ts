@@ -1,35 +1,43 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as machineState from "../state/config-machine-state-async.js";
-import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { UpdateCheckLifecycle } from "./update-check-lifecycle.js";
 import {
-  createGatewaySchedulerClock,
-  createTestGatewayScheduler,
-} from "../test-utils/gateway-scheduler-clock.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
-import * as sentinel from "./restart-sentinel.js";
-import {
-  createGatewayUpdateLifecycle,
-  type UpdateCheckLifecycle,
-} from "./update-check-lifecycle.js";
-import { checkUpdateStatus, resolveNpmChannelTag } from "./update-check.js";
-import { getUpdateRun, listUpdateRuns } from "./update-run-ledger.js";
-import { createDevGitStatus } from "./update-startup-git.test-support.js";
+  closeUpdateFixtureDatabases,
+  resetUpdateFixtureModules,
+} from "./update-fixture.test-support.js";
 import {
   containingObject,
   matchingObject,
   idleActiveWorkInspectors,
 } from "./update-startup-suite.test-support.js";
-import { createGatewayUpdateCheck } from "./update-startup.js";
-import {
-  getUpdateAvailable,
-  getUpdateSchedule,
-  resetUpdateStatusState,
-} from "./update-status-state.js";
+
+let machineState = await import("../state/config-machine-state-async.js");
+let { createGatewaySchedulerClock, createTestGatewayScheduler } =
+  await import("../test-utils/gateway-scheduler-clock.js");
+let { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+let sentinel = await import("./restart-sentinel.js");
+let { createGatewayUpdateLifecycle } = await import("./update-check-lifecycle.js");
+let { checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js");
+let { getUpdateRun, listUpdateRuns } = await import("./update-run-ledger.js");
+let { createDevGitStatus } = await import("./update-startup-git.test-support.js");
+let { createGatewayUpdateCheck } = await import("./update-startup-scheduler.js");
+let { getUpdateAvailable, getUpdateSchedule } = await import("./update-status-state.js");
+
+async function importUpdateFixtureModules() {
+  machineState = await import("../state/config-machine-state-async.js");
+  ({ createGatewaySchedulerClock, createTestGatewayScheduler } =
+    await import("../test-utils/gateway-scheduler-clock.js"));
+  ({ createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js"));
+  sentinel = await import("./restart-sentinel.js");
+  ({ createGatewayUpdateLifecycle } = await import("./update-check-lifecycle.js"));
+  ({ checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js"));
+  ({ getUpdateRun, listUpdateRuns } = await import("./update-run-ledger.js"));
+  ({ createDevGitStatus } = await import("./update-startup-git.test-support.js"));
+  ({ createGatewayUpdateCheck } = await import("./update-startup-scheduler.js"));
+  ({ getUpdateAvailable, getUpdateSchedule } = await import("./update-status-state.js"));
+}
 
 vi.mock("./openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./openclaw-root.js")>()),
@@ -71,6 +79,8 @@ describe("scheduled update discovery and application", () => {
     });
 
   beforeEach(async () => {
+    await resetUpdateFixtureModules();
+    await importUpdateFixtureModules();
     vi.clearAllMocks();
     clock = createGatewaySchedulerClock(Date.parse("2026-01-17T10:00:00Z"));
     vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
@@ -163,9 +173,8 @@ describe("scheduled update discovery and application", () => {
   afterEach(async () => {
     await lifecycle.stop();
     await lifecycle.scheduler.stop();
-    resetUpdateStatusState();
+    await closeUpdateFixtureDatabases();
     vi.restoreAllMocks();
-    await closeStateDatabaseForTest();
     await testState.cleanup();
   });
 

@@ -65,6 +65,7 @@ function createWatchChildFixture(outputDir = tempDirs.make("openclaw-gateway-wat
   };
   const child = new WatchChildProcess();
   Object.defineProperties(child, {
+    stdin: { value: null },
     pid: { configurable: true, value: 1234 },
     exitCode: { get: () => exitState.code },
     signalCode: { get: () => exitState.signal },

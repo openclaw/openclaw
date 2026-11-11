@@ -9,9 +9,10 @@ import type { MailboxMessage, MailboxPayload, MailboxRecipient } from "./mailbox
  * - `user`: OpenClaw ID session (`Authorization: Bearer <id token>`).
  * - `device`: `user` plus an `OpenClaw-Signature` by a device key D bound to that account.
  * - `gateway`: `OpenClaw-Signature` by the claw's registered K_gw (no bearer secret).
+ * - `node`: W-signed request, no bearer; only node redemption mail and admitted-node descriptor reads.
  * - `relay`: the relay's static bearer token (iroh-relay `access.http`), relay address allowlisted.
  */
-export type DiscoveryAuth = "user" | "device" | "gateway" | "relay";
+export type DiscoveryAuth = "user" | "device" | "gateway" | "relay" | "node";
 
 /** Every Discovery v1 endpoint. Paths use `{name}` placeholders. */
 export const DISCOVERY_ENDPOINTS = {
@@ -21,6 +22,13 @@ export const DISCOVERY_ENDPOINTS = {
   getRegistration: { method: "GET", path: "/v1/claws/{claw_id}/registration", auth: "gateway" },
   listClaws: { method: "GET", path: "/v1/claws", auth: "user" },
   publishDescriptor: { method: "PUT", path: "/v1/claws/{claw_id}/descriptor", auth: "gateway" },
+  getPublishedDescriptor: {
+    method: "POST",
+    path: "/v1/claws/{claw_id}/published-descriptor",
+    auth: "gateway",
+  },
+  getNodeDescriptor: { method: "GET", path: "/v1/claws/{claw_id}/node/descriptor", auth: "node" },
+  sendNodeMail: { method: "POST", path: "/v1/claws/{claw_id}/mailbox/node", auth: "node" },
   getDescriptor: { method: "GET", path: "/v1/claws/{claw_id}/descriptor", auth: "user" },
   publishSnapshot: { method: "PUT", path: "/v1/claws/{claw_id}/snapshot", auth: "gateway" },
   getSnapshot: { method: "GET", path: "/v1/claws/{claw_id}/snapshot", auth: "user" },
@@ -58,9 +66,19 @@ export const DISCOVERY_ERRORS = {
 /** One of the {@link DISCOVERY_ERRORS} codes. */
 export type DiscoveryErrorCode = keyof typeof DISCOVERY_ERRORS;
 
-/** Error response body. `retry_after` (seconds) accompanies `rate_limited` and `unavailable`. */
+/**
+ * Error response body. `retry_after` (seconds) accompanies `rate_limited` and `unavailable`.
+ * A descriptor publish refused with `stale_binding` or `conflict` (its binding verified under
+ * the claw's root, signed by its K_gw) carries `binding`, the ServerBinding Discovery
+ * publishes: its owner verifies it to tell a superseded machine from an integrity error.
+ */
 export type DiscoveryErrorBody = {
-  error: { code: DiscoveryErrorCode; message: string; retry_after?: number };
+  error: {
+    code: DiscoveryErrorCode;
+    message: string;
+    retry_after?: number;
+    binding?: SignedStatement<"ServerBinding">;
+  };
 };
 
 /** POST /v1/enrollment-codes: a one-time code that links a claw to the signed-in account. */
@@ -106,6 +124,14 @@ export type ListClawsResponse = { claws: ClawListEntry[] };
 export type PublishDescriptorRequest = { descriptor: ClawDescriptor };
 /** Response of GET /v1/claws/{claw_id}/descriptor. */
 export type GetDescriptorResponse = { descriptor: ClawDescriptor };
+
+/** Admitted W only: descriptor plus its current-binding snapshot for client freshness verification. */
+export type GetNodeDescriptorResponse = GetDescriptorResponse & GetSnapshotResponse;
+/** Accountless pre-admission mail: request signer must be redemption W, recipient always Gateway. */
+export type SendNodeMailRequest = {
+  to: "gateway";
+  payload: { kind: "node_redemption"; redemption: SignedStatement<"NodeRedemption"> };
+};
 
 /**
  * PUT /v1/claws/{claw_id}/snapshot. Discovery checks the K_gw signature and that the snapshot is
@@ -153,7 +179,7 @@ export type AckMailRequest = { cursor: string };
 /**
  * POST /iroh/admit (iroh-relay `access.http`). Request header `X-Iroh-Endpoint-Id: <64 hex>`,
  * `Authorization: Bearer <relay token>`. Response body is exactly `true` or `false`.
- * Admits: K_srv of each claw's latest descriptor, and the owner and member peer keys listed in
+ * Admits: K_srv of each claw's latest descriptor, and the owner, member and node peer keys listed in
  * each claw's latest snapshot (current state only; a removed key is absent). Malformed ids -> `false`. Missing or
  * wrong bearer -> 401 (the relay fails closed).
  */

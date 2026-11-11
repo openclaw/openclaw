@@ -4,6 +4,14 @@ import type { SessionTranscriptContextSelection } from "../../config/sessions/se
 import type { PreparedSessionTranscriptHydration } from "../../config/sessions/session-transcript-worker.types.js";
 import type { SessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 
+/** Internal readers own their array; transcript payloads stay immutable. */
+export const sessionManagerReadTranscriptBranch = Symbol.for(
+  "openclaw.session-manager.read-transcript-branch",
+);
+export const sessionManagerReadToolResultProjectionEntries = Symbol.for(
+  "openclaw.session-manager.read-tool-result-projection-entries",
+);
+
 export type SessionManagerPersistenceTarget = SessionTranscriptTargetBinding;
 export type SessionManagerBoundedContextLimits = SessionTranscriptContextSelection;
 export type PreparedSessionTranscriptReload = PreparedSessionTranscriptHydration;

@@ -47,6 +47,24 @@ describe("applyEditsToNormalizedContent", () => {
     expect(message.indexOf("near line 2")).toBeLessThan(message.indexOf("near line 3"));
   });
 
+  it("preserves cutoff scores and earlier equal-score lines as the top three tighten", () => {
+    const expected = "a".repeat(100);
+    const line = (distance: number) => "a".repeat(100 - distance) + "b".repeat(distance);
+    const message = getMismatchMessage(
+      [line(56), line(54), line(20), line(20), line(20), line(1), line(1), line(1), line(1)].join(
+        "\n",
+      ),
+      expected,
+    );
+    expect(message.match(/near line \d+ \(\d+% match\)/g)).toEqual([
+      "near line 6 (99% match)",
+      "near line 7 (99% match)",
+      "near line 8 (99% match)",
+    ]);
+    expect(getMismatchMessage(line(54), expected)).toContain("46% match");
+    expect(getMismatchMessage(line(56), expected)).not.toContain("Closest matching lines");
+  });
+
   it("uses the most meaningful oldText line for multiline diagnostics", () => {
     const message = getMismatchMessage(
       "header\nconst actualValue = 42;\nfooter\n",

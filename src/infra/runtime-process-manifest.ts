@@ -52,6 +52,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     ),
     stallObserver: runtimeProcessEntrypoint("logging/diagnostic-stall-observer.worker"),
     systemCaWarmup: runtimeProcessEntrypoint("gateway/system-ca-warmup.worker"),
+    openclawIdTunnel: runtimeProcessEntrypoint("gateway/openclaw-id/tunnel-child/entry"),
     shutdownHardExit: loaderFreeEntrypoint("cli/gateway-cli/shutdown-hard-exit.worker"),
     packageIntegrityHasher: runtimeProcessEntrypoint(
       "infra/package-update-integrity-hasher.worker",
@@ -245,6 +246,7 @@ export const pluginRuntimeProcessManifest = {
     ...pluginRuntimeProcess("code-mode-quickjs", "src/executor", "src/code-mode.worker"),
     sourceWorkerName: "code-mode.worker",
   },
+  codexStdio: pluginRuntimeProcess("codex", "stdio-worker-entrypoint", "stdio.worker"),
   codexCatalogPage: pluginRuntimeProcess(
     "codex",
     "catalog-page-worker-entrypoint",

@@ -31,6 +31,14 @@ export type CommandQueueTaskDeadline =
   | { kind: "bounded"; deadlineAtMs: number }
   | { kind: "unlimited" };
 
+/** Borrowed queue-entry facts; the queue clears membership when admission ends. */
+export type CommandQueueWait = {
+  lane: string;
+  queued?: true;
+  queuedAheadAtEnqueue: number;
+  activeAheadAtEnqueue: number;
+};
+
 export type CommandQueueAdmissionOptions = {
   sessionTarget?: Readonly<{ agentId?: string; sessionKey?: string; sessionId: string }>;
   /** Enqueue-time provenance for diagnostics only; never used for admission. */
@@ -47,7 +55,7 @@ export type CommandQueueAdmissionOptions = {
   /** Cancels queued admission; the task owns cancellation after it starts. */
   abortSignal?: AbortSignal;
   /** Called only when this entry remains queued after immediate lane admission. */
-  onQueued?: () => void;
+  onQueued?: (wait?: Readonly<CommandQueueWait>) => void;
   warnAfterMs?: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
   priority?: "foreground" | "normal" | "background";

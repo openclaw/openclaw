@@ -41,7 +41,7 @@ extension DashboardWindowController {
             request, sourceID: self.notificationSourceID, replyHandler: replyHandler)
     }
 
-    func applyDeviceSettingsRequest(_ request: DeviceSettingsRequest) async throws {
+    func applyDeviceSettingsRequest(_ request: DeviceSettingsRequest) async throws -> Task<Void, Error>? {
         // Publish even a failed transition: recovery may have changed the hosting state.
         defer { NotificationCenter.default.post(name: .openclawDeviceSettingsChanged, object: nil) }
         switch request {
@@ -49,7 +49,7 @@ extension DashboardWindowController {
             await self.publishDeviceSettings()
             await BrowserProfileImportModel.shared.refreshAvailability()
         case let .set(key, value):
-            try await self.setDeviceSetting(key, value: value)
+            return try await self.setDeviceSetting(key, value: value)
         case let .resolvePermission(request):
             try await self.resolveNodePermission(request)
         case let .requestPermission(id):
@@ -70,6 +70,7 @@ extension DashboardWindowController {
         case .chromeExtensionSetup, .chromeExtensionStatus, .installChromeExtension:
             break // The queued handler returns the canonical setup result directly.
         }
+        return nil
     }
 
     private func resolveNodePermission(_ request: NodePermissionRequest) async throws {
@@ -107,7 +108,7 @@ extension DashboardWindowController {
         default: nil
         }
         guard let (key, value) = setting else { return true }
-        try await self.setDeviceSetting(key, value: value, isCurrent: isCurrent)
+        _ = try await self.setDeviceSetting(key, value: value, isCurrent: isCurrent)
         guard isCurrent() else { return false }
         return switch capability {
         case .computerControl: isComputerControlEnabled()
@@ -152,18 +153,21 @@ extension DashboardWindowController {
     private func setDeviceSetting(
         _ key: DeviceSettingKey,
         value: DeviceSettingValue,
-        isCurrent: @escaping @MainActor () -> Bool = { true }) async throws
+        isCurrent: @escaping @MainActor () -> Bool = { true }) async throws -> Task<Void, Error>?
     {
         let sourceID = self.notificationSourceID
         let consent = self.requiredDeviceSettingConsent(key, value: value)
         if let consent {
-            guard await self.deviceSettingsMessageHandler.confirm(consent) else { return }
+            guard await self.deviceSettingsMessageHandler.confirm(consent) else { return nil }
         }
         // Another window can revoke scope while the sheet is open. Compare the consent
         // actually shown, then keep cookie mutations synchronous with this check.
         guard isCurrent(), self.canUseDeviceSettings(sourceID: sourceID),
-              self.requiredDeviceSettingConsent(key, value: value) == consent else { return }
+              self.requiredDeviceSettingConsent(key, value: value) == consent else { return nil }
         switch (key, value) {
+        case let (.launchAtLogin, .boolean(enabled)):
+            guard !enabled || self.deviceLaunchAtLoginAvailable else { return nil }
+            return AppStateStore.shared.setLaunchAtLogin(enabled)
         case let (.keepGatewayRunning, .boolean(enabled)):
             try await GatewayProcessManager.shared.setKeepGatewayRunning(enabled) {
                 isCurrent() && self.canUseDeviceSettings(sourceID: sourceID)
@@ -173,7 +177,7 @@ extension DashboardWindowController {
                 isCurrent() && self.canUseDeviceSettings(sourceID: sourceID)
             }
         case let (.locationMode, .string(value)):
-            guard let mode = DeviceSettingsLocationMode(rawValue: value) else { return }
+            guard let mode = DeviceSettingsLocationMode(rawValue: value) else { return nil }
             await AppStateStore.shared
                 .setLocationMode(mode.nativeMode) { isCurrent() && self.canUseDeviceSettings(sourceID: sourceID) }
         case let (_, .boolean(enabled)):
@@ -186,14 +190,15 @@ extension DashboardWindowController {
                 state.cookieSyncDomains = CookieSyncManager.normalizedDomains(values)
             } else if key == .localeAdditional {
                 let available = Set(VoiceWakeDeviceOptions.locales().map(\.id))
-                guard values.allSatisfy(available.contains) else { return }
+                guard values.allSatisfy(available.contains) else { return nil }
                 state.voiceWakeAdditionalLocaleIDs = values
             }
         case (_, .null):
-            guard key == .microphone else { return }
+            guard key == .microphone else { return nil }
             AppStateStore.shared.voiceWakeMicName = ""
             AppStateStore.shared.voiceWakeMicID = ""
         }
+        return nil
     }
 
     private func setDeviceBoolean(_ key: DeviceSettingKey, enabled: Bool) {
@@ -204,9 +209,6 @@ extension DashboardWindowController {
             return
         }
         switch key {
-        case .launchAtLogin:
-            guard !enabled || self.deviceLaunchAtLoginAvailable else { return }
-            state.launchAtLogin = enabled
         case .quickChatEnabled:
             state.quickChatEnabled = enabled
             QuickChatController.shared.setEnabled(enabled)

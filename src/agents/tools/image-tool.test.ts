@@ -955,7 +955,7 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("loads images directly for native-vision models without resolving an image model", async () => {
+  it("loads parameterized data URLs for native-vision models without resolving an image model", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -999,7 +999,7 @@ describe("image tool implicit imageModel config", () => {
 
       const result = await tool.execute("native-image", {
         prompt: "Read the screenshot error.",
-        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        path: `data:image/png;charset=utf-8;base64,${ONE_PIXEL_PNG_B64}`,
       });
       const content = (
         result as {

@@ -367,7 +367,7 @@ describe("dreaming view", () => {
     expect(idleContainer.querySelector(".dreams__bubble")).toBeNull();
     expectElement(idleContainer, ".dreams--idle");
     expect(compactText(idleContainer.querySelector(".dreams-controls__status"))).toBe(
-      "Dreaming is a global setting; it is not scoped to this agent.",
+      "Dreaming applies to all agents.",
     );
 
     const engineOff = renderInto(
@@ -388,7 +388,7 @@ describe("dreaming view", () => {
       }),
     );
     expect(compactText(engineOff.querySelector(".dreams-controls__status"))).toBe(
-      "Memory engine is Off. Choose an engine in Settings to enable dreaming.",
+      "Memory engine is off. Choose an engine in Settings to turn on Dreaming.",
     );
     expect(engineOff.querySelector<HTMLInputElement>('input[role="switch"]')?.disabled).toBe(true);
 
@@ -431,8 +431,8 @@ describe("dreaming view", () => {
     openReviewPanel("insights");
     const container = renderInto(buildProps());
     expect(textItems(container, ".dreams-review__cluster-heading")).toEqual([
-      "Travel · 1 chat · 1 signal",
-      "Health · 1 chat · 1 sensitive",
+      "Travel · 1 conversation · 1 signal",
+      "Health · 1 conversation · 1 sensitive",
     ]);
     const items = container.querySelectorAll("[data-import-page]");
     expect(items[0]?.querySelector(".settings-row__title")?.textContent).toBe(
@@ -811,7 +811,7 @@ describe("dreaming view", () => {
     openReviewPanel("dailyLog");
     const onResetGroundedShortTerm = vi.fn();
     const container = renderInto(buildProps({ onResetGroundedShortTerm }));
-    expect(container.querySelectorAll(".settings-section__actions .btn")).toHaveLength(1);
+    expect(container.querySelectorAll(".settings-section__actions button")).toHaveLength(1);
     expect(
       container.querySelector(".dreams-review__entry .dreams-review__snippet")?.textContent,
     ).toBe("Emma prefers shorter, lower-pressure check-ins.");

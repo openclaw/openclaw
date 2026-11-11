@@ -566,5 +566,8 @@ This capability is host-local and is never a wire environment override.
 
 `process-runtime` exports `createBoundedLineFramer` for bounded LF-delimited byte
 streams. It preserves incomplete lines and leaves CR handling to the consumer.
+`stripGatewayAllocatorEnv` removes `MALLOC_CONF` and jemalloc `LD_PRELOAD`
+entries in place from a caller-owned child environment. Copy inherited values
+first; never pass `process.env`. Other preload libraries remain available.
 Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
 the runtime's existing dispatch and delivery authority.

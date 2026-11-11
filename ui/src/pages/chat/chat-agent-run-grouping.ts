@@ -1,10 +1,11 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { MessageGroup, SystemEventGroup } from "../../lib/chat/chat-types.ts";
+import type { ChatItem, MessageGroup, SystemEventGroup } from "../../lib/chat/chat-types.ts";
 import {
   assistantMessageCanOwnTurnActions,
   assistantMessageIsInterrupted,
   groupEndsRunInFailure,
+  isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
@@ -21,6 +22,7 @@ import {
   type StreamRunRenderItem,
   type WorkGroupRenderItem,
 } from "./chat-turn-presentation.ts";
+import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 
 type AgentRunFramePart =
   | MessageGroup
@@ -39,6 +41,16 @@ export type AgentRunFrameRenderItem = {
     | { kind: "interrupted" }
     | { kind: "failed" };
   parts: AgentRunFramePart[];
+  /** Completed runs share one identity/footer across independently virtualized rows. */
+  fragment?: {
+    source: AgentRunFrameRenderItem;
+    first: boolean;
+    last: boolean;
+    firstAssistant: MessageGroup | undefined;
+    representative: MessageGroup | undefined;
+    firstBubbleKey: string | null;
+    work: WorkGroupRenderItem | undefined;
+  };
   /** This run's groups held by an earlier rollup that no visible reply owns. */
   detachedGroups?: MessageGroup[];
 };
@@ -46,7 +58,7 @@ export type AgentRunFrameRenderItem = {
 type AgentRunFrameInput = CompletedTurnRenderItem | ActivityRunRenderItem;
 
 export function chatItemGroups(
-  item: AgentRunFrameInput | AgentRunFrameRenderItem | SystemEventGroup,
+  item: AgentRunFrameInput | AgentRunFrameRenderItem | SystemEventGroup | ChatItem,
 ): MessageGroup[] {
   if (item.kind === "agent-run-frame") {
     return item.parts.flatMap(chatItemGroups);
@@ -139,6 +151,27 @@ export function agentRunFrameActiveStatusParts(
     : undefined;
 }
 
+function hasTerminalRunOutcome(message: unknown, runId: string): boolean {
+  const record = asRecord(message);
+  const metadata = asRecord(record?.["__openclaw"]);
+  if (
+    isLiveTerminalForRun(message, runId) ||
+    metadata?.runTerminal === true ||
+    assistantMessageIsInterrupted(message) ||
+    record?.stopReason === "error"
+  ) {
+    return true;
+  }
+  // Provider speech, commentary and reasoning mirrors can stop a message without ending its run.
+  const phase = resolveAssistantReplyPhase(message);
+  return (
+    !isProviderVoiceTranscript(message) &&
+    phase !== "commentary" &&
+    metadata?.mirrorOrigin !== "codex-app-server" &&
+    (phase === "final_answer" || record?.stopReason === "stop")
+  );
+}
+
 /** Wrap semantic work/activity rows in one run-owned presentation frame. */
 export function coalesceAgentRunFrames(
   items: AgentRunFrameInput[],
@@ -147,6 +180,8 @@ export function coalesceAgentRunFrames(
     /** Source history includes silent/empty terminals omitted from rendered groups. */
     messages?: readonly unknown[];
     activeRunId?: string | null;
+    /** Session-wide liveness does not grant foreground stream ownership. */
+    activeRunIds?: readonly string[];
   } = {},
 ): Array<AgentRunFrameInput | AgentRunFrameRenderItem> {
   if (opts.searchActive) {
@@ -155,12 +190,19 @@ export function coalesceAgentRunFrames(
   const result: Array<AgentRunFrameInput | AgentRunFrameRenderItem> = [];
   const lastAssistantByRun = new Map<string, unknown>();
   const terminalRuns = new Set<string>();
+  const activeRunIds = new Set(opts.activeRunIds);
   for (const message of opts.messages ?? []) {
     const id = transcriptRunId(message);
     const record = asRecord(message);
     if (id && record?.role === "assistant") {
       lastAssistantByRun.set(id, message);
+      const terminal = hasTerminalRunOutcome(message, id);
+      // A delayed active-session snapshot cannot revive a run whose terminal we already observed.
+      if (terminal) {
+        activeRunIds.delete(id);
+      }
       if (
+        terminal ||
         record.stopReason === "stop" ||
         record.stopReason === "error" ||
         assistantMessageIsInterrupted(message) ||
@@ -204,7 +246,8 @@ export function coalesceAgentRunFrames(
     if (!runId || !frameRunId || parts.length === 0) {
       return;
     }
-    const active = runId === opts.activeRunId || parts.some(itemIsActive);
+    const active =
+      runId === opts.activeRunId || activeRunIds.has(runId) || parts.some(itemIsActive);
     // A stopped history snapshot can end between tool iterations. Keep its
     // saved output, but never claim that the absent final answer completed.
     const interrupted =

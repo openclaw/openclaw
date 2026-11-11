@@ -7,7 +7,7 @@
 - Avoid shorthand controls like `Button("Title")`, `Link("Title", ...)`, `TextField("Placeholder", ...)`, and `SecureField("Placeholder", ...)` when they make typography or placeholder styling implicit. Prefer explicit label builders with branded `Text`/`Label`.
 - Secure-field placeholders need both branded visual styling and accessibility semantics. If using an overlay placeholder, keep the actual field semantically named with `.accessibilityLabel(...)` and hide the decorative placeholder from accessibility.
 - System font modifiers are acceptable for SF Symbol `Image(systemName:)` sizing, not for user-visible text unless a platform control makes branded typography impossible. If an exception is intentional, keep it narrow and explain why.
-- When touching iOS text surfaces, update/keep `apps/ios/Tests/OpenClawTypographyTests.swift` so bare text/control regressions are caught, then run the focused typography test.
+- The typography scanner in `apps/ios/Tests/OpenClawTypographyTests.swift` enforces this rule across iOS sources (no per-surface pins to update); when touching iOS text surfaces, run the focused typography test.
 
 ## Licenses Screen
 
