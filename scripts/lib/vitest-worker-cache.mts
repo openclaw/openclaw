@@ -19,7 +19,7 @@ import {
 import type { VitestWorkerPreset } from "./vitest-worker-descriptor.mts";
 
 const isCacheSlot = (directory: string) =>
-  /^run-cache-(?:runtime-)?\d+$/u.test(path.basename(directory));
+  /^run-cache-(?:(?:runtime|tooling)-)?\d+$/u.test(path.basename(directory));
 
 function cacheLocation(root: string, directory: string) {
   const cacheRoot = path.join(root, ".artifacts/vitest-worker-cache");

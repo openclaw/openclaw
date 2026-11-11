@@ -86,7 +86,8 @@ export function extractTranscriptIndexEntry(
   if (!id || (role !== "user" && role !== "assistant")) {
     return undefined;
   }
-  const text = readMessageText(message);
+  // Derived search text only: PostgreSQL text cannot hold NUL, and both engines index alike.
+  const text = readMessageText(message)?.replaceAll("\0", " ");
   if (!text) {
     return undefined;
   }

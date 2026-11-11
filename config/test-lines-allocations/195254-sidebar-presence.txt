@@ -1,0 +1,3 @@
+# Browser-computed geometry, color, and ring parity for Users and Sessions.
+# Covers active/idle/unknown states; fails on the original offset mismatch.
+42

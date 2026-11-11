@@ -76,12 +76,15 @@ export function prepareGroupMessage(
   return { item, source, actions: details, ownsActions };
 }
 
-export function isActivityMessageGroup(group: MessageGroupData, bubbleMode = false): boolean {
-  if (normalizeRoleForGrouping(group.role) !== "tool") {
+export function isActivityMessageGroup(
+  group: MessageGroupData,
+  options: Pick<NativeMessageGroupOptions, "bubbleMode" | "frameContent">,
+): boolean {
+  if (options.frameContent !== undefined || normalizeRoleForGrouping(group.role) !== "tool") {
     return false;
   }
   if (
-    bubbleMode &&
+    options.bubbleMode &&
     group.messages.some(
       (item) => item.hasVisibleContent && resolveMessageRole(item.message) === "assistant",
     )
@@ -90,7 +93,7 @@ export function isActivityMessageGroup(group: MessageGroupData, bubbleMode = fal
   }
   const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
   return (
-    bubbleMode ||
+    options.bubbleMode ||
     group.messages.length > 1 ||
     cards.length > 1 ||
     (cards.length === 0 &&
@@ -210,15 +213,18 @@ export function prepareMessageGroupFrame(
   // Footer copy stays available (e.g. a commentary search hit); reply was already dropped for non-owners.
   const footerActionDetails = preparedMessages.at(-1)?.actions ?? null;
   const footerActionMessageKey = actionOwners.at(-1)?.key;
+  const pendingSteer =
+    normalizedRole === "user" ? opts.pendingSteer?.(group.messages.at(-1)?.message) : undefined;
   const hasUserFooterActions =
     normalizedRole === "user" &&
     ((opts.onRewind && !opts.rewindDisabled) || hasMessageActionButtons(footerActionDetails, opts));
   // Source sessions share stable sender hues; the shared participant palette owns contrast
-  // in each theme. Own and unattributed messages keep the theme-derived accent skin.
+  // in each theme. Only peers (left side) take their identity hue: a right-side user turn is
+  // the viewer's, so it keeps the accent skin even when the viewer has no profile to match.
   const senderHue =
     isForwarded && sourceSessionKey
       ? resolveIdentityHue({ id: sourceSessionKey })
-      : normalizedRole === "user" && group.sender && !isOwnGroup
+      : isPeerGroup && group.sender
         ? resolveIdentityHue(group.sender)
         : null;
   const pendingSend = readPendingSendStatus(group.messages.at(-1)?.message);
@@ -265,6 +271,10 @@ export function prepareMessageGroupFrame(
     footerActionDetails,
     footerActionMessageKey,
     hasUserFooterActions,
+    // An undelivered steer's footer slot holds only its steer row; identity, time and
+    // actions follow delivery.
+    pendingSteer,
+    statusFooter: Boolean(sendStatus || pendingSteer),
     sendStatus,
     inlineUserAvatar,
     hasAvatar,

@@ -182,7 +182,7 @@ describe("inactivity", () => {
 
   it("honours configurable windows and reports when the next drop is due", async () => {
     const world = await buildWorld();
-    const windows = { ownerDeviceSeconds: 10, memberPeerKeySeconds: 5 };
+    const windows = { ownerDeviceSeconds: 10, memberPeerKeySeconds: 5, nodeSeconds: 5 };
     expect(dropInactive(world.state, WORLD_NOW + 10, windows)).toBeNull();
     expect(nextInactivityDrop(world.state, windows)).toBe(WORLD_NOW + 11);
     expect(dropInactive(world.state, WORLD_NOW + 11, windows)?.state.owner_devices).toEqual({});

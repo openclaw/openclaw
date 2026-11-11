@@ -29,6 +29,7 @@ import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version
 import {
   authenticatePreparedNpmArtifact,
   consumePreparedNpmPackage,
+  createPreparedNpmCapacityObserver,
   downloadPreparedNpmRelease,
   validatePreparedNpmArtifactDescriptor,
 } from "./plugin-npm-prepared-release.mjs";
@@ -303,13 +304,7 @@ async function waitForRun(runId, attempt, workflow, tooling, { allowFailure = fa
   );
 }
 
-function dispatch(workflow, inputs, tooling, revalidateAuthority) {
-  verifyReleaseToolingIdentity({
-    repository: REPOSITORY,
-    workflowRef: tooling.ref,
-    workflowFullRef: tooling.fullRef,
-    workflowSha: tooling.sha,
-  });
+async function dispatch(workflow, inputs, tooling, revalidateAuthority) {
   const args = [
     "--method",
     "POST",
@@ -323,7 +318,14 @@ function dispatch(workflow, inputs, tooling, revalidateAuthority) {
   }
   // Dispatch is a mutation: never retry an uncertain response. A new request
   // could create a second publisher even when the first response was lost.
-  revalidateAuthority?.();
+  verifyReleaseToolingIdentity({
+    repository: REPOSITORY,
+    workflowRef: tooling.ref,
+    workflowFullRef: tooling.fullRef,
+    workflowSha: tooling.sha,
+  });
+  // Finish remote reads before checking the operator permission that authorizes POST.
+  await revalidateAuthority?.();
   const result = api(`actions/workflows/${workflow}/dispatches`, args);
   requireValue(
     Number.isSafeInteger(result.workflow_run_id) && result.workflow_run_id > 0,
@@ -464,7 +466,7 @@ async function loadPreparedPlugins({
     throw failure.reason;
   }
   const [npm, clawhub] = results.map((result) => result.value);
-  adoption.revalidateAuthority?.();
+  await adoption.revalidateAuthority?.();
   return {
     npm,
     clawhub: { packages: clawhub.map((entry) => entry.prepared) },
@@ -474,9 +476,15 @@ async function loadPreparedPlugins({
 }
 
 export async function prefetchPreparedPlugins(options) {
-  const manifests = await loadPreparedPlugins(options);
-  const { plugins, inputs, sourceSha, toolingSha, sourceRoot, outputDir, token, fetchImpl } =
-    options;
+  const capacity = options.reportCapacity
+    ? createPreparedNpmCapacityObserver(options.fetchImpl)
+    : undefined;
+  const manifests = await loadPreparedPlugins({
+    ...options,
+    fetchImpl: capacity?.fetchImpl ?? options.fetchImpl,
+  });
+  const { plugins, inputs, sourceSha, toolingSha, sourceRoot, outputDir, token } = options;
+  const fetchImpl = capacity?.packageFetchImpl ?? options.fetchImpl;
   const admissionDir = mkdtempSync(join(outputDir, "verified-"));
   const tasks = [
     ...manifests.npm.packages.map(
@@ -517,7 +525,8 @@ export async function prefetchPreparedPlugins(options) {
       throw failure.reason;
     }
   }
-  manifests.adoption.revalidateAuthority?.();
+  await manifests.adoption.revalidateAuthority?.();
+  capacity?.report(tasks.length);
   writeJson(join(admissionDir, "verified.json"), {
     sourceSha,
     toolingSha,
@@ -561,7 +570,7 @@ async function readReady(descriptor, directory, tooling, token) {
     toolingSha: tooling.sha,
     toolingFullRef: tooling.fullRef,
   });
-  adoption.revalidateAuthority?.();
+  await adoption.revalidateAuthority?.();
   return {
     ready: validateReadyRelease(value, {
       sourceSha,
@@ -755,11 +764,13 @@ async function main() {
     if (values.request === undefined) {
       // npm bytes are already qualified by FRV. Persist before the remaining
       // mutation so an uncertain ClawHub dispatch is never repeated blindly.
-      request.clawhubRunId = dispatch(
-        "plugin-clawhub-release.yml",
-        { ref: sourceSha, publish_scope: "all-publishable", dry_run: "true" },
-        tooling,
-        adoption.revalidateAuthority,
+      request.clawhubRunId = (
+        await dispatch(
+          "plugin-clawhub-release.yml",
+          { ref: sourceSha, publish_scope: "all-publishable", dry_run: "true" },
+          tooling,
+          adoption.revalidateAuthority,
+        )
       ).workflow_run_id;
       replaceJson(requestPath, request);
       reportDispatch("plugin-clawhub-release.yml", request.clawhubRunId);
@@ -830,7 +841,7 @@ async function main() {
       outputDir: join(directory, "packages"),
       token,
     });
-    adoption.revalidateAuthority?.();
+    await adoption.revalidateAuthority?.();
     writeJson(join(directory, READY_FILE), ready);
     output(
       "artifact_name",
@@ -887,11 +898,8 @@ async function main() {
     // non-execution. Existing intent never authorizes another mutation.
     writeJson(requestPath, request);
     try {
-      request.releaseRunId = dispatch(
-        "openclaw-release-publish.yml",
-        inputs,
-        tooling,
-        revalidateAuthority,
+      request.releaseRunId = (
+        await dispatch("openclaw-release-publish.yml", inputs, tooling, revalidateAuthority)
       ).workflow_run_id;
       request.state = "unverified";
       replaceJson(requestPath, request);

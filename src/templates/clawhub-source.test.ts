@@ -162,7 +162,7 @@ const emptyManifest: TemplateManifest = {
   workspace: { bootstrapFiles: {}, files: [] },
   packages: [],
   mcpServers: {},
-  cronJobs: [],
+  automations: [],
 };
 const listPage = (items: unknown[], nextCursor: string | null = null) => ({ items, nextCursor });
 function mockArchive(archivePath: string, extractedRoot: string) {
@@ -237,7 +237,7 @@ beforeEach(async () => {
       { kind: "plugin", source: "clawhub", ref: "@openclaw/source-plugin", version: "2.0.0" },
     ],
     mcpServers: { sources: { command: "source-tool" } },
-    cronJobs: [
+    automations: [
       {
         id: "daily-briefing",
         name: "Daily briefing",
@@ -653,6 +653,27 @@ describe("verified ClawHub Template source", () => {
     await expect(resolveSource({ mode: "apply", baseUrl, run })).resolves.toMatchObject({
       value: "resolved",
     });
+  });
+
+  it("overlaps package and exact-artifact reads while keeping trust before download", async () => {
+    await prepareResolverFixture();
+    const detailRead = Promise.withResolvers<unknown>();
+    const artifactRead = Promise.withResolvers<unknown>();
+    mocks.detail.mockImplementationOnce(() => detailRead.promise);
+    mocks.artifact.mockImplementationOnce(() => artifactRead.promise);
+    const attempt = probeSource();
+    try {
+      expect(mocks.detail).toHaveBeenCalledTimes(1);
+      expect(mocks.artifact).toHaveBeenCalledTimes(1);
+      expect(mocks.trust).not.toHaveBeenCalled();
+      expect(mocks.download).not.toHaveBeenCalled();
+    } finally {
+      detailRead.resolve({ package: officialPackage(), owner: { handle: "openclaw" } });
+      artifactRead.resolve(artifact());
+      await attempt;
+    }
+    expect(mocks.trust).toHaveBeenCalledTimes(1);
+    expect(mocks.download).toHaveBeenCalledTimes(1);
   });
 
   it("keeps preview ephemeral and persists only after an approved apply asks for it", async () => {

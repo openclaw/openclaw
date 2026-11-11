@@ -68,7 +68,7 @@ export type LocalWorkspaceCheckpointReceipt =
 
 export type LocalWorkspaceManifestValue =
   | LocalWorkspaceManifestScan
-  | { kind: "rescan" }
+  | { kind: "rescan"; entryCount?: number }
   | { kind: "materialize"; rawManifest: string; manifestRef: string }
   | {
       kind: "archive";

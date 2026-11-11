@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { Page } from "playwright";
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
-import { frames, openNavigationDrawer } from "./control-ui-interaction-navigation.ts";
+import { frames, navigation, openNavigationDrawer } from "./control-ui-interaction-navigation.ts";
 import {
   cronLoadedJobCount,
   interactionScenarios,
@@ -228,9 +228,10 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
   }
   const cycles = 8;
   const chatPicker = interactionScenarios.find(({ id }) => id === "model-picker-first-open-search");
+  const chatSearch = interactionScenarios.find(({ id }) => id === "model-picker-search");
   const sessions = interactionScenarios.find(({ id }) => id === "sessions-sort");
   const sidebar = interactionScenarios.find(({ id }) => id === "sidebar-toggle");
-  if (!chatPicker || !sessions || !sidebar) {
+  if (!chatPicker || !chatSearch || !sessions || !sidebar) {
     throw new Error("Missing shared chat picker or Sessions scenario");
   }
   const repeated = (
@@ -278,17 +279,73 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
     createProviderArtworkScenario(1_000, "reopen"),
     ...createNoopPushScenarios(),
     ...createNoopOwnerScenarios(),
+    ...(["first-open", "open"] as const).map((phase): EngineScenario =>
+      Object.assign({}, chatPicker, {
+        id: `model-picker-${phase}`,
+        explicitOnly: true,
+        expected: "One activation opens the model picker with visible choices and focused search.",
+        prepare: async (page, gateway) => {
+          await chatPicker.prepare(page, gateway);
+          if (phase === "open") {
+            await page.locator(".chat-pane-cache__pane--active [data-chat-model-select]").click();
+            await page.locator("[data-chat-model-search]").waitFor();
+            await page.keyboard.press("Escape");
+          }
+        },
+        run: async (page) => {
+          const trigger = page.locator(".chat-pane-cache__pane--active [data-chat-model-select]");
+          if ((page.viewportSize()?.width ?? 1440) < 600) {
+            await trigger.tap();
+          } else {
+            await trigger.click();
+          }
+          await page.waitForFunction(() => {
+            const input = document.querySelector("[data-chat-model-search]");
+            return (
+              input &&
+              input === document.activeElement &&
+              document.querySelector("[data-chat-model-option]")
+            );
+          });
+          return page.locator(".chat-controls__model-menu").evaluate((menu) => ({
+            elements: menu.querySelectorAll("*").length,
+            mountedRows: menu.querySelectorAll(".chat-controls__model-virtual-row").length,
+            mountedOptions: menu.querySelectorAll("[data-chat-model-option]").length,
+          }));
+        },
+      } satisfies Partial<EngineScenario>),
+    ),
+    {
+      ...chatSearch,
+      id: "model-picker-search-paste",
+      explicitOnly: true,
+      expected: "One native edit filters the already-open picker without typing round trips.",
+      run: async (page) => {
+        await page.locator("[data-chat-model-search]").fill("Warm model 0999");
+        await page.waitForFunction(() => {
+          const rows = [
+            ...document.querySelectorAll<HTMLElement>("[data-chat-model-option]"),
+          ].filter((row) => row.checkVisibility());
+          return rows.length === 1 && rows[0]?.dataset.chatModelOption === "example/model-999";
+        });
+        return { nativeEdits: 1 };
+      },
+    },
     ...(["open", "close"] as const).map((direction): EngineScenario =>
       Object.assign({}, sidebar, {
         id: `sidebar-${direction}`,
         explicitOnly: true,
-        viewports: ["mobile"],
         expected: `One native activation ${direction}s the populated drawer and preserves the conversation.`,
         prepare: async (page, gateway) => {
           await sidebar.prepare(page, gateway);
           if (direction === "open") {
-            await page.keyboard.press("Escape");
-            await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+            if (await page.locator(".shell--mobile-nav").count()) {
+              await page.keyboard.press("Escape");
+              await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+            } else {
+              await page.locator(".sidebar-session-toolbar__collapse").first().click();
+              await page.locator(".shell--nav-collapsed").waitFor();
+            }
             await page
               .locator(".shell-nav")
               .evaluate((drawer) =>
@@ -297,6 +354,37 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
           }
         },
         run: async (page) => {
+          if (!(await page.locator(".shell--mobile-nav").count())) {
+            if (direction === "open") {
+              await navigation(page, "sessions");
+              await page.locator(".shell--nav-collapsed").waitFor({ state: "detached" });
+            } else {
+              await page.locator(".sidebar-session-toolbar__collapse").first().click();
+              await page.locator(".shell--nav-collapsed").waitFor();
+            }
+            await page
+              .locator(".shell, .shell-nav")
+              .evaluateAll((elements) =>
+                Promise.all(
+                  elements
+                    .flatMap((element) => element.getAnimations())
+                    .map((animation) => animation.finished),
+                ),
+              );
+            if (direction === "close") {
+              await page.locator(".sidebar-shell").evaluate((panel) => {
+                if (
+                  panel.checkVisibility({ visibilityProperty: true, checkOpacity: true }) ||
+                  panel.contains(document.activeElement)
+                ) {
+                  throw new Error("Collapsed sidebar content must be hidden and release focus");
+                }
+              });
+            } else {
+              await page.locator(".sidebar-recent-session").first().waitFor({ state: "visible" });
+            }
+            return { nativeActivations: 1 };
+          }
           if (direction === "open") {
             await openNavigationDrawer(page);
             if (!(await page.locator(".shell-nav :focus").first().isVisible())) {

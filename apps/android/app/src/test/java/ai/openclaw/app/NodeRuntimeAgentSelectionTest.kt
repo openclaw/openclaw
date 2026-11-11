@@ -22,6 +22,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
@@ -2159,6 +2160,69 @@ class NodeRuntimeAgentSelectionTest {
   private suspend fun awaitAgentRefresh(refreshes: Channel<Job>) {
     withTimeout(2_000) { refreshes.receive().join() }
   }
+
+  @Test
+  fun configChangeReplacesCachedRealtimeAdmissionWithNativeTalk() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val originalScope = ReflectionHelpers.getField<CoroutineScope>(runtime, "scope")
+      try {
+        ReflectionHelpers.setField(runtime, "scope", CoroutineScope(originalScope.coroutineContext + Dispatchers.Unconfined))
+        val readiness = ReflectionHelpers.getField<MutableStateFlow<GatewayTalkSetupReadiness>>(runtime, "_talkSetupReadiness")
+        val unconfiguredRealtime =
+          """{"realtime":{"ready":false,"providers":[]},"transcription":{"ready":true,"activeProvider":"system","providers":[{"id":"system","label":"System","configured":true}]}}"""
+        readiness.value =
+          talkSetupReadinessFromGateway(
+            catalog =
+              Json
+                .parseToJsonElement(unconfiguredRealtime)
+                .jsonObject,
+            talkConfig =
+              Json
+                .parseToJsonElement("""{"talk":{"realtime":{"mode":"realtime"}}}""")
+                .jsonObject,
+          )
+        assertTrue(runtime.talkSetupReadiness.value.launch.requiresSetup)
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "talk.catalog" -> {
+              unconfiguredRealtime
+            }
+
+            "talk.config" -> {
+              """{"config":{"talk":{"realtime":{"mode":"stt-tts"}}}}"""
+            }
+
+            "models.list" -> {
+              """{"models":[]}"""
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[]}"""
+            }
+
+            "config.get" -> {
+              """{"config":{}}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        }
+        ReflectionHelpers.callInstanceMethod<Unit>(
+          runtime,
+          "handleGatewayEvent",
+          ReflectionHelpers.ClassParameter.from(String::class.java, "config.changed"),
+          ReflectionHelpers.ClassParameter.from(String::class.java, "{}"),
+        )
+        assertEquals(TalkLaunchRoute.Native, runtime.talkSetupReadiness.value.talkLaunchRoute)
+        assertFalse(runtime.talkSetupReadiness.value.launch.requiresSetup)
+      } finally {
+        ReflectionHelpers.setField(runtime, "scope", originalScope)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
 
   // This fixture owns reconnect callbacks; discovery must not start a competing connection.
   private fun reconnectOperator(

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
 import { createEngineActionTiming } from "../../scripts/lib/control-ui-engine-action-timing.ts";
+import { createControlUiLiveRegionAudit } from "../../scripts/lib/control-ui-live-region-audit.ts";
 import { createControlUiMutationAudit } from "../../scripts/lib/control-ui-mutation-audit.ts";
 
 let audit: ReturnType<typeof createControlUiMutationAudit> | undefined;
@@ -9,6 +10,40 @@ afterEach(() => {
   audit = undefined;
   document.body.replaceChildren();
   vi.restoreAllMocks();
+});
+
+it("records off-log updates separately from a nested polite atomic status", async () => {
+  const log = document.createElement("div");
+  log.setAttribute("role", "log");
+  log.setAttribute("aria-live", "off");
+  const stream = document.createElement("p");
+  stream.textContent = "First delta";
+  const status = document.createElement("span");
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  status.setAttribute("aria-atomic", "true");
+  log.append(stream, status);
+  document.body.append(log);
+  const live = createControlUiLiveRegionAudit();
+  live.start();
+  stream.firstChild!.nodeValue = "Next delta";
+  await Promise.resolve();
+  status.textContent = "Final answer. ".repeat(50);
+  await Promise.resolve();
+  const result = live.finish();
+  expect(result.samples.find((sample) => sample.role === "log")).toMatchObject({
+    effective: { live: "off" },
+    textSample: "Next delta",
+  });
+  const announcement = result.samples.find((sample) => sample.role === "status");
+  expect(announcement).toMatchObject({
+    raw: { live: "polite", atomic: "true" },
+    effective: { live: "polite", atomic: "true" },
+    ancestorLiveOff: true,
+    textLength: status.textContent.length,
+    textSample: status.textContent.slice(0, 500),
+  });
+  expect(announcement!.textSample.length).toBeLessThanOrEqual(500);
 });
 
 it("distinguishes equal writes from changes that return to their starting value", () => {

@@ -108,7 +108,7 @@ describe("agents_list tool", () => {
       description: "Finds and synthesizes evidence",
     });
     expect(details.agents?.find((agent) => agent.id === "blank")).not.toHaveProperty("description");
-    expect(result.content).toEqual([{ type: "text", text: JSON.stringify(details, null, 2) }]);
+    expect(result.content).toEqual([{ type: "text", text: JSON.stringify(details) }]);
     expect(JSON.stringify(result)).not.toContain("Excluded agent description");
   });
 

@@ -1,5 +1,3 @@
-import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../../agents/agent-scope-config.js";
 import {
@@ -12,6 +10,7 @@ import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolveProviderAuthLookupMaps } from "../../secrets/provider-env-vars.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { expectCollected } from "../../test-utils/retention.js";
 import type { PreparedGatewayModelCatalogSnapshot } from "../server-model-catalog-auth.js";
 import { readModelAuthStatusFacts } from "./models-auth-status-facts.js";
 import { createOpenAiCodexOauthHealthSummary } from "./models-auth-status.health.test-support.js";
@@ -117,8 +116,10 @@ it("does not let retained configs keep retired auth generations alive", async ()
   }
   const metadataSnapshot = createPluginMetadataSnapshotFixture();
   const configs = Array.from({ length: 20 }, () => ({}));
+  const generations: WeakRef<Generation>[] = [];
   const readGeneration = (generationConfig: object) => {
     const generation = new Generation();
+    generations.push(new WeakRef(generation));
     const snapshot: PreparedGatewayModelCatalogSnapshot = {
       agentId: "main",
       agentDir,
@@ -140,8 +141,7 @@ it("does not let retained configs keep retired auth generations alive", async ()
   configs.forEach(readGeneration);
   readGeneration(configs[0]!);
   expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(21);
-  await setImmediate();
-  expect(queryObjects(Generation)).toBe(0);
+  await expectCollected(...generations);
   expect(configs).toHaveLength(20);
 });
 

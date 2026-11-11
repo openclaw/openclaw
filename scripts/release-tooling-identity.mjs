@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "./lib/record-shared.mjs";
 
@@ -672,7 +673,7 @@ async function main(argv = process.argv.slice(2)) {
       // Only the candidate route acquires independently authenticated P evidence.
       const { verifyQualificationAdmission } =
         await import("./release-qualification-admission.mjs");
-      verifyQualificationAdmission({
+      const admission = verifyQualificationAdmission({
         descriptor: options.qualificationAdmission,
         repository: options.repository,
         candidateSha: options.candidateSha,
@@ -680,6 +681,18 @@ async function main(argv = process.argv.slice(2)) {
         workflowRef: identity.ref,
         inputs: options.qualificationInputs,
       });
+      if (process.env.GITHUB_OUTPUT) {
+        appendFileSync(
+          process.env.GITHUB_OUTPUT,
+          "performance_exempt=" +
+            String(
+              admission.coverage.exemptions?.some(
+                (entry) => entry.childRole === "productPerformance",
+              ) ?? false,
+            ) +
+            "\n",
+        );
+      }
     } else {
       verifyReleaseToolingIdentity({
         allowPrevalidatedRef: identity.ref !== "main" && !protectedMatch,

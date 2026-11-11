@@ -1,8 +1,7 @@
 {
   "id": "parallel",
   "categories": [
-    "web",
-    "models"
+    "web"
   ],
   "activation": {
     "onStartup": false
