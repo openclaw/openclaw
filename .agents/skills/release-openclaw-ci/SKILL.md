@@ -74,7 +74,8 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   all other required lanes must pass. See
   [Publication requirements](#publication-requirements). Stable tags require stable/full
   evidence, soak, and blocking performance. Beta-profile evidence cannot qualify
-  stable. Soak and performance cannot be waived. All-group
+  stable. Soak remains mandatory; performance exceptions are limited to the
+  checked-in policy. All-group
   qualification requires all nine Linux/Windows/macOS Gateway install/upgrade
   combinations. Preserve first failures, identity, and complete evidence.
 - Native macOS, Windows, Linux, and Android publication is independent of
@@ -537,8 +538,9 @@ gh workflow run openclaw-performance.yml \
 - Compare available Kova, gateway startup, and CLI startup metrics with earlier
   release evidence or clawgrit reports before publish/closeout.
 - Record regressions in release evidence and investigate their product impact.
-  Stable/full qualification requires blocking performance. Every selected
-  performance child must succeed; failures cannot be waived.
+  Stable/full qualification requires blocking performance subject only to the
+  checked-in policy’s exact Kova grants. Retain failed reports; a failed-job
+  grant does not authorize a not-run exemption.
 - `npm-beta-v1` defers the performance child. Every selected child still needs
   terminal evidence and must prove artifact-only publication.
 
@@ -677,7 +679,7 @@ The selected FRV run must conclude **success**. Stable publication requires
 stable/full evidence, soak, and blocking performance.
 Decide blocker or flake for every failed test. Rerun flakes on the same Release
 SHA at most twice and file a fix-in-parallel issue/PR on `main`; never re-cut
-solely to clear a flake. An exact failed live-provider/Telegram leaf may instead
+solely to clear a flake. An exact eligible failed leaf may instead
 have a reviewed [release-tooling grant](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
 Land and pin P, then run or revalidate FRV without changing C/Q. The publisher
 does not grant waivers or accept failed FRV. All unwaived failures and missing,
@@ -928,7 +930,8 @@ Interpret state precisely:
   remained active.
 
 Read every selected lane's actual conclusion. `passed` requires every selected
-validation lane to succeed; omitted coverage is not run, never passed.
+validation lane to satisfy pinned P's policy, with terminal evidence and raw
+waived failures retained; omitted coverage is not run, never passed.
 
 The `full-release-diagnostics-<run-id>-<attempt>` artifact is the terminal
 failure and timing manifest. Use it after an early blocker instead of
@@ -957,8 +960,8 @@ run-ID-cached bytes first.
    candidate, treat the failure as a blocker and backport or supersede; do not
    rerun it as inherited success. A signature repeated on another candidate is
    deterministic until a named mechanism and fix prove otherwise. Track a fix
-   for genuine flakes on `main`; every selected job must still pass before
-   publication. Classify blockers further:
+   for genuine flakes on `main`; every unwaived selected job must still pass before
+   publication under pinned P's policy. Classify blockers further:
    - confirmed product/code failure: fix the release branch, freeze a new Code
      SHA, and invalidate product evidence
    - qualification harness/contract defect: repair the candidate closure and
