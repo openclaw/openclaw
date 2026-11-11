@@ -96,6 +96,7 @@ describe("AcpSessionManager turn results", () => {
       const startTurn = state.start();
       const failure = await state.run().catch((error: unknown) => error);
       expect(failure).toMatchObject({ message: expect.stringContaining("openclaw doctor --fix") });
+      expect(String(failure)).toContain("Gateway log");
       expect(String(failure)).not.toContain(workspaceDir);
       expect(startTurn).not.toHaveBeenCalled();
       expect(state.runTurn).not.toHaveBeenCalled();

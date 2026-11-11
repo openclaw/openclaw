@@ -1,2 +1,2 @@
-508
-# Covers local marker isolation, container activation, retained attestation admission, affected-workspace repair guidance, attachment preparation, native commands, chat steering, early provisioning, restricted and nested ACP spawning, persisted ACP turns, missing inherited cwd markers, and sandbox copy ordering.
+531
+# Covers local marker isolation, container activation, retained attestation admission, affected-workspace repair guidance, attachment preparation, native commands, chat steering, early provisioning, restricted and nested ACP spawning, persisted ACP turns, missing inherited cwd markers, damaged sibling claims, and sandbox copy ordering.

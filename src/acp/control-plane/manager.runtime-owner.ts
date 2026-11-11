@@ -13,9 +13,12 @@ import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
 } from "../../infra/startup-maintenance-required.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import type { AcpSessionTarget } from "./manager.types.js";
+
+const log = createSubsystemLogger("acp/control-plane");
 
 /** Old backends can isolate qualified keys, but silently ignore an added owner field. */
 export function assertAcpRuntimeOwnerSupport(runtime: AcpRuntime, target: AcpSessionTarget): void {
@@ -64,9 +67,10 @@ export function assertAcpWorkspaceMigrationReady(
     if (findStartupMaintenanceRequiredError(error)?.kind !== "legacy-workspace") {
       throw error;
     }
+    log.warn("ACP working directory needs workspace state repair", { error: String(error) });
     throw new StartupMaintenanceRequiredError(
       "legacy-workspace",
-      "This agent's workspace needs migration. Ask the gateway operator to run `openclaw doctor --fix`.",
+      "The ACP working directory needs repair. Ask the gateway operator to inspect its path in the Gateway log. Run `openclaw doctor --fix` after ensuring that directory is configured as a workspace.",
     );
   }
 }

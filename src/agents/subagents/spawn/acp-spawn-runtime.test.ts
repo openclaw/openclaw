@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { resolveRuntimeCwdForAcpSpawn } from "./acp-spawn-runtime.js";
+import { formatAcpSpawnCwdError, resolveRuntimeCwdForAcpSpawn } from "./acp-spawn-runtime.js";
 
 it("leaves an explicit external cwd to its owner", async () => {
   await withOpenClawTestState({ layout: "state-only" }, async (state) => {
@@ -31,13 +31,13 @@ it("leaves an explicit external cwd to its owner", async () => {
         managedWorkspaceDir: managed,
       }),
     ).rejects.toMatchObject({ kind: "legacy-workspace" });
-    await expect(
-      resolveRuntimeCwdForAcpSpawn({
-        resolvedCwd: managedChild,
-        explicitCwd: managedChild,
-        managedWorkspaceDir: managed,
-      }),
-    ).rejects.toMatchObject({ kind: "legacy-workspace" });
+    const failure = await resolveRuntimeCwdForAcpSpawn({
+      resolvedCwd: managedChild,
+      explicitCwd: managedChild,
+      managedWorkspaceDir: managed,
+    }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ kind: "legacy-workspace" });
+    expect(formatAcpSpawnCwdError(failure, false)).toContain("Gateway log");
     await expect(
       resolveRuntimeCwdForAcpSpawn({
         resolvedCwd: restrictedChild,

@@ -313,6 +313,22 @@ describe("legacy workspace Doctor migration", () => {
     expect(assertReady).not.toThrow();
   });
 
+  it("keeps activation blocked when a damaged sibling claim escapes turn admission", async () => {
+    const siblingPath = `${context.workspaceDir}.attested`;
+    const claimPath = claimPathFor(siblingPath);
+    await write(claimPath, "damaged claim\n");
+    const env = {
+      ...context.env,
+      OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER: path.join(context.homeDir, "activation-capture"),
+    };
+
+    expect(assertReady).not.toThrow();
+    const result = await migrate({ ...context, env });
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warningDisposition).toBeUndefined();
+    expect(await fsp.readFile(claimPath, "utf8")).toBe("damaged claim\n");
+  });
+
   it("rejects attestation beneath a symlinked parent", async () => {
     const externalDir = path.join(context.homeDir, "external-state");
     const identity = workspaceIdentity();

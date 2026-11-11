@@ -547,10 +547,15 @@ export async function migrateLegacyWorkspaceState(params: {
         });
         changes.push(...result.changes);
         warnings.push(...result.warnings);
-        // Configured setup and sibling sources are rooted at their parent; reserved state is not.
+        // State-owned refusals and damaged claims unseen by the turn gate block activation.
         if (
           result.warnings.length > 0 &&
-          (source.workspaceDir === undefined || source.rootDir !== path.dirname(source.sourcePath))
+          (source.workspaceDir === undefined ||
+            source.rootDir !== path.dirname(source.sourcePath) ||
+            (source.kind === "attestation" &&
+              pathMayExistSync(`${source.sourcePath}${CLAIM_SUFFIX}`) &&
+              !legacyWorkspaceSiblingAttestationMayExist(source.sourcePath) &&
+              !legacyWorkspaceSiblingAttestationMayExist(`${source.sourcePath}${CLAIM_SUFFIX}`)))
         ) {
           stateOwnedSourceRefused = true;
         }

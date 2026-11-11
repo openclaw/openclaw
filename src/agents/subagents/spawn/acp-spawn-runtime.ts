@@ -17,6 +17,7 @@ import {
 } from "../../../infra/outbound/session-binding-service.js";
 import { isPathInside } from "../../../infra/path-guards.js";
 import { findStartupMaintenanceRequiredError } from "../../../infra/startup-maintenance-required.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveAgentConfig } from "../../agent-scope.js";
 import { splitTrailingAuthProfile } from "../../model-ref-profile.js";
 import {
@@ -32,6 +33,7 @@ import { splitModelRef } from "./subagent-spawn-plan.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 
 const ACP_RUNTIME_TIMEOUT_MAX_SECONDS = 24 * 60 * 60;
+const log = createSubsystemLogger("agents/acp-spawn");
 
 export async function resolveRuntimeCwdForAcpSpawn(params: {
   resolvedCwd?: string;
@@ -78,7 +80,8 @@ export async function resolveRuntimeCwdForAcpSpawn(params: {
 
 export function formatAcpSpawnCwdError(error: unknown, senderRestricted: boolean): string {
   if (findStartupMaintenanceRequiredError(error)?.kind === "legacy-workspace") {
-    return "This agent's workspace needs migration. Ask the gateway operator to run `openclaw doctor --fix`.";
+    log.warn("ACP working directory needs workspace state repair", { error: String(error) });
+    return "The ACP working directory needs repair. Ask the gateway operator to inspect its path in the Gateway log. Run `openclaw doctor --fix` after ensuring that directory is configured as a workspace.";
   }
   return senderRestricted ? "Restricted session root unavailable." : formatErrorMessage(error);
 }
