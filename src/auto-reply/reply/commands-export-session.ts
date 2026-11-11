@@ -133,7 +133,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   const entries = rawEntries.map((fileEntry) => {
     const node = tree.byId.get(fileEntry.id);
     return node && fileEntry.parentId !== node.parentId
-      ? { ...fileEntry, parentId: node.parentId }
+      ? Object.assign({}, fileEntry, { parentId: node.parentId })
       : fileEntry;
   });
   const leafId = tree.leafId;
