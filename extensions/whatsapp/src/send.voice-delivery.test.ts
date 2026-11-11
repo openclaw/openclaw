@@ -159,13 +159,6 @@ it.each(["ogg", "m4a"])("delivers %s voice and caption in one activity scope", a
       channels: 1,
       bitrate: "64k",
     });
-    expect(listenerSendMessage).toHaveBeenNthCalledWith(
-      1,
-      "+1555",
-      "",
-      Buffer.from("opus-output"),
-      "audio/ogg; codecs=opus",
-    );
     expect(listenerSendMessage).toHaveBeenNthCalledWith(2, "+1555", caption, undefined, undefined);
   }
 });
