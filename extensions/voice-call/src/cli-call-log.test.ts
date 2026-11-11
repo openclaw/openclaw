@@ -107,7 +107,7 @@ it.each(["drain", "error"] as const)(
   async (event) => {
     fs.writeFileSync(file, event === "error" ? '{"seq":0}\n' : '{"seq":0}\n{"seq":1}\n');
     const drainListeners = process.stdout.listenerCount("drain");
-    const blocked = createDeferred();
+    const blocked = createDeferred<void>();
     const failed = new Error("output pipe failed");
     let writable = false;
     stdout.mockImplementation((chunk) => {
@@ -212,8 +212,8 @@ it.each(["snapshots", "SIGINT", "SIGTERM", "read"] as const)(
     file = path.join(workspace.dir, "calls.jsonl");
     const first = { callId: "first", state: "completed" },
       second = { callId: "second", state: "completed" };
-    const reading = createDeferred(),
-      release = createDeferred();
+    const reading = createDeferred<void>(),
+      release = createDeferred<void>();
     if (mode === "read") {
       historyMock.mockImplementationOnce(async () => {
         reading.resolve();
