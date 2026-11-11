@@ -15,10 +15,6 @@ import {
   hasManagedOutgoingAssistantContent,
 } from "../gateway/server-methods/chat-assistant-content.js";
 import {
-  captureWebchatReplyMediaScope,
-  prepareWebchatReplyMediaForDisplay,
-} from "../gateway/server-methods/chat-reply-media.js";
-import {
   createStructuredOutboundPayloadPlan,
   projectOutboundPayloadPlanForMirror,
   resolveOutboundPayloadMirrorText,
@@ -27,6 +23,7 @@ import { collectReplyMediaEntries } from "../infra/outbound/reply-media-entries.
 import { hasReplyChannelData } from "../interactive/payload.js";
 import { logWarn } from "../logger.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
+import { getAgentScopedMediaLocalRootsForSources } from "../media/local-roots.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import {
   commitBackgroundResultToSession,
@@ -82,8 +79,7 @@ export async function commitBackgroundPayloadsToSession(
           sessionKey: params.sessionKey,
           config: params.config,
           payloads,
-          signal: params.signal,
-          assertCurrent: params.assertCurrent,
+          mediaSources: mirror.mediaUrls,
         });
         return hasAssistantDisplayMediaContent(preparedContent) ? preparedContent : undefined;
       },
@@ -140,8 +136,7 @@ async function buildResultDisplayContent(params: {
   sessionKey: string;
   config: OpenClawConfig;
   payloads: readonly ReplyPayload[];
-  signal?: AbortSignal;
-  assertCurrent?: () => void;
+  mediaSources: readonly string[];
 }): Promise<Record<string, unknown>[]> {
   const documentReferences = new Map<string, Record<string, unknown>>();
   const displayPayloads = params.payloads.map((payload) => {
@@ -182,32 +177,17 @@ async function buildResultDisplayContent(params: {
       attachments: media.map(({ attachment }) => attachment ?? {}),
     });
   });
-  if (!displayPayloads.some((payload) => collectReplyMediaEntries(payload).length > 0)) {
-    const { assistantContent } = await buildAssistantReplyContent({
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      payloads: displayPayloads,
-      includeSensitiveMedia: false,
-    });
-    return [...(assistantContent ?? []), ...documentReferences.values()];
-  }
-  // Background results use the same workspace and live read authority as normal replies.
-  const scope = await captureWebchatReplyMediaScope({
-    cfg: params.config,
-    agentId: params.agentId,
+  const { assistantContent } = await buildAssistantReplyContent({
     sessionKey: params.sessionKey,
-    assertCurrent: params.assertCurrent,
+    agentId: params.agentId,
+    payloads: displayPayloads,
+    managedMediaLocalRoots: getAgentScopedMediaLocalRootsForSources({
+      cfg: params.config,
+      agentId: params.agentId,
+      mediaSources: [...params.mediaSources],
+    }),
+    includeSensitiveMedia: false,
+    onManagedMediaPrepareError: (message) => logWarn(`Result media embedding skipped: ${message}`),
   });
-  try {
-    const { assistantContent } = await prepareWebchatReplyMediaForDisplay({
-      scope,
-      inputs: displayPayloads.map((payload) => ({ kind: "raw", payload })),
-      abortSignal: params.signal,
-      includeSensitiveMedia: false,
-      logGateway: { warn: (message) => logWarn(message) },
-    });
-    return [...(assistantContent ?? []), ...documentReferences.values()];
-  } finally {
-    scope.release();
-  }
+  return [...(assistantContent ?? []), ...documentReferences.values()];
 }
