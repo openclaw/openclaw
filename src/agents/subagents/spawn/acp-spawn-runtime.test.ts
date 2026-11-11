@@ -9,8 +9,10 @@ it("leaves an explicit external cwd to its owner", async () => {
     const cwd = state.path("external");
     const managed = state.path("managed");
     const managedChild = path.join(managed, "child");
+    const restrictedChild = path.join(managed, "restricted-child");
     await fs.mkdir(cwd);
     await fs.mkdir(managedChild, { recursive: true });
+    await fs.mkdir(restrictedChild);
     const source = path.join(cwd, "openclaw-workspace-state.json");
     await fs.writeFile(source, "not-json");
     await fs.writeFile(path.join(managed, "openclaw-workspace-state.json"), "not-json");
@@ -29,6 +31,22 @@ it("leaves an explicit external cwd to its owner", async () => {
         managedWorkspaceDir: managed,
       }),
     ).rejects.toMatchObject({ kind: "legacy-workspace" });
+    await expect(
+      resolveRuntimeCwdForAcpSpawn({
+        resolvedCwd: managedChild,
+        explicitCwd: managedChild,
+        managedWorkspaceDir: managed,
+      }),
+    ).rejects.toMatchObject({ kind: "legacy-workspace" });
+    await expect(
+      resolveRuntimeCwdForAcpSpawn({
+        resolvedCwd: restrictedChild,
+        managedWorkspaceDir: managed,
+        requireExistingCwd: true,
+      }),
+    ).rejects.toMatchObject({ kind: "legacy-workspace" });
+    await fs.rm(path.join(managed, "openclaw-workspace-state.json"));
+    await fs.writeFile(path.join(managedChild, "openclaw-workspace-state.json"), "not-json");
     await expect(
       resolveRuntimeCwdForAcpSpawn({
         resolvedCwd: managedChild,

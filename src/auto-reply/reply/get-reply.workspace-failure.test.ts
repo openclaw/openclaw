@@ -60,6 +60,37 @@ it.each([
   }
 });
 
+it("returns repair guidance before a native command uses a retained workspace", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only" });
+  const source = state.path("workspace", "openclaw-workspace-state.json");
+  try {
+    await fs.mkdir(state.workspaceDir, { recursive: true });
+    await fs.writeFile(source, "not-json");
+    const command = "/export-session session.html";
+    const reply = await getReplyFromConfig(
+      buildGetReplyCtx({
+        Body: command,
+        CommandBody: command,
+        CommandAuthorized: true,
+        CommandTurn: {
+          kind: "native",
+          source: "native",
+          authorized: true,
+          commandName: "export-session",
+          body: command,
+        },
+      }),
+      undefined,
+      { agents: { defaults: { workspace: state.workspaceDir } } },
+    );
+    expect(reply).toMatchObject({ text: expect.stringContaining("openclaw doctor --fix") });
+    expect(JSON.stringify(reply)).not.toContain(state.workspaceDir);
+    expect(await fs.readFile(source, "utf8")).toBe("not-json");
+  } finally {
+    await state.cleanup();
+  }
+});
+
 it("rejects queued reply preparation after abort or operator revocation without workspace effects", async ({
   signal,
 }) => {

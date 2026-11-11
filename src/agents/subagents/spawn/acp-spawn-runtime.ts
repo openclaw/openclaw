@@ -10,12 +10,13 @@ import type { AcpInitializeSessionInput } from "../../../acp/control-plane/manag
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { isMissingPathError } from "../../../infra/errors.js";
+import { formatErrorMessage, isMissingPathError } from "../../../infra/errors.js";
 import {
   getSessionBindingService,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import { isPathInside } from "../../../infra/path-guards.js";
+import { findStartupMaintenanceRequiredError } from "../../../infra/startup-maintenance-required.js";
 import { resolveAgentConfig } from "../../agent-scope.js";
 import { splitTrailingAuthProfile } from "../../model-ref-profile.js";
 import {
@@ -36,29 +37,50 @@ export async function resolveRuntimeCwdForAcpSpawn(params: {
   resolvedCwd?: string;
   explicitCwd?: string;
   managedWorkspaceDir: string;
+  requireExistingCwd?: boolean;
 }): Promise<string | undefined> {
   if (!params.resolvedCwd) {
+    if (params.requireExistingCwd) {
+      throw new Error("The restricted session root is unavailable.");
+    }
     return undefined;
   }
-  if (!normalizeOptionalString(params.explicitCwd)) {
+  const explicitCwd = normalizeOptionalString(params.explicitCwd);
+  if (!explicitCwd || params.requireExistingCwd) {
     try {
       await fs.access(params.resolvedCwd);
     } catch (error) {
-      if (isMissingPathError(error)) {
+      if (!params.requireExistingCwd && isMissingPathError(error)) {
         return undefined;
       }
       throw error;
     }
     assertNoUnmigratedWorkspaceState({ workspaceDir: params.resolvedCwd });
-  } else if (
+  }
+  if (
     isPathInside(
       resolveCanonicalWorkspacePath(params.managedWorkspaceDir),
       resolveCanonicalWorkspacePath(params.resolvedCwd),
     )
   ) {
     assertNoUnmigratedWorkspaceState({ workspaceDir: params.managedWorkspaceDir });
+    if (
+      explicitCwd &&
+      !params.requireExistingCwd &&
+      resolveCanonicalWorkspacePath(params.resolvedCwd) !==
+        resolveCanonicalWorkspacePath(params.managedWorkspaceDir)
+    ) {
+      assertNoUnmigratedWorkspaceState({ workspaceDir: params.resolvedCwd });
+    }
   }
   return params.resolvedCwd;
+}
+
+export function formatAcpSpawnCwdError(error: unknown, senderRestricted: boolean): string {
+  if (findStartupMaintenanceRequiredError(error)?.kind === "legacy-workspace") {
+    return "This agent's workspace needs migration. Ask the gateway operator to run `openclaw doctor --fix`.";
+  }
+  return senderRestricted ? "Restricted session root unavailable." : formatErrorMessage(error);
 }
 
 type AcpSpawnInitializedSession = Awaited<

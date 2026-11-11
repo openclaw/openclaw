@@ -7,6 +7,7 @@ import {
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
 import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
+import { assertNoUnmigratedWorkspaceState } from "../../agents/workspace-legacy-state.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -134,6 +135,8 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   if (!shouldRunNativeSlashCommandFastPath(params.ctx)) {
     return { handled: false };
   }
+
+  assertNoUnmigratedWorkspaceState({ workspaceDir: params.workspaceDir });
 
   const sessionState = await initFastReplySessionState(params);
   if (params.commandAuthorized) {

@@ -290,28 +290,35 @@ async function resolveReplyFromConfig(
       return reply;
     };
 
-    const nativeSlashCommandFastReply = await traceGetReplyPhase(
-      "reply.native_slash_command_fast_path",
-      () =>
-        maybeResolveNativeSlashCommandFastReply({
-          ctx: finalized,
-          cfg,
-          agentId,
-          agentDir,
-          agentCfg,
-          commandAuthorized: finalized.CommandAuthorized,
-          defaultProvider,
-          defaultModel,
-          aliasIndex,
-          provider,
-          model,
-          workspaceDir: workspaceDirForNativeCommand,
-          preparedModelCatalog,
-          typing,
-          opts: optsWithSkillFilter,
-          skillFilter: mergedSkillFilter,
-        }),
-    );
+    let nativeSlashCommandFastReply: Awaited<
+      ReturnType<typeof maybeResolveNativeSlashCommandFastReply>
+    >;
+    try {
+      nativeSlashCommandFastReply = await traceGetReplyPhase(
+        "reply.native_slash_command_fast_path",
+        () =>
+          maybeResolveNativeSlashCommandFastReply({
+            ctx: finalized,
+            cfg,
+            agentId,
+            agentDir,
+            agentCfg,
+            commandAuthorized: finalized.CommandAuthorized,
+            defaultProvider,
+            defaultModel,
+            aliasIndex,
+            provider,
+            model,
+            workspaceDir: workspaceDirForNativeCommand,
+            preparedModelCatalog,
+            typing,
+            opts: optsWithSkillFilter,
+            skillFilter: mergedSkillFilter,
+          }),
+      );
+    } catch (error) {
+      return rejectUnavailableWorkspacePreparation(error);
+    }
     if (nativeSlashCommandFastReply.handled) {
       logResolverTiming("completed", "native_slash_command_fast_path");
       return finishCommandTurn({

@@ -19,7 +19,6 @@ import {
 } from "../../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../../gateway/session-utils-store-worker.js";
-import { formatErrorMessage } from "../../../infra/errors.js";
 import {
   resolveEventSessionKeyForPolicy,
   resolveEventSessionRoutingPolicy,
@@ -29,7 +28,6 @@ import {
   listSessionBindingsBySessionAsync,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
-import { findStartupMaintenanceRequiredError } from "../../../infra/startup-maintenance-required.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { isIncognitoSessionKey, normalizeOptionalAgentId } from "../../../routing/session-key.js";
 import { recordSessionCreated } from "../../../sessions/session-created.js";
@@ -91,6 +89,7 @@ import {
 } from "./acp-spawn-result.js";
 import {
   bindPreparedAcpThread,
+  formatAcpSpawnCwdError,
   initializeAcpSpawnRuntime,
   resolveAcpSpawnRuntimeOptions,
   resolveRuntimeCwdForAcpSpawn,
@@ -373,13 +372,12 @@ export async function spawnAcpDirect(
       resolvedCwd,
       explicitCwd: params.cwd,
       managedWorkspaceDir: resolveAgentWorkspaceDir(cfg, ownerAgentId),
+      requireExistingCwd: senderRestricted,
     });
   } catch (error) {
     return buildAcpSpawnError(
       "cwd_resolution_failed",
-      findStartupMaintenanceRequiredError(error)?.kind === "legacy-workspace"
-        ? "This agent's workspace needs migration. Ask the gateway operator to run `openclaw doctor --fix`."
-        : formatErrorMessage(error),
+      formatAcpSpawnCwdError(error, senderRestricted),
     );
   }
 

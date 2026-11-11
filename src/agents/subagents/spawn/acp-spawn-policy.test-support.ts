@@ -1,4 +1,6 @@
+import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { spawnAcpDirect } from "./acp-spawn.js";
@@ -51,6 +53,23 @@ export function registerAcpSpawnPolicyTests(fixture: {
         inheritedToolDeny: ["browser"],
       }),
     );
+  });
+
+  it("refuses a restricted ACP helper when its pinned root has disappeared", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-missing-root-"));
+    await fs.rmdir(root);
+    const result = await fixture.spawn(
+      { task: "inspect", agentId: "codex" },
+      {
+        agentSessionKey: "agent:codex:main",
+        inheritedToolPolicySource: "sender",
+        workspaceDir: root,
+        sessionPermissionPolicy: { mode: "full", root },
+      },
+    );
+    expect(result).toMatchObject({ status: "error", errorCode: "cwd_resolution_failed" });
+    expect(JSON.stringify(result)).not.toContain(root);
+    expect(fixture.initializeSessionMock).not.toHaveBeenCalled();
   });
 
   it("refuses ACP when a restricted helper's guarded root cannot be enforced", async () => {
