@@ -491,6 +491,8 @@ def checkout_harness(sha):
         "scripts/lib/changed-path-facts.mjs",
         "scripts/lib/ci-test-observations.mjs",
         "scripts/lib/ci-ios-smoke-plan.mjs",
+        "scripts/lib/ci-node-test-capacity.mts",
+        "scripts/lib/vitest-shard-metadata.mts",
         "scripts/lib/ci-skills-python-plan.mjs",
         "scripts/lib/release-context.mjs",
         "scripts/lib/release-version.mjs",

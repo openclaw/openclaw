@@ -74,9 +74,9 @@ async function startAdvisor(everyToolCalls = 1, reply = "NO_CHANGE", runTrigger 
       expect(forkSession).toHaveBeenCalledTimes(reviews);
     }
   };
-  const startRun = async (runId = "run-1", trigger = "user") => {
+  const startRun = async (runId = "run-1", trigger = "user", sessionKey = "agent:main:main") => {
     const beforeReply = on.mock.calls[0]?.[1] as Hook | undefined;
-    await beforeReply?.({}, { sessionKey: "agent:main:main", runId, trigger });
+    await beforeReply?.({}, { sessionKey, runId, trigger });
     await send("lifecycle", "start", {}, undefined, runId);
   };
   const tool = async (reviews?: number) => {
@@ -109,6 +109,17 @@ it("reviews complete tools at the threshold, rechecking queued and native calls"
   await run.tool(1);
   await run.send("tool", "result", native, 1);
   await run.send("codex_app_server.item", "completed", native, 2);
+  // The same run's next review is told the delivered advice so it does not repeat it.
+  expect(run.forkSession.mock.calls[1]?.[0].message).toContain('"Stop polling." Do not repeat it.');
+  await run.startRun("run-2");
+  for (const [toolCallId, reviews] of [
+    ["next-1", 2],
+    ["next-2", 3],
+  ] as const) {
+    await run.send("tool", "start", { toolCallId }, undefined, "run-2");
+    await run.send("tool", "result", { toolCallId }, reviews, "run-2");
+  }
+  expect(run.forkSession.mock.calls[2]?.[0].message).not.toContain("Do not repeat it.");
 });
 
 it.each([
@@ -141,10 +152,13 @@ it.each(["Looks fine to me.", "CORRECTION", "NO_CHANGE"])(
   },
 );
 
-it("ignores non-user runs and does not review at run end", async () => {
+it("ignores non-user and subagent runs and does not review at run end", async () => {
   const run = await startAdvisor(1, "NO_CHANGE", "cron");
   await run.tool();
   await run.send("lifecycle", "end", {}, 0);
+  await run.startRun("run-sub", "user", "agent:main:subagent:child");
+  await run.send("tool", "start", { toolCallId: "sub" }, undefined, "run-sub");
+  await run.send("tool", "result", { toolCallId: "sub" }, 0, "run-sub");
   await run.startRun("run-2");
   await run.send("lifecycle", "end", {}, 0, "run-2");
 });
