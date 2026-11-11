@@ -129,6 +129,44 @@ it.each(routes)("preserves Android build JVM options for $name", (route) => {
   expect(readFileSync(calls, "utf8").trim()).toBe("-Dfixture=true");
 });
 
+it.each(routes)("routes real-Gateway UI for $name", (route) => {
+  const job = readCiWorkflow().jobs["checks-ui-e2e-real-gateway"];
+  const context = {
+    eventName: "pull_request" as const,
+    repository: "openclaw/openclaw",
+    headRepository: "openclaw/openclaw",
+    runAttempt: route.attempt,
+    runnerBackend: route.backend,
+    preflightOutputs: {
+      effective_runner_backend: route.backend,
+      placement_runner_backend: route.backend === "boat" ? "hybrid" : route.backend,
+    },
+  };
+  for (const frozenTarget of ["false", "true", ""]) {
+    const preflightOutputs = { ...context.preflightOutputs, frozen_target: frozenTarget };
+    const runner =
+      route.backend === "hybrid"
+        ? frozenTarget === "false"
+          ? "blacksmith-4vcpu-ubuntu-2404"
+          : "blacksmith-8vcpu-ubuntu-2404"
+        : "ubuntu-24.04";
+    expect(evaluateWorkflowExpression(job["runs-on"], { ...context, preflightOutputs })).toBe(
+      runner,
+    );
+    expect(
+      evaluateWorkflowExpression(job["runs-on"], {
+        ...context,
+        eventName: "workflow_dispatch",
+        dispatchId: "full-release-validation-fixture",
+        releaseRunnerGroup: "fixture-group",
+        preflightOutputs: { ...preflightOutputs, ci_qualification: "true" },
+      }),
+    ).toEqual(
+      route.backend === "boat" ? "ubuntu-24.04" : { group: "fixture-group", labels: runner },
+    );
+  }
+});
+
 it.each(["push", "pull_request", "workflow_dispatch"] as const)(
   "keeps full Boat lint stripes separate for %s",
   (eventName) => {

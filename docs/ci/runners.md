@@ -321,8 +321,10 @@ Current-target `build-artifacts` uses the existing 16-class. A [controlled Testb
 
 Existing recommendation-based promotions from the 8-class remain for `checks-node-compact-large-5` and `checks-node-compact-large-9`. Extension bundles follow the planner's runner metadata: the former bundle-16/bundle-25 overrides would attach old recommendations to different work after compaction. The former 32-to-16 overrides for `checks-node-compact-small-3`, `checks-node-compact-small-4`, and `checks-node-compact-small-10` are removed so these rows retain their planner-owned parallel or tooling capacity. Numbered bins can contain different work across profiles and revisions; the retained compact recommendations use a 24-hour window and still need ownership-based replacement when those bins change. A later recommendation identified CPU saturation for `build-artifacts` on the 16-class. Current complete-job duration and memory headroom still need measurement; the earlier controlled proof retains its original source scope.
 
-Current-target `checks-ui-e2e-real-gateway` rows use the 16-class. Frozen or
-unclassified targets retain the 32-class. The
+In Boat mode, `checks-ui-e2e-real-gateway` runs directly on GitHub-hosted
+`ubuntu-24.04`, including full release validation with a configured runner group.
+Other backends retain their routing: current targets use the 16-class, while
+frozen or unclassified targets retain the 32-class. The
 planner balances serial fixtures and audited parallel standalone files in the
 first row; the second owns the remaining parallel files. The first row also owns
 the desktop transport proof when selected by full manual/release validation or
@@ -330,7 +332,7 @@ a direct desktop-spec edit. Both rows retain their existing worker limits, build
 ordering, hosted fallbacks, and test deadlines. Runtime-only preparation leaves
 SDK declaration generation and validation with `build-artifacts`. The split adds
 one job and possible registration when the lane is selected, while ordinary PRs
-continue to omit it. Backend routing is unchanged. Exact-head
+continue to omit it. Exact-head
 CI measures complete row walls, including setup and transport proof.
 
 An earlier 16-class attempt exceeded the 20-minute Blacksmith budget.
