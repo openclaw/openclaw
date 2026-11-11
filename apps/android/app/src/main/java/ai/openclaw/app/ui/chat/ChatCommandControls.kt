@@ -6,7 +6,8 @@ import java.util.Locale
 internal fun slashCommandQuery(input: String): String? {
   val trimmed = input.trimStart()
   if (!trimmed.startsWith("/")) return null
-  val token = trimmed.drop(1).takeWhile { !it.isWhitespace() }
+  val token = trimmed.drop(1)
+  if (token.any { it.isWhitespace() }) return null
   return token.lowercase(Locale.US)
 }
 

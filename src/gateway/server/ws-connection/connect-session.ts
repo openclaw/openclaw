@@ -257,13 +257,15 @@ export async function attachAuthenticatedGatewayConnect(
   const scopesStartedAt = performance.now();
   const effectiveScopes = remoteIngressPrincipal
     ? deviceScopes
-    : resolveEffectiveConnectionScopes({
-        role,
-        deviceScopes,
-        verifiedIdentity: state.authPolicy.verifiedIdentity,
-        identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
-        upgradeReq: context.handler.upgradeReq,
-      });
+    : authResult.delegation
+      ? [...authResult.delegation.scopes]
+      : resolveEffectiveConnectionScopes({
+          role,
+          deviceScopes,
+          verifiedIdentity: state.authPolicy.verifiedIdentity,
+          identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
+          upgradeReq: context.handler.upgradeReq,
+        });
   // OpenClaw ID members are capped by their membership role, whatever the device requested.
   const openclawIdRolePolicy =
     role === "operator" ? openclawIdTunnelRolePolicy(openclawIdPrincipal) : undefined;
@@ -556,8 +558,8 @@ export async function attachAuthenticatedGatewayConnect(
     if (!remoteIngressPrincipal) {
       prepareGatewayConnectOperatorAccess(nextClient);
     }
-  } catch {
-    await rejectGatewayConnectOperatorAccess(context);
+  } catch (error) {
+    await rejectGatewayConnectOperatorAccess(context, error);
     return;
   }
   if (!profileLifecycle.isCurrent(preparedProfile)) {
