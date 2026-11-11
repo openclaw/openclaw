@@ -58,7 +58,7 @@ jobs:
             --openclaw-npm-resume-run-id "$OPENCLAW_NPM_RESUME_RUN_ID"
       - name: Retain publication dispatch receipt
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-button-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -94,7 +94,7 @@ jobs:
             --request "$RUNNER_TEMP/release-request.json" --output "$RUNNER_TEMP/release-button"
       - name: Retain readback evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-button-verification-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/release-button/clawhub-public-verification/evidence.json
@@ -225,7 +225,7 @@ jobs:
 
       - name: Retain Linux updater continuity evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux-updater-continuity-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/linux-updater-carry
@@ -277,7 +277,7 @@ jobs:
           echo "- Legacy Linux bridge: degraded; dispatch acceptance is not mirror success." >> "$GITHUB_STEP_SUMMARY"
       - name: Retain Linux mirror dispatch evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux-mirror-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/linux-mirror-dispatch.json
@@ -305,7 +305,7 @@ jobs:
           node-version: "24.22.1"
       - name: Create Linux release request token
         id: linux_request_token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -336,7 +336,7 @@ jobs:
           echo "- Linux: request unconfirmed; publication is pending. Inspect Linux App Release Request and Linux App Release before redispatching." >> "$GITHUB_STEP_SUMMARY"
       - name: Retain Linux request evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux-release-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/linux-dispatch.json
@@ -395,7 +395,7 @@ jobs:
           echo "- Windows Hub: dispatch failed; inspect this job before manual recovery." >> "$GITHUB_STEP_SUMMARY"
       - name: Upload Windows dispatch evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-release-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/windows-dispatch.json

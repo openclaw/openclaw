@@ -67,7 +67,7 @@ jobs:
             .github/workflows/stale.yml
       - name: Test PR lifecycle policy
         run: node --test test/scripts/stale-pr-lifecycle.node.mjs
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: app-token
         continue-on-error: true
         with:
@@ -76,7 +76,7 @@ jobs:
           permission-actions: read
           permission-issues: write
           permission-pull-requests: write
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: app-token-fallback
         continue-on-error: true
         with:
@@ -150,7 +150,7 @@ jobs:
       pull-requests: write
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: app-token
         continue-on-error: true
         with:
@@ -159,7 +159,7 @@ jobs:
           permission-actions: read
           permission-issues: write
           permission-pull-requests: write
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: app-token-fallback
         continue-on-error: true
         with:
@@ -297,7 +297,7 @@ jobs:
       issues: write
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: app-token
         continue-on-error: true
         with:
@@ -305,7 +305,7 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           permission-issues: write
           permission-metadata: read
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: app-token-fallback
         continue-on-error: true
         with:
@@ -483,7 +483,7 @@ jobs:
       pull-requests: write
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: app-token
         with:
           app-id: "2971289"
@@ -811,7 +811,7 @@ jobs:
       issues: write
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: app-token
         with:
           app-id: "2729701"

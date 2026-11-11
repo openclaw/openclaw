@@ -723,7 +723,7 @@ jobs:
             "openclaw-${release_version}-stable-main-closeout.json.sha256"
 
       - name: Upload closeout workflow evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: openclaw-stable-main-closeout-${{ needs.resolve.outputs.tag }}
           path: ${{ runner.temp }}/openclaw-stable-main-closeout

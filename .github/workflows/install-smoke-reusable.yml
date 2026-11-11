@@ -491,7 +491,7 @@ jobs:
 
       - name: Upload root Dockerfile image artifact
         id: image_artifact_upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.image_artifact.outputs.artifact_name }}
           path: ${{ steps.image_artifact.outputs.artifact_path }}
@@ -633,7 +633,7 @@ jobs:
             "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
       - name: Download root Dockerfile image artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           artifact-ids: ${{ needs.root_dockerfile_image.outputs.artifact_id }}
           path: ${{ runner.temp }}/install-smoke-root-image
@@ -931,7 +931,7 @@ jobs:
 
       - name: Upload candidate payload artifact
         id: payload_upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.payload.outputs.artifact_name }}
           path: ${{ steps.payload.outputs.artifact_path }}
@@ -1015,7 +1015,7 @@ jobs:
 
       - name: Upload installer smoke image artifact
         id: image_artifact_upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.image_artifact.outputs.artifact_name }}
           path: ${{ steps.image_artifact.outputs.artifact_path }}
@@ -1097,7 +1097,7 @@ jobs:
 
       - name: Upload installer non-root image artifact
         id: image_artifact_upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.image_artifact.outputs.artifact_name }}
           path: ${{ steps.image_artifact.outputs.artifact_path }}
@@ -1176,7 +1176,7 @@ jobs:
 
       - &candidate_payload_download_step
         name: Download candidate payload artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           artifact-ids: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_id }}
           path: ${{ runner.temp }}/install-smoke-candidate-payload
@@ -1236,7 +1236,7 @@ jobs:
             "$ARTIFACT_DIGEST" "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
       - name: Download installer update image artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           artifact-ids: ${{ needs.installer_smoke_update_image.outputs.artifact_id }}
           path: ${{ runner.temp }}/install-smoke-update-image
@@ -1435,7 +1435,7 @@ jobs:
             "$ARTIFACT_DIGEST" "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
       - name: Download installer non-root image artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           artifact-ids: ${{ needs.installer_smoke_nonroot_image.outputs.artifact_id }}
           path: ${{ runner.temp }}/install-smoke-nonroot-image
@@ -1655,7 +1655,7 @@ jobs:
 
       - name: Upload Bun-only runtime smoke artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bun-only-runtime-smoke-${{ github.run_attempt }}
           # Evidence only; the installed package trees and state under this directory are hundreds of MB.

@@ -70,7 +70,7 @@ jobs:
           node scripts/openclaw-release-ready.mjs dispatch-prepare "${args[@]}"
       - name: Retain exact preparation dispatches
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-preparation-request-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/release-ready/request.json
@@ -121,7 +121,7 @@ jobs:
             --output "$RUNNER_TEMP/release-ready"
       - name: Upload immutable readiness receipt
         id: artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.seal.outputs.artifact_name }}
           path: ${{ runner.temp }}/release-ready/release-ready.json
@@ -171,7 +171,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/release-qualification-admission.mjs
       - name: Upload immutable qualification admission
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.admission.outputs.artifact_name }}
           path: ${{ runner.temp }}/qualification-admission/qualification-admission.json

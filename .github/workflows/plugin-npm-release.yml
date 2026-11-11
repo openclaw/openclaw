@@ -373,7 +373,7 @@ jobs:
 
       - name: Upload resolved npm publication plan
         if: inputs.defer_registry_verification && inputs.release_publish_run_id != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: plugin-npm-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/npm-publication-plan.json
@@ -752,7 +752,7 @@ jobs:
 
       - name: Upload immutable npm preflight artifact
         id: upload_preflight_artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.preflight_artifact.outputs.name }}
           path: ${{ steps.preflight_artifact.outputs.dir }}
@@ -801,7 +801,7 @@ jobs:
             src/plugins
 
       - name: Download immutable npm preflight artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}
           path: ${{ runner.temp }}/plugin-npm-preflight-readback
@@ -1227,7 +1227,7 @@ jobs:
           echo "artifact_path=$output_dir" >> "$GITHUB_OUTPUT"
 
       - name: Upload immutable plugin npm preflight evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.preflight_evidence.outputs.artifact_name }}
           path: ${{ steps.preflight_evidence.outputs.artifact_path }}/*
@@ -1301,7 +1301,7 @@ jobs:
 
       - name: Upload qualified npm preparation manifest
         id: upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.seal.outputs.artifact_name }}
           path: ${{ runner.temp }}/plugin-npm-prepared/plugin-npm-prepared.json
@@ -1694,7 +1694,7 @@ jobs:
 
       - name: Upload consumed npm qualification
         if: inputs.defer_registry_verification && inputs.release_publish_run_id != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: plugin-npm-qualification-${{ matrix.plugin.extensionId }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/${{ matrix.plugin.extensionId }}-npm-qualification.json
@@ -1798,7 +1798,7 @@ jobs:
 
       - name: Download stable npm bootstrap approval
         if: ${{ steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' && steps.publication_evidence.outputs.publish_tag == 'latest' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: npm-stable-bootstrap-approval-${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}
           path: ${{ runner.temp }}/npm-stable-bootstrap-approval

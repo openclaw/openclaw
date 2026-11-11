@@ -202,7 +202,7 @@ jobs:
         run: node scripts/mantis/telegram-proof-storage.mts cleanup
       - name: Upload normalized public observations
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mantis-request-telegram-${{ github.run_id }}-1
           path: ${{ inputs.scenario == 'telegram-markdown-parser-fidelity' && '.artifacts/telegram-test-server-proof/qa-*.json' || '.artifacts/telegram-test-server-proof/*.json' }}
@@ -257,7 +257,7 @@ jobs:
           PLAN_SHA256: ${{ inputs.plan_sha256 }}
         run: node scripts/mantis/finalize-request-proof.mts "$SCENARIO"
       - name: Upload request receipt
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mantis-request-receipt-${{ github.run_id }}-1
           path: .artifacts/mantis-request-finalizer/receipt.json
