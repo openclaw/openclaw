@@ -66,14 +66,13 @@ final class MacOpenClawIDOperatorRoute {
             self.generation &+= 1
             let generation = self.generation
             let authority = MacNodeOpenClawIDRouteAuthority()
-            let task = Task { [weak self] in
-                try await Self.prepare(target: target, generation: generation, authority: authority) {
-                    Task { @MainActor [weak self] in
-                        guard let self, self.route?.authority === authority else { return }
-                        self.stop()
-                        await GatewayEndpointStore.shared.refresh()
-                    }
-                }
+            let invalidate: @Sendable () -> Void = { [weak self] in
+                guard let self else { return }
+                Task { @MainActor in await self.invalidated(authority) }
+            }
+            let task = Task {
+                try await Self.prepare(
+                    target: target, generation: generation, authority: authority, onInvalidated: invalidate)
             }
             self.route = (target.hostname, authority, task)
         }
@@ -87,6 +86,13 @@ final class MacOpenClawIDOperatorRoute {
             if self.route?.authority === route.authority { self.stop() }
             throw error
         }
+    }
+
+    /// A tunnel or proxy failure retires only the route it belongs to, then re-resolves chat.
+    private func invalidated(_ authority: MacNodeOpenClawIDRouteAuthority) async {
+        guard self.route?.authority === authority else { return }
+        self.stop()
+        await GatewayEndpointStore.shared.refresh()
     }
 
     /// Retires the route; its tunnel, proxy and trust adapter close in the background.
