@@ -70,7 +70,6 @@ export function createPdfToolInfraStub(completeMock: Mock) {
   }
 
   async function stubPdfToolInfra(
-    _agentDir: string,
     params: {
       mockLoad?: boolean;
       provider?: string;

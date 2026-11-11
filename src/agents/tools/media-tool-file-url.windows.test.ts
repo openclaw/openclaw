@@ -62,7 +62,7 @@ describe.runIf(process.platform === "win32")("host-local media tool file URLs", 
         const pdfPath = path.join(workspaceDir, "résumé document.pdf");
         await fs.writeFile(imagePath, ONE_PIXEL_PNG);
         await fs.writeFile(pdfPath, FAKE_PDF_MEDIA.buffer);
-        await stubPdfToolInfra(agentDir, { mockLoad: false });
+        await stubPdfToolInfra({ mockLoad: false });
         vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
 
         const config: OpenClawConfig = {
