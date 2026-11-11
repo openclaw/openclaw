@@ -1092,12 +1092,9 @@ extension OnboardingWizardView {
         guard self.step == .auth else { return }
         guard self.issue.needsPairing else { return }
         guard self.connectingGateway == nil else { return }
-        // The view's pairing issue is sticky; only a live pairing pause may be retried automatically,
-        // never a rate limit or rejected credential.
-        let connection = self.appModel.connection
-        guard [connection.node, connection.operator].contains(where: {
-            $0.pausedProblem?.needsPairingApproval == true
-        }) else { return }
+        // The view's pairing issue is sticky; retry automatically only while every live pause is a
+        // pairing approval, never alongside a rate limit or rejected credential.
+        guard self.appModel.connection.isPausedOnlyForPairing else { return }
 
         let now = Date()
         if let last = lastPairingAutoResumeAttemptAt, now.timeIntervalSince(last) < 6 {

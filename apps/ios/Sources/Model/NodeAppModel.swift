@@ -131,6 +131,13 @@ struct GatewayConnection: Equatable {
     var isPaused: Bool {
         self.node.pausedProblem != nil || self.operator.pausedProblem != nil
     }
+
+    /// Automatic pairing retries may run only when every pause is a pairing-approval pause; a rate
+    /// limit or rejected credential on either session waits for the user.
+    var isPausedOnlyForPairing: Bool {
+        let problems = [self.node.pausedProblem, self.operator.pausedProblem].compactMap(\.self)
+        return !problems.isEmpty && problems.allSatisfy(\.needsPairingApproval)
+    }
 }
 
 @MainActor

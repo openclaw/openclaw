@@ -35,6 +35,24 @@ import Testing
         #expect(appModel.canAutoReconnect)
     }
 
+    @Test func `automatic pairing retry waits while a credential pause is live`() throws {
+        let pairing = GatewayConnectionProblem(
+            kind: .pairingRequired,
+            owner: .gateway,
+            title: "Pairing required",
+            message: "Approve this device on the gateway.",
+            requestId: "req-mixed",
+            retryable: false,
+            pauseReconnect: true)
+        let rateLimit = try Self.rateLimitProblem()
+
+        #expect(GatewayConnection(node: .paused(pairing), operator: .connecting).isPausedOnlyForPairing)
+        #expect(GatewayConnection(node: .paused(pairing), operator: .paused(pairing)).isPausedOnlyForPairing)
+        #expect(!GatewayConnection(node: .paused(pairing), operator: .paused(rateLimit)).isPausedOnlyForPairing)
+        #expect(!GatewayConnection(node: .paused(rateLimit), operator: .idle).isPausedOnlyForPairing)
+        #expect(!GatewayConnection().isPausedOnlyForPairing)
+    }
+
     @Test @MainActor func `a dropped node stays down while the operator is paused`() async throws {
         try await Self.withFixtureGateway { server, appModel in
             try await TestWait.observed("node connected") { appModel.gatewayConnected }
