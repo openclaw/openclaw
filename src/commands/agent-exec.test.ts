@@ -498,7 +498,9 @@ describe("agent exec command composition", () => {
     const fallback = ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"];
     const result = await runExec({ model: "openai/gpt-5.6-sol", fallback }, async (opts) => {
       expect(opts).toMatchObject({ model: "openai/gpt-5.6-sol", modelFallbacksOverride: fallback });
-      opts.onModelFallbackExhausted?.();
+      if (typeof opts.onModelFallbackExhausted === "function") {
+        opts.onModelFallbackExhausted();
+      }
       return successResult();
     });
     expect(result).toMatchObject({
