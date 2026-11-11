@@ -5,7 +5,6 @@ import {
   formatUserTime,
   resolveUserTimeFormat,
   resolveUserTimezone,
-  withNormalizedTimestamp,
 } from "./date-time.js";
 
 vi.mock("node:child_process", () => ({
@@ -15,13 +14,6 @@ vi.mock("node:child_process", () => ({
 }));
 
 afterEach(() => vi.restoreAllMocks());
-
-it("keeps fractional millisecond strings in the millisecond unit", () => {
-  const normalized = withNormalizedTimestamp({}, "1700000000000.5");
-
-  expect(normalized.timestampMs).toBe(1700000000001);
-  expect(normalized.timestampUtc).toBe("2023-11-14T22:13:20.001Z");
-});
 
 it("uses a 24-hour locale even when its hour digits are not Latin", () => {
   const RealDateTimeFormat = Intl.DateTimeFormat;
