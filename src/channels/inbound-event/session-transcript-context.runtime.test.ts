@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_CONTEXT_JSON_STRING_CHARS } from "../../auto-reply/reply/channel-prompt-context.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
@@ -62,44 +61,6 @@ describe("session transcript inbound context", () => {
       { messageId: "session:u1", sender: "User", body: "deploy at noon", timestamp: 1_000 },
       { messageId: "session:a1", sender: "Assistant", body: "remind at 11:50", timestamp: 2_000 },
     ]);
-  });
-
-  it("keeps a selected native notification through transcript merge and prompt rendering", async () => {
-    // Telegram's native history/selection suite owns capture and selection. This
-    // boundary starts with its selected window and supplies only older storage rows.
-    readRecent.mockResolvedValue([
-      {
-        id: "old-1",
-        role: "user",
-        text: "Older discussion. ".repeat(MAX_CONTEXT_JSON_STRING_CHARS),
-        timestamp: 1_000,
-      },
-      {
-        id: "old-2",
-        role: "assistant",
-        text: "Earlier repair. ".repeat(MAX_CONTEXT_JSON_STRING_CHARS),
-        timestamp: 2_000,
-      },
-    ]);
-    const notification = "Build completed. What should run next?";
-    const ctx = await merged({
-      Provider: "telegram",
-      ReplyToId: "25",
-      SessionTranscriptContext: { chatWindow: true, historyLimit: 3 },
-      ChannelStructuredContext: chatWindow(
-        [{ message_id: "902", sender: "OpenClaw (you)", body: notification, timestamp_ms: 3_000 }],
-        { source: "telegram" },
-      ),
-    });
-    const prompt = buildInboundUserContextPrefix(ctx);
-    expect(prompt.split(notification)).toHaveLength(2);
-    expect(prompt).toContain("[omitted]");
-    expect(ctx.ReplyToId).toBe("25");
-    expect(ctx.ChannelStructuredContext?.[0]?.payload).toMatchObject({
-      messages: expect.arrayContaining([
-        expect.objectContaining({ message_id: "902", body: notification }),
-      ]),
-    });
   });
 
   it("renders the configured native window without restoring stale transcript content", async () => {
@@ -197,8 +158,40 @@ describe("session transcript inbound context", () => {
           : [{ message_id: "902" }, { message_id: "903" }],
       });
       const prompt = buildInboundUserContextPrefix(ctx);
-      expect(prompt).toContain("Build complete");
+      expect(prompt.split("Build complete")).toHaveLength(2);
       expect(prompt).not.toContain("sessionTranscriptPriorityMessageIds");
+    },
+  );
+
+  it.each([false, true])(
+    "prefers an available canonical row and retains native fallback otherwise (canonical: %s)",
+    async (canonical) => {
+      readRecent.mockResolvedValue([
+        ...(canonical
+          ? [{ id: "answer", role: "assistant" as const, text: "Alpha beta", timestamp: 500 }]
+          : []),
+        { id: "other", role: "assistant", text: "Unrelated newer discussion", timestamp: 3_000 },
+      ]);
+      const ctx = await merged({
+        SessionTranscriptContext: { historyLimit: 2 },
+        ChannelStructuredContext: chatWindow(
+          [
+            { message_id: "25", body: "explicit target", is_reply_target: true, timestamp_ms: 0 },
+            { message_id: "700", body: "Alpha", timestamp_ms: 1_000 },
+            { message_id: "701", body: "beta", timestamp_ms: 2_000 },
+          ],
+          { sessionTranscriptPriorityMessageIds: ["700", "701", "session:answer"] },
+        ),
+      });
+      expect(ctx.ChannelStructuredContext?.[0]?.payload).toMatchObject({
+        messages: [
+          { message_id: "25" },
+          {
+            message_id: canonical ? "session:answer" : "701",
+            body: canonical ? "Alpha beta" : "beta",
+          },
+        ],
+      });
     },
   );
 

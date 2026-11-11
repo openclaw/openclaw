@@ -316,6 +316,104 @@ it("keeps transcript context until every physical projection part is recorded, t
   );
 });
 
+it.each([
+  { parts: 2, historyLimit: 2, explicitReply: true, canonical: true, independent: false },
+  { parts: 4, historyLimit: 3, explicitReply: false, canonical: true, independent: false },
+  { parts: 2, historyLimit: 2, explicitReply: true, canonical: false, independent: false },
+  { parts: 2, historyLimit: 2, explicitReply: false, canonical: true, independent: true },
+])(
+  "retains multipart topic context under a saturated history budget ($parts parts, explicit: $explicitReply, canonical: $canonical)",
+  async ({ parts, historyLimit, explicitReply, canonical, independent }) => {
+    const forum = { ...group, type: "supergroup", is_forum: true } as const;
+    const sessionKey = `agent:main:telegram:group:${forum.id}:topic:25`;
+    const eventId = "budgeted-topic-answer";
+    const now = Math.floor(Date.now() / 1000);
+    const texts = ["Alpha", "beta", "gamma", "delta"].slice(0, parts);
+    const canonicalText = `**Alpha** ${texts.slice(1).join(" ")}`;
+    const targetMessageId = explicitReply ? message("Earlier question").message_id : 25;
+    const physicalMessageIds: number[] = [];
+    cfg.channels!.telegram!.historyLimit = historyLimit;
+    cfg.channels!.telegram!.groups = { "*": { requireMention: false } };
+    cfg.messages!.groupChat = { unmentionedInbound: "user_request" };
+    const target = { storePath, sessionKey };
+    await upsertSessionEntry({
+      ...target,
+      entry: { sessionId: "budgeted-topic", updatedAt: now * 1000 },
+    });
+    await appendSessionTranscriptMessageByIdentity({
+      agentId: "main",
+      ...target,
+      sessionId: "budgeted-topic",
+      eventId: canonical ? eventId : "unrelated-newer-answer",
+      message: {
+        role: "assistant",
+        content: canonical ? canonicalText : "Newer unrelated discussion",
+        timestamp: (now - (canonical ? 6 : 1)) * 1000,
+      },
+    });
+    const bot = await createBot(false, true, cfg);
+    for (const [partIndex, text] of texts.entries()) {
+      const sent = message(text, {
+        chat: forum,
+        message_thread_id: 25,
+        from: bot.botInfo,
+        date: now - 5 + partIndex,
+      });
+      physicalMessageIds.push(sent.message_id);
+      await recordOutbound(sent, {
+        transcriptMessageId: eventId,
+        partIndex,
+        finalPart: partIndex === parts - 1,
+      });
+    }
+    if (independent) {
+      await recordOutbound(
+        message("Independent notification", {
+          chat: forum,
+          message_thread_id: 25,
+          from: bot.botInfo,
+          date: now - 1,
+        }),
+      );
+    }
+    await receive(bot, {
+      message: message("Please continue", {
+        chat: forum,
+        message_thread_id: 25,
+        date: now,
+        reply_to_message: reply(explicitReply ? "Earlier question" : "Topic root", {
+          chat: forum,
+          message_id: targetMessageId,
+          message_thread_id: 25,
+          date: now - 3600,
+          ...(explicitReply
+            ? {}
+            : { forum_topic_created: { name: "Checks", icon_color: 0x6fb9f0 } }),
+        }),
+      }),
+    });
+    const messages = contextMessages();
+    expect(messages.length).toBeLessThanOrEqual(historyLimit);
+    expect(lastInput().ReplyToId).toBe(String(targetMessageId));
+    if (explicitReply) {
+      expectContextMessages({
+        message_id: String(targetMessageId),
+        body: "Earlier question",
+        is_reply_target: true,
+      });
+    }
+    if (independent) {
+      expectContextMessages({ body: "Independent notification" });
+      expect(messages.some((entry) => entry.message_id === `session:${eventId}`)).toBe(false);
+    } else if (canonical) {
+      expectContextMessages({ message_id: `session:${eventId}`, body: canonicalText });
+    } else {
+      expectContextMessages({ message_id: String(physicalMessageIds.at(-1)), body: "beta" });
+      expect(messages.some((entry) => entry.message_id === `session:${eventId}`)).toBe(false);
+    }
+  },
+);
+
 async function replyInput(text: string, overrides: Partial<Message>, bot?: Bot) {
   await receive(bot ?? (await createBot(false, true, cfg)), {
     message: { ...message(text), ...overrides },

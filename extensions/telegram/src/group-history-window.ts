@@ -179,45 +179,94 @@ export function selectTelegramGroupPromptContext(params: {
     if (messages.length === 0) {
       return [];
     }
+    const projectionForMessage = (message: Record<string, unknown>) =>
+      typeof message["message_id"] === "string"
+        ? entry.telegramTranscriptProjections?.[message["message_id"]]
+        : undefined;
+    const pinned = messages.filter((message) => message["is_reply_target"] === true);
+    const prioritySlots = Math.max(0, params.historyLimit - pinned.length);
+    const guaranteedMessages =
+      pinned.length > params.historyLimit
+        ? []
+        : [
+            ...pinned,
+            ...(prioritySlots === 0
+              ? []
+              : recentSelfMessages
+                  .filter((message) => message["is_reply_target"] !== true)
+                  .slice(-prioritySlots)),
+          ];
+    const completePriorityProjectionIds = resolveCompleteTelegramPromptContextProjectionIds(
+      guaranteedMessages.map(projectionForMessage),
+    );
+    const recentProjectionIds = new Set(
+      recentSelfMessages.flatMap((message) => {
+        const marker = projectionForMessage(message);
+        return marker?.kind === "valid" ? [marker.projection.transcriptMessageId] : [];
+      }),
+    );
+    // An explicit target can displace a physical part after selection. When any
+    // projected answer cannot fit whole, prioritize real canonical rows as units;
+    // mixing partial canonical fallbacks with complete physical groups can evict
+    // another group's part. Missing canonical rows leave the native tail intact.
+    const canonicalPriorityIds = [...recentProjectionIds].some(
+      (id) => !completePriorityProjectionIds.has(id),
+    )
+      ? recentProjectionIds
+      : new Set<string>();
+    const canonicalPriorityIdForMessage = (message: Record<string, unknown>) => {
+      const marker = projectionForMessage(message);
+      return marker?.kind === "valid" &&
+        canonicalPriorityIds.has(marker.projection.transcriptMessageId)
+        ? marker.projection.transcriptMessageId
+        : undefined;
+    };
     const assistantTextKeys = [
       ...(messages.length === sourceMessages.length
         ? (entry.sessionTranscriptAssistantTextDedupeKeys ?? [])
         : []),
       ...recentSelfMessages.flatMap((message) =>
-        typeof message["body"] === "string" && message["body"].trim()
+        !canonicalPriorityIdForMessage(message) &&
+        typeof message["body"] === "string" &&
+        message["body"].trim()
           ? [`body:${message["body"].trim()}`]
           : [],
       ),
     ];
-    const priorityMessageIds = recentSelfMessages.flatMap((message) =>
-      typeof message["message_id"] === "string" ? [message["message_id"]] : [],
-    );
+    // Keep native fallbacks below their canonical row, at the group's own recency.
+    const priorityMessageIds = recentSelfMessages.flatMap((message) => {
+      const canonicalId = canonicalPriorityIdForMessage(message);
+      if (typeof message["message_id"] !== "string") {
+        return [];
+      }
+      return canonicalId
+        ? [message["message_id"], `session:${canonicalId}`]
+        : [message["message_id"]];
+    });
     const recentContextMetadata = {
       ...(assistantTextKeys.length > 0
         ? { sessionTranscriptAssistantTextDedupeKeys: [...new Set(assistantTextKeys)] }
         : {}),
       ...(priorityMessageIds.length > 0
-        ? { sessionTranscriptPriorityMessageIds: priorityMessageIds }
+        ? {
+            sessionTranscriptPriorityMessageIds: priorityMessageIds.filter(
+              (id, index) => priorityMessageIds.lastIndexOf(id) === index,
+            ),
+          }
         : {}),
     };
-    if (messages.length === sourceMessages.length) {
-      return [{ ...entry, ...recentContextMetadata }];
-    }
     // Clipping unrelated ambient rows must not duplicate a complete final reply;
     // clipping any physical projection part must restore its canonical text.
     const completeProjectionIds = resolveCompleteTelegramPromptContextProjectionIds(
-      messages.map((message) =>
-        typeof message["message_id"] === "string"
-          ? entry.telegramTranscriptProjections?.[message["message_id"]]
-          : undefined,
-      ),
+      messages.map(projectionForMessage),
     );
-    const retainedProjectionIds = entry.sessionTranscriptDedupeMessageIds?.filter((id) =>
-      completeProjectionIds.has(id),
+    const retainedProjectionIds = entry.sessionTranscriptDedupeMessageIds?.filter(
+      (id) => completeProjectionIds.has(id) && !canonicalPriorityIds.has(id),
     );
     const {
       sessionTranscriptDedupeMessageIds: _projectionIds,
       sessionTranscriptAssistantTextDedupeKeys: _assistantTextKeys,
+      sessionTranscriptPriorityMessageIds: _priorityMessageIds,
       ...selectedEntry
     } = entry;
     return [

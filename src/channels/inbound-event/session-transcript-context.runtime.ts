@@ -245,13 +245,24 @@ export async function mergeSessionTranscriptContext(params: {
     let messages = [...added, ...existing].toSorted(compareMessages);
     if (!(messages.length <= limit)) {
       const pinned = messages.filter((message) => message.is_reply_target === true);
-      const priorityIds = new Set(filterStringEntries(window.sessionTranscriptPriorityMessageIds));
-      const priority = messages.filter(
-        (message) =>
-          message.is_reply_target !== true &&
-          typeof message.message_id === "string" &&
-          priorityIds.has(message.message_id),
+      const priorityOrder = new Map(
+        filterStringEntries(window.sessionTranscriptPriorityMessageIds).map((id, index) => [
+          id,
+          index,
+        ]),
       );
+      const priority = messages
+        .flatMap((message) => {
+          const order =
+            typeof message.message_id === "string"
+              ? priorityOrder.get(message.message_id)
+              : undefined;
+          return message.is_reply_target !== true && order !== undefined
+            ? [{ message, order }]
+            : [];
+        })
+        .toSorted((left, right) => left.order - right.order)
+        .map(({ message }) => message);
       const prioritySlots = Math.max(0, limit - pinned.length);
       const selectedPriority = prioritySlots === 0 ? [] : priority.slice(-prioritySlots);
       const available = Math.max(0, prioritySlots - selectedPriority.length);

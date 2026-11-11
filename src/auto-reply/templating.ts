@@ -52,7 +52,7 @@ export type ChannelStructuredContextEntry = {
   sessionTranscriptDedupeMessageIds?: string[];
   /** Internal presentation hints; body: keys coalesce exact text without linking message identities. */
   sessionTranscriptAssistantTextDedupeKeys?: string[];
-  /** Native context candidates take available slots after explicit reply targets. */
+  /** Candidate IDs in ascending priority; canonical rows may follow native fallbacks. */
   sessionTranscriptPriorityMessageIds?: string[];
 };
 

@@ -501,8 +501,10 @@ export function createTelegramMessageContextRuntime({
             ...(completeProjectionIds.size > 0
               ? {
                   sessionTranscriptDedupeMessageIds: [...completeProjectionIds],
-                  telegramTranscriptProjections: transcriptProjections,
                 }
+              : {}),
+            ...(Object.keys(transcriptProjections).length > 0
+              ? { telegramTranscriptProjections: transcriptProjections }
               : {}),
             payload: {
               order: "chronological",
