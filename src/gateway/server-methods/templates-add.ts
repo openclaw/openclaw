@@ -14,7 +14,6 @@ import {
   createRuntimeConfigWriteApplication,
 } from "../../config/runtime-write-application.js";
 import type { AgentEntryConfig } from "../../config/types.agents.js";
-import { listConfiguredMessageChannels } from "../../infra/outbound/channel-selection.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginInstallBatchReload } from "../../plugins/install-runtime-batch.js";
 import { reloadManagedPlugin } from "../../plugins/management-mutations.js";
@@ -49,17 +48,6 @@ import { assertValidParams } from "./validation.js";
 
 const log = createSubsystemLogger("gateway/templates-add");
 
-// Matches the scheduler: channel discovery is advisory, so a failure skips the check.
-async function listSchedulerChannels(
-  config: Parameters<typeof listConfiguredMessageChannels>[0],
-): Promise<string[] | undefined> {
-  try {
-    return await listConfiguredMessageChannels(config);
-  } catch {
-    return undefined;
-  }
-}
-
 export const templatesAddHandlers: GatewayRequestHandlers = {
   "templates.add.plan": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateTemplatesAddPlanParams, "templates.add.plan", respond)) {
@@ -83,8 +71,6 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           }
           return listedMcp.mcpServers;
         },
-        configuredChannels: await listSchedulerChannels(context.getRuntimeConfig()),
-        ...(params.automationChannel ? { automationChannel: params.automationChannel } : {}),
       });
       assertTemplatesLabsEnabled(context.getRuntimeConfig());
       respond(true, plan);
@@ -200,13 +186,8 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           });
           assertCurrent();
           assertTemplatesLabsEnabled(config);
-          // The scheduler validates announce delivery against these channels at cron.add.
-          const configuredChannels = await listSchedulerChannels(context.getRuntimeConfig());
-          assertCurrent();
           return {
             config,
-            configuredChannels,
-            ...(params.automationChannel ? { automationChannel: params.automationChannel } : {}),
             sourceMcpServers: async () => {
               const listedMcp = await listConfiguredMcpServers();
               assertCurrent();

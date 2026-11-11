@@ -11,7 +11,7 @@ import type {
 import type { TemplateManifest, TemplatePackage, TemplateDependency } from "./schema.js";
 
 export { TEMPLATE_BOOTSTRAP_FILE_NAMES, type TemplateDiagnostic } from "./manifest-contract.js";
-export type { TemplatePlannedCronJob, TemplateSourceIdentity } from "./manifest-contract.js";
+export type { TemplateSourceIdentity } from "./manifest-contract.js";
 
 export type {
   TemplateCronJob,
@@ -177,8 +177,6 @@ export type TemplateAddPlan = {
     ready: boolean;
     requirements: TemplateLocalPrerequisite[];
   };
-  /** Set when announce-to-last automations need the operator to pick a channel. */
-  automationChannels?: { options: string[]; selected?: string };
   blockers: TemplateDiagnostic[];
   diagnostics: TemplateDiagnostic[];
 };

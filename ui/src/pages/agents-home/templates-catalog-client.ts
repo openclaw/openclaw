@@ -107,12 +107,8 @@ export async function readTemplatePreview(
 export async function readTemplateAddReviewPlan(
   client: GatewayBrowserClient,
   source: TemplateCatalogSource,
-  automationChannel?: string,
 ): Promise<TemplateAddReviewPlan> {
-  const plan = await client.request<TemplateLifecyclePlanResult>("templates.add.plan", {
-    source,
-    ...(automationChannel ? { automationChannel } : {}),
-  });
+  const plan = await client.request<TemplateLifecyclePlanResult>("templates.add.plan", { source });
   if (plan.operation !== "add" || !plan.planIntegrity || !plan.target?.agentId) {
     throw new Error("ClawHub did not return a valid Add review.");
   }
@@ -137,9 +133,6 @@ export async function applyTemplateAdd(
       ...(plan
         ? {
             agentId: plan.target.agentId,
-            ...(plan.automationChannels?.selected
-              ? { automationChannel: plan.automationChannels.selected }
-              : {}),
             planIntegrity: plan.planIntegrity,
             acknowledgeCapabilities: plan.pluginReviews
               .filter((review) => review.ownerAction === "install")

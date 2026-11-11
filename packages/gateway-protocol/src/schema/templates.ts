@@ -279,20 +279,14 @@ export const TemplateSkillAcknowledgementSchema = Type.Union([
   }),
 ]);
 
-// A configured channel id, or "none", for automations that announce to the last
-// channel on a host where the scheduler needs an explicit channel.
-const TemplateAutomationChannelSchema = NonEmptyString;
-
 export const TemplatesAddPlanParamsSchema = closedObject({
   source: TemplateCatalogCoordinateSchema,
   agentId: Type.Optional(NonEmptyString),
-  automationChannel: Type.Optional(TemplateAutomationChannelSchema),
 });
 
 export const TemplatesAddApplyParamsSchema = closedObject({
   source: TemplateCatalogCoordinateSchema,
   agentId: Type.Optional(NonEmptyString),
-  automationChannel: Type.Optional(TemplateAutomationChannelSchema),
   planIntegrity: Type.Optional(NonEmptyString),
   acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
   acknowledgeCapabilities: Type.Optional(Type.Array(TemplatePluginAcknowledgementSchema)),
@@ -389,8 +383,7 @@ const TemplateScheduledDeclarationSchema = closedObject({
     closedObject({ everyMs: Type.Integer({ minimum: 1 }) }),
   ]),
   session: stringLiteralUnion(["main", "isolated"]),
-  delivery: stringLiteralUnion(["none", "last-channel", "channel", "owner"]),
-  channel: Type.Optional(NonEmptyString),
+  delivery: stringLiteralUnion(["none", "last-channel", "owner"]),
   messageDigest: NonEmptyString,
 });
 
@@ -536,13 +529,6 @@ export const TemplateLifecyclePlanResultSchema = closedObject({
   riskAcknowledgementRequired: Type.Boolean(),
   configuredAccess: Type.Optional(TemplateConfiguredAccessSchema),
   scheduledJobs: Type.Optional(TemplateScheduledJobsSchema),
-  // Present when Add must ask where announce-to-last automations deliver.
-  automationChannels: Type.Optional(
-    closedObject({
-      options: Type.Array(NonEmptyString),
-      selected: Type.Optional(TemplateAutomationChannelSchema),
-    }),
-  ),
   readiness: Type.Optional(
     closedObject({
       ready: Type.Boolean(),

@@ -6,7 +6,6 @@ import { cronJobDefinitionFromReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { toPublicCronJob } from "../cron/public-job.js";
 import { createTrustedCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
-import { findAmbiguousAnnounceDeliveryChannels } from "../cron/service/jobs-validation.js";
 import { applyDefaultCronToolsAllow } from "../cron/tools-allow.js";
 import type { CronJob, CronStoredJob } from "../cron/types.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
@@ -15,12 +14,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { TEMPLATE_CRON_REF_SCHEMA_VERSION, type PersistedTemplateCronRef } from "./cron-records.js";
 import { digestTemplateBytes } from "./digest.js";
 import type { TemplateMutationStateOptions } from "./state-mutation-options.js";
-import type {
-  TemplateAddPlan,
-  TemplateCronJob,
-  TemplateDiagnostic,
-  TemplatePlannedCronJob,
-} from "./types.js";
+import type { TemplateAddPlan, TemplateCronJob } from "./types.js";
 import { readTemplateWorkspaceActionSource } from "./workspace.js";
 
 export type { PersistedTemplateCronRef } from "./cron-records.js";
@@ -95,10 +89,7 @@ function schedulerJobRecordByDeclarationKey(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-function templateCronGatewayInput(
-  agentId: string,
-  ref: Pick<PersistedTemplateCronRef, "declarationKey" | "job">,
-) {
+function templateCronGatewayInput(agentId: string, ref: PersistedTemplateCronRef) {
   const job = ref.job;
   if ("automation" in job) {
     return { ...job.automation, declarationKey: ref.declarationKey, owner: { agentId } };
@@ -125,64 +116,6 @@ function templateCronGatewayInput(
         }
       : { mode: "none" },
   };
-}
-
-/** Channels that make the scheduler reject this declared automation's delivery. */
-function templateCronJobAmbiguousDeliveryChannels(
-  agentId: string,
-  job: TemplateCronJob,
-  configuredChannels: readonly string[],
-): string[] | undefined {
-  const input = normalizeCronJobCreate(
-    templateCronGatewayInput(agentId, { declarationKey: `template:${agentId}:${job.id}`, job }),
-  );
-  return input ? findAmbiguousAnnounceDeliveryChannels(input, configuredChannels) : undefined;
-}
-
-type TemplateAutomationChannelPlan = {
-  jobs: { job: TemplatePlannedCronJob; blocked: boolean }[];
-  blockers: TemplateDiagnostic[];
-  channels?: TemplateAddPlan["automationChannels"];
-};
-
-/**
- * Templates cannot name a channel, so on a host where the scheduler needs one for an
- * announce-to-last automation, the operator picks it during Add ("none" turns updates off).
- */
-export function planTemplateAutomationChannels(
-  agentId: string,
-  automations: readonly TemplateCronJob[],
-  host: { configuredChannels?: readonly string[]; automationChannel?: string },
-): TemplateAutomationChannelPlan {
-  const plan: TemplateAutomationChannelPlan = { jobs: [], blockers: [] };
-  for (const [index, declared] of automations.entries()) {
-    const options = host.configuredChannels
-      ? templateCronJobAmbiguousDeliveryChannels(agentId, declared, host.configuredChannels)
-      : undefined;
-    if (!options) {
-      plan.jobs.push({ job: declared, blocked: false });
-      continue;
-    }
-    const choice = host.automationChannel;
-    const delivery: TemplatePlannedCronJob["delivery"] =
-      choice === "none"
-        ? { mode: "none" }
-        : choice && options.includes(choice)
-          ? { mode: "announce", channel: choice }
-          : undefined;
-    plan.channels = { options, ...(delivery && choice ? { selected: choice } : {}) };
-    plan.jobs.push({ job: delivery ? { ...declared, delivery } : declared, blocked: !delivery });
-    if (!delivery) {
-      plan.blockers.push({
-        level: "error",
-        code: choice ? "automation_channel_invalid" : "automation_channel_required",
-        phase: "plan",
-        path: `$.automations[${index}].delivery`,
-        message: `Automation ${JSON.stringify(declared.id)} announces to the last channel and this host has several channels; choose one of ${options.join(", ")}, or none.`,
-      });
-    }
-  }
-  return plan;
 }
 
 export function templateCronGatewayJobMatchesRef(
@@ -327,9 +260,8 @@ export async function installTemplateCronJobsStateless(
   try {
     for (const action of actions) {
       currentAction = action;
-      // Plan actions also carry the operator's reviewed delivery-channel choice.
       // SAFETY: cronJob plan actions originate from validated TemplateCronJob manifest entries.
-      const details = action.details as TemplatePlannedCronJob | undefined;
+      const details = action.details as TemplateCronJob | undefined;
       if (!action.automation && !details?.id) {
         throw new TemplateCronInstallError(
           "cron_plan_invalid",

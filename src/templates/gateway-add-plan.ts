@@ -91,8 +91,6 @@ export type GatewayTemplateAddPlanningContext = {
   /** Trusted in-flight creation receipt; never a wire field. */
   admittedWorkspace?: string;
   packagePreflight?: TemplatePackagePreflight;
-  configuredChannels?: readonly string[];
-  automationChannel?: string;
 };
 
 export async function buildGatewayTemplateAddPlan(
@@ -123,8 +121,6 @@ export async function buildGatewayTemplateAddPlan(
       existingAgentIds,
       existingWorkspacePaths: existingWorkspaces,
       ...(context.admittedWorkspace ? { admittedWorkspace: context.admittedWorkspace } : {}),
-      configuredChannels: context.configuredChannels,
-      ...(context.automationChannel ? { automationChannel: context.automationChannel } : {}),
       // Most Templates have no MCP declarations. Do not read and validate the
       // entire authored host configuration for an unrelated requirement type.
       existingMcpServers:

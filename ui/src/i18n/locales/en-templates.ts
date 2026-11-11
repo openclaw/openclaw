@@ -77,11 +77,6 @@ const enTemplates = {
     trustReview: "ClawHub flagged this package for review. Read the warning before adding.",
     reviewTitle: "Review before adding",
     reviewDescription: "This template needs permission to add the following plugins or skills.",
-    automationChannelTitle: "Choose where automation updates go",
-    automationChannelDescription:
-      "This template has automations that post updates, and this Gateway has more than one channel. Pick the channel for those updates, or turn them off.",
-    automationChannelLabel: "Channel for automation updates",
-    automationChannelNone: "No updates",
     version: "Version {version}",
     dependencyClawHub: "ClawHub · Version {version}",
     dependencyBundled: "Bundled with template",

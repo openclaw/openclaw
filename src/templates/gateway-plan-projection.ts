@@ -24,16 +24,6 @@ import { mcpServerSchema } from "./schema.js";
 import { collectTemplateSkillWarningReviews } from "./skill-warning-review.js";
 import type { TemplateAddPlan, TemplateAddPlanAction, TemplateReadResult } from "./types.js";
 
-// Reviewed blockers carry fixed text; raw plan diagnostics can name local paths.
-const TEMPLATE_BLOCKER_MESSAGES: Partial<Record<string, string>> = {
-  plugin_disabled:
-    "This plugin is disabled. Enable it in Plugins; reinstall it there first if needed.",
-  automation_channel_required:
-    "This host has more than one channel. Choose where this Template's automation updates go.",
-  automation_channel_invalid:
-    "The chosen automation channel is not configured on this host. Choose one of the listed channels, or none.",
-};
-
 type SkillArtifact = NonNullable<
   Extract<TemplateActionEffect, { type: "skill-package" }>["desired"]
 >;
@@ -374,8 +364,9 @@ export function projectTemplateAddPlan(
           code: diagnostic.code,
           path: diagnostic.path,
           message:
-            TEMPLATE_BLOCKER_MESSAGES[diagnostic.code] ??
-            "Resolve this OpenClaw state conflict before continuing.",
+            diagnostic.code === "plugin_disabled"
+              ? "This plugin is disabled. Enable it in Plugins; reinstall it there first if needed."
+              : "Resolve this OpenClaw state conflict before continuing.",
         })),
         ...effectBlockers,
         ...requestedPolicyBlockers(plan.agent.config, configuredAccess),
@@ -404,7 +395,6 @@ export function projectTemplateAddPlan(
         : {}),
       ...(configuredAccess ? { configuredAccess } : {}),
       ...(scheduledJobs ? { scheduledJobs } : {}),
-      ...(plan.automationChannels ? { automationChannels: plan.automationChannels } : {}),
       readiness: {
         ready: plan.readiness.ready,
         requirements: plan.readiness.requirements.map((requirement) =>

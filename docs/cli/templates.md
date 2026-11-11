@@ -209,6 +209,12 @@ membership after review. File modes follow ordinary Template packaging.
 Use `automations` for scheduled work. The retired `cronJobs` key is rejected;
 move its declarations to `automations` and remove `cronJobs`.
 
+Add schedules every declared automation in the new agent's main session, with
+no delivery, so its runs appear in the agent's own conversation. `session` and
+`delivery` are still accepted in `CLAW.md`, but Add does not apply them. To run
+an automation in an isolated session or post its summary to a channel, change
+it in the automation's settings after Add.
+
 Environment values remain unresolved references; never package credentials.
 Shared plugins and MCP servers must match existing declarations exactly or Add
 reports the conflict without replacing them. Plugin and skill trust warnings
@@ -226,20 +232,11 @@ and private job scratch instead of installing heartbeat configuration. Legacy
 `tasks:` entries become separate automations, and the remaining checklist stays
 in the monitor's scratch. An `every: 0m` declaration stays disabled.
 The Add review shows each converted job with its interval and owner delivery;
-existing cron schedules and `none` or last-channel delivery keep their meaning.
-On a Gateway with more than one configured channel, the scheduler requires an
-explicit channel for an isolated automation that announces to the last channel.
-Templates cannot name a channel, so Add asks where those automation updates go:
-one of the configured channels, or no updates. The Control UI shows that choice
-before it adds the agent; Gateway clients pass it as `automationChannel` (a
-channel ID or `none`) to both `templates.add.plan` and `templates.add.apply`,
-and the review lists the offered channels in `automationChannels`. With one
-channel, Add keeps last-channel delivery without asking.
+existing cron schedules keep their meaning.
 Gateway review responses represent interval schedules as `{ everyMs }`, where
 `everyMs` is a positive integer, and
 owner delivery as `owner`, alongside the existing `{ cron, timezone }` schedules
-and `none` or `last-channel` delivery variants. A chosen channel appears as
-`channel` delivery with its `channel` ID.
+and the `none` delivery of declared automations.
 
 Add creates a job disabled until its imported scratch is saved and verified.
 If scratch import conflicts with another edit, or its write cannot be confirmed,
@@ -349,7 +346,7 @@ to use the default unused ID.
 
 Gateway Add review responses describe schedules as either `{ cron, timezone }`
 or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery
-values are `none`, `last-channel`, `channel` (with a `channel` ID), or `owner`.
+is `owner` for converted heartbeat jobs and `none` for declared automations.
 
 CLI Add from a local source requires exclusive offline state ownership; it refuses
 to run while a Gateway owns that state. For published ClawHub Templates, both the

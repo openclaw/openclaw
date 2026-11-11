@@ -75,13 +75,7 @@ beforeEach(() => {
 
 afterEach(() => vi.clearAllMocks());
 
-// The automation channel choice travels from review to every Apply re-plan.
-const params = {
-  source,
-  automationChannel: "telegram",
-  planIntegrity: "sha256:reviewed",
-  acknowledgeCapabilities: [],
-};
+const params = { source, planIntegrity: "sha256:reviewed", acknowledgeCapabilities: [] };
 const plan = { operation: "add", planIntegrity: "sha256:reviewed", target: { agentId } };
 
 function makeCron<T extends object>(overrides: T) {
@@ -108,7 +102,7 @@ async function callAdd(
   const handler = expectDefined(templatesAddHandlers[method], method);
   await handler({
     req: { type: "req", id: "add", method },
-    params: operation === "plan" ? { source, automationChannel: "telegram" } : params,
+    params: operation === "plan" ? { source } : params,
     respond,
     context: { getRuntimeConfig, ...runtime } as never,
     client:
@@ -162,8 +156,6 @@ it("plans from the persisted roster, not a stale Gateway cache", async () => {
     source,
     config: onDisk,
     sourceMcpServers: expect.any(Function),
-    configuredChannels: [],
-    automationChannel: "telegram",
   });
   expect(listMcp).not.toHaveBeenCalled();
   expect(request).toEqual([[true, plan]]);
@@ -194,8 +186,6 @@ it("applies the reviewed coordinate against the persisted roster", async () => {
     expect(await input.getPlanningContext()).toEqual({
       config: onDisk,
       sourceMcpServers: expect.any(Function),
-      configuredChannels: [],
-      automationChannel: "telegram",
     });
     expect(listMcp).not.toHaveBeenCalled();
     input.assertCurrent();

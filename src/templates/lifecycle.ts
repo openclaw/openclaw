@@ -12,7 +12,6 @@ import { templateAgentCopyNumber, selectNextTemplateAgentId } from "./add-agent-
 import { templateOwnedAgentConfig } from "./agent-config-ownership.js";
 import { templateAddCapabilityChange, templateAgentCapabilityChange } from "./application-plan.js";
 import { planBundledTemplateDependency } from "./bundled-dependency-plan.js";
-import { planTemplateAutomationChannels } from "./cron.js";
 import { templateDependencyInventory } from "./dependency-inventory.js";
 import { digestTemplateBytes, digestTemplateValue } from "./digest.js";
 import { digestTemplateMcpServer } from "./mcp.js";
@@ -52,10 +51,6 @@ export type TemplateAddPlanContext = {
   existingMcpServers?: Record<string, Record<string, unknown>>;
   packagePreflight?: TemplatePackagePreflight;
   sourceReferenceRoot?: string;
-  /** Channels the Gateway scheduler counts when it validates announce delivery. */
-  configuredChannels?: readonly string[];
-  /** Operator's choice for announce-to-last automations: a configured channel or "none". */
-  automationChannel?: string;
 };
 
 function sourceReferencePath(root: string, path: string): string {
@@ -636,9 +631,12 @@ export async function buildTemplateAddPlan(params: {
   });
 
   // Strict v1 validation permits only deterministic main or isolated targets.
-  const automations = planTemplateAutomationChannels(finalId, params.manifest.automations, context);
-  blockers.push(...automations.blockers);
-  for (const { job, blocked } of automations.jobs) {
+  // Templates keep one conversation per agent: Add schedules every declared automation
+  // in the agent's main session and drops its delivery, since a Template can only
+  // announce to the last channel, which the scheduler rejects on multi-channel hosts.
+  // The owner can change either later in the automation's settings.
+  for (const { delivery: _ignoredDelivery, ...declared } of params.manifest.automations) {
+    const job = { ...declared, session: "main" as const };
     actions.push({
       kind: "cronJob",
       id: job.id,
@@ -648,11 +646,8 @@ export async function buildTemplateAddPlan(params: {
         ...job,
         agentId: finalId,
         expectedState: "absent",
-        ...(job.delivery?.channel === "last"
-          ? { deliveryResolution: "local-channel-state:last" }
-          : {}),
       },
-      blocked,
+      blocked: false,
     });
     capabilityChanges.push(
       templateAddCapabilityChange({
@@ -715,7 +710,6 @@ export async function buildTemplateAddPlan(params: {
       ready: readinessRequirements.length === 0,
       requirements: readinessRequirements,
     },
-    ...(automations.channels ? { automationChannels: automations.channels } : {}),
     blockers,
     diagnostics: params.diagnostics ?? [],
   };

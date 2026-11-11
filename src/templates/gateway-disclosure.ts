@@ -25,7 +25,7 @@ import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-own
 import { preserveOperatorAgentSettings } from "./agent-config-ownership.js";
 import { digestTemplateValue } from "./digest.js";
 import { cronJobSchema } from "./schema.js";
-import type { TemplateAddPlan, TemplateCronJob, TemplatePlannedCronJob } from "./types.js";
+import type { TemplateAddPlan, TemplateCronJob } from "./types.js";
 
 type AccessSnapshot = NonNullable<TemplateConfiguredAccess["desired"]>;
 type ScheduledDeclaration = NonNullable<TemplateScheduledJobs["jobs"][number]["current"]>;
@@ -163,29 +163,18 @@ export function projectTemplateConfiguredAccess(params: {
   };
 }
 
-function scheduledDeclaration(
-  job: TemplateCronJob,
-  delivery: TemplatePlannedCronJob["delivery"] = job.delivery,
-): ScheduledDeclaration {
-  const channel = delivery?.mode === "announce" ? delivery.channel : undefined;
+function scheduledDeclaration(job: TemplateCronJob): ScheduledDeclaration {
   return {
     enabled: job.enabled ?? true,
     schedule: { cron: job.schedule.cron, timezone: job.schedule.timezone },
     session: job.session,
-    ...(delivery?.mode !== "announce"
-      ? { delivery: "none" as const }
-      : channel && channel !== "last"
-        ? { delivery: "channel" as const, channel }
-        : { delivery: "last-channel" as const }),
+    delivery: job.delivery?.mode === "announce" ? "last-channel" : "none",
     messageDigest: digestTemplateValue(job.message),
   };
 }
 
-function proposedScheduledDeclaration(
-  job: TemplateCronJob,
-  delivery: TemplatePlannedCronJob["delivery"],
-): ProposedScheduledDeclaration {
-  return { ...scheduledDeclaration(job, delivery), message: job.message };
+function proposedScheduledDeclaration(job: TemplateCronJob): ProposedScheduledDeclaration {
+  return { ...scheduledDeclaration(job), message: job.message };
 }
 
 export function projectTemplateAddScheduledJobs(plan: TemplateAddPlan): TemplateScheduledJobs {
@@ -213,14 +202,7 @@ export function projectTemplateAddScheduledJobs(plan: TemplateAddPlan): Template
             },
           };
         }
-        // SAFETY: cronJob plan actions carry a planned Template automation.
-        const details = action.details as TemplatePlannedCronJob | undefined;
-        // The declaration is validated as authored; an operator-chosen channel
-        // replaces only its delivery.
-        const chosenChannel =
-          details?.delivery?.mode === "announce" &&
-          details.delivery.channel !== undefined &&
-          details.delivery.channel !== "last";
+        const details = action.details;
         const parsed = cronJobSchema.safeParse({
           id: details?.id,
           name: details?.name,
@@ -228,7 +210,7 @@ export function projectTemplateAddScheduledJobs(plan: TemplateAddPlan): Template
           schedule: details?.schedule,
           session: details?.session,
           message: details?.message,
-          delivery: chosenChannel ? undefined : details?.delivery,
+          delivery: details?.delivery,
         });
         if (!parsed.success || parsed.data.id !== action.id || action.action !== "schedule") {
           throw new Error("Template scheduled declaration preview is unavailable.");
@@ -237,7 +219,7 @@ export function projectTemplateAddScheduledJobs(plan: TemplateAddPlan): Template
           id: action.id,
           action: action.action,
           blocked: action.blocked,
-          proposed: proposedScheduledDeclaration(parsed.data, details?.delivery),
+          proposed: proposedScheduledDeclaration(parsed.data),
         };
       }),
   };

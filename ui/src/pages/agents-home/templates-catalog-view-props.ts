@@ -19,8 +19,6 @@ export type TemplatesCatalogViewProps = {
   canStartAdd: boolean;
   consentWarning: string | null;
   reviewPlan: TemplateAddReviewPlan | null;
-  /** Channels to pick from before Add can schedule announce-to-last automations. */
-  automationChannelOptions: readonly string[] | null;
   canAdd: boolean;
   preview?: {
     kind: "instruction" | "skill";
@@ -38,6 +36,4 @@ export type TemplatesCatalogViewProps = {
   onCancelConsent: () => void;
   onConfirmReview: () => void | Promise<void>;
   onCancelReview: () => void;
-  onChooseAutomationChannel: (channel: string) => void | Promise<void>;
-  onCancelAutomationChannel: () => void;
 };

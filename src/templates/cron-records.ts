@@ -5,7 +5,7 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import type { TemplatePlannedCronJob } from "./manifest-contract.js";
+import type { TemplateCronJob } from "./manifest-contract.js";
 
 export const TEMPLATE_CRON_REF_SCHEMA_VERSION = "openclaw.templateCronRef.v1" as const;
 
@@ -18,7 +18,7 @@ export type PersistedTemplateCronRef = {
   /** Operation-local native creator fact; never learned from a later mutable job read. */
   nativeOwnership?: { ownerProfileId: string | undefined };
   status: "pending" | "complete" | "failed" | "removed";
-  job: TemplatePlannedCronJob | { automation: CronJobCreate };
+  job: TemplateCronJob | { automation: CronJobCreate };
   error?: string;
   createdAtMs: number;
   updatedAtMs: number;
@@ -37,7 +37,7 @@ function rowToTemplateCronRef(row: CronRefRow): PersistedTemplateCronRef {
     // SAFETY: Lifecycle writers own the existing persisted status enum.
     status: row.status as PersistedTemplateCronRef["status"],
     // SAFETY: Template cron writers persist validated manifest jobs as JSON.
-    job: JSON.parse(row.job_json) as TemplatePlannedCronJob,
+    job: JSON.parse(row.job_json) as TemplateCronJob,
     ...(row.error ? { error: row.error } : {}),
     createdAtMs: sqliteNumber(row.created_at_ms),
     updatedAtMs: sqliteNumber(row.updated_at_ms),

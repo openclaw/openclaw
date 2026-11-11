@@ -317,23 +317,6 @@ export function assertAnnounceDeliveryChannelSupport(
   if (patch && !cronPatchTouchesDeliveryResolution(patch)) {
     return;
   }
-  const channels = findAmbiguousAnnounceDeliveryChannels(job, configuredChannels);
-  if (channels) {
-    throw new Error(
-      `cron announce delivery requires an explicit channel when multiple channels are configured (${channels.join(", ")}): set --channel <id> or use --best-effort-deliver`,
-    );
-  }
-}
-
-/**
- * Configured channels that leave an isolated announce job without a
- * deterministic route, or undefined when its delivery can select one.
- */
-export function findAmbiguousAnnounceDeliveryChannels(
-  job: Pick<CronJob, "sessionTarget" | "delivery"> &
-    Partial<Pick<CronJob, "sessionKey" | "payload">>,
-  configuredChannels?: readonly string[],
-): string[] | undefined {
   const mode = resolveCronDeliveryMode(job);
   const channel = normalizeMessageChannel(job.delivery?.channel);
   const to = normalizeOptionalString(job.delivery?.to);
@@ -351,9 +334,11 @@ export function findAmbiguousAnnounceDeliveryChannels(
     job.delivery?.target === "owner" ||
     channels.length < 2
   ) {
-    return undefined;
+    return;
   }
-  return channels;
+  throw new Error(
+    `cron announce delivery requires an explicit channel when multiple channels are configured (${channels.join(", ")}): set --channel <id> or use --best-effort-deliver`,
+  );
 }
 
 export function cronPatchTouchesDeliveryResolution(patch: CronJobPatch): boolean {

@@ -1,2 +1,2 @@
-# Regression proof that Template Add asks where last-channel automations deliver on multi-channel hosts.
-99
+# Regression proof that Template Add schedules last-channel automations in the main session without delivery.
+68
