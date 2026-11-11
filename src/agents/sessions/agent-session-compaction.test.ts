@@ -966,18 +966,18 @@ describe("degraded compaction reload", () => {
     }
   });
 
-  it("keeps history on transient failures until a third or hard-limit failure commits the floor", async () => {
-    const dir = tempDirs.make("openclaw-compaction-failure-streak-");
-    const target = sessionTarget(path.join(dir, "sessions.json"), "compaction-failure-streak");
+  it("records failed attempts and commits the floor only when the pending request requires it", async () => {
+    const dir = tempDirs.make("openclaw-compaction-attempts-");
+    const target = sessionTarget(path.join(dir, "sessions.json"), "compaction-attempts");
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     let sessionManager = SessionManager.open(target, dir);
-    let at = 0;
-    const appendTurn = () => {
-      sessionManager.appendMessage(makeUserMessage(`prompt ${(at += 1)}`, at));
-      sessionManager.appendMessage({ ...createAssistant(model, `answer ${at}`), timestamp: at });
-    };
-    appendTurn();
-    appendTurn();
+    for (const at of [1, 3]) {
+      sessionManager.appendMessage(makeUserMessage(`prompt ${at}`, at));
+      sessionManager.appendMessage({
+        ...createAssistant(model, `answer ${at}`),
+        timestamp: at + 1,
+      });
+    }
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
       createAssistantResultStream({
         ...createAssistant(activeModel, [], "error"),
@@ -996,13 +996,11 @@ describe("degraded compaction reload", () => {
     let fixture = await safeguardFixture(model, sessionManager, undefined, (api) => {
       api.on("session_before_compact", async () => (decline ? { cancel: true } : undefined));
     });
-    const compactOnce = async (unresolved?: "unresolved") => {
+    const compactOnce = async (requestRequiresCompaction?: true) => {
       const events = collectCompactionEnds(fixture.session);
-      await (
-        unresolved
-          ? fixture.session[agentSessionAutomaticCompaction](undefined, unresolved)
-          : fixture.session.compact()
-      ).catch((error: unknown) => {
+      await fixture.session[agentSessionAutomaticCompaction](undefined, undefined, undefined, {
+        requestRequiresCompaction,
+      }).catch((error: unknown) => {
         expect(String(error)).toContain("Compaction cancelled");
       });
       return events.at(-1)?.outcome;
@@ -1011,10 +1009,9 @@ describe("degraded compaction reload", () => {
     const context = JSON.stringify(sessionManager.buildSessionContext());
     expect(await compactOnce()).toEqual({ status: "aborted" });
     expect(await compactOnce()).toEqual({ status: "aborted" });
-    // An earlier hook's decline neither reuses the last failure nor extends the streak.
+    // An earlier hook's decline does not reuse the last safeguard failure.
     decline = true;
-    expect(await compactOnce()).toEqual({ status: "aborted" });
-    expect(attempts()).toHaveLength(2);
+    expect(await compactOnce(true)).toEqual({ status: "aborted" });
     // Attempt rows survive a reopen and never reach model context.
     fixture.session.dispose();
     fixture.dispose();
@@ -1022,29 +1019,16 @@ describe("degraded compaction reload", () => {
     sessionManager = await reopen(target, dir);
     fixture = await safeguardFixture(model, sessionManager);
     expect(JSON.stringify(sessionManager.buildSessionContext())).toBe(context);
+    const cancelled = { failure: "timeout", required: false, outcome: "cancelled" };
     expect(attempts()).toEqual(
-      [1, 2].map((streak) => ({
-        failure: "timeout",
-        pressure: "headroom",
-        tokensBefore: expect.any(Number),
-        streak,
-        outcome: "cancelled",
-      })),
+      [1, 2].map(() => ({ ...cancelled, tokensBefore: expect.any(Number) })),
     );
 
-    // The third failure in a row commits the floor and takes the degraded notice path.
-    expect(await compactOnce()).toMatchObject({ status: "completed", qualityDegraded: true });
+    // A required compaction commits the floor and takes the degraded notice path.
+    expect(await compactOnce(true)).toMatchObject({ status: "completed", qualityDegraded: true });
     expect(lastCompaction(sessionManager).details).toMatchObject({ qualityDegraded: true });
     expect(lastCompaction(sessionManager).details).not.toHaveProperty("summaryRefused");
-    expect(attempts().at(-1)).toMatchObject({ streak: 3, outcome: "floor" });
-
-    // A committed compaction resets the streak; at the hard limit one failure commits the floor.
-    appendTurn();
-    appendTurn();
-    expect(await compactOnce()).toEqual({ status: "aborted" });
-    expect(attempts().at(-1)).toMatchObject({ streak: 1, outcome: "cancelled" });
-    expect(await compactOnce("unresolved")).toMatchObject({ qualityDegraded: true });
-    expect(attempts().at(-1)).toMatchObject({ streak: 2, pressure: "hard", outcome: "floor" });
+    expect(attempts().at(-1)).toMatchObject({ required: true, outcome: "floor" });
     fixture.dispose();
   });
 });

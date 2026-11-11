@@ -1,2 +1,2 @@
-88
-# Session-owner regression for failed-compaction escalation: streak, earlier-hook decline, hard-limit floor, reset, persisted attempt rows excluded from context.
+72
+# Session-owner regression for failed-compaction attempt rows: persisted, excluded from context, earlier-hook decline, required-preflight floor.

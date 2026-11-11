@@ -272,6 +272,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     requestBudget?: CompactionRequestBudget;
     requestFromEntryId?: string;
     pendingUserEntryId?: string;
+    requestRequiresCompaction?: true;
     onSummaryReady?: () => void;
   }): Promise<CompactionWorkOutcome> {
     const isManual = options.mode === "manual";
@@ -442,7 +443,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         const floor = await settleCompactionSafeguardCancellation(
           this.sessionManager,
           preparation,
-          { ...options, contextMessages, requestBudget, model },
+          options,
         );
         if (!floor) {
           return { status: "aborted" };

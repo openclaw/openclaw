@@ -13,25 +13,17 @@ import {
 } from "./agent-hooks/compaction-safeguard-runtime.js";
 import { createSessionManagerRuntimeRegistry } from "./agent-hooks/session-manager-runtime-registry.js";
 import { describeCompactionFailure } from "./embedded-agent-runner/compact-reasons.js";
-import type { AgentMessage } from "./runtime/index.js";
-import {
-  estimateCompactedRequestTokens,
-  type CompactionRequestBudget,
-} from "./sessions/compaction/request-budget.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
 
 /** A transcript custom entry: persisted and readable, never projected into model context. */
 const COMPACTION_ATTEMPT_CUSTOM_TYPE = "openclaw.compaction-attempt";
-// Consecutive non-refusal failures that commit the floor despite headroom (Hermes also uses 3).
-const FAILURE_STREAK_FLOOR = 3;
-
 type CompactionAttempt = {
   /** `refusal`, the provider failover class (timeout, overloaded, format...), or `unknown`. */
   failure: string;
-  pressure: "hard" | "headroom";
+  /** The pending request needed this compaction (a required preflight). */
+  required: boolean;
   tokensBefore: number;
-  streak: number;
   outcome: "cancelled" | "floor";
 };
 
@@ -134,72 +126,36 @@ export function withCompactionSummaryRoute<T extends { details?: unknown }>(
   return { ...result, details: { ...asOptionalRecord(result.details), summaryRoute } };
 }
 
-/** Attempt rows since the latest boundary; any committed compaction or reset ends the streak. */
-function readFailureStreak(
-  pathEntries: readonly { type: string; customType?: string; data?: unknown }[],
-): number {
-  const boundary = pathEntries.findLastIndex(
-    (entry) => entry.type === "compaction" || entry.type === "reset",
-  );
-  return pathEntries
-    .slice(boundary + 1)
-    .filter(
-      (entry) =>
-        entry.type === "custom" &&
-        entry.customType === COMPACTION_ATTEMPT_CUSTOM_TYPE &&
-        asOptionalRecord(entry.data)?.failure !== "refusal",
-    ).length;
-}
-
 /**
- * Settles a safeguard cancellation and records the attempt. A non-refusal failure commits the
- * floor at the hard limit or on the third consecutive failure; otherwise history is kept.
+ * Settles a safeguard cancellation and records the attempt. A non-refusal failure of a required
+ * compaction commits the floor, because the pending request cannot run until history shrinks;
+ * otherwise history is kept. Streak and overflow escalation wait on the recorded attempt rate.
  * Caller aborts never escalate. Cancels from other hooks record no safeguard cancellation and
  * stay intentional declines.
  */
 export async function settleCompactionSafeguardCancellation(
   sessionManager: {
-    getBranch(): readonly { type: string; customType?: string; data?: unknown }[];
     appendCustomEntryAsync(customType: string, data: CompactionAttempt): Promise<string>;
   },
   preparation: CompactionPreparation,
-  request: {
-    signal: AbortSignal;
-    requestState?: "unresolved";
-    contextMessages: AgentMessage[];
-    requestBudget?: CompactionRequestBudget;
-    model: { contextWindow?: number };
-  },
+  request: { signal: AbortSignal; requestRequiresCompaction?: true },
 ) {
   const cancellation = getCompactionSafeguardRuntime(sessionManager)?.cancellation;
   if (!cancellation || request.signal.aborted) {
     return undefined;
   }
-  const { requestBudget } = request;
-  const window = requestBudget?.contextWindow ?? request.model.contextWindow ?? 0;
-  const reserve = requestBudget?.reserveTokens ?? preparation.settings.reserveTokens;
-  const tokens = requestBudget
-    ? estimateCompactedRequestTokens(request.contextMessages, requestBudget)
-    : preparation.tokensBefore;
-  // Overflow and budget recovery retry a request that did not fit; otherwise the request is at
-  // its hard limit once it reaches the reserve beside the context window.
-  const hardPressure =
-    request.requestState === "unresolved" || (window > 0 && tokens >= window - reserve);
+  // The owner's fact, not an estimate: a required preflight cannot run its pending request.
+  const required = request.requestRequiresCompaction === true;
   const refused = isCompactionSummaryRefusal(cancellation.error);
-  const streak = readFailureStreak(sessionManager.getBranch()) + (refused ? 0 : 1);
-  const floor =
-    !refused && (hardPressure || streak >= FAILURE_STREAK_FLOOR)
-      ? compactWithoutSummary(preparation)
-      : undefined;
-  // Best effort: a lost row hides one failure from the streak and the attempt rate.
+  const floor = !refused && required ? compactWithoutSummary(preparation) : undefined;
+  // Best effort: a lost row hides one failure from the attempt rate.
   await sessionManager
     .appendCustomEntryAsync(COMPACTION_ATTEMPT_CUSTOM_TYPE, {
       failure: refused
         ? "refusal"
         : (describeCompactionFailure(cancellation.error).reason ?? "unknown"),
-      pressure: hardPressure ? "hard" : "headroom",
+      required,
       tokensBefore: preparation.tokensBefore,
-      streak,
       outcome: floor?.ok ? "floor" : "cancelled",
     })
     .catch((error: unknown) => {
@@ -209,7 +165,7 @@ export async function settleCompactionSafeguardCancellation(
     return undefined;
   }
   log.warn(
-    `Compaction summarization failed ${streak} time(s) in a row (hardPressure=${hardPressure}); committing the floor without a summary.`,
+    "Compaction summarization failed while a pending request needs room; committing the floor without a summary.",
   );
   setCompactionSafeguardCancellation(sessionManager, undefined);
   return { ...floor.value, details: { ...floor.value.details, qualityDegraded: true as const } };
