@@ -125,7 +125,9 @@ suite.define(() => {
       await sidebar.getByRole("link", { name: /Session sources/ }).click();
       await gateway.waitForRequest("plugins.list");
       const section = page.locator("#settings-session-sources");
-      await expectText(section, "Loading");
+      const loading = section.getByRole("status", { name: "Loading…", exact: true });
+      await expectCount(loading, 1);
+      expect(await loading.getAttribute("aria-busy")).toBe("true");
       expect(await section.getByRole("switch").count()).toBe(0);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
       await gateway.resolveDeferred("plugins.list");
@@ -206,11 +208,12 @@ suite.define(() => {
             ? { methodResponses: { "config.schema": { schema: objectSchema({}), uiHints: {} } } }
             : { operatorScopes: ["operator.read"] },
         );
-        await expectCount(section.getByRole("switch"), 2);
+        const switches = section.getByRole("switch", { includeHidden: true });
+        await expectCount(switches, 2);
         if (missingSchema) {
           await expectText(section, "Couldn’t load session sources");
         }
-        for (const toggle of await section.getByRole("switch").all()) {
+        for (const toggle of await switches.all()) {
           expect(await toggle.isDisabled()).toBe(true);
         }
         expect(await gateway.getRequests("config.set")).toHaveLength(0);

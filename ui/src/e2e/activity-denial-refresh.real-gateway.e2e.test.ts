@@ -1,5 +1,3 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
@@ -14,10 +12,10 @@ import {
 import { ensureProfileForEmail } from "../../../src/state/user-profiles.ts";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import type { SessionsListResult } from "../api/types.ts";
 import { activityPersonLocation } from "../app-route-paths.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
@@ -30,7 +28,7 @@ const suite = createControlUiE2eSuite({
 const scopes = ["operator.sessions.read", "operator.sessions.write"];
 
 suite.define(() => {
-  it("keeps a real guest timeline denial stable across unrelated session mutations", async (test) => {
+  it("keeps a real guest timeline private across unrelated session mutations", async (test) => {
     let cleanupState: (() => Promise<void>) | undefined;
     let gateway: GatewayServer | undefined;
     let proxy: ViteDevServer | undefined;
@@ -103,6 +101,7 @@ suite.define(() => {
           },
           async ({ page }) => {
             const requests: string[] = [];
+            const responses: { ok: boolean; payload: SessionsListResult }[] = [];
             const changed: unknown[] = [];
             page.on("websocket", (socket) => {
               socket.on("framesent", (frame) => {
@@ -120,6 +119,9 @@ suite.define(() => {
                 if (message.type === "event" && message.event === "sessions.changed") {
                   changed.push(message.payload);
                 }
+                if (message.type === "res" && requests.includes(message.id)) {
+                  responses.push(message);
+                }
               });
             });
             const url = new URL(
@@ -134,9 +136,24 @@ suite.define(() => {
               .click();
             await waitForControlUiGatewayReady(page);
             const alert = page.locator(".activity-feed__feedback [role=alert]");
-            await alert.waitFor();
-            const denial = await alert.textContent();
-            expect(denial).toContain("Other people's activity is private.");
+            const notFound = page.locator(".activity-feed__not-found");
+            const expectPrivateActivity = async () => {
+              await notFound
+                .getByRole("heading", { name: "Person not found", exact: true })
+                .waitFor();
+              await expect
+                .poll(() => responses.length > 0 && responses.length === requests.length)
+                .toBe(true);
+              for (const response of responses) {
+                expect(response).toMatchObject({ ok: true, payload: { sessions: [] } });
+                expect(
+                  response.payload.people?.some((person) => person.identity.id === other.id),
+                ).not.toBe(true);
+              }
+              expect(await alert.count()).toBe(0);
+              expect(await page.locator(".activity-feed__loading").count()).toBe(0);
+            };
+            await expectPrivateActivity();
             const initial = requests.length;
             await page.clock.install();
             await pauseVirtualClock(page);
@@ -148,36 +165,9 @@ suite.define(() => {
             });
             await expect.poll(() => changed.length).toBeGreaterThan(0);
             await page.clock.runFor(6000);
-            const facts = {
-              initial,
-              requests: requests.length,
-              skeleton: await page.locator(".activity-feed__loading").count(),
-              alert: await alert.count(),
-              changes: changed.length,
-            };
+            await expect.poll(() => requests.length).toBeGreaterThan(initial);
+            await expectPrivateActivity();
             await page.clock.resume();
-            if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-              const frame = await takeControlUiScreenshotFrame(
-                page,
-                page.locator(".activity-feed"),
-                [page.locator(".activity-feed__search")],
-                { animations: "disabled" },
-              );
-              await writeFile(path.join(suite.artifactDir, "real-denial.png"), frame.png);
-              await writeFile(
-                path.join(suite.artifactDir, "real-facts.json"),
-                JSON.stringify(facts, null, 2),
-              );
-              console.log("Real Activity evidence", suite.artifactDir, facts);
-            }
-            expect(facts).toMatchObject({ initial, requests: initial, skeleton: 0, alert: 1 });
-            await page
-              .locator(".activity-feed__feedback")
-              .getByRole("button", { name: "Retry", exact: true })
-              .click();
-            await expect.poll(() => requests.length).toBe(initial + 1);
-            await alert.waitFor();
-            expect(await alert.textContent()).toBe(denial);
           },
         );
       },
