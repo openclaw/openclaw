@@ -209,6 +209,44 @@ it("runs exact no-pager requests with empty rather than executable pager values"
   expect(mocks.spawnInputs[0]?.env).toMatchObject({ GIT_PAGER: "", PAGER: "" });
 });
 
+const textOf = (result: { content: Array<{ type: string; text?: string }> }) =>
+  result.content
+    .filter((entry) => entry.type === "text")
+    .map((entry) => entry.text ?? "")
+    .join("\n");
+
+it("keeps config environment literals readable unless a protected store entry overrides them", async () => {
+  vi.stubEnv("GOG_KEYRING_PASSWORD", "stable-config-literal");
+  mocks.egressActive = true;
+
+  const runEgress = (params: ExecParams) =>
+    createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+    }).execute("exec", { yieldMs: 120_000, ...params });
+
+  await runEgress({ command: "echo first" }).then((result) => {
+    expect(mocks.spawnInputs.at(-1)?.env?.GOG_KEYRING_PASSWORD).toBe("stable-config-literal");
+    expect(textOf(result)).not.toContain('overrides the inherited "GOG_KEYRING_PASSWORD"');
+  });
+
+  await writeEntries({}, [
+    {
+      name: "GOG_KEYRING_PASSWORD",
+      value: "protected-store-value",
+      allowedHosts: ["api.example.com"],
+    },
+  ]);
+  await runEgress({ command: "echo second" }).then((result) => {
+    const protectedValue = mocks.spawnInputs.at(-1)?.env?.GOG_KEYRING_PASSWORD ?? "";
+    expect(looksLikeSecretSentinel(protectedValue)).toBe(true);
+    expect(resolveSecretSentinel(protectedValue)).toBe("protected-store-value");
+    expect(textOf(result)).toContain('overrides the inherited "GOG_KEYRING_PASSWORD"');
+  });
+});
+
 it.each([
   [{ PATH: "/explicit/bin" }, /Security Violation: Custom 'PATH' variable is forbidden/],
   [{ LD_DEBUG: "1" }, /Security Violation: Environment variable 'LD_DEBUG' is forbidden/],

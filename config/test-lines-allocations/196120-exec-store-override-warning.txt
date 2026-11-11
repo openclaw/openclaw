@@ -1,0 +1,5 @@
+# PR #196698 (53afa0f2f3e): exact 38-line regression for the protected-store exec
+# environment warning — config env literals stay readable until a protected store
+# entry overrides them, and the override announces the sentinel swap.
+# Omitted at landing; preserve this coverage without changing the shared scalar.
+38
