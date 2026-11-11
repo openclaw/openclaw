@@ -9,7 +9,11 @@ import {
   buildSyntheticTextMessage,
 } from "../bot-handlers.message-context.js";
 import type { RegisterTelegramHandlerParams } from "../bot-handlers.types.js";
-import { resolveTelegramUpdateReceivedAtSeconds } from "../bot-processing-outcome.js";
+import {
+  isTelegramSpooledReplayUpdate,
+  recordTelegramMessageProcessingResult,
+  resolveTelegramUpdateReceivedAtSeconds,
+} from "../bot-processing-outcome.js";
 import { resolveTelegramMessageThreadSpec } from "../bot/helpers.js";
 import { readTelegramWidgetQuery, type TelegramWidgetQuery } from "./widget-bot-api.js";
 import { TELEGRAM_WIDGET_REQUEST_PREFIX } from "./widget-guidance.js";
@@ -21,7 +25,7 @@ const WIDGET_REQUEST_MAX_PER_WINDOW = 10;
 const WIDGET_REQUEST_GATE_MAX_KEYS = 500;
 const TAP_SOURCE_MAX_CHARS = 8_000;
 
-type WidgetRequestHistory = { at: number; data: string }[];
+type WidgetRequestHistory = { at: number; data: string; queryId: string }[];
 
 /**
  * Telegram cannot tell a tap from a widget's background request, so the router admits a
@@ -30,11 +34,15 @@ type WidgetRequestHistory = { at: number; data: string }[];
  */
 export function createTelegramWidgetRequestGate(now: () => number = Date.now) {
   const history = new Map<string, WidgetRequestHistory>();
-  return (key: string, data: string): boolean => {
+  return (key: string, data: string, queryId: string): boolean => {
     const at = now();
     const recent = (history.get(key) ?? []).filter(
       (entry) => at - entry.at < WIDGET_REQUEST_WINDOW_MS,
     );
+    // Durable ingress replays a retryable query under the same id; it was already admitted.
+    if (recent.some((entry) => entry.queryId === queryId)) {
+      return true;
+    }
     if (
       recent.length >= WIDGET_REQUEST_MAX_PER_WINDOW ||
       recent.some((entry) => entry.data === data)
@@ -42,7 +50,7 @@ export function createTelegramWidgetRequestGate(now: () => number = Date.now) {
       history.set(key, recent);
       return false;
     }
-    recent.push({ at, data });
+    recent.push({ at, data, queryId });
     history.delete(key);
     history.set(key, recent);
     if (history.size > WIDGET_REQUEST_GATE_MAX_KEYS) {
@@ -102,7 +110,7 @@ export function createTelegramWidgetQueryRouter({
     const data = query.data.trim();
     const chatId = query.chat.id;
     const widgetKey = `${chatId}:${query.message_id}`;
-    if (!isAdmissibleWidgetRequestText(data) || !admit(widgetKey, data)) {
+    if (!isAdmissibleWidgetRequestText(data) || !admit(widgetKey, data, query.id)) {
       logVerbose(`telegram: widget request dropped for ${widgetKey}`);
       return;
     }
@@ -153,7 +161,7 @@ export function createTelegramWidgetQueryRouter({
       }),
       reply_to_message: { ...widgetMessage, reply_to_message: undefined },
     };
-    await processMessageWithReplyChain({
+    const result = await processMessageWithReplyChain({
       ctx: buildSyntheticContext(ctx, syntheticMessage),
       msg: syntheticMessage,
       allMedia: [],
@@ -164,6 +172,9 @@ export function createTelegramWidgetQueryRouter({
         messageIdOverride: query.id,
       },
     });
+    if (result?.kind === "failed-retryable") {
+      recordTelegramMessageProcessingResult(result);
+    }
   };
 
   return {
@@ -177,6 +188,12 @@ export function createTelegramWidgetQueryRouter({
         await handleQuery(ctx, query);
       } catch (error) {
         runtime.error?.(danger(`widget query handler failed: ${String(error)}`));
+        // The query was acknowledged at admission; keep it retryable instead of tombstoning it.
+        if (isTelegramSpooledReplayUpdate(ctx.update)) {
+          recordTelegramMessageProcessingResult({ kind: "failed-retryable", error });
+          return;
+        }
+        throw error;
       }
     },
   };

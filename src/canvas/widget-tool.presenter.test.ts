@@ -119,6 +119,20 @@ describe("show_widget current-channel presentation", () => {
       await expectNoDocument();
     });
 
+    it("passes an explicitly empty state through as a clearing update", async () => {
+      const present = vi.fn(async () => ({
+        ok: true as const,
+        value: { kind: "message" as const, receipt, updated: true },
+      }));
+      const tool = createTool({
+        inlineClientAvailable: false,
+        presenters: [channelPresenter(present)],
+        presenterContext: { messageChannel: "telegram", currentMessageId: "query-1" },
+      });
+      await run(tool, { title: "Vote", state: "" });
+      expect(present).toHaveBeenCalledWith(expect.objectContaining({ state: "" }));
+    });
+
     it("rejects oversized state before presenting", async () => {
       const present = vi.fn();
       const tool = createTool({

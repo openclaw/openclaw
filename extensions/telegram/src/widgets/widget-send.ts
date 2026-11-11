@@ -16,10 +16,6 @@ export function hashTelegramWidgetSource(source: string): string {
   return createHash("sha256").update(source).digest("hex");
 }
 
-// A widget that never calls request() gets no query permission, so Telegram refuses every
-// request for it, background ones included.
-const WIDGET_REQUEST_CALL_RE = /\.request\s*\(/u;
-
 export async function sendTelegramWidget(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -42,7 +38,8 @@ export async function sendTelegramWidget(params: {
       chat_id: prepared.chatId,
       html: params.source,
       caption,
-      ...(WIDGET_REQUEST_CALL_RE.test(params.source) ? { allow_queries: true } : {}),
+      // Every widget may query; the query router decides which taps reach the agent.
+      allow_queries: true,
       ...(params.state ? { chat_data: params.state } : {}),
       ...prepared.threadParams,
     };

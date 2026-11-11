@@ -1,24 +1,46 @@
-import { describe, expect, it } from "vitest";
-import { readTelegramWidgetQuery } from "./widget-bot-api.js";
-import { createTelegramWidgetRequestGate } from "./widget-query-router.js";
+import { describe, expect, it, vi } from "vitest";
+
+const lookupTelegramSentWidget = vi.hoisted(() => vi.fn());
+const recordResult = vi.hoisted(() => vi.fn());
+vi.mock("./widget-store.js", () => ({
+  lookupTelegramSentWidget,
+  recordTelegramWidgetTap: vi.fn(),
+}));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({ readRuntimeConfig: () => ({}) }));
+vi.mock("../bot-processing-outcome.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../bot-processing-outcome.js")>()),
+  isTelegramSpooledReplayUpdate: () => true,
+  recordTelegramMessageProcessingResult: recordResult,
+}));
+
+const { readTelegramWidgetQuery } = await import("./widget-bot-api.js");
+const { createTelegramWidgetQueryRouter, createTelegramWidgetRequestGate } =
+  await import("./widget-query-router.js");
 
 describe("Telegram widget request gate", () => {
   it("admits a request text once per window per widget", () => {
     let now = 0;
     const admit = createTelegramWidgetRequestGate(() => now);
-    expect(admit("1:10", "refresh")).toBe(true);
+    expect(admit("1:10", "refresh", "q1")).toBe(true);
     // A widget polling with the same data in the background reaches the agent once.
     now = 5_000;
-    expect(admit("1:10", "refresh")).toBe(false);
-    expect(admit("1:10", "vote:2")).toBe(true);
-    expect(admit("1:11", "refresh")).toBe(true);
+    expect(admit("1:10", "refresh", "q2")).toBe(false);
+    expect(admit("1:10", "vote:2", "q3")).toBe(true);
+    expect(admit("1:11", "refresh", "q4")).toBe(true);
     now = 61_000;
-    expect(admit("1:10", "refresh")).toBe(true);
+    expect(admit("1:10", "refresh", "q5")).toBe(true);
+  });
+
+  it("admits a durable replay of an already admitted query", () => {
+    const admit = createTelegramWidgetRequestGate(() => 0);
+    expect(admit("1:10", "vote:v", "q1")).toBe(true);
+    expect(admit("1:10", "vote:v", "q1")).toBe(true);
+    expect(admit("1:10", "vote:v", "q2")).toBe(false);
   });
 
   it("caps distinct requests at ten per minute per widget", () => {
     const admit = createTelegramWidgetRequestGate(() => 0);
-    const results = Array.from({ length: 12 }, (_, i) => admit("1:10", `tap:${i}`));
+    const results = Array.from({ length: 12 }, (_, i) => admit("1:10", `tap:${i}`, `q${i}`));
     expect(results.filter(Boolean)).toHaveLength(10);
   });
 });
@@ -68,5 +90,57 @@ describe("formatTelegramWidgetRequestText", () => {
     expect(
       formatTelegramWidgetRequestText("done:1", { title: "Today", source: "x".repeat(9_000) }),
     ).not.toContain("Widget code:");
+  });
+});
+
+describe("widget query router", () => {
+  const query = {
+    id: "q1",
+    from: { id: 7, is_bot: false, first_name: "A" },
+    chat: { id: 7, type: "private" as const, first_name: "A" },
+    message_id: 10,
+    data: "vote:v",
+  };
+  const createRouter = (
+    processMessageWithReplyChain: (...args: unknown[]) => Promise<unknown> = vi.fn(),
+    authorized = true,
+  ) =>
+    createTelegramWidgetQueryRouter({
+      params: { accountId: "default", runtime: { error: vi.fn() } } as never,
+      message: { processMessageWithReplyChain } as never,
+      authorization: {
+        resolveTelegramEventAuthorizationContext: async () => ({ storeAllowFrom: [] }),
+        authorizeTelegramEventSender: async () => authorized,
+      } as never,
+    });
+  const ctx = {
+    update: { update_id: 1, widget_query: query },
+    me: { id: 1 },
+    getFile: vi.fn(),
+  } as never;
+
+  it("drops a tap from a sender outside the allowlist before any agent turn", async () => {
+    const process = vi.fn();
+    lookupTelegramSentWidget.mockResolvedValueOnce(undefined);
+    await createRouter(process, false).route(ctx, vi.fn());
+    expect(process).not.toHaveBeenCalled();
+  });
+
+  it("keeps an acknowledged tap retryable when routing fails before dispatch", async () => {
+    recordResult.mockClear();
+    lookupTelegramSentWidget.mockRejectedValueOnce(new Error("store busy"));
+    await createRouter().route(ctx, vi.fn());
+    expect(recordResult).toHaveBeenCalledWith({
+      kind: "failed-retryable",
+      error: expect.objectContaining({ message: "store busy" }),
+    });
+  });
+
+  it("records a retryable dispatch outcome for the ingress owner", async () => {
+    recordResult.mockClear();
+    lookupTelegramSentWidget.mockResolvedValueOnce(undefined);
+    const failure = { kind: "failed-retryable", error: new Error("session busy") };
+    await createRouter(async () => failure).route(ctx, vi.fn());
+    expect(recordResult).toHaveBeenCalledWith(failure);
   });
 });

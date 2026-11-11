@@ -58,6 +58,15 @@ TelegramWidget.onEvent('chatDataChanged',draw);draw();</script>`;
     expect(await check(source, { state, nextState: '{"w":0,"v":1}' })).toEqual({ errors: [] });
   });
 
+  it("accepts undefined or NaN the author wrote as content", async () => {
+    expect(await check("<p>JavaScript values: undefined and NaN</p>")).toEqual({ errors: [] });
+    expect(
+      await check(
+        `<p id=o></p><script>document.getElementById('o').textContent='Is NaN a number?';</script>`,
+      ),
+    ).toEqual({ errors: [] });
+  });
+
   it("reports errors that only happen after a tap", async () => {
     const source = `<button onclick="TelegramWidget.request('x'.repeat(80))">Go</button>`;
     expect((await check(source)).errors[0]).toMatch(/must be a string of 1 to 64 bytes/);

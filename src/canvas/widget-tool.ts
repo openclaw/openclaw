@@ -346,7 +346,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         params.report !== null &&
         !(rawWidgetCode.trim() && rawReport && Object.keys(rawReport).length === 0);
       const title = readToolStringParam(params, "title", { required: true });
-      const state = readToolStringParam(params, "state", { trim: false });
+      const state = readToolStringParam(params, "state", { trim: false, allowEmpty: true });
       if (state !== undefined) {
         if (!stateCapability) {
           throw new WidgetHtmlInputError("state is unavailable for this widget surface");

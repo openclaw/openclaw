@@ -9,6 +9,10 @@ const SHIM_HEAD = String.raw`(function () {
 "use strict";
 var G = globalThis;
 var SOURCE = G.__widgetSource;
+var STRING_LITERAL = /(["'\x60])(?:\\.|(?!\1)[^\\])*\1/g;
+var LITERAL_TEXT = SOURCE
+  .replace(/<script\b[\s\S]*?<\/script>/gi, function (m) { return " " + (m.match(STRING_LITERAL) || []).join(" ") + " "; })
+  .replace(/<style\b[\s\S]*?<\/style>/gi, " ");
 var STATE = G.__widgetState;
 var errors = [];
 var seen = new Set();
@@ -150,7 +154,8 @@ function measure() {
   maxNodes = Math.max(maxNodes, nodes); maxRules = Math.max(maxRules, ruleCount);
   var shown = visibleText(body);
   var bad = /\b(undefined|NaN|\[object Object\])\b/.exec(shown);
-  if (bad) {
+  // Words the author wrote as text or string literals are content, not missing data.
+  if (bad && LITERAL_TEXT.indexOf(bad[1]) < 0) {
     var at = Math.max(0, bad.index - 30);
     fail("The widget shows \"" + bad[1] + "\" " + context + " (\"..." + short(shown.slice(at, bad.index + 30)) + "...\"). The code reads data that is not there; check the state shape and the variables it uses.");
   }
