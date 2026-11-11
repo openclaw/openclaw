@@ -5,13 +5,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { assertDirectoryIdentitySync, readDirectoryIdentity } from "@openclaw/fs-safe/advanced";
 import type { MovePathPublicationReceipt } from "@openclaw/fs-safe/atomic";
-import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import { isRemovalIoError, removePathWithinRoot } from "./fs-safe-remove.js";
 import { FsSafeError, pathExists } from "./fs-safe.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
+import { sanitizeManifestForNpmInstall } from "./install-package-manifest.js";
 import { withInstallActivity, type InstallActivityObserver } from "./install-progress.js";
 import {
   assertCanonicalPathWithinBase,
@@ -20,11 +20,11 @@ import {
   resolveInstallPublishTarget,
 } from "./install-safe-path.js";
 import { formatNpmCommandFailureOutput } from "./install-source-utils.js";
-import { tryReadJson, writeJson } from "./json-files.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import { resolveNpmCommand } from "./npm-command.js";
 import { movePackageRoot } from "./package-update-filesystem.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
+import { copyWindowsJunction } from "./windows-junction-copy.js";
 
 type InstallSourceHardlinks = "package-manager" | "reject";
 
@@ -52,53 +52,6 @@ export function hasPackageRuntimeDependencies(manifest: {
     Object.keys(manifest.dependencies ?? {}).length > 0 ||
     Object.keys(manifest.optionalDependencies ?? {}).length > 0
   );
-}
-
-async function sanitizeManifestForNpmInstall(
-  targetDir: string,
-  omitOpenClawHostDependency: boolean,
-): Promise<() => Promise<void>> {
-  const manifestPath = path.join(targetDir, "package.json");
-  const parsed = await tryReadJson<unknown>(manifestPath);
-  if (!isObjectRecord(parsed)) {
-    return () => Promise.resolve();
-  }
-  const manifest = parsed;
-  const originalManifest = await fs.readFile(manifestPath);
-  let changed = false;
-
-  // npm resolves omitted development dependencies even when it does not install them.
-  if (Object.hasOwn(manifest, "devDependencies")) {
-    delete manifest.devDependencies;
-    changed = true;
-  }
-
-  if (omitOpenClawHostDependency) {
-    for (const key of [
-      "dependencies",
-      "optionalDependencies",
-      "peerDependencies",
-      "peerDependenciesMeta",
-    ] as const) {
-      const dependencies = manifest[key];
-      if (!isObjectRecord(dependencies) || !Object.hasOwn(dependencies, "openclaw")) {
-        continue;
-      }
-      delete dependencies.openclaw;
-      if (Object.keys(dependencies).length === 0) {
-        delete manifest[key];
-      }
-      changed = true;
-    }
-  }
-
-  if (changed) {
-    await writeJson(manifestPath, manifest, { trailingNewline: true });
-    return async () => {
-      await fs.writeFile(manifestPath, originalManifest);
-    };
-  }
-  return () => Promise.resolve();
 }
 
 async function hideProjectNpmConfigForInstall(targetDir: string): Promise<HiddenProjectConfigFile> {
@@ -221,6 +174,8 @@ export async function installPackageDir<
   };
   copyErrorPrefix: string;
   hasDeps: boolean;
+  /** Resolve and validate the staging tree, then discard it without publication. */
+  prepareOnly?: boolean;
   omitOpenClawHostDependency?: boolean;
   sourceHardlinks?: InstallSourceHardlinks;
   depsLogMessage: string;
@@ -525,6 +480,7 @@ export async function installPackageDir<
           // rewrites them toward the source tree, which makes valid vendored
           // package links look like install-root escapes during post-copy scans.
           verbatimSymlinks: true,
+          filter: copyWindowsJunction,
         }),
       );
     }
@@ -606,6 +562,16 @@ export async function installPackageDir<
       }
     } catch (err) {
       return await fail(`post-install validation failed: ${String(err)}`, err);
+    }
+  }
+
+  if (params.prepareOnly) {
+    try {
+      await fs.rm(stageDir, { recursive: true, force: true });
+      stageDir = null;
+      return { ok: true };
+    } catch (error) {
+      return await fail(`prepared package cleanup failed: ${String(error)}`, error);
     }
   }
 

@@ -80,7 +80,7 @@ import {
   waitForGatewayHealthyListener,
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
-import { renderGatewayServiceStartHints } from "./shared.js";
+import { assertGatewayServiceActionAllowed, renderGatewayServiceStartHints } from "./shared.js";
 import { repairLoadedGatewayServiceForStart } from "./start-repair.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
@@ -296,7 +296,7 @@ function renderGatewayServiceUninstallHints(): string[] {
 
 /** Uninstall the managed Gateway service after stopping it. */
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
-  assertGatewayServiceMutationAllowed("uninstall the gateway service");
+  assertGatewayServiceActionAllowed("uninstall", "uninstall the gateway service");
   return await runServiceUninstall({
     serviceNoun: "Gateway",
     service: resolveGatewayService(),
@@ -309,7 +309,7 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
 
 /** Start the managed Gateway service, repairing stale service definitions when possible. */
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
-  assertGatewayServiceMutationAllowed("start the gateway");
+  assertGatewayServiceActionAllowed("start", "start the gateway");
   const service = resolveGatewayService();
   const expectedPort = (await resolveGatewayConfigPorts()).explicit;
   return await runServiceStart({
@@ -422,7 +422,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
     return;
   }
   assertGatewayServiceUpdateCurrent();
-  assertGatewayServiceMutationAllowed("stop the gateway");
+  assertGatewayServiceActionAllowed("stop", "stop the gateway");
   const service = resolveGatewayService();
   return await runServiceStop({
     serviceNoun: "Gateway",
