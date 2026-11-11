@@ -902,3 +902,27 @@ it("permits admitted schema discovery with exec denied, without enabling executi
   });
   expect(mockCallGatewayTool).not.toHaveBeenCalled();
 });
+
+it("refuses capability-conferring native tools only on completion turns", async () => {
+  const decide = async (completion: boolean) => {
+    const { context } = await createExecution({ nativeTools: ["Agent", "WebSearch"] });
+    context.backendResolved.projectNativeToolAuthority = (tools) =>
+      tools.includes("WebSearch") ? ["web_search"] : [];
+    if (completion) {
+      context.params.trustedInternalHandoff = {
+        kind: "subagent-completion",
+        sourceSessionKey: "agent:main:subagent:child",
+        targetSessionKey: "agent:main:main",
+        targetSessionId: "sdk-session",
+        provider: "claude-cli",
+        model: "claude-sonnet-4-6",
+      };
+    }
+    return [
+      (await decideNativeTool(context, "WebSearch", { query: "news" }))?.behavior,
+      (await decideNativeTool(context, "Agent", { prompt: "tick" }))?.behavior,
+    ];
+  };
+  expect(await decide(false)).toEqual(["allow", "allow"]);
+  expect(await decide(true)).toEqual(["deny", "allow"]);
+});
