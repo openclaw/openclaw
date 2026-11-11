@@ -204,7 +204,9 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
       using now = vi.spyOn(Date, "now").mockReturnValue(0);
       const first = open();
       const killedPid = pid(first);
-      if (kind === "pooled") close(first);
+      if (kind === "pooled") {
+        close(first);
+      }
       await admin.query("SELECT pg_terminate_backend($1)", [killedPid]);
       // Only wall time advances while the guest's monotonic clock is suspended.
       now.mockReturnValue(2 * 60 * 60_000);
