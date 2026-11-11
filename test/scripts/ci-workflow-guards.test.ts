@@ -584,6 +584,43 @@ describe("ci workflow guards", () => {
     expect(evidence.with.path).toContain("wearScreenshots/*.jpg");
   });
 
+  it.each([
+    ["openclaw-performance", ["kova", "source_performance", "gateway_concurrency"]],
+    [
+      "qa-live-transports-convex",
+      [
+        "run_mock_parity",
+        "run_live_runtime_token_efficiency",
+        "run_live_matrix",
+        "run_live_buzz",
+        "run_live_telegram",
+        "run_live_discord",
+        "run_live_whatsapp",
+        "run_live_slack",
+      ],
+    ],
+  ] as const)("routes %s runtime jobs to hosted Ubuntu in Boat mode", (name, jobs) => {
+    const workflow = readWorkflow(`.github/workflows/${name}.yml`);
+    for (const runnerBackend of ["", "blacksmith", "hybrid", "runson", "github", "boat"] as const) {
+      const labels = ["github", "boat"].includes(runnerBackend)
+        ? "ubuntu-24.04"
+        : "blacksmith-4vcpu-ubuntu-2404";
+      for (const group of ["", "release-runners"]) {
+        for (const job of jobs) {
+          expect(
+            evaluateWorkflowRunner(workflow.jobs[job]["runs-on"], {
+              runnerBackend,
+              runnerGroup: group,
+              releaseRunnerGroup: group,
+              dispatchId: "full-release-validation-routing-proof",
+            }),
+            job,
+          ).toEqual(group ? { group, labels } : labels);
+        }
+      }
+    }
+  });
+
   it("separates release QA lanes without weakening their resource locks", () => {
     const workflow = readWorkflow(".github/workflows/qa-live-transports-convex.yml");
     const releaseWorkflow = readReleaseChecksWorkflow();
@@ -2501,9 +2538,9 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
 
   it.each([
     {
-      file: "full-release-validation.yml",
+      file: "full-release-state-watcher.yml",
       runner: "blacksmith-2vcpu-ubuntu-2404",
-      job: "release_decision",
+      job: "watch",
     },
     {
       file: "openclaw-npm-preflight.yml",
@@ -3229,7 +3266,7 @@ process.exit(JSON.parse(process.env.RECIPE_EXITS)[count] ?? 99);
           cwd: workspace,
           encoding: "utf8",
           env: {
-            PATH: process.env.PATH,
+            PATH: `${bin}${path.delimiter}${process.env.PATH}`,
             NODE_BIN: bin,
             GITHUB_ACTION_PATH: path.resolve(".github/actions/setup-node-env"),
             GITHUB_WORKSPACE: workspace,
@@ -3675,6 +3712,23 @@ server.listen(0, "127.0.0.1", () => {
   });
 
   it("keeps each compiled worker preset in a separate archive", () => {
+    const uiSetup = requiredWorkflowStep(
+      readCiWorkflow().jobs["checks-ui-e2e"].steps,
+      "Setup Node environment",
+    );
+    expect(uiSetup.with?.["vitest-worker-preset"]).toBe("runtime");
+    for (const [task, frozen, expected] of [
+      ["control-ui", "false", "true"],
+      ["control-ui", "true", "false"],
+      ["browser-extension", "false", "false"],
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(uiSetup.with?.["vitest-worker-cache"], {
+          matrix: { task },
+          preflightOutputs: { frozen_target: frozen },
+        }),
+      ).toBe(expected);
+    }
     const setup = readWorkflow(".github/actions/setup-node-env/action.yml");
     const steps = setup.runs.steps as WorkflowStep[];
     const restore = requiredWorkflowStep(steps, "Restore compiled Vitest workers");
@@ -5315,6 +5369,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     () => {
       const directory = tempDirs.make("ci-preflight-dependencies-");
       const harness = exportPreflightHarness(directory);
+      const adaptiveImport = spawnSync(
+        testNodeExecPath,
+        [
+          "--input-type=module",
+          "-e",
+          `await import(${JSON.stringify(pathToFileURL(path.join(harness, "scripts/ci-adaptive-priors.mjs")).href)});`,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(adaptiveImport.status, adaptiveImport.stderr).toBe(0);
       const harnessPaths = new Set<string>();
       const steps: WorkflowStep[] = readCiWorkflow().jobs.preflight.steps;
       for (const step of steps) {
@@ -6609,13 +6673,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           GITHUB_ENV: output,
           FIXTURE_CORES: String(cores),
           RUNSON_JOB: "true",
+          OPENCLAW_NODE_TEST_CPU_BUDGET: "",
           RUNNER_ENVIRONMENT: "self-hosted",
           FROZEN_TARGET: "false",
           SHARD_PLAN_CONCURRENCY: "1",
         },
       });
       expect(result.status, result.stderr).toBe(0);
-      expect(readWorkflowOutputs(output)).toEqual({ OPENCLAW_VITEST_MAX_WORKERS: String(workers) });
+      expect(readWorkflowOutputs(output)).toEqual({
+        OPENCLAW_NODE_TEST_CPU_BUDGET: "",
+        OPENCLAW_VITEST_MAX_WORKERS: String(workers),
+      });
     }
   });
 
@@ -6834,7 +6902,7 @@ it("pins generated publisher and maturity owners before credentials and selected
   ]);
   expect(action.runs.steps[0]).toEqual({
     ...PINNED_GIT_OWNER,
-    uses: "openclaw/openclaw/.github/actions/git-owner@c30efcb58a050bc5c449381e732125662e87faae",
+    uses: "openclaw/openclaw/.github/actions/git-owner@8743f1bfafa41aebdb3a33a7137eaa6d70bd0eb7",
   });
   const sanitySteps: WorkflowStep[] = readWorkflowSanityWorkflow().jobs.actionlint.steps;
   const audit = sanitySteps.findIndex(
@@ -6932,6 +7000,7 @@ it.each(["publish", "promote"])(
             finalize_release_before_docker: false,
           },
           needs: {
+            resolve_release_target: { outputs: { prepared_plugins: "" } },
             publish: { result: "success" },
             publish_docker: { result: "success" },
             finalize_github_release_before_docker: { result: "skipped" },
@@ -7596,15 +7665,23 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     const steps = job.steps as WorkflowStep[];
     const checkout = requiredWorkflowStep(steps, "Checkout selected tag");
     expect(job.permissions, jobName).toEqual({ contents: "read" });
-    expect(checkout.with?.["persist-credentials"], jobName).toBe(false);
     const jobJson = JSON.stringify(job);
     expect(jobJson, jobName).not.toContain("${{ secrets.");
     for (const envName of tauriSigningEnvNames) {
       expect(jobJson, jobName).not.toContain(envName);
     }
     if (jobName === "validate_release") {
+      expect(checkout.uses).toBeUndefined();
+      expect(checkout.env).toEqual({
+        RELEASE_TAG: "${{ steps.request.outputs.release_tag }}",
+      });
+      expect(checkout.run).toContain('f"+refs/tags/{release_tag}:refs/tags/{release_tag}"');
+      expect(checkout.run).toContain("for attempt in range(1, 4):");
+      expect(checkout.run).toContain("timeout=120");
+      expect(checkout.run).toContain('git_output(workspace, "rev-parse", "HEAD")');
       continue;
     }
+    expect(checkout.with?.["persist-credentials"], jobName).toBe(false);
     const checkoutIndex = steps.indexOf(checkout);
     expect(checkout.with?.ref).toBe("${{ needs.validate_release.outputs.tag_sha }}");
     expect(checkoutIndex, `${jobName} selected checkout order`).toBeGreaterThan(0);
@@ -7636,7 +7713,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     path: ".release-tooling",
     "persist-credentials": false,
     "sparse-checkout":
-      "apps/linux/src-tauri/tauri.conf.json\nscripts/lib/record-shared.mjs\nscripts/release-tooling-identity.mjs\nscripts/linux-updater-manifest.mjs\nscripts/lib/release-version.mjs\n",
+      "apps/linux/src-tauri/tauri.conf.json\nscripts/lib/record-shared.mjs\nscripts/lib/plain-gh.mjs\nscripts/release-tooling-identity.mjs\nscripts/linux-updater-manifest.mjs\nscripts/lib/release-version.mjs\n",
   });
   const tooling = requiredWorkflowStep(linuxSteps, "Verify trusted release tooling identity");
   expect(tooling?.env).toMatchObject({
