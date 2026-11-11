@@ -1812,16 +1812,16 @@ export async function runPublishModelCatalog(
       ? [{ file: path.resolve(rootDir, args.outV3), content: serializedV3 }]
       : []),
   ];
-  if (outputs.length > 1) {
+  // The v1-only run keeps its direct writer (#160157). Versioned outputs, including a
+  // lone v2/v3 left by --skip-oversized-v1, replace the previous file through the
+  // temp-file publisher so an interrupted write never destroys it.
+  if (outputs.length > 1 || skipV1) {
     await publishModelCatalogPair(outputs, (message) =>
       process.stderr.write(`[${SCRIPT_LABEL}] warning: ${message}\n`),
     );
   } else {
-    const [output] = outputs;
-    if (output) {
-      fs.mkdirSync(path.dirname(output.file), { recursive: true });
-      fs.writeFileSync(output.file, output.content);
-    }
+    fs.mkdirSync(path.dirname(outputFile), { recursive: true });
+    fs.writeFileSync(outputFile, serialized);
   }
   if (bundleV2) {
     process.stdout.write(

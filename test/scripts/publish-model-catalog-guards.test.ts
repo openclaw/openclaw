@@ -26,6 +26,8 @@ function fixture(options: {
   authChoices?: Array<{ provider: string; onboardingScopes?: string[] }>;
   /** Standalone LiteLLM prices; v1 lists each under two keys, so they grow v1 fastest. */
   standalonePrices?: number;
+  /** Publish v1 and v3 only, as a feed set without v2. */
+  withoutV2?: boolean;
 }) {
   const rootDir = tempDirs.make("openclaw-catalog-guards-");
   const providers = {
@@ -85,8 +87,7 @@ function fixture(options: {
           ...(options.standalonePrices === undefined ? [] : ["--pricing"]),
           "--out",
           files.v1,
-          "--out-v2",
-          files.v2,
+          ...(options.withoutV2 ? [] : ["--out-v2", files.v2]),
           "--out-v3",
           files.v3,
           ...extraArgs,
@@ -217,6 +218,22 @@ describe("feed size", () => {
     expect(JSON.parse(fs.readFileSync(files.v2, "utf8")).models).toHaveLength(200);
     expect(JSON.parse(fs.readFileSync(files.v3, "utf8")).models).toHaveLength(200);
     expect(stderr.join("")).toContain("v1 not written, the previous v1 stays served");
+  });
+
+  it("keeps the previous v3 when the lone v3 left by --skip-oversized-v1 fails mid-write", async () => {
+    const { files, run } = fixture({ standalonePrices: 31_000, withoutV2: true });
+    fs.writeFileSync(files.v3, "previous v3\n");
+    const realWrite = fs.writeFileSync;
+    // A full disk: the v3 write lands half its bytes, then fails.
+    vi.spyOn(fs, "writeFileSync").mockImplementation((target, data, options) => {
+      if (typeof data === "string" && data.includes('"schemaVersion": 3')) {
+        realWrite(target, data.slice(0, data.length / 2), options);
+        throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+      }
+      return realWrite(target, data, options);
+    });
+    await expect(run("--skip-oversized-v1")).rejects.toThrow("ENOSPC");
+    expect(fs.readFileSync(files.v3, "utf8")).toBe("previous v3\n");
   });
 });
 
