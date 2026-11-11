@@ -151,16 +151,18 @@ In onboarding, keep port `18789`, select **LAN** for the Gateway bind, and
 leave Tailscale off. The LAN bind lets Docker reach the Gateway inside the
 container. Docker publishes the port on the host's loopback address.
 
-Start the Gateway and print the Control UI URL.
+Start the Gateway, wait for it to be healthy, then copy the one-time Control UI
+pairing URL to the Docker host's clipboard.
 
 ```powershell
-docker compose up -d openclaw-gateway
-docker compose run --rm openclaw-cli dashboard --no-open
+docker compose up --wait openclaw-gateway
+(docker compose run --rm -T openclaw-cli dashboard --json | ConvertFrom-Json).browserUrl | Set-Clipboard
 ```
 
-Open the printed URL in the browser on the Docker host. The named volumes
-preserve the configuration, workspace, and auth-profile keys when you replace
-the container.
+Paste the URL into a browser on the Docker host within 10 minutes. If the
+Control UI is still preparing or the link expires, rerun the second command.
+The named volumes preserve the configuration, workspace, and auth-profile keys
+when you replace the container.
 
 ### Using the Control UI browser
 
