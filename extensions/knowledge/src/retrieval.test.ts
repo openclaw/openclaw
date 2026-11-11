@@ -392,9 +392,10 @@ it("keyword search matches canonically equivalent Unicode spellings without rewr
   const nfdPath = await f.put("nfd_note", "Greek", `The word ${decomposed} is decomposed.`);
   await f.put("plain_note", "Greek", `The word ${unaccented} is unaccented.`);
 
-  // Capture full records (body, hash, revision) through the real service record API
-  // before searching; a query that rewrote stored text would change these fields.
-  const recordOf = async (id: string) => (await f.service.record({ id }, f.owner)).record!;
+  // Capture full records (body, hash, revision) through the real service
+  // record_detail API before searching; a query that rewrote stored text would
+  // change these fields.
+  const recordOf = async (id: string) => (await f.service.record_detail({ id }, f.owner)).record!;
   const fields = (record: any) => ({
     body: record.body,
     hash: record.hash,
@@ -410,9 +411,10 @@ it("keyword search matches canonically equivalent Unicode spellings without rewr
     before[id] = await recordOf(id);
   }
 
-  // Run both regression searches with full detail so snippets/highlights are exposed.
-  const fullComposed = await f.service.grep({ query: composed, detail: "full" }, f.owner);
-  const fullDecomposed = await f.service.grep({ query: decomposed, detail: "full" }, f.owner);
+  // The service grep already returns full hits (snippets and citations); the
+  // compact projection is only produced by the agent surface.
+  const fullComposed = await f.service.grep({ query: composed }, f.owner);
+  const fullDecomposed = await f.service.grep({ query: decomposed }, f.owner);
   const sorted = (result: any) => ids(result).toSorted();
   const byComposed = sorted(fullComposed);
   const byDecomposed = sorted(fullDecomposed);
@@ -429,7 +431,7 @@ it("keyword search matches canonically equivalent Unicode spellings without rewr
   // bounded-snippet contract: snippet.text === body.slice(start, end)) and identify
   // the canonical word each note authored, in its own verbatim normalization.
   for (const result of [fullComposed, fullDecomposed]) {
-    for (const hit of result.hits.filter(isFullHit)) {
+    for (const hit of result.hits) {
       const { word, otherSpelling } = canonicalWords[hit.record.id]!;
       const originalBody = before[hit.record.id]!.body as string;
       expect(hit.snippet.text).toBe(originalBody.slice(hit.snippet.start, hit.snippet.end));
@@ -461,10 +463,10 @@ it("keyword search matches canonically equivalent Unicode spellings without rewr
   const nfdHangul = mixed.normalize("NFD"); // 가나
   await f.put("hangul_note", "Hangul", `Saved verbatim: ${mixed}.`);
   await f.put("hangul_nfc_note", "Hangul", `Saved composed: ${nfcHangul}.`);
-  const fullHangul = await f.service.grep({ query: mixed, detail: "full" }, f.owner);
+  const fullHangul = await f.service.grep({ query: mixed }, f.owner);
   expect(sorted(fullHangul)).toStrictEqual(["hangul_nfc_note", "hangul_note"]);
   // The hit cites the record's own spelling, not a canonical replacement.
-  const hangulHit = fullHangul.hits.find((h) => isFullHit(h) && h.record.id === "hangul_note");
+  const hangulHit = fullHangul.hits.find((h) => h.record.id === "hangul_note");
   expect(hangulHit!.snippet.text).toContain(mixed);
   // Canonical query directions of the same word stay equivalent; both reach the
   // composed note, and only the literal query reaches the mixed stored token.
