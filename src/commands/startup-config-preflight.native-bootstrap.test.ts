@@ -13,6 +13,11 @@ import {
   recheckGatewayRunBootstrap,
 } from "../cli/gateway-cli/pre-bootstrap.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
+import { runClientCredentialOperation } from "../infra/client-credential-store.js";
+import {
+  generateStoredDeviceIdentity,
+  storedDeviceIdentityToRow,
+} from "../infra/device-identity-material.js";
 import { StateDatabaseOfflineMaintenanceError } from "../infra/gateway-state-owner-record.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
@@ -26,6 +31,38 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
+
+it.runIf(process.platform !== "win32")(
+  "repairs remount modes before Gateway preflight admits client credentials",
+  async () => {
+    await withOpenClawTestState({ label: "gateway-remounted-credentials" }, async (state) => {
+      await state.writeConfig({ gateway: { mode: "local" }, plugins: { enabled: false } });
+      const identity = storedDeviceIdentityToRow("node", generateStoredDeviceIdentity(123), 456);
+      const read = () =>
+        runClientCredentialOperation(state.env, {
+          kind: "identity.read",
+          identity_key: identity.identity_key,
+        });
+      runClientCredentialOperation(state.env, { kind: "identity.create", identity });
+      const credentials = resolveClientCredentialStorePath(state.env);
+      for (const [target, broadened] of [
+        [state.stateDir, 0o2770],
+        [path.dirname(credentials), 0o2770],
+        [credentials, 0o660],
+      ] as const) {
+        fs.chmodSync(target, broadened);
+      }
+      expect(() => read()).toThrow("directory is unsafe");
+
+      const ready = await runStartupConfigPreflight({ gateway: true, observe: false });
+
+      expect(ready.snapshot.valid).toBe(true);
+      expect(read()).toEqual({ kind: "identity", identity });
+      expect(fs.lstatSync(path.dirname(credentials)).mode & 0o7777).toBe(0o700);
+      expect(fs.lstatSync(credentials).mode & 0o7777).toBe(0o600);
+    });
+  },
+);
 
 it.each([false, true])(
   "migrates native credentials before webhook readiness (routed root: %s)",

@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isolatedAssistant,
@@ -15,6 +16,9 @@ describe("isolated completion token budgets", () => {
   it.each(["host-v1", "host-v2", "harness-v2", "cli"] as const)(
     "reserves requested reasoning while preserving explicit limits through %s",
     async (route) => {
+      // Token-budget propagation is independent of cold-loader time; deadline tests own expiry.
+      using clock = vi.spyOn(performance, "now");
+      clock.mockReturnValue(0);
       const model = {
         provider: "openai",
         id: "gpt-test",
@@ -75,17 +79,17 @@ describe("isolated completion token budgets", () => {
   );
 
   it.each([
-    { reasoning: true, modelMaxTokens: 1_024, expected: 1_024 },
-    { reasoning: false, modelMaxTokens: 16_384, expected: 300 },
-    { reasoning: false, modelMaxTokens: 128, expected: 128 },
-  ])("fits the answer budget to model capabilities: %j", async (capability) => {
+    { reasoning: true, modelMaxTokens: 1_024, expected: { maxTokens: 1_024, temperature: 0.2 } },
+    { reasoning: false, modelMaxTokens: 16_384, expected: { maxTokens: 300, temperature: 0.2 } },
+    { reasoning: false, modelMaxTokens: 128, id: "gpt-6-luna", expected: { maxTokens: 128 } },
+  ])("fits the answer budget to model capabilities: %j", async (row) => {
     mocks.prepareSimpleCompletionModel.mockResolvedValue({
       model: {
         provider: "openai",
-        id: "gpt-test",
+        id: row.id ?? "gpt-test",
         api: "openai-responses",
-        reasoning: capability.reasoning,
-        maxTokens: capability.modelMaxTokens,
+        reasoning: row.reasoning,
+        maxTokens: row.modelMaxTokens,
       },
       auth: { apiKey: "synthetic-key", mode: "api-key", source: "test" },
     });
@@ -93,9 +97,8 @@ describe("isolated completion token budgets", () => {
       assistant: isolatedAssistant([{ type: "text", text: "done" }]),
     }));
     registerIsolatedHarness({ runIsolatedCompletionV2: dispatch });
-    await runIsolatedCompletion({ ...isolatedRequest(), answerTokenBudget: 300 });
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ streamParams: { maxTokens: capability.expected } }),
-    );
+    const streamParams = { temperature: 0.2 };
+    await runIsolatedCompletion({ ...isolatedRequest(), answerTokenBudget: 300, streamParams });
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ streamParams: row.expected }));
   });
 });

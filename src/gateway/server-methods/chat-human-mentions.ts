@@ -14,8 +14,9 @@ function splitsSurrogate(text: string, offset: number): boolean {
 }
 
 /**
- * A message that selects people and never names the agent is addressed to those
- * people. The agent's group-chat mention patterns (identity name, emoji, or
+ * A message that starts with a selected person and never names the agent is
+ * addressed to people. Incidental mentions (including cc) still run the agent.
+ * The agent's group-chat mention patterns (identity name, emoji, or
  * configured `mentionPatterns`) decide whether it was named; the selected
  * tokens are excluded so a person whose handle contains the agent's name does
  * not address it.
@@ -26,12 +27,14 @@ export function isHumanAddressedChatMessage(params: {
   text: string;
   mentions: readonly HumanMention[] | undefined;
 }): boolean {
-  if (!params.mentions?.length) {
+  const mentions = params.mentions ?? [];
+  const firstMention = mentions[0];
+  if (!firstMention || params.text.slice(0, firstMention.start).trim()) {
     return false;
   }
   let remaining = "";
   let cursor = 0;
-  for (const mention of params.mentions) {
+  for (const mention of mentions) {
     remaining += params.text.slice(cursor, mention.start);
     cursor = mention.end;
   }

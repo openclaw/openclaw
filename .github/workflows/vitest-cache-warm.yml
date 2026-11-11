@@ -35,7 +35,7 @@ jobs:
       matrix:
         # Hybrid's hosted lanes cannot read Blacksmith's backend-local cache.
         # Dependency publication must not queue behind long code warming.
-        platform: ${{ fromJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && '["linux", "linux-hosted", "macos"]' || '["linux", "macos"]') }}
+        platform: ${{ fromJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && '["linux-hosted", "macos"]' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && '["linux", "linux-hosted", "macos"]' || '["linux", "macos"]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -102,7 +102,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && '["linux", "linux-hosted"]' || '["linux"]') }}
+        platform: ${{ fromJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && '["linux-hosted"]' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && '["linux", "linux-hosted"]' || '["linux"]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

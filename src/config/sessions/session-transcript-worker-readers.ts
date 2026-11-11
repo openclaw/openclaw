@@ -141,6 +141,10 @@ const readers: Readers & ThisType<ReaderContext> = {
     (input) => ({ kind: "transcript-visible-delta", ...input }),
     (value) => value.result,
   ),
+  readReplayGroups: reader(
+    (input) => ({ kind: "transcript-replay-groups", ...input }),
+    (value) => value.result,
+  ),
   readSessionMemoryCapture: reader(
     (input) => ({ kind: "session-memory-capture", ...input }),
     (value) => value.result,

@@ -15,6 +15,7 @@ import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { getWebhookLegacyListener } from "../plugins/http-legacy-listener.js";
 import { NODE_WORKER_BUNDLE_TRANSFER_PATH } from "../worker/node-bundle-install-protocol.js";
 import { resolveAssistantAgentId } from "./assistant-identity.js";
+import { parseBrowserPairRequestPath } from "./browser-pair-route.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import {
@@ -85,6 +86,7 @@ import {
   getSessionHistoryHttpModule,
   getSessionKillHttpModule,
   getToolsInvokeHttpModule,
+  getBrowserPairHttpModule,
   getDevicePairingJoinHttpModule,
   getPluginNodeCapabilityAuthModule,
   getHttpAuthUtilsModule,
@@ -439,6 +441,19 @@ export function createGatewayHttpRequestHandler(
           (await getDevicePairingJoinHttpModule()).handleDevicePairingJoinHttpRequest({
             ...transferRequest,
             shortcode: devicePairingJoinShortcode,
+          }),
+        );
+      }
+
+      const browserPairAction = controlUiEnabled
+        ? parseBrowserPairRequestPath(scopedRequestPath, controlUiRouteBasePath)
+        : null;
+      if (browserPairAction) {
+        addAdmittedStage(true, async () =>
+          (await getBrowserPairHttpModule()).handleBrowserPairHttpRequest({
+            ...transferRequest,
+            action: browserPairAction,
+            config: configSnapshot,
           }),
         );
       }

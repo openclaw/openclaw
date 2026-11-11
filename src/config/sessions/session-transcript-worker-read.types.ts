@@ -1,6 +1,7 @@
+import type { SessionEntryRenderedPage } from "../../../packages/memory-host-sdk/src/host/session-entry-render.js";
 import type {
   BuildSessionEntryOptions,
-  SessionFileEntry,
+  SessionEntrySummary,
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import type { SessionResetRecallCutoff } from "../../../packages/memory-host-sdk/src/host/session-reset-recall.js";
 import type { BoardReadOperations } from "../../boards/sqlite-board-operations.js";
@@ -35,6 +36,7 @@ import type {
 } from "./session-history-read.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import type { SessionTranscriptAnchorEntry } from "./session-transcript-anchor-read.types.js";
+import type { SessionTranscriptReplaySelection } from "./session-transcript-replay.types.js";
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
@@ -158,6 +160,7 @@ export type SessionTranscriptDeltaWorkerInput = Omit<
 } & (
     | { kind: "transcript-raw-delta"; limits: SessionTranscriptRawDeltaLimits }
     | { kind: "transcript-visible-delta"; limits: SessionTranscriptVisibleMessageDeltaLimits }
+    | { kind: "transcript-replay-groups"; selection: SessionTranscriptReplaySelection }
   );
 
 export type SessionTranscriptLatestAssistantWorkerInput = Omit<
@@ -206,28 +209,30 @@ export type SessionResetRecallWorkerInput = {
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
-type SessionEntryWorkerRequest = {
-  kind: "session-entry";
-  absPath: string;
-  options: Omit<BuildSessionEntryOptions, "onTranscriptMessage" | "parseYieldEveryLines"> & {
-    agentId: string;
-    sessionId: string;
-    storePath: string;
-  };
-  admission?: UserTurnTranscriptAdmissionReceipt;
-};
-
-export type SessionEntryWorkerInput = SessionEntryWorkerRequest &
-  ({ mode?: "entry" } | { mode: "snapshot"; includeOriginalMessages: boolean });
-
 export type SessionEntriesWorkerInput = {
   kind: "session-entries";
-  entries: Omit<SessionEntryWorkerRequest, "kind">[];
+  entries: {
+    absPath: string;
+    options: Omit<BuildSessionEntryOptions, "onTranscriptMessage"> & {
+      agentId: string;
+      sessionId: string;
+      storePath: string;
+    };
+    admission?: UserTurnTranscriptAdmissionReceipt;
+    /** Deliver rendered pages; otherwise only the summary returns. */
+    pages: boolean;
+    /** Deliver each observed original message with the pages. */
+    messages: boolean;
+    prefixLineCount?: number;
+  }[];
 };
 
-export type SessionEntriesWorkerResult = {
-  entries: (
-    | { entry: SessionFileEntry | null; resetRecallCutoff: SessionResetRecallCutoff }
-    | { cold: true }
-  )[];
-};
+/** The worker's acknowledged deliveries, in order, for one requested entry. */
+export type SessionEntriesWorkerUpdate =
+  | { page: SessionEntryRenderedPage }
+  | { reset: true }
+  | {
+      value:
+        | { summary: SessionEntrySummary | null; resetRecallCutoff: SessionResetRecallCutoff }
+        | { cold: true };
+    };

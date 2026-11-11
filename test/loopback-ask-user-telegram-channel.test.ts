@@ -241,7 +241,7 @@ it("publishes the prompt through Bot API and completes after the answer", async 
           ).toHaveLength(1);
           expect(completed.result).toMatchObject({
             isError: false,
-            content: [{ type: "text", text: expect.stringContaining('"status": "answered"') }],
+            content: [{ type: "text", text: expect.stringContaining('"status":"answered"') }],
           });
         },
         () => {

@@ -1,5 +1,6 @@
 import { request } from "node:http";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { codexModel, threadStartResult } from "./bounded-turn.test-harness.js";
@@ -89,6 +90,9 @@ it.each([
 ] as const)(
   "preserves $mode identity and sampling intent (preferred=$preferred) through native bounded dispatch",
   async ({ mode, preferred }) => {
+    // Auth and sampling assertions must not spend the turn deadline on cold module loading.
+    using clock = vi.spyOn(performance, "now");
+    clock.mockReturnValue(0);
     const endpoint =
       mode === "api-key" ? "https://selected-api.example/v1" : "https://api.openai.com/v1";
     const calls: Array<{ method: string; params?: JsonObject }> = [];

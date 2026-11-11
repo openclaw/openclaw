@@ -3,7 +3,6 @@ import { createMemo, Errored, For, Loading, Show, useContext } from "solid-js";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ChatContextWindowControl } from "./chat-context-window-control.tsx";
 import { ChatModelAccountSectionView } from "./chat-model-account-control.tsx";
@@ -428,7 +427,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
     const providerLabel = () => providerDisplayLabel(props.provider);
     const groupLabel = () => t("chat.modelControls.providerModels", { provider: providerLabel() });
     const options = () => [...props.lead, ...props.more];
-    const auth = () => panel.params.providerAuth?.get(canonicalModelAuthProviderId(props.provider));
+    const auth = () => panel.params.providerAuth?.get(props.provider);
     const authKind = () => auth()?.kind;
     const showAuth = createMemo(
       () =>
@@ -494,7 +493,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
                 <span aria-hidden="true">
                   <Icon
                     name={
-                      authKind() === "subscription"
+                      authKind() === "subscription" || authKind() === "native"
                         ? "circleUser"
                         : authKind() === "api"
                           ? "key"
