@@ -1,0 +1,3 @@
+# Extend native Template Add source restoration to paired devices and faithfully
+# retain the existing unprofiled shared-secret and ownership failure fixtures.
+63

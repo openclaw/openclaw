@@ -133,6 +133,8 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
           allowMetadataChanges: true,
           requireMaterialized:
             readGatewayRequestMutationAuthority(options).sessionScope === "operator.sessions.read",
+          // Its creator observes the first turn; delivery still filters every event by visibility.
+          allowStartableMain: true,
         });
         options.sessionMutationCommitGuard?.();
         const includeApprovals = Boolean(connId) && params.includeApprovals === true;

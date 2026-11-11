@@ -57,6 +57,9 @@ const repositoryScriptEntries = [
   "scripts/bench-plugin-catalog.ts!",
   "scripts/bench-template-detail.mts!",
   "scripts/bench-session-source-notifications.mjs!",
+  "scripts/bench-pr-dependency-cache.mjs!",
+  // scripts/pr injects this cache-lifetime preload through NODE_OPTIONS.
+  "scripts/pr-lib/dependency-lifetime-inherit.cjs!",
   // The Windows benchmark launches this observer with Node --import by exact path.
   "scripts/lib/session-source-observer-preload.mjs!",
   "scripts/perf/agent-exec-cgroup-proof.ts!",
@@ -77,6 +80,7 @@ const repositoryScriptEntries = [
   "scripts/perf/responses-policy-fingerprint-measure.ts!",
   "scripts/perf/cron-own-receipts-measure.mjs!",
   "scripts/perf/spawn-broker-shutdown-measure.ts!",
+  "scripts/perf/state-private-store-modes-measure.mjs!",
   "scripts/perf/workspace-inventory-spawn-measure.ts!",
   "scripts/perf/sandbox-projection-fetch-measure.ts!",
   // catalog-compare-released.mts copies and spawns this sandboxed reader by path.

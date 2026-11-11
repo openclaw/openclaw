@@ -185,13 +185,16 @@ result in the parent session.
 The request uses the current model's credentials, proxy, and TLS policy. Session
 read authority is checked immediately before network sends, including retries.
 Native ChatGPT forks use independent connections without consuming or replacing
-the parent's continuation. Supported APIs are OpenAI Responses (including native
-ChatGPT), Chat Completions, and Anthropic Messages. Other APIs, including Bedrock,
-fail before dispatch because their transports cannot enforce live fork authority.
-Tool choice is set to `none` to prevent hosted tool execution; local tool calls
-are denied, with at most two additional inference attempts. On Anthropic, changing
-tool choice invalidates the messages cache, while the tool and system caches can
-remain reusable.
+the parent's continuation. Forks run on every model API whose transport sends
+through the guarded fetch, including Gemini and Ollama. Bedrock fails before
+dispatch, because the AWS SDK sends requests and retries through its own HTTP
+handler and cannot enforce live fork authority.
+Local tool calls are denied, with at most two additional inference attempts. On
+OpenAI Responses (including native ChatGPT), Chat Completions, and Anthropic
+Messages, tool choice is also set to `none` to prevent hosted tool execution. On
+Anthropic, changing tool choice invalidates the messages cache, while the tool and
+system caches can remain reusable. Other APIs keep the parent's tool choice; a fork
+whose request carries a provider-hosted tool on those APIs fails before it is sent.
 
 Read-only forks do not acquire workspace placement authority, write a transcript,
 or change the parent's history. Normal parent settlement preserves a fork's read
@@ -785,6 +788,12 @@ use the latter to attach the committed scope receipt to a transaction result.
 Each participating writer names its affected scopes with
 `withSqliteDatabaseWriteScope`. Unscoped writes and schema changes invalidate
 all scope receipts. These tokens describe committed data, never effect authority.
+
+The process keeps one identity descriptor open per admitted database file, because
+closing it can release SQLite's POSIX locks. An owner that deletes a private database
+file it created calls `retireSqliteDatabaseAdmissionForPath(path)` from
+`sqlite-runtime` first, after every connection and worker using that file has closed.
+Otherwise the deleted file keeps its disk space until the process exits.
 
 `readSqliteDatabaseWriteRevision` from `sqlite-worker-runtime` reads the in-process
 write revision without SQL. PostgreSQL owners retaining a snapshot across their own
