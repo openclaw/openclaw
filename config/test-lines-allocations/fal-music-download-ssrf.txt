@@ -1,0 +1,2 @@
+103
+# Exercise real fal download guarding, redirect rejection, public audio delivery, HTTP errors, and request cleanup with synthetic external I/O.

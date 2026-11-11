@@ -6,7 +6,13 @@ import {
   type MusicGenerationRequest,
 } from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
-import { postJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowHttpError,
+  createProviderOperationTimeoutError,
+  executeProviderOperationWithRetry,
+  postJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveFalHttpRequestConfig } from "./http-config.js";
 
@@ -127,6 +133,32 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
         validateBinaryResponse: true,
         // Preserve fal's deadline-only timing when enabling the shared binary reader.
         chunkTimeoutMs: 0,
+        fetchResponse: ({ deadline, timeoutMs }) =>
+          executeProviderOperationWithRetry({
+            provider: "fal",
+            stage: "download",
+            operation: async () => {
+              const result = await fetchWithSsrFGuard({
+                url: candidate.url,
+                timeoutMs: timeoutMs(),
+                auditContext: "fal-music-download",
+              });
+              try {
+                await assertOkOrThrowHttpError(
+                  result.response,
+                  "fal generated music download failed",
+                  {
+                    bodyTimeoutMs: timeoutMs,
+                    onBodyTimeout: () => createProviderOperationTimeoutError(deadline),
+                  },
+                );
+                return result;
+              } catch (error) {
+                await result.release();
+                throw error;
+              }
+            },
+          }),
       });
       const record = isRecord(payload) ? payload : undefined;
       const lyrics = normalizeOptionalString(record?.lyrics);
