@@ -5,7 +5,6 @@ import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-scr
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
-  startControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 import { agentRoster } from "./agent-roster.test-support.ts";
 import {
@@ -17,7 +16,6 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({
   name: "Agent Tools refresh mocked Gateway E2E",
-  startServer: () => startControlUiE2eServer(undefined, { source: true }),
   startServerBeforeBrowser: true,
 });
 const runPage = pageRunner(suite, settingsPageOptions);

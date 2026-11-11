@@ -168,7 +168,7 @@ export function AgentTools(
   }) {
     const ready = createMemo((): EffectivePreview => {
       const readEffective = params.readEffective.bind(params);
-      latest(readEffective);
+      readEffective();
       const result = latest(() => params.effectivePreview);
       if (isPending(readEffective)) {
         return {
