@@ -343,7 +343,9 @@ if (values["freeze-source"]) {
         const resolved = fs.realpathSync(from);
         const local = path.relative(sourceRoot, resolved);
         const target =
-          local === "" || local.startsWith("packages/") || local.startsWith("extensions/")
+          local === "" ||
+          ((local.startsWith("packages/") || local.startsWith("extensions/")) &&
+            !local.includes("/node_modules/"))
             ? path.join(destination, local)
             : resolved;
         fs.symlinkSync(target, to);
