@@ -22,7 +22,6 @@ import {
 } from "./chat-message-render.test-support.tsx";
 import {
   createAssistantMessage,
-  createAttachmentBlock,
   createUserMessage,
   createMediaBlock,
   createAssistantImageMessage,
@@ -257,7 +256,6 @@ describe("grouped chat attachments", () => {
 
   it("refreshes a managed attachment ticket while its Files player stays open", async () => {
     const { source, artifactId, ticket } = managedTicketFixture();
-    const audio = { artifactId, playback: "native" } as const;
     const first = ticket("first", 31_000);
     const refreshed = ticket("refreshed", 5 * 60_000);
     const resolveArtifactDownload = vi
@@ -267,10 +265,7 @@ describe("grouped chat attachments", () => {
     const container = document.body.appendChild(document.createElement("div"));
     let sidebarContent: unknown;
     renderReactiveAssistant(
-      () =>
-        createAssistantMessage([
-          createAttachmentBlock(source, "audio", "clip.mp3", "audio/mpeg", audio),
-        ]),
+      () => nativeAudio(source, artifactId),
       {
         resolveArtifactDownload,
         onOpenSidebar: (content) => {
