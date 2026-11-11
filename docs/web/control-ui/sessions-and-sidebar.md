@@ -406,7 +406,9 @@ conversations without clearing the current owner or agent selection. The button
 also shows a dot when Status differs from Active. **Reset** appears at the right of the Filters header
 whenever any visible Filters or Display setting differs from its default. It restores
 all visible panel settings: Active status, automation and system sessions off,
-Custom groups, Created sort, When filtering for empty groups, and message previews off.
+Custom groups, Last updated sort, When filtering for empty groups, and message previews off.
+Last updated is also the initial sort when no valid saved choice exists; an explicit
+saved Created, Last updated, or Owners sort is preserved.
 Reset preserves the owner choice in the title. Display choices never add a filter dot. Tab moves between rows; Left and Right choose within a segmented
 status control. The title chip opens a picker with owner avatars and a search field;
 type to filter owners by name, and Escape clears the search before closing.

@@ -292,7 +292,7 @@ describe("AppSidebar session ownership", () => {
 
     let menu = await openSessionMenu(sidebar);
     expect(await sessionMenuChoice(menu, "sort:people")).toBeNull();
-    expect((await sessionMenuChoice(menu, "sort:created"))?.getAttribute("aria-selected")).toBe(
+    expect((await sessionMenuChoice(menu, "sort:updated"))?.getAttribute("aria-selected")).toBe(
       "true",
     );
     sidebar.dismissTransientMenus();
