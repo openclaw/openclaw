@@ -15,6 +15,7 @@ import { createSessionCapabilityFixture } from "../chat-session-capability.test-
 import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
 import {
+  captureSessionWorkspaceNavigation,
   getSessionWorkspace,
   loadSessionWorkspace,
   sessionWorkspaceForHost,
@@ -874,7 +875,11 @@ it.each(["desktop", "mobile"] as const)(
     const workspace = createWorkspace({
       presentation,
       browserSearch: "absent",
-      navigation: { searchOpen: true },
+      navigation: {
+        ...captureSessionWorkspaceNavigation(getSessionWorkspace(createSessionWorkspaceHost())),
+        searchOpen: true,
+        browserSearch: "absent",
+      },
       list: { root: "/workspace", files: [], browser: { path: "", search: "absent", entries: [] } },
       transcriptAttachments: attachments(),
     });
