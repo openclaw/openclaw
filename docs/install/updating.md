@@ -48,6 +48,12 @@ Admitted Doctor and update repair retain their existing schema-maintenance
 authority, including candidate and private rehearsal repair. Update phase flags
 alone do not grant that authority.
 
+A newer Doctor recognizes retained update captures whose state directory used
+an older Windows short-path spelling. Scope comparison resolves the recorded
+state directory and configuration parent without changing sealed capture bytes
+or following the final configuration entry. A different selected state directory
+or configuration entry remains rejected.
+
 Pre-update config copies publish through a temporary file and same-directory
 rename. An interrupted write preserves the previous `.pre-update` copy, and a
 later snapshot attempt can retry. This repair must be present in the updater
