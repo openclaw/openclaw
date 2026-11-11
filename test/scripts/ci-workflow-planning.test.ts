@@ -213,9 +213,7 @@ describe("PostgreSQL conformance selection", () => {
         }),
       ).toEqual(expected);
     }
-    expect(job.strategy.matrix.shard).toEqual(
-      readCiWorkflow().jobs["postgres-conformance"].strategy.matrix.shard,
-    );
+    expect(job.strategy.matrix.shard).toEqual(["1/3", "2/3", "3/3"]);
     expect(job["timeout-minutes"]).toBe(50);
     expect(job.name).toBe("PostgreSQL conformance (${{ matrix.version }}, ${{ matrix.shard }})");
     for (const [repository, ref, admitted] of [
@@ -3243,12 +3241,20 @@ describe("ci workflow guards", () => {
           selectedRows = matrix.include;
         } else if (matrix) {
           for (const [key, value] of Object.entries(matrix)) {
+            if (key === "exclude") continue;
             const values = evaluate(value) as unknown[];
             selectedRows = selectedRows.flatMap((row) =>
               values.map((entry) => Object.assign({}, row, { [key]: entry })),
             );
           }
         }
+        const excluded = evaluate(matrix?.exclude) as Record<string, unknown>[] | undefined;
+        selectedRows = selectedRows.filter(
+          (row) =>
+            !excluded?.some((entry) =>
+              Object.entries(entry).every(([key, value]) => row[key] === value),
+            ),
+        );
         const runners = definition.uses?.startsWith("./.github/workflows/")
           ? Object.values(readWorkflow(definition.uses.slice(2)).jobs).map(
               (child) => (child as { "runs-on": string })["runs-on"],
@@ -3353,7 +3359,7 @@ describe("ci workflow guards", () => {
       });
     }
 
-    it("counts all three PostgreSQL conformance shards in hosted admission", () => {
+    it("counts PostgreSQL conformance and the independent smoke in hosted admission", () => {
       const result = manifestWithHostedNodeRows(0, {
         eventName: "pull_request",
         changedPaths: ["src/infra/database-engine/open.ts"],
