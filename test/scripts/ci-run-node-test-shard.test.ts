@@ -630,17 +630,41 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
   );
 
-  it("rejects an invalid runtime policy before scheduling any child", async () => {
-    const runChild = vi.fn(async () => 0);
-    await expect(
-      runShardPlans([{ kind: "group", name: "one", plan: { configs: [bunConfig] } }], {
-        env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "all-bun" },
-        scratchDir: makeScratchDir(),
-        runChild,
-      }),
-    ).rejects.toThrow("Invalid OPENCLAW_CI_TEST_RUNTIME_POLICY");
-    expect(runChild).not.toHaveBeenCalled();
-  });
+  it.each([
+    {
+      name: "runtime policy",
+      env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "all-bun" },
+      concurrency: undefined,
+      error: "Invalid OPENCLAW_CI_TEST_RUNTIME_POLICY",
+    },
+    {
+      name: "zero concurrency",
+      env: {},
+      concurrency: 0,
+      error: "Shard plan concurrency must be a positive integer",
+    },
+  ])(
+    "rejects invalid $name before preparing builds or scheduling children",
+    async ({ env, concurrency, error }) => {
+      const prepare = vi
+        .spyOn(buildPrerequisites, "preparePrebuiltAiPackage")
+        .mockRejectedValue(new Error("Invalid shard settings reached expensive build preparation"));
+      const runChild = vi.fn(async () => 0);
+      await expect(
+        runShardPlans(
+          [{ kind: "group", name: "one", plan: { configs: ["test/vitest/vitest.e2e.config.ts"] } }],
+          {
+            env: { ...env, OPENCLAW_E2E_USE_PREBUILT_DIST: "1" },
+            concurrency,
+            scratchDir: makeScratchDir(),
+            runChild,
+          },
+        ),
+      ).rejects.toThrow(error);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(runChild).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { policy: "bun-compatible", vitestArgs: [] },
