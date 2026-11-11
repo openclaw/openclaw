@@ -42,7 +42,7 @@
   border-radius: var(--radius-full);
   background: var(--bg-hover);
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 700;
   line-height: 1;
 }
@@ -123,7 +123,7 @@
 }
 
 .content-header.hub-page-header--stacked .page-title {
-  font-size: 26px;
+  font-size: calc(26px * var(--control-ui-text-scale));
 }
 
 .content-header.hub-page-header--stacked .hub-page-header__tabs {
@@ -247,19 +247,11 @@
   }
 
   .content-header.hub-page-header--stacked .page-title {
-    font-size: 22px;
+    font-size: calc(22px * var(--control-ui-text-scale));
   }
 }
 
-/* The shared page header owns its shell's mobile inset, including on pages that do
-   not load the settings stylesheet. */
 @media (max-width: 640px) {
-  .content.content--hub-header:not(.content--systems) {
-    --content-inline-padding: var(--space-3);
-    --settings-header-inline-padding: 0;
-    padding: var(--space-3) var(--space-3) var(--space-4);
-  }
-
   /* Outranks the settings-page header column inset regardless of stylesheet order. */
   .content.content--hub-header .content-header.hub-page-header {
     padding-inline: 0;

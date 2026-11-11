@@ -248,14 +248,22 @@ it.skipIf(!chromiumAvailable).each(["replacement", "read-only"] as const)(
   },
 );
 
-it.skipIf(!chromiumAvailable)(
-  "retains a pending inline publication across navigation and retries only a confirmed failure",
-  async () => {
+it.skipIf(!chromiumAvailable).each([
+  { width: 390, colorScheme: "dark" as const },
+  { width: 390, colorScheme: "light" as const },
+  { width: 1440, colorScheme: "dark" as const },
+])(
+  "keeps file previews readable and retains publication across navigation at $width/$colorScheme",
+  async ({ width, colorScheme }) => {
     const server = await startControlUiE2eServer();
     let browser: Browser | undefined;
     try {
       browser = await connectCreatorBrowser();
-      const page = await browser.newPage(createDarkDesktopControlUiContextOptions());
+      const page = await browser.newPage({
+        ...createDarkDesktopControlUiContextOptions(),
+        viewport: { width, height: 844 },
+        colorScheme,
+      });
       const draftId = "ec8f46b0-4ca3-4991-8a73-dfdcc8764087";
       const sessionKey = "agent:main:dashboard:release-brief";
       const optionalFile = "workspace/checklist.md";
@@ -279,7 +287,7 @@ it.skipIf(!chromiumAvailable)(
         ],
         files: [
           { path: "CLAW.md", content: "Portable release instructions" },
-          { path: optionalFile, content: "Check each date and citation." },
+          { path: optionalFile, content: "Check each date and citation.\n\n".repeat(50) },
         ],
         scope,
       };
@@ -361,7 +369,20 @@ it.skipIf(!chromiumAvailable)(
       await card.getByRole("button", { name: /Workspace files/ }).click();
       await card.getByRole("button", { name: "View all", exact: true }).click();
       await card.getByRole("button", { name: optionalFile, exact: true }).click();
-      await card.getByText("Check each date and citation.", { exact: true }).waitFor();
+      const document = card.locator(".template-creator__detail-panel article");
+      await document.getByText("Check each date and citation.", { exact: true }).first().waitFor();
+      expect(await document.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+        true,
+      );
+      const body = card.locator(".template-creator__body");
+      await body.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      expect(
+        await body.evaluate(
+          (element) => element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
+        ),
+      ).toBe(true);
       await card.getByRole("button", { name: "Back to contents", exact: true }).click();
       await card.getByRole("button", { name: "Back to contents", exact: true }).click();
       await card.getByRole("button", { name: "Back to Template", exact: true }).click();

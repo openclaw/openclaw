@@ -400,7 +400,7 @@ a.dashboard-row__main:hover {
   color: var(--text-strong);
   font-size: calc(15px * var(--control-ui-text-scale));
   font-weight: var(--control-ui-font-weight-semibold);
-  line-height: 22px;
+  line-height: calc(22px * var(--control-ui-text-scale));
 }
 
 .dashboard-row__title > .session-run-spinner {
@@ -570,7 +570,7 @@ a.dashboard-row__main:hover {
   font-size: calc(15px * var(--control-ui-text-scale));
   font-weight: var(--control-ui-font-weight-semibold);
   letter-spacing: -0.01em;
-  line-height: 22px;
+  line-height: calc(22px * var(--control-ui-text-scale));
 }
 
 .dashboard-card .dashboard-card__title,

@@ -556,6 +556,15 @@ describe("original publication admission reader", () => {
     };
     const client = {
       ...fixture.client,
+      verifyRetainedPublicationArtifacts() {
+        throw new Error("Publication admission fixture does not recover publication artifacts");
+      },
+      downloadArtifactArchive() {
+        throw new Error("Publication admission fixture does not download artifact archives");
+      },
+      getRunArtifacts() {
+        throw new Error("Publication admission fixture does not list run artifacts");
+      },
       validateChildReuse: async () => {
         throw new Error("publication admission fixture does not reuse children");
       },

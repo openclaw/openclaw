@@ -95,25 +95,6 @@ const FULL_RELEASE_ARTIFACTS_WORKFLOW = ".github/workflows/full-release-artifact
 const ACTIONS_CACHE_V6 = "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
 const CI_WORKFLOW = ".github/workflows/ci.yml";
 const PERFORMANCE_WORKFLOW = ".github/workflows/openclaw-performance.yml";
-const PUBLICATION_CONTRACT_FILES = [
-  "scripts/full-release-publication-contract.mjs",
-  "scripts/lib/full-release-publication-inputs.mjs",
-  "scripts/lib/release-upgrade-baseline.mjs",
-  "scripts/clawhub-prepared-artifact.mjs",
-  "scripts/clawhub-parent-authorization.mjs",
-  "scripts/plugin-publication-artifact.mjs",
-  "scripts/release-tooling-identity.mjs",
-  "scripts/lib/actions-artifact-archive.mjs",
-  "scripts/lib/arg-utils.runtime.mjs",
-  "scripts/lib/bounded-response.mjs",
-  "scripts/lib/clawhub-package-family.mjs",
-  "scripts/lib/clawhub-publication-state.mjs",
-  "scripts/lib/canonical-json.mjs",
-  "scripts/lib/npm-core-release-packages.json",
-  "scripts/lib/npm-publish-plan.mjs",
-  "scripts/lib/record-shared.mjs",
-  "scripts/lib/release-version.mjs",
-];
 const FULL_RELEASE_CHILD_DISPATCHES = [
   {
     jobName: "normal_ci",
@@ -2180,6 +2161,7 @@ describe("frozen admission workflow barriers", () => {
       "release_execution_plan",
       "release_decision",
       "diagnostic_drain",
+      "cleanup_boat_release_runners",
     ]);
     const outputs = new Proxy(
       {
@@ -2225,6 +2207,7 @@ describe("frozen admission workflow barriers", () => {
               runInNewContext(expression, {
                 inputs: { ...inputs, shared_image_policy: policy },
                 github: { ref: "refs/heads/main", run_attempt: 1 },
+                vars: { OPENCLAW_CI_RUNNER_BACKEND: "boat" },
                 needs: Object.fromEntries(
                   Object.keys(jobs).map((key) => [
                     key,
@@ -9341,6 +9324,7 @@ test "$package_manager" = "pnpm@12.1.0"
     const drainDownloads = workflowStep(summary, "Download diagnostic drain attempts");
 
     const terminalNeeds = [
+      "boat_release_runners",
       "resolve_target",
       "prepare_npm_package",
       "qualify_npm_package",
@@ -9350,8 +9334,10 @@ test "$package_manager" = "pnpm@12.1.0"
     ];
     expect(decision.needs).toEqual(terminalNeeds);
     expect(drain.needs).toEqual(terminalNeeds);
-    expect(decision.if).toBe("always()");
-    expect(drain.if).toBe("always()");
+    const waiterCondition =
+      "always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')";
+    expect(decision.if).toBe(waiterCondition);
+    expect(drain.if).toBe(waiterCondition);
     expect(decisionStep.run).toBe(drainStep.run);
     expect(decisionStep.env).toMatchObject({
       FAIL_FAST: "${{ inputs.fail_fast }}",
@@ -10712,26 +10698,74 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain('bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"');
     expect(workflow).toContain("use_github_hosted_runners:");
-    for (const [jobName, runner] of [
-      ["validate_special_e2e", "blacksmith-8vcpu-ubuntu-2404"],
-      ["validate_live_provider_suites", "blacksmith-2vcpu-ubuntu-2404"],
-    ] as const) {
-      expect(evaluateWorkflowRunner(workflowJob(LIVE_E2E_WORKFLOW, jobName)["runs-on"])).toBe(
-        runner,
+    const expectRuntimeRunner = (
+      selector: unknown,
+      legacy: string,
+      boat: string,
+      githubHosted = false,
+    ) => {
+      for (const runnerBackend of [
+        "",
+        "blacksmith",
+        "github",
+        "hybrid",
+        "runson",
+        "boat",
+      ] as const) {
+        for (const runnerGroup of ["", "release-runners"]) {
+          for (const useGithubHostedRunners of [false, true]) {
+            const label =
+              useGithubHostedRunners || (githubHosted && runnerBackend === "github")
+                ? "ubuntu-24.04"
+                : runnerBackend === "boat"
+                  ? boat
+                  : legacy;
+            expect(
+              evaluateWorkflowRunner(selector, {
+                runnerBackend,
+                runnerGroup,
+                useGithubHostedRunners,
+              }),
+            ).toEqual(runnerGroup ? { group: runnerGroup, labels: label } : label);
+          }
+        }
+      }
+    };
+    for (const jobName of [
+      "validate_release_live_cache",
+      "plan_docker_lane_groups",
+      "validate_live_provider_suites",
+      "validate_live_media_provider_suites",
+    ]) {
+      expectRuntimeRunner(
+        workflowJob(LIVE_E2E_WORKFLOW, jobName)["runs-on"],
+        "blacksmith-2vcpu-ubuntu-2404",
+        "boat",
       );
-      expect(
-        evaluateWorkflowRunner(workflowJob(LIVE_E2E_WORKFLOW, jobName)["runs-on"], {
-          useGithubHostedRunners: true,
-        }),
-      ).toBe("ubuntu-24.04");
+    }
+    for (const jobName of [
+      "validate_special_e2e",
+      "validate_docker_e2e",
+      "validate_docker_lanes",
+      "prepare_docker_e2e_image",
+      "prepare_live_test_image",
+      "validate_live_models_docker",
+      "validate_live_models_docker_targeted",
+      "validate_live_docker_provider_suites",
+      "validate_docker_openwebui",
+    ]) {
+      expectRuntimeRunner(
+        workflowJob(LIVE_E2E_WORKFLOW, jobName)["runs-on"],
+        "blacksmith-8vcpu-ubuntu-2404",
+        "boat-xlarge",
+        jobName === "validate_docker_openwebui",
+      );
     }
     for (const jobName of ["build", "test"]) {
-      const selector = workflowJob(".github/workflows/openclaw-repo-e2e-reusable.yml", jobName)[
-        "runs-on"
-      ];
-      expect(evaluateWorkflowRunner(selector)).toBe("blacksmith-8vcpu-ubuntu-2404");
-      expect(evaluateWorkflowRunner(selector, { useGithubHostedRunners: true })).toBe(
-        "ubuntu-24.04",
+      expectRuntimeRunner(
+        workflowJob(".github/workflows/openclaw-repo-e2e-reusable.yml", jobName)["runs-on"],
+        "blacksmith-8vcpu-ubuntu-2404",
+        "boat-xlarge",
       );
     }
     const repoE2eHarnessCheckout = workflowStep(
@@ -10815,6 +10849,11 @@ describe("package artifact reuse", () => {
     const imageDockerfile = readFileSync(LIVE_MEDIA_RUNNER_DOCKERFILE, "utf8");
     const imageWorkflow = readFileSync(LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW, "utf8");
     const buildJob = workflowJob(LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW, "build");
+    for (const runnerBackend of ["", "blacksmith", "github", "hybrid", "runson", "boat"] as const) {
+      expect(evaluateWorkflowRunner(buildJob["runs-on"], { runnerBackend })).toBe(
+        runnerBackend === "boat" ? "ubuntu-24.04" : "blacksmith-2vcpu-ubuntu-2404",
+      );
+    }
     const buildStep = workflowStep(buildJob, "Build and push live media runner image");
     expect(imageDockerfile).toMatch(/^FROM ubuntu:24\.04@sha256:[a-f0-9]{64}$/m);
     expect(imageDockerfile).toContain("apt-get install -y --no-install-recommends");
@@ -14886,45 +14925,15 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it("loads the strict release validator from the isolated trusted tooling bundle", () => {
     const root = tempDirs.make("release-validation-tooling-");
-    for (const source of [
-      "scripts/release-ci-summary.mjs",
-      "scripts/lib/release-validation-waivers.mjs",
-      "scripts/lib/release-evidence-identity.mjs",
-      "scripts/release-qualification-admission.mjs",
-      "scripts/lib/qualification-admission-baselines.mjs",
-      "scripts/release-qualification-coverage.mjs",
-      "scripts/lib/full-release-manifest.mjs",
-      "scripts/full-release-validation-policy.mjs",
-      "scripts/pr-lib/gh-api-preflight.mjs",
-      "scripts/lib/direct-run.mjs",
-      ...PUBLICATION_CONTRACT_FILES,
-      "scripts/lib/release-changelog.mjs",
-      "scripts/full-release-candidate-contract.mjs",
-      "scripts/lib/full-release-candidate-reuse.mjs",
-      "scripts/lib/full-release-child-request.mjs",
-      "scripts/lib/full-release-child-reuse.mjs",
-      "scripts/lib/full-release-evidence.mjs",
-      "scripts/lib/release-publish-inputs.mjs",
-      "scripts/plugin-sdk-api-release-evidence.mjs",
-      "scripts/lib/canonical-json.mjs",
-      "scripts/lib/cross-os-release-checks/suite-filter.mjs",
-      "scripts/lib/plain-gh.mjs",
-      "scripts/lib/release-context.mjs",
-      "scripts/lib/release-version.mjs",
-      "scripts/lib/record-shared.mjs",
-      "scripts/lib/upgrade-survivor-policy.mjs",
-      "scripts/lib/upgrade-survivor-scenarios.json",
-    ]) {
-      const destination = join(root, source.replace(/^scripts\//u, ""));
-      mkdirSync(dirname(destination), { recursive: true });
-      copyFileSync(source, destination);
-    }
+    // Both trusted publisher checkouts acquire the complete scripts tree, not an
+    // independently maintained list of the validator's transitive dependencies.
+    copyTreeCloseOnExec("scripts", join(root, "scripts"));
     const result = spawnSync(
       process.execPath,
       [
         "--input-type=module",
         "-e",
-        `await import(${JSON.stringify(pathToFileURL(join(root, "release-ci-summary.mjs")).href)})`,
+        `await import(${JSON.stringify(pathToFileURL(join(root, "scripts/release-ci-summary.mjs")).href)})`,
       ],
       { encoding: "utf8", timeout: 20_000 },
     );

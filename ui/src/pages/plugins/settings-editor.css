@@ -42,7 +42,7 @@ openclaw-plugin-settings-groups {
   margin-top: 28px;
 }
 .plugin-editor__section h2 {
-  font-size: 18px;
+  font-size: calc(18px * var(--control-ui-text-scale));
   margin: 0 0 12px;
 }
 .plugin-editor__group {
@@ -77,7 +77,7 @@ openclaw-plugin-settings-groups {
 }
 .plugin-editor__copy p {
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   line-height: 1.5;
   margin: 6px 0 0;
   overflow-wrap: anywhere;
@@ -217,7 +217,7 @@ openclaw-plugin-settings-groups {
   color: var(--muted);
   padding: 8px 10px;
   border-radius: var(--radius-sm);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   text-decoration: none;
 }
 .plugin-editor__nav a:hover,

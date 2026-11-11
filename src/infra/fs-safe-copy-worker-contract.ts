@@ -21,10 +21,27 @@ export type FsSafeProvisionCopy = {
   paths: readonly string[];
 };
 
+export type ProvisionCopyDetails = {
+  copier: "linux-batched" | "portable";
+  fallbackReason?:
+    | "platform"
+    | "procfs-unavailable"
+    | "proc-descriptors-unavailable"
+    | "gnu-cp-unavailable"
+    | "helper-unavailable";
+  batchCount: number;
+  sourceBytes: number;
+  spawnCount: number;
+  spawnMs: number;
+  childMs: number;
+  authorityChecks: number;
+  authorityMs: number;
+};
+
 export type FsSafeCopyReply =
   | { type: "probe"; backend: TreeCloneBackend | undefined; nativeMode: FsSafeNativeMode }
   | { type: "metadata"; entries: (CloneFileMetadata | undefined)[] }
   | { type: "acl"; acl: DarwinAclInspection }
   | { type: "written" }
-  | { type: "provisioned"; paths: string[] }
-  | { type: "failed"; message: string; code?: string };
+  | { type: "provisioned"; paths: string[]; copyDetails?: ProvisionCopyDetails }
+  | { type: "failed"; message: string; code?: string; copyDetails?: ProvisionCopyDetails };

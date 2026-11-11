@@ -14,7 +14,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -22,7 +22,7 @@
 
 .option-card__question {
   color: var(--text-strong);
-  font-size: 16px;
+  font-size: var(--control-ui-text-lg);
   font-weight: 650;
   line-height: 1.35;
 }
@@ -78,12 +78,12 @@
 
 .option-card__choice strong {
   color: var(--text-strong);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
 }
 
 .option-card__description {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.45;
 }
 
@@ -93,7 +93,7 @@
   border-radius: var(--radius-full);
   background: var(--primary);
   color: var(--primary-foreground);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 700;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -105,7 +105,7 @@
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   text-decoration: underline;
   text-underline-offset: 3px;
 }

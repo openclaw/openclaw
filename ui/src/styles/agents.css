@@ -61,7 +61,7 @@
   border: 1px dashed var(--border);
   border-radius: var(--radius-sm);
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   color: var(--muted);
   background: transparent;
@@ -368,7 +368,7 @@
   background: transparent;
   color: var(--accent);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   padding: 2px 0;
   word-break: break-all;
   text-align: left;
@@ -401,7 +401,7 @@
 
 .agent-file-sub {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   margin-top: 4px;
 }
 
@@ -431,7 +431,7 @@
 
 .md-preview-dialog__path {
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -740,7 +740,7 @@
 
 .agent-tools-runtime-chip__meta {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   white-space: nowrap;
 }
 
@@ -961,7 +961,7 @@
   display: flex;
   align-items: center;
   font-weight: 600;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--muted);

@@ -23,7 +23,8 @@
   grid-template-areas:
     "topbar"
     "notice"
-    "content";
+    "content"
+    "save-status";
   /* The nav collapses to an overlay drawer here, so it no longer reserves a
      column. Zero the width the docked terminal reads or it would leave a
      258px gap and waste most of a phone viewport. */
@@ -204,7 +205,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   border-radius: calc(18px * var(--openclaw-corner-radius-scale));
   background: var(--bg-elevated);
   color: var(--muted);
-  font: 400 12px/20px var(--font-body);
+  font: 400 var(--control-ui-text-sm)/calc(20px * var(--control-ui-text-scale)) var(--font-body);
 }
 
 .mobile-header__notice > svg {
@@ -278,10 +279,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     var(--floating-header-control) / 2 * var(--openclaw-corner-radius-scale)
   );
   grid-template-rows: 0 auto minmax(0, 1fr);
-  grid-template-areas:
-    "topbar"
-    "notice"
-    "content";
 
   & .topbar {
     position: absolute;
@@ -334,10 +331,10 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     max-width: 100%;
     overflow: hidden;
     color: var(--text-strong);
-    font: 600 16px / 20px var(--font-body);
+    font: 600 var(--control-ui-text-lg) / calc(20px * var(--control-ui-text-scale)) var(--font-body);
     /* The narrowest phones leave less room than the pill takes: 15px keeps the
        settings titles whole and closer to center. */
-    font-size: clamp(15px, 4.6vw, 16px);
+    font-size: calc(clamp(15px, 4.6vw, 16px) * var(--control-ui-text-scale));
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -568,6 +565,13 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     padding-bottom: 0;
   }
 
+  /* Full-bleed route edges belong to the shell, including cold Systems entry
+     before the lazy chat sheets load. New Session keeps its own inset contract. */
+  .shell--mobile-nav .content--chat:not(.content--new-session) {
+    --content-inline-padding: 0px;
+    padding-inline: 0;
+  }
+
   /* Custodian owns its page inset and vertical rhythm. Keep the generic mobile
      content rule below from stacking shell spacing onto that owner. */
   main.content--custodian {
@@ -587,7 +591,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .card-title {
-    font-size: 13px;
+    font-size: calc(13px * var(--control-ui-text-scale));
   }
 
   .stat {
@@ -596,7 +600,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .stat-value {
-    font-size: 18px;
+    font-size: calc(18px * var(--control-ui-text-scale));
   }
 
   .chat-thread {
@@ -651,29 +655,51 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .list-title {
-    font-size: 13px;
+    font-size: calc(13px * var(--control-ui-text-scale));
   }
 
   .code-block {
     padding: 8px;
     border-radius: var(--radius-md);
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
 }
 
 /* Controls take their phone size with the floating header and stacked rows. */
 @media (max-width: 640px) {
+  /* Page traits own the phone gutter even when a detail has no hub header.
+     Full-bleed panes keep their inset if a nested SettingsPage reports a trait. */
+  .shell--settings .content:not(.content--custodian),
+  .content.content--hub-header:not(.content--systems),
+  .content.content--settings-page:where(
+      :not(
+        .content--chat,
+        .content--custodian,
+        .content--workboard,
+        .content--plugin-embed,
+        .content--systems
+      )
+    ) {
+    --content-inline-padding: var(--space-3);
+    --settings-header-inline-padding: 0;
+    padding: var(--space-3) var(--space-3) var(--space-4);
+
+    .settings-page {
+      padding-inline: 0;
+    }
+  }
+
   .field input,
   .field textarea,
   .field select {
     padding: 8px 10px;
     border-radius: var(--radius-md);
-    font-size: 14px;
+    font-size: var(--control-ui-text-md);
   }
 
   .btn {
     padding: 8px 12px;
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
 }
 
@@ -701,7 +727,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .stat-value {
-    font-size: 16px;
+    font-size: var(--control-ui-text-lg);
   }
 
   .chat-bubble {
@@ -742,7 +768,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   .data-table th,
   .data-table td {
     padding: 8px 6px;
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
 
   .data-table-pagination {
@@ -761,7 +787,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .data-table-search input {
-    font-size: 14px;
+    font-size: var(--control-ui-text-md);
     padding: 8px 10px;
   }
 

@@ -475,19 +475,16 @@ directly.
 
 ## Write directives, not observations
 
-Each entry has a metadata line followed by one imperative directive:
+Write one current imperative directive per entry. No metadata is required:
 
 ```md
-<!-- observed: 2026-07-27 | status: active -->
-
 - Prefer concise progress updates during implementation work.
 ```
 
 Use these rules:
 
 - Begin with an imperative such as `Always`, `Never`, or `Prefer`.
-- Record the date the preference was observed.
-- Use only `active` or `superseded` for status.
+- Keep only current preferences in this file.
 - Keep one behavioral instruction per directive.
 - Store only details that improve assistance. Do not turn the file into a dossier.
 
@@ -495,29 +492,21 @@ PrefEval found that preference following degrades sharply in longer conversation
 
 ## Supersede in place
 
-When a preference changes, update its existing section. Do not append a second active directive elsewhere in the file.
+When a preference changes, replace the old directive in its existing section. Do not keep contradictory directives in the file.
 
 Before:
 
 ```md
-<!-- observed: 2026-05-10 | status: active -->
-
 - Prefer detailed explanations for every code change.
 ```
 
 After:
 
 ```md
-<!-- observed: 2026-05-10 | status: superseded -->
-
-- Prefer detailed explanations for every code change.
-
-<!-- observed: 2026-07-27 | status: active -->
-
 - Prefer concise implementation summaries unless more detail is requested.
 ```
 
-Keep the superseded entry next to its replacement so the current directive is unambiguous. HorizonBench reports that systems often select an originally stated preference after the user has changed it ([arXiv:2604.17283](https://arxiv.org/abs/2604.17283)). Append-only contradictory history recreates that failure mode.
+If the change history matters, record it with an observation date in `memory/YYYY-MM-DD.md`, explicitly noting which preference replaced the old one. Keep that history out of the always-injected `USER.md`. HorizonBench reports that systems often select an originally stated preference after the user has changed it ([arXiv:2604.17283](https://arxiv.org/abs/2604.17283)). Append-only contradictory history recreates that failure mode.
 
 ## Choose the right file
 
@@ -534,9 +523,13 @@ Keep the superseded entry next to its replacement so the current directive is un
 
 `USER.md` has a fixed 4,000-character bootstrap cap, smaller than the general per-file budget. The `agents.defaults.bootstrapMaxChars` and `agents.entries.*.bootstrapMaxChars` settings can only lower this cap for `USER.md`; they cannot raise it. Profile guidance is meant to stay directive-sized so it cannot crowd project rules or durable facts out of the shared prompt budget.
 
+The loader treats this file as plain text: headings, whitespace, HTML comments, and superseded entries all count toward the cap. It does not parse `observed` dates or filter `status: superseded`. The older dated-comment format was bookkeeping for humans and the model, not a runtime freshness, priority, or expiration mechanism. Existing files still load, but remove that metadata when compacting them.
+
+Over-budget shared files are truncated from the middle, so an active directive can be omitted. Personal files are omitted entirely when over budget, as described above. Increasing the general per-file limit cannot bypass the fixed USER cap.
+
 When `USER.md` approaches the cap:
 
-1. Remove stale superseded entries (keep the replacement next to the old entry so the current directive stays unambiguous).
+1. Remove metadata comments and superseded directives; preserve useful history in daily memory first.
 2. Move durable facts and lessons that do not change how you should be assisted into `MEMORY.md`.
 3. Move detailed observations and running project context into daily `memory/YYYY-MM-DD.md` files.
 4. Use [standing intents](/concepts/standing-intents) for event-conditioned future actions, so the trigger stays injected without the full detail.

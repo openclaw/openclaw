@@ -1,8 +1,8 @@
 /* The schema-driven form itself renders through the settings design
    language (settings-section/settings-group/settings-row; see
    ui/src/styles/settings.css). This file keeps only the config page
-   chrome (tabs, actions, diff, raw editor) plus genuinely form-specific
-   pieces layered on top of the settings primitives. */
+   chrome (tabs, actions, diff, raw editor). Shared form details load
+   with the settings workspace in settings.css on every form route. */
 
 /* Mirrors the .settings-page column so config chrome lines up with it. */
 .config-lead,
@@ -78,7 +78,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 10px 16px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   color: var(--text-strong);
   list-style: none;
@@ -113,7 +113,7 @@
   display: flex;
   align-items: baseline;
   gap: 12px;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--control-ui-text-scale));
   font-family: var(--mono);
 }
 
@@ -707,16 +707,10 @@
   }
 }
 
-.cfg-collection-draft__controls {
-  display: grid;
-  gap: 8px;
-  width: 100%;
-}
-
 .config-raw-field textarea {
   min-height: 500px;
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.55;
 }
 
@@ -742,189 +736,8 @@
   height: 20px;
 }
 
-.cfg-field__error {
-  font-size: 12px;
-  color: var(--danger);
-}
-
-.cfg-structured-draft {
-  display: contents;
-}
-
-.cfg-structured-draft__error .settings-row__control,
-.cfg-json-editor > .settings-input,
-.cfg-json-editor > .settings-secret,
-.cfg-array .settings-row--stacked .settings-row__control {
-  width: 100%;
-}
-
-.cfg-json-editor {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  width: 100%;
-}
-
-.cfg-array .settings-row--stacked .settings-row__control > input[type="number"] {
-  flex: 1 1 auto;
-  width: auto;
-}
-
-/* A list of plain values is one row per value: the field, then its remove button. */
-.cfg-array__item--row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--list-row-padding);
-  padding-inline-start: var(--space-7);
-
-  > .cfg-array__value {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
-  > .cfg-array__value > .settings-row {
-    min-height: 0;
-    padding: 0;
-  }
-
-  /* A list value is required by being in the list. */
-  .settings-row__control > .settings-row__desc[aria-hidden="true"] {
-    display: none;
-  }
-}
-
-/* A collection's head and entry rows hold one small action, which stays beside its text. */
-@media (max-width: 640px) {
-  .cfg-collection-row {
-    flex-wrap: nowrap;
-
-    > .settings-row__control {
-      flex: 0 0 auto;
-      flex-wrap: nowrap;
-      width: auto;
-      max-width: none;
-    }
-  }
-}
-
-/* A number and its step buttons are one control, on the input's own surface. */
-.cfg-stepper {
-  display: inline-flex;
-  align-items: stretch;
-  min-width: 0;
-  height: var(--settings-control-height);
-  background: var(--field-bg);
-  border: 1px solid var(--field-border);
-  border-radius: var(--field-radius);
-}
-
-.cfg-stepper:focus-within {
-  border-color: var(--ring);
-}
-
-.settings-row .cfg-stepper > .settings-input,
-.settings-row .cfg-stepper > input[type="number"].settings-input {
-  flex: 0 1 72px;
-  width: 72px;
-  min-width: 0;
-  min-height: 0;
-  height: auto;
-  padding-inline: var(--space-1);
-  text-align: center;
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  appearance: textfield;
-}
-
-.cfg-stepper > .settings-input:focus {
-  outline: none;
-  box-shadow: none;
-}
-
-.cfg-stepper > .settings-input::-webkit-inner-spin-button,
-.cfg-stepper > .settings-input::-webkit-outer-spin-button {
-  appearance: none;
-  margin: 0;
-}
-
-/* On a phone a number sits under its label like every other field, at the same width. */
-@media (max-width: 640px) {
-  .cfg-stepper {
-    width: 100%;
-  }
-
-  .settings-row .cfg-stepper > .settings-input,
-  .settings-row .cfg-stepper > input[type="number"].settings-input {
-    flex: 1 1 auto;
-    width: auto;
-  }
-}
-
-.cfg-stepper__button {
-  flex: 0 0 auto;
-  width: 30px;
-  min-width: 30px;
-  padding: 0;
-  color: var(--muted);
-  font: inherit;
-  background: transparent;
-  border: 0;
-  border-radius: var(--field-radius);
-  cursor: var(--cursor-action);
-}
-
-.cfg-stepper__button:hover:not(:disabled) {
-  color: var(--text-strong);
-  background: var(--surface-hover);
-}
-
-.cfg-stepper__button:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: -2px;
-}
-
-.cfg-stepper__button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.cfg-collection-draft__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
 .config-content :is(input, textarea, select)[aria-invalid="true"] {
   border-color: var(--danger);
-}
-
-.cfg-redacted {
-  opacity: 0.7;
-}
-
-/* Collapsible nested-object summary behaves like a nav row. */
-.cfg-object__summary {
-  cursor: var(--cursor-action);
-  list-style: none;
-  transition: background var(--duration-fast) ease;
-}
-
-.cfg-object__summary::-webkit-details-marker {
-  display: none;
-}
-
-.cfg-object__summary:hover {
-  background: var(--bg-hover);
-}
-
-/* A closed group on a curated page is one line; its help arrives with its settings. */
-.cfg-object--quiet:not([open]) > .cfg-object__summary .settings-row__desc {
-  display: none;
 }
 
 /* The curated rows and the schema editor read as one column of sections. */
