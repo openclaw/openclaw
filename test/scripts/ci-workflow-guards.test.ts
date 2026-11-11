@@ -7000,6 +7000,7 @@ it.each(["publish", "promote"])(
             finalize_release_before_docker: false,
           },
           needs: {
+            resolve_release_target: { outputs: { prepared_plugins: "" } },
             publish: { result: "success" },
             publish_docker: { result: "success" },
             finalize_github_release_before_docker: { result: "skipped" },
