@@ -191,6 +191,17 @@ describe("sessions import CLI", () => {
     expect(mocks.runtime.exit).not.toHaveBeenCalled();
   });
 
+  it("prints each line of a multi-line failure under its source in human output", async () => {
+    mocks.callGateway.mockRejectedValueOnce(
+      new Error("Gateway not reachable.\nStart it with `openclaw gateway run`.\u001b[2K\rForged"),
+    );
+    await run("sessions import claude thread --host gateway:local");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Failed claude/gateway:local/thread: Gateway not reachable.\n  Start it with `openclaw gateway run`.\\rForged",
+    );
+    expect(mocks.runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
   it("imports an explicit locator and warns about bounded history in human output", async () => {
     mocks.callGateway.mockResolvedValueOnce({ ...imported, complete: false, totalItems: 50_001 });
     await run(
