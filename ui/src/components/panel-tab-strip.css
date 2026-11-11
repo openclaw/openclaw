@@ -131,7 +131,7 @@
   }
 }
 
-/* Desktop tabs use surface contrast for selection; keep the close target
+/* Desktop tabs use the theme's selection surface; the close target stays
    inside its reserved space without adding a separate outline. */
 .tabstrip.tabstrip--desktop {
   display: flex;
@@ -164,16 +164,20 @@
   }
 
   /* The close action is a sibling overlaid inside this same tab. */
-  .tabstrip-tab:hover,
+  .tabstrip-tab:is(:hover, [active]),
   .tabstrip-tab:has(+ .tabstrip-tab__close:hover) {
     color: var(--text);
-    background: color-mix(in srgb, var(--text) 5%, transparent);
+    background: var(--surface-hover);
   }
 
   .tabstrip-tab[active] {
-    color: var(--text);
-    background: var(--bg-elevated);
+    background: var(--surface-selected);
     box-shadow: none;
+  }
+
+  .tabstrip-tab[active]:hover,
+  .tabstrip-tab[active]:has(+ .tabstrip-tab__close:hover) {
+    background: var(--surface-selected-hover);
   }
 
   .tabstrip-tab__icon {
