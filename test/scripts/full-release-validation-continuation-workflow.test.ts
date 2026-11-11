@@ -26,13 +26,18 @@ const watcher = parse(
   readFileSync(".github/workflows/full-release-state-watcher.yml", "utf8"),
 ) as typeof workflow;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const allSteps = [...Object.values(workflow.jobs), watcher.jobs.watch].flatMap(
+const allSteps = [...Object.values(workflow.jobs), workflowJob("watch")].flatMap(
   ({ steps }) => steps ?? [],
 );
 
+function workflowJob(name: string) {
+  const job = name === "watch" ? watcher.jobs.watch : workflow.jobs[name];
+  assert(job, `missing workflow job: ${name}`);
+  return job;
+}
+
 function step(job: string, name: string) {
-  const owner = job === "watch" ? watcher.jobs.watch : workflow.jobs[job];
-  const match = owner?.steps?.find((entry) => entry.name === name);
+  const match = workflowJob(job).steps?.find((entry) => entry.name === name);
   assert(match, `missing workflow step: ${job}/${name}`);
   return match;
 }
@@ -262,7 +267,7 @@ describe("full release same-parent recovery workflow", () => {
         });
       };
       for (const caller of ["release_decision", "diagnostic_drain"]) {
-        expect(evaluate(workflow.jobs[caller].with?.qualification_workflow_sha)).toBe(
+        expect(evaluate(workflowJob(caller).with?.qualification_workflow_sha)).toBe(
           verifierCheckedOut ? verifierSha : "",
         );
       }
@@ -418,7 +423,7 @@ describe("full release same-parent recovery workflow", () => {
       FAIL_FAST: "${{ inputs.mode == 'decision' && inputs.fail_fast || false }}",
       FULL_RELEASE_STATE_MODE: "${{ inputs.mode }}",
     });
-    expect(workflow.jobs.release_decision.with?.mode).toBe("decision");
-    expect(workflow.jobs.diagnostic_drain.with?.mode).toBe("drain");
+    expect(workflowJob("release_decision").with?.mode).toBe("decision");
+    expect(workflowJob("diagnostic_drain").with?.mode).toBe("drain");
   });
 });
