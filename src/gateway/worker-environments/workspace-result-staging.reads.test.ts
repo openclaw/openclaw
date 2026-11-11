@@ -3,9 +3,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi, type TestContext } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { requireGit } from "../../agents/worktrees/git.js";
+import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import * as commandRuntime from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -28,6 +28,7 @@ import {
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
+import { resolveWorkspaceResultStorage } from "./workspace-result-storage.js";
 
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
@@ -93,6 +94,20 @@ function corruptBatch(
 
 const git = (root: string, args: string[]) =>
   requireGit(root, ["-c", "core.longpaths=true", ...args], { timeoutMs: 10_000 });
+
+async function reftableGit(root: string, args: string[], context: TestContext) {
+  const result = await runGit(root, args);
+  if (
+    result.termination === "exit" &&
+    result.code !== 0 &&
+    /unknown option.*ref-format|unknown ref storage format.*reftable|'refs' is not a git command/u.test(
+      result.stderr,
+    )
+  ) {
+    context.skip("Installed Git does not support reftable repositories");
+  }
+  expect(result.code, result.stderr).toBe(0);
+}
 
 async function stagedFixture(
   fileCount = 64,
@@ -179,17 +194,20 @@ async function stagedFixture(
   const currentManifestRaw = manifest(entries);
   const publishedRef = workerWorkspaceResultRef("read-batch");
   const stagedResultRef = linked ? preparedWorkerWorkspaceResultRef(publishedRef) : publishedRef;
-  const commit = await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
-    root: repository,
-    stagingRoot: input,
-    stagedResultRef,
-    ...(isolated ? {} : { sharedResultStore: true as const }),
-    baseManifestRaw,
-    currentManifestRaw,
-    baseManifestRef: manifestRef(baseManifestRaw),
-    currentManifestRef: manifestRef(currentManifestRaw),
-  });
+  const stage = (sharedResultStore = !isolated) =>
+    workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+      root: repository,
+      stagingRoot: input,
+      stagedResultRef,
+      ...(sharedResultStore ? { sharedResultStore: true as const } : {}),
+      baseManifestRaw,
+      currentManifestRaw,
+      baseManifestRef: manifestRef(baseManifestRaw),
+      currentManifestRef: manifestRef(currentManifestRaw),
+    });
+  const commit = await stage();
   return {
+    stage,
     read: (use: Parameters<typeof withStagedWorkerWorkspaceResult>[1]) =>
       withStagedWorkerWorkspaceResult({ root: repository, stagedResultRef }, use),
     repository,
@@ -229,6 +247,58 @@ it.each([
     expect(await fs.readdir(path.join(gitDir, "openclaw-worker-results"))).toEqual([]);
   },
 );
+
+it("keeps a retained legacy reftable result in its original store on retry", async (context) => {
+  const fixture = await stagedFixture(0);
+  const params = { root: fixture.repository, stagedResultRef: fixture.stagedResultRef };
+  await reftableGit(fixture.repository, ["refs", "migrate", "--ref-format=reftable"], context);
+  await expect.soft(hasWorkerWorkspaceResultRef(params)).resolves.toBe(true);
+  expect(await fixture.stage(false)).toBe(fixture.commit);
+  const storage = await resolveWorkspaceResultStorage(params.root, params.stagedResultRef);
+  expect(storage.root).toBe(fixture.repository);
+  expect(await git(fixture.repository, ["rev-parse", fixture.stagedResultRef])).toBe(
+    fixture.commit,
+  );
+});
+
+it("retains a private reftable result until its last claim ref is released", async (context) => {
+  const fixture = await stagedFixture(0, { isolated: true });
+  const params = { root: fixture.repository, stagedResultRef: fixture.stagedResultRef };
+  const storage = await resolveWorkspaceResultStorage(params.root, params.stagedResultRef);
+  const candidate = preparedWorkerWorkspaceResultRef(fixture.stagedResultRef);
+  await git(storage.root, ["update-ref", candidate, fixture.commit]);
+  await reftableGit(storage.root, ["refs", "migrate", "--ref-format=reftable"], context);
+  await expect.soft(hasWorkerWorkspaceResultRef(params)).resolves.toBe(true);
+  await deleteStagedWorkerWorkspaceResult({ ...params, stagedResultRef: candidate });
+  await expect(fs.stat(storage.root)).resolves.toBeDefined();
+  await expect(hasWorkerWorkspaceResultRef(params)).resolves.toBe(true);
+  await fixture.read(async (snapshot) => {
+    expect(await fs.readFile(path.join(snapshot.stagingRoot, fixture.binaryPath))).toEqual(
+      fixture.files.get(fixture.binaryPath),
+    );
+  });
+  await deleteStagedWorkerWorkspaceResult(params);
+  await expect(fs.stat(storage.root)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("keeps new private result lookups cheap with a reftable environment default", async (context) => {
+  await reftableGit(
+    tempDirs.make("workspace-reftable-probe-"),
+    ["init", "--quiet", "--bare", "--template=", "--ref-format=reftable"],
+    context,
+  );
+  vi.stubEnv("GIT_DEFAULT_REF_FORMAT", "reftable");
+  const fixture = await stagedFixture(0, { isolated: true });
+  const params = { root: fixture.repository, stagedResultRef: fixture.stagedResultRef };
+  const storage = await resolveWorkspaceResultStorage(params.root, params.stagedResultRef);
+  expect(await git(storage.root, ["rev-parse", "--show-ref-format"])).toBe("files");
+  const commands = vi.spyOn(commandRuntime, "runCommandWithTimeout");
+  await expect(hasWorkerWorkspaceResultRef(params)).resolves.toBe(true);
+  expect(commands).not.toHaveBeenCalled();
+  commands.mockRestore();
+  await deleteStagedWorkerWorkspaceResult(params);
+  await expect(fs.stat(storage.root)).rejects.toMatchObject({ code: "ENOENT" });
+});
 
 it("joins only matching pending staged reads and forgets settled results", async () => {
   const fixture = await stagedFixture(0);

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { requireGit } from "../../agents/worktrees/git.js";
@@ -9,7 +10,10 @@ import {
   readGitRefs,
   resolveGitRefsBase,
 } from "../../infra/git-root.js";
-import { withWorkspaceResultRefMutation } from "./workspace-result-git.js";
+import {
+  readWorkspaceResultRefObjects,
+  withWorkspaceResultRefMutation,
+} from "./workspace-result-git.js";
 import {
   isLocalWorkspaceBaseRefreshRef,
   WORKER_RESULT_REF_PREFIX,
@@ -31,6 +35,8 @@ const privateEnv: NodeJS.ProcessEnv = Object.fromEntries(
     "REPLACE_REF_BASE",
   ].map((name) => [`GIT_${name}`, undefined]),
 );
+// New private stores own their ref format; existing stores keep native lookup.
+privateEnv.GIT_DEFAULT_REF_FORMAT = "files";
 
 export type WorkspaceResultStorage = {
   root: string;
@@ -50,6 +56,19 @@ function resultRefs(ref: string): string[] {
         WORKER_RESULT_CANDIDATE_REF_PREFIX,
         WORKER_RESULT_CLEANUP_REF_PREFIX,
       ].map((prefix) => `${prefix}/${ref.slice(ref.lastIndexOf("/") + 1)}`);
+}
+
+export async function hasWorkspaceResultStorageRefs(
+  storage: WorkspaceResultStorage,
+  refs: readonly string[],
+): Promise<boolean> {
+  if (!storage.commonDir) {
+    return false;
+  }
+  const objects = existsSync(path.join(storage.commonDir, "reftable"))
+    ? await readWorkspaceResultRefObjects(storage.root, refs, storage.baseEnv)
+    : readGitRefs(storage.commonDir, refs);
+  return [...objects.values()].some(Boolean);
 }
 
 export async function resolveWorkspaceResultStorage(
@@ -125,7 +144,7 @@ export async function resolveWorkspaceResultStorage(
     }
   }
   // Stable claims finish in their original store, including packed recovery refs.
-  if (!create || [...readGitRefs(commonDir, storage.refs!).values()].some(Boolean)) {
+  if (!create || (await hasWorkspaceResultStorageRefs(original, storage.refs!))) {
     return original;
   }
   const format = await requireGit(root, ["rev-parse", "--show-object-format"], original);
@@ -155,7 +174,7 @@ export async function deleteEmptyWorkspaceResultStorage(
   await withWorkspaceResultRefMutation(
     storage.root,
     async () => {
-      if (![...readGitRefs(storage.root, storage.refs!).values()].some(Boolean)) {
+      if (!(await hasWorkspaceResultStorageRefs(storage, storage.refs!))) {
         await fs.rm(storage.root, { recursive: true, force: true });
       }
     },

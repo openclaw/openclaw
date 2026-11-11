@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readGitRefs } from "../../infra/git-root.js";
 import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -46,6 +45,7 @@ import {
 import {
   resolveWorkspaceResultStorage,
   deleteEmptyWorkspaceResultStorage,
+  hasWorkspaceResultStorageRefs,
   type WorkspaceResultStorage,
 } from "./workspace-result-storage.js";
 export { adoptStagedWorkerWorkspaceHistory } from "./workspace-result-history.js";
@@ -97,7 +97,7 @@ export async function hasWorkerWorkspaceResultRef(params: {
 }): Promise<boolean> {
   const ref = requireWorkerResultStorageRef(params.stagedResultRef);
   const storage = await resolveWorkspaceResultStorage(params.root, ref);
-  return Boolean(storage.commonDir && readGitRefs(storage.commonDir, [ref]).get(ref));
+  return hasWorkspaceResultStorageRefs(storage, [ref]);
 }
 
 async function stageWorkerWorkspaceResult(
