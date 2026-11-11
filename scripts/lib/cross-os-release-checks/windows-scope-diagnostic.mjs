@@ -32,7 +32,8 @@ if (process.platform === "win32" && output) {
   };
   registerHooks({ load(url, context, nextLoad) {
     const result = nextLoad(url, context);
-    if (!/\/update-recovery-backup-reader-[^/]+\.mjs$/.test(url)) return result;
+    // Exact retained baseline/candidate implementations; same-prefix re-export barrels have no assertion.
+    if (!/\/update-recovery-backup-reader-(?:BZpL0l9m|CK_1jHek)\.mjs$/.test(url)) return result;
     const source = typeof result.source === "string" ? result.source : Buffer.from(result.source).toString("utf8");
     const marker = "function assertManifestSelectedScope(manifest, scopes) {";
     if (source.split(marker).length !== 2 || !source.includes("Update recovery backup belongs to another selected state or configuration.")) throw new Error("Diagnostic scope instrumentation does not match the exact package");
