@@ -191,7 +191,6 @@ it("normalizes fractional millisecond timestamps through the Slack channel actio
       toolContext: {
         currentChannelProvider: "slack",
         currentChannelId: "C123",
-        requesterAccountId: "default",
       },
     };
 
