@@ -56,6 +56,7 @@ suite.define(() => {
           featureMethods: [...defaultControlUiFeatureMethods, "agents.list", "models.list"],
           authMode: ordering === "route before hello" ? "token" : undefined,
           deferredMethods: ordering === "route before hello" ? ["connect"] : [],
+          featureMethods: [...defaultControlUiFeatureMethods, "agents.list", "models.list"],
           methodResponses: {
             "agents.list": roster,
             "sessions.usage": emptyUsage,

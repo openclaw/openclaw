@@ -179,6 +179,7 @@ export function evaluateWorkflowExpression(
       (token: string, property: string | undefined) =>
         property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
     );
+  const effectiveRunnerBackend = (context.runnerBackend ?? context.runnerProfile) || "blacksmith";
   const globals = {
     always: () => true,
     success: () => !context.failed && !context.cancelled,
@@ -293,6 +294,9 @@ export function evaluateWorkflowExpression(
           frozen_target: String(context.frozenTarget ?? false),
           hosted_runner_profile_contract: String(context.hostedRunnerProfileContract ?? true),
           run_check: String(context.runCheck ?? true),
+          effective_runner_backend: effectiveRunnerBackend,
+          placement_runner_backend:
+            effectiveRunnerBackend === "boat" ? "hybrid" : effectiveRunnerBackend,
           runner_profile: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
           // Preflight defaults the Node planner backend to the logical profile.
           node_runner_backend: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",

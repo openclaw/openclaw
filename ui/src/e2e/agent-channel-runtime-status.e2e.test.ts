@@ -46,6 +46,12 @@ suite.define(() => {
         featureMethods: [...defaultControlUiFeatureMethods, "channels.status"],
         assistantName: "Main agent",
         defaultAgentId: "main",
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "agents.list",
+          "channels.status",
+          "config.get",
+        ],
         methodResponses: {
           "agents.list": createAgentRoster({ main: "Main agent" }, "main", "agent"),
           "channels.status": {

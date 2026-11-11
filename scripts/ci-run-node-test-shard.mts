@@ -36,6 +36,7 @@ import {
 } from "./lib/vitest-outcome.mts";
 import {
   MAX_CI_VITEST_PLAN_CONCURRENCY,
+  resolveCiNodeTestResources,
   resolveCiVitestPlanConcurrency,
   runVitestPlans,
 } from "./lib/vitest-plan-scheduling.mts";
@@ -698,8 +699,11 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   }
   const ci = isCiLikeEnv(baseEnv);
   const continueOnFailure = shouldContinueVitestFailures(baseEnv);
-  const hostResources = ci
+  const actualHostResources = ci
     ? { logicalCpuCount: os.availableParallelism(), totalMemoryBytes: os.totalmem() }
+    : null;
+  const hostResources = actualHostResources
+    ? resolveCiNodeTestResources(actualHostResources, baseEnv.OPENCLAW_NODE_TEST_CPU_BUDGET)
     : null;
   const exclusive = (entry: ShardPlan) =>
     entry.kind === "group" && entry.plan.configs.some(isExclusiveCiTestConfig);
@@ -858,8 +862,11 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       : undefined;
     if (hostResources) {
       console.log(
-        `[shard:resources] logicalCpuCount=${hostResources.logicalCpuCount} totalMemoryBytes=${hostResources.totalMemoryBytes} requested plans=${requestedConcurrency} admitted plans=${concurrency}`,
+        `[shard:resources] logicalCpuCount=${actualHostResources!.logicalCpuCount} totalMemoryBytes=${hostResources.totalMemoryBytes} requested plans=${requestedConcurrency} admitted plans=${concurrency}`,
       );
+      if (baseEnv.OPENCLAW_NODE_TEST_CPU_BUDGET) {
+        console.log(`[shard:cpu-budget] logicalCpuCount=${hostResources.logicalCpuCount}`);
+      }
       reportCiResourceSnapshot("start");
     }
     const clonedCacheSlots = clonePersistentCacheSlots(persistentCacheRoot, concurrency, policy);

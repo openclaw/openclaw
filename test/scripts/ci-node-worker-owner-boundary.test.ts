@@ -42,10 +42,10 @@ it.for(["frozen", "modern-missing", "modern-corrupt", "modern-unshared", "frozen
         // Damage only the worker owner; retain real lifecycle exports.
         for (const file of [
           "lib/vitest-build-prerequisites.mts",
-          "test-projects.test-support.mts",
           "lib/vitest-process.mts",
           "lib/vitest-process-env.mts",
           "lib/vitest-runtime-selection.mts",
+          "test-projects.test-support.mts",
           "vitest-process-group.mts",
         ]) {
           const source = JSON.stringify(pathToFileURL(join(root, "scripts", file)).href);

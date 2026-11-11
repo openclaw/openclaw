@@ -262,6 +262,9 @@ suite.define(() => {
             .evaluate((item) => item === document.activeElement),
         )
         .toBe(true);
+      await expect
+        .poll(() => dropdown.locator(".oc-menu-item:focus").textContent())
+        .toContain("Camera");
       await page.evaluate(() => {
         const input = document.querySelector<HTMLInputElement>(".agent-chat__file-input");
         if (!input) {

@@ -30,9 +30,10 @@ suite.define(() => {
         defaultAgentId: "main",
         featureMethods: [
           ...defaultControlUiFeatureMethods,
-          "agents.update",
           "agents.list",
+          "agents.update",
           "config.get",
+          "agent.identity.get",
         ],
         methodResponses: {
           "agents.list": {
