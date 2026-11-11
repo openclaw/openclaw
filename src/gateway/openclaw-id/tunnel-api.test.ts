@@ -213,6 +213,7 @@ describe("OpenClaw ID tunnel API", () => {
       {
         submit: (statement) => claw.authority.submit(statement, "mailbox"),
         redeem: (redemption, sender) => claw.authority.redeem(redemption, sender),
+        redeemNode: (redemption) => claw.authority.redeemNode(redemption),
       },
     );
     expect(result).toMatchObject({

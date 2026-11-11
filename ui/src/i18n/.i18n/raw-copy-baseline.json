@@ -425,7 +425,7 @@
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/pages/skills/library-view.tsx",
+      "path": "ui/src/pages/skills/library-dialog-content.tsx",
       "text": "SKILL.md"
     },
     {

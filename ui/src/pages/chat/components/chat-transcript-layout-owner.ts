@@ -40,7 +40,7 @@ export function unscaledBorderBox(element: HTMLElement, style = getComputedStyle
 /** The native scroll range changes only at these viewport and content writes. */
 export class TranscriptLayoutOwner {
   ready = false;
-  /** Row-column offset held back from scrollTop while iOS momentum is running. */
+  /** Row-column offset held back from scrollTop while native scrolling is running. */
   rowShift = 0;
   private rowGeometry: readonly TranscriptRowGeometry[] = [];
   rowLayout?: ChatWidgetLayout;

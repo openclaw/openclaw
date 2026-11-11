@@ -736,7 +736,7 @@ it.each([0, 252])(
   },
 );
 
-it("keeps smooth latest through settlement and idle until the target", async () => {
+it("keeps smooth latest through idle and measured estimates", async () => {
   const flushFrames = stubAnimationFrames();
   transcriptDomState.measuredRowHeight = 120;
   const rows = numberedContentRows(40);
@@ -773,6 +773,45 @@ it("keeps smooth latest through settlement and idle until the target", async () 
   vi.advanceTimersByTime(150);
   expect(scrollTo).toHaveBeenCalledExactlyOnceWith({ top: 4300, behavior: "instant" });
   expect(transcript.isProgrammaticScroll).toBe(false);
+  await Promise.resolve();
+  flush();
+  emitRowSizes(transcriptRows(container), 120);
+  flushFrames();
+  expect(transcript.scrollToEnd({ source: "auto", behavior: "instant" })).toBe(true);
+});
+
+it("renews a live end destination after the native scroll target expires", async () => {
+  transcriptDomState.measuredRowHeight = 120;
+  const flushFrames = stubAnimationFrames();
+  const { container, transcript } = await mountTestTranscript(
+    "live-end-expiry",
+    numberedContentRows(40),
+  );
+  geometry(container, { clientHeight: 600, scrollHeight: 4800 });
+  const scrollTo = vi.fn();
+  container.scrollTo = scrollTo;
+  scroll(container, 1000);
+  transcript.update();
+  const now = vi.spyOn(window.performance, "now").mockReturnValue(0);
+  onTestFinished(() => now.mockRestore());
+  transcript.scrollToEnd({ behavior: "smooth" });
+  await Promise.resolve();
+  flush();
+  await Promise.resolve();
+  expect(scrollTo).toHaveBeenLastCalledWith({ top: 4200, behavior: "smooth" });
+  scroll(container, 1500);
+  // The native virtualizer has a finite journey timeout; the stream can outlive it.
+  now.mockReturnValue(6000);
+  flushFrames();
+  geometry(container, { scrollHeight: 4900 });
+  scrollTo.mockClear();
+  transcript.scrollToEnd({ source: "auto", behavior: "smooth" });
+  await Promise.resolve();
+  flush();
+  emitRowSizes(transcriptRows(container), 120);
+  flushFrames();
+  await Promise.resolve();
+  expect(scrollTo).toHaveBeenLastCalledWith({ top: 4300, behavior: "smooth" });
 });
 
 it.each([false, true])(

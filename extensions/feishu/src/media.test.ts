@@ -498,25 +498,19 @@ describe("saveMessageResourceFeishu", () => {
     expect(resourceRequest(1).params).toEqual({ type: "media" });
   });
 
-  it.each(["header", "payload"])(
-    "recovers Latin-1-decoded CJK filenames from %s",
-    async (source) => {
-      const fileName = "武汉15座山登山信息汇总.csv";
-      const latin1 = Buffer.from(fileName, "utf8").toString("latin1");
-      messageResourceGetMock.mockResolvedValueOnce(
-        resourceResponse(
-          "a,b\n1,2\n",
-          source === "header"
-            ? { "content-disposition": `attachment; filename="${latin1}"` }
-            : { "content-type": "text/csv" },
-        ),
-      );
-      const result = await downloadResource(
-        source === "payload" ? { originalFilename: latin1 } : {},
-      );
-      expect(result.id).toMatch(/^武汉15座山登山信息汇总---[a-f0-9-]{36}\.csv$/);
-    },
-  );
+  const latin1 = Buffer.from("武汉15座山.csv", "utf8").toString("latin1");
+  it.each([
+    [`attachment; filename="${latin1}"`, undefined, "武汉15座山"],
+    [undefined, latin1, "武汉15座山"],
+    ['attachment; filename="report; final.csv"', undefined, "report_final"],
+    ["attachment; filename=\"a;b.csv\"; filename*=UTF-8''preferred.csv", undefined, "preferred"],
+    ['attachment; filename="report; final.csv', undefined, "backup"],
+  ])("saves the filename from %s / %s", async (disposition, originalFilename, base) => {
+    const headers = disposition ? { "content-disposition": disposition } : undefined;
+    messageResourceGetMock.mockResolvedValueOnce(resourceResponse("a,b\n1,2\n", headers));
+    const result = await downloadResource({ originalFilename: originalFilename ?? "backup.csv" });
+    expect(result.id).toMatch(new RegExp(`^${base}---[a-f0-9-]{36}\\.csv$`));
+  });
 
   it("keeps the shipped 120-second media timeout for stalled stream bodies", async () => {
     vi.useFakeTimers();

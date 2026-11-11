@@ -321,8 +321,8 @@ export function createEngineIdleScenarios(durationMs = 30_000): readonly EngineS
     ...[false, true].map((hidden) =>
       idle(clocks, `idle-sidebar-clock-${hidden ? "hidden" : "visible"}`, hidden),
     ),
-    ...[0, 1, 5, 20].map((count) =>
-      idle(
+    ...[0, 1, 5, 20].flatMap((count) => {
+      const desktop = idle(
         {
           ...clocks,
           fixtureOverrides: (_sandbox, base) => ({
@@ -356,7 +356,73 @@ export function createEngineIdleScenarios(durationMs = 30_000): readonly EngineS
         },
         `idle-sidebar-running-${count}`,
         false,
-      ),
-    ),
+      );
+      if (count !== 1) {
+        return [desktop];
+      }
+      return [
+        desktop,
+        {
+          ...desktop,
+          id: "idle-sidebar-clock-mobile-open-1",
+          viewports: ["mobile"],
+          expected:
+            "A touch-capable mobile page retains one visible running-session clock in its open navigation drawer without input.",
+          prepare: async (page, gateway) => {
+            await desktop.prepare(page, gateway);
+            const viewport = page.viewportSize()!;
+            const ready = await page.evaluate(({ width, height }) => {
+              const drawer = document.querySelector<HTMLElement>(
+                ".shell--mobile-nav.shell--nav-drawer-open > .shell-nav",
+              );
+              const runningClocks = drawer?.querySelectorAll<HTMLElement>(
+                ".sidebar-recent-session openclaw-elapsed-time",
+              );
+              const clock = runningClocks?.[0];
+              const row = clock?.closest(".sidebar-recent-session");
+              const clockStyle = clock ? getComputedStyle(clock) : undefined;
+              // ElapsedTime uses display: contents; measure its rendered text.
+              const range = document.createRange();
+              if (clock) {
+                range.selectNodeContents(clock);
+              }
+              const bounds = range.getBoundingClientRect();
+              const port = clock?.closest(".sidebar-shell__body")?.getBoundingClientRect();
+              return {
+                viewport: innerWidth === width && innerHeight === height,
+                // WebKit/Firefox can emulate touch while reporting zero maxTouchPoints.
+                coarsePointer: matchMedia("(pointer: coarse)").matches,
+                visibleDocument: document.visibilityState === "visible",
+                modalDrawer:
+                  drawer?.getAttribute("aria-modal") === "true" &&
+                  drawer.getAttribute("aria-hidden") !== "true" &&
+                  !drawer.inert,
+                oneClock: runningClocks?.length === 1,
+                visibleRow:
+                  row?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) === true,
+                labeledClock: Boolean(clock?.textContent?.trim()),
+                running: Boolean(
+                  row?.querySelector(".session-glyph__ring, .session-glyph__trace-run"),
+                ),
+                visibleText:
+                  clockStyle?.visibility === "visible" &&
+                  clockStyle.opacity !== "0" &&
+                  bounds.width > 0 &&
+                  bounds.height > 0 &&
+                  bounds.right > 0 &&
+                  bounds.left < innerWidth &&
+                  bounds.bottom > (port?.top ?? 0) &&
+                  bounds.top < (port?.bottom ?? innerHeight),
+              };
+            }, viewport);
+            if (Object.values(ready).some((condition) => !condition)) {
+              throw new Error(
+                `Mobile idle requires the selected touch viewport, an open modal drawer, and one visible running-session clock: ${JSON.stringify(ready)}`,
+              );
+            }
+          },
+        } satisfies EngineIdleScenario,
+      ];
+    }),
   ];
 }

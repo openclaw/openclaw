@@ -27,7 +27,11 @@ export function replaceMdSource(
     blocks: ast.blocks.map((block) => ({
       ...block,
       line: shift(block.line),
-      items: block.items.map((item) => ({ ...item, line: shift(item.line) })),
+      items: block.items.map((item) => ({
+        ...item,
+        line: shift(item.line),
+        textLine: item.textLine === null ? null : shift(item.textLine),
+      })),
     })),
   });
   const lines = edited.raw.replace(/^\uFEFF/, "").split(/\r?\n/);

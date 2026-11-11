@@ -304,8 +304,7 @@ export async function writeCliSystemPromptFile(params: {
   };
 }
 
-export async function prepareCliPromptImagePayload(params: {
-  backend: CliBackendConfig;
+type CliPromptImageInput = {
   prompt: string;
   imagePrompt?: string;
   workspaceDir: string;
@@ -314,13 +313,10 @@ export async function prepareCliPromptImagePayload(params: {
   imageOrder?: PromptImageOrderEntry[];
   mediaImageLayout?: MediaImageLayout;
   media?: MediaFact[];
-  imageTurnKey?: string;
-}): Promise<{
-  prompt: string;
-  imagePaths?: string[];
-}> {
-  let prompt = params.prompt;
-  const imagePrompt = params.imagePrompt ?? prompt;
+};
+
+export async function loadCliPromptImages(params: CliPromptImageInput): Promise<ImageContent[]> {
+  const imagePrompt = params.imagePrompt ?? params.prompt;
   const needsHydration =
     params.imagePrompt !== undefined ||
     Boolean(params.media?.length) ||
@@ -344,7 +340,22 @@ export async function prepareCliPromptImagePayload(params: {
       `failed to hydrate ${imageResult.failedMediaCount} structured image attachment(s) for CLI input`,
     );
   }
-  const resolvedImages = imageResult?.images ?? params.images ?? [];
+  return imageResult?.images ?? params.images ?? [];
+}
+
+export async function prepareCliPromptImagePayload(
+  params: CliPromptImageInput & {
+    backend: CliBackendConfig;
+    imageTurnKey?: string;
+    /** Run-owned snapshot already inspected by the input gate; never reload its source paths. */
+    preparedImages?: ImageContent[];
+  },
+): Promise<{
+  prompt: string;
+  imagePaths?: string[];
+}> {
+  let prompt = params.prompt;
+  const resolvedImages = params.preparedImages ?? (await loadCliPromptImages(params));
   if (resolvedImages.length === 0) {
     return { prompt };
   }

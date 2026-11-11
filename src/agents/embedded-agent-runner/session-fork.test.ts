@@ -338,18 +338,17 @@ it("uses the current prepared proxy and TLS transport policy", async () => {
   );
 });
 
-it("denies Anthropic hosted search while retaining prepared tools and system", async () => {
+it.each([
+  ["denies hosted search", { type: "web_search_20250305", name: "web_search" }, { type: "none" }],
+  ["keeps tool_choice for client tools", { name: "exec", input_schema: {} }, undefined],
+])("Anthropic %s while retaining prepared tools and system", async (_, hostedTool, choice) => {
   const { streamFn, request } = guardedTransport(undefined, "anthropic-messages");
   const requestModel = apiModel("anthropic-messages");
-  const hostedTool = { type: "web_search_20250305", name: "web_search" };
   const withHostedTool: StreamFn = (activeModel, requestContext, options) =>
     streamFn(activeModel, requestContext, {
       ...options,
       onPayload: (payload, payloadModel) => {
-        if (!isRecord(payload)) {
-          throw new Error("Expected provider request");
-        }
-        const prepared = { ...payload, tools: [hostedTool] };
+        const prepared = isRecord(payload) ? { ...payload, tools: [hostedTool] } : payload;
         return options?.onPayload?.(prepared, payloadModel) ?? prepared;
       },
     });
@@ -357,13 +356,8 @@ it("denies Anthropic hosted search while retaining prepared tools and system", a
   const original = await request().json();
   await expect(fork(withHostedTool, requestModel)).resolves.toBe("Answer");
   const replay = await request().json();
-  expect(replay).toEqual(
-    expect.objectContaining({
-      tool_choice: { type: "none" },
-      tools: [hostedTool],
-      system: original.system,
-    }),
-  );
+  expect(replay).toEqual(expect.objectContaining({ tools: [hostedTool], system: original.system }));
+  expect(replay.tool_choice).toEqual(choice ?? original.tool_choice);
   expectText(JSON.stringify(replay.messages), ["Parent question", "Review only"]);
 });
 

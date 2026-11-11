@@ -26,7 +26,7 @@ import {
   type MessageActionElements,
 } from "./chat-message-action-elements.ts";
 import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.types.ts";
-import { extractMessageMediaText } from "./chat-message-media.ts";
+import { extractMessageMediaText } from "./chat-message-media-projection.ts";
 import {
   hasActionRowReactionPicker,
   type MessageReactionOptions,

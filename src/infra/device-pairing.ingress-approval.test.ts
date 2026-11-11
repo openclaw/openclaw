@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
+import { approveDevicePairing as approveDevicePairingFromSdk } from "../plugin-sdk/device-bootstrap.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";
@@ -47,6 +48,18 @@ beforeEach(() => {
 afterAll(async () => {
   await closeStateDatabaseForTest();
   await suiteRootTracker.cleanup();
+});
+
+test("keeps token issuer selection private to worker-owned approval flows", async () => {
+  const request = await requestOperator(read);
+  const pluginOptions = {
+    callerScopes: ["operator.admin"],
+    tokenIssuer: { kind: "shared-gateway-auth" as const, generation: "plugin-supplied" },
+  };
+  await expect(
+    approveDevicePairingFromSdk(request.request.requestId, pluginOptions, baseDir),
+  ).resolves.toMatchObject({ status: "approved" });
+  expect((await paired())?.tokens?.operator?.issuer).toBeUndefined();
 });
 
 test.each(["trusted-proxy", "remote-ingress"] as const)(

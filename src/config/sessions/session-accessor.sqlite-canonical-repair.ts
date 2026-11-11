@@ -2,6 +2,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
@@ -162,6 +163,37 @@ export async function ensureSqliteTranscriptGenerationsForCanonicalRepair(
     }
   }
   for (const group of byDatabase.values()) {
+    const options = toDatabaseOptions(group.resolved);
+    const sourceDatabase = openOpenClawAgentDatabase(options);
+    const readSessionIds = (database: OpenClawAgentDatabase) =>
+      uniqueStrings([
+        ...group.sources.flatMap((source) => collectSessionStateIdsForEntry(source.entry)),
+        ...readSessionGenerationIdsForKeys(
+          database,
+          group.sources.map((source) => source.sessionKey),
+          { exactStoredKeys: true },
+        ),
+      ]);
+    const cold = executeSqliteQuerySync(
+      sourceDatabase.db,
+      getSessionKysely(sourceDatabase.db)
+        .selectFrom("session_transcript_cold_archives")
+        .select("session_id")
+        .where("session_id", "in", sqliteStringSet(readSessionIds(sourceDatabase))),
+    ).rows;
+    // Doctor holds offline custody. Restore before reserving the writer because the archive
+    // owner needs that writer too; qualified legacy keys do not identify the physical owner.
+    if (cold.length > 0) {
+      const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+      for (const { session_id: sessionId } of cold) {
+        await restoreSessionColdTranscript({
+          agentId: options.agentId,
+          env: options.env,
+          sessionId,
+          storePath: group.resolved.ownerStorePath ?? sourceDatabase.path,
+        });
+      }
+    }
     await runExclusiveSqliteSessionWrite(
       group.resolved,
       async () => {
@@ -169,16 +201,7 @@ export async function ensureSqliteTranscriptGenerationsForCanonicalRepair(
           (database) => {
             // Inventory and generation creation share one snapshot so copied rows and later archive
             // plans observe the same immutable identity for each imported transcript.
-            const sessionIds = uniqueStrings([
-              ...group.sources.flatMap((source) => [
-                ...collectSessionStateIdsForEntry(source.entry),
-              ]),
-              ...readSessionGenerationIdsForKeys(
-                database,
-                group.sources.map((source) => source.sessionKey),
-                { exactStoredKeys: true },
-              ),
-            ]);
+            const sessionIds = readSessionIds(database);
             const db = getSessionKysely(database.db);
             for (const sessionId of sessionIds) {
               assertSessionTranscriptHot(database.db, sessionId);

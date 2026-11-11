@@ -180,11 +180,14 @@ validate_prep_baseline_transition() {
   # Replay once before observing live authority. The private facts stay in this
   # recovery invocation; retry must reconstruct them from the admitted journal.
   PREP_TRANSITION_FACTS=$(node "$helper" validate-transition \
-    "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID") || return 1
+    "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" "${PR_MAIN_SHA:-}") || return 1
   validate_review_transition_state "$pr" "$source" "$target" || return 1
   observation=$(cat .local/pr-meta.json) || return 1
   archive=$(printf '%s' "$PREP_TRANSITION_FACTS" | jq -er '.binding | @base64d | fromjson | .archive') || return 1
   revalidate_baseline_publication "$pr" "$observation" "$source" "$archive" || return 1
+  if printf '%s' "$PREP_TRANSITION_FACTS" | jq -e '.binding | @base64d | fromjson | .version == 2 and .purpose == "proof"' >/dev/null; then
+    require_proof_publication_custody "$pr" proof || return 1
+  fi
   if [ "$command" = install-transition ]; then
     PREP_TRANSITION_FACTS=$(printf '%s' "$PREP_TRANSITION_FACTS" | node "$helper" install-transition \
       "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID") || return 1
@@ -289,9 +292,9 @@ recover_review_transition() {
       pr_git update-ref --no-deref "refs/heads/$branch" "$target" "$source" || return 1
     fi
   elif [ "$mode" = "branch" ]; then
-    pr_git checkout -B "$branch" "$target" || return 1
+    GIT_NO_LAZY_FETCH=1 pr_git checkout -B "$branch" "$target" || return 1
   else
-    pr_git checkout --detach "$target" || return 1
+    GIT_NO_LAZY_FETCH=1 pr_git checkout --detach "$target" || return 1
   fi
 
   local actual_branch
@@ -332,7 +335,12 @@ checkout_pr_worktree_target() {
 
   local source target mode=detached
   source=$(pr_git rev-parse HEAD) || return 1
-  target=$(pr_git rev-parse "$target_ref^{commit}") || return 1
+  # A lazy commit fetch sends no haves and can download all reachable history.
+  # Acquire missing commits through the filtered, negotiating source owner first.
+  target=$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse --verify "$target_ref^{commit}" 2>/dev/null) || {
+    fetch_canonical_ref "$target_ref" --no-write-fetch-head || return 1
+    target=$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse --verify "$target_ref^{commit}") || return 1
+  }
   require_no_ignored_transition_paths "$pr" "$source" "$target" || return 1
   [ -z "$branch" ] || mode=branch
   write_review_transition_journal "$pr" "$source" "$target" "$mode" "$branch" || return 1
@@ -340,12 +348,19 @@ checkout_pr_worktree_target() {
 }
 
 fetch_canonical_ref() {
-  local refspec="$1" root source git_dir promisor filter=""
+  local refspec="$1" root source
   shift
   root=$(repo_root) || return 1
-  source=$(pr_git -C "$root" remote get-url origin) || return 1
-  git_dir=$(pr_git rev-parse --absolute-git-dir) || return 1
   # Resolve relative URLs at the canonical root; ignore worktree origin/refmaps.
+  source=$(pr_git -C "$root" remote get-url origin) || return 1
+  fetch_source_with_canonical_promisor "$source" "$refspec" "$@"
+}
+
+fetch_source_with_canonical_promisor() {
+  local source="$1" refspec="$2" root git_dir promisor filter=""
+  shift 2
+  root=$(repo_root) || return 1
+  git_dir=$(pr_git rev-parse --absolute-git-dir) || return 1
   # Other PRs and ordinary fetches own shared refs and the root FETCH_HEAD.
   # Automatic maintenance can prune unrelated worktree metadata, even on fetch.
   set -- fetch --no-auto-maintenance --no-tags --refmap= "$@" "$source" "$refspec"
@@ -354,6 +369,8 @@ fetch_canonical_ref() {
     filter=$(pr_git -C "$root" config --get remote.origin.partialclonefilter) || [ "$?" -eq 1 ] || return 1
     if [ -n "$filter" ]; then
       # Literal URLs lose origin's filter; --filter would persist a new remote.
+      # Without a filter the pack is not a promisor pack, and Git's connectivity
+      # check then parses every promisor object in the repository.
       # Project the canonical promisor settings only for this fetch.
       set -- "--config-env=remote.$source.promisor=PR_CANONICAL_FETCH_PROMISOR" \
         "--config-env=remote.$source.partialclonefilter=PR_CANONICAL_FETCH_FILTER" "$@"

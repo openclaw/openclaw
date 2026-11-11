@@ -165,9 +165,7 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                   disabled={!model.gateway.connected || !view().operatorAccess.canAdmin || busy()}
                   onClick={() => void mutate("gc", () => model.gc())}
                 >
-                  {operation() === "gc" || view().loading
-                    ? t("common.loading")
-                    : t("worktrees.cleanNow")}
+                  {operation() === "gc" ? t("common.loading") : t("worktrees.cleanNow")}
                 </button>
               </>
             }

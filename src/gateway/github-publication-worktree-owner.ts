@@ -117,11 +117,16 @@ export function preparePublicationWorktreeRead(
       rejectChangedPublicationWorktree(error);
     }
     context.admission.assertCurrent();
-    if (!worktree) {
-      throw new GitHubPublicationSessionChangedError();
-    }
     const current = requirePublicationSessionOwner(identity, readSession());
     if (current.entry.repositoryWorkspaceId !== workspaceId) {
+      throw new GitHubPublicationSessionChangedError();
+    }
+    if (!worktree) {
+      if (!selection && !workspaceId && !current.entry.worktree?.id) {
+        throw new Error(
+          "This conversation has no publication workspace. To publish a committed local checkout, call github_publish with workspacePath set to the checkout's absolute path.",
+        );
+      }
       throw new GitHubPublicationSessionChangedError();
     }
     const assertCurrent = () => {

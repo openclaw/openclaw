@@ -20,6 +20,7 @@ import * as pluginArtifactIdentity from "../plugins/plugin-runtime-artifact-iden
 import { createInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl } from "./inference-route.js";
+import { describeSystemAgentConfigConflict } from "./setup-config-snapshot.js";
 import { resolvePersistentApplyInference as resolvePersistentApplyInferenceImpl } from "./setup-inference.js";
 import {
   installSystemAgentClaudeCliBackendTestFixture,
@@ -649,6 +650,7 @@ describe("verified OpenClaw inference binding", () => {
 
     expect(binding.execution).toMatchObject({ agentHarnessRuntimeOverride: "openclaw" });
     expect(binding.auth.agentHarnessId).toBe("openclaw");
+    expect(describeSystemAgentConfigConflict(binding.execution.runConfig)).toBeUndefined();
   });
 
   it("rejects an opaque harness with no trusted manifest owner", async () => {

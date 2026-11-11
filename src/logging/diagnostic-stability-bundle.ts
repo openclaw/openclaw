@@ -20,10 +20,16 @@ import { resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit, VERSION } fr
 import { readMemoryUsage } from "./diagnostic-memory-bundle.js";
 import {
   assignOptionalFields,
+  readCodeString,
   readObject,
+  readOptionalCodeString,
   readOptionalNumber,
   readOptionalPositiveInteger,
   readRequiredNumber,
+  readRequiredString,
+  readTimestampMs,
+  readTimestampString,
+  SAFE_REASON_CODE,
 } from "./diagnostic-stability-readers.js";
 import {
   getDiagnosticStabilitySnapshot,
@@ -37,7 +43,6 @@ const DIAGNOSTIC_STABILITY_BUNDLE_VERSION = 1;
 const DIAGNOSTIC_STABILITY_BUNDLE_RETENTION = 20;
 export const MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES = 5 * 1024 * 1024;
 
-const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const BUNDLE_PREFIX = "openclaw-stability-";
 const BUNDLE_SUFFIX = ".json";
 const REDACTED_HOSTNAME = "<redacted-hostname>";
@@ -225,45 +230,6 @@ function resolveDiagnosticStabilityBundleDir(
 
 function isBundleFile(name: string): boolean {
   return name.startsWith(BUNDLE_PREFIX) && name.endsWith(BUNDLE_SUFFIX);
-}
-
-function readTimestampMs(value: unknown, label: string): number {
-  const timestamp = readRequiredNumber(value, label);
-  if (Number.isNaN(new Date(timestamp).getTime())) {
-    throw new Error(`Invalid stability bundle: ${label} must be a valid timestamp`);
-  }
-  return timestamp;
-}
-
-function readRequiredString(value: unknown, label: string): string {
-  if (typeof value !== "string") {
-    throw new Error(`Invalid stability bundle: ${label} must be a string`);
-  }
-  return value;
-}
-
-function readTimestampString(value: unknown, label: string): string {
-  const timestamp = readRequiredString(value, label);
-  if (Number.isNaN(new Date(timestamp).getTime())) {
-    throw new Error(`Invalid stability bundle: ${label} must be a valid timestamp`);
-  }
-  return timestamp;
-}
-
-function readCodeString(value: unknown, label: string): string {
-  const code = readRequiredString(value, label);
-  if (!SAFE_REASON_CODE.test(code)) {
-    throw new Error(`Invalid stability bundle: ${label} must be a safe diagnostic code`);
-  }
-  return code;
-}
-
-function readOptionalCodeString(value: unknown, label: string): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const code = readRequiredString(value, label);
-  return SAFE_REASON_CODE.test(code) ? code : undefined;
 }
 
 function readProcessBuildIdentity(source: Record<string, unknown>) {

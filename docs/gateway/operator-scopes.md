@@ -698,6 +698,21 @@ dispatch so authorization failures have one standard structured response:
   `operator.admin`.
   For non-admin callers, the handler limits `cwd` to configured agent
   workspaces. `projectId` cannot be combined with `cwd` or `execNode`.
+  `projectGitUrl` (clone or reuse a repository by URL with the Gateway's GitHub
+  identity) requires `operator.write`.
+- Callers without `operator.write` (for example the `guest` and `contributor`
+  roles) only see and open agent-workspace projects and registry projects whose
+  origin is a public GitHub repository on the configured host. GitHub
+  `private` and Enterprise `internal` repositories, non-GitHub origins, and
+  failed or rate-limited visibility lookups are hidden. This applies to
+  `projects.list` (projects, recents; the default repository is write-only),
+  `projects.checkoutOptions`, project skills in `commands.list`,
+  `sessions.create` with `projectId`, native background spawns with
+  `projectId`, and children that inherit their parent's checkout, which check
+  the child's requester. Discovery caches visibility for up to 10 minutes;
+  creating a session or child asks GitHub again. Existing checkouts are kept.
+- `projects.searchRemote` and `worktrees.list` need `operator.write`;
+  worktree listings include every session's paths, repository roots, and branches.
 - `environments.list` needs `operator.read` for plain inventory and
   `operator.write` when `runtimeId` requests runtime-specific command eligibility.
   Session placement methods derive
@@ -737,6 +752,11 @@ dispatch so authorization failures have one standard structured response:
 - `sessions.delete` requires `operator.write` for an archived-only request
   with the supported fields, and `operator.admin` otherwise. Neither session
   scope authorizes deletion.
+- `session.typing` accepts `operator.sessions.write` for draft previews in the
+  authenticated creator’s own session, or broader `operator.write` access under
+  the existing participation policy. Read-only access cannot publish typing;
+  session visibility and current authority are checked again before a delayed
+  preview is delivered.
 - `session.reactions.list` accepts `operator.sessions.read` or broader read
   access and requires current session visibility. `session.reactions.set` requires `operator.write`, an identified
   author, and permission to send to or suggest in the session. A view-only
@@ -879,6 +899,15 @@ shared-secret bearer auth, even if a caller sends narrower declared scopes.
 Identity-bearing modes, such as trusted proxy auth or private-ingress `none`,
 can still honor explicit declared scopes. Use separate Gateways for real trust
 boundary separation.
+
+## Recovering from inactive authority
+
+If a turn reports that operator source or execution authority is no longer active,
+reconnect to the Gateway, then send the message again. If reconnecting denies
+access, ask an administrator to restore your access. Starting a new conversation
+does not restore a revoked connection grant. Accepted work retains its original
+authority: reconnecting admits fresh requests but never reactivates old tools or
+callbacks.
 
 ## Related
 

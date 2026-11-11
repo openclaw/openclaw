@@ -4,7 +4,7 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { DoctorMemoryEmbeddingRuntimePayload } from "../gateway/server-methods/doctor.js";
 import type { ManifestOwnerBasePolicyBlockReason } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import type { MemoryHealth } from "../plugins/memory-provider-types.js";
+import type { MemoryHealth } from "../plugins/memory-provider-runtime-types.js";
 
 const note = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));

@@ -260,17 +260,18 @@ you set the options below. Or use config:
     entries: {
       advisor: {
         enabled: true,
-        config: { everyToolCalls: 10, everyMinutes: 20 },
+        config: { everyMinutes: 20, everyToolCalls: 0 },
       },
     },
   },
 }
 ```
 
-- `everyToolCalls` (default `10`, range `0`–`1000`): review after this many tool
-  calls in a conversation.
 - `everyMinutes` (default `20`, range `0`–`1440`): review after this many minutes
-  of work in a run, checked when a tool starts.
+  of work in a run, checked when a tool starts. Runs shorter than this are not
+  reviewed.
+- `everyToolCalls` (default `0`, off; range `0`–`1000`): also review after this
+  many tool calls in a conversation.
 - `reviewInstructions` (optional, up to 4,000 characters): replaces the built-in
   definition of "off course". Changes apply to the next review.
 
@@ -278,8 +279,12 @@ Set both triggers to `0` to turn reviews off.
 
 Behavior and limits:
 
-- Only user-triggered runs are reviewed. Heartbeat, cron and other automatic
-  runs are not.
+- Only the main agent's user-triggered runs are reviewed. Heartbeat, cron and
+  other automatic runs are not, and neither are subagent sessions: the main
+  agent sees what its subagents report, so Advisor corrects the main agent,
+  which can redirect the subagent.
+- After a correction steers a run, later reviews in that run are told what was
+  already said and stay quiet unless they find a different problem.
 - A due review waits until every running tool call has its result, so the fork
   never sees a missing or synthetic tool outcome. A stalled call delays the
   review rather than forcing it.
@@ -290,8 +295,11 @@ Behavior and limits:
   before acting.
 - Advisor needs conversation access and prompt injection permission through
   `plugins.entries.advisor.hooks`, which trusted plugins have by default.
-- Gateway info logs record review token usage and whether a correction steered
-  the run.
+- Gateway info logs record review token usage (uncached input, cache reads,
+  cache writes and output) and whether a correction steered the run. When a review
+  misses the provider cache and the provider reports cache-write tokens, its
+  context appears under cache writes rather than input. Reviews do not share the conversation's prompt-cache key, so on
+  OpenAI routes some reviews miss the cache.
 
 ## OpenClaw ID remote access
 
@@ -338,8 +346,22 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   **Remove access** for a browser. The confirmation lists any other devices that
   will also lose access. They disconnect immediately; use another approved owner
   browser or your recovery kit to restore access.
+- **Sign out of OpenClaw ID** on a remote browser ends its account session and
+  revokes the Gateway tokens issued to it, but the browser stays approved.
+  Signing back in on the same browser reconnects with the access it was
+  approved for, without a new device approval. Asking for more access than
+  that still needs approval.
+- **Settings → Devices** and `openclaw devices list` mark browsers that connect
+  through OpenClaw ID and link to **Access**. They can't be removed or have
+  their tokens revoked as devices. To end someone's access, remove them on
+  **Access**; to remove one of your own owner browsers, use **Your devices** in
+  the account menu. Nodes and other devices are managed as before.
 - There is no owner reset in this version: a claw keeps the recovery kit it was
   linked with, so store the kit safely.
+- To move a claw to new connection keys (a lost or leaked key file, a new computer
+  without the key files, or routine rotation), run `openclaw id rebind` on the
+  computer that runs it, with its recovery kit. Devices, people, nodes and invites
+  stay ([CLI](/cli/id)).
 
 ### Sign in with OpenClaw ID
 
@@ -358,11 +380,20 @@ instead of asking you to paste one.
 
 - The Gateway supervises one **tunnel child** process. The child owns the iroh
   endpoint key (`<state dir>/openclaw-id/endpoint.key`, mode 0600, created on
-  first start and never regenerated; a new key re-links every device). It runs
+  first start). It runs
   at a lower CPU priority, restarts with a 1 to 30 second backoff, is restarted
   gracefully above 512 MB RSS, and stops with SIGTERM then SIGKILL after 2
   seconds. If the iroh binding cannot load on this platform, the Gateway reports
   remote access unavailable and keeps running.
+- Once a claw is linked, its server binding names the endpoint key and the
+  Gateway key (`<state dir>/openclaw-id/gateway.key`), and neither is ever
+  created again. If either file is missing or holds another key, for example
+  after a restore that skipped the key files, remote access is off and status
+  reports `keys_missing` or `key_mismatch`. Nothing is published or dialed with
+  another key. The Gateway itself keeps running, so everything on this computer
+  works as before. To bring remote access back, restore the original key files,
+  then restart the Gateway, or move the claw to new keys with its recovery kit
+  on this computer: `openclaw id rebind` ([CLI](/cli/id)).
 - The child admits a device only if the Gateway's membership lists the
   device's endpoint key, and checks that before accepting any stream. Until a
   claw is linked, nobody is admitted.
