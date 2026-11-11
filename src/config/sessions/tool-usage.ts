@@ -128,7 +128,7 @@ export async function resetAgentToolUsage(input: AgentToolUsageOptions) {
   return state;
 }
 
-export function importAgentToolUsage(
+export async function importAgentToolUsage(
   input: AgentToolUsageOptions & {
     catalog: readonly ToolUsageCatalogEntry[];
     sinceDays?: number;
@@ -145,6 +145,9 @@ export function importAgentToolUsage(
     Math.floor(now - Math.min(TOOL_USAGE_RETENTION_MS, sinceDays * 86_400_000)),
   );
   const catalog = input.catalog.map(({ id, name }) => ({ id, name }));
+  const { settlePendingAgentToolUsageAdmissions } =
+    await import("../../agents/tool-usage-recorder.js");
+  await settlePendingAgentToolUsageAdmissions(normalizeAgentId(input.agentId));
   return withDatabase(input, async (options, current) => {
     const state = await withSessionHistoryWorkerDatabase(options, (owner) =>
       owner.readAgentToolUsage({ now, env: options.env ?? {} }),

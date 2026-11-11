@@ -97,13 +97,20 @@ export async function runEmbeddedAttempt(
         ? AbortSignal.any([attempt.abortSignal, parentSignal])
         : parentSignal
       : attempt.abortSignal;
-    const result = await runWithAsyncWorkResources((onAcquired) =>
-      runEmbeddedAttemptOwned(
-        attempt,
-        (release) => onAcquired({ release, releaseBeforeResultWhenIdle: true }),
-        resourceAbortSignal,
-      ),
-    );
+    const run = (retainToolUsageCleanup?: (release: () => Promise<void>) => void) =>
+      runWithAsyncWorkResources((onAcquired) =>
+        runEmbeddedAttemptOwned(
+          attempt,
+          (release) => onAcquired({ release, releaseBeforeResultWhenIdle: true }),
+          resourceAbortSignal,
+          retainToolUsageCleanup,
+        ),
+      );
+    // Recording settles after tool resources, under the same retained work tree,
+    // without making its storage latency part of the foreground result.
+    const result = isToolUsageRecordingEnabled(attempt)
+      ? await runWithAsyncWorkResources((onAcquired) => run((release) => onAcquired({ release })))
+      : await run();
     modelExecution?.assertCurrent();
     return result;
   } finally {
@@ -116,6 +123,7 @@ async function runEmbeddedAttemptOwned(
   input: EmbeddedRunAttemptInternalParams,
   retainToolCleanup: (release: () => Promise<void>) => void,
   resourceAbortSignal: AbortSignal | undefined,
+  retainToolUsageCleanup?: (release: () => Promise<void>) => void,
 ): Promise<EmbeddedRunAttemptResult> {
   let params = input;
   const runAbortController = new AbortController();
@@ -195,19 +203,18 @@ async function runEmbeddedAttemptOwned(
     params.abortSignal,
   );
   try {
-    if (isToolUsageRecordingEnabled(params)) {
-      params = {
-        ...params,
-        toolUsageRecorder: await prepare("attempt.tool-usage", () =>
-          createRunToolUsageRecorder({
-            agentId: sessionAgentId,
-            runId: params.runId,
-            config: params.config,
-            sessionKey: params.sessionKey,
-            log,
-          }),
-        ),
-      };
+    if (retainToolUsageCleanup) {
+      const recorder = createRunToolUsageRecorder({
+        agentId: sessionAgentId,
+        runId: params.runId,
+        config: params.config,
+        sessionKey: params.sessionKey,
+        log,
+      });
+      params = { ...params, toolUsageRecorder: recorder };
+      if (recorder) {
+        retainToolUsageCleanup(() => recorder.settle());
+      }
     }
     const preparedSkills = await prepare("attempt.skills", () =>
       prepareEmbeddedSkills({
@@ -653,15 +660,8 @@ async function runEmbeddedAttemptOwned(
           }
         });
       } finally {
-        try {
-          const recorder = params.toolUsageRecorder;
-          if (recorder) {
-            await cleanupStep("embedded-tool-usage", () => recorder.settle());
-          }
-        } finally {
-          setup[Symbol.dispose]();
-          externalAbortController.dispose();
-        }
+        setup[Symbol.dispose]();
+        externalAbortController.dispose();
       }
     };
     if (resolveCleanupReason() === "completion") {

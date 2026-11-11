@@ -195,11 +195,17 @@ export async function prepareSessionToolUsageRanking(params: {
     .slice(markerIndex + 1)
     .some((entry) => entry.type === "model_change");
   const previous = params.state.usageRanking;
+  if (!previous) {
+    // Both checkpoint consumers share the ranking owner's one restored identity.
+    params.state.persistedUsageRanking = readToolUsageRankingSnapshot(data?.usageRanking);
+  }
   const sameBoundary = previous
     ? previous.routeKey === params.routeKey && previous.historyId === historyId
     : data?.routeKey === params.routeKey && data.historyId === historyId && !afterModelChange;
   let snapshot = sameBoundary
-    ? (previous?.snapshot ?? readToolUsageRankingSnapshot(data?.usageRanking))
+    ? previous
+      ? previous.snapshot
+      : params.state.persistedUsageRanking
     : undefined;
   const frozen = snapshot;
   if (!sameBoundary && params.enabled) {
@@ -211,7 +217,7 @@ export async function prepareSessionToolUsageRanking(params: {
     const firstSeen =
       inherited?.newcomers ??
       previous?.snapshot?.newcomers ??
-      readToolUsageRankingSnapshot(data?.usageRanking)?.newcomers;
+      params.state.persistedUsageRanking?.newcomers;
     snapshot = {
       version: 1,
       at: inherited?.at ?? params.now,
@@ -528,7 +534,7 @@ export function prepareSessionSystemPrompt(params: {
         historyId,
         permissionNotice:
           typeof data.permissionNotice === "string" ? data.permissionNotice : undefined,
-        usageRanking: readToolUsageRankingSnapshot(data.usageRanking),
+        usageRanking: params.state.persistedUsageRanking,
         restart: false,
       };
       params.state.systemPrompt = series;
@@ -662,6 +668,7 @@ export async function persistSessionSystemPrompt(
     }
   }
   state.systemPrompt = { ...snapshot, restart: false };
+  state.persistedUsageRanking = snapshot.usageRanking;
   state.pendingSystemPrompt = undefined;
   state.toolSurface = toolSurface;
   state.pendingToolSurface = undefined;

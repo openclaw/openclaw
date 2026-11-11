@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   createRunToolUsageRecorder,
   discardPendingAgentToolUsage,
+  settlePendingAgentToolUsageAdmissions,
   type RunToolUsageRecorder,
 } from "./tool-usage-recorder.js";
 
@@ -31,6 +33,7 @@ async function createRecorder(agentId = "main") {
     throw new Error("expected enabled recorder");
   }
   recorders.push(recorder);
+  await recorder.flush();
   return recorder;
 }
 
@@ -67,6 +70,48 @@ describe("run-owned tool usage", () => {
     expect(storage.flushAgentToolUsage).not.toHaveBeenCalled();
   });
 
+  it("starts synchronously while import joins admission and reset fences its buffered counts", async () => {
+    const release = Promise.withResolvers<{ generation: number; liveSince: number }>();
+    storage.beginAgentToolUsageRecording.mockReturnValueOnce(release.promise);
+    const recorder = createRunToolUsageRecorder({
+      agentId: "main",
+      runId: "delayed-admission",
+      config,
+      log: { warn },
+      now: () => 1_000,
+    });
+    try {
+      expect(recorder).not.toBeInstanceOf(Promise);
+      expect(recorder).toBeDefined();
+      recorder!.record("openclaw:core:read");
+      const firstFlush = recorder!.flush();
+      let importReady = false;
+      const beforeImport = settlePendingAgentToolUsageAdmissions("main").then(() => {
+        importReady = true;
+      });
+      await Promise.resolve();
+      expect(importReady).toBe(false);
+      expect(storage.flushAgentToolUsage).not.toHaveBeenCalled();
+      discardPendingAgentToolUsage("main", 2);
+      recorder!.record("openclaw:core:write");
+      expect(recorder!.flush()).toBe(firstFlush);
+      release.resolve({ generation: 1, liveSince: 1_000 });
+      await beforeImport;
+      await firstFlush;
+      expect(storage.flushAgentToolUsage).toHaveBeenCalledExactlyOnceWith({
+        agentId: "main",
+        runId: "delayed-admission",
+        config,
+        generation: 2,
+        rows: [{ toolId: "openclaw:core:write", score: 1, updatedAt: 1_000 }],
+        now: 1_000,
+      });
+    } finally {
+      release.resolve({ generation: 1, liveSince: 1_000 });
+      await (await recorder)?.settle();
+    }
+  });
+
   it("coalesces slow turn flushes without blocking completion or retaining per-call rows", async () => {
     const release = Promise.withResolvers<boolean>();
     storage.flushAgentToolUsage.mockImplementationOnce(() => release.promise);
@@ -97,18 +142,25 @@ describe("run-owned tool usage", () => {
     expect(storage.flushAgentToolUsage).toHaveBeenCalledTimes(3);
   });
 
-  it("retains a turn arriving between drain completion and promise settlement", async () => {
+  it("retains a late turn through closure of its asynchronous work owner", async () => {
+    const owner = new AsyncWorkScope();
     const release = Promise.withResolvers<boolean>();
     storage.flushAgentToolUsage.mockImplementationOnce(() => release.promise);
-    const recorder = await createRecorder();
-    recorder.record("openclaw:notes:lookup");
-    const drained = recorder.flush();
-    void release.promise.then(() => {
-      recorder.record("openclaw:core:read");
-      void recorder.flush();
+    const recorder = await owner.run(() => createRecorder());
+    const drained = owner.run(() => {
+      recorder.record("openclaw:notes:lookup");
+      const flushing = recorder.flush();
+      void release.promise.then(() => {
+        recorder.record("openclaw:core:read");
+        void recorder.flush();
+      });
+      return flushing;
     });
+    const closed = owner.drain();
     release.resolve(true);
     await drained;
+    await closed;
+    expect(warn).not.toHaveBeenCalled();
     expect(storage.flushAgentToolUsage.mock.calls.map(([batch]) => batch.rows)).toEqual([
       [{ toolId: "openclaw:notes:lookup", score: 1, updatedAt: 1_000 }],
       [{ toolId: "openclaw:core:read", score: 1, updatedAt: 1_000 }],
@@ -165,14 +217,13 @@ describe("run-owned tool usage", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("tool usage flush failed"));
     expect(storage.flushAgentToolUsage).toHaveBeenCalledTimes(1);
     storage.beginAgentToolUsageRecording.mockRejectedValueOnce(new Error("admission failed"));
-    expect(
-      await createRunToolUsageRecorder({
-        agentId: "main",
-        runId: "synthetic-run",
-        config,
-        log: { warn },
-      }),
-    ).toBeUndefined();
+    const unavailable = createRunToolUsageRecorder({
+      agentId: "main",
+      runId: "synthetic-run",
+      config,
+      log: { warn },
+    });
+    await unavailable?.settle();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("tool usage recording unavailable"));
   });
 });

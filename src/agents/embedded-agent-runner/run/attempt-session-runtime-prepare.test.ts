@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildSessionContext } from "../../../../packages/agent-core/src/harness/session/session.js";
@@ -493,7 +494,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
           {
             id: "openclaw:core:read",
             name: "read",
-            source: "core",
+            source: "openclaw",
             description: "read",
             tool: {
               name: "read",
@@ -511,6 +512,9 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       },
     };
     const render = vi.fn<PrepareInput["prepareSystemPrompt"]>(async () => ({
+      runtimeChannel: undefined,
+      runtimeInfo: { model: "test-model" },
+      systemPromptReport: undefined,
       systemPromptText: "unchanged",
     }));
     fixture.input.prepareSystemPrompt = render;
@@ -522,7 +526,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     const fixture = createHistoryFixture();
     const first = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
     const prompt = await first.prepareSystemPromptUpdate!("## Policy\nUnsent update");
-    prompt.commit();
+    expectDefined(prompt.commit, "in-history prompt commit")();
     expect(first.sessionPromptState.pendingSystemPrompt?.renderedPrefix).toBe(
       "## Policy\nUnsent update",
     );
@@ -549,7 +553,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       const prompt = `## User\n${profile ?? "Shared"} guidance`;
       const prepared = await runtime.prepareSystemPromptUpdate!(prompt, true);
       expect(prepared).toMatchObject({ restart: true, systemPrompt: prompt });
-      prepared.commit();
+      expectDefined(prepared.commit, "in-history prompt commit")();
       await fixture.persist(runtime);
     }
   });
@@ -650,10 +654,10 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       const routeR = fixture.input.attempt.modelId;
       const firstRuntime = await fixture.prepare();
       const initial = await firstRuntime.prepareSystemPromptUpdate!("## Policy\nA");
-      initial.commit();
+      expectDefined(initial.commit, "in-history prompt commit")();
       await persistSessionSystemPrompt(firstRuntime.sessionPromptState, appendCustomEntryAsync);
       const changed = await firstRuntime.prepareSystemPromptUpdate!("## Policy\nB", true);
-      changed.commit();
+      expectDefined(changed.commit, "in-history prompt commit")();
       recordUpdate(changed.update!);
       agentState.messages.push(changed.update!);
       await persistSessionSystemPrompt(firstRuntime.sessionPromptState, appendCustomEntryAsync);
@@ -672,11 +676,11 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       fixture.input.attempt.modelId = routeR;
       const resumedRuntime = await fixture.prepare();
       const resumed = await resumedRuntime.prepareSystemPromptUpdate!("## Policy\nB", true);
-      expect(resumed.restart).toBe(true);
+      expect(resumed).toMatchObject({ restart: true });
       expect(resumed.systemPrompt).toBe("## Policy\nB");
       expect(resumed.update).toBeUndefined();
       expect(agentState.messages).toEqual([]);
-      resumed.commit();
+      expectDefined(resumed.commit, "in-history prompt commit")();
       await persistSessionSystemPrompt(resumedRuntime.sessionPromptState, appendCustomEntryAsync);
       expect(entries.at(-1)).toMatchObject({
         data: { prefix: "## Policy\nB", renderedPrefix: "## Policy\nB" },
@@ -707,7 +711,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     // Failed replay admission never calls the returned projection's commit.
     const retry = await prepare(prompt);
     expect(retry.update?.content).toBe(permissionNotice);
-    retry.commit();
+    expectDefined(retry.commit, "in-history prompt commit")();
     recordUpdate(retry.update!);
     await persist(runtime);
     expect(buildSessionContext(entries).messages).toContainEqual(
@@ -717,7 +721,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
 
     const pinned = retry.systemPrompt;
     const restricted = await prepare("## Tools\nNo tools are available.");
-    restricted.commit();
+    expectDefined(restricted.commit, "in-history prompt commit")();
     await persist(runtime);
     expect((await prepare(pinned)).update).toBeUndefined();
     const restored = await prepare(pinned, true);

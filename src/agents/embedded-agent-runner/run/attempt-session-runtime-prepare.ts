@@ -2,7 +2,6 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
-import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
@@ -40,6 +39,7 @@ import {
 } from "../session-prompt-state.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
+import type { SystemPromptUpdatePreparation } from "./attempt-permission-prompt.js";
 import {
   prepareEmbeddedAttemptAgentSession,
   prepareEmbeddedAttemptSessionBoundary,
@@ -56,13 +56,10 @@ import type { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.j
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { resolveAttemptTrajectorySessionFile } from "./attempt-transcript-helpers.js";
 import type { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
 import { projectTrajectorySessionTarget } from "./shared-run-context.js";
-import type {
-  EmbeddedAttemptExternalAbortController,
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "./types.js";
+import type { EmbeddedAttemptExternalAbortController, EmbeddedRunAttemptResult } from "./types.js";
 
 type SessionSettleTracker = ReturnType<typeof createEmbeddedAttemptSessionSettleTracker>;
 
@@ -75,7 +72,7 @@ type EmbeddedAttemptSessionRuntimeState = {
 };
 
 export async function prepareEmbeddedAttemptSessionRuntime(input: {
-  attempt: EmbeddedRunAttemptParams;
+  attempt: EmbeddedRunAttemptInternalParams;
   activeContextEngine?: ContextEngine;
   agentDir: string;
   isRawModelRun: boolean;
@@ -182,21 +179,9 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const rankingEnabled =
     usesSystemPromptSeries &&
     attempt.config?.agents?.defaults?.experimental?.usageRankedToolIndex === true;
-  const initialEntries = rankingEnabled ? sessionManager[sessionManagerReadTranscriptBranch]() : [];
-  const inheritedRanking =
-    rankingEnabled &&
-    !initialEntries.some(
-      (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
-    )
-      ? readToolUsageRankingSnapshot(
-          (
-            await getReplyOperationSessionReader(attempt.replyOperation)?.readEntry(
-              sessionPreparation.assertCurrent,
-              "list",
-            )
-          )?.entry?.toolUsageRankingSeed,
-        )
-      : undefined;
+  const inheritedRanking = rankingEnabled
+    ? readToolUsageRankingSnapshot(attempt.toolUsageRankingSeed)
+    : undefined;
   let usageRanking: ToolUsageRankingSnapshot | undefined;
   const prepareUsageRanking = async () => {
     if (
@@ -302,7 +287,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const effectiveToolCount = effectiveTools.length;
   let freshSystemPrompt = systemPromptText;
   let projectedSystemPrompt: string | undefined;
-  const prepareSystemPromptUpdate =
+  const prepareSystemPromptUpdate: SystemPromptUpdatePreparation | undefined =
     usesSystemPromptSeries && (transcriptPolicy.inHistorySystemUpdates || rankingEnabled)
       ? async (nextPrompt: string, freshlyRendered = false) => {
           let preparedPrompt = nextPrompt;

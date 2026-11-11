@@ -38,6 +38,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../../admitted-run-context.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
+import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import type { RequesterOrigin } from "../../requester-origin.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import {
@@ -47,6 +48,7 @@ import {
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
 import { enqueueSwarmRun } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
+import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
 import { readBoundExecutionState } from "./subagent-spawn.production-boundary.diagnostics.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
@@ -472,3 +474,36 @@ export type RequestCustodySpawnCaseOptions = Pick<
   parentRunId: string;
   assertNoModelExecution: () => void;
 };
+
+export function createHeldModelRun(
+  runEmbeddedAgent: NativePluginSpawnTestOptions["runEmbeddedAgent"],
+) {
+  return function holdModelRun(
+    bound: Pick<Awaited<ReturnType<typeof createSpawnBoundaryParent>>, "storePath">,
+    text: string,
+    onStart?: (params: Parameters<typeof runEmbeddedAgent>[0]) => Promise<void>,
+  ) {
+    const result = createDeferred<EmbeddedAgentRunResult>();
+    const started = createDeferred();
+    runEmbeddedAgent.mockImplementationOnce(async (params) => {
+      try {
+        if (onStart) {
+          await onStart(params);
+        }
+      } catch (error) {
+        started.reject(error);
+        throw error;
+      }
+      started.resolve();
+      const reply = await result.promise;
+      await recordSpawnBoundaryFinal({
+        storePath: bound.storePath,
+        sessionKey: expectDefined(params.sessionKey, "child session"),
+        runId: params.runId,
+        text,
+      });
+      return reply;
+    });
+    return { started: started.promise, finish: () => result.resolve(visibleResult(text)) };
+  };
+}

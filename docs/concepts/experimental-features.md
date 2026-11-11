@@ -163,8 +163,11 @@ are reported as unknown provenance rather than guessed.
 Rows expire 90 days after their last counted successful call, and agent removal
 removes that agent's usage. Expired rows never affect ranking or status; physical
 pruning happens on usage writes and the Gateway’s hourly maintenance sweep, even
-while the lab is disabled. Recording is batched; a crash or failed flush may lose
-unflushed counts, and importing a live-managed run does not replay those counts. Import reads existing transcripts from the configured session store, including
+while the lab is disabled. Recording starts and flushes in the background; orderly
+shutdown waits for it. Selecting a new ranking snapshot still reads stored scores
+at the prompt-series boundary. Recording is batched; a crash or failed flush may
+lose unflushed counts, and importing a live-managed run does not replay those
+counts. Import reads existing transcripts from the configured session store, including
 custom/shared stores, while counting only the selected agent’s sessions. It does
 not retain another copy of their content.
 

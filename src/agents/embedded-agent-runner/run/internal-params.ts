@@ -124,6 +124,8 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
     | "runCleanupSettlement"
     | "joinObservation"
   > & {
+    /** Spawn preference from the exact session entry already captured by run admission. */
+    toolUsageRankingSeed?: InternalSessionEntry["toolUsageRankingSeed"];
     /** Best-effort, attempt-owned accumulator; never forwarded to other harnesses. */
     toolUsageRecorder?: RunToolUsageRecorder;
     bindWatchdogAttempt?: (attempt: SessionControllerWatchdogAttempt) => void;
