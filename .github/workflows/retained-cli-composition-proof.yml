@@ -5,6 +5,11 @@ on:
   push:
     branches: [diagnostic/release-2026.11.4-cli-composition-20261111]
   workflow_dispatch:
+    inputs:
+      fixture_only:
+        description: Replay the Windows composition and changed Linux fixture without repeating proven type graphs or unchanged owner tests.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -80,7 +85,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     outputs:
-      matrix: ${{ steps.plan.outputs.matrix }}
+      matrix: ${{ steps.plan.outputs.matrix || '{"include":[{"graph":"not-requested"}]}' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: &static_source
@@ -102,6 +107,7 @@ jobs:
           node --version > .artifacts/composition-static/node.txt
           bun --version > .artifacts/composition-static/bun.txt
       - name: Plan canonical production and test graphs once
+        if: ${{ !inputs.fixture_only }}
         id: plan
         run: |
           node --import ./scripts/tsx.mjs --input-type=module <<'NODE'
@@ -148,6 +154,7 @@ jobs:
       - name: Run selected proof
         env:
           LANE: ${{ github.job }}
+          FIXTURE_ONLY: ${{ inputs.fixture_only }}
         run: |
           set -euo pipefail
           case "$LANE" in
@@ -155,7 +162,11 @@ jobs:
               node scripts/run-tsgo-core-test-shards.mjs --ci-graphs-json "[\"$GRAPH\"]" --concurrency 1 2>&1 | tee .artifacts/composition-static/result.log
               ;;
             static-tests)
-              node scripts/run-vitest.mjs src/infra/update-retained-runtime-imports.process.test.ts src/cli/runtime-cleanup-scope.retirement.test.ts --maxWorkers=1 --reporter=verbose 2>&1 | tee .artifacts/composition-static/result.log
+              files=(src/cli/runtime-cleanup-scope.retirement.test.ts)
+              if test "$FIXTURE_ONLY" != "true"; then
+                files+=(src/infra/update-retained-runtime-imports.process.test.ts)
+              fi
+              node scripts/run-vitest.mjs "${files[@]}" --maxWorkers=1 --reporter=verbose 2>&1 | tee .artifacts/composition-static/result.log
               ;;
             static-checks)
               {
@@ -177,6 +188,7 @@ jobs:
           retention-days: 7
 
   static-types:
+    if: ${{ !inputs.fixture_only }}
     needs: static-plan
     env:
       GRAPH: ${{ matrix.graph }}

@@ -168,25 +168,34 @@ for (const runtime of ["node", "node-short-path"] as const) {
   it.skipIf(runtime === "node-short-path" && process.platform !== "win32")(
     "drains real CLI resources after " + runtime + " retained-update composition",
     async () => {
-      // Keep unchanged external package dependencies available through ordinary
-      // Node ancestry, without copying the workspace's node_modules into retention.
-      const scratch = path.resolve(".openclaw/tmp");
-      await fs.mkdir(scratch, { recursive: true });
-      const directory = composition.createTempDir("cli-retained-composition-", scratch);
+      const started = performance.now();
+      const stage = (phase: string) =>
+        console.log(JSON.stringify({ phase: "cli-composition-setup", runtime, stage: phase, elapsedMs: Math.round(performance.now() - started) }));
+      // The Windows system temp volume supports 8.3 names; the checkout volume
+      // may not. Keep unchanged dependencies in ordinary ancestry, outside the
+      // package mutation root, rather than repairing missing runtime imports.
+      const directory = composition.createTempDir("cli-retained-composition-");
+      await fs.symlink(path.resolve("node_modules"), path.join(directory, "node_modules"), process.platform === "win32" ? "junction" : "dir");
+      stage("fixture-root-created");
       const fixture = await createPackageSwapFixture(directory);
       const importRoot = await resolveRetainedRuntimeTestRoot(fixture.packageRoot, runtime);
+      stage("graph-copy-started");
       await copyCliRetainedCompositionGraph({
         preparedEntrypoint: compositionEntrypoint,
         root: fixture.packageRoot,
         importRoot,
       });
+      stage("graph-copy-completed");
       await fs.writeFile(
         path.join(fixture.packageRoot, "package.json"),
         JSON.stringify({ name: "openclaw", version: "1.0.0", type: "module" }),
       );
+      stage("inventory-started");
       await writePackageDistInventory(fixture.packageRoot);
+      stage("inventory-completed");
       const stateDirectory = path.join(directory, "state");
       const nodeExecutable = resolveTestNodeExecPath();
+      stage("child-launch");
       const result = await composition.track(
         runCliProcessChild({
           nodeExecutable,
@@ -211,6 +220,7 @@ for (const runtime of ["node", "node-short-path"] as const) {
           timeoutMs: CLI_PROCESS_DEADLOCK_GUARD_MS,
         }),
       );
+      stage("child-settled");
       const failure = formatCliProcessFailure({
         reason: "CLI retained-update composition failed",
         ...result,
@@ -220,11 +230,13 @@ for (const runtime of ["node", "node-short-path"] as const) {
       expect(result.stderr, failure).not.toMatch(
         /CLI cleanup (?:failed|timed out|deferred)|Plugin CLI resource disposal failed|watchdog|descendant completion is unverified/iu,
       );
-      const line = result.stdout
-        .split(/\r?\n/u)
-        .find((value) => value.startsWith('{"phase":"cli-retained-composition"'));
-      expect(line, failure).toBeDefined();
-      const receipt = JSON.parse(line!) as {
+      // Machine-output CLI routes console logs to stderr. Accept either real
+      // stream without modifying runCli or losing the independent warning gate.
+      const lines = [result.stdout, result.stderr].flatMap((output) => output.split(/\r?\n/u))
+        .filter((value) => value.startsWith('{"phase":"cli-retained-composition"'));
+      expect(lines, failure).toHaveLength(1);
+      const line = lines[0]!;
+      const receipt = JSON.parse(line) as {
         requested: string;
         observed: string;
         physical: string;
