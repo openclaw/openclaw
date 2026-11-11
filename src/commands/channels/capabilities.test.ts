@@ -26,7 +26,8 @@ vi.mock("../../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
 }));
 
-vi.mock("../../channels/plugins/read-only.js", () => ({
+vi.mock("../../channels/plugins/read-only.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/plugins/read-only.js")>()),
   listReadOnlyChannelPluginsForConfigAsync: mocks.listReadOnlyChannelPluginsForConfigAsync,
 }));
 

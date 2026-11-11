@@ -91,7 +91,8 @@ vi.mock("../channels/plugins/index.js", () => ({
     channel === "clickclack" ? undefined : channel === "imsg" ? "imessage" : channel,
 }));
 
-vi.mock("../channels/plugins/read-only.js", () => ({
+vi.mock("../channels/plugins/read-only.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/plugins/read-only.js")>()),
   listReadOnlyChannelPluginsForConfigAsync: () => mocks.listChannelPlugins(),
 }));
 

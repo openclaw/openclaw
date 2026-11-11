@@ -65,7 +65,8 @@ import {
   resolveHealthAgentOrder,
 } from "./collector.js";
 
-vi.mock("../../channels/plugins/read-only.js", () => ({
+vi.mock("../../channels/plugins/read-only.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/plugins/read-only.js")>()),
   listReadOnlyChannelPluginsForConfig: () => [],
   listReadOnlyChannelPluginsForConfigAsync: async () => [],
 }));
