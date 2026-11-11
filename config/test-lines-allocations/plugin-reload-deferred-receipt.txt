@@ -1,3 +1,0 @@
-# Exact 16-line regression growth for saved-but-deferred plugin reload receipts.
-# Retains eventual runtime replacement, metadata and channel ownership assertions.
-16

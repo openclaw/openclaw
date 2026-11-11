@@ -66,7 +66,7 @@ describe("Template application schema v1", () => {
       parseTemplateManifest({
         schemaVersion: 1,
         agent: { id: "analyst", tools: { profile: "coding", allow: ["read"] } },
-        plugins: [{ ref: extension.ref, version: extension.version }],
+        plugins: [extension],
       }),
     ).toMatchObject({
       ok: true,
@@ -78,10 +78,7 @@ describe("Template application schema v1", () => {
       parseTemplateManifest({
         schemaVersion: 1,
         agent: { id: "analyst" },
-        plugins: [
-          { ref: extension.ref, version: extension.version },
-          { ref: extension.ref, version: extension.version },
-        ],
+        plugins: [extension, { ...extension }],
       }).ok,
     ).toBe(false);
   });
@@ -102,7 +99,7 @@ describe("Template application planning v1", () => {
   it("plans an inspected plugin and an ordinary managed schema asset", async () => {
     const plan = await planApplication(
       {
-        plugins: [{ ref: extension.ref, version: extension.version }],
+        plugins: [extension],
         workspace: {
           files: [{ source: "workspace/schemas/market.json", path: "schemas/market.json" }],
         },
@@ -137,9 +134,8 @@ describe("Template application planning v1", () => {
       envVars: ["MARKET_DATA_TOKEN"],
       authMethods: [],
     };
-    const plan = await planApplication(
-      { plugins: [{ ref: extension.ref, version: extension.version }] },
-      async () => extensionPreflight({ action: "reuse", requirements: [prerequisite] }),
+    const plan = await planApplication({ plugins: [extension] }, async () =>
+      extensionPreflight({ action: "reuse", requirements: [prerequisite] }),
     );
     expect(plan.actions).toContainEqual(
       expect.objectContaining({
@@ -151,9 +147,8 @@ describe("Template application planning v1", () => {
     expect(plan.readiness).toEqual({ ready: false, requirements: [prerequisite] });
   });
   it("blocks incomplete plugin adapter provenance", async () => {
-    const plan = await planApplication(
-      { plugins: [{ ref: extension.ref, version: extension.version }] },
-      async () => extensionPreflight({ adapterIdentity: undefined }),
+    const plan = await planApplication({ plugins: [extension] }, async () =>
+      extensionPreflight({ adapterIdentity: undefined }),
     );
     expect(plan.blockers).toContainEqual(
       expect.objectContaining({ code: "plugin_capability_provenance_incomplete" }),
