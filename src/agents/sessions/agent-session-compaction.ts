@@ -6,6 +6,7 @@ import { withSessionTranscriptWriteAssertion } from "../../config/sessions/trans
 import type { AssistantMessage, ModelRequestHeaders } from "../../llm/types.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { buildCoreCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
+import { setCompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { SAFETY_MARGIN } from "../compaction-planning.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import {
@@ -423,6 +424,8 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       // Summary producers, including session_before_compact hooks, already failed.
       compactionResult = compactWithoutNewSummary(preparation, this.sessionManager);
     } else if (this.currentExtensionRunner.hasHandlers("session_before_compact")) {
+      // Cancellation provenance belongs to this attempt; an earlier hook may decline first.
+      setCompactionSafeguardCancellation(this.sessionManager, undefined);
       const extensionResult = await this.currentExtensionRunner.emit({
         type: "session_before_compact",
         preparation,

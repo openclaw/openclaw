@@ -992,7 +992,10 @@ describe("degraded compaction reload", () => {
             ? [entry.data]
             : [],
         );
-    let fixture = await safeguardFixture(model, sessionManager);
+    let decline = false;
+    let fixture = await safeguardFixture(model, sessionManager, undefined, (api) => {
+      api.on("session_before_compact", async () => (decline ? { cancel: true } : undefined));
+    });
     const compactOnce = async (unresolved?: "unresolved") => {
       const events = collectCompactionEnds(fixture.session);
       await (
@@ -1008,6 +1011,10 @@ describe("degraded compaction reload", () => {
     const context = JSON.stringify(sessionManager.buildSessionContext());
     expect(await compactOnce()).toEqual({ status: "aborted" });
     expect(await compactOnce()).toEqual({ status: "aborted" });
+    // An earlier hook's decline neither reuses the last failure nor extends the streak.
+    decline = true;
+    expect(await compactOnce()).toEqual({ status: "aborted" });
+    expect(attempts()).toHaveLength(2);
     // Attempt rows survive a reopen and never reach model context.
     fixture.session.dispose();
     fixture.dispose();
