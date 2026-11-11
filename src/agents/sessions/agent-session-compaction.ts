@@ -1,7 +1,6 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
-import { commitCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { AssistantMessage, ModelRequestHeaders } from "../../llm/types.js";
@@ -35,6 +34,7 @@ import { compactionErrorMessage, unwrapCoreResult } from "./agent-session-utils.
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
 import {
   assertCompactionRequestCanFit,
+  commitSessionCompactionSummary,
   createCompactionRequestBudget,
   createStandaloneCompactionRequestBudget,
   estimateCompactedRequestTokens,
@@ -504,7 +504,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
 
     const completedCompaction = {
       ...withCompactionSummaryRoute(compactionResult, this.sessionManager, model, withoutSummary),
-      summary: commitCompactionSummary(compactionResult, preparation, withoutSummary, () =>
+      summary: commitSessionCompactionSummary(compactionResult, preparation, withoutSummary, () =>
         replayTokenBudget(this, model, options.settings, projectReplacement(compactionResult, "")),
       ),
     };
