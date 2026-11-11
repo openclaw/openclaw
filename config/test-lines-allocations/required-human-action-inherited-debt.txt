@@ -1,2 +1,0 @@
-# Explicitly approved six-line inherited debt reconciliation for PR #196951 at main 8e5ae5b37c5d1f3a93600a9fe87b81509bb57064. Separate from this change's exact 476 regression lines; shared scalar and checker unchanged.
-6
