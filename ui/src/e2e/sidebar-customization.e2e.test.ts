@@ -552,7 +552,7 @@ suite.define(() => {
       // Ask OpenClaw is a settings-takeover page (#111686): the settings
       // sidebar owns navigation there, not the app sidebar.
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
-      await expect.poll(() => sidebar.locator(".sidebar-shell").isVisible()).toBe(false);
+      await expect.poll(() => sidebar.isVisible()).toBe(false);
       await expect
         .poll(() => page.getByRole("button", { name: "Exit setup" }).isVisible())
         .toBe(false);

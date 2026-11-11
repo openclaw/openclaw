@@ -71,9 +71,9 @@ suite.define(() => {
     }
     const chatInbox = page.locator(".sidebar-rail__bottom .sidebar-issues-button");
     await chatInbox.waitFor({ state: "visible" });
-    const { sidebar: settingsSidebar } = await openSettings();
-    expect(await settingsSidebar.locator(".sidebar-issues-button").count()).toBe(0);
-    await expect.poll(() => page.locator(".sidebar-shell").isVisible()).toBe(false);
+
+    await openSettings();
+    expect(await page.locator(".sidebar-issues-button").count()).toBe(0);
   });
 
   it.each([
