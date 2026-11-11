@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
@@ -8,6 +8,10 @@ import {
 } from "../agents/admitted-run-context.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { markPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
@@ -22,24 +26,32 @@ import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
 
 const fixture = vi.hoisted(() => ({ tools: [] as AnyAgentTool[] }));
-vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
+// mock-isolation: Resolve the fixture session without opening a session store.
 vi.mock("../config/sessions/session-accessor.js", () => ({
   resolveSessionEntryAccessTarget: () => ({ entry: undefined }),
 }));
+// mock-isolation: Report no paired nodes instead of probing the host.
 vi.mock("../agents/node-exec-availability.js", () => ({
   loadNodeExecAvailability: async () => ({ cacheKey: "no-nodes", isAvailable: () => false }),
 }));
+// mock-isolation: Run tools without the host before-tool-call policy chain.
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: async ({ params }: { params: unknown }) => ({ blocked: false, params }),
 }));
+// mock-isolation: Run with no global plugin hooks registered.
 vi.mock("../plugins/hook-runner-global.js", () => ({ getGlobalHookRunner: () => null }));
+// mock-isolation: Serve the fixture tool set instead of resolving host tools.
 vi.mock("./tool-resolution.js", () => ({
   resolveGatewayScopedTools: () => ({ agentId: "main", tools: fixture.tools }),
 }));
 
 const admissions: PreparedAgentRunAdmission[] = [];
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
 afterEach(async () => {
   await closeMcpLoopbackServer();
+  clearRuntimeConfigSnapshot();
   for (const admission of admissions.splice(0)) {
     admission.close();
   }
@@ -205,6 +217,32 @@ describe("MCP loopback work ownership", () => {
     } finally {
       release.resolve();
       await descendant;
+      await firstWork.drain();
+    }
+  });
+
+  it("aborts a pending cooperating tool call when the loopback runtime closes", async () => {
+    const started = createDeferred();
+    let toolAborted = false;
+    pluginFixture(async (_toolCallId, _params, signal) => {
+      started.resolve();
+      await new Promise<void>((resolve) => {
+        signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      toolAborted = true;
+      return { content: [{ type: "text", text: "plugin ok" }], details: {} };
+    });
+    const firstWork = new AsyncWorkScope();
+    const turn = await firstWork.track(() => cliTurn("pending-close"));
+    try {
+      const pending = turn.call("memory_search");
+      await started.promise;
+      // Without runtime shutdown reaching the tool signal, this waits on the open response.
+      await closeMcpLoopbackServer();
+      expect(toolAborted).toBe(true);
+      await pending;
+    } finally {
+      turn.close();
       await firstWork.drain();
     }
   });

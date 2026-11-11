@@ -1,0 +1,3 @@
+# MCP loopback work-ownership regression tests: plugin calls survive the starter turn closing, cleanup tails
+# join runtime close, and runtime shutdown aborts a pending cooperating tool call. Exact net growth for PR #197119.
+249

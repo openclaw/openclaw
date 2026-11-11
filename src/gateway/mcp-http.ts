@@ -483,7 +483,12 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
               const runRequestScope = boundClientGrant?.requestScope;
               const handleAsCaller = () =>
                 withGatewayToolCallerIdentity(callerIdentity, () =>
-                  runWithTrackedCancellation(requestAbort.signal, handleRequest),
+                  runWithTrackedCancellation(
+                    // Runtime shutdown must reach a cooperating tool while it still holds the
+                    // response open; the request signal alone waits for the socket to close.
+                    AbortSignal.any([requestAbort.signal, work.signal]),
+                    handleRequest,
+                  ),
                 );
               response = await (runRequestScope
                 ? withPluginRuntimeGatewayRequestScope(runRequestScope, handleAsCaller)
