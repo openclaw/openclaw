@@ -1,5 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { threadId } from "node:worker_threads";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import {
   executeSqliteQuerySync,
@@ -22,6 +23,7 @@ import {
   assertAgentDeletionPathFence,
   prepareAgentDeletionPathFence,
 } from "./agent-deletion-journal.js";
+import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
 import { withExistingAgentLeaseWrite } from "./openclaw-agent-db-existing-write.js";
 import {
   createAgentDatabaseLeaseStaleReasonReader,
@@ -266,7 +268,9 @@ export function releaseOpenClawAgentDatabaseLease(
     | "read-only"
     | "uncheckpointed"
     | "postgres-closed",
+  timing?: OpenClawAgentDatabase["closeTiming"],
 ): void {
+  const leaseStartedAt = performance.now();
   const release = (database: EngineConnection) => {
     const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database);
     const held = executeSqliteQueryTakeFirstSync(
@@ -311,9 +315,27 @@ export function releaseOpenClawAgentDatabaseLease(
           : "verification-missing";
     }
     const publish = () => {
+      const totalMs = timing ? performance.now() - timing.startedAt : 0;
+      const slowClose = totalMs >= 500;
+      const phases = slowClose
+        ? {
+            totalMs: Math.round(totalMs),
+            walStopMs: Math.round(timing?.walStopMs ?? 0),
+            checkpointMs: Math.round(timing?.checkpointMs ?? 0),
+            nativeCloseMs: Math.round(timing?.nativeCloseMs ?? 0),
+            leaseReleaseMs: Math.round(performance.now() - leaseStartedAt),
+          }
+        : undefined;
+      const dbHash = phases
+        ? createHash("sha256")
+            .update(held?.path ?? "unknown")
+            .digest("hex")
+            .slice(0, 16)
+        : undefined;
       if (held) {
         const previous = closeReceipts.get(held.path);
         if (
+          !slowClose &&
           previous?.agentId === held.agent_id &&
           previous.receipt === receipt &&
           previous.blockingLeaseId === blockingLease?.lease_id
@@ -327,12 +349,13 @@ export function releaseOpenClawAgentDatabaseLease(
         });
       }
       log.info(
-        `agent database clean-close receipt: ${receipt}; agent=${held?.agent_id ?? "unknown"}${blockingLease ? `; blockingLeaseId=${blockingLease.lease_id}; ownerPid=${blockingLease.owner_pid}` : ""}`,
+        `agent database clean-close receipt: ${receipt}; agent=${held?.agent_id ?? "unknown"}${blockingLease ? `; blockingLeaseId=${blockingLease.lease_id}; ownerPid=${blockingLease.owner_pid}` : ""}${phases ? `; db=${dbHash}; thread=${threadId}; close=${JSON.stringify(phases)}` : ""}`,
         {
           agentId: held?.agent_id,
           path: held?.path,
           leaseId,
           receipt,
+          ...(phases ? { close: phases } : {}),
           blockingLease: blockingLease && {
             leaseId: blockingLease.lease_id,
             ownerPid: blockingLease.owner_pid,

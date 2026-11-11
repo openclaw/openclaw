@@ -379,6 +379,8 @@ it.each([false, true])(
             await verifyAgentDatabaseStartupIntegrity(input);
           },
         });
+        // Join fixture startup before exercising the bounded request-facing write admission.
+        await admission.waitForAgentPreparation("main", { env });
         await admission.waitForAgentPreparation("main", { env, forWrite: true });
         expect(() => assertAgentDatabaseAdmitted("main", { env })).not.toThrow();
         expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeUndefined();
