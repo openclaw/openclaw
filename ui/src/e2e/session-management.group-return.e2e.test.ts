@@ -18,7 +18,7 @@ async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
 }
 
 suite.define(() => {
-  it("moves sessions between rendered category groups", async () => {
+  it("moves sessions between custom groups after switching from Person grouping", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
       const key = "agent:main:planning";
       const rows = [
@@ -26,7 +26,7 @@ suite.define(() => {
         sessionRow("agent:main:ready", "Documentation review", 1, { category: "Ready" }),
       ];
       await page.addInitScript(() =>
-        localStorage.setItem("openclaw:sidebar:sessions:grouping", "category"),
+        localStorage.setItem("openclaw:sidebar:sessions:grouping", "person"),
       );
       const gateway = await support.installMockGateway(page, {
         sessionKey: key,
@@ -39,6 +39,9 @@ suite.define(() => {
       await page.goto(support.controlUiSessionUrl(suite.server.baseUrl, key));
       const section = (id: string) => page.locator(`[data-session-section="${id}"]`);
       const row = (id: string) => section(id).locator(`[data-session-key="${key}"]`);
+      await row("groups").waitFor();
+      await chooseSidebarMenuOption(page, "Group by", "Custom groups");
+      await closeSidebarMenu(page);
       await row("category:Planning").waitFor();
       await chooseSidebarMenuOption(page, "Hide empty groups", "Never");
       await closeSidebarMenu(page);
@@ -60,9 +63,11 @@ suite.define(() => {
         { key, agentId: "main", expectedSessionId: rows[0]!.sessionId, category: "Ready" },
         { key, agentId: "main", expectedSessionId: rows[0]!.sessionId, category: null },
       ]);
+      await chooseSidebarMenuOption(page, "Group by", "Person");
+      await closeSidebarMenu(page);
       expect(
         await page.evaluate(() => localStorage.getItem("openclaw:sidebar:sessions:grouping")),
-      ).toBe("category");
+      ).toBe("person");
       const reads = (await gateway.getRequests("sessions.list")).length;
       await gateway.closeLatest();
       await gateway.waitForRequest("sessions.list", { after: reads });
