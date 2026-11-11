@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
+import {
+  createDocsMarkdown,
+  parseDocsDocument,
+  parseFrontmatter,
+} from "../../scripts/lib/docs-markdown.mjs";
 
 const mapLink = (href: string, line: number | undefined) => ({ href, line });
 function render(source: string, mapLines = false) {
@@ -26,6 +30,23 @@ function expectVisible(document: ReturnType<typeof parseDocsDocument>, line?: nu
 }
 
 describe("docs Markdown rendering", () => {
+  it.each([
+    {
+      name: "annotated LF delimiter",
+      source: '---\ntitle: Example\ndescription: "{"\n--- # end\n# Body\n',
+      data: { title: "Example", description: "{" },
+      content: "# Body\n",
+    },
+    {
+      name: "annotated CRLF document-end delimiter",
+      source: '---\r\ntitle: Example\r\ndescription: "{"\r\n... # end\r\n# Body\r\n',
+      data: { title: "Example", description: "{" },
+      content: "# Body\r\n",
+    },
+  ])("parses $name through the public frontmatter parser", ({ source, data, content }) => {
+    expect(parseFrontmatter(source)).toEqual({ data, content });
+  });
+
   it("preserves nested fence indentation with CRLF", () => {
     const body = '{\n  "features": {\n    "example": "<Tab title=\\"literal\\">"\n  }\n}';
     const yaml = "app:\n  scopes:\n    - chat:write\n  description: |\n    Nested content";

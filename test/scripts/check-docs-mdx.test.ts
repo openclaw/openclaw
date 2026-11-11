@@ -15,6 +15,19 @@ it.each([
   ["plain component", component, null],
   ["LF frontmatter", frontmatter + component, null],
   ["CRLF frontmatter", (frontmatter + component).replaceAll("\n", "\r\n"), null],
+  [
+    "annotated LF frontmatter delimiter",
+    '---\ntitle: Example\ndescription: "{"\n--- # end\n' + component,
+    null,
+  ],
+  [
+    "annotated CRLF frontmatter delimiter",
+    ('---\ntitle: Example\ndescription: "{"\n... # end\n' + component).replaceAll(
+      "\n",
+      "\r\n",
+    ),
+    null,
+  ],
   ["YAML document-end delimiter", "---\ntitle: Example\n...\n" + component, null],
   ["LF MDX expression", frontmatter + "{\n", mdxError],
   ["CRLF MDX expression", (frontmatter + "{\n").replaceAll("\n", "\r\n"), mdxError],
