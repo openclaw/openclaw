@@ -1,8 +1,8 @@
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { ignoreMissingPath } from "./errno.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
-import { hasNodeErrorCode } from "./path-guards.js";
 
 /** Fence every durable database file an update rollback restores. */
 export async function inspectRestorableDatabaseFiles(
@@ -15,14 +15,12 @@ export async function inspectRestorableDatabaseFiles(
     // Readers mutate/recreate the transient WAL index; only durable files fence capture.
     for (const suffix of ["", "-wal", "-journal"]) {
       const file = `${database}${suffix}`;
-      let info;
-      try {
-        info = await fs.lstat(file, { bigint: true });
-      } catch (error) {
-        if (suffix && hasNodeErrorCode(error, "ENOENT")) {
-          continue;
-        }
-        throw error;
+      // Only sidecars may be absent; without a handler a missing main file still rejects.
+      const info = await fs
+        .lstat(file, { bigint: true })
+        .catch(suffix ? ignoreMissingPath : undefined);
+      if (!info) {
+        continue;
       }
       if (!info.isFile() || info.nlink !== 1n) {
         throw new Error(
