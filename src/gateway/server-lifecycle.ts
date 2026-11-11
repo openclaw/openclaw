@@ -50,6 +50,7 @@ import { refreshGatewayHealthSnapshot } from "./server/health-state.js";
 import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 import { prepareTalkConnectionClose } from "./talk/session-registry.js";
 import { withAgentTerminalOpenAdmission } from "./terminal/open-admission.js";
+import { disposeGatewayDelegationCredentials } from "./trusted-proxy-delegation.js";
 
 type GatewayRuntimePreparation = Awaited<ReturnType<typeof prepareGatewayKernelState>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -413,6 +414,7 @@ export async function prepareGatewayLifecycle(params: {
     const notice = resolveGatewayShutdownNotice(options);
     markGatewaySuspendExiting();
     authRateLimiter.dispose();
+    disposeGatewayDelegationCredentials();
     browserAuthRateLimiter.dispose();
     talkClose.beginClose();
     void runtimeState.maintenance?.stopPeriodicTasks();
