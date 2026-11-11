@@ -136,6 +136,8 @@ export type BrowserTab = {
   url: string;
   /** Listing-time observation; unavailable URLs stay redacted, not implicitly trusted. */
   urlUnavailableReason?: "navigation_blocked" | "navigation_check_failed";
+  /** The current browser connection observed this target's renderer crash. */
+  crashed?: boolean;
   wsUrl?: string;
   /** Internal CDP lookup pin paired with wsUrl; omitted from model-facing summaries. */
   wsLookup?: BrowserCdpLookup;

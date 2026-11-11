@@ -68,6 +68,15 @@ export function isBrowserStateRuntimeCurrent(
   return (!runtime || getOptionalBrowserStateRuntime() === runtime) && isCurrent?.() !== false;
 }
 
+/** Requires the captured runtime to remain the active browser state owner. */
+export function assertBrowserStateRuntimeCurrent(
+  runtime: BrowserStateRuntime | null | undefined,
+): void {
+  if (getOptionalBrowserStateRuntime() !== runtime) {
+    throw new Error("Browser session tab store owner changed");
+  }
+}
+
 export function getPendingBrowserDashboardRegistrations(
   runtime: BrowserStateRuntime,
   targetId: string | undefined,

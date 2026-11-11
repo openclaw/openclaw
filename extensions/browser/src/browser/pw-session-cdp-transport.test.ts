@@ -1,11 +1,12 @@
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { connectOverCdpTransport } from "./pw-session-cdp-transport.js";
+import { connectOverCdpTransport, getCrashedTargets } from "./pw-session-cdp-transport.js";
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 
 afterEach(() => {
   connectOverCdpSpy.mockReset();
+  vi.useRealTimers();
 });
 
 function mockPageInitializationFailure(
@@ -32,6 +33,62 @@ function mockPageInitializationFailure(
 }
 
 describe("Playwright CDP initialization diagnostics", () => {
+  it("keeps a cold crash until its owning page session detaches", async () => {
+    vi.useFakeTimers();
+    const wire: import("playwright-core").ConnectOverCDPTransport = {
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    const browser = {} as import("playwright-core").Browser;
+    const targetInfo = {
+      targetId: "CRASHED-PAGE",
+      type: "page",
+      title: "Crash target",
+      url: "https://example.test/crash",
+      browserContextId: "default-context",
+    };
+    connectOverCdpSpy.mockImplementationOnce((async () => {
+      wire.onmessage?.({
+        method: "Target.attachedToTarget",
+        params: { sessionId: "page-session", targetInfo },
+      });
+      wire.onmessage?.({ method: "Inspector.targetCrashed", sessionId: "page-session" });
+      return browser;
+    }) as never);
+
+    await connectOverCdpTransport("http://127.0.0.1:18799", {
+      timeout: 1000,
+      headers: {},
+      preparedTransport: wire,
+    });
+    expect(getCrashedTargets(browser)?.get("CRASHED-PAGE")).toEqual({
+      targetId: "CRASHED-PAGE",
+      title: "Crash target",
+      url: "https://example.test/crash",
+      type: "page",
+    });
+
+    wire.onmessage?.({
+      method: "Target.attachedToTarget",
+      sessionId: "browser-cdp-session",
+      params: { sessionId: "probe-session", targetInfo },
+    });
+    wire.onmessage?.({
+      method: "Target.detachedFromTarget",
+      sessionId: "browser-cdp-session",
+      params: { sessionId: "probe-session", targetId: "CRASHED-PAGE" },
+    });
+    expect(getCrashedTargets(browser)?.has("CRASHED-PAGE")).toBe(true);
+
+    wire.onmessage?.({
+      method: "Target.detachedFromTarget",
+      params: { sessionId: "page-session", targetId: "CRASHED-PAGE" },
+    });
+    expect(getCrashedTargets(browser)?.size).toBe(0);
+    wire.onclose?.();
+    await vi.runAllTimersAsync();
+  });
+
   it("identifies the page target whose initialization blocks a cold connection", async () => {
     const closeWire = vi.fn();
     const wire: import("playwright-core").ConnectOverCDPTransport = {

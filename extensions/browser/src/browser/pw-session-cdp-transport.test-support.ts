@@ -1,5 +1,9 @@
 import { chromium } from "playwright-core";
 
+// These mock connections have no native transport events or crash state.
+export const getCrashedTargets: typeof import("./pw-session-cdp-transport.js").getCrashedTargets =
+  () => undefined;
+
 export class UnresponsiveCdpTargetError extends Error {
   constructor(targetIds: string[]) {
     super(targetIds.join(", "));

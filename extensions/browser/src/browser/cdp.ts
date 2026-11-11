@@ -51,6 +51,8 @@ export async function captureScreenshot(opts: {
   return await withCdpSocket(
     opts.wsUrl,
     async (send) => {
+      // Inspector replays crashes that occurred before this page socket attached.
+      await send("Inspector.enable");
       await send("Page.enable");
 
       // Headless background tabs need activation to produce a frame. Preserve

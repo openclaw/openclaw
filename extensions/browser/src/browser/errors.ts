@@ -72,6 +72,12 @@ export class BrowserActionError extends BrowserError {
   readonly code = BROWSER_ACT_ERROR_CODES.operationFailed;
 }
 
+export class BrowserTabCrashedError extends BrowserActionError {
+  constructor() {
+    super("Browser tab crashed (renderer exited). Open the URL in a new tab to continue.");
+  }
+}
+
 /**
  * Raised when a browser CDP endpoint (the cdpUrl itself) fails the
  * configured SSRF policy. Distinct from a blocked navigation target so

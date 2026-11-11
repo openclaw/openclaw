@@ -10,6 +10,7 @@ import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { getHeadersWithAuth, stripCdpUrlCredentials } from "./cdp-auth.js";
 import { getDirectAgentForCdp, withManagedProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
+import { BrowserTabCrashedError } from "./errors.js";
 import { getPlaywrightUserAgent } from "./playwright-core.runtime.js";
 import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
@@ -24,7 +25,9 @@ const PLAYWRIGHT_CDP_MAX_REDIRECTS = 10;
 type CdpSocketLookup = typeof dnsLookupCb;
 
 type CdpResponse = {
-  id: number;
+  id?: number;
+  method?: string;
+  sessionId?: string;
   result?: unknown;
   error?: { message?: string };
 };
@@ -166,6 +169,7 @@ function createPinnedAgentForCdpUrl(
 
 function createCdpSender(ws: WebSocket, opts?: CdpSocketOptions) {
   let nextId = 1;
+  let crashError: BrowserTabCrashedError | undefined;
   const pending = new Map<number, Pending>();
   const commandTimeoutMs =
     typeof opts?.commandTimeoutMs === "number" && Number.isFinite(opts.commandTimeoutMs)
@@ -180,6 +184,10 @@ function createCdpSender(ws: WebSocket, opts?: CdpSocketOptions) {
     const id = nextId++;
     const msg = { id, method, params, sessionId };
     return new Promise<unknown>((resolve, reject) => {
+      if (crashError) {
+        reject(crashError);
+        return;
+      }
       if (ws.readyState !== WebSocket.OPEN) {
         reject(new CdpSocketError("closed", "CDP socket closed"));
         return;
@@ -232,6 +240,11 @@ function createCdpSender(ws: WebSocket, opts?: CdpSocketOptions) {
   ws.on("message", (data) => {
     try {
       const parsed = JSON.parse(rawDataToString(data)) as CdpResponse;
+      if (parsed.method === "Inspector.targetCrashed" && parsed.sessionId === undefined) {
+        crashError = new BrowserTabCrashedError();
+        closeWithError(crashError);
+        return;
+      }
       if (typeof parsed.id !== "number") {
         return;
       }

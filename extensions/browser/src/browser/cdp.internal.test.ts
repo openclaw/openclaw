@@ -19,7 +19,7 @@ const cdpError = (message: string): Reply => ({ error: { message } });
 const runtimeValueResult = (value: unknown) => cdpResult({ result: { value } });
 const axTreeResult = (nodes: RawAXNode[]) => cdpResult({ nodes });
 const { start: startMockWsServer, close: closeBrowsers } = createCdpFixture(
-  { ...pageReplies, "Page.bringToFront": cdpResult() },
+  { ...pageReplies, "Inspector.enable": cdpResult(), "Page.bringToFront": cdpResult() },
   { raw: true },
 );
 afterEach(async () => {
@@ -53,6 +53,7 @@ it.each<[CaptureOptions, Record<string, unknown>, boolean]>([
     lookup: undefined,
   });
   expect(messages.map(({ method }) => method)).toEqual([
+    "Inspector.enable",
     "Page.enable",
     ...(activates ? ["Page.bringToFront"] : []),
     "Page.captureScreenshot",

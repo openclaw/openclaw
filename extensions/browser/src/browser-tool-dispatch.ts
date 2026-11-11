@@ -106,6 +106,7 @@ function formatAgentTab(source: BrowserTab): Record<string, unknown> {
     title: source.title,
     url: source.url,
     ...(source.urlUnavailableReason ? { urlUnavailableReason: source.urlUnavailableReason } : {}),
+    ...(source.crashed ? { crashed: true } : {}),
     type: source.type,
     ...(targetId ? { targetId } : {}),
     ...(source.wsUrl ? { wsUrl: source.wsUrl } : {}),

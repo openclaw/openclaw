@@ -21,6 +21,7 @@ export const pwAi = {
   getObservedBrowserStateViaPlaywright: session.getObservedBrowserStateViaPlaywright,
   getDocumentIdentitiesViaPlaywright: session.getDocumentIdentitiesViaPlaywright,
   getPageForTargetId: session.getPageForTargetId,
+  getCrashedTargetsForCdpUrl: session.getCrashedTargetsForCdpUrl,
   hasCachedPlaywrightBrowserConnection: session.hasCachedPlaywrightBrowserConnection,
   listPagesViaPlaywright: session.listPagesViaPlaywright,
   armDialogViaPlaywright: downloads.armDialogViaPlaywright,

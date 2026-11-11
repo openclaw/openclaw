@@ -12,6 +12,7 @@ export {
 export {
   ensureContextState,
   getPageForTargetId,
+  getCrashedTargetsForCdpUrl,
   hasCachedPlaywrightBrowserConnection,
   retirePlaywrightBrowserConnectionExact,
 } from "./pw-session-connection.js";

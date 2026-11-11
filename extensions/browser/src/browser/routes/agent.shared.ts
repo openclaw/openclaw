@@ -110,6 +110,7 @@ type RouteWithTabParams<T> = {
   ctx: BrowserRouteContext;
   profileCtx?: ProfileContext;
   targetId?: string;
+  allowCrashed?: boolean;
   /**
    * Set for routes that read from or return data scoped to the selected tab.
    * Leave false only for routes that navigate, activate, close, or otherwise manage the tab.
@@ -138,6 +139,7 @@ export async function withRouteTabContext<T>(
         // Agent routes can address local-managed tabs through Playwright when per-tab WS discovery lags.
         const tab = await profileCtx.ensureTabAvailable(params.targetId, {
           allowPlaywrightFallback: true,
+          ...(params.allowCrashed ? { allowCrashed: true } : {}),
           signal,
           timeoutMs: params.ctx.state().resolved.actionTimeoutMs,
         });

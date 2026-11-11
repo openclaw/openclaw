@@ -3,6 +3,10 @@ import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { Browser, Page, Response } from "playwright-core";
+import {
+  assertBrowserStateRuntimeCurrent,
+  getOptionalBrowserStateRuntime,
+} from "../browser-runtime-state.js";
 import { resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
 import {
@@ -17,12 +21,14 @@ import { AX_REF_PATTERN, normalizeCdpWsUrl } from "./cdp.js";
 import { DEFAULT_BROWSER_ACTION_TIMEOUT_MS } from "./constants.js";
 import { resolveBrowserEngine } from "./engines/registry.js";
 import type { BrowserEngineId } from "./engines/types.js";
+import { BrowserActionError, BrowserTabCrashedError } from "./errors.js";
 import {
   withBrowserNavigationPolicy,
   assertBrowserNavigationAllowed,
   type BrowserNavigationPolicyOptions,
 } from "./navigation-guard.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
+import { getCrashedTargets } from "./pw-session-cdp-transport.js";
 import {
   clearBlockedPageRef,
   clearBlockedPageRefsForCdpUrl,
@@ -315,6 +321,7 @@ export async function listPagesViaPlaywright(opts: {
         { cdpUrl: opts.cdpUrl, ssrfPolicy: opts.ssrfPolicy, signal, engine: opts.engine },
         async (browser) => {
           signal.throwIfAborted();
+          const crashedTargets = getCrashedTargets(browser);
           const contexts = opts.requireCompleteTargetList ? browser.contexts() : [];
           let publication = createDeferred<void>();
           const wake = () => publication.resolve();
@@ -426,6 +433,7 @@ export async function listPagesViaPlaywright(opts: {
                       title: targetInfo.title,
                       url: page.url(),
                       type: "page" as const,
+                      ...(crashedTargets?.has(targetInfo.targetId) ? { crashed: true } : {}),
                     },
                   };
                 }),
@@ -450,6 +458,21 @@ export async function listPagesViaPlaywright(opts: {
                   ? [result.page]
                   : [],
               );
+              // Playwright omits pages that crashed before connection initialization.
+              // Keep their native identity for diagnostics and explicit closing.
+              // An unidentified quarantined Page must not regain visibility here.
+              if (!pages.some((page) => isBlockedPageRef(opts.cdpUrl, page))) {
+                for (const crashed of crashedTargets?.values() ?? []) {
+                  if (
+                    isBlockedTarget(opts.cdpUrl, crashed.targetId) ||
+                    resolvedPages.some((page) => page.targetId === crashed.targetId) ||
+                    (remainingTargetIds && !remainingTargetIds.delete(crashed.targetId))
+                  ) {
+                    continue;
+                  }
+                  resolvedPages.push({ ...crashed, crashed: true });
+                }
+              }
               if (
                 (opts.requireCompleteTargetList || resolvedPages.length === 0) &&
                 pageResults.some((result) => result.status === "unresolved")
@@ -647,8 +670,47 @@ export async function closePageByTargetIdViaPlaywright(opts: {
   targetId: string;
   ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
+  assertCurrent?: () => void | Promise<void>;
 }): Promise<void> {
-  const page = await getPageForTargetId(opts);
+  let page: Page;
+  try {
+    page = await getPageForTargetId(opts);
+  } catch (error) {
+    if (!(error instanceof BrowserTabCrashedError)) {
+      throw error;
+    }
+    const runtime = getOptionalBrowserStateRuntime();
+    const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
+    // Prepare the session before admission so retention or runtime changes during
+    // preparation still reject the close instead of executing on stale authority.
+    const session = await browser.newBrowserCDPSession();
+    try {
+      // Cold-crashed targets have no Playwright Page; the browser still owns their closure.
+      // Dispatch the close synchronously so it starts while admission still holds authority.
+      await dispatchBrowserTabClose(
+        opts.targetId,
+        undefined,
+        () => {
+          opts.signal?.throwIfAborted();
+          return session
+            .send("Target.closeTarget", { targetId: opts.targetId })
+            .then(({ success }) => {
+              if (!success) {
+                throw new BrowserActionError("Browser did not close the crashed tab.");
+              }
+            });
+        },
+        {
+          assertCurrent: () =>
+            opts.assertCurrent?.()?.then(() => assertBrowserStateRuntimeCurrent(runtime)) ??
+            assertBrowserStateRuntimeCurrent(runtime),
+        },
+      );
+    } finally {
+      await session.detach().catch(() => {});
+    }
+    return;
+  }
   await closeResolvedPageViaPlaywright(page, opts);
 }
 

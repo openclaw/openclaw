@@ -5,13 +5,7 @@ import {
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-runtime";
 import { resolveBrowserNavigationTimeoutMs } from "../act-policy.js";
-import type { CdpDocumentIdentities } from "../cdp-page-session.js";
-import {
-  captureScreenshot,
-  getDocumentIdentitiesViaCdp,
-  snapshotAria,
-  snapshotRoleViaCdp,
-} from "../cdp.js";
+import { captureScreenshot, snapshotAria, snapshotRoleViaCdp } from "../cdp.js";
 import type { ChromeMcpTargetOperation } from "../chrome-mcp-contracts.js";
 import {
   navigateChromeMcpPage,
@@ -55,6 +49,8 @@ import {
 } from "./agent.shared.js";
 import {
   captureBrowserOperationTarget,
+  ignoreUnavailableSnapshotMetadata,
+  readSnapshotDocumentIdentities,
   resolveOperationTargetOutcome,
 } from "./agent.snapshot-target.js";
 import { resolveSnapshotPlan } from "./agent.snapshot.plan.js";
@@ -495,14 +491,13 @@ export function registerBrowserAgentSnapshotRoutes(
             cdpUrl: profileCtx.profile.cdpUrl,
             targetId: tab.targetId,
           };
-          const readPlaywrightDocumentIdentities = pwModule?.getDocumentIdentitiesViaPlaywright;
           const observedBrowserState = pwModule
             ? await pwModule
                 .getObservedBrowserStateViaPlaywright({
                   ...playwrightTarget,
                   ...browserNavigationPolicyForProfile(ctx, profileCtx),
                 })
-                .catch(() => undefined)
+                .catch(ignoreUnavailableSnapshotMetadata)
             : undefined;
           const browserStateFields =
             observedBrowserState &&
@@ -517,22 +512,13 @@ export function registerBrowserAgentSnapshotRoutes(
               ...(plan.format === "aria" ? { nodes: [] } : { snapshot: "", refs: {} }),
             });
           }
-          const readDocumentIdentities = async (): Promise<CdpDocumentIdentities> => {
-            const playwrightIdentities = readPlaywrightDocumentIdentities
-              ? await readPlaywrightDocumentIdentities({
-                  ...playwrightTarget,
-                  timeoutMs: plan.timeoutMs,
-                }).catch(() => undefined)
-              : undefined;
-            if (playwrightIdentities?.mainFrame || !tab.wsUrl) {
-              return playwrightIdentities ?? {};
-            }
-            return await getDocumentIdentitiesViaCdp({
-              wsUrl: tab.wsUrl,
-              ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
+          const readDocumentIdentities = () =>
+            readSnapshotDocumentIdentities({
+              tab,
+              cdpUrl: profileCtx.profile.cdpUrl,
+              pwModule,
               timeoutMs: plan.timeoutMs,
-            }).catch(() => ({}));
-          };
+            });
           const initialIdentities = await readDocumentIdentities();
           const initialDocumentIdentity = initialIdentities.mainFrame;
           const snapshotSpansFrames =

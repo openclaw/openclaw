@@ -1,6 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { Frame, Page } from "playwright-core";
-import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
+import { BROWSER_ACTION_NAVIGATION_GRACE_MS, isCloseOnlyAction } from "./act-policy.js";
 import type { BrowserBatchAbort, BrowserBatchActionResult } from "./client-actions-types.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
 import type { BrowserDownloadResult } from "./download-types.js";
@@ -40,6 +40,7 @@ import { closePageViaPlaywright, resizeViewportViaPlaywright } from "./pw-tools-
 
 type ActionExecutionOptions = GuardedInteractionOptions & {
   evaluateEnabled?: boolean;
+  target: { page?: Page; url: string; closed: boolean };
 };
 
 async function executeSingleAction(
@@ -108,16 +109,15 @@ async function executeSingleAction(
       }
       return await evaluateViaPlaywright({ ...action, ...interaction });
     case "close":
-      return await closePageViaPlaywright({
-        cdpUrl: opts.cdpUrl,
-        targetId: effectiveTargetId,
-        assertCurrent: opts.assertCurrent,
-      });
+      await closePageViaPlaywright(interaction);
+      opts.target.closed = true;
+      return undefined;
     case "batch": {
       const batch = await batchViaPlaywright({
         ...action,
         ...interaction,
         evaluateEnabled: opts.evaluateEnabled,
+        target: opts.target,
       });
       // A nested batch is one parent action; surface its first failure so each
       // level applies its own stopOnError without discarding the child outcome.
@@ -146,6 +146,7 @@ export async function executeActViaPlaywright(
   opts: GuardedInteractionOptions & {
     action: BrowserActRequest;
     evaluateEnabled?: boolean;
+    targetUrl?: string;
   },
 ): Promise<{
   result?: unknown;
@@ -155,30 +156,42 @@ export async function executeActViaPlaywright(
   browserState?: unknown;
   downloads?: BrowserDownloadResult[];
   targetId?: string;
+  closed?: true;
 }> {
   const navigationPolicy = interactionNavigationPolicy(opts);
-  const page = await getPageForTargetId({
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-    ssrfPolicy: opts.ssrfPolicy,
-  });
+  const page = isCloseOnlyAction(opts.action)
+    ? undefined
+    : await getPageForTargetId({
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        ssrfPolicy: opts.ssrfPolicy,
+      });
+  const target = { page, url: opts.targetUrl ?? page?.url() ?? "", closed: false };
   const withOperationTarget = async <T extends Record<string, unknown>>(payload: T) => {
-    const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId;
-    return { ...payload, ...(targetId ? { targetId } : {}) };
+    const targetId = page
+      ? (await pageTargetInfo(page).catch(() => null))?.targetId
+      : opts.targetId;
+    return {
+      ...payload,
+      ...(targetId ? { targetId } : {}),
+      ...(target.closed ? { closed: true as const } : {}),
+    };
   };
   // Any DOM action can synchronously trigger a download. Capturing all actions
   // keeps reporting and final-URL policy aligned with the actual file write.
-  const downloadCapture = beginActionDownloadCaptureOnPage(page, {
-    beforeSave: async (download) => {
-      if (!download.url) {
-        throw new Error("Action download URL is unavailable");
-      }
-      await assertBrowserNavigationResultAllowed({
-        url: download.url,
-        ...navigationPolicy,
-      });
-    },
-  });
+  const downloadCapture =
+    page &&
+    beginActionDownloadCaptureOnPage(page, {
+      beforeSave: async (download) => {
+        if (!download.url) {
+          throw new Error("Action download URL is unavailable");
+        }
+        await assertBrowserNavigationResultAllowed({
+          url: download.url,
+          ...navigationPolicy,
+        });
+      },
+    });
   // Guarded interactions already hold a 250 ms event window while policy is
   // active. Policy-free internal callers need that window from download capture.
   const downloadGraceMs =
@@ -187,26 +200,28 @@ export async function executeActViaPlaywright(
       ? BROWSER_ACTION_NAVIGATION_GRACE_MS
       : 0;
   const drainDownloads = async (firstEventGraceMs = downloadGraceMs) =>
-    await downloadCapture.drain({
+    await downloadCapture?.drain({
       firstEventGraceMs,
     });
-  const dialogAbort = createObservedDialogAbortSignalForPage({
-    page,
-    parentSignal: opts.signal,
-  });
+  const dialogAbort =
+    page &&
+    createObservedDialogAbortSignalForPage({
+      page,
+      parentSignal: opts.signal,
+    });
   const execution = {
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
     ...navigationPolicy,
     evaluateEnabled: opts.evaluateEnabled,
-    signal: dialogAbort.signal,
+    signal: dialogAbort?.signal ?? opts.signal,
     assertCurrent: opts.assertCurrent,
+    target,
   };
   try {
     if (opts.action.kind === "batch") {
       const batch = await batchViaPlaywright({
         ...execution,
-        page,
         actions: opts.action.actions,
         stopOnError: opts.action.stopOnError,
       });
@@ -227,7 +242,7 @@ export async function executeActViaPlaywright(
     let failure = err;
     try {
       const failureGraceMs =
-        dialogAbort.signal.aborted && actionUsesNavigationRequestGuard(opts.action)
+        dialogAbort?.signal.aborted && actionUsesNavigationRequestGuard(opts.action)
           ? BROWSER_ACTION_NAVIGATION_GRACE_MS
           : downloadGraceMs;
       await drainDownloads(failureGraceMs);
@@ -243,6 +258,7 @@ export async function executeActViaPlaywright(
       });
     }
     if (
+      page &&
       isPolicyDenyNavigationError(failure) &&
       !wasBrowserNavigationSourcePreservedAfterPolicyDenial(failure)
     ) {
@@ -254,8 +270,8 @@ export async function executeActViaPlaywright(
     }
     throw failure;
   } finally {
-    downloadCapture.dispose();
-    dialogAbort.cleanup();
+    downloadCapture?.dispose();
+    dialogAbort?.cleanup();
   }
 }
 
@@ -263,11 +279,12 @@ async function batchViaPlaywright(
   opts: ActionExecutionOptions & {
     actions: BrowserActRequest[];
     stopOnError?: boolean;
-    page?: Page;
   },
 ): Promise<{ results: BrowserBatchActionResult[]; aborted?: BrowserBatchAbort }> {
   const navigationPolicy = interactionNavigationPolicy(opts);
-  const page = opts.page ?? (await getPageForTargetId(opts));
+  const { page } = opts.target;
+  const currentUrl = () => page?.url() ?? opts.target.url;
+  const isClosed = () => opts.target.closed || page?.isClosed();
   const results: BrowserBatchActionResult[] = [];
   const finishAborted = (
     reason: BrowserBatchAbort["reason"],
@@ -280,12 +297,12 @@ async function batchViaPlaywright(
       : { results, aborted: { reason, afterAction, url, skipped } satisfies BrowserBatchAbort };
   let navigated = false;
   const onFrameNavigated = (frame: Frame) => {
-    if (frame === page.mainFrame()) {
+    if (frame === page?.mainFrame()) {
       navigated = true;
     }
   };
   const finishNavigation = (afterAction: number, skipped: number) => {
-    const url = page.url();
+    const url = currentUrl();
     const lastResult = results.at(-1);
     if (lastResult) {
       results[results.length - 1] = { ...lastResult, navigated: true, url };
@@ -296,7 +313,7 @@ async function batchViaPlaywright(
   // Snapshot refs are document-scoped, so any committed main-frame navigation
   // ends the batch. A commit after the next action dispatch is inherently unguardable;
   // callers that expect navigation can use separate act calls as the escape hatch.
-  page.on("framenavigated", onFrameNavigated);
+  page?.on("framenavigated", onFrameNavigated);
   try {
     for (const [index, action] of opts.actions.entries()) {
       if (opts.signal?.aborted) {
@@ -305,8 +322,8 @@ async function batchViaPlaywright(
       if (navigated) {
         return finishNavigation(index, opts.actions.length - index);
       }
-      if (page.isClosed()) {
-        return finishAborted("closed", index, page.url(), opts.actions.length - index);
+      if (isClosed()) {
+        return finishAborted("closed", index, currentUrl(), opts.actions.length - index);
       }
       let result: BrowserBatchActionResult;
       try {
@@ -325,8 +342,8 @@ async function batchViaPlaywright(
         result = { ok: false, error: formatErrorMessage(err) };
       }
       results.push(result);
-      if (page.isClosed()) {
-        return finishAborted("closed", index + 1, page.url(), opts.actions.length - index - 1);
+      if (isClosed()) {
+        return finishAborted("closed", index + 1, currentUrl(), opts.actions.length - index - 1);
       }
       if (navigated) {
         return finishNavigation(index + 1, opts.actions.length - index - 1);
@@ -337,6 +354,6 @@ async function batchViaPlaywright(
     }
     return { results };
   } finally {
-    page.off("framenavigated", onFrameNavigated);
+    page?.off("framenavigated", onFrameNavigated);
   }
 }

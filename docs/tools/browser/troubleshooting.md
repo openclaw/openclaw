@@ -42,6 +42,20 @@ Gateway. A browser-rendered HTTP error, such as `403 Forbidden`, is evidence tha
 the website denied access; it does not establish whether a profile or resource
 exists.
 
+## Crashed tabs
+
+When Chromium reports a renderer crash, OpenClaw returns
+`Browser tab crashed (renderer exited)` with instructions to open the URL in a new
+tab. Crashes observed by the persistent automation connection appear with
+`crashed: true` in tab listings and can still be closed. Other healthy tabs remain
+available. Tab listings report recorded observations: a screenshot-only connection
+can report a crash before the list reflects it.
+
+Open the URL in a new tab to continue. A crashed tab remains unusable through its
+current automation connection, even if it is reloaded manually. If it was the
+selected tab, choose a healthy tab explicitly before sending more actions without
+a target ID.
+
 ## Output directory errors
 
 If an output fails with `Invalid path: must stay within output directory`, set
