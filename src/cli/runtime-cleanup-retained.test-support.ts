@@ -53,6 +53,16 @@ export async function copyCliRetainedCompositionGraph(params: {
 }
 
 async function runComposition(fixture: CliRetainedCompositionFixture): Promise<void> {
+  const started = performance.now();
+  const stage = (phase: string) =>
+    process.stderr.write(
+      JSON.stringify({
+        phase: "cli-composition-child",
+        stage: phase,
+        elapsedMs: Math.round(performance.now() - started),
+      }) + "\n",
+    );
+  stage("entry");
   const moduleUrl = (relative: string) =>
     pathToFileURL(path.join(fixture.importRoot, "dist/legacy-finalizer/src", relative)).href;
   const physicalUrl = (relative: string) =>
@@ -74,7 +84,11 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
         admittedParent = context.parentURL;
       }
       const result = nextResolve(specifier, context);
-      if (settled && context.parentURL === retainedCleanupUrl && specifier.includes("harness/registry")) {
+      if (
+        settled &&
+        context.parentURL === retainedCleanupUrl &&
+        specifier.includes("harness/registry")
+      ) {
         resolvedRegistryUrl = result.url;
       }
       return result;
@@ -89,7 +103,9 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
   );
   const { runMainOrRootHelp }: typeof import("../entry.js") = await import(moduleUrl("entry.js"));
   const registry: typeof import("../agents/harness/registry.js") = await import(registryUrl);
-  const runtime: typeof import("../plugins/runtime.js") = await import(moduleUrl("plugins/runtime.js"));
+  const runtime: typeof import("../plugins/runtime.js") = await import(
+    moduleUrl("plugins/runtime.js")
+  );
   const { createEmptyPluginRegistry }: typeof import("../plugins/registry-empty.js") = await import(
     moduleUrl("plugins/registry-empty.js")
   );
@@ -97,11 +113,11 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
     await import(moduleUrl("proxy-capture/store.async.js"));
   const { withRetainedUpdateRuntime }: typeof import("../infra/update-retained-runtime.js") =
     await import(moduleUrl("infra/update-retained-runtime.js"));
-  const { swapStagedPackageInstall }: typeof import("../infra/package-update-swap.js") = await import(
-    moduleUrl("infra/package-update-swap.js")
-  );
+  const { swapStagedPackageInstall }: typeof import("../infra/package-update-swap.js") =
+    await import(moduleUrl("infra/package-update-swap.js"));
   const { captureRuntimeWorkerSource }: typeof import("../infra/runtime-worker-generation.js") =
     await import(moduleUrl("infra/runtime-worker-generation.js"));
+  stage("owners-loaded");
   let store: Awaited<ReturnType<typeof acquireDebugProxyCaptureStoreAsync>>["store"] | undefined;
   let resource: ReturnType<typeof setInterval> | undefined;
   let disposeCalls = 0;
@@ -109,7 +125,11 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
   const phases: string[] = [];
   Object.assign(globalThis, {
     __openclawRetainedCompositionCommand: async () => {
-      assert.equal(admittedParent, cleanupUrl, "cleanup did not load under the requested runtime spelling");
+      assert.equal(
+        admittedParent,
+        cleanupUrl,
+        "cleanup did not load under the requested runtime spelling",
+      );
       console.log(
         JSON.stringify({
           phase: "cli-composition-admitted",
@@ -207,6 +227,7 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
   });
   const argv = [process.execPath, fileURLToPath(moduleUrl("entry.js")), "config", "get", "fixture"];
   process.argv = argv;
+  stage("cli-dispatch");
   await withCliProcessScope(() =>
     runMainOrRootHelp(argv, {
       finalize: async () => {
@@ -215,7 +236,10 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
         assert(store?.isClosed, "canonical shared-state finalizer did not close the store");
         await assert.rejects(store.listSessions(), /closed/iu);
         assert(supervisors.length > 0);
-        assert(supervisors.every((worker) => worker.threadId === -1), "native workers were not joined");
+        assert(
+          supervisors.every((worker) => worker.threadId === -1),
+          "native workers were not joined",
+        );
         assert.equal(observedParent, cleanupUrl, "late resolution escaped the runtime identity");
         assert(lateResolutions.some((specifier) => specifier.includes("harness/registry")));
         assert.equal(
