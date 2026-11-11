@@ -1,6 +1,6 @@
+import { splitSystemPromptRelocatableBoundary } from "@openclaw/ai/internal/shared";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { splitSystemPromptRelocatableBoundary } from "@openclaw/ai/internal/shared";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
@@ -322,11 +322,6 @@ async function prepareCliRunContextWithinReadFence(
     );
     return prepared;
   };
-  const nodeClaudePlacement = detectNodeClaudePlacement({
-    backendId: backendResolved.id,
-    execHost: params.sessionEntry?.execHost,
-    execNode: params.sessionEntry?.execNode,
-  });
   // Manual compaction reuses the cached native session, so unlike side questions
   // it must rebuild the turn's request prefix (system prompt, MCP, skills) for
   // the provider cache to hit. Node-Claude placement strips those transports
@@ -338,8 +333,15 @@ async function prepareCliRunContextWithinReadFence(
   // hook-injected prompt/tool caps (hooks stay off), delivery-mode and
   // silent-reply defaults (binding facts aren't persisted for regular
   // sessions), and non-default bootstrap knobs.
-  const restoresTurnPrefixForCache = isControlOperation && !nodeClaudePlacement;
-  const skipsTurnPrefix = skipsTurnPreparation && !restoresTurnPrefixForCache;
+  // Mirrors detectNodeClaudePlacement without its malformed-input throw, so
+  // error precedence for every other caller stays exactly as before.
+  const compactRestoresPrefixForToolPolicy =
+    params.controlOperation === "compact" &&
+    !(
+      backendResolved.id === "claude-cli" &&
+      params.sessionEntry?.execHost === "node" &&
+      Boolean(params.sessionEntry?.execNode?.trim())
+    );
   const toolPolicy = await resolveCliRuntimeToolPolicy({
     params,
     policySessionKey,
@@ -351,11 +353,18 @@ async function prepareCliRunContextWithinReadFence(
     resolveManagedNativeTools: backendResolved.resolveManagedNativeTools,
     sideQuestionToolMode: backendResolved.sideQuestionToolMode,
     isSideQuestion,
-    skipsTurnPreparation: skipsTurnPrefix,
+    skipsTurnPreparation: skipsTurnPreparation && !compactRestoresPrefixForToolPolicy,
   });
   params = toolPolicy.params;
   const { runtimeToolsAllowPolicy, managedNativeTools } = toolPolicy;
   const internalParams = params as RunCliAgentPrepareParams;
+  const nodeClaudePlacement = detectNodeClaudePlacement({
+    backendId: backendResolved.id,
+    execHost: params.sessionEntry?.execHost,
+    execNode: params.sessionEntry?.execNode,
+  });
+  const restoresTurnPrefixForCache = isControlOperation && !nodeClaudePlacement;
+  const skipsTurnPrefix = skipsTurnPreparation && !restoresTurnPrefixForCache;
   params.assertCurrent?.();
   params.abortSignal?.throwIfAborted();
   if (nodeClaudePlacement && params.cliToolAvailability) {

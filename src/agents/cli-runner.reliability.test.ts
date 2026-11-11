@@ -1909,7 +1909,7 @@ describe("runCliAgent reliability", () => {
     },
   );
 
-  it("keeps native control operations out of restrictive prompt preparation", async () => {
+  it("restores the turn prefix for native control operations (hooks stay off)", async () => {
     const { dir, sessionFile, sessionTarget } = createSessionFixture({
       history: [{ role: "user", content: "earlier ask" }],
     });
@@ -1972,9 +1972,13 @@ describe("runCliAgent reliability", () => {
 
       expect(hookRunner.runBeforePromptBuild).not.toHaveBeenCalled();
       expect(context.params.prompt).toBe("/compact");
+      // Compact restores the turn prefix for cache parity: the system prompt
+      // is rebuilt instead of empty. This backend cannot mediate tools, so no
+      // exact cap is minted here (covered with an enforcing backend in
+      // prepare.test.ts).
       expect(context.params.cliToolAvailability).toBeUndefined();
       expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "native-session" });
-      expect(context.systemPrompt).toBe("");
+      expect(context.systemPrompt).not.toBe("");
       expect(context.contextEngine).toBeUndefined();
       expect(context.claudeSkillsPlugin.args).toEqual([]);
     } finally {
