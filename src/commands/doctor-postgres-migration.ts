@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseEngineInput } from "../infra/database-engine/types.js";
 import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
 import { capturePostgresBackup, fingerprintPostgresBackup } from "../snapshot/database-backup.js";
+import { doctorMigrationBackupPath } from "./doctor-migration-backup-names.js";
 
 /** Retain the exact predecessor under the same custody as the version runner. */
 export async function backupDoctorPostgresMigration(
@@ -9,7 +10,7 @@ export async function backupDoctorPostgresMigration(
   input: NonNullable<DatabaseEngineInput>,
   maintenance: { assertAdmission(): void },
 ): Promise<{ changes: string[]; generation?: string }> {
-  const directory = `${sourcePath}.pre-startup-migration-${randomUUID()}.postgres.bak`;
+  const directory = doctorMigrationBackupPath(sourcePath, randomUUID(), "postgres");
   const config = { database: { engine: "postgres" as const, postgres: input } };
   maintenance.assertAdmission();
   const before = hasUpdateDoctorMigrationCapture()

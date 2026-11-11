@@ -379,22 +379,32 @@ describe("backup Doctor migration originals", () => {
       closeOpenClawStateDatabase();
       const statePath = resolveOpenClawStateSqlitePath(state.env);
       const id = "0b6f3c1e-8f2a-4c1d-9e3b-5a7d2c4f6e81";
+      // A PostgreSQL original is a directory: omitted whole and reported once.
+      const postgresOriginal = `${statePath}.pre-startup-migration-${id}.postgres.bak`;
       const originals = [
         `${agentPath}.pre-startup-migration-${id}.bak`,
         `${agentPath}.pre-startup-migration-${id}.scoped.bak`,
+        `${agentPath}.pre-startup-migration-restart-recovery-${id}.bak`,
         `${statePath}.pre-startup-migration-${id}.bak`,
+        postgresOriginal,
       ];
       // Similar names Doctor never writes stay ordinary agent files.
       const neighbors = [
         `${agentPath}.pre-startup-migration-notes.bak`,
+        `${agentPath}.pre-startup-migration-restart-recovery-notes.bak`,
+        `${statePath}.pre-startup-migration-notes.postgres.bak`,
         path.join(state.agentDir(), "operator.bak"),
       ];
-      for (const file of [...originals, ...neighbors]) {
+      const postgresDump = path.join(postgresOriginal, "dump", "toc.dat");
+      await fs.mkdir(path.dirname(postgresDump), { recursive: true });
+      await fs.writeFile(postgresDump, "synthetic original");
+      for (const file of [...originals, ...neighbors].filter((f) => f !== postgresOriginal)) {
         await fs.writeFile(file, "synthetic original");
       }
       const archived = async (archivePath: string, file: string) =>
-        (await listArchiveEntries(archivePath)).some((entry) =>
-          entry.endsWith(`/${path.basename(file)}`),
+        (await listArchiveEntries(archivePath)).some(
+          (entry) =>
+            entry.endsWith(`/${path.basename(file)}`) || entry.includes(`/${path.basename(file)}/`),
         );
 
       const full = await createVerifiedBackup(state);
@@ -419,6 +429,9 @@ describe("backup Doctor migration originals", () => {
             reason: "excluded",
           }),
         );
+      }
+      expect(lean.skipped.filter((s) => s.sourcePath.startsWith(postgresOriginal))).toHaveLength(1);
+      for (const file of [...originals.filter((f) => f !== postgresOriginal), postgresDump]) {
         expect(await fs.readFile(file, "utf8")).toBe("synthetic original");
       }
       for (const file of neighbors) {

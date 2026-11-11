@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { isNotFoundPathError, isPathInside } from "@openclaw/fs-safe/path";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -26,7 +27,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { canonicalizeContainmentRoot } from "../infra/path-containment.js";
 import { realpathOrResolve } from "../infra/path-existence.js";
-import { isDoctorMigrationBackupPath } from "../infra/session-sqlite-migration-manifest.js";
 import { assertNotUpdateCapturePath, isUpdateCapturePath } from "../infra/update-capture-paths.js";
 import {
   resolveActivatedPluginBackupInventory,
@@ -54,6 +54,7 @@ import {
   type BackupRegenerableKind,
 } from "./backup-resource-inventory.js";
 import { buildCleanupPlan } from "./cleanup-utils.js";
+import { isDoctorMigrationBackupPath } from "./doctor-migration-backup-names.js";
 import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-config-repair.js";
 
 // DEFLATE can legitimately encode zero-filled sparse ranges just over 1000:1.
