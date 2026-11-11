@@ -75,13 +75,43 @@ function expectRateRead(harness: Harness, called: boolean) {
 }
 function expectResetError(result: Result) {
   const error = expectUsageLimitPromptError(result);
-  expect(error.message).toContain("You've reached your Codex subscription usage limit.");
+  expect(error.message).toContain("Codex reported a usage or quota limit.");
   expect(error.message).toContain("Next reset in");
   return error;
 }
 
 export function registerCodexUsageLimitTests() {
   describe("runCodexAppServerAttempt usage limits", () => {
+    it.each(["startup", "streamed"] as const)(
+      "preserves the native quota cause through %s failure and unavailable account usage",
+      async (phase) => {
+        const error = {
+          message: "Quota exceeded. Check your plan and billing details.",
+          codexErrorInfo: "usageLimitExceeded",
+        };
+        const harness = createStartedThreadHarness(async (method) => {
+          if (method === "turn/start" && phase === "startup") {
+            throw Object.assign(new Error(error.message), { data: { error } });
+          }
+          if (method === "account/rateLimits/read") {
+            throw new Error("account rate limits are unavailable for API key auth");
+          }
+          return undefined;
+        });
+        const params = createUsageParams();
+        const run = runCodexAppServerAttempt(params);
+        if (phase === "streamed") {
+          await waitForRequest(harness, run, "turn/start");
+          await harness.notify(turnCompleted({ id: "turn-1", status: "failed", error }));
+        }
+        const message = expectUsageLimitPromptError(await run).message;
+        expect(message.split(error.message)).toHaveLength(2);
+        expect(message).not.toMatch(/subscription usage limit|Next reset|Wait until/);
+        expect(params.authProfileStore.usageStats?.["openai:work"]?.blockedUntil).toBeUndefined();
+        expectRateRead(harness, true);
+      },
+    );
+
     it.each([
       { codexErrorInfo: "rateLimitExceeded", status: 429 },
       { codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } }, status: 429 },
