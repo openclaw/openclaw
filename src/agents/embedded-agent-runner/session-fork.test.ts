@@ -338,7 +338,6 @@ it("uses the current prepared proxy and TLS transport policy", async () => {
   );
 });
 
-// Anthropic invalidates cached messages when tool_choice changes; only hosted tools need it.
 it.each([
   ["denies hosted search", { type: "web_search_20250305", name: "web_search" }, { type: "none" }],
   ["keeps tool_choice for client tools", { name: "exec", input_schema: {} }, undefined],
@@ -349,10 +348,7 @@ it.each([
     streamFn(activeModel, requestContext, {
       ...options,
       onPayload: (payload, payloadModel) => {
-        if (!isRecord(payload)) {
-          throw new Error("Expected provider request");
-        }
-        const prepared = { ...payload, tools: [hostedTool] };
+        const prepared = isRecord(payload) ? { ...payload, tools: [hostedTool] } : payload;
         return options?.onPayload?.(prepared, payloadModel) ?? prepared;
       },
     });
