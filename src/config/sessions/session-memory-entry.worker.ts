@@ -4,6 +4,7 @@ import { projectSessionEntryRecord } from "../../../packages/memory-host-sdk/src
 import {
   renderSessionEntrySnapshot,
   readSessionEntryResetRecallCutoff,
+  type SessionEntryRenderSink,
 } from "../../../packages/memory-host-sdk/src/host/session-entry-render.js";
 import { LruCache } from "../../infra/lru-cache.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
@@ -12,9 +13,10 @@ import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import { prepareAssistantTranscriptText } from "../../shared/chat-message-content.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
-  readTranscriptExportSnapshotReadOnlySync,
+  openTranscriptExportReadOnly,
   readTranscriptExportSnapshotsFromDatabase,
-} from "./session-accessor.sqlite-read.js";
+} from "./session-accessor.sqlite-export-read.js";
+import { SessionTranscriptExportChangedError } from "./session-accessor.sqlite-export-slices.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
@@ -23,8 +25,8 @@ import { readTranscriptStatsBatchFromDatabase } from "./session-accessor.sqlite-
 import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
-  SessionEntryWorkerInput,
   SessionEntriesWorkerInput,
+  SessionEntriesWorkerUpdate,
 } from "./session-transcript-worker-read.types.js";
 import type { SessionTranscriptWorkerValues } from "./session-transcript-worker.types.js";
 
@@ -33,7 +35,6 @@ type Snapshot = Exclude<
   "cold"
 >;
 type ExportRequest = Parameters<typeof readTranscriptExportSnapshotsFromDatabase>[1][number];
-type PreparedEntries = SessionTranscriptWorkerValues["session-entries"]["entries"];
 const snapshots = new LruCache<Snapshot>(16, {
   maxBytes: 8 * 1024 * 1024,
   sizeOf: (snapshot) => snapshot.stats.sizeBytes,
@@ -41,20 +42,38 @@ const snapshots = new LruCache<Snapshot>(16, {
 diagnosticsChannel("openclaw.memory.critical").subscribe(() => snapshots.clear());
 const MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
 
-/** The export worker retains projected rows; transcript rewrite identity replaces the prefix. */
-export async function prepareSessionMemoryEntry(request: SessionEntryWorkerInput) {
-  const [result] = await prepareSessionMemoryEntries([request]);
-  if ("cold" in result!) {
-    throw new SessionTranscriptColdError(request.options.sessionId);
+type StreamRequest = SessionEntriesWorkerInput["entries"][number];
+type Delivery = { index: number } & SessionEntriesWorkerUpdate;
+// An active transcript may change between slices; each attempt restarts from a fresh head.
+const MAX_EXPORT_ATTEMPTS = 3;
+
+/**
+ * Hands each export to the host in acknowledged pages, then its summary. Rendered text never
+ * accumulates here: transcripts above the retention limit are read, projected and rendered one
+ * bounded slice at a time.
+ */
+export async function deliverSessionMemoryEntries(
+  entries: SessionEntriesWorkerInput["entries"],
+  channel: WorkerTaskChannel | undefined,
+  control: WorkerTaskControl,
+): Promise<SessionTranscriptWorkerValues["session-entries"]> {
+  if (!channel) {
+    throw new Error("Session exports require their host delivery channel");
   }
-  return result!;
+  channel.consumeInput();
+  await streamSessionMemoryEntries(entries, async (delivery) => {
+    control.throwIfCancelled();
+    const response = await channel.request({ kind: "session-entries", ...delivery });
+    response.consumed();
+    control.throwIfCancelled();
+  });
+  return { entries: [] };
 }
 
-async function prepareSessionMemoryEntries(
+async function streamSessionMemoryEntries(
   entries: SessionEntriesWorkerInput["entries"],
-  publish?: (index: number, value: PreparedEntries[number]) => Promise<void>,
-): Promise<PreparedEntries> {
-  const results: PreparedEntries = [];
+  send: (delivery: Delivery) => Promise<void>,
+): Promise<void> {
   const groups = new Map<
     string,
     { index: number; resolved: ReturnType<typeof resolveSqliteTranscriptReadScope> }[]
@@ -106,14 +125,14 @@ async function prepareSessionMemoryEntries(
       const batch = group.slice(start, end);
       const requests = batch.map(({ index, resolved }): ExportRequest => {
         const request = entries[index]!;
-        const previous = snapshots.peek(snapshotKey(request));
+        // Observers need original messages; projected rows are never mixed into their cache.
+        const previous = request.messages ? undefined : snapshots.peek(snapshotKey(request));
         return {
           resolved,
           scope: request.options,
           admission: request.admission,
           options: {
-            projectEvent: (event: unknown) =>
-              projectSessionEntryRecord(event, prepareAssistantTranscriptText),
+            projectEvent: request.messages ? undefined : projectEvent,
             previous:
               previous?.generation != null && previous.throughSeq !== undefined
                 ? {
@@ -127,7 +146,7 @@ async function prepareSessionMemoryEntries(
       });
       // Transcripts the retained-snapshot cache admits (at most MAX_SNAPSHOT_BYTES) are read
       // inside the batch transaction; on SQLite, larger ones, which the cache never retains,
-      // are read in slices after it.
+      // are streamed in slices after it.
       const exported = withOpenClawAgentDatabaseReadOnly(
         (database) =>
           runSqliteReadSnapshotSync(
@@ -140,86 +159,141 @@ async function prepareSessionMemoryEntries(
           ),
         toDatabaseOptions(group[0]!.resolved),
       );
-      // Render and deliver serially. Count-only groups previously retained every
-      // projected snapshot and every expanded entry in this 512 MiB isolate.
+      // Render and deliver serially; only the current export's bounded state is live.
       for (const [offset, { index }] of batch.entries()) {
         const request = entries[index]!;
-        let snapshot = exported.found ? exported.value.shift()! : null;
-        if (snapshot && snapshot !== "cold" && snapshot.deferred) {
-          snapshot = readDeferredSnapshot(request, requests[offset]!.options, snapshot);
-        }
-        let value: PreparedEntries[number];
-        if (snapshot === "cold") {
-          value = { cold: true };
-        } else {
+        const snapshot = exported.found ? exported.value.shift()! : null;
+        if (snapshot !== "cold" && !request.messages) {
           retainSnapshot(snapshotKey(request), snapshot);
-          const entry = snapshot
-            ? await renderSessionEntrySnapshot(
-                request.absPath,
-                request.options,
-                snapshot,
-                snapshot.stats.sizeBytes > MAX_SNAPSHOT_BYTES,
-              )
-            : null;
-          value = {
-            entry,
-            resetRecallCutoff: entry
-              ? readSessionEntryResetRecallCutoff(entry)
-              : { state: "absent" },
-          };
         }
-        if (publish) {
-          await publish(index, value);
-        } else {
-          results[index] = value;
-        }
+        await send({
+          index,
+          value: await streamSessionMemoryEntry(
+            index,
+            request,
+            requests[offset]!.options,
+            snapshot,
+            send,
+          ),
+        });
       }
       start = end;
     }
   }
-  return results;
 }
 
-/** Hands each prepared entry to the host and waits for it to accept that entry before the next. */
-export async function deliverSessionMemoryEntries(
-  entries: SessionEntriesWorkerInput["entries"],
-  channel: WorkerTaskChannel | undefined,
-  control: WorkerTaskControl,
-): Promise<SessionTranscriptWorkerValues["session-entries"]> {
-  if (!channel) {
-    throw new Error("Session exports require their host delivery channel");
+function projectEvent(event: unknown) {
+  return projectSessionEntryRecord(event, prepareAssistantTranscriptText);
+}
+
+async function streamSessionMemoryEntry(
+  index: number,
+  request: StreamRequest,
+  exportOptions: ExportRequest["options"],
+  batchSnapshot: Snapshot | null | "cold",
+  send: (delivery: Delivery) => Promise<void>,
+): Promise<Extract<SessionEntriesWorkerUpdate, { value: unknown }>["value"]> {
+  let delivered = false;
+  const sink: SessionEntryRenderSink = {
+    prefixLineCount: request.prefixLineCount,
+    pageMessages: request.messages,
+    page:
+      request.pages || request.messages
+        ? async (page) => {
+            const lines = request.pages && page.lines.length > 0;
+            delivered ||= lines;
+            await send({
+              index,
+              page: lines
+                ? page
+                : {
+                    startLine: page.startLine,
+                    lines: [],
+                    lineMap: [],
+                    messageTimestampsMs: [],
+                    lineProvenance: [],
+                    ...(page.messages ? { messages: page.messages } : {}),
+                  },
+            });
+          }
+        : undefined,
+    reset: async () => {
+      if (delivered) {
+        delivered = false;
+        await send({ index, reset: true });
+      }
+    },
+  };
+  if (batchSnapshot === "cold") {
+    return { cold: true };
   }
-  channel.consumeInput();
-  await prepareSessionMemoryEntries(entries, async (index, value) => {
-    control.throwIfCancelled();
-    const response = await channel.request({ kind: "session-entries", index, value });
-    response.consumed();
-    control.throwIfCancelled();
-  });
-  return { entries: [] };
-}
-
-/** Reads a transcript above the retention limit in short slices after its batch transaction. */
-function readDeferredSnapshot(
-  request: SessionEntriesWorkerInput["entries"][number],
-  options: ExportRequest["options"],
-  batchHead: Snapshot,
-): Snapshot | null | "cold" {
-  try {
-    // An unchanged transcript keeps the batch statistics instead of reading them again.
-    return runWithSessionTranscriptReadFence(
-      request.admission,
-      () => readTranscriptExportSnapshotReadOnlySync(request.options, options, batchHead) ?? null,
-    );
-  } catch (error) {
-    if (!(error instanceof SessionTranscriptColdError)) {
-      throw error;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const opened =
+        attempt === 1 && !batchSnapshot?.deferred
+          ? batchSnapshot && { snapshot: batchSnapshot, events: batchSnapshot.events }
+          : openDeferredExport(
+              request,
+              exportOptions,
+              attempt === 1 ? (batchSnapshot ?? undefined) : undefined,
+            );
+      const summary = opened
+        ? await renderSessionEntrySnapshot(
+            request.absPath,
+            request.options,
+            { ...opened.snapshot, events: opened.events },
+            sink,
+          )
+        : null;
+      return {
+        summary,
+        resetRecallCutoff: summary
+          ? readSessionEntryResetRecallCutoff(summary)
+          : { state: "absent" },
+      };
+    } catch (error) {
+      if (error instanceof SessionTranscriptColdError) {
+        await sink.reset?.();
+        return { cold: true };
+      }
+      if (
+        !(error instanceof SessionTranscriptExportChangedError) ||
+        attempt >= MAX_EXPORT_ATTEMPTS
+      ) {
+        throw error;
+      }
+      await sink.reset?.();
     }
-    return "cold";
   }
 }
 
-function snapshotKey({ options }: SessionEntriesWorkerInput["entries"][number]) {
+/** Opens a transcript above the retention limit for slice-by-slice rendering. */
+function openDeferredExport(
+  request: StreamRequest,
+  options: ExportRequest["options"],
+  batchHead: Snapshot | undefined,
+) {
+  // A fresh head still reuses a retained prefix while its generation matches.
+  const opened = runWithSessionTranscriptReadFence(request.admission, () =>
+    openTranscriptExportReadOnly(request.options, options, batchHead),
+  );
+  if (!opened || !request.admission) {
+    return opened;
+  }
+  // Admitted reads project each slice under the same fence as their head.
+  const events = opened.events;
+  const admission = request.admission;
+  return {
+    snapshot: opened.snapshot,
+    events: {
+      [Symbol.iterator]: () => ({
+        next: () => runWithSessionTranscriptReadFence(admission, () => events.next()),
+      }),
+    },
+  };
+}
+
+function snapshotKey({ options }: StreamRequest) {
   return JSON.stringify([options.storePath, options.agentId, options.sessionId]);
 }
 

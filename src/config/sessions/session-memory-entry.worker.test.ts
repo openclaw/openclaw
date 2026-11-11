@@ -191,3 +191,40 @@ it("waits for delivery before reading later export batches and retries a failed 
     expect(delivered).toEqual([0, 1, 2, 3]);
   });
 });
+
+it("restarts a sliced export after a concurrent change and discards its delivered pages", async () => {
+  await withOpenClawTestState({ label: "session-memory-entry-restart" }, async (state) => {
+    const scope = scopeFor(path.join(state.sessionsDir(), "sessions.json"), "restart");
+    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    // Six 1 MB rows exceed snapshot retention and the 2 MiB slice budget.
+    const rows = Array.from({ length: 6 }, (_, index) =>
+      userEvent(`row-${index}`, `row${index} `.repeat(200_000)),
+    );
+    replace(scope, rows);
+    const updates: string[] = [];
+    let appended = false;
+    const [exported] = await collectSessionMemoryEntries(
+      [{ absPath: scope.sessionKey, options: scope }],
+      undefined,
+      (_index, update) => {
+        updates.push("reset" in update ? "reset" : "page");
+        if (!appended) {
+          appended = true;
+          expect(
+            appendTranscriptMessageSync(scope, {
+              eventId: "concurrent",
+              message: { role: "assistant", content: "Concurrent answer." },
+            }),
+          ).toMatchObject({ ok: true });
+        }
+      },
+    );
+    assert(exported && "entry" in exported && exported.entry, "Expected a hot export");
+    // The restarted export reads the transcript current at its fresh head.
+    expect(updates).toContain("reset");
+    expect(updates.indexOf("reset")).toBeGreaterThan(0);
+    expect(exported.entry.content.endsWith("\nAssistant: Concurrent answer.")).toBe(true);
+    expect(exported.entry.content.startsWith("User: row0 row0")).toBe(true);
+    expect(exported.entry.lineCount).toBe(exported.entry.content.split("\n").length);
+  });
+});
