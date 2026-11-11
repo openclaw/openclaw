@@ -3,12 +3,18 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
+import { buildCliMcpGrantContext } from "../agents/cli-runner/mcp-grant-context.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
+import type { SkillSnapshot } from "../skills/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
@@ -65,6 +71,7 @@ describe.skipIf(process.platform === "win32")(
     });
 
     afterEach(() => {
+      clearRuntimeConfigSnapshot();
       resetProcessRegistryForTests();
       closeOpenClawStateDatabaseForTest();
       envSnapshot.restore();
@@ -72,8 +79,9 @@ describe.skipIf(process.platform === "win32")(
     });
 
     // Resolves exec as the CLI-backend loopback bridge does for a run of agent `execution` whose
-    // runtime tool policy comes from agent `main`'s session.
-    async function mediatedExecTool(): Promise<AnyAgentTool> {
+    // runtime tool policy comes from agent `main`'s session: the grant context comes from the CLI
+    // grant builder and is spread into tool resolution as the loopback runtime spreads it.
+    async function mediatedExecTool(skillsSnapshot?: SkillSnapshot): Promise<AnyAgentTool> {
       const cfg = {
         plugins: { enabled: false },
         tools: { exec: { host: "gateway", security: "allowlist", ask: "off" } },
@@ -85,16 +93,33 @@ describe.skipIf(process.platform === "win32")(
           },
         },
       } as OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg);
+      const context = buildCliMcpGrantContext({
+        run: {
+          sessionId: "execution-session",
+          sessionKey: "agent:execution:main",
+          runtimePolicySessionKey: "agent:main:main",
+          sessionFile: path.join(root, "execution-session"),
+          workspaceDir: root,
+          provider: "fixture-cli",
+          prompt: "Run the skill tool",
+          timeoutMs: 1000,
+          runId: "execution-run",
+          senderIsOwner: true,
+          ...(skillsSnapshot ? { skillsSnapshot } : {}),
+        },
+        config: cfg,
+        requireExplicitMessageTarget: false,
+        agentId: "execution",
+        runtimePolicyAgentId: "main",
+        modelProvider: "fixture-cli",
+        modelId: "fixture",
+      });
       const { tools } = await resolveGatewayScopedTools({
+        ...context,
         cfg,
         surface: "loopback",
-        sessionKey: "agent:execution:main",
-        agentId: "execution",
-        runtimePolicySessionKey: "agent:main:main",
-        runtimePolicyAgentId: "main",
-        workspaceDir: root,
         cwd: root,
-        senderIsOwner: true,
         mediatedToolNames: ["exec"],
       });
       const tool = tools.find((candidate) => candidate.name === "exec");
@@ -104,9 +129,9 @@ describe.skipIf(process.platform === "win32")(
       return tool;
     }
 
-    async function runBin(bin: string) {
+    async function runBin(bin: string, skillsSnapshot?: SkillSnapshot) {
       const marker = path.join(root, `${bin}.marker`);
-      const tool = await mediatedExecTool();
+      const tool = await mediatedExecTool(skillsSnapshot);
       const outcome = await tool
         .execute(`call-${bin}`, { command: `${bin} ${marker}`, workdir: root })
         .then(
@@ -125,5 +150,25 @@ describe.skipIf(process.platform === "win32")(
       const result = await runBin("policy-tool");
       expect(result).toEqual({ denied: "Error: exec denied: allowlist miss", ran: false });
     });
+
+    it("runs a bin whose skill the session's snapshot admits", async () => {
+      const result = await runBin("exec-tool", {
+        prompt: "",
+        skills: [{ name: "exec-tool" }],
+        skillFilter: ["exec-tool"],
+      });
+      expect(result).toMatchObject({ details: { status: "completed", exitCode: 0 }, ran: true });
+    });
+
+    it.each([
+      ["filter-excluded", { skillFilter: ["other-skill"] }],
+      ["override-disabled", { skillOverrides: { "exec-tool": false } }],
+    ] as const)(
+      "denies a bin whose skill the session's snapshot left %s, with no I/O",
+      async (_case, narrowing) => {
+        const result = await runBin("exec-tool", { prompt: "", skills: [], ...narrowing });
+        expect(result).toEqual({ denied: "Error: exec denied: allowlist miss", ran: false });
+      },
+    );
   },
 );

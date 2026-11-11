@@ -497,8 +497,9 @@ export async function resolveGatewayScopedTools(
           ...commonToolOptions(),
           sessionEventSourcePolicy: params.sessionEventSourcePolicy,
           agentId: policyAgentId,
-          // Skill-bin trust follows the executing agent; credentials and hooks stay as above.
-          skillOwnerAgentId: sessionAgentId,
+          // Skill-bin trust follows the executing agent and the session's admitted skill
+          // narrowing; credentials and hooks stay with the policy agent above.
+          execSkillScope: { ownerAgentId: sessionAgentId, ...params.admittedSkillScope },
           sessionKey: runtimePolicySessionKey,
           runSessionKey: params.sessionKey,
           operationalRunInstance: params.admittedRunContext?.operationalRunInstance,

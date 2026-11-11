@@ -8,7 +8,7 @@ import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { MemoryFlushToolRunContext } from "./agent-tools.memory-flush.types.js";
 import type { SkillInstructionDeliveryCache } from "./agent-tools.read.js";
-import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import type { ExecSkillScope, ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import type {
   AgentRunClientContext,
@@ -38,8 +38,6 @@ export type OpenClawCodingToolsOptions = {
   agentId?: string;
   /** Retained policy owner; execution identity remains agentId/runSessionKey. */
   policyAgentId?: string;
-  /** Executing agent whose skills may authorize exec bins when agentId names the policy agent. */
-  skillOwnerAgentId?: string;
   exec?: ExecToolDefaults & ProcessToolDefaults;
   /** Specific ingress provider used only for transport tool availability. */
   toolPolicyMessageProvider?: string;
@@ -155,6 +153,11 @@ export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
   additionalInheritedToolNamesRef?: string[];
   /** The host owns continuation policy when this factory builds only part of its tool surface. */
   sessionEventSourcePolicy?: SessionEventSourcePolicy;
+  /**
+   * Host-prepared autoAllowSkills scope for a run whose skill snapshot is not carried here (the
+   * CLI loopback grant). Replaces the scope derived from `agentId` and `skillsSnapshot`.
+   */
+  execSkillScope?: ExecSkillScope;
 };
 
 export type PluginCodingToolsOptions = Omit<
@@ -163,4 +166,8 @@ export type PluginCodingToolsOptions = Omit<
   | "onProgressCardPlanSaved"
   | "authProfileStoreSource"
   | "onWebSearchConfiguration"
->;
+  | "exec"
+> & {
+  /** Skill-bin trust scope is host-derived from the admitted run, never caller-supplied. */
+  exec?: Omit<ExecToolDefaults, "skillScope"> & ProcessToolDefaults;
+};
