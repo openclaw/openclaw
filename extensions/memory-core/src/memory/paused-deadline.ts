@@ -1,10 +1,11 @@
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
-import type {
-  MemoryEmbeddingProvider,
-  MemoryEmbeddingProviderRuntime,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type { MemorySearchDeadlineControl } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+
+export const EMBEDDING_TIMEOUTS_MS = {
+  query: { remote: 60_000, local: 5 * 60_000 },
+  batch: { remote: 2 * 60_000, local: 10 * 60_000 },
+};
 
 export function createPausedDeadline(params: {
   kind: "corpus" | "embedding";
@@ -107,24 +108,4 @@ export async function runEmbeddingOperationWithTimeout<T>(params: {
   } finally {
     deadline.close();
   }
-}
-
-const EMBEDDING_TIMEOUTS_MS = {
-  query: { remote: 60_000, local: 5 * 60_000 },
-  batch: { remote: 2 * 60_000, local: 10 * 60_000 },
-};
-
-export function resolveMemoryEmbeddingTimeout(
-  kind: "query" | "batch",
-  provider: MemoryEmbeddingProvider | null,
-  providerRuntime: MemoryEmbeddingProviderRuntime | undefined,
-): number {
-  const defaults = EMBEDDING_TIMEOUTS_MS[kind];
-  const runtimeTimeoutMs =
-    kind === "query"
-      ? providerRuntime?.inlineQueryTimeoutMs
-      : providerRuntime?.inlineBatchTimeoutMs;
-  return typeof runtimeTimeoutMs === "number" && runtimeTimeoutMs > 0
-    ? resolveTimerTimeoutMs(runtimeTimeoutMs, defaults.remote)
-    : defaults[provider?.id === "local" ? "local" : "remote"];
 }

@@ -21,6 +21,7 @@ type EmbeddingQueryRetryHarness = {
     deadlineControl?: MemorySearchDeadlineControl,
   ) => Promise<number[]>;
   markLocalEmbeddingProviderDegraded: (error: unknown) => void;
+  resolveEmbeddingTimeout: () => number;
   waitForEmbeddingRetry: (delayMs: number, action: string, signal?: AbortSignal) => Promise<void>;
 };
 
@@ -38,11 +39,7 @@ function createEmbeddingQueryRetryHarness(
   return Object.assign(Object.create(MemoryManagerEmbeddingOps.prototype), {
     provider,
     settings: {},
-    providerRuntime: {
-      id: provider.id,
-      inlineQueryTimeoutMs: timeoutMs,
-      inlineBatchTimeoutMs: timeoutMs,
-    },
+    resolveEmbeddingTimeout: () => timeoutMs,
     markLocalEmbeddingProviderDegraded: vi.fn(),
   }) as EmbeddingQueryRetryHarness;
 }

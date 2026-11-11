@@ -205,7 +205,6 @@ export async function runMemoryStatus(
     return;
   }
   const deep = Boolean(opts.deep || opts.index);
-  const signal = !opts.index && !opts.fix ? getAsyncWorkSignal() : undefined;
   const allResults: Array<{
     agentId: string;
     status: ReturnType<MemoryManager["status"]>;
@@ -218,6 +217,7 @@ export async function runMemoryStatus(
     dreamingAudit?: DreamingArtifactsAuditSummary;
     dreamingRepair?: RepairDreamingArtifactsResult;
   }> = [];
+  const signal = getAsyncWorkSignal();
   const cfg = await withMemoryCommand({
     commandName: "memory status",
     options: opts,
@@ -246,7 +246,6 @@ export async function runMemoryStatus(
             progress.tick();
             progress.setLabel("Checking embeddings…");
             embeddingProbe = await manager.probeEmbeddingAvailability();
-            signal?.throwIfAborted();
             progress.tick();
             if (hasVectorStoreProbe) {
               progress.setLabel("Checking semantic vectors…");
@@ -306,8 +305,8 @@ export async function runMemoryStatus(
     if (!signal?.aborted) {
       throw error;
     }
-    return null;
   });
+  // Ctrl+C owns the exit; an interrupted check prints no partial status.
   if (!cfg || signal?.aborted) {
     return;
   }
