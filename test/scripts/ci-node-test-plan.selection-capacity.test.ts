@@ -7,6 +7,16 @@ import {
   createSelectedNodeTestShardBundles,
   type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { parseCompactSplitTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
+
+const preparedWorkspace = "src/node-host/node-worker-prepared-workspace.test.ts";
+const preparedCompanion = "src/cli/update-cli/update-repair-cancellation.test.ts";
+const planFiles = (
+  job: Pick<NodeTestShard, "includePatterns" | "groups"> & { targets?: string[] },
+) => [
+  ...(job.includePatterns ?? job.targets ?? []),
+  ...(job.groups ?? []).flatMap((group) => group.includePatterns ?? []),
+];
 
 it("retains canonical capacity and exact scope for a compact selection", () => {
   const targets = [
@@ -52,7 +62,7 @@ it("retains canonical capacity and exact scope for a compact selection", () => {
   }
 });
 
-it("maps final Boat plans without changing hybrid groups, packing, or timings", () => {
+it("maps unaffected Boat plans without changing hybrid groups, packing, or timings", () => {
   const compilerTargets = [
     "test/scripts/run-vitest-bounded.test.ts",
     "test/scripts/run-vitest-state-cleanup.test.ts",
@@ -101,12 +111,122 @@ it("maps final Boat plans without changing hybrid groups, packing, or timings", 
     };
     const hybrid = createNodeTestShardBundles({ ...options, runnerBackend: "hybrid" });
     const boat = createNodeTestShardBundles({ ...options, runnerBackend: "boat" });
-    expect(boat).toEqual(hybrid.map(expectedJob));
+    for (const original of hybrid.filter((job) => !planFiles(job).includes(preparedWorkspace))) {
+      expect(boat.find((job) => job.checkName === original.checkName)).toEqual(
+        expectedJob(original),
+      );
+    }
   }
   for (const plan of [createSelectedNodeTestShardBundles, createChangedNodeTestShards]) {
     const hybrid = expectDefined(plan(targets, { runnerBackend: "hybrid" }), "hybrid selection");
     const boat = expectDefined(plan(targets, { runnerBackend: "boat" }), "Boat selection");
     expect(boat).toEqual(hybrid.map(expectedJob));
+  }
+});
+
+it.each(["noncompact", "pull-request", "push", "selected", "changed"] as const)(
+  "isolates prepared workspace on hosted runners in the %s plan",
+  (mode) => {
+    const plan = (runnerBackend: string) =>
+      mode === "selected" || mode === "changed"
+        ? expectDefined(
+            (mode === "selected"
+              ? createSelectedNodeTestShardBundles
+              : createChangedNodeTestShards)([preparedWorkspace, preparedCompanion], {
+              runnerBackend,
+            }),
+            "prepared selection",
+          )
+        : createNodeTestShardBundles({
+            runnerBackend,
+            compactMode: mode === "noncompact" ? undefined : mode,
+            includeProofTests: false,
+            includeReleaseOnlyPluginShards: false,
+          });
+    const hybrid = plan("hybrid");
+    const original = expectDefined(
+      hybrid.find((job) => planFiles(job).includes(preparedWorkspace)),
+      "original owner",
+    );
+    const boat = plan("boat");
+    const hosted = expectDefined(
+      boat.find((job) => planFiles(job).includes(preparedWorkspace)),
+      "hosted owner",
+    );
+    const retained = expectDefined(
+      boat.find((job) => job.checkName === original.checkName),
+      "retained owner",
+    );
+    expect(boat.flatMap(planFiles).toSorted()).toEqual(hybrid.flatMap(planFiles).toSorted());
+    expect(planFiles(hosted)).toEqual([preparedWorkspace]);
+    expect(hosted.runner).toBe("ubuntu-24.04");
+    expect(hosted.cpuBudget).toBe(original.runner === "blacksmith-32vcpu-ubuntu-2404" ? 8 : 2);
+    expect(hosted.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
+    expect(hosted.planConcurrency).toBe(1);
+    expect(hosted.timeoutMinutes).toBe(original.timeoutMinutes);
+    expect(hosted.pretestBuildMode).toBe(original.pretestBuildMode);
+    expect(hosted.requiresDist).toBe(original.requiresDist);
+    expect(hosted.predictedSeconds).toBeUndefined();
+    expect(retained.predictedSeconds).toBe(original.predictedSeconds);
+    expect(retained.runner).toMatch(/^boat/u);
+    expect(
+      boat.some(
+        (job) => job.runner.startsWith("boat") && planFiles(job).includes(preparedCompanion),
+      ),
+    ).toBe(true);
+    const sourceGroup = original.groups?.find((group) =>
+      group.includePatterns?.includes(preparedWorkspace),
+    );
+    const source = sourceGroup ?? original;
+    const remaining =
+      retained.groups?.find((group) => group.shard_name === sourceGroup?.shard_name) ?? retained;
+    const extracted = hosted.groups?.[0] ?? hosted;
+    if (sourceGroup) {
+      expect(hosted.groups?.[0]?.configs).toEqual(sourceGroup.configs);
+    }
+    expect(extracted.timing_key).not.toBe(source.timing_key);
+    expect(parseCompactSplitTimingKey(extracted.timing_key!)).toMatchObject({
+      part: 2,
+      expectedParts: 2,
+    });
+    expect(parseCompactSplitTimingKey(remaining.timing_key!)).toMatchObject({
+      part: 1,
+      expectedParts: 2,
+    });
+    for (const group of original.groups ?? []) {
+      if (!group.includePatterns?.includes(preparedWorkspace)) {
+        expect(retained.groups).toContainEqual(group);
+      }
+    }
+  },
+);
+
+it("keeps the selected prepared workspace extraction within the existing job cap", () => {
+  const source = expectDefined(
+    createSelectedNodeTestShardBundles([preparedWorkspace, preparedCompanion], {
+      runnerBackend: "hybrid",
+    }),
+    "source owner",
+  );
+  const snapshot = JSON.stringify(source);
+  expect(() => routeBoatNodeTestJobs(source, source.length)).toThrow(/exceeds.*jobs/u);
+  expect(routeBoatNodeTestJobs(source, source.length + 1)).toHaveLength(source.length + 1);
+  expect(JSON.stringify(source)).toBe(snapshot);
+  for (const [inherited, expected] of [
+    ["1", "1"],
+    ["2", "2"],
+    ["8", "2"],
+  ] as const) {
+    const parents = source.map((job) =>
+      Object.assign({}, job, { env: { OPENCLAW_VITEST_MAX_WORKERS: inherited } }),
+    );
+    const rows = routeBoatNodeTestJobs(parents);
+    expect(
+      rows.find((job) => job.runner === "ubuntu-24.04")?.env?.OPENCLAW_VITEST_MAX_WORKERS,
+    ).toBe(expected);
+    expect(
+      rows.find((job) => job.runner.startsWith("boat"))?.env?.OPENCLAW_VITEST_MAX_WORKERS,
+    ).toBe(inherited);
   }
 });
 

@@ -1151,7 +1151,15 @@ export function createChangedNodeTestShards(
 ): ChangedNodeTestShard[] | null {
   if (options.runnerBackend === "boat") {
     const jobs = createChangedNodeTestShards(changedPaths, { ...options, runnerBackend: "hybrid" });
-    return jobs && routeBoatNodeTestJobs(jobs);
+    return (
+      jobs &&
+      routeBoatNodeTestJobs(
+        jobs,
+        options.compactNodeJobCap === undefined
+          ? undefined
+          : options.compactNodeJobCap + jobs.filter((job) => job.requiresDist).length,
+      )
+    );
   }
   const cwd = options.cwd ?? process.cwd();
   const fallback = (reason: string) => {

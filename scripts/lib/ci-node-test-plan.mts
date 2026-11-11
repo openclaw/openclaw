@@ -3149,8 +3149,17 @@ export function createNodeTestShardBundles(
   options: NodeTestPlanOptions = {},
 ): NodeTestShard[] | CompactNodeTestShard[] {
   if (options.runnerBackend === "boat") {
+    const jobs = createNodeTestShardBundles({ ...options, runnerBackend: "hybrid" });
+    const compact = options.compactMode !== undefined || options.compact === true;
     return routeBoatNodeTestJobs(
-      createNodeTestShardBundles({ ...options, runnerBackend: "hybrid" }),
+      jobs,
+      compact
+        ? Math.min(
+            COMPACT_NODE_TEST_JOB_CAP,
+            (options.compactNodeJobCap ?? COMPACT_NODE_TEST_JOB_CAP) +
+              jobs.filter((job) => job.requiresDist).length,
+          )
+        : undefined,
     );
   }
   const compactMode =
@@ -4221,7 +4230,7 @@ export function createSelectedNodeTestShardBundles(
       ...options,
       runnerBackend: "hybrid",
     });
-    return selected && routeBoatNodeTestJobs(selected);
+    return selected && routeBoatNodeTestJobs(selected, COMPACT_NODE_TEST_JOB_CAP);
   }
   if (options.runnerBackend === "runson") {
     const selected = createSelectedNodeTestShardBundles(targets, {

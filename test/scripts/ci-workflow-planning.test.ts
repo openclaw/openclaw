@@ -25,6 +25,7 @@ import {
   writeGitHubOutput,
 } from "../../scripts/ci-changed-scope.mjs";
 import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
+import { routeBoatNodeTestJobs } from "../../scripts/lib/ci-node-test-capacity.mts";
 import {
   decodeNodeTestGroups,
   encodeNodeTestGroups,
@@ -6024,6 +6025,99 @@ describe("ci workflow guards", () => {
     ).toMatchObject(
       selected.flatMap((shard) => shard.groups.map(({ includePatterns }) => ({ includePatterns }))),
     );
+  });
+
+  it("keeps prepared workspace hosted through packing and release-group routing", () => {
+    const workspace = "src/node-host/node-worker-prepared-workspace.test.ts";
+    const targets = [
+      "src/gateway/server-methods/models-list.membership.integration.test.ts",
+      "src/gateway/server-methods/models-dispatch.catalog.integration.test.ts",
+      "src/gateway/server-methods/models-list.native-lifecycle.integration.test.ts",
+      "src/gateway/client-callsites.guard.test.ts",
+      "src/auto-reply/reply/reply-turn-admission.module-identity.test.ts",
+      "src/cli/update-cli/update-repair-cancellation.test.ts",
+      workspace,
+      "src/cli/update-cli.package-lifecycle.test.ts",
+      "src/infra/kysely-sync.test.ts",
+      "src/infra/sqlite-capabilities.test.ts",
+    ];
+    const original = expectDefined(
+      createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
+      "selected original eight-group workload",
+    );
+    expect(original.flatMap((job) => job.groups)).toHaveLength(8);
+    const routed = routeBoatNodeTestJobs(original);
+    const retained = routed
+      .filter((job) => job.runner.startsWith("boat"))
+      .flatMap((job) => job.groups);
+    for (const group of original.flatMap((job) => job.groups)) {
+      if (!group.includePatterns?.includes(workspace)) {
+        expect(retained).toContainEqual(group);
+      }
+    }
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      eventName: "push",
+      runnerBackend: "hybrid",
+      nodeRunnerBackend: "hybrid",
+      nodeTestShards: routed,
+      scopeEnv: { OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND: "boat" },
+    });
+    expect(result.status, result.output).toBe(0);
+    const rows = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include;
+    const hosted = expectDefined(
+      rows.find((row: { runner: string }) => row.runner === "ubuntu-24.04"),
+      "hosted matrix row",
+    );
+    const files = (row: { groups_gzip_base64: string }) =>
+      resolveSelectedUiIncludes(row.groups_gzip_base64).flat();
+    expect(files(hosted)).toEqual([workspace]);
+    expect([undefined, hosted.runner]).toContain(hosted.runner_label);
+    expect(hosted).toMatchObject({
+      runner: "ubuntu-24.04",
+      cpu_budget: 8,
+      plan_concurrency: 1,
+    });
+    expect(rows.flatMap(files).toSorted()).toEqual(targets.toSorted());
+    const memoryOwner = expectDefined(
+      original.find((row) =>
+        row.groups.some((group) => group.minTotalMemoryBytes === 28 * 1024 ** 3),
+      ),
+      "memory owner",
+    );
+    const memoryRow = expectDefined(
+      rows.find((row: { check_name: string }) => row.check_name === memoryOwner.checkName),
+      "retained memory row",
+    );
+    expect(memoryRow.runner).toBe("boat-xlarge");
+    expect(decodeNodeTestGroups(memoryRow.groups_gzip_base64)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ minTotalMemoryBytes: 28 * 1024 ** 3 })]),
+    );
+    const job = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
+    for (const runAttempt of [1, 2]) {
+      for (const releaseRunnerGroup of ["", "fixture-group"]) {
+        const context = {
+          eventName: "workflow_dispatch" as const,
+          repository: "openclaw/openclaw",
+          dispatchId: "full-release-validation-fixture",
+          releaseRunnerGroup,
+          runAttempt,
+          preflightOutputs: { effective_runner_backend: "boat", ci_qualification: "true" },
+          matrix: hosted,
+        };
+        expect(evaluateWorkflowExpression(job["runs-on"], context)).toBe("ubuntu-24.04");
+        const legacy = {
+          ...context,
+          preflightOutputs: { effective_runner_backend: "hybrid", ci_qualification: "true" },
+        };
+        expect(evaluateWorkflowExpression(job["runs-on"], legacy)).toEqual(
+          releaseRunnerGroup
+            ? { group: releaseRunnerGroup, labels: "ubuntu-24.04" }
+            : "ubuntu-24.04",
+        );
+      }
+    }
   });
 
   it("keeps the Boat failure reporter hosted when preflight emits no backend outputs", () => {

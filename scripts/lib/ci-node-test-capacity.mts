@@ -1,4 +1,8 @@
 import type { CompactNodeTestShard, NodeTestShard } from "./ci-node-test-plan.mts";
+import {
+  createCompactSplitTimingGeneration,
+  parseCompactSplitTimingKey,
+} from "./vitest-shard-metadata.mts";
 
 export const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 export const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
@@ -150,11 +154,41 @@ export function resolveBoatNodeTestCapacity(
   return capacity;
 }
 
+const BOAT_HOSTED_PREPARED_WORKSPACE = "src/node-host/node-worker-prepared-workspace.test.ts";
+
+function splitBoatHostedWorkspace<
+  T extends Pick<NodeTestShard, "configs" | "includePatterns" | "env" | "timing_key"> & {
+    targets?: string[];
+  },
+>(plan: T, shardName: string): { retained?: T; hosted: T } | undefined {
+  const files = plan.includePatterns ?? plan.targets;
+  const field = plan.includePatterns ? "includePatterns" : "targets";
+  if (!files?.includes(BOAT_HOSTED_PREPARED_WORKSPACE)) {
+    return undefined;
+  }
+  const retained = files.filter((file) => file !== BOAT_HOSTED_PREPARED_WORKSPACE);
+  if (retained.length === 0) {
+    return { hosted: plan };
+  }
+  const hosted = [BOAT_HOSTED_PREPARED_WORKSPACE];
+  const { timingKeys } = createCompactSplitTimingGeneration({
+    configs: plan.configs,
+    env: plan.env,
+    parentShardName:
+      parseCompactSplitTimingKey(plan.timing_key ?? "")?.parentShardName ?? shardName,
+    stripes: [retained, hosted],
+  });
+  return {
+    retained: { ...plan, [field]: retained, timing_key: timingKeys[0]! },
+    hosted: { ...plan, [field]: hosted, timing_key: timingKeys[1]! },
+  };
+}
+
 // Map only final jobs: group runners remain logical placement/timing identities.
 export function routeBoatNodeTestJobs<
-  T extends Pick<NodeTestShard, "runner" | "checkName" | "groups" | "includePatterns">,
->(jobs: T[]): T[] {
-  return jobs.map((job) => {
+  T extends Omit<NodeTestShard, "configs"> & { configs?: string[]; targets?: string[] },
+>(jobs: T[], jobCap?: number): T[] {
+  const routed = jobs.flatMap((job): T[] => {
     const capacity = resolveBoatNodeTestCapacity(
       job.runner,
       job.checkName,
@@ -164,6 +198,47 @@ export function routeBoatNodeTestJobs<
         ...(job.groups ?? []).flatMap((group) => group.includePatterns ?? []),
       ],
     );
-    return capacity ? { ...job, ...capacity } : job;
+    const physical = capacity ? { ...job, ...capacity } : job;
+    const hosted = (subset: T): T => ({
+      ...subset,
+      checkName: `${job.checkName}-prepared-workspace-hosted`,
+      shardName: `${job.shardName}-prepared-workspace-hosted`,
+      runner: "ubuntu-24.04",
+      planConcurrency: 1,
+      env: {
+        ...job.env,
+        OPENCLAW_VITEST_MAX_WORKERS: String(
+          Math.min(2, Number(job.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 2)),
+        ),
+      },
+      // No measured cost exists for the extracted hosted allocation. Retained
+      // Boat rows keep their conservative parent estimate, as RunsOn extraction does.
+      predictedSeconds: undefined,
+      predictedTestSeconds: undefined,
+    });
+    if (job.groups) {
+      const hostedGroups: NonNullable<T["groups"]> = [];
+      const retained = job.groups.flatMap((group) => {
+        const split = splitBoatHostedWorkspace(group, group.shard_name);
+        if (!split) {
+          return [group];
+        }
+        hostedGroups.push(split.hosted);
+        return split.retained ? [split.retained] : [];
+      });
+      return hostedGroups.length === 0
+        ? [physical]
+        : [
+            ...(retained.length ? [{ ...physical, groups: retained }] : []),
+            hosted({ ...physical, groups: hostedGroups }),
+          ];
+    }
+    const split =
+      job.configs && splitBoatHostedWorkspace({ ...physical, configs: job.configs }, job.shardName);
+    return split ? [...(split.retained ? [split.retained] : []), hosted(split.hosted)] : [physical];
   });
+  if (jobCap !== undefined && routed.length > jobCap) {
+    throw new Error(`Boat node test plan exceeds ${jobCap} jobs (${routed.length} planned)`);
+  }
+  return routed;
 }

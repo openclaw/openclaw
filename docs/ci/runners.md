@@ -494,9 +494,15 @@ inherited read/search capability so ordinary Unix permission checks apply.
 Android uses `boat-large`; its compact and main-PR test profiles retain their
 logical two-CPU budget. Full core lint uses five separate stripes with a 25-minute
 job timeout on the first Boat attempt, including setup. Other backends and hosted
-retries retain 15 minutes. Node packing, groups, timing identities, explicit
-workers, heaps, native providers, and release runner groups are unchanged. The
+retries retain 15 minutes. Aside from the prepared-workspace exception below,
+Node packing, groups, timing identities, explicit workers, heaps, native providers,
+and release runner groups are unchanged. The
 build retains its 35-minute Boat budget.
+
+The prepared-workspace startup test runs in its own GitHub-hosted `ubuntu-24.04`
+row in Boat mode. Other files retain their Boat placement. The hosted row bypasses
+release runner groups and keeps its two-worker limit, preparation, and original
+job deadline; the test's 30-second child limit is unchanged.
 
 Boat uses store-only dependency setup. Scheduled cache warmers stay on hosted
 Ubuntu and retain the existing hosted namespace; a cache miss is valid. The
