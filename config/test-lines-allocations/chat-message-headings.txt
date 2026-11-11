@@ -1,0 +1,3 @@
+# Sender-heading order, streaming identity, continuation suppression, and virtual-window navigation.
+# 187 lines of renderer boundary coverage plus 4 native transcript invalidation assertions.
+191
