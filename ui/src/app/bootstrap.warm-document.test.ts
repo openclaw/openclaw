@@ -98,8 +98,8 @@ function reject(opts: GatewayBrowserClientOptions, message: string) {
 
 it.each([false, true])("handles peer boot retirement with Loader transport=%s", (loader) => {
   const root = document.documentElement;
-  const attributes = ["data-openclaw-id-enabled", "data-openclaw-control-ui-base-path"];
-  const previous = attributes.map((name) => root.getAttribute(name));
+  const attributes = ["data-openclaw-id-enabled", "data-openclaw-control-ui-base-path"] as const;
+  const previous = attributes.map((name) => ({ name, value: root.getAttribute(name) }));
   root.setAttribute(attributes[0], "true");
   root.setAttribute(attributes[1], "");
   if (loader) {
@@ -123,8 +123,7 @@ it.each([false, true])("handles peer boot retirement with Loader transport=%s", 
       expect(runtime.context.gateway.snapshot.phase).toBe("connected");
     }
   } finally {
-    attributes.forEach((name, index) => {
-      const value = previous[index];
+    previous.forEach(({ name, value }) => {
       if (value === null) {
         root.removeAttribute(name);
       } else {
