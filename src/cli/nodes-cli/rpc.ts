@@ -121,7 +121,7 @@ export const callNodesGatewayCli = async (
   const invokeTimeoutMs =
     method === "node.invoke" && isRecord(params) ? params.timeoutMs : undefined;
   const useLocalBackendSharedAuth = callOpts?.useLocalBackendSharedAuth === true;
-  return await callGatewayFromCliWithTransport(method, opts, params, {
+  const result = await callGatewayFromCliWithTransport(method, opts, params, {
     label: `Nodes ${method}`,
     timeoutMs: resolveNodesTransportTimeoutMs(opts, invokeTimeoutMs),
     scopes: callOpts?.scopes,
@@ -135,6 +135,9 @@ export const callNodesGatewayCli = async (
     sharedStateMode: "read-only",
     signal: callOpts?.signal,
   });
+  // A reply can settle while the interrupted client closes; Ctrl+C still owns the output.
+  callOpts?.signal?.throwIfAborted();
+  return result;
 };
 
 /** Read node diagnostics with pairing details when authorized; Ctrl+C stops the read. */
