@@ -23,12 +23,12 @@ describe("getSanitizedManagedImageAttachmentError", () => {
     expect(sanitized.cause).toBe(error);
   });
 
-  it("keeps the generic reason for errors that could reveal a filesystem path", () => {
+  it("keeps a sanitized message while preserving the path-bearing reason as the cause", () => {
     const error = new Error(
       "Local media path is not under an allowed directory: C:\\Users\\me\\workspace\\voice.ogg",
     );
     const sanitized = getSanitizedManagedImageAttachmentError(error, "voice.ogg", "audio");
     expect(sanitized.message).toBe('Managed audio attachment "voice.ogg" could not be prepared');
-    expect(sanitized.cause).toBeUndefined();
+    expect(sanitized.cause).toBe(error);
   });
 });

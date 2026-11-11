@@ -224,15 +224,42 @@ async function buildResultDisplayContent(params: {
 
 // Delivery confirmed the media, so a later transcript-embedding failure must not record a
 // delivery failure in the destination conversation; retain the delivered name instead.
-function retainDeliveredMediaReferences(
+// Only a false `delivery-failed` outcome is corrected; independently meaningful preparation
+// outcomes such as `unsupported-format` keep their recovery guidance. The name stays visible
+// through the display text block, which the UI consumer renders even when it drops a
+// reference attachment that has no URL.
+export function retainDeliveredMediaReferences(
   blocks: readonly Record<string, unknown>[],
 ): Record<string, unknown>[] {
-  return blocks.map((block) => {
-    if (block.type !== "attachment_error" || !isRecord(block.attachment)) {
+  const referenceNames: string[] = [];
+  const retained = blocks.map((block) => {
+    if (
+      block.type !== "attachment_error" ||
+      !isRecord(block.attachment) ||
+      block.attachment.code !== "delivery-failed"
+    ) {
       return block;
     }
     const reference = { ...block.attachment };
     delete reference.code;
+    if (typeof reference.label === "string" && reference.label.trim().length > 0) {
+      referenceNames.push(reference.label);
+    }
     return { type: "attachment", attachment: reference };
   });
+  if (referenceNames.length === 0) {
+    return retained;
+  }
+  const referenceText = referenceNames.join(", ");
+  const textIndex = retained.findIndex(
+    (block) => isRecord(block) && block.type === "text" && typeof block.text === "string",
+  );
+  if (textIndex === -1) {
+    return [{ type: "text", text: referenceText }, ...retained];
+  }
+  return retained.map((block, index) =>
+    index === textIndex && isRecord(block) && typeof block.text === "string"
+      ? { ...block, text: block.text.length ? `${block.text}\n${referenceText}` : referenceText }
+      : block,
+  );
 }

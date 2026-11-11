@@ -6,10 +6,10 @@ export function createManagedImageAttachmentError(message: string) {
   return error;
 }
 
-// Absolute paths in an error message can reveal the host filesystem layout; only preserve
-// the underlying preparation reason as the sanitized error's cause when it is safe to log.
-const PRIVATE_PATH_RE = /(?:[A-Za-z]:[\\/]|(?:^|[\s'"`(=:,])(?:~|[\\/]{1,2})(?![\\/]))/u;
-
+// The sanitized error keeps an actionable, path-free message for strict callers and display.
+// The original preparation error is always preserved as its cause so the logging owner can
+// surface the underlying reason (including path-bearing refusals); logs are written raw and
+// redacted at egress.
 export function getSanitizedManagedImageAttachmentError(
   error: unknown,
   label: string,
@@ -26,7 +26,7 @@ export function getSanitizedManagedImageAttachmentError(
   const sanitized = createManagedImageAttachmentError(
     `Managed ${kind} attachment ${JSON.stringify(label)} could not be prepared`,
   );
-  if (error instanceof Error && !PRIVATE_PATH_RE.test(error.message)) {
+  if (error instanceof Error) {
     sanitized.cause = error;
   }
   return sanitized;

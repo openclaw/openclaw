@@ -26,3 +26,15 @@ it.each(["paste", "file", undefined, "unknown"])(
     ]);
   },
 );
+
+it("keeps a delivered media name in text when a reference attachment has no URL", () => {
+  const result = normalizeMessage({
+    role: "assistant",
+    content: [
+      { type: "text", text: "Voice note\nGenerated audio 1" },
+      { type: "attachment", attachment: { kind: "audio", label: "Generated audio 1" } },
+    ],
+  });
+  // The delivered-name text block survives; the URL-less reference attachment is dropped.
+  expect(result.content).toEqual([{ type: "text", text: "Voice note\nGenerated audio 1" }]);
+});
