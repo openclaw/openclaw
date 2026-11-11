@@ -1,7 +1,21 @@
 // One real connected client; optional config reloads precede the idle window.
+// --fs-census records per-thread filesystem API calls, stream creation/read sizes,
+// and worker births (including retired nested workers). API calls are not native
+// syscall totals; readFile/open can overlap and SQLite bypasses these wrappers.
+// --compile-cache enables the launcher's worker cache and native read diagnostics.
+// Keep both counting options separate from uninstrumented CPU/latency acceptance.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -46,6 +60,8 @@ const { values } = parseArgs({
     "start-at": { type: "string" },
     port: { type: "string", default: "41563" },
     timers: { type: "boolean", default: false },
+    "fs-census": { type: "boolean", default: false },
+    "compile-cache": { type: "boolean", default: false },
     profile: { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     subscribe: { type: "boolean", default: false },
@@ -78,6 +94,7 @@ if (sqlOutput) {
   sqlPhase("boot");
 }
 const output = path.resolve(values.output);
+const instrumented = values.timers || values["fs-census"];
 const integer = (raw: string, label: string, min: number) =>
   parseStrictIntegerOption({ raw, label, min, fallback: min });
 const minutes = integer(values.minutes, "--minutes", 1);
@@ -108,6 +125,10 @@ const config: OpenClawConfig = state
   : { ...BASE_GATEWAY_BENCH_CONFIG };
 mkdirSync(output); // Never overwrite artifacts from an earlier run.
 mkdirSync(path.join(output, "tmp"));
+const censusDirectory = values["fs-census"] ? path.join(output, "fs-census") : undefined;
+if (censusDirectory) {
+  mkdirSync(censusDirectory);
+}
 const configPath = path.join(output, "openclaw.json");
 const origin = "https://idle-measure.example";
 writeFileSync(
@@ -150,9 +171,19 @@ const env = createGatewayBenchEnv(path.join(state ?? output, "home"), configPath
     OPENCLAW_SYSTEMD_UNIT: `openclaw-idle-measure-${port}`,
     OPENCLAW_IDLE_MEASURE_CHANNEL: channel,
     OPENCLAW_IDLE_MEASURE_TIMERS: values.timers ? "1" : "0",
+    ...(censusDirectory ? { OPENCLAW_IDLE_MEASURE_FS_CENSUS: censusDirectory } : {}),
     OPENCLAW_IDLE_MEASURE_WATCHER_FAILURE: values["watcher-failure"] ? "1" : "0",
     OPENCLAW_BENCH_TRACE_GC: traceGc ? "1" : "0",
-    NODE_DISABLE_COMPILE_CACHE: "1",
+    ...(values["compile-cache"]
+      ? {
+          NODE_COMPILE_CACHE: path.join(output, "compile-cache"),
+          NODE_DEBUG_NATIVE: "COMPILE_CACHE",
+          // Enter the launcher's post-respawn state: cache worker isolates while
+          // preserving this fixture's IPC descriptor and uncached main thread.
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "gateway",
+        }
+      : { NODE_DISABLE_COMPILE_CACHE: "1" }),
   },
 });
 const args = [
@@ -161,7 +192,7 @@ const args = [
   path.resolve("scripts/tsx.mjs"),
   "--import",
   path.resolve("scripts/lib/gateway-bench-profile-preload.ts"),
-  ...(values.timers || values["watcher-failure"]
+  ...(instrumented || values["watcher-failure"]
     ? ["--import", path.resolve("scripts/perf/idle-gateway-measure-preload.mjs")]
     : []),
   path.resolve(values.entry),
@@ -236,6 +267,12 @@ async function sample() {
     load: loadavg(),
     processTreeCpuMs: readProcessTreeCpuMs(child!.pid),
     rows,
+    // Files retain final snapshots from workers that exited between samples.
+    fsCensus: censusDirectory
+      ? readdirSync(censusDirectory)
+          .filter((name) => name.endsWith(".json"))
+          .map((name) => JSON.parse(readFileSync(path.join(censusDirectory, name), "utf8")))
+      : undefined,
   };
   samples.push(value);
   writeFileSync(path.join(output, "samples.json"), JSON.stringify(samples, null, 2));
@@ -414,7 +451,7 @@ try {
     }
     await wait(startAt - Date.now());
   }
-  if (values.timers) {
+  if (instrumented) {
     child.send({ channel, action: "enable" });
     await sample();
   }
@@ -435,6 +472,7 @@ try {
       : await startGatewayDiagnostics(child, diagnosticsId);
   const cpuBefore = await readGatewayCpuUsage(child);
   const start = Date.now();
+  const compileLogStart = values["compile-cache"] ? statSync(logPath).size : 0;
   console.log(JSON.stringify({ ready: true, pid: child.pid, start, minutes, output }));
   for (let minute = 1; minute <= minutes; minute++) {
     sqlPhase(`steady-${minute}`);
@@ -443,10 +481,11 @@ try {
       throw failure;
     }
     console.log(
-      JSON.stringify({ minute, load: loadavg(), ...(values.timers ? await sample() : {}) }),
+      JSON.stringify({ minute, load: loadavg(), ...(instrumented ? await sample() : {}) }),
     );
   }
   const endedAt = Date.now();
+  const compileLogEnd = values["compile-cache"] ? statSync(logPath).size : 0;
   const cpuAfter = await readGatewayCpuUsage(child);
   if (values.allocations) {
     await controlGatewayProfile(child, "heap", "stop", heapProfilePath);
@@ -494,6 +533,21 @@ try {
         endedAtEpochMs: endedAt,
         durationMs: endedAt - start,
         timers: values.timers,
+        fsCensus: values["fs-census"],
+        // Native compile-cache reads bypass JS filesystem wrappers. This diagnostic
+        // count covers the measured log byte range and excludes boot/shutdown.
+        compileCache: values["compile-cache"]
+          ? {
+              reads: (
+                readFileSync(logPath)
+                  .subarray(compileLogStart, compileLogEnd)
+                  .toString()
+                  .match(/\[compile cache\] reading cache from /g) ?? []
+              ).length,
+              logStart: compileLogStart,
+              logEnd: compileLogEnd,
+            }
+          : undefined,
         cpu: { ...measureGatewayCpuUsage(cpuBefore, cpuAfter), before: cpuBefore, after: cpuAfter },
         diagnostics,
         promotion,
