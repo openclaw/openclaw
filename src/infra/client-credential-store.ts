@@ -257,6 +257,7 @@ function* openClientCredentialCustodySteps(
     };
     const cached = admittedFiles.get(custodyKey);
     let initialized = false;
+    let uncommittedBootstrap = false;
     let needsMetadataUpgrade = false;
     yield {
       database,
@@ -276,6 +277,11 @@ function* openClientCredentialCustodySteps(
               version === 0 &&
               !database.prepare("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").get() // sqlite-allow-raw -- Bootstrap only an empty native catalog.
             ) {
+              if (!createIfMissing && !options.migration) {
+                // A creator stopped before its schema committed; readers see no store yet.
+                uncommittedBootstrap = true;
+                return;
+              }
               if (!createIfMissing) {
                 throw new Error("Client credential store is empty; run openclaw doctor --fix.");
               }
@@ -312,6 +318,12 @@ function* openClientCredentialCustodySteps(
           }
         }),
     };
+    if (uncommittedBootstrap) {
+      physicalClose();
+      // Same admission as a missing file: pending legacy sources still require Doctor.
+      assertMissingClientCredentialStoreReady(env);
+      return undefined;
+    }
     // First-use schema creation survives cancellation of the caller's row write.
     if (initialized && execute) {
       yield {
