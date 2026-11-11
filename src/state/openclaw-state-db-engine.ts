@@ -11,6 +11,7 @@ import {
   postgresIndexOrderingMigration,
   withLegacyPostgresIndexOrdering,
 } from "../infra/database-engine/postgres-index-ordering.js";
+import { missingPostgresAdditiveColumns } from "../infra/database-engine/postgres-schema.js";
 import { isPostgresSqlConnection, type PostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   invalidateLocalSqliteSchemaAdmissions,
@@ -100,13 +101,24 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
       fragment.tables.some((table) => tables.has(table)) ? [] : fragment.tables,
     ),
   );
+  // Inspection retains a predecessor without the additive columns its seal already proved.
+  const predecessorColumns = missingPostgresAdditiveColumns(statePostgresSchema, facts.catalog);
   // Older inspection schemas are checked against their migration's exact source DDL.
   if (facts.version === OPENCLAW_STATE_SCHEMA_VERSION) {
     assertPostgresCatalog(
       facts.catalog.filter(
         (fact) => !fact.kind.endsWith("Definition") && fact.table !== "openclaw_schema_meta",
       ),
-      runtime.expectedCatalog.filter((fact) => !absent.has(fact.table)),
+      runtime.expectedCatalog.filter(
+        (fact) =>
+          !absent.has(fact.table) &&
+          !predecessorColumns.some(
+            ({ table, column }) =>
+              fact.kind === "column" &&
+              fact.table === table &&
+              (fact.value as { name?: unknown }).name === column,
+          ),
+      ),
     );
   }
   if (fresh) {
@@ -145,6 +157,8 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
 
 const statePostgresSchema = {
   postgres: runtime.eagerSql,
+  // #196392 added this first-use SQLite column to schema 39's eager PostgreSQL DDL.
+  postgresAdditiveColumns: [{ table: "workspace_setup_state", column: "bootstrap_deferred" }],
   postgresFragments: runtime.fragments.map((fragment): PostgresSchemaFragment => {
     const { activation } = fragment;
     if (activation !== "first-use" && activation !== "version-additive") {

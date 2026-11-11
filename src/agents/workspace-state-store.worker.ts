@@ -3,6 +3,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
@@ -103,7 +104,10 @@ export function mergeWorkspaceSetupStateInDatabase(
   if (next.setupCompletedAt) {
     assertCanonicalTimestamp(next.setupCompletedAt, "setup completed");
   }
-  ensureColumn(database.db, "workspace_setup_state", "bootstrap_deferred INTEGER");
+  // PostgreSQL admission owns this column with its generated bigint definition.
+  if (!isPostgresSqlConnection(database.db)) {
+    ensureColumn(database.db, "workspace_setup_state", "bootstrap_deferred INTEGER");
+  }
   const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
   const identity = resolution.identity;
   const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });

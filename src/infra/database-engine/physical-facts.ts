@@ -84,7 +84,7 @@ export function admitPostgresPhysicalFacts(params: {
   } catch (error) {
     throw new Error(`Cannot read PostgreSQL catalog or metadata. ${recovery}`, { cause: error });
   }
-  const { metadata: row, catalog } = snapshot;
+  const { metadata: row } = snapshot;
   if (row.version !== params.version || row.store_id !== params.storeId) {
     throw new Error(`PostgreSQL metadata identity or version mismatch. ${recovery}`);
   }
@@ -94,17 +94,18 @@ export function admitPostgresPhysicalFacts(params: {
     if (params.recordSchema) {
       schemaHash = recordPostgresSchema(params.db, params.namespace, schema, snapshot);
     } else {
-      schemaHash = verifyPostgresSchema(
+      ({ schemaHash, snapshot } = verifyPostgresSchema(
         params.db,
         params.namespace,
         schema,
         snapshot,
         params.preserveSchemaSeal,
         params.requireSealedSchema,
-      );
+      ));
     }
     retainPostgresSchema(params.db, schema);
   }
+  const { catalog } = snapshot;
   const facts: PostgresPhysicalFacts = {
     engine: "postgres",
     admissionId: randomUUID(),

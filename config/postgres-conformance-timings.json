@@ -736,6 +736,10 @@
       "group": "infra",
       "seconds": 38.461
     },
+    "src/state/openclaw-state-db-bootstrap-deferral.postgres.test.ts": {
+      "group": "infra",
+      "seconds": 6.5
+    },
     "src/state/openclaw-state-db.postgres.test.ts": {
       "group": "infra",
       "seconds": 162.151

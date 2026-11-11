@@ -227,7 +227,11 @@ all incompatibilities without modifying the source files.
 Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
 
 Template setup adds a bare nullable `workspace_setup_state.bootstrap_deferred INTEGER`
-column through the startup-additive owner. A value of `1` keeps package bootstrap
+column through the startup-additive owner. On PostgreSQL the column is part of the
+generated schema-39 DDL as `bigint`. A schema-39 store sealed before the column existed
+is verified against that exact predecessor DDL, gains the column, and is resealed in the
+same writable admission transaction. Inspection and update preflight accept either exact
+shape without writing; any other difference is still refused as drift. A value of `1` keeps package bootstrap
 seeding with the initializer across restarts and failed dependency setup; normal
 workspace preparation does not seed defaults or mark setup complete. Successful
 package seeding clears the flag. Existing milestones and attestation hashes are
