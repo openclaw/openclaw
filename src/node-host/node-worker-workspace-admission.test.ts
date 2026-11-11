@@ -59,6 +59,8 @@ it.skipIf(process.platform === "win32")(
 
 async function runAdmissionProcess(policy: string | undefined, body = "", beforeAdmission = "") {
   const env = { ...process.env };
+  // Keep test logs outside the intentionally unsafe temp roots.
+  env.OPENCLAW_TEST_FILE_LOG = "1";
   delete env.OPENCLAW_NODE_TRUSTED_WRITABLE_ANCESTORS;
   if (policy !== undefined) {
     env.OPENCLAW_NODE_TRUSTED_WRITABLE_ANCESTORS = policy;
