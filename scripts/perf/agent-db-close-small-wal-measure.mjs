@@ -21,6 +21,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { transformSync } from "esbuild";
+import { install, labels } from "./agent-db-close-small-wal-trace.mjs";
 const { values } = parseArgs({
   options: {
     root: { type: "string" },
@@ -47,7 +48,6 @@ const sourceUrl = (p) => pathToFileURL(path.resolve(p)).href;
 const traceBuffer = new SharedArrayBuffer((2 + 2048 * 6) * 4);
 const traceView = new Int32Array(traceBuffer);
 const preload = sourceUrl("scripts/perf/agent-db-close-small-wal-trace.mjs");
-const { install, labels } = await import(preload);
 install(traceBuffer, root);
 Object.assign(globalThis, {
   __agentCloseMeasureTrace: traceBuffer,
