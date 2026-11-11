@@ -2200,7 +2200,10 @@ describe("release validation no-push transport", () => {
     expect(Object.keys(workflow.on?.workflow_dispatch?.inputs ?? {})).toHaveLength(25);
     expect(workflow.on?.workflow_dispatch?.inputs?.wait_for_clawhub).toBeDefined();
     const validate = step(job(workflow, "resolve_release_target"), "Validate inputs");
-    const projection = validate.run!.split('RELEASE_EVIDENCE_MODE="')[0];
+    const projection = validate.run?.split('RELEASE_EVIDENCE_MODE="')[0];
+    if (!projection) {
+      throw new Error("Missing release input projection");
+    }
     expect(projection).toContain("prepared_plugins=%s");
     const descriptors = {
       npm: { artifact: "original-npm" },
