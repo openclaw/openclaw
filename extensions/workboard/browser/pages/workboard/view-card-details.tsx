@@ -477,6 +477,11 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
                                           : "workboard.detailOpenManually",
                                       )}
                                     </span>
+                                    {mode() === "manual" &&
+                                    (card().status === "scheduled" ||
+                                      card().metadata?.automation?.scheduledAt !== undefined) ? (
+                                      <p>{t("workboard.manualOpenClearsSchedule")}</p>
+                                    ) : undefined}
                                     <div class="workboard-detail__actions">
                                       <For
                                         each={["codex", "claude"] as const}

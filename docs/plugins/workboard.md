@@ -402,6 +402,12 @@ Unlinked cards without an active or unresolved task association can start work d
   Opening it clears any schedule and moves a `scheduled` card to `todo`.
   Other cards keep their status.
 
+A card scheduled without a date cannot run automatically until its date or status
+is changed. A future schedule prevents an automatic start until it is due. The
+card shows the reason, while an existing session remains available through
+**Open session**. Manual opening is a separate explicit action and displays its
+schedule-clearing effect before it is selected.
+
 Autonomous starts use the Gateway's task-tracked agent run path (default agent
 and model unless Claude/OpenAI is chosen explicitly). Workboard then links the
 resulting run id and session key back onto the card. Each linked

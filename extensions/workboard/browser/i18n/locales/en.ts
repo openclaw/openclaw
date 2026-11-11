@@ -210,6 +210,14 @@ export default {
     detailOpenManually: "Open a session manually",
     detailNoSessionYet: "No session yet",
     defaultAgentBadge: "Default",
+    manualOpenClearsSchedule:
+      "Opening a manual session clears the schedule and moves scheduled cards to To do.",
+    startBlockMissingSchedule:
+      "This card is scheduled without a date. Set a date or change its status before starting.",
+    startBlockFutureSchedule:
+      "This card is scheduled for a future time. Change its schedule before starting early.",
+    startBlockLinked:
+      "Open the existing session to continue, or clear its link in Edit to start another.",
     detailStartSessionHelp: "Start {agent} to work on this card.",
     detailTechnical: "Technical details",
     detailRun: "Run",

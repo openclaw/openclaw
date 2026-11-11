@@ -143,3 +143,30 @@ it("updates and clears a card session target when only its resolution changes", 
   expect(buttonByLabel(openCardMenu(row), "Open session")).toBeNull();
   expect(view.state.cards[0]).toBe(card);
 });
+
+it.each([
+  [{ status: "scheduled" as const }, "without a date"],
+  [
+    {
+      status: "scheduled" as const,
+      metadata: { automation: { scheduledAt: Date.now() + 60_000 } },
+    },
+    "future time",
+  ],
+])(
+  "shows why automatic start is unavailable and keeps manual open explicit",
+  (overrides, reason) => {
+    const { container } = renderDetails(createWorkboardCard(overrides));
+    const automatic = expectDefined(
+      container.querySelector<HTMLButtonElement>(".workboard-card__start--autonomous"),
+    );
+    expect(automatic.disabled).toBe(true);
+    expect(automatic.title).toContain(reason);
+    expect(container.textContent).toContain(reason);
+    expect(container.textContent).toContain("Opening a manual session clears the schedule");
+    expect(
+      expectDefined(container.querySelector<HTMLButtonElement>(".workboard-card__start--manual"))
+        .disabled,
+    ).toBe(false);
+  },
+);

@@ -1,7 +1,7 @@
 /** @jsxImportSource @solidjs/web */
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
 import {
@@ -12,6 +12,7 @@ import {
 import {
   canStartWorkboardCard,
   startWorkboardCard,
+  workboardStartBlockReason,
   stopWorkboardCard,
 } from "../../lib/workboard/execution.ts";
 import { findWorkboardSession } from "../../lib/workboard/lifecycle.ts";
@@ -304,6 +305,22 @@ export function OpenSessionCardAction(input: {
     </Show>
   );
 }
+export function useWorkboardStartBlock(
+  card: () => WorkboardCard,
+  mode: () => WorkboardExecutionMode,
+) {
+  const [now, setNow] = createSignal(Date.now());
+  createEffect(
+    () => (mode() === "autonomous" ? (card().metadata?.automation?.scheduledAt ?? 0) - now() : 0),
+    (delay) => {
+      if (delay > 0) {
+        const timer = setTimeout(() => setNow(Date.now()), Math.min(delay, 2_147_483_647));
+        return () => clearTimeout(timer);
+      }
+    },
+  );
+  return createMemo(() => workboardStartBlockReason(card(), mode(), now()));
+}
 export function StartExecutionButton(input: {
   workboard: WorkboardProps;
   card: WorkboardCard;
@@ -315,6 +332,10 @@ export function StartExecutionButton(input: {
   const runtimeBlock = createMemo(() =>
     engineBlockedByRuntime(input.workboard, input.card, input.engine),
   );
+  const startBlock = useWorkboardStartBlock(
+    () => input.card,
+    () => input.mode,
+  );
   const engineName = createMemo(() =>
     input.engine === "codex" ? t("workboard.engineOpenAI") : t("workboard.engineClaude"),
   );
@@ -323,9 +344,16 @@ export function StartExecutionButton(input: {
       busy() ||
       !input.workboard.connected ||
       Boolean(runtimeBlock()) ||
+      Boolean(startBlock()) ||
       Boolean(input.card.metadata?.archivedAt),
   );
   const title = createMemo(() => {
+    const reason = startBlock();
+    if (reason) {
+      return t(
+        `workboard.startBlock${reason === "missingSchedule" ? "MissingSchedule" : reason === "futureSchedule" ? "FutureSchedule" : "Linked"}`,
+      );
+    }
     const blocked = runtimeBlock();
     return blocked
       ? blocked
@@ -367,6 +395,7 @@ export function StartExecutionButton(input: {
       ]}
       type="button"
       aria-label={title()}
+      title={title()}
       disabled={disabled()}
       onClick={() => void start()}
     >

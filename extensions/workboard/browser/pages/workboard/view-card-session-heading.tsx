@@ -8,6 +8,7 @@ import {
   OpenSessionCardAction,
   StartExecutionButton,
   CardAction,
+  useWorkboardStartBlock,
   type getCardActionState,
 } from "./view-card-actions.tsx";
 import { formatLifecycle, renderLifecycleIcon, type WorkboardProps } from "./view-helpers.tsx";
@@ -22,6 +23,10 @@ export function CardSessionHeading(props: {
   action: ReturnType<typeof getCardActionState>;
   tab: "overview" | "session";
 }) {
+  const startBlock = useWorkboardStartBlock(
+    () => props.card,
+    () => "autonomous",
+  );
   const formatted = createMemo(() => formatLifecycle(props.lifecycle));
   const sessionStatus = createMemo(() => getSessionStatus(props.card, props.lifecycle));
   const sessionStateLabel = () => formatted().label;
@@ -55,9 +60,13 @@ export function CardSessionHeading(props: {
           ) : undefined}
           {sessionEmpty() && props.action.showStartControls && !props.action.archived ? (
             <p class="workboard-detail__session-help">
-              {t("workboard.detailStartSessionHelp", {
-                agent: cardAgentLabel(props.card, props.workboard.agentsList),
-              })}
+              {startBlock() === "missingSchedule"
+                ? t("workboard.startBlockMissingSchedule")
+                : startBlock() === "futureSchedule"
+                  ? t("workboard.startBlockFutureSchedule")
+                  : t("workboard.detailStartSessionHelp", {
+                      agent: cardAgentLabel(props.card, props.workboard.agentsList),
+                    })}
             </p>
           ) : undefined}
         </div>

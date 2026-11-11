@@ -31,6 +31,26 @@ export function canStartWorkboardCard(card: WorkboardCard): boolean {
   return !workboardCardSessionKey(card);
 }
 
+export function workboardStartBlockReason(
+  card: WorkboardCard,
+  mode: WorkboardExecutionMode,
+  now = Date.now(),
+): "linked" | "missingSchedule" | "futureSchedule" | undefined {
+  if (!canStartWorkboardCard(card)) {
+    return "linked";
+  }
+  if (mode === "autonomous") {
+    const scheduledAt = card.metadata?.automation?.scheduledAt;
+    if (typeof scheduledAt === "number" && scheduledAt > now) {
+      return "futureSchedule";
+    }
+    if (card.status === "scheduled" && scheduledAt == null) {
+      return "missingSchedule";
+    }
+  }
+  return undefined;
+}
+
 function assertCurrentCard(state: WorkboardUiState, card: WorkboardCard): void {
   const current = state.cards.find((candidate) => candidate.id === card.id);
   // Page hiding closes admission; an existing action still owns this revision.
@@ -77,15 +97,15 @@ export async function startWorkboardCard(
   const mode = params.mode ?? "autonomous";
   const model =
     engine === "codex" || engine === "claude" ? WORKBOARD_ENGINE_MODELS[engine] : undefined;
-  const scheduledAt = params.card.metadata?.automation?.scheduledAt;
   initialState.error = null;
-  if (
-    mode === "autonomous" &&
-    (typeof scheduledAt === "number"
-      ? scheduledAt > Date.now()
-      : params.card.status === "scheduled")
-  ) {
-    initialState.error = "Scheduled cards cannot start before their scheduled time.";
+  const block = workboardStartBlockReason(params.card, mode);
+  if (block) {
+    initialState.error =
+      block === "linked"
+        ? "This card already has a session. Open it to continue, or clear the link in Edit to start another."
+        : block === "missingSchedule"
+          ? "This card is scheduled without a date. Set a date or change its status before starting."
+          : "This card is scheduled for a future time. Change its schedule before starting early.";
     notifyWorkboard(params.host);
     return null;
   }
@@ -93,7 +113,7 @@ export async function startWorkboardCard(
     { ...params, cardId: params.card.id, reconcileConflict: false },
     async (state, client) => {
       assertCurrentCard(state, params.card);
-      if (!canStartWorkboardCard(params.card)) {
+      if (workboardStartBlockReason(params.card, mode)) {
         throw new Error(
           "This card already has an execution. Refresh its details or use Edit to clear its session link before starting another.",
         );
