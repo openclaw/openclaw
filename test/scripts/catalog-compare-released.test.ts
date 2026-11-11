@@ -314,3 +314,81 @@ esac
     }
   });
 });
+
+describe("catalog compare released worker staging", () => {
+  // Readers spawn in the same tick; copying the worker per spawn truncates the file a
+  // sibling is loading, which then runs an empty module and exits 0 with no result.
+  it("writes the staged worker once before readers spawn", () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "catalog-stage-test-")));
+    try {
+      const bin = path.join(root, "bin");
+      const tmp = path.join(root, "tmp");
+      fs.mkdirSync(bin);
+      fs.mkdirSync(tmp);
+      fs.writeFileSync(
+        path.join(bin, "npm"),
+        `#!/bin/sh
+case "$1" in install)
+  for spec in "$@"; do case "$spec" in openclaw@*)
+    mkdir -p node_modules/openclaw/dist
+    echo '"official-external-provider-catalog.json" function validateAndSanitizeRemoteModelCatalogBundleV2(' > node_modules/openclaw/dist/listing.mjs
+  ;; esac; done ;;
+esac
+`,
+        { mode: 0o755 },
+      );
+      const writes = path.join(root, "worker-writes.json");
+      const preload = path.join(root, "count-worker-writes.mjs");
+      fs.writeFileSync(
+        preload,
+        `import fs from "node:fs";
+const writes = [];
+for (const name of ["copyFileSync", "writeFileSync"]) {
+  const real = fs[name];
+  fs[name] = function (...args) {
+    if (String(args[name === "copyFileSync" ? 1 : 0]).endsWith("catalog-compare-released-worker.mts")) writes.push(name);
+    return real.apply(this, args);
+  };
+}
+process.on("exit", () => fs.writeFileSync(${JSON.stringify(writes)}, JSON.stringify(writes)));
+`,
+      );
+      const bundle = path.join(root, "v2.json");
+      const baseline = path.join(root, "v2-published.json");
+      for (const file of [bundle, baseline]) {
+        fs.writeFileSync(file, JSON.stringify({ schemaVersion: 2, providers: {}, models: [{}] }));
+      }
+
+      // Both readers fail on the fake release; only staging is under test.
+      spawnSync(
+        process.execPath,
+        [
+          "--import",
+          preload,
+          "scripts/catalog-compare-released.mts",
+          "--check",
+          "--candidate",
+          bundle,
+          "--baseline",
+          baseline,
+          "--releases",
+          "2099.1.1,2099.1.2",
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            PATH: `${bin}:${process.env.PATH ?? ""}`,
+            HOME: root,
+            OPENCLAW_HOME: root,
+            OPENCLAW_STATE_DIR: path.join(root, "state"),
+            TMPDIR: tmp,
+          },
+        },
+      );
+
+      expect(JSON.parse(fs.readFileSync(writes, "utf8"))).toEqual(["copyFileSync"]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

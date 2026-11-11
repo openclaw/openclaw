@@ -214,10 +214,7 @@ async function readRelease(
     OPENCLAW_CONFIG_PATH: path.join(sandbox, "state/openclaw.json"),
     TMPDIR: path.join(sandbox, "tmp"),
   };
-  // Released code finds bundled plugins relative to its entry script; a worker
-  // inside this checkout would make it load the checkout's extensions/.
   const worker = path.join(runDir, path.basename(WORKER));
-  fs.copyFileSync(WORKER, worker);
   const workerArgs = JSON.stringify({
     releaseDir,
     bundle,
@@ -376,6 +373,11 @@ const runDir = fs.realpathSync(
   fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-compare-run-")),
 );
 try {
+  // Released code finds bundled plugins relative to its entry script; a worker
+  // inside this checkout would make it load the checkout's extensions/. Copy once:
+  // readers spawn together, and a copy per spawn truncates the file a sibling is
+  // loading, which then runs an empty module and exits 0 without a result.
+  fs.copyFileSync(WORKER, path.join(runDir, path.basename(WORKER)));
   const candidate = path.resolve(values.candidate);
   if (values.check) {
     process.exitCode = await checkReleases(candidate, runDir);
