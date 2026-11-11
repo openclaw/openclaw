@@ -920,6 +920,24 @@ describe("Windows startup fallback", () => {
     },
   );
 
+  it("stops the Startup supervisor before its Gateway child", async ({ env }) => {
+    addStartupFallbackMissingResponses();
+    await writeStartupFallbackEntry(env);
+    await writeTaskCommand(env, STARTUP_GATEWAY_COMMAND);
+    mockProcesses(() => [
+      processEntry(6001, `${STARTUP_GATEWAY_COMMAND} --task-supervisor-child=65536`),
+      processEntry(6000, `${STARTUP_GATEWAY_COMMAND} --task-supervisor`),
+      POWERSHELL_PROCESS,
+    ]);
+
+    await stopScheduledTask({ env, stdout: new PassThrough() });
+
+    const killed = spawnSync.mock.calls
+      .filter(([command]) => command.endsWith("taskkill.exe"))
+      .map(([, args]) => args?.at(-1));
+    expect(killed).toEqual(["6000", "6001"]);
+  });
+
   it("restarts the owned Startup process", async ({ env }) => {
     await prepareFallbackRestart(env);
     await expect(restartScheduledTask({ env, stdout: new PassThrough() })).resolves.toEqual({

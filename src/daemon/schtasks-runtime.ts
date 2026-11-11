@@ -524,6 +524,37 @@ async function resolveControllableFallbackRuntime(
   return runtime;
 }
 
+/** The login-item supervisor restarts a terminated Gateway child, so it must exit first. */
+async function terminateStartupRuntime(
+  env: GatewayServiceEnv,
+  runtime: GatewayServiceRuntime,
+  assertCurrent?: () => void,
+  beforeMutation?: () => Promise<void>,
+): Promise<boolean> {
+  const command = shouldManageGatewayListenerPort(env)
+    ? await readScheduledTaskCommand(env).catch(ignoreNonCleanupCommandError)
+    : null;
+  const port = resolveScheduledTaskCommandPort(env, command);
+  const snapshot = command?.programArguments.length && port ? readWindowsProcessSnapshot() : null;
+  const supervisorPid =
+    snapshot && command && port
+      ? findInstalledProcessPid(
+          snapshot,
+          port,
+          [...command.programArguments, WINDOWS_TASK_SUPERVISOR_FLAG],
+          () => true,
+        )
+      : null;
+  const pids = [supervisorPid, runtime.pid].filter((pid) => typeof pid === "number");
+  if (pids.length && beforeMutation) {
+    await beforeMutation();
+  }
+  for (const pid of pids) {
+    await terminateGatewayProcessTree(pid, assertCurrent);
+  }
+  return pids.length > 0;
+}
+
 export async function stopStartupEntry(
   env: GatewayServiceEnv,
   stdout: NodeJS.WritableStream,
@@ -531,9 +562,7 @@ export async function stopStartupEntry(
   assertCurrent?: () => void,
 ): Promise<void> {
   const runtime = await resolveControllableFallbackRuntime(env);
-  if (runtime.pid) {
-    await terminateGatewayProcessTree(runtime.pid, assertCurrent);
-  }
+  await terminateStartupRuntime(env, runtime, assertCurrent);
   onMutation?.();
   stdout.write(`${formatLine("Stopped Windows login item", resolveTaskName(env))}\n`);
 }
@@ -547,12 +576,7 @@ export async function terminateInstalledStartupRuntime(
     return;
   }
   const runtime = await resolveControllableFallbackRuntime(env);
-  if (runtime.pid) {
-    if (beforeMutation) {
-      await beforeMutation();
-    }
-    await terminateGatewayProcessTree(runtime.pid, assertCurrent);
-  }
+  await terminateStartupRuntime(env, runtime, assertCurrent, beforeMutation);
 }
 
 export async function restartStartupEntry(
@@ -562,8 +586,7 @@ export async function restartStartupEntry(
   assertCurrent?: () => void,
 ): Promise<GatewayServiceRestartResult> {
   const runtime = await resolveControllableFallbackRuntime(env);
-  if (runtime.pid) {
-    await terminateGatewayProcessTree(runtime.pid, assertCurrent);
+  if (await terminateStartupRuntime(env, runtime, assertCurrent)) {
     onMutation?.("stop");
   }
   await launchFallbackTaskScript(env, undefined, assertCurrent);
