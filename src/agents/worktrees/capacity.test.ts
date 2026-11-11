@@ -273,13 +273,11 @@ describe("worktree Git size estimates", () => {
         await release.promise;
       });
       await started.promise;
-      const execute = gitExec.executeGitCommandBytes;
-      vi.spyOn(gitExec, "executeGitCommandBytes").mockImplementation(async (cwd, args, options) => {
-        const result = await execute(cwd, args, options);
-        if (args[0] === "rev-parse" && args[1] === "--git-common-dir") {
-          discovered.resolve();
-        }
-        return result;
+      const enqueue = gitExec.enqueueGitRefMutation;
+      vi.spyOn(gitExec, "enqueueGitRefMutation").mockImplementation((...args) => {
+        const queued = enqueue(...args);
+        discovered.resolve();
+        return queued;
       });
       const controller = new AbortController();
       const revoked = new Error("hydration authority revoked");
