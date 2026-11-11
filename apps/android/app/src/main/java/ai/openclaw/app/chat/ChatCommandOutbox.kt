@@ -38,6 +38,9 @@ internal const val OUTBOX_OWNER_CHANGED_ERROR = "chat owner changed before this 
 /** User-visible reason for rows parked when their transcript branch loses ownership. */
 internal const val OUTBOX_BRANCH_CHANGED_ERROR = "Session branch changed; review and retry this message."
 
+/** User-visible reason for rows parked after the gateway definitively rejects their scope's history. */
+internal fun outboxHistoryRejectedError(reason: String): String = "the gateway rejected this chat's history ($reason); review and retry this message"
+
 private const val OUTBOX_BRANCH_PARK_MARKER = "\n# branch-park:"
 private const val OUTBOX_BRANCH_SWITCH_LEASE_MS = 5L * 60L * 1000L
 
