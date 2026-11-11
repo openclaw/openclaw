@@ -352,6 +352,11 @@
                     "mimeTypes": ["image/png", "image/jpeg", "image/webp"],
                     "remoteUrls": false
                   }
+                },
+                "billing": {
+                  "unit": "tokens",
+                  "source": "provider-docs",
+                  "usdPerMillion": { "input": 0.1, "output": 0 }
                 }
               }
             }

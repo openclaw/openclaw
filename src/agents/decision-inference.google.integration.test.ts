@@ -109,6 +109,8 @@ it("routes the selected Gemini Decision model through the registered Google plug
           expect(events).toMatchObject([
             { provider: "google", model: "gemini-decision-1", usage: { input: 21, output: 0 } },
           ]);
+          // Google's published Decision rate: $0.10 per million input tokens, no output charge.
+          expect(events[0]?.costUsd).toBeCloseTo((21 * 0.1) / 1_000_000, 12);
           // Existing V1 callers reach the same native route through the lossless bridge.
           const legacy = await withGuardedFetchRequestAuthority(undefined, () =>
             evaluateDecisionInRegistry(

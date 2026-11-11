@@ -232,9 +232,10 @@ questions take 2 to 255 options. Probabilities, fractional scores, confidence,
 and input token usage are preserved. The API reports zero output tokens.
 
 Gemini returns HTTP 400 for limit, key-validation, and input-safety rejections.
-OpenClaw reports these as `unsupported-input`. Decision cost stays unknown
-unless reported; chat token prices do not price this endpoint. Evaluations send
-the supplied evidence to Google and use your Gemini API billing.
+OpenClaw reports these as `unsupported-input`. Usage is priced at Google's
+published Decision rate of $0.10 per million input tokens, with no output-token
+charge. Evaluations send the supplied evidence to Google and use your Gemini
+API billing.
 
 ## Web search
 
