@@ -1,0 +1,2 @@
+# Real launcher filesystem-permission diagnostic and immutable-release refusal without artifact writes.
+51

@@ -31,6 +31,13 @@ openclaw users list --json
 Requires `operator.read`. Human output lists each profile's ID, display name, and
 email aliases. Use the durable IDs when linking or merging profiles.
 
+For installed releases, use the installed `openclaw` command as shown above, or
+run `node openclaw.mjs users list --json` from that built release.
+`pnpm openclaw ...` is the source-development runner: even a read-only query can
+require writes to prepare build artifacts before contacting the Gateway. An
+`EACCES` or `EROFS` failure on `.artifacts/run-node-build.lock` is a local
+artifact-preparation failure, not evidence that a Gateway user lacks permissions.
+
 ## Link an email alias
 
 ```bash

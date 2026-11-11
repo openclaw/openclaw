@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -116,6 +117,56 @@ function writePrebuiltRuntime(root: string) {
   writeBuildStamp({ cwd: root });
   writeRuntimePostBuildStamp({ cwd: root });
 }
+
+it.runIf(process.platform !== "win32" && process.getuid?.() !== 0).for([false, true])(
+  "explains unwritable source artifacts without repairing an immutable release (immutable: %s)",
+  async (immutable) => {
+    await withShimFixture("scripts/run-node.mjs", async ({ checkoutRoot, runNode }) => {
+      const artifacts = path.join(checkoutRoot, ".artifacts");
+      mkdirSync(artifacts, { mode: 0o555 });
+      if (immutable) {
+        writeFileSync(
+          path.join(checkoutRoot, "deployment.json"),
+          JSON.stringify({ kind: "git", sourceHead: "a".repeat(40) }),
+        );
+      }
+      try {
+        const result = await runNode(
+          [
+            path.resolve("scripts/run-node.mjs"),
+            "gateway",
+            "call",
+            "users.list",
+            "--params",
+            "{}",
+            "--json",
+          ],
+          prepareRunnerEnv({ ...process.env, OPENCLAW_RUNNER_LOG: "0" }),
+          checkoutRoot,
+        );
+        expect(result.error, formatShimResult(result)).toBeUndefined();
+        expect(result.status, formatShimResult(result)).toBe(1);
+        expect(result.stdout).toBe("");
+        if (immutable) {
+          expect(result.stderr).toContain(
+            "Cannot regenerate build artifacts in an immutable deployment",
+          );
+          expect(result.stderr).not.toContain("EACCES");
+        } else {
+          expect(result.stderr).toContain("Cannot prepare source-runner artifacts (EACCES)");
+          expect(result.stderr).toContain("[cause]: Error: EACCES: permission denied, mkdir");
+          expect(result.stderr.match(/code: 'EACCES'/gu)).toHaveLength(2);
+        }
+        expect(result.stderr).toContain("installed `openclaw` command");
+        expect(result.stderr).toContain("node openclaw.mjs");
+        expect(existsSync(path.join(artifacts, "run-node-build.lock"))).toBe(false);
+        expect(existsSync(path.join(checkoutRoot, "dist"))).toBe(false);
+      } finally {
+        chmodSync(artifacts, 0o755);
+      }
+    });
+  },
+);
 
 it.runIf(process.platform !== "win32").for(["runner", "shim"] as const)(
   "preserves %s interruption while waiting for cleanup custody release",

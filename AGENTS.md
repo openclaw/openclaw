@@ -43,7 +43,7 @@ Update instructions at owner; no competing rules here.
 - Check mergeability first; don't rebase or merge `main` just because it advanced. Integrate for conflicts, a named failing gate, or material base risk, then rerun affected checks. Prior-head CI stays prior-head evidence ([landing](.agents/skills/openclaw-pr-maintainer/references/landing.md)).
 - Time pressure never waives gates. Report concrete blockers.
 - Don't mix shell dialects (for example, zsh `${name:r}` in bash).
-- CLI: `pnpm openclaw ...` or `pnpm dev`, never `node --import tsx src/index.ts`. Never reconcile a shared/worktree install other jobs use. Dependency, vendoring, format, typecheck gotchas: [scripts guide](scripts/AGENTS.md#execution-gotchas).
+- Source-development CLI: `pnpm openclaw ...` or `pnpm dev`, never `node --import tsx src/index.ts`. Installed-release queries use the installed `openclaw` command, not the source runner; source builds may need a writable checkout. Never reconcile a shared/worktree install other jobs use. Dependency, vendoring, format, typecheck gotchas: [scripts guide](scripts/AGENTS.md#execution-gotchas).
 
 ## One owner, complete cutover
 
