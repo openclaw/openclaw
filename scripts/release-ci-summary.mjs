@@ -43,6 +43,7 @@ import {
   MAX_RELEASE_ARTIFACT_BYTES,
   normalizeReleaseCoveragePolicy,
   readReleaseJobListing,
+  releaseWatcherJobName,
   releaseCompositeJobsSha256,
   releaseChildSpec,
   releaseChildAdvisories,
@@ -3559,8 +3560,8 @@ export function tryReadReleaseDecisionArtifact(
 
 function releaseDecisionBlockedDuringDrain(parent, runId, repository) {
   const jobs = parent.jobs ?? [];
-  const decision = jobs.find((job) => job.name === "Release Decision");
-  const drain = jobs.find((job) => job.name === "Diagnostic Drain");
+  const decision = jobs.find((job) => releaseWatcherJobName(job.name) === "Release Decision");
+  const drain = jobs.find((job) => releaseWatcherJobName(job.name) === "Diagnostic Drain");
   if (
     decision?.status !== "completed" ||
     SUCCESSFUL_PARENT_JOB_CONCLUSIONS.has(String(decision.conclusion ?? "")) ||
