@@ -1,0 +1,2 @@
+# Gateway restart --preserve-definition surfaces the refused service-management reason.
+2

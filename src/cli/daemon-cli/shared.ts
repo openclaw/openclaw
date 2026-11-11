@@ -73,7 +73,7 @@ export function resolveDaemonInstallBlockMessage(
 
 /** Service-policy refusals carry their own remedy; show it instead of the generic CLI failure. */
 export function assertGatewayServiceActionAllowed(
-  label: "start" | "stop" | "uninstall",
+  label: "start" | "stop" | "uninstall" | "restart",
   action: string,
 ): void {
   const refusal = resolveGatewayServiceMutationError(action);
