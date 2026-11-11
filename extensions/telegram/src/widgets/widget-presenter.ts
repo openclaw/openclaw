@@ -123,8 +123,9 @@ async function presentTelegramWidget(
     const problems = code
       ? await checkTelegramWidget({
           source: code,
-          state: tapped.state ?? null,
-          nextState: params.state ?? null,
+          // Telegram exposes an empty or missing state to widget code as null.
+          state: tapped.state || null,
+          nextState: params.state || null,
           tapAll: false,
         })
       : [];
@@ -167,7 +168,7 @@ async function presentTelegramWidget(
   }
   const problems = await checkTelegramWidget({
     source,
-    state: params.state ?? null,
+    state: params.state || null,
     tapAll: true,
   });
   if (problems.length) {

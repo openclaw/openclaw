@@ -389,7 +389,8 @@ G.TelegramWidget = Object.freeze({
     }
     needsTap("request");
     requests++;
-    return Promise.resolve(null);
+    // Telegram resolves an acknowledged request with { result }; an empty answer is null.
+    return Promise.resolve({ result: null });
   },
   copyText: function (text) {
     needsTap("copyText");

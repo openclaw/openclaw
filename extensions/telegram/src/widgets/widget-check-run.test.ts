@@ -67,6 +67,11 @@ TelegramWidget.onEvent('chatDataChanged',draw);draw();</script>`;
     ).toEqual({ errors: [] });
   });
 
+  it("resolves request() with Telegram's acknowledgment object", async () => {
+    const source = `<p id=o></p><button onclick="TelegramWidget.request('vote').then(function(a){document.getElementById('o').textContent=String(a.result===null)})">Vote</button>`;
+    expect(await check(source)).toEqual({ errors: [] });
+  });
+
   it("reports errors that only happen after a tap", async () => {
     const source = `<button onclick="TelegramWidget.request('x'.repeat(80))">Go</button>`;
     expect((await check(source)).errors[0]).toMatch(/must be a string of 1 to 64 bytes/);

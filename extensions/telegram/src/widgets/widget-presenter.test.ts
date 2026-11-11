@@ -102,6 +102,29 @@ describe("Telegram widget presenter", () => {
     expect(editTelegramWidgetState).not.toHaveBeenCalled();
   });
 
+  it("checks a cleared state as null, like Telegram, but still sends the empty state", async () => {
+    lookupTelegramWidgetTap.mockResolvedValue({ chatId: "111", messageId: 42 });
+    lookupTelegramSentWidget.mockResolvedValue({
+      name: "vote",
+      sourceHash: hashTelegramWidgetSource(SOURCE),
+      title: "Vote",
+      state: '{"v":0}',
+      source: SOURCE,
+    });
+    const presenter = registerPresenter();
+    await presenter.present({
+      document: { kind: "html", html: "", source: "" },
+      title: "Vote",
+      name: "vote",
+      state: "",
+      context: { ...dm, currentMessageId: "query-1" },
+    });
+    expect(checkTelegramWidget).toHaveBeenCalledWith(
+      expect.objectContaining({ state: '{"v":0}', nextState: null }),
+    );
+    expect(editTelegramWidgetState).toHaveBeenCalledWith(expect.objectContaining({ state: "" }));
+  });
+
   it("matches only private chats on Telegram", () => {
     const presenter = registerPresenter();
     expect(presenter.match(dm)).toBe(true);
