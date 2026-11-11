@@ -9474,6 +9474,35 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Rejected") == true)
     }
 
+    @Test @MainActor func `handle deep link with retired stored key still requires confirmation`() async throws {
+        let retiredKeyName = "deeplink.agent.key"
+        UserDefaults.standard.set("retired-demo-key", forKey: retiredKeyName)
+        defer { UserDefaults.standard.removeObject(forKey: retiredKeyName) }
+        let appModel = NodeAppModel()
+        appModel.gatewayConnected = true
+        var sent: [AgentDeepLink] = []
+        appModel.testAgentRequestHandler = { sent.append($0) }
+        let url = try #require(URL(
+            string: "openclaw://agent?message=keyed&deliver=1&to=123456&channel=telegram&key=retired-demo-key"))
+
+        await appModel.handleDeepLink(url: url)
+        #expect(appModel.pendingAgentDeepLinkPrompt != nil)
+        #expect(sent.isEmpty)
+
+        appModel.declinePendingAgentDeepLinkPrompt()
+        #expect(appModel.pendingAgentDeepLinkPrompt == nil)
+        #expect(sent.isEmpty)
+
+        try await Task.sleep(for: .seconds(5.1))
+        await appModel.handleDeepLink(url: url)
+        await appModel.approvePendingAgentDeepLinkPrompt()
+        #expect(sent.count == 1)
+        let request = try #require(sent.first)
+        #expect(request.deliver == false)
+        #expect(request.to == nil)
+        #expect(request.channel == nil)
+    }
+
     @Test @MainActor func `stored operator scopes request permissions without granting disconnected authority`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
