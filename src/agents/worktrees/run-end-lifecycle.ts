@@ -11,6 +11,10 @@ import { registerOpenClawStatePathAsyncResource } from "../../state/openclaw-sta
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { createPreparedWorktreePathIndex } from "./gc-dependencies.js";
+import type {
+  WorktreeTemplateActivity,
+  WorktreeTemplateSelection,
+} from "./template-prewarm.types.js";
 import type { WorktreeWarmPoolRequest } from "./template-registry.js";
 
 type RunEndOperation = {
@@ -44,6 +48,7 @@ const mutationAuthority = new AsyncLocalStorage<MutationAuthority>();
 
 function createLifetime({ admission }: OpenClawStateWorkerContext) {
   let warmPoolListener: ((request: WorktreeWarmPoolRequest) => void) | undefined;
+  let templateListener: ((activity: WorktreeTemplateActivity) => void) | undefined;
   let retired = false;
   let uncertain = false;
   const cleanupFailures = new Map<object, unknown>();
@@ -76,6 +81,17 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
     return [...selected];
   };
   const owner = {
+    onTemplateActivity(listener: (activity: WorktreeTemplateActivity) => void) {
+      templateListener = listener;
+      return () => {
+        if (templateListener === listener) {
+          templateListener = undefined;
+        }
+      };
+    },
+    templateActivity(activity: WorktreeTemplateActivity) {
+      templateListener?.(activity);
+    },
     onWarmPoolNeeded(listener: (request: WorktreeWarmPoolRequest) => void) {
       warmPoolListener = listener;
       return () => {
@@ -290,6 +306,41 @@ export function onWorktreeWarmPoolNeeded(
 
 export function requestWorktreeWarmPool(env: NodeJS.ProcessEnv, request: WorktreeWarmPoolRequest) {
   lifetime(captureWorktreeRunEndContext(env)).requestWarmPool(request);
+}
+
+export function onWorktreeTemplateActivity(
+  env: NodeJS.ProcessEnv,
+  listener: (activity: WorktreeTemplateActivity) => void,
+): () => void {
+  return lifetime(captureWorktreeRunEndContext(env)).onTemplateActivity(listener);
+}
+
+export function notifyWorktreeTemplateActivity(
+  env: NodeJS.ProcessEnv,
+  activity: WorktreeTemplateActivity,
+): void {
+  lifetimes
+    .get(captureOpenClawStateWorkerContext({ env }).admission.coordinationKey)
+    ?.templateActivity(activity);
+}
+
+/** Busy scopes cover allocation/application; exact selections allow a shared template build. */
+export function beginWorktreePreparation(
+  env: NodeJS.ProcessEnv,
+  selection?: WorktreeTemplateSelection & { background?: boolean },
+): Disposable {
+  const owner = lifetimes.get(captureOpenClawStateWorkerContext({ env }).admission.coordinationKey);
+  const event = {
+    type: "preparation" as const,
+    selection: selection && {
+      cacheKey: selection.cacheKey,
+      contentKey: selection.contentKey,
+      backend: selection.backend,
+    },
+    background: selection?.background,
+  };
+  owner?.templateActivity({ ...event, active: true });
+  return { [Symbol.dispose]: () => owner?.templateActivity({ ...event, active: false }) };
 }
 
 export function withWorktreeRunEnd<T>(

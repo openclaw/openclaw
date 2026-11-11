@@ -18,8 +18,9 @@ export const retainedWorktreeTemplateKey = (cacheKey: string, contentKey: string
 
 /** Retained commits share the publication owner's mutation lease. */
 export function worktreeTemplateMutationKey(cacheKey: string): string {
-  return cacheKey.startsWith("retained:")
-    ? cacheKey.slice("retained:".length, cacheKey.lastIndexOf(":"))
+  return (cacheKey.startsWith("retained:") || cacheKey.startsWith("preparing:")) &&
+    cacheKey.lastIndexOf(":") > cacheKey.indexOf(":")
+    ? cacheKey.slice(cacheKey.indexOf(":") + 1, cacheKey.lastIndexOf(":"))
     : cacheKey;
 }
 

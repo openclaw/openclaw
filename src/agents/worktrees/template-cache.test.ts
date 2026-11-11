@@ -165,7 +165,6 @@ it.each(["cold", "idle"])("shares %s preparation and reader custody", async (sta
     await idle();
   }
   const { entered, finish, prepare: build, validate } = preparationGate();
-  const mutate = vi.spyOn(allocation, "withWorktreeMutationLease");
   const first = prepare({ prepare: build, validate });
   await entered;
   const attempted = observeReaderAttempt();
@@ -176,7 +175,6 @@ it.each(["cold", "idle"])("shares %s preparation and reader custody", async (sta
   expect(left).toMatchObject({ id: right?.id, status: "ready" });
   expect(right).toMatchObject({ status: "ready" });
   expect(build).toHaveBeenCalledTimes(state === "cold" ? 1 : 0);
-  expect(mutate).toHaveBeenCalledTimes(1);
   assert(left && right, "Both callers must acquire the prepared template");
   const warm = await allocation.withWorktreeMutationLease(
     { env, ...options, id: `template:${params.cacheKey}` },
@@ -187,7 +185,10 @@ it.each(["cold", "idle"])("shares %s preparation and reader custody", async (sta
   await warm?.release();
   await collect();
   expect(await source(left)).toBe("source");
-  expect(await prepare({ contentKey: "commit-2" })).toBeUndefined();
+  const other = await prepare({ contentKey: "commit-2" });
+  assert(other, "Reader-held generations must not block another commit");
+  expect(other.id).not.toBe(left.id);
+  await other.release();
   await left.release();
   await collect();
   expect(await list()).toHaveLength(1);
@@ -206,6 +207,32 @@ it.each(["cold", "idle"])("shares %s preparation and reader custody", async (sta
   await collect();
   expect(await list()).toEqual([]);
   await expect(fs.access(left.path)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("prepares another commit without waiting for an in-flight native refresh", async () => {
+  const original = await idle();
+  const { entered, finish, block } = preparationGate();
+  const refresh = block(async (existing: { path: string }, staged: { path: string }) => {
+    await fs.cp(existing.path, staged.path, { recursive: true });
+    return true;
+  });
+  const first = prepare({ contentKey: "commit-2", sourceCommit: "b".repeat(40), refresh });
+  await entered;
+  try {
+    const foreground = await prepare({
+      contentKey: "commit-3",
+      sourceCommit: "c".repeat(40),
+      options: { ...options, waitBudget: { remainingMs: 0 } },
+    });
+    assert(foreground, "A different commit must not wait behind native work");
+    expect(await source(foreground)).toBe("source");
+    expect(await source(original!)).toBe("source");
+    await foreground.release();
+  } finally {
+    finish();
+    await (await first)?.release();
+    await original?.release();
+  }
 });
 
 it.each([false, true])("settles refresh before publication (fail=%s)", async (fail) => {

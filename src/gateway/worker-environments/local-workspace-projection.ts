@@ -13,7 +13,10 @@ import {
   readRegistryWorktree,
   readLiveRegistryWorktreeByPath,
 } from "../../agents/worktrees/registry-read.js";
-import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
+import {
+  beginWorktreePreparation,
+  captureWorktreeRunEndContext,
+} from "../../agents/worktrees/run-end-lifecycle.js";
 import type {
   ManagedWorktreeRecord,
   WorktreeWorkerAuthority,
@@ -44,12 +47,13 @@ const pendingCheckpoints = new Map<string, PendingWorkspaceOperation<void>>();
 const pendingPreparations = new Map<string, PendingWorkspaceOperation<string>>();
 
 /** Queued preparations share observation, while each caller retains its own run authority. */
-export function withLocalWorkspacePreparation(
+export async function withLocalWorkspacePreparation(
   owner: LocalWorkspaceOwner,
   options: { sandbox: SandboxConfig; acceleration: boolean; signal?: AbortSignal },
   prepare: (beginCapture: () => void) => Promise<string>,
 ): Promise<string> {
-  return joinLocalWorkspaceOperation(
+  using _ = beginWorktreePreparation(owner.env ?? process.env);
+  return await joinLocalWorkspaceOperation(
     pendingPreparations,
     owner,
     [owner.agentId, owner.sessionKey, owner.sessionId, owner.lifecycleRevision],
@@ -197,13 +201,6 @@ export async function withSettledLocalWorkspace<T>(
       "agentId" | "sessionKey" | "sessionId" | "lifecycleRevision"
     >;
   },
-  operation: (custody?: LocalWorkspaceCustody) => Promise<T>,
-): Promise<T> {
-  return await settleLocalWorkspace(params, operation);
-}
-
-async function settleLocalWorkspace<T>(
-  params: Parameters<typeof withSettledLocalWorkspace>[0],
   operation: (custody?: LocalWorkspaceCustody) => Promise<T>,
 ): Promise<T> {
   const context = captureWorktreeRunEndContext(params.env ?? process.env);
