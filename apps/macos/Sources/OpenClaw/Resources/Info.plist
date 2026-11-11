@@ -32,6 +32,14 @@
                 <string>openclaw</string>
             </array>
         </dict>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>ai.openclaw.mac.node-invite</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>openclaw-node</string>
+            </array>
+        </dict>
     </array>
     <key>LSMinimumSystemVersion</key>
     <string>26.2</string>

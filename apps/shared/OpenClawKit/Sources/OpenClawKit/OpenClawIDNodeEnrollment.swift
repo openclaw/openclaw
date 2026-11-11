@@ -83,10 +83,16 @@ public struct OpenClawIDNodeEnrollmentClient: Sendable {
         joinLink: String,
         discoveryOrigin: String,
         identity: OpenClawIDNodeIdentity,
+        operatorPeerKey: String? = nil,
         description: OpenClawIDNodeEnrollmentDescription,
         onVerificationCode: @escaping @Sendable (String) async -> Void) async throws
     -> OpenClawIDNodeTrustTarget {
         let origin = try OpenClawIDNodeEnrollmentLink.discoveryOrigin(discoveryOrigin)
+        if let operatorPeerKey {
+            guard OpenClawIDNodeEnrollmentLink.matches(operatorPeerKey, "^iroh:[0-9a-f]{64}$"),
+                  operatorPeerKey != identity.peerKey
+            else { throw OpenClawIDNodeEnrollmentError.invalidIdentity }
+        }
         // Parse inside the attempt so no outer task retains decoded invite bytes during polling.
         // A hard monotonic deadline bounds stalled I/O as well as polling, independent of clock changes.
         return try await withThrowingTaskGroup(of: OpenClawIDNodeTrustTarget.self) { group in
@@ -95,6 +101,7 @@ public struct OpenClawIDNodeEnrollmentClient: Sendable {
                     joinLink: joinLink,
                     origin: origin,
                     identity: identity,
+                    operatorPeerKey: operatorPeerKey,
                     description: description,
                     onVerificationCode: onVerificationCode)
             }
@@ -156,6 +163,7 @@ public struct OpenClawIDNodeEnrollmentClient: Sendable {
         joinLink: String,
         origin: URL,
         identity: OpenClawIDNodeIdentity,
+        operatorPeerKey: String?,
         description: OpenClawIDNodeEnrollmentDescription,
         onVerificationCode: @Sendable (String) async -> Void) async throws -> OpenClawIDNodeTrustTarget
     {
@@ -166,8 +174,17 @@ public struct OpenClawIDNodeEnrollmentClient: Sendable {
         if let previous, previous.clawID != link.clawID || previous.rootFingerprint != link.rootFingerprint {
             throw OpenClawIDNodeEnrollmentError.rootMismatch
         }
-        let redemption = try Self.redemption(link: &link, identity: identity, description: description, now: self.now())
-        await onVerificationCode(Self.verificationCode(link: link, peerKey: identity.peerKey, description: description))
+        let redemption = try Self.redemption(
+            link: &link,
+            identity: identity,
+            operatorPeerKey: operatorPeerKey,
+            description: description,
+            now: self.now())
+        await onVerificationCode(Self.verificationCode(
+            link: link,
+            peerKey: identity.peerKey,
+            operatorPeerKey: operatorPeerKey,
+            description: description))
         let body = OpenClawIDCanonicalJSON.object([
             "to": .string("gateway"),
             "payload": .object(["kind": .string("node_redemption"), "redemption": redemption]),
@@ -267,6 +284,7 @@ public struct OpenClawIDNodeEnrollmentClient: Sendable {
     static func redemption(
         link: inout OpenClawIDNodeEnrollmentLink,
         identity: OpenClawIDNodeIdentity,
+        operatorPeerKey: String? = nil,
         description: OpenClawIDNodeEnrollmentDescription,
         now: Int64) throws -> OpenClawIDCanonicalJSON
     {
@@ -290,6 +308,8 @@ public struct OpenClawIDNodeEnrollmentClient: Sendable {
         fields["proof"] = .string(OpenClawIDNodeIdentity.hex(proof))
         fields["description"] = description.json
         fields["requested_at"] = .integer(now)
+        // Signed by W with the rest of the request; the owner approves it with the node or not at all.
+        if let operatorPeerKey { fields["operator_peer_key"] = .string(operatorPeerKey) }
         let body = OpenClawIDCanonicalJSON.object(fields)
         let signature = try identity.sign(Data("openclaw/NodeRedemption/v1\0".utf8) + body.encoded)
         return .object([
@@ -305,14 +325,18 @@ public struct OpenClawIDNodeEnrollmentClient: Sendable {
     static func verificationCode(
         link: OpenClawIDNodeEnrollmentLink,
         peerKey: String,
+        operatorPeerKey: String? = nil,
         description: OpenClawIDNodeEnrollmentDescription) -> String
     {
-        let parts = OpenClawIDCanonicalJSON.object([
+        var fields: [String: OpenClawIDCanonicalJSON] = [
             "claw_id": .string(link.clawID),
             "invite_id": .string(link.inviteID),
             "peer_key": .string(peerKey),
             "description": description.json,
-        ])
+        ]
+        // Covered only when requested, so node-only codes keep the shared protocol vector.
+        if let operatorPeerKey { fields["operator_peer_key"] = .string(operatorPeerKey) }
+        let parts = OpenClawIDCanonicalJSON.object(fields)
         let digest = SHA256.hash(data: Data("openclaw/node-verification-code/v1\0".utf8) + parts.encoded)
         let number = digest.prefix(4).reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
         return String(format: "%06u", number % 1_000_000)

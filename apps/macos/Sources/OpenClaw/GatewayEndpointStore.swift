@@ -508,8 +508,15 @@ actor GatewayEndpointStore {
                     return
                 }
                 self.cancelRemoteEnsure()
-                guard await self.sourceIsCurrent(source, generation: generation) else { return }
-                self.publishReadyEndpoint(source: source, url: url)
+                do {
+                    _ = try await self.publishDirectEndpoint(source: source, url: url, generation: generation)
+                } catch is CancellationError {
+                } catch {
+                    guard await self.sourceIsCurrent(source, generation: generation) else { return }
+                    self.setState(.unavailable(
+                        mode: .remote,
+                        reason: "Chat over OpenClaw ID is not available yet. Ask the owner to approve this Mac."))
+                }
                 return
             }
             let endpointBeforeLookup = self.resolvedEndpoint
@@ -655,7 +662,10 @@ actor GatewayEndpointStore {
                 throw Self.endpointError("gateway.remote.url missing or invalid")
             }
             self.cancelRemoteEnsure()
-            return self.publishReadyEndpoint(source: source, url: url)
+            guard let endpoint = try await self.publishDirectEndpoint(
+                source: source, url: url, generation: generation)
+            else { throw CancellationError() }
+            return endpoint
         }
 
         guard let task = self.kickRemoteEnsureIfNeeded(source: source, generation: generation) else {
@@ -757,10 +767,34 @@ actor GatewayEndpointStore {
     }
 
     @discardableResult
+    /// A direct URL naming this Mac's OpenClaw ID claw is served by its operator tunnel; the
+    /// route generation is the endpoint's authority, so a replaced tunnel reconnects chat.
+    private func publishDirectEndpoint(
+        source: SourceSnapshot,
+        url: URL,
+        generation: UInt64) async throws -> GatewayConnection.EndpointSnapshot?
+    {
+        let operatorRoute: MacOpenClawIDOperatorLive? = if await MainActor.run(body: {
+            MacOpenClawIDOperatorRoute.shared.serves(url)
+        }) {
+            try await MacOpenClawIDOperatorRoute.shared.current()
+        } else {
+            nil
+        }
+        guard await self.sourceIsCurrent(source, generation: generation) else { return nil }
+        guard let operatorRoute else { return self.publishReadyEndpoint(source: source, url: url) }
+        return self.publishReadyEndpoint(
+            source: source,
+            url: operatorRoute.logicalOrigin,
+            routeAuthority: operatorRoute.generation,
+            openClawIDSession: operatorRoute.sessionBox)
+    }
+
     private func publishReadyEndpoint(
         source: SourceSnapshot,
         url: URL,
-        routeAuthority: UInt64? = nil) -> GatewayConnection.EndpointSnapshot
+        routeAuthority: UInt64? = nil,
+        openClawIDSession: WebSocketSessionBox? = nil) -> GatewayConnection.EndpointSnapshot
     {
         // SourceSnapshot owns route credentials and identity. Publish every ready
         // path through one derivation so local, direct, and tunnel routes cannot drift.
@@ -787,7 +821,8 @@ actor GatewayEndpointStore {
             tls: tls,
             routeAuthority: routeAuthority,
             deviceAuthGatewayID: source.deviceAuthGatewayID,
-            revision: self.routeRevision)
+            revision: self.routeRevision,
+            openClawIDSession: openClawIDSession)
         self.resolvedEndpoint = endpoint
         self.setState(.ready(
             mode: mode,
@@ -1183,7 +1218,12 @@ extension GatewayEndpointStore {
         remoteBasePath: String? = nil,
         authToken: String? = nil) throws -> URL
     {
-        guard var components = URLComponents(url: config.url, resolvingAgainstBaseURL: false) else {
+        // The OpenClaw ID claw hostname is a browser-loader site; this Mac reaches its Control UI
+        // through the operator tunnel's cookie-gated loopback proxy instead.
+        let gatewayURL = MacOpenClawIDOperatorRoute.dashboardRoute(for: config.url).map {
+            URL(string: "ws://\($0.url.host ?? "127.0.0.1"):\($0.url.port ?? 0)/") ?? config.url
+        } ?? config.url
+        guard var components = URLComponents(url: gatewayURL, resolvingAgainstBaseURL: false) else {
             throw NSError(domain: "Dashboard", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Invalid gateway URL",
             ])

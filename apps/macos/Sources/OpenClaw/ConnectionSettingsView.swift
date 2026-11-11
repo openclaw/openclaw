@@ -204,6 +204,12 @@ struct ConnectionSettingsView: View {
                 Text("OpenClaw runs")
                 Text("Own a Gateway on this Mac, or attach to one on another host.")
             }
+            LabeledContent {
+                Button("Add this Mac to a claw…") { MacOpenClawIDJoinController.shared.present() }
+            } label: {
+                Text("OpenClaw ID")
+                Text("Use an owner’s invite to connect this Mac as a node with chat and dashboard.")
+            }
         } header: {
             Text("Gateway")
         } footer: {

@@ -1351,8 +1351,8 @@ extension MacNodeModeCoordinator {
 
 extension MacNodeModeCoordinator {
     /// Selects only the node lane. Operator endpoints, credentials and chat remain unchanged.
-    func selectOpenClawIDTarget(_ target: MacNodeOpenClawIDTarget?) {
-        self.openClawIDSelectionStore?.save(target)
+    func selectOpenClawIDTarget(_ target: MacNodeOpenClawIDTarget?, operatorRequested: Bool = false) {
+        self.openClawIDSelectionStore?.save(target, operatorRequested: operatorRequested)
         self.openClawIDSelection = .success(target)
         self.enqueueRouteInvalidation(mode: .reconnectRefresh)
     }

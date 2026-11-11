@@ -15,8 +15,10 @@ public actor OpenClawIDNodeIdentityKeychainStore: OpenClawIDNodeIdentityStore {
 
     /// A dedicated per-enrollment node identity on every Apple platform, including iOS.
     /// Never reuse the phone's operator/client-pairing key or its Keychain namespace.
-    public init(enrollmentID: UUID, accessGroup: String? = nil) {
-        self.service = "ai.openclaw.node-enrollment"
+    /// `operatorKey` selects the same enrollment's separate chat/dashboard key (W_op), which
+    /// lives in its own namespace and is never handed to the node transport or its worker.
+    public init(enrollmentID: UUID, accessGroup: String? = nil, operatorKey: Bool = false) {
+        self.service = operatorKey ? "ai.openclaw.node-enrollment.operator" : "ai.openclaw.node-enrollment"
         self.account = enrollmentID.uuidString
         self.accessGroup = accessGroup
     }

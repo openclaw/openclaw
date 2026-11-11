@@ -222,7 +222,10 @@ extension DashboardManager {
         let config = endpoint.config
         let browserSession = endpoint.browserSession
         try browserSession?.validate(for: config.url)
-        let advertisedIdentityURL = mode == .remote || endpoint.tls != nil
+        // The OpenClaw ID operator proxy is this Mac's dashboard route; never the claw's
+        // browser sign-in origin, which would need a separate browser approval.
+        let operatorDashboard = MacOpenClawIDOperatorRoute.dashboardRoute(for: config.url)
+        let advertisedIdentityURL = operatorDashboard == nil && (mode == .remote || endpoint.tls != nil)
             ? try await browserIdentityURLProvider(target, config)
             : nil
         let identityURL = mode == .remote ? advertisedIdentityURL : nil
@@ -257,6 +260,10 @@ extension DashboardManager {
             : nil
         let url = try identityURL ?? GatewayEndpointStore.dashboardURL(
             for: dashboardConfig, mode: mode, remoteBasePath: remoteBasePath)
+        if let operatorDashboard {
+            // The proxy admits only this launch's cookie; set it before the document loads.
+            await self.websiteDataStore.httpCookieStore.setCookie(operatorDashboard.cookie)
+        }
         try browserSession?.validate(for: url)
         let legacyCredentials: DashboardNativeGatewayAuth.LegacyCredentials? = if identityURL == nil,
                                                                                   browserSession == nil
@@ -282,7 +289,8 @@ extension DashboardManager {
         return (WindowConfiguration(
             url: url,
             auth: auth,
-            tlsParams: identityURL == nil && browserSession == nil ? endpoint.tls?.params : nil,
+            tlsParams: identityURL == nil && browserSession == nil && operatorDashboard == nil
+                ? endpoint.tls?.params : nil,
             mode: mode,
             displayName: name,
             browserSession: browserSession,

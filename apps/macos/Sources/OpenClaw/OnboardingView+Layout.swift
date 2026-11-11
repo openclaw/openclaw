@@ -43,6 +43,12 @@ extension OnboardingView {
         .sheet(isPresented: self.$showOpenClawID) {
             OnboardingOpenClawIDView(model: self.openClawID)
         }
+        .onChange(of: self.openClawID.step) { _, step in
+            // One approval leaves the Mac working: go straight into the claw's dashboard.
+            guard case .connected = step else { return }
+            self.showOpenClawID = false
+            self.finishJoinedClaw()
+        }
         .onAppear {
             self.onboardingDidAppear()
         }

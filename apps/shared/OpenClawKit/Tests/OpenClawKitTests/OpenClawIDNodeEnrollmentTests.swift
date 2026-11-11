@@ -36,6 +36,41 @@ struct OpenClawIDNodeEnrollmentTests {
         try .init(displayName: "Build node", platform: "linux", commands: ["system.run"], caps: ["system"])
     }
 
+    @Test func `requested operator key is signed and covered by the shared comparison code`() throws {
+        let (fixture, _) = try fixture()
+        var link = try OpenClawIDNodeEnrollmentLink(fixture.node_invite.link)
+        let identity = try OpenClawIDNodeIdentity(seed: OpenClawIDNodeIdentity.unhex(fixture.node_key.seed_hex))
+        let operatorKey = "iroh:" + String(repeating: "ab", count: 32)
+        // Cross-language vector from packages/openclaw-id-protocol nodeVerificationCode.
+        #expect(OpenClawIDNodeEnrollmentClient.verificationCode(
+            link: link,
+            peerKey: identity.peerKey,
+            operatorPeerKey: operatorKey,
+            description: try description()) == "386684")
+        let redemption = try OpenClawIDNodeEnrollmentClient.redemption(
+            link: &link,
+            identity: identity,
+            operatorPeerKey: operatorKey,
+            description: description(),
+            now: fixture.now)
+        guard case let .object(envelope) = redemption, case let .object(body)? = envelope["body"] else {
+            Issue.record("redemption is not an object")
+            return
+        }
+        #expect(body["operator_peer_key"] == .string(operatorKey))
+    }
+
+    @Test func `link may carry its Discovery origin`() throws {
+        let (fixture, _) = try fixture()
+        let carried = fixture.node_invite.link + "&d=" + "https%3A%2F%2Fdiscovery.example.test"
+        #expect(try OpenClawIDNodeEnrollmentLink(carried).discoveryOrigin?.absoluteString ==
+            "https://discovery.example.test")
+        #expect(try OpenClawIDNodeEnrollmentLink(fixture.node_invite.link).discoveryOrigin == nil)
+        #expect(throws: OpenClawIDNodeEnrollmentError.self) {
+            try OpenClawIDNodeEnrollmentLink(fixture.node_invite.link + "&d=https%3A%2F%2Fd.example%2Fpath")
+        }
+    }
+
     @Test func `signed golden redemption and comparison code`() throws {
         let (fixture, json) = try fixture()
         var link = try OpenClawIDNodeEnrollmentLink(fixture.node_invite.link)

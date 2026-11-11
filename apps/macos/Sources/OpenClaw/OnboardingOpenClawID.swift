@@ -2,7 +2,8 @@ import Foundation
 import Observation
 
 /// Native enrollment owns credentials and approval checks; views receive display data only.
-/// Node approval and chat access are separate grants, never one six-digit ceremony.
+/// For a Mac, one compared code and one owner approval grant the node and, separately keyed,
+/// chat and dashboard access. The claw records them as distinct grants.
 @MainActor
 protocol OnboardingOpenClawIDService {
     var unavailableReason: String? { get }
@@ -22,7 +23,8 @@ enum OnboardingOpenClawIDIntent { case makeReachable, connect, joinNode }
 
 enum OnboardingOpenClawIDAction {
     case signIn, selectClaw(String), saveRecoveryKit, confirmRecoveryKit, requestNode, checkApproval, requestChat
-    case pasteNodeInvitation(discoveryOrigin: String)
+    /// The pasted link or owner command, with the Advanced Discovery origin (empty: use the link's).
+    case submitNodeInvitation(text: String, discoveryOrigin: String)
 }
 
 struct OnboardingClaw: Identifiable, Equatable {
@@ -44,6 +46,14 @@ enum OnboardingOpenClawIDStep: Equatable {
     case chatAccess(claw: String, approvalURL: URL?)
     case connected(claw: String)
     case reachable(hostname: String)
+}
+
+extension OnboardingOpenClawIDStep {
+    /// The code is shown and the service is waiting for the owner's decision.
+    var isAwaitingApproval: Bool {
+        if case .compareCode = self { return true }
+        return false
+    }
 }
 
 struct UnavailableOnboardingOpenClawIDService: OnboardingOpenClawIDService {
@@ -70,6 +80,8 @@ final class OnboardingOpenClawIDModel {
     private(set) var error: String?
     let unavailableReason: String?
     let accountUnavailableReason: String?
+    /// An invitation opened through an `openclaw-node://` link, shown in the paste field.
+    var pendingInvitation: String?
     @ObservationIgnored private let service: any OnboardingOpenClawIDService
     @ObservationIgnored private let onNodeConnected: (String) -> Void
     @ObservationIgnored private var task: Task<Void, Never>?
@@ -105,6 +117,7 @@ final class OnboardingOpenClawIDModel {
         self.busy = false
         self.error = nil
         self.step = .signIn
+        self.pendingInvitation = nil
     }
 
     private func run(_ operation: @escaping @MainActor () async throws -> OnboardingOpenClawIDStep)
@@ -117,7 +130,17 @@ final class OnboardingOpenClawIDModel {
                 let step = try await operation()
                 guard !Task.isCancelled else { return }
                 self.step = step
-                if case let .nodeConnection(claw, true) = step { self.onNodeConnected(claw) }
+                switch step {
+                case .compareCode:
+                    // The Gateway knows when the owner decides; wait for it rather than a click.
+                    self.busy = false
+                    self.perform(.checkApproval)
+                    return
+                case let .connected(claw), let .nodeConnection(claw, true):
+                    self.onNodeConnected(claw)
+                default:
+                    break
+                }
             } catch {
                 guard !Task.isCancelled else { return }
                 // Service errors can carry sensitive response bodies; do not render them verbatim.

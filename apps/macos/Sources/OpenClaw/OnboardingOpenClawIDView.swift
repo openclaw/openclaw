@@ -1,4 +1,5 @@
 import SwiftUI
+import OpenClawKit
 
 struct OnboardingReachabilityContent: View {
     let unavailableReason: String?
@@ -41,9 +42,10 @@ struct OnboardingOpenClawIDView: View {
                 step: self.model.step,
                 unavailableReason: self.model.step == .signIn
                     ? self.model.accountUnavailableReason : self.model.unavailableReason,
+                invitation: self.model.pendingInvitation ?? "",
                 action: { self.model.perform($0) })
                 .disabled(self.model.busy || self.model.unavailableReason != nil)
-            if self.model.busy { ProgressView("Working…") }
+            if self.model.busy, !self.model.step.isAwaitingApproval { ProgressView("Working…") }
             if let error = self.model.error {
                 Text(error).foregroundStyle(.orange).font(.callout)
             }
@@ -59,8 +61,11 @@ struct OnboardingOpenClawIDView: View {
 struct OnboardingOpenClawIDContent: View {
     let step: OnboardingOpenClawIDStep
     let unavailableReason: String?
+    var invitation = ""
     let action: (OnboardingOpenClawIDAction) -> Void
+    @State private var invitationText = ""
     @State private var discoveryOrigin = ""
+    @State private var discoveryEdited = false
 
     var body: some View {
         VStack(spacing: 18) {
@@ -68,40 +73,71 @@ struct OnboardingOpenClawIDContent: View {
         }
         .multilineTextAlignment(.center)
         .frame(maxWidth: 520)
+        .onAppear {
+            if self.invitationText.isEmpty { self.invitationText = self.invitation }
+            self.prefillDiscovery()
+        }
+        .onChange(of: self.invitation) { _, value in
+            self.invitationText = value
+            self.prefillDiscovery()
+        }
+        .onChange(of: self.invitationText) { _, _ in self.prefillDiscovery() }
+    }
+
+    /// Shows the origin the link or command carries; a value the person typed is kept.
+    private func prefillDiscovery() {
+        guard !self.discoveryEdited else { return }
+        let input = try? OnboardingNodeInvitationInput(self.invitationText)
+        let carried = input?.discoveryOrigin ??
+            input.flatMap { try? OpenClawIDNodeEnrollmentLink($0.link) }?.discoveryOrigin?.absoluteString
+        self.discoveryOrigin = carried ?? ""
     }
 
     @ViewBuilder
     private var content: some View {
         switch self.step {
         case .nodeInvitation:
-            self.heading("Use a node invitation", subtitle: "Ask the owner for a private node invitation.")
+            self.heading("Add this Mac to a claw", subtitle: "Paste the invite the claw’s owner sent you.")
             if let unavailableReason { Text(unavailableReason).foregroundStyle(.secondary) }
-            Text("""
-            Copy the private invitation, and enter the Discovery origin supplied by the owner. \
-            Neither account sign-in nor a Gateway token is needed.
-            """)
-            .foregroundStyle(.secondary)
-            TextField("Discovery origin (https://…)", text: self.$discoveryOrigin)
+            TextField(
+                "openclaw-node://join#… or the full command",
+                text: self.$invitationText,
+                axis: .vertical)
                 .textFieldStyle(.roundedBorder)
-            Button("Paste node invitation") {
-                self.action(.pasteNodeInvitation(discoveryOrigin: self.discoveryOrigin))
+                .lineLimit(3...5)
+                .multilineTextAlignment(.leading)
+            DisclosureGroup("Advanced") {
+                TextField(
+                    "Discovery origin (https://…)",
+                    text: Binding(
+                        get: { self.discoveryOrigin },
+                        set: {
+                            self.discoveryOrigin = $0
+                            self.discoveryEdited = true
+                        }))
+                    .textFieldStyle(.roundedBorder)
+                    .padding(.top, 6)
             }
-            .buttonStyle(.borderedProminent).disabled(self.discoveryOrigin.isEmpty)
-            Text("""
-            The private invitation is read only when you choose Paste. \
-            It is not shown here or saved in preferences.
-            """)
-            .font(.caption).foregroundStyle(.secondary)
-        case let .nodeConnection(claw, connected):
-            self.heading(connected ? "Node connected" : "Node approved; connecting…", subtitle: claw)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Continue") {
+                let text = self.invitationText
+                self.invitationText = ""
+                self.action(.submitNodeInvitation(text: text, discoveryOrigin: self.discoveryEdited ? self.discoveryOrigin : ""))
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(self.invitationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Text("The invite works once. It is not saved, and no Gateway token or account sign-in is needed.")
+                .font(.caption).foregroundStyle(.secondary)
+        case let .nodeConnection(claw, _):
+            self.heading("This Mac joined \(claw)", subtitle: "The owner approved it as a node only.")
             self.row(
-                connected ? "Node connection verified" : "Waiting for the node connection",
-                detail: connected ? "The Gateway completed this Mac’s node handshake." :
-                    "Approval alone does not prove connectivity. Check again after the Mac connects.",
-                icon: connected ? "checkmark.circle" : "hourglass")
-            Text("Chat and account access are not configured by this invitation.")
-                .foregroundStyle(.secondary)
-            Button("Check connection") { self.action(.checkApproval) }
+                "Node connected",
+                detail: "The assistant can use the Mac capabilities the owner approved.",
+                icon: "checkmark.circle")
+            self.row(
+                "Chat isn’t available",
+                detail: "The owner did not allow chat and dashboard from this Mac. Ask them to add it again with chat.",
+                icon: "bubble.left.and.bubble.right")
         case .signIn:
             self.heading("Sign in with OpenClaw ID", subtitle: "Choose an account to find your OpenClaw.")
             Image(systemName: "person.crop.circle").font(.system(size: 56)).foregroundStyle(.tint)
@@ -137,28 +173,29 @@ struct OnboardingOpenClawIDContent: View {
             Button("I’ve saved it") { self.action(.confirmRecoveryKit) }
                 .buttonStyle(.borderedProminent).disabled(!saved)
         case let .addMac(claw, device, capabilities):
-            self.heading("Add this Mac to \(claw)", subtitle: "Review this Mac’s requested node capabilities.")
+            self.heading("Add this Mac to \(claw)", subtitle: "One approval from the owner sets everything up.")
             self.row(device, detail: "macOS · this device", icon: "laptopcomputer")
+            self.row(
+                "Chat and dashboard",
+                detail: "Use \(claw) from this Mac, without a VPN or Gateway token.",
+                icon: "bubble.left.and.bubble.right")
             ScrollView {
                 self.row("Node capabilities", detail: capabilities, icon: "wrench.and.screwdriver")
             }
-            .frame(maxHeight: 160)
-            self.row(
-                "Chat access stays separate",
-                detail: """
-                This node invitation does not sign you in, approve chat access, \
-                or grant Gateway administration.
-                """,
-                icon: "bubble.left.and.bubble.right")
-            Button("Request node access") { self.action(.requestNode) }.buttonStyle(.borderedProminent)
+            .frame(maxHeight: 140)
+            Text("The owner can approve the node alone. Gateway configuration and access management stay with owners.")
+                .font(.callout).foregroundStyle(.secondary)
+            Button("Request access") { self.action(.requestNode) }.buttonStyle(.borderedProminent)
         case let .compareCode(claw, device, code, approvalURL):
             self.heading("Compare the code", subtitle: "On \(claw), open Access and find \(device).")
             Text(code).font(.system(size: 42, weight: .semibold, design: .monospaced)).textSelection(.enabled)
-            Text("Approve node access only if the six digits match. This code does not approve chat access.")
+            Text("The owner approves only if all six digits match.")
                 .foregroundStyle(.secondary)
-            self.row("Waiting for node approval", detail: "Account and chat setup remain separate.", icon: "hourglass")
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("Waiting for the owner to approve…").foregroundStyle(.secondary)
+            }
             self.browserApproval(approvalURL)
-            Button("Check approval") { self.action(.checkApproval) }
         case let .chatAccess(claw, approvalURL):
             self.heading(
                 "Approve your chat access",
@@ -183,8 +220,8 @@ struct OnboardingOpenClawIDContent: View {
                 detail: "This Mac’s approved capabilities are available.",
                 icon: "checkmark.circle")
             self.row(
-                "Chat connected",
-                detail: "Your separately approved operator access is ready.",
+                "Chat and dashboard ready",
+                detail: "Opening \(claw)…",
                 icon: "checkmark.circle")
         case let .reachable(hostname):
             self.heading("You’re all set!", subtitle: "Reachable at \(hostname).")

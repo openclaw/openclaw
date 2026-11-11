@@ -18,24 +18,22 @@ struct OnboardingNodeInvitationServiceTests {
     }
 
     @Test
-    func `unpackaged invitation entry does not read clipboard or request enrollment`() {
+    func `unpackaged invitation entry does not request enrollment`() {
         let service = OnboardingNodeInvitationService(
             databaseURL: URL(fileURLWithPath: "/unused-node-enrollment.sqlite"),
             unavailableReason: "Native transport is not packaged.",
-            readInvitation: {
-                Issue.record("Unavailable enrollment must not read the clipboard")
-                throw CocoaError(.featureUnsupported)
-            },
             describeNode: {
                 Issue.record("Unavailable enrollment must not prepare node capabilities")
                 throw CocoaError(.featureUnsupported)
             },
-            install: { _ in Issue.record("Unavailable enrollment must not install a node") },
-            isConnected: { _ in false })
+            install: { _ in
+                Issue.record("Unavailable enrollment must not install a node")
+                return false
+            })
         let model = OnboardingOpenClawIDModel(service: service)
         #expect(model.begin(.joinNode) == nil)
         #expect(model.step == .nodeInvitation)
-        #expect(model.perform(.pasteNodeInvitation(discoveryOrigin: "https://discovery.example")) == nil)
+        #expect(model.perform(.submitNodeInvitation(text: "openclaw-node://join#x", discoveryOrigin: "")) == nil)
         #expect(model.perform(.requestNode) == nil)
         #expect(model.error == nil)
     }
@@ -48,8 +46,23 @@ struct OnboardingNodeInvitationServiceTests {
         let node_key: Key
     }
 
+    @Test
+    func `pasted text accepts the bare link or the owner's full command`() throws {
+        let link = "openclaw-node://join#i=a.b&c=c"
+        let bare = try OnboardingNodeInvitationInput(" \(link)\n")
+        #expect(bare.link == link && bare.discoveryOrigin == nil)
+        let command = "npx -y 'openclaw@2026.11.5' node join '\(link)' --discovery-url 'https://d.example' --service"
+        let full = try OnboardingNodeInvitationInput(command)
+        #expect(full.link == link && full.discoveryOrigin == "https://d.example")
+        #expect(try OnboardingNodeInvitationInput("openclaw node join \(link) --discovery=https://d.example")
+            .discoveryOrigin == "https://d.example")
+        #expect(throws: OpenClawIDNodeInvitationInputError.self) {
+            try OnboardingNodeInvitationInput("openclaw node join --service")
+        }
+    }
+
     @Test(arguments: [false, true])
-    func `owner-approved invitation installs once and cancellation rejects a late descriptor`(
+    func `one owner approval installs node and chat once, and cancellation rejects a late descriptor`(
         cancel: Bool) async throws
     {
         let fixtureURL = URL(fileURLWithPath: #filePath)
@@ -72,46 +85,52 @@ struct OnboardingNodeInvitationServiceTests {
         let database = root.appendingPathComponent("node.sqlite")
         let http = DescriptorGate(response: response)
         var installed: [MacNodeOpenClawIDTarget] = []
-        var connected = false
+        let operatorSeed = Data(repeating: 9, count: 32)
         let service = OnboardingNodeInvitationService(
             databaseURL: database,
-            readInvitation: { fixture.node_invite.link },
             describeNode: {
                 try OpenClawIDNodeEnrollmentDescription(
                     displayName: "Build node", platform: "linux", commands: ["system.run"], caps: ["system"])
             },
             identityStore: { _ in FixtureIdentity(seed: seed) },
+            operatorIdentityStore: { _ in FixtureIdentity(seed: operatorSeed) },
             http: http,
             now: { fixture.now },
-            install: { installed.append($0) },
-            isConnected: { _ in connected })
+            install: {
+                installed.append($0)
+                return true
+            })
         let model = OnboardingOpenClawIDModel(service: service)
         #expect(model.accountUnavailableReason != nil)
         await model.begin(.joinNode)?.value
         #expect(model.step == .nodeInvitation)
-        await model.perform(.pasteNodeInvitation(discoveryOrigin: "https://discovery.example"))?.value
+        // The owner's full command is pasted; its Discovery origin needs no separate entry.
+        await model.perform(.submitNodeInvitation(
+            text: "openclaw node join '\(fixture.node_invite.link)' --discovery-url https://discovery.example",
+            discoveryOrigin: ""))?.value
         await model.perform(.requestNode)?.value
         let hostname = try OpenClawIDNodeEnrollmentLink(fixture.node_invite.link).hostname
-        try #require(model.step == .compareCode(claw: hostname, device: "Build node", code: "168017", approvalURL: nil))
+        guard case let .compareCode(claw, device, code, _) = model.step else {
+            Issue.record("expected the comparison code, got \(model.step)")
+            return
+        }
+        #expect(claw == hostname && device == "Build node")
+        // The code covers the requested chat key, so it differs from the node-only vector.
+        #expect(code.count == 6 && code != "168017")
+        // Approval is detected without a click: the model is already waiting on the descriptor.
         await http.waitForDescriptor()
+        #expect(model.busy)
         #expect(installed.isEmpty)
-        let approval = model.perform(.checkApproval)
         if cancel { model.cancel() }
         await http.release()
-        await approval?.value
+        while model.busy { await Task.yield() }
         #expect(installed.count == (cancel ? 0 : 1))
         if cancel {
             #expect(model.step == .signIn)
             #expect(model.error == nil)
         } else {
-            #expect(model.step == .nodeConnection(claw: hostname, connected: false))
-            connected = true
-            await model.perform(.checkApproval)?.value
-            #expect(model.step == .nodeConnection(claw: hostname, connected: true))
+            #expect(model.step == .connected(claw: hostname))
             #expect(installed.count == 1)
-            await model.perform(.requestChat)?.value
-            #expect(model.error != nil)
-            #expect(model.step == .nodeConnection(claw: hostname, connected: true))
             model.cancel()
         }
         let store = OpenClawIDNodeNativeTrustStore(
@@ -121,6 +140,7 @@ struct OnboardingNodeInvitationServiceTests {
         if let selected = installed.first { #expect(saved?.enrollmentID == selected.enrollmentID) }
         await store.close()
         #expect(await http.requestCount == 2)
+        #expect(await http.redemptionCarriesOperatorKey)
         #expect(await http.usedBearer == false)
     }
 }
@@ -138,6 +158,7 @@ private actor DescriptorGate: OpenClawIDNodeEnrollmentHTTP {
     private var started: CheckedContinuation<Void, Never>?
     private(set) var requestCount = 0
     private(set) var usedBearer = false
+    private(set) var redemptionCarriesOperatorKey = false
 
     init(response: Data) {
         self.response = response
@@ -146,7 +167,13 @@ private actor DescriptorGate: OpenClawIDNodeEnrollmentHTTP {
     func send(_ request: URLRequest) async throws -> OpenClawIDNodeEnrollmentHTTPResponse {
         self.requestCount += 1
         self.usedBearer = self.usedBearer || request.value(forHTTPHeaderField: "Authorization") != nil
-        if request.httpMethod == "POST" { return .init(status: 202, body: Data("{}".utf8)) }
+        if request.httpMethod == "POST" {
+            let body = request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let redemption = (body?["payload"] as? [String: Any])?["redemption"] as? [String: Any]
+            self.redemptionCarriesOperatorKey =
+                ((redemption?["body"] as? [String: Any])?["operator_peer_key"] as? String)?.hasPrefix("iroh:") == true
+            return .init(status: 202, body: Data("{}".utf8))
+        }
         return await withCheckedContinuation {
             self.pending = $0
             self.started?.resume()

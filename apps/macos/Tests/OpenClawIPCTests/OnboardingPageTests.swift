@@ -44,6 +44,20 @@ struct OnboardingPageTests {
     }
 
     @Test
+    func `joining a claw with chat finishes straight into its dashboard`() {
+        let state = AppState(preview: true)
+        var handoffs: [OnboardingDashboardHandoff] = []
+        let view = OnboardingView(
+            state: state,
+            openClawIDService: NodeCompletionFixture(),
+            dashboardHandoffOpener: { handoffs.append($0) })
+        view.finishJoinedClaw()
+        view.finishJoinedClaw()
+        #expect(handoffs == [.dashboard])
+        #expect(!view.finish())
+    }
+
+    @Test
     func `unavailable invitation entry preserves an existing browser completion`() {
         let view = OnboardingView(
             state: AppState(preview: true),

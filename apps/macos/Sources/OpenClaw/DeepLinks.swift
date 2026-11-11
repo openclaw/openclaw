@@ -62,6 +62,11 @@ final class DeepLinkHandler {
     }
 
     func handle(url: URL) async {
+        // A node invitation carries a single-use secret; it goes only to the join sheet.
+        if url.scheme?.lowercased() == "openclaw-node", url.host?.lowercased() == "join" {
+            MacOpenClawIDJoinController.shared.present(invitation: url.absoluteString)
+            return
+        }
         guard let route = DeepLinkParser.parse(url) else {
             deepLinkLogger.debug("ignored deep link \(Self.invalidRouteMetadata(url), privacy: .public)")
             return

@@ -32,14 +32,22 @@ final class MacNodeOpenClawIDSelectionStore {
             identityStore: OpenClawIDNodeIdentityKeychainStore(enrollmentID: enrollmentID))
     }
 
-    func save(_ target: MacNodeOpenClawIDTarget?) {
+    /// Whether this enrollment also asked for chat/dashboard access with its operator key.
+    /// The claw decides whether it was granted; a refused key simply never connects.
+    var operatorRequested: Bool {
+        (self.defaults.object(forKey: self.key) as? [String: String])?["operator"] == "requested"
+    }
+
+    func save(_ target: MacNodeOpenClawIDTarget?, operatorRequested: Bool? = nil) {
         guard let target else {
             self.defaults.removeObject(forKey: self.key)
             return
         }
-        self.defaults.set([
+        var fields = [
             "hostname": target.hostname,
             "enrollmentID": target.enrollmentID.uuidString,
-        ], forKey: self.key)
+        ]
+        if operatorRequested ?? self.operatorRequested { fields["operator"] = "requested" }
+        self.defaults.set(fields, forKey: self.key)
     }
 }

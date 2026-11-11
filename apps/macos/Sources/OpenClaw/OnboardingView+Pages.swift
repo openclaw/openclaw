@@ -799,7 +799,7 @@ extension OnboardingView {
                 if case let .node(name) = self.finishState.connectionCompletion {
                     self.featureRow(
                         title: "Node setup complete",
-                        subtitle: "This Mac is configured for \(name). Chat and account access remain separate.",
+                        subtitle: "This Mac is a node of \(name). The owner did not allow chat from it.",
                         systemImage: "checkmark.circle")
                 } else if let name = self.savedBrowserGatewayName {
                     self.featureRow(title: "Gateway added", subtitle: name, systemImage: "checkmark.circle")
