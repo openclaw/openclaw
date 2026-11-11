@@ -213,7 +213,12 @@ not enable unrelated proof-tier checks.
 
 Full and runtime-only compiled workers reserve separate live/cache slots, so
 runtime checks cannot replace a retained full generation. The protected warmer
-keeps its prebuild full seed for source-only Node shards and publishes the full
+also supplies runtime workers to current-target Control UI E2E rows. Worker-cache
+identity ignores the compiler's heap ceiling while preserving other Node options;
+the warmer and test job keep their own memory limits. Frozen targets and browser
+extension rows retain their existing preparation.
+
+The protected warmer keeps its prebuild full seed for source-only Node shards and publishes the full
 generation already prepared by postbuild collection separately. Only selected
 source verifiers in the artifact producer restore that postbuild seed, keyed by
 the existing Node toolchain identity. A missing archive keeps their uncached path;

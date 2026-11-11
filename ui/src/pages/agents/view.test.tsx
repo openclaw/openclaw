@@ -119,6 +119,7 @@ describe("renderAgents", () => {
         <Agents
           {...props}
           tools={{ ...props.tools, readCatalog }}
+          config={config({})}
           readData={() => ({ ...props.readData(), agentsPanel: "tools" })}
         />
       );

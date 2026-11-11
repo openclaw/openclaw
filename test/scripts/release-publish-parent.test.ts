@@ -707,6 +707,15 @@ it("cleans up recorded ClawHub children after a later dispatch fails", () => {
   expect([rejection >= 0, rejection < cleanup.calls.findIndex(isCancel)]).toEqual([true, true]);
 });
 
+it("cleans up the current parent's unfinished sealed recovery child", () => {
+  const recovery = "plugin-clawhub-recovery.yml";
+  const result = fixture({
+    children: [child({ id: 94, ...childWorkflow(recovery) })],
+  }).run(`${source}cleanup_clawhub_children`, { CHILD_CLAWHUB_RECOVERY_RUN_ID: "94" });
+  expect(result.status, result.stderr).toBe(0);
+  expect(cancellations(result)).toEqual(["94"]);
+});
+
 it.each<{ config: Fixture; env: NodeJS.ProcessEnv; messages: string[] }>([
   { config: { capped: true }, env: {}, messages: [] },
   {

@@ -543,7 +543,10 @@ describe("ModelSetupPage first-run application recovery", () => {
     expect(relaunched.request).not.toHaveBeenCalled();
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 500_000);
     [...page.querySelectorAll<HTMLButtonElement>(".model-setup__intro .btn")]
-      .find((button) => button.textContent?.trim() === "Check again")
+      .find(
+        (button) =>
+          (button.getAttribute("aria-label") ?? button.textContent?.trim()) === "Check again",
+      )
       ?.click();
     await waitForModelSetupDetection(page);
     expect(relaunched.request.mock.calls.map(([method]) => method)).toEqual([

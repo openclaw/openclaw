@@ -92,7 +92,7 @@
 .channels-detail .oc-dialog__title {
   align-items: flex-start;
   padding-block: calc((var(--overlay-modal-close-size) - 24px) / 2);
-  line-height: calc(24px * var(--control-ui-text-scale));
+  line-height: 24px;
   overflow-wrap: anywhere;
 }
 

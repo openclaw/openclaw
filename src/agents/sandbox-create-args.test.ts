@@ -63,6 +63,7 @@ describe("buildSandboxCreateArgs", () => {
       );
       for (const docker of [config.docker, resolveSandboxBrowserDockerCreateConfig(config)]) {
         expect(valuesForFlag(build(docker).argv, "--pids-limit")).toEqual([expected]);
+        expect(valuesForFlag(build(docker).argv, "--ulimit")).toEqual(["core=0"]);
       }
     },
   );

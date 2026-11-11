@@ -76,6 +76,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     client,
     context,
     toolsAllow,
+    deferWorkspaceBootstrap,
     skillLibrary,
     cronCreatorAuthority,
     assertDashboardReadCurrent,
@@ -380,6 +381,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                     : {}),
                   runId: clientRunId,
                   operatorAuthority: admission.operatorAuthority,
+                  deferWorkspaceBootstrap,
                   providerReviewAcknowledgment: request.providerReviewAcknowledgment,
                   dashboardReadAdmission,
                   skillLibraryAuthoring,
@@ -618,6 +620,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
           const hasTerminalAgentError =
             dispatchResult.collaborativeSteeringRefused ||
             (hasReturnedAgentError && (runtimeFailed || !finalizedSourceReply));
+          await dispatchErrorLifecycle.settleTerminalPersistence();
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
             if (hasTerminalAgentError && !dispatchResult.collaborativeSteeringRefused) {
               await dispatchErrorLifecycle.recordUnstartedFailure({
