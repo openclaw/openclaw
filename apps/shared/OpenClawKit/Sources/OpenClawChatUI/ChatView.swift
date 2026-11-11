@@ -537,6 +537,9 @@ extension OpenClawChatView {
         .onDisappear {
             self.speech?.stop()
             self.scrollCommand.cancel()
+            #if os(iOS)
+            self.scroll.transcriptScroller = nil
+            #endif
         }
         #if os(iOS)
         .onChange(of: self.viewModel.localSendRevision) { _, _ in
@@ -569,6 +572,7 @@ extension OpenClawChatView {
         #if os(iOS)
         self.readerHistorySnapshot = nil
         self.scroll.isKeyboardTransitioning = false
+        self.scroll.transcriptScroller = nil
         #endif
         self.speech?.stop()
         self.scrollCommand.cancel()
@@ -1121,7 +1125,10 @@ extension OpenClawChatView {
             self.scroll.hasNewerContentBelow = false
             #if os(iOS)
             self.scroll.readerAnchor.release()
-            self.scrollCommand.cancel()
+            self.scroll.isUserScrolling = false
+            if !self.scroll.jumpToAttachedTranscriptBottom(command: &self.scrollCommand) {
+                self.moveScrollPosition(to: self.scrollerBottomID)
+            }
             #else
             self.moveScrollPosition(to: self.scrollerBottomID)
             #endif

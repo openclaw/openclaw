@@ -2,6 +2,12 @@
 import SwiftUI
 import UIKit
 
+func chatTranscriptBottomOffset(_ scroll: UIScrollView) -> CGFloat {
+    max(
+        -scroll.adjustedContentInset.top,
+        scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+}
+
 /// Same-transaction live-edge owner. No timer, queue or display-link correction.
 struct ChatSynchronousFollowProbe: UIViewRepresentable {
     let scroll: ChatScrollFollowState
@@ -29,7 +35,9 @@ struct ChatSynchronousFollowProbe: UIViewRepresentable {
             while let view = parent, !(view is UIScrollView) {
                 parent = view.superview
             }
-            guard let scroll = parent as? UIScrollView, scroll !== self.scroller else { return }
+            guard let scroll = parent as? UIScrollView else { return }
+            self.followState?.transcriptScroller = scroll
+            guard scroll !== self.scroller else { return }
             self.observations.removeAll()
             self.scroller = scroll
             if self.keyboardObservers.isEmpty {
@@ -74,9 +82,7 @@ struct ChatSynchronousFollowProbe: UIViewRepresentable {
                   let scroll = self.scroller, scroll.window != nil,
                   !scroll.isTracking, !scroll.isDragging, !scroll.isDecelerating,
                   scroll.bounds.height > 0 else { return }
-            let y = max(
-                -scroll.adjustedContentInset.top,
-                scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+            let y = chatTranscriptBottomOffset(scroll)
             guard y.isFinite, abs(scroll.contentOffset.y - y) > 0.5 else { return }
             self.reconciling = true
             defer { self.reconciling = false }
@@ -105,6 +111,18 @@ struct ChatSynchronousFollowProbe: UIViewRepresentable {
         probe.observations.removeAll()
         probe.scroller = nil
         probe.followState = nil
+    }
+}
+
+extension ChatScrollFollowState {
+    func jumpToAttachedTranscriptBottom(command: inout ChatScrollCommand) -> Bool {
+        guard let scroller = self.transcriptScroller, scroller.window != nil else { return false }
+        command.cancel()
+        let offset = chatTranscriptBottomOffset(scroller)
+        if offset.isFinite {
+            scroller.setContentOffset(CGPoint(x: scroller.contentOffset.x, y: offset), animated: false)
+        }
+        return true
     }
 }
 #endif

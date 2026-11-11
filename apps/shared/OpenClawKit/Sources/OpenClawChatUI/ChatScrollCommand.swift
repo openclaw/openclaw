@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 /// Reader navigation releases following; keyboard avoidance alone keeps the live-edge pin.
 func chatReaderScrollReleasesFollow(_ phase: ScrollPhase, keyboardTransition: Bool = false) -> Bool {
@@ -29,6 +32,7 @@ final class ChatScrollFollowState {
     var isUserScrolling = false
     var hasNewerContentBelow = false
     #if os(iOS)
+    @ObservationIgnored weak var transcriptScroller: UIScrollView?
     var isKeyboardTransitioning = false
     let readerAnchor = ChatReaderRunAnchor()
     #endif

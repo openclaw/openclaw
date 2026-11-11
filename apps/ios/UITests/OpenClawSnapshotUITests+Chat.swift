@@ -469,6 +469,18 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "reader-status-bar-navigation")
         jumpToLatest.tap()
         XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
+        self.assertLatestReplyVisible(finalReply, in: transcript)
+        self.attachScreenshot(named: "reader-latest-after-clock-jump")
+    }
+
+    private func assertLatestReplyVisible(_ reply: XCUIElement, in transcript: XCUIElement) {
+        let visible = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                reply.exists && !reply.frame.isEmpty && reply.frame.intersects(transcript.frame)
+            },
+            object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 5), .completed)
+        self.assertElementHasRenderedContent(reply, named: "latest reply after Jump")
     }
 
     func testAnthropicWorkChunksKeepNarrationVisibleInOrder() throws {
@@ -676,6 +688,15 @@ extension OpenClawSnapshotUITests {
         XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY + 1)
         let first = app.staticTexts["OPENCLAW_SWITCH_B_FIRST"]
         XCTAssertFalse(first.exists && first.isHittable)
+        let transcript = app.collectionViews.firstMatch
+        XCTAssertTrue(transcript.waitForExistence(timeout: 3))
+        transcript.swipeDown()
+        transcript.swipeDown()
+        let jump = app.buttons["Jump to latest reply"]
+        XCTAssertTrue(jump.waitForExistence(timeout: 3))
+        jump.tap()
+        self.assertLatestReplyVisible(latest, in: transcript)
+        self.attachScreenshot(named: "chat-switch-jump-latest")
     }
 
     func testTaskListLongPressOffersRefreshDismissAndClear() throws {
