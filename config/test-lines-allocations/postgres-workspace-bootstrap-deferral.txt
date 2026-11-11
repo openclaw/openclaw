@@ -1,2 +1,2 @@
-84
+89
 # PostgreSQL v39-to-v40 workspace bootstrap deferral regression (#196966): exact pre-column store upgrade, drift refusal, and migration-scope declarations.
