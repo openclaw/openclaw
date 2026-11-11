@@ -329,6 +329,10 @@ export type CronServiceDeps = {
     accountId?: string;
     threadId?: string | number;
     inheritSessionThread?: false;
+    /** A separately configured failure route must not use the selected conversation. */
+    alternateRoute?: boolean;
+    /** A safety notice for a selected conversation, sent without run details. */
+    notice?: "auto-disabled";
     /** Persists the transport-owned terminal fact before Gateway work admission releases. */
     onDeliverySettled: (outcome: CronFailureNotificationDelivery) => Promise<void>;
   }) => Promise<void>;
@@ -665,6 +669,7 @@ export type CronUpdateOptions = Pick<
   | "commitGuard"
   | "captureRuntimeAuthority"
   | "inferenceBinding"
+  | "deliveryConversation"
   | "execPolicy"
   | "streamExecApproval"
   | "streamSandbox"

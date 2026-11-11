@@ -119,14 +119,15 @@ export function resolveCronFailureAlertDefaults(
  * which has not been through the delivery codec yet.
  */
 type CronDeliveryRouteFields = Partial<
-  Record<"target" | "channel" | "to" | "threadId" | "accountId", unknown>
+  Record<"target" | "channel" | "to" | "threadId" | "accountId" | "sessionKey", unknown>
 >;
 
 /**
  * A configured default destination replaces the remembered session route of any
  * announce job that names no route of its own. `none` and `webhook` never gain a
  * chat destination, and any job routing field (channel other than `last`, `to`,
- * `threadId`, `accountId`, or owner targeting) keeps the job on its own route.
+ * `threadId`, `accountId`, owner targeting, or a selected `sessionKey`
+ * conversation) keeps the job on its own route.
  */
 export function cronDeliveryUsesDefaultDestination(
   job: { delivery?: CronDeliveryRouteFields },
@@ -138,13 +139,14 @@ export function cronDeliveryUsesDefaultDestination(
   const delivery = job.delivery;
   return (
     !delivery ||
-    !hasExplicitCronDeliveryTarget({
-      target: delivery.target === "owner" ? "owner" : undefined,
-      channel: normalizeMessageChannel(normalizeOptionalString(delivery.channel)),
-      to: normalizeOptionalString(delivery.to),
-      threadId: normalizeOptionalThreadValue(delivery.threadId),
-      accountId: normalizeOptionalString(delivery.accountId),
-    })
+    (normalizeOptionalString(delivery.sessionKey) === undefined &&
+      !hasExplicitCronDeliveryTarget({
+        target: delivery.target === "owner" ? "owner" : undefined,
+        channel: normalizeMessageChannel(normalizeOptionalString(delivery.channel)),
+        to: normalizeOptionalString(delivery.to),
+        threadId: normalizeOptionalThreadValue(delivery.threadId),
+        accountId: normalizeOptionalString(delivery.accountId),
+      }))
   );
 }
 

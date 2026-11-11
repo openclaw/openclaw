@@ -1,4 +1,5 @@
 /** Resolves and validates session-target keys used by cron jobs and delivery. */
+import type { CronConversationBinding, CronDelivery } from "./types.js";
 
 const INVALID_CRON_SESSION_TARGET_ID_ERROR = "invalid cron sessionTarget session id";
 
@@ -87,4 +88,58 @@ export function resolveCronDeliverySessionKey(job: {
   return typeof job.sessionKey === "string" && job.sessionKey.trim()
     ? job.sessionKey.trim()
     : undefined;
+}
+
+/** Shown when a selected result conversation has no matching Gateway capture. */
+export const CRON_SELECTED_CONVERSATION_UNBOUND_MESSAGE =
+  "cron delivery.sessionKey has no captured conversation; set delivery.sessionKey again with cron.update";
+
+/**
+ * The internal conversation chosen by `delivery.sessionKey`: announce results plus failure and
+ * safety notices, or only those notices with `none`. `undefined`: the job uses implicit or
+ * external routing. `null`: the key has no matching captured generation, so delivery must fail
+ * instead of falling back to another conversation.
+ */
+export function resolveCronSelectedConversation(job: {
+  delivery?: Pick<CronDelivery, "mode" | "sessionKey">;
+  deliveryConversation?: CronConversationBinding;
+}): CronConversationBinding | null | undefined {
+  // Validation keeps the key on announce or none jobs; leaving those modes clears it.
+  const sessionKey = job.delivery?.sessionKey;
+  if (sessionKey === undefined) {
+    return undefined;
+  }
+  return job.deliveryConversation?.sessionKey === sessionKey ? job.deliveryConversation : null;
+}
+
+type CronResultConversation = {
+  sourceSessionKey?: string;
+  sourceSessionGeneration?: { sessionId: string; lifecycleRevision: string | undefined };
+};
+
+/**
+ * The conversation that receives a routeless result. A selected conversation replaces the
+ * creator's; an unbound selection keeps no generation, so delivery fails instead of falling back.
+ */
+export function resolveCronResultConversation(
+  job: Parameters<typeof resolveCronSelectedConversation>[0],
+  creator: CronResultConversation,
+): CronResultConversation {
+  const selected =
+    job.delivery?.mode === "announce" ? resolveCronSelectedConversation(job) : undefined;
+  if (selected === undefined) {
+    return {
+      sourceSessionKey: creator.sourceSessionKey,
+      sourceSessionGeneration: creator.sourceSessionGeneration,
+    };
+  }
+  return selected
+    ? {
+        sourceSessionKey: selected.sessionKey,
+        sourceSessionGeneration: {
+          sessionId: selected.sessionId,
+          lifecycleRevision: selected.lifecycleRevision,
+        },
+      }
+    : { sourceSessionKey: job.delivery?.sessionKey, sourceSessionGeneration: undefined };
 }

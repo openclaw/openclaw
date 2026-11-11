@@ -7,6 +7,7 @@ import { compileSafeRegexDetailed } from "../../security/safe-regex.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { assertCronActiveHours } from "../active-hours.js";
 import { resolveCronDeliveryMode } from "../delivery-defaults.js";
+import { hasExplicitCronDeliveryTarget } from "../delivery-target-validation.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
@@ -267,6 +268,9 @@ export function assertDeliverySupport(
   if (!job.delivery) {
     return;
   }
+  if (job.delivery.sessionKey !== undefined) {
+    assertConversationDeliverySupport(job);
+  }
   // No primary delivery and no completion webhook -- nothing to validate.
   if (job.delivery.mode === "none" && !job.delivery.completionDestination) {
     return;
@@ -309,6 +313,33 @@ export function assertDeliverySupport(
   }
 }
 
+/**
+ * The selected conversation replaces channel routing, so routing fields cannot coexist. With
+ * `none` it carries only failure and safety notices, so any job shape may use it.
+ */
+function assertConversationDeliverySupport(
+  job: Pick<CronJob, "sessionTarget" | "payload" | "delivery">,
+) {
+  const delivery = job.delivery;
+  if (delivery?.mode !== "announce" && delivery?.mode !== "none") {
+    throw new Error('cron delivery.sessionKey requires delivery.mode="announce" or "none"');
+  }
+  if (hasExplicitCronDeliveryTarget(delivery) || delivery.directPolicy !== undefined) {
+    throw new Error(
+      "cron delivery.sessionKey cannot be combined with delivery.channel, to, threadId, accountId, target, or directPolicy; clear those fields to deliver to the selected conversation",
+    );
+  }
+  // Main-session jobs do not support an independent announcement destination.
+  if (
+    delivery.mode === "announce" &&
+    (job.sessionTarget === "main" || job.payload.kind === "systemEvent")
+  ) {
+    throw new Error(
+      'cron delivery.sessionKey with delivery.mode="announce" is supported only for jobs outside the main session; use delivery.mode="none" to send only failure and safety notices there',
+    );
+  }
+}
+
 export function assertAnnounceDeliveryChannelSupport(
   job: CronJob,
   configuredChannels?: readonly string[],
@@ -332,6 +363,7 @@ export function assertAnnounceDeliveryChannelSupport(
     targetMaySelectChannel ||
     job.delivery?.bestEffort === true ||
     job.delivery?.target === "owner" ||
+    job.delivery?.sessionKey !== undefined ||
     channels.length < 2
   ) {
     return;

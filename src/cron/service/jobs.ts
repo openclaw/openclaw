@@ -427,6 +427,7 @@ export function applyJobPatch(
         authoredDelivery.to !== undefined ||
         authoredDelivery.threadId !== undefined ||
         authoredDelivery.accountId !== undefined ||
+        authoredDelivery.sessionKey !== undefined ||
         authoredDelivery.completionDestination !== undefined)
     ) {
       assertDeliverySupport({
@@ -435,9 +436,18 @@ export function applyJobPatch(
         delivery: authoredDelivery,
       });
     }
-    // Clear-only failure destinations retain their global-default opt-outs.
+    // Clear-only failure destinations retain their global-default opt-outs; a selected
+    // conversation keeps receiving this job's failure and safety notices.
     const failureDestination = job.delivery?.failureDestination;
-    job.delivery = failureDestination ? { mode: "none", failureDestination } : undefined;
+    const sessionKey = job.delivery?.sessionKey;
+    job.delivery =
+      failureDestination || sessionKey !== undefined
+        ? {
+            mode: "none",
+            ...(failureDestination ? { failureDestination } : {}),
+            ...(sessionKey !== undefined ? { sessionKey } : {}),
+          }
+        : undefined;
   }
   if (patch.state) {
     const statePatch = { ...patch.state } as Partial<CronJobState>;

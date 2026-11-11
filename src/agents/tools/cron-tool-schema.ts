@@ -313,6 +313,9 @@ function createCronDeliverySchema(): TSchema {
           }),
         ),
         accountId: deliveryStringSchema("Delivery account"),
+        sessionKey: deliveryStringSchema(
+          "Same-agent conversation for announce results and failure/safety notices; with mode none, notices only",
+        ),
         failureDestination: Type.Optional(
           Type.Union([failureDestinationObject, Type.Null()], {
             description:

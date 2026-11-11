@@ -284,6 +284,7 @@ export function applyJobResult(
       queueCronAutoDisableNotification({
         job,
         reason: "consecutive-failures",
+        atMs: result.endedAt,
         consecutiveErrors: job.state.consecutiveErrors ?? 0,
         deferredNotifications: opts.deferredNotifications,
       });
@@ -319,6 +320,7 @@ export function applyJobResult(
               ? { ...ownerNotice, ...(agentId ? { agentId } : {}) }
               : notice,
           text: result.error ?? "Automation paused: its parent conversation is unavailable.",
+          atMs: result.endedAt,
         });
       }
     }

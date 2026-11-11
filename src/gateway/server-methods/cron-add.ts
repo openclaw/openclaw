@@ -32,6 +32,7 @@ import { prepareCronCreatorSession } from "./cron-creator-session.js";
 import { isCronInvalidRequestError } from "./cron-error-classification.js";
 import {
   captureCronCreatorSession,
+  captureCronDeliveryConversation,
   requiresExplicitAgentRuntimeToolsAllow,
   normalizeCronAddRequest,
   assertCronDoesNotTargetAgentHarness,
@@ -150,6 +151,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     return;
   }
   let creatorOptions: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
+  let deliveryConversation: Awaited<ReturnType<typeof captureCronDeliveryConversation>>;
   const commitGuard = () => {
     commandCreation.creation?.assertCurrent();
     assertMutationCurrent?.();
@@ -177,6 +179,14 @@ export const cronAddHandler: GatewayRequestHandler = async ({
       { ...jobCreate, createdActor: creatorOptions.createdActor },
       context.cron.getDefaultAgentId(),
     );
+    deliveryConversation = await captureCronDeliveryConversation({
+      cfg,
+      job: jobCreate,
+      defaultAgentId: context.cron.getDefaultAgentId(),
+    });
+    if (deliveryConversation && jobCreate.delivery) {
+      jobCreate.delivery = { ...jobCreate.delivery, sessionKey: deliveryConversation.sessionKey };
+    }
   } catch (err) {
     creatorOptions?.disposeOperatorSource?.();
     creatorOptions?.disposeInferenceAuthorization?.();
@@ -194,6 +204,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
         ...jobCreate,
         sourceConversation: creatorOptions.sourceConversation,
         createdActor: creatorOptions.createdActor,
+        deliveryConversation,
       },
     });
     const streamSandbox = execPolicy?.sandboxContext
@@ -228,6 +239,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
 
           enabledExplicit,
           ...creatorOptions,
+          ...(deliveryConversation ? { deliveryConversation } : {}),
           ...(commandCreation.creation
             ? {
                 pluginCommand: commandCreation.creation.envelope,

@@ -58,6 +58,7 @@ import {
 import {
   assertValidCronUpdatePatch,
   captureCronCreatorSession,
+  captureCronDeliveryConversation,
   captureCronUpdatedInferenceBinding,
   normalizeCronUpdateRequest,
 } from "./cron-input-validation.js";
@@ -189,6 +190,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     let streamExecPolicy: ReturnType<typeof resolveCronStreamExecPolicy>;
     const requiresStreamExec = cronUpdateRequiresStreamExecAuthority(patch, currentJob);
     let creatorSessionId: string | undefined;
+    let deliveryConversation: Awaited<ReturnType<typeof captureCronDeliveryConversation>>;
     if (callerScope && !callerScope.manageAll && "agentId" in patch) {
       respondInvalidCronParams(respond, "cron.update", "agentId cannot be changed by caller scope");
       return;
@@ -243,6 +245,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         jobToUpdate,
         nextJob,
         context.cron.getDefaultAgentId(),
+        patch,
       );
       if (
         callerScope?.manageAll &&
@@ -282,6 +285,20 @@ export const cronHandlers: GatewayRequestHandlers = {
       const runtimeAuthority = capture?.captureRuntimeAuthority();
       capture &&= { ...capture, captureRuntimeAuthority: () => runtimeAuthority };
       const nextJob = await validateUpdate(currentJob);
+      // Selecting the key, or moving the job to another agent, re-resolves the destination.
+      if (
+        typeof patch.delivery?.sessionKey === "string" ||
+        ("agentId" in patch && nextJob.delivery?.sessionKey !== undefined)
+      ) {
+        deliveryConversation = await captureCronDeliveryConversation({
+          cfg,
+          job: nextJob,
+          defaultAgentId: context.cron.getDefaultAgentId(),
+        });
+        if (deliveryConversation && typeof patch.delivery?.sessionKey === "string") {
+          patch.delivery.sessionKey = deliveryConversation.sessionKey;
+        }
+      }
       const nextSourceRevision = resolveCronOperatorExecutionRevision(nextJob);
       const sealed = currentJob.operatorSource;
       const sourceBound = Boolean(
@@ -359,6 +376,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       ...(inference?.inferenceBinding !== undefined
         ? { inferenceBinding: inference.inferenceBinding }
         : {}),
+      ...(deliveryConversation ? { deliveryConversation } : {}),
       commitGuard,
       ...(capture ? { captureRuntimeAuthority: capture.captureRuntimeAuthority } : {}),
     };
@@ -466,7 +484,7 @@ export const cronHandlers: GatewayRequestHandlers = {
               deliveryPreview = await resolveCronDeliveryFailurePreview({
                 cfg,
                 defaultAgentId: context.cron.getDefaultAgentId(),
-                job: nextJob,
+                job: deliveryConversation ? { ...nextJob, deliveryConversation } : nextJob,
               });
               if (updateOptions) {
                 updateOptions.execPolicy = execPolicy;

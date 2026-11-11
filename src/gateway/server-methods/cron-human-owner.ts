@@ -135,64 +135,85 @@ export function assertHumanCronExecutionAccess(
   }
 }
 
-/** Retargeting uses the same agent ceiling and session access as an interactive run. */
+/**
+ * Retargeting, and selecting the result conversation, use the same agent ceiling and session
+ * access as an interactive run.
+ */
 export async function prepareHumanCronTargetAccess(
   client: GatewayClient | null,
   getConfig: () => OpenClawConfig,
   previous: CronJob,
   next: CronJob,
   defaultAgentId?: string,
+  patch?: CronJobPatch,
 ): Promise<{ assertCurrent: () => void; release: () => void } | undefined> {
   if (!isDirectCronOwnerClient(client) || client?.connect?.scopes?.includes("operator.admin")) {
     return undefined;
   }
-  if (
-    previous.agentId === next.agentId &&
-    previous.sessionKey === next.sessionKey &&
-    previous.sessionTarget === next.sessionTarget
-  ) {
+  const retargeted =
+    previous.agentId !== next.agentId ||
+    previous.sessionKey !== next.sessionKey ||
+    previous.sessionTarget !== next.sessionTarget;
+  // The Gateway captures delivery.sessionKey when it is set or when its agent changes.
+  const destination =
+    typeof patch?.delivery?.sessionKey === "string" || previous.agentId !== next.agentId
+      ? next.delivery?.sessionKey
+      : undefined;
+  if (!retargeted && destination === undefined) {
     return undefined;
   }
   const cfg = getConfig();
   const agentId = resolveCronJobEffectiveAgentId(next, defaultAgentId);
-  const sessionKey =
-    next.sessionTarget === "main"
+  const executionKey = !retargeted
+    ? undefined
+    : next.sessionTarget === "main"
       ? resolveAgentMainSessionKey({ cfg, agentId })
       : (resolveCronSessionTargetSessionKey(next.sessionTarget) ?? next.sessionKey);
   const profiles = await prepareSessionSharingProfiles(client);
-  const facts = sessionKey
-    ? await prepareSessionMutationFacts({ cfg, agentId, sessionKey, allowMissing: true })
-    : undefined;
+  const prepareTarget = async (sessionKey: string) => ({
+    sessionKey,
+    facts: await prepareSessionMutationFacts({ cfg, agentId, sessionKey, allowMissing: true }),
+  });
+  const targets: Array<Awaited<ReturnType<typeof prepareTarget>>> = [];
+  const release = () => {
+    for (const target of targets) {
+      target.facts.release();
+    }
+  };
   const assertCurrent = () => {
     const currentConfig = getConfig();
     const agentError = authorizeGatewaySessionCreation({ cfg: currentConfig, client, agentId });
     if (agentError) {
       throw new TypeError(agentError.message);
     }
-    if (!facts || !sessionKey) {
-      return;
-    }
-    const current = facts.readCurrent(currentConfig);
-    const projected = prepareProjectedSessionSharing({
-      cfg: currentConfig,
-      client,
-      profiles,
-      isMember: (_target, identityId) => current.membership.has(identityId),
-    });
-    const error = authorizePreparedSessionMutation(
-      { cfg: currentConfig, client, agentId, sessionKey },
-      current,
-      { policy: projected.policy, aliases: profiles.readCurrent().profile?.aliases ?? new Set() },
-    );
-    if (error) {
-      throw new TypeError(error.message);
+    for (const { sessionKey, facts } of targets) {
+      const current = facts.readCurrent(currentConfig);
+      const projected = prepareProjectedSessionSharing({
+        cfg: currentConfig,
+        client,
+        profiles,
+        isMember: (_target, identityId) => current.membership.has(identityId),
+      });
+      const error = authorizePreparedSessionMutation(
+        { cfg: currentConfig, client, agentId, sessionKey },
+        current,
+        { policy: projected.policy, aliases: profiles.readCurrent().profile?.aliases ?? new Set() },
+      );
+      if (error) {
+        throw new TypeError(error.message);
+      }
     }
   };
   try {
+    for (const sessionKey of new Set([executionKey, destination])) {
+      if (sessionKey) {
+        targets.push(await prepareTarget(sessionKey));
+      }
+    }
     assertCurrent();
-    return { assertCurrent, release: () => facts?.release() };
+    return { assertCurrent, release };
   } catch (error) {
-    facts?.release();
+    release();
     throw error;
   }
 }

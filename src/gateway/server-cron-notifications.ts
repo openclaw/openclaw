@@ -18,7 +18,10 @@ import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js
 import { createCronExecutionId } from "../cron/run-id.js";
 import type { CronEvent, CronService } from "../cron/service.js";
 import type { CronFailureRepairRequest, CronServiceDeps } from "../cron/service/state.js";
-import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
+import {
+  CRON_SELECTED_CONVERSATION_UNBOUND_MESSAGE,
+  resolveCronDeliverySessionKey,
+} from "../cron/session-target.js";
 import type {
   CronFailureNotificationDelivery,
   CronJob,
@@ -480,11 +483,51 @@ async function sendGatewayCronFailureAlertUnderAdmission(
       return { kind: "settled", outcome: { delivered: true, status: "delivered" } };
     }
 
+    const alertPayload = params.notice
+      ? params.payload
+      : {
+          ...params.payload,
+          text: appendCronFailureAlertDetails(
+            params.payload.text ?? "",
+            params.runAtMs,
+            runtimeConfig,
+          ),
+        };
+    // Only primary-route notices use the selected conversation. An explicit alternate route
+    // may also resolve to "last" without a recipient, so preserve the policy decision rather
+    // than inferring it from coordinates. An uncaptured primary selection fails closed.
+    const conversation =
+      !params.alternateRoute && params.channel === "last" && !params.to && !params.accountId
+        ? params.job.deliveryConversation
+        : undefined;
+    if (conversation === null) {
+      throw new Error(CRON_SELECTED_CONVERSATION_UNBOUND_MESSAGE);
+    }
     const abortController = new AbortController();
     const deliveryTimeoutError = new Error("cron: failure alert announcement timed out");
     // Release Gateway admission on deadline even when a transport ignores abort.
     const result = await withTimeout(
       (async () => {
+        if (conversation) {
+          if (params.runAtMs === undefined) {
+            throw new Error("cron failure alert is missing its run time");
+          }
+          const committed = await commitCronConversationResult({
+            config: runtimeConfig,
+            agentId,
+            jobId: params.job.id,
+            runStartedAt: params.runAtMs,
+            conversation,
+            payloads: [alertPayload],
+            signal: abortController.signal,
+            deliveryAttemptFence: null,
+            kind: params.notice ?? "failure-alert",
+          });
+          if (!committed.ok) {
+            throw new Error(committed.reason);
+          }
+          return { status: "sent" as const };
+        }
         const resolved = await resolveDeliveryTarget(
           runtimeConfig,
           agentId,
@@ -510,14 +553,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           onTranscriptDiagnostic: (message) => {
             params.logger.warn({ jobId: params.job.id }, message);
           },
-          payload: {
-            ...params.payload,
-            text: appendCronFailureAlertDetails(
-              params.payload.text ?? "",
-              params.runAtMs,
-              runtimeConfig,
-            ),
-          },
+          payload: alertPayload,
           inspectionUrl: resolveControlUiAutomationRunUrl(runtimeConfig, {
             jobId: params.job.id,
             runId:
@@ -577,6 +613,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
   if (
     params.job &&
     params.resolveCronAgent &&
+    params.job.delivery?.mode !== "none" &&
     !params.quietTrigger &&
     (params.evt.status === "skipped" || (params.evt.status === "error" && params.runNotStarted))
   ) {

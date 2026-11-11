@@ -36,6 +36,10 @@ export type SessionEventOutcome = {
   delivered: boolean;
   /** The settled answer was committed by the existing conversation-result writer. */
   conversationResultCommitted?: true;
+  /** A selected announcement has its own destination and delivery outcome. */
+  selectedConversationDelivery?:
+    | { status: "delivered" }
+    | { status: "not-delivered"; error: string };
   summary?: string;
   nextCheckMs?: number;
   sourceDeliveryOutcome?: SourceDeliveryOutcome;

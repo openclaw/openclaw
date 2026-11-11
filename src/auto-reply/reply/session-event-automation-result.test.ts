@@ -68,13 +68,31 @@ it.for([
   { result: "progress", notification: "other-conversation" },
   { result: "progress", messageTool: true },
   { result: "progress", messageTool: "mirror" },
+  { result: "progress", notification: "selected" },
+  { result: "no_change", notification: "selected" },
+  { result: "progress", notification: "selected", messageTool: "mirror" },
+  { result: "progress", notification: "selected", selectedNative: true },
+  { result: "progress", notification: "selected", selectedSelf: true },
+  { result: "progress", notification: "selected", selectedSelf: true, selectedNative: true },
+  { result: "progress", notification: "selected", selectedSelf: true, messageTool: "mirror" },
+  {
+    result: "progress",
+    notification: "selected",
+    selectedSelf: true,
+    selectedMedia: true,
+    messageTool: "mirror",
+  },
 ] as const)(
-  "settles automation $result ($notification/$messageTool/$alias) through its shared session owner",
+  "settles automation $result ($notification/$messageTool/$alias/$selectedNative/$selectedSelf/$selectedMedia) through its shared session owner",
   async (scenario, { signal }) => {
     const progress = scenario.result === "progress";
     const failed = scenario.result === "failed";
     const notification = "notification" in scenario ? scenario.notification : undefined;
-    const nativeOnly = notification === "native-only";
+    const selected = notification === "selected";
+    const nativeOnly = notification === "native-only" || "selectedNative" in scenario;
+    const selectedSelf = "selectedSelf" in scenario;
+    const selectedMedia = "selectedMedia" in scenario;
+    const expectedResultText = selectedMedia ? "report.pdf" : summary;
     const otherConversation = notification === "other-conversation";
     const conversationOnly = notification === "conversation" || nativeOnly || otherConversation;
     const notificationDisabled = notification === "none";
@@ -144,6 +162,15 @@ it.for([
                 : "agent:main:automation-result",
         };
         const sessionId = "automation-result-session";
+        const inbox = {
+          agentId: scope.agentId,
+          sessionKey: selectedSelf ? scope.sessionKey : "agent:main:selected-inbox",
+          sessionId: selectedSelf ? sessionId : "selected-inbox-session",
+          lifecycleRevision: selectedSelf ? "original" : "selected-inbox-generation",
+        };
+        if (selected) {
+          await replaceSessionEntry(inbox, { ...inbox, updatedAt: Date.now() });
+        }
         const route = { channel: "telegram", to: "-100001", accountId: "default" };
         await replaceSessionEntry(scope, {
           sessionId,
@@ -180,16 +207,18 @@ it.for([
                 : alias === "main-key" || alias === "global-main"
                   ? "session:main"
                   : `session:${scope.sessionKey}`,
-            delivery: notificationDisabled
-              ? { mode: "none" }
-              : {
-                  mode: "announce",
-                  ...(conversationOnly
-                    ? {}
-                    : unavailable
-                      ? { channel: "missing-channel", to: "recipient" }
-                      : route),
-                },
+            delivery: selected
+              ? { mode: "announce", sessionKey: inbox.sessionKey }
+              : notificationDisabled
+                ? { mode: "none" }
+                : {
+                    mode: "announce",
+                    ...(conversationOnly
+                      ? {}
+                      : unavailable
+                        ? { channel: "missing-channel", to: "recipient" }
+                        : route),
+                  },
             payload: {
               kind: "agentTurn",
               message: request,
@@ -197,6 +226,7 @@ it.for([
             },
           }),
           sourceConversation: alias ? undefined : source,
+          deliveryConversation: selected ? inbox : undefined,
         };
         let automationRunId: string | undefined;
         model.mockReset().mockImplementation(async (params) => {
@@ -217,20 +247,23 @@ it.for([
             action: "record_result",
             ...result,
           });
-          const finalPayload = nativeOnly
-            ? {
-                channelData: {
-                  discord: {
-                    embeds: [{ title: "Report ready", description: "Native report body" }],
+          const finalPayload = selectedMedia
+            ? { mediaUrls: ["https://example.com/report.pdf"] }
+            : nativeOnly
+              ? {
+                  channelData: {
+                    discord: {
+                      embeds: [{ title: "Report ready", description: "Native report body" }],
+                    },
                   },
-                },
-              }
-            : { text: summary };
+                }
+              : { text: summary };
           if ("messageTool" in scenario && scenario.messageTool === "mirror") {
             setReplyPayloadMetadata(finalPayload, {
               sourceReplyTranscriptMirror: {
                 ...scope,
                 text: finalPayload.text,
+                mediaUrls: selectedMedia ? ["https://example.com/report.pdf"] : undefined,
                 idempotencyKey: `source-result:${automationRunId}`,
               },
             });
@@ -271,6 +304,18 @@ it.for([
             ...(failed ? { error: failure } : {}),
           });
           expect(outcome.result).toEqual(result);
+          if (selected) {
+            const inboxMessages = (await loadTranscriptEvents(inbox))
+              .map(readTranscriptEventMessage)
+              .filter(
+                (message) =>
+                  message?.model === "automation-result" ||
+                  message?.idempotencyKey === `source-result:${automationRunId}`,
+              );
+            expect(inboxMessages.map((message) => message?.content)).toEqual(
+              progress && !nativeOnly ? [[{ type: "text", text: expectedResultText }]] : [],
+            );
+          }
           const settled = expectDefined(
             await readSessionEntryInWorker(scope),
             "settled shared session",
@@ -289,14 +334,14 @@ it.for([
               message?.idempotencyKey === `source-result:${automationRunId}`,
           );
           expect(facts.map((fact) => fact?.content)).toEqual(
-            progress && !nativeOnly ? [[{ type: "text", text: summary }]] : [],
+            progress && !nativeOnly ? [[{ type: "text", text: expectedResultText }]] : [],
           );
           if (progress) {
             expect(outcome).toMatchObject({
               summary,
               delivered: !notificationDisabled && !deliveryFails,
             });
-            if (unavailable || otherConversation) {
+            if (unavailable || otherConversation || (selected && nativeOnly)) {
               expect(outcome.deliveryError).toBeTruthy();
             } else {
               expect(outcome.deliveryError).toBeUndefined();

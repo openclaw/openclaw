@@ -35,11 +35,13 @@ export function assertCronDeliveryInputNonBlankFields(delivery: unknown, fieldPr
   const deliveryRecord = delivery as {
     channel?: unknown;
     to?: unknown;
+    sessionKey?: unknown;
     failureDestination?: unknown;
     completionDestination?: unknown;
   };
   assertNonBlankStringField(`${fieldPrefix}.channel`, deliveryRecord.channel);
   assertNonBlankStringField(`${fieldPrefix}.to`, deliveryRecord.to);
+  assertNonBlankStringField(`${fieldPrefix}.sessionKey`, deliveryRecord.sessionKey);
 
   const failureDestination = deliveryRecord.failureDestination;
   if (failureDestination && typeof failureDestination === "object") {

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +18,7 @@ import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAccountCronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import { CronService } from "../../cron/service.js";
@@ -527,6 +529,65 @@ it("allows only the current human owner or admin to edit and transfer an automat
         ).toBe(true);
       } finally {
         cron.stop();
+        await fixture.scheduler.stop();
+      }
+    },
+  );
+});
+
+it("requires conversation write access before a human owner selects a result conversation", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", prepareProfileCatalog: true },
+    async (state) => {
+      const storePath = path.join(state.sessionsDir("main"), "sessions.json");
+      const cfg = { ...rolePolicyConfig(), session: { store: storePath } };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const alice = roleClient("view", "destination-alice");
+      const profileId = (client: GatewayClient) =>
+        expectDefined(client.authenticatedUserProfile, "profile").profileId;
+      const conversations = {
+        own: "agent:main:dashboard:alice-inbox",
+        foreign: "agent:main:dashboard:bob-private",
+      };
+      for (const [sessionKey, owner] of [
+        [conversations.own, alice],
+        [conversations.foreign, roleClient("view", "destination-bob")],
+      ] as const) {
+        await replaceSessionEntry(
+          { agentId: "main", storePath, sessionKey },
+          {
+            sessionId: `${sessionKey}-session`,
+            updatedAt: 1,
+            createdVia: "operator",
+            createdActor: { type: "human", source: "profile", id: profileId(owner) },
+          },
+        );
+      }
+      const fixture = createPolicyFixture(state.path("cron", "jobs.json"));
+      try {
+        const job = await fixture.cron.add(jobInput, {
+          createdActor: { type: "human", source: "profile", id: profileId(alice) },
+        });
+        const select = (sessionKey: string) =>
+          fixture.invoke(
+            "cron.update",
+            { id: job.id, patch: { delivery: { mode: "none", sessionKey } } },
+            undefined,
+            undefined,
+            undefined,
+            alice,
+          );
+        expectDenied(await select(conversations.foreign), "for this connection");
+        expect(fixture.cron.getJob(job.id)?.delivery).toEqual({ mode: "none" });
+        expect((await select(conversations.own))[0]).toBe(true);
+        expect(fixture.cron.getJob(job.id)?.delivery).toEqual({
+          mode: "none",
+          sessionKey: conversations.own,
+        });
+      } finally {
+        fixture.cron.stop();
         await fixture.scheduler.stop();
       }
     },

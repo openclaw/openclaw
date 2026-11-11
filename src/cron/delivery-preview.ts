@@ -21,7 +21,11 @@ import {
   type DeliveryTargetResolution,
   type CronDeliverySourceGeneration,
 } from "./isolated-agent/delivery-target.js";
-import { resolveCronDeliverySessionKey } from "./session-target.js";
+import {
+  CRON_SELECTED_CONVERSATION_UNBOUND_MESSAGE,
+  resolveCronDeliverySessionKey,
+  resolveCronSelectedConversation,
+} from "./session-target.js";
 import {
   CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
   hasCanonicalCronDeliveryMode,
@@ -29,7 +33,12 @@ import {
 import type { CronDeliveryPreview, CronStoredJob } from "./types.js";
 
 type CronDeliveryPreviewJob = Pick<CronStoredJob, "delivery" | "payload" | "sessionTarget"> &
-  Partial<Pick<CronStoredJob, "agentId" | "sessionKey" | "sourceConversation" | "createdActor">>;
+  Partial<
+    Pick<
+      CronStoredJob,
+      "agentId" | "sessionKey" | "sourceConversation" | "deliveryConversation" | "createdActor"
+    >
+  >;
 
 function formatTarget(channel?: string, to?: string | null): string {
   if (!channel) {
@@ -77,8 +86,19 @@ function prepareCronDeliveryPreview(params: CronDeliveryPreviewParams) {
     params.job,
     resolveCronDeliveryDefaultsScope(params.cfg.cron, params.job, agentId),
   );
+  const selected = resolveCronSelectedConversation(params.job);
   if (plan.mode === "none" && !hasExplicitCronDeliveryTarget(plan)) {
-    return { preview: { label: "not requested", detail: "not requested" } };
+    // A silent job's selected conversation receives only failure and safety notices.
+    return {
+      preview: {
+        label: "not requested",
+        ...(selected === undefined
+          ? { detail: "not requested" }
+          : selected
+            ? { detail: `failure and safety notices -> conversation ${selected.sessionKey}` }
+            : { detail: CRON_SELECTED_CONVERSATION_UNBOUND_MESSAGE, failed: true as const }),
+      },
+    };
   }
   if (plan.mode === "webhook") {
     // Webhook previews do not resolve channel targets; runtime only needs the configured URL.
@@ -92,6 +112,16 @@ function prepareCronDeliveryPreview(params: CronDeliveryPreviewParams) {
     };
   }
 
+  if (selected !== undefined) {
+    return {
+      preview: {
+        label: `announce -> conversation ${params.job.delivery?.sessionKey}`,
+        ...(selected
+          ? { detail: "commits to the selected conversation (no external channel route)" }
+          : { detail: CRON_SELECTED_CONVERSATION_UNBOUND_MESSAGE, failed: true as const }),
+      },
+    };
+  }
   const requestedChannel = plan.channel ?? "last";
   if (!agentId) {
     return {

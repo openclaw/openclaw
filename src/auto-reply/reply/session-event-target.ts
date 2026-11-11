@@ -27,6 +27,7 @@ import {
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { sessionToolOverridesEqual } from "../../config/sessions/session-tool-overrides.js";
+import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
@@ -40,7 +41,7 @@ import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deleti
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import type { PreparedCommandOwnerAuthority } from "../command-auth.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
-import type { SessionEventTarget } from "./session-event-contract.js";
+import type { SessionEventOptions, SessionEventTarget } from "./session-event-contract.js";
 import { narrowSessionEventSettings } from "./session-event-policy.js";
 
 const targetScopes = resolveGlobalSingleton(
@@ -546,6 +547,16 @@ export function intersectSessionEventToolsAllow(
     matchers.every((matches) => matches(name)),
   );
   return attachToolAllowlistIntersection(candidates, restrictions);
+}
+
+/** Tool cap of one occurrence: the scheduled job's allowlist narrowed by the producer's target. */
+export function resolveSessionEventToolsAllow(
+  options: Pick<SessionEventOptions, "scheduledAutomation" | "expectedTarget">,
+): string[] | undefined {
+  const jobTools = options.scheduledAutomation
+    ? resolveCronRunToolsAllow(options.scheduledAutomation.job)
+    : undefined;
+  return intersectSessionEventToolsAllow(jobTools, options.expectedTarget?.toolsAllow);
 }
 
 /** Frozen tools may continue only while the current session still covers their admitted policy. */

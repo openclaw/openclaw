@@ -23,6 +23,7 @@ export function mergeCronDelivery(
     to: existing?.to,
     threadId: existing?.threadId,
     accountId: existing?.accountId,
+    sessionKey: existing?.sessionKey,
     bestEffort: existing?.bestEffort,
     completionDestination: existing?.completionDestination,
     failureDestination: existing?.failureDestination,
@@ -46,6 +47,10 @@ export function mergeCronDelivery(
     if (!hasCompletionDestinationPatch && (next.mode === "none" || next.mode === "webhook")) {
       next.completionDestination = undefined;
     }
+    if (next.mode === "webhook") {
+      // A selected conversation serves announce results and none-mode notices, not webhooks.
+      next.sessionKey = undefined;
+    }
   }
   if ("channel" in patch) {
     next.channel = normalizeOptionalString(patch.channel);
@@ -64,6 +69,9 @@ export function mergeCronDelivery(
   }
   if ("accountId" in patch) {
     next.accountId = normalizeOptionalString(patch.accountId);
+  }
+  if ("sessionKey" in patch) {
+    next.sessionKey = normalizeOptionalString(patch.sessionKey);
   }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
@@ -132,6 +140,7 @@ export function mergeCronDelivery(
     next.to === undefined &&
     next.threadId === undefined &&
     next.accountId === undefined &&
+    next.sessionKey === undefined &&
     next.bestEffort === undefined &&
     next.completionDestination === undefined &&
     next.failureDestination === undefined

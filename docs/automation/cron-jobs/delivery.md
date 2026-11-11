@@ -57,7 +57,35 @@ With no external route, the conversation commit itself completes delivery. WebCh
 
 Conversation results and notifications share silent-reply handling. Suppressing a caption preserves attached media, and internal control tokens stay out of history. `none` disables automatic results and notifications; primary `webhook` delivery remains an external-only mode.
 
-Do not set `delivery.channel: "webchat"`: internal conversation coordinates are not channel delivery targets. Leave the external route unset to deliver to the creating WebChat conversation.
+Do not set `delivery.channel: "webchat"`: internal conversation coordinates are not channel delivery targets. Leave the external route unset to deliver to the creating WebChat conversation, or select another conversation with `delivery.sessionKey`.
+
+### Selected conversation
+
+`delivery.sessionKey` sends an automation's output to an existing conversation of the job's agent instead of the creating conversation or a channel. Use it to collect several automations in one WebChat conversation without recreating them:
+
+```json5
+// cron.update params: results and notices
+{
+  jobId: "<job-id>",
+  patch: { delivery: { mode: "announce", sessionKey: "agent:main:<conversation>" } },
+}
+// cron.update params: a silent job keeps no result delivery; only its notices move
+{
+  jobId: "<job-id>",
+  patch: { delivery: { mode: "none", sessionKey: "agent:main:<conversation>" } },
+}
+```
+
+- With `announce`, the result is added to that conversation's history and appears live in WebChat; it is not sent through the conversation's external channel. Results keep their job and run, and retries do not duplicate them.
+- With `none`, successful runs add nothing to the selected conversation. A persistent execution still keeps its own settled reply; that is execution history, not an announcement. The selection alone does not turn on failure alerts; they follow the usual `failureAlert` and global `cron.failureAlert` policy.
+- Failure alerts that use the job's primary route, and auto-disable or pause safety notices, go to the selected conversation. This includes the safety notice of a job with `failureAlert: false`. An alert with its own `failureAlert` or `delivery.failureDestination` route, including `channel: "last"`, or a configured `cron.failureAlert`, agent, or creator failure route keeps that route. Owner-conversation repair still runs in the conversation that created the job.
+- The selected conversation is the job's own route, so a configured [default destination](#default-destinations) does not replace it.
+- Only the destination changes. Execution context (`sessionTarget`, the creating conversation, workspace, sandbox, model account, and tool authority) stays as it was, so choosing or clearing the conversation does not require re-authorizing the job.
+- It requires `delivery.mode` `announce` or `none` and cannot be combined with `channel` other than `last`, `to`, `threadId`, `accountId`, `target`, or `directPolicy`. Switching between `announce` and `none` keeps it; switching to `webhook` clears it.
+- `announce` applies to jobs outside the main session. Persistent-session agent turns keep their settled execution reply and also publish the selected announcement. `none` works with any job, including main-session script and system-event jobs; send `mode: "none"` with the key for those jobs.
+- The Gateway checks the conversation when you set it: it must exist, belong to the job's agent, and not be archived. Agent callers can select only conversations of their own agent, and a human owner without administrator access needs write access to the conversation.
+- The job records the conversation's current incarnation. If that conversation is deleted or reset with `/new`, results and notices are recorded as **Not delivered** and nothing is written to the new session or a remembered channel route. Results are not retried in the creating conversation or elsewhere. A persistent execution keeps its ordinary settled reply independently of announcement delivery. A failure alert or safety notice that was not delivered goes to the owning agent's main session as an in-app notice instead. Set the same `sessionKey` again to follow the new session.
+- Clear it with `patch: { delivery: { sessionKey: null } }` to restore the previous creating-conversation, channel, or in-app notice routing.
 
 <Warning>
   Every outbound automation webhook uses the strict SSRF guard. Loopback,
@@ -134,14 +162,14 @@ Set `cron.delivery` to send every announce job that names no route of its own to
 
 The job owner is its `agentId`, else the agent in its session key, else the default agent. The job creator is the Gateway profile recorded when the job was created: the operator profile that created it, or the human profile that asked an agent to create it. Jobs created before creator recording, and jobs whose creator is channel-only, unknown, an agent with no delegating human, or the system, have no creator default. Primary results resolve in this order:
 
-| Job delivery                                                                                    | Destination                                                                          |
-| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Names a route: `channel` other than `last`, `to`, `threadId`, `accountId`, or `target: "owner"` | The job's own route (defaults ignored)                                               |
-| `announce` (or omitted) with no route, creator has `cron.creators.<profileId>.delivery`         | The creator default                                                                  |
-| `announce` (or omitted) with no route, owner agent has `cron.agents.<agentId>.delivery`         | The agent default                                                                    |
-| `announce` (or omitted) with no route, only `cron.delivery` set                                 | The Gateway default                                                                  |
-| `announce` (or omitted) with no route, no default configured                                    | Unchanged: creating conversation, remembered route, or the single configured channel |
-| `none` or `webhook`                                                                             | Unchanged: defaults never add a chat destination                                     |
+| Job delivery                                                                                                  | Destination                                                                          |
+| ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Names a route: `channel` other than `last`, `to`, `threadId`, `accountId`, `target: "owner"`, or `sessionKey` | The job's own route (defaults ignored)                                               |
+| `announce` (or omitted) with no route, creator has `cron.creators.<profileId>.delivery`                       | The creator default                                                                  |
+| `announce` (or omitted) with no route, owner agent has `cron.agents.<agentId>.delivery`                       | The agent default                                                                    |
+| `announce` (or omitted) with no route, only `cron.delivery` set                                               | The Gateway default                                                                  |
+| `announce` (or omitted) with no route, no default configured                                                  | Unchanged: creating conversation, remembered route, or the single configured channel |
+| `none` or `webhook`                                                                                           | Unchanged: defaults never add a chat destination                                     |
 
 - The most specific default wins whole. A creator default replaces the agent and Gateway defaults, and an agent default replaces the Gateway default, instead of merging fields, because a recipient, thread, and account belong to the channel that supplied them.
 - A default replaces the creating-conversation route for route-less announce jobs in every session target, including `current` and `main`. Results then land in the default destination, not the creating chat. To keep a job in a particular chat, set its `channel` and `to`.

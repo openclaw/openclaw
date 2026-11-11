@@ -5,6 +5,10 @@ import {
   mergeCronRunDiagnostics,
 } from "../../cron/run-diagnostics.js";
 import { projectCronRunUsage } from "../../cron/run-telemetry.js";
+import {
+  CRON_SELECTED_CONVERSATION_UNBOUND_MESSAGE,
+  resolveCronSelectedConversation,
+} from "../../cron/session-target.js";
 import { consumeCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -148,6 +152,7 @@ export async function settleSessionEventTurn(params: {
     | "sourceDeliveryOutcome"
     | "automationResult"
     | "conversationResultCommitted"
+    | "selectedConversationDelivery"
   >
 > {
   const { automation, runId, deliveryEvidence } = params;
@@ -204,52 +209,54 @@ export async function settleSessionEventTurn(params: {
 
   // Execution prose is audit-only. Publish the settled answer once,
   // independently of whether this occurrence requests a notification.
-  const payloads = selectAutomationReplyPayloads(
+  const visiblePayloads = selectAutomationReplyPayloads(
     deliveryEvidence?.payloads ?? [],
     settled.automationResult.result?.outcome === "no_change",
     deliveryEvidence?.meta?.terminalReply?.disposition === "silent",
-  ).filter(
+  ).filter((payload) => !shouldSuppressReasoningPayload(payload) && isRenderablePayload(payload));
+  // Source-reply mirrors satisfy only the execution transcript, not another destination.
+  const payloads = visiblePayloads.filter(
     (payload) =>
-      !shouldSuppressReasoningPayload(payload) &&
-      isRenderablePayload(payload) &&
-      // Source-reply mirrors retain their existing transcript writer.
       getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror?.sessionKey !==
-        params.sessionKey,
+      params.sessionKey,
   );
   if (
     params.outcome === "completed" &&
     !hasPendingAutomationContinuation(deliveryEvidence?.meta) &&
-    payloads.length > 0
+    visiblePayloads.length > 0
   ) {
     const binding = params.binding;
     if (!binding?.sessionId) {
       throw new Error("Automation result has no admitted conversation generation");
     }
     const { commitCronConversationResult } = await import("../../cron/conversation-result.js");
-    const committed = await commitCronConversationResult({
-      config: params.config,
-      agentId: params.agentId,
-      jobId: automation.job.id,
-      runStartedAt: automation.job.state.runningAtMs ?? params.runStartedAt,
-      conversation: {
-        sessionKey: params.sessionKey,
-        sessionId: binding.sessionId,
-        lifecycleRevision: binding.lifecycleRevision,
-      },
-      payloads,
-      signal: params.signal,
-      deliveryAttemptFence: {
-        beforeAttempt: async () => {
-          await params.prepareCurrent();
-          await automation.deliveryAttemptFence?.beforeAttempt();
-          params.assertCurrent();
-        },
-        assertCurrent: () => {
-          params.assertCurrent();
-          automation.deliveryAttemptFence?.assertCurrent();
-        },
-      },
-    });
+    const committed =
+      payloads.length > 0
+        ? await commitCronConversationResult({
+            config: params.config,
+            agentId: params.agentId,
+            jobId: automation.job.id,
+            runStartedAt: automation.job.state.runningAtMs ?? params.runStartedAt,
+            conversation: {
+              sessionKey: params.sessionKey,
+              sessionId: binding.sessionId,
+              lifecycleRevision: binding.lifecycleRevision,
+            },
+            payloads,
+            signal: params.signal,
+            deliveryAttemptFence: {
+              beforeAttempt: async () => {
+                await params.prepareCurrent();
+                await automation.deliveryAttemptFence?.beforeAttempt();
+                params.assertCurrent();
+              },
+              assertCurrent: () => {
+                params.assertCurrent();
+                automation.deliveryAttemptFence?.assertCurrent();
+              },
+            },
+          })
+        : { ok: true as const, skipped: true as const, diagnostics: undefined };
     if (!committed.ok) {
       throw new Error(committed.reason);
     }
@@ -259,7 +266,80 @@ export async function settleSessionEventTurn(params: {
         committed.diagnostics,
       );
     }
-    return { ...settled, conversationResultCommitted: committed.skipped ? undefined : true };
+    const executionResult = {
+      ...settled,
+      conversationResultCommitted: committed.skipped ? undefined : (true as const),
+    };
+    const selected =
+      automation.job.delivery?.mode === "announce"
+        ? resolveCronSelectedConversation(automation.job)
+        : undefined;
+    if (selected === undefined) {
+      return executionResult;
+    }
+    // A selected announcement is a second result destination, not permission to replace
+    // the persistent execution's settled reply or inherit its remembered transport.
+    try {
+      if (selected === null) {
+        throw new Error(CRON_SELECTED_CONVERSATION_UNBOUND_MESSAGE);
+      }
+      if (
+        selected.sessionKey === params.sessionKey &&
+        selected.sessionId === binding.sessionId &&
+        selected.lifecycleRevision === binding.lifecycleRevision
+      ) {
+        const alreadyMirrored =
+          payloads.length === 0 &&
+          visiblePayloads.some((payload) => {
+            const mirror = getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
+            return Boolean(mirror?.text?.trim() || mirror?.mediaUrls?.some((url) => url.trim()));
+          });
+        if (committed.skipped && !alreadyMirrored) {
+          throw new Error("selected result has no conversation projection");
+        }
+        return { ...executionResult, selectedConversationDelivery: { status: "delivered" } };
+      }
+      const delivered = await commitCronConversationResult({
+        config: params.config,
+        agentId: params.agentId,
+        jobId: automation.job.id,
+        runStartedAt: automation.job.state.runningAtMs ?? params.runStartedAt,
+        conversation: selected,
+        payloads: visiblePayloads,
+        signal: params.signal,
+        deliveryAttemptFence: {
+          beforeAttempt: async () => {
+            await params.prepareCurrent();
+            await automation.beforeDeliver?.();
+            params.assertCurrent();
+          },
+          assertCurrent: () => {
+            params.assertCurrent();
+            automation.deliveryAttemptFence?.assertCurrent();
+            automation.assertDeliveryCurrent?.();
+          },
+        },
+      });
+      if (!delivered.ok) {
+        throw new Error(delivered.reason);
+      }
+      if (delivered.skipped) {
+        throw new Error("selected result has no conversation projection");
+      }
+      executionResult.automationResult.diagnostics = mergeCronRunDiagnostics(
+        executionResult.automationResult.diagnostics,
+        delivered.diagnostics,
+      );
+      return { ...executionResult, selectedConversationDelivery: { status: "delivered" } };
+    } catch (error) {
+      return {
+        ...executionResult,
+        selectedConversationDelivery: {
+          status: "not-delivered",
+          error: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
   }
   return settled;
 }

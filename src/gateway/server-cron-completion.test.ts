@@ -16,9 +16,11 @@ import {
   noteActiveCronJobRemoval,
   requestActiveCronJobCancellation,
 } from "../cron/active-jobs.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { readCronRunHistoryPageForTests } from "../cron/run-history.test-support.js";
 import { createNoopLogger } from "../cron/service.test-harness.js";
 import { createCronCompletionDeliveryFence } from "../cron/service/delivery-attempt-fence.js";
+import { cronNotificationJob } from "../cron/service/notification-intents.js";
 import { finishCronRun } from "../cron/service/run-history.js";
 import { markServiceCronJobActive } from "../cron/service/run-receipts.js";
 import { createCronServiceState } from "../cron/service/state.js";
@@ -723,3 +725,170 @@ describe("completion announcement", () => {
     },
   );
 });
+
+describe("selected internal conversation", () => {
+  async function selectInbox(fixture: Awaited<ReturnType<typeof createCompletionFixture>>) {
+    const inbox = { ...fixture.source, sessionKey: "agent:main:dashboard:inbox" };
+    const generation = { sessionId: "inbox-session", lifecycleRevision: "inbox-generation" };
+    await replaceSessionEntry(inbox, { ...generation, updatedAt: 1 });
+    fixture.job.delivery = { mode: "announce", sessionKey: inbox.sessionKey };
+    fixture.job.deliveryConversation = { sessionKey: inbox.sessionKey, ...generation };
+    const alert = (channel: string, to?: string) => {
+      const onDeliverySettled = vi.fn(async () => {});
+      return {
+        onDeliverySettled,
+        sent: sendGatewayCronFailureAlert({
+          deps: {},
+          logger: { warn: vi.fn() },
+          resolveCronAgent: () => ({ agentId: "main", cfg: fixture.cfg }),
+          job: cronNotificationJob(fixture.job),
+          routing: { defaultAgentId: "main" },
+          payload: { text: "Scheduled command failed." },
+          runAtMs: 1000,
+          channel,
+          ...(to ? { to } : {}),
+          mode: "announce",
+          onDeliverySettled,
+        }),
+      };
+    };
+    const reset = () =>
+      resetSessionEntryLifecycle({
+        storePath: inbox.storePath,
+        target: { canonicalKey: inbox.sessionKey, storeKeys: [inbox.sessionKey] },
+        buildNextEntry: () => ({
+          sessionId: "inbox-replacement",
+          lifecycleRevision: "inbox-replacement-generation",
+          updatedAt: 2,
+        }),
+      });
+    return { inbox, alert, reset };
+  }
+
+  it("commits a result and its failure notice only to the selected conversation", async () => {
+    await withCompletionFixture("command", async (fixture) => {
+      const { inbox, alert } = await selectInbox(fixture);
+
+      await expect(fixture.finalize()).resolves.toMatchObject({
+        deliveryAttempted: true,
+        delivered: true,
+      });
+      const notice = alert("last");
+      await notice.sent;
+
+      expect(fixture.sendText).not.toHaveBeenCalled();
+      expect(notice.onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
+        delivered: true,
+        status: "delivered",
+      });
+      const provenance = {
+        kind: "cron",
+        jobId: fixture.job.id,
+        runId: `cron:${fixture.job.id}:1000`,
+      };
+      expect(await fixture.messages(inbox)).toEqual([
+        expect.objectContaining({
+          content: [{ type: "text", text: fixture.text }],
+          openclawAutomation: provenance,
+        }),
+        expect.objectContaining({
+          content: [{ type: "text", text: expect.stringContaining("Scheduled command failed.") }],
+          openclawAutomation: provenance,
+        }),
+      ]);
+      // Neither the creating conversation nor any remembered route receives a copy.
+      await fixture.assertNoResults();
+    });
+  });
+
+  it("keeps alerts that name their own route on that channel", async () => {
+    await withCompletionFixture("command", async (fixture) => {
+      const { inbox, alert } = await selectInbox(fixture);
+      await alert("telegram", "123").sent;
+      expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ text: expect.stringContaining("Scheduled command failed.") }),
+      );
+      expect(await fixture.messages(inbox)).toEqual([]);
+    });
+  });
+
+  it("fails delivery to a reset conversation without falling back", async () => {
+    await withCompletionFixture("command", async (fixture) => {
+      const { inbox, alert, reset } = await selectInbox(fixture);
+      await reset();
+
+      await expect(fixture.finalize()).resolves.toMatchObject({
+        deliveryAttempted: true,
+        delivered: false,
+        deliveryError: expect.stringContaining("session rebound"),
+      });
+      const notice = alert("last");
+      await expect(notice.sent).rejects.toThrow("session rebound");
+      expect(notice.onDeliverySettled).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ delivered: false, status: "not-delivered" }),
+      );
+      expect(fixture.sendText).not.toHaveBeenCalled();
+      expect(await fixture.messages(inbox)).toEqual([]);
+      await fixture.assertNoResults();
+    });
+  });
+});
+
+it.each(["command", "script"] as const)(
+  "commits an agent-less %s result to its source agent's selected conversation",
+  async (kind) => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: {}, worker: { workspace: state.workspaceDir } } },
+      };
+      const storePath = path.join(state.sessionsDir("worker"), "sessions.json");
+      const creator = {
+        sessionKey: "agent:worker:dashboard:creator",
+        sessionId: "worker-creator",
+        lifecycleRevision: "creator-generation",
+      };
+      const inbox = {
+        sessionKey: "agent:worker:dashboard:inbox",
+        sessionId: "worker-inbox",
+        lifecycleRevision: "inbox-generation",
+      };
+      for (const conversation of [creator, inbox]) {
+        await replaceSessionEntry(
+          { agentId: "worker", storePath, sessionKey: conversation.sessionKey },
+          { ...conversation, updatedAt: 1 },
+        );
+      }
+      const job: CronStoredJob = {
+        ...makeCronJob({
+          sessionKey: creator.sessionKey,
+          payload:
+            kind === "command"
+              ? { kind: "command", argv: ["printf", "finished"] }
+              : { kind: "script", script: "return { notify: 'finished' };" },
+          delivery: { mode: "announce", sessionKey: inbox.sessionKey },
+        }),
+        sourceConversation: creator,
+        deliveryConversation: inbox,
+      };
+      const result = await finalizeCronCompletionAnnouncement({
+        job,
+        text: "Worker finished",
+        runStartedAtMs: 1000,
+        deliveryAttemptFence: null,
+        deps: {},
+        resolveCronAgent: (requested) => ({ agentId: requested ?? "main", cfg }),
+        logger: getChildLogger({ module: "cron-completion-test" }),
+        label: kind,
+      });
+      expect(result).toMatchObject({ delivered: true, deliveryError: undefined });
+      const messages = async (conversation: typeof inbox) =>
+        (await loadTranscriptEvents({ agentId: "worker", storePath, ...conversation }))
+          .map(readTranscriptEventMessage)
+          .filter((message) => message?.role === "assistant");
+      expect(await messages(inbox)).toEqual([
+        expect.objectContaining({ content: [{ type: "text", text: "Worker finished" }] }),
+      ]);
+      expect(await messages(creator)).toEqual([]);
+    });
+  },
+);

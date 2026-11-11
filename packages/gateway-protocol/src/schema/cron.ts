@@ -335,6 +335,8 @@ const CronDeliveryNoopSchema = closedObject({
   ...CronDeliverySharedProperties,
   ...CronChatDeliveryProperties,
   to: Type.Optional(NonBlankString),
+  /** Internal conversation for failure and safety notices; success stays silent. */
+  sessionKey: Type.Optional(NonBlankString),
 });
 
 const CronDeliveryAnnounceSchema = closedObject({
@@ -343,6 +345,8 @@ const CronDeliveryAnnounceSchema = closedObject({
   ...CronChatDeliveryProperties,
   completionDestination: Type.Optional(CronCompletionDestinationSchema),
   to: Type.Optional(NonBlankString),
+  /** Internal conversation that receives results instead of a channel or the creator. */
+  sessionKey: Type.Optional(NonBlankString),
 });
 
 const CronDeliveryWebhookSchema = closedObject({
@@ -364,6 +368,7 @@ const CronDeliveryPatchSchema = closedObject({
   ...CronDeliveryPatchSharedProperties,
   completionDestination: Type.Optional(Type.Union([CronCompletionDestinationSchema, Type.Null()])),
   to: Type.Optional(Type.Union([NonBlankString, Type.Null()])),
+  sessionKey: Type.Optional(Type.Union([NonBlankString, Type.Null()])),
 });
 
 const CronFailureNotificationDeliverySchema = closedObject({

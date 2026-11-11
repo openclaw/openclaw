@@ -265,7 +265,13 @@ function isSameDeliveryTarget(
   failurePlan: CronFailureDeliveryPlan,
 ): boolean {
   const primaryMode = delivery.mode;
-  if (!hasCanonicalCronDeliveryMode(delivery) || primaryMode === "none") {
+  // A selected internal conversation is distinct from every external failure route,
+  // including an explicit "last" route with no recipient coordinates.
+  if (
+    !hasCanonicalCronDeliveryMode(delivery) ||
+    primaryMode === "none" ||
+    delivery.sessionKey !== undefined
+  ) {
     return false;
   }
 

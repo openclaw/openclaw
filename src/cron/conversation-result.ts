@@ -15,6 +15,8 @@ export type CronConversationResultParams = {
   payloads: ReplyPayload[];
   signal?: AbortSignal;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
+  /** Notices share the run's provenance but must not dedupe against its result. */
+  kind?: "result" | "failure-alert" | "auto-disabled";
 };
 
 /** Commits an internal-channel result; external deliveries are recorded by outbound delivery. */
@@ -33,7 +35,10 @@ export async function commitCronConversationResult(
       lifecycleRevision: params.conversation.lifecycleRevision,
     },
     payloads: params.payloads,
-    idempotencyKey: `cron-current-completion:${runId}`,
+    idempotencyKey:
+      params.kind === undefined || params.kind === "result"
+        ? `cron-current-completion:${runId}`
+        : `cron-${params.kind}:${runId}`,
     provenance: { kind: "cron", jobId: params.jobId, runId },
     config: params.config,
     signal: params.signal,

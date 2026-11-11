@@ -19,7 +19,6 @@ import {
 } from "../../config/sessions/session-source-authority.js";
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
-import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
 import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { execRequestAbortSignal } from "../../infra/exec-request-context.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.types.js";
@@ -66,8 +65,8 @@ import {
   captureSessionEventTargetForHost,
   getSessionEventRuntimeConfig,
   hasSessionEventOriginatingCaller,
-  intersectSessionEventToolsAllow,
   prepareSessionEventTargetForHost,
+  resolveSessionEventToolsAllow,
 } from "./session-event-target.js";
 
 export { assertSessionEventTargetCurrent, captureSessionEventTargetForHost };
@@ -159,6 +158,7 @@ function enqueueSessionEventAttempt(
   let inputRecorder: UserTurnTranscriptRecorder | undefined;
   let delivered = false;
   let conversationResultCommitted: true | undefined;
+  let selectedConversationDelivery: SessionEventOutcome["selectedConversationDelivery"];
   let deliveryAttempted = false;
   let deliveryAmbiguous = false;
   let deliveryError: string | undefined;
@@ -173,11 +173,7 @@ function enqueueSessionEventAttempt(
   let settings = options.expectedTarget?.settings;
   let checkedSettings: typeof settings | null = null;
   let isDeletionBlocked: (() => boolean) | undefined;
-  const jobTools = options.scheduledAutomation
-    ? resolveCronRunToolsAllow(options.scheduledAutomation.job)
-    : undefined;
-  const producerTools = options.expectedTarget?.toolsAllow;
-  const toolsAllow = intersectSessionEventToolsAllow(jobTools, producerTools);
+  const toolsAllow = resolveSessionEventToolsAllow(options);
   const assertOwnerCurrent = () => {
     if (settlement === "finished") {
       throw new Error("Session event occurrence is settled");
@@ -453,6 +449,7 @@ function enqueueSessionEventAttempt(
         interruptedByRestart: terminalOutcome.stopReason === "restart",
         delivered,
         conversationResultCommitted,
+        selectedConversationDelivery,
         deliveryAttempted,
         deliveryAmbiguous,
         deliveryError,
@@ -706,6 +703,7 @@ function enqueueSessionEventAttempt(
             sourceDeliveryOutcome = terminal.sourceDeliveryOutcome;
             automationResult = terminal.automationResult;
             conversationResultCommitted = terminal.conversationResultCommitted;
+            selectedConversationDelivery = terminal.selectedConversationDelivery;
             delivered ||= sourceDeliveryOutcome?.satisfiesSourceDelivery === true;
           },
         },

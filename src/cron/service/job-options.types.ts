@@ -21,6 +21,8 @@ export type CronAddOptions = {
   /** Null authorizes a native CLI account transition on explicit updates only. */
   inferenceBinding?: CronStoredJob["inferenceBinding"] | null;
   sourceConversation?: CronStoredJob["sourceConversation"];
+  /** Host-captured generation for the job's `delivery.sessionKey`, never public input. */
+  deliveryConversation?: CronStoredJob["deliveryConversation"];
   /** Logical sandbox target captured from the admitted creator, never public input. */
   streamSandbox?: CronStoredJob["streamSandbox"];
   /** Fresh native process grant captured only at an existing stream-exec authorization edge. */

@@ -99,8 +99,15 @@ export function resolveCronRequesterExecutionRevision(job: CronStoredJob): strin
     ownerProfileId: _ownerProfileId,
     ownerTransferPending: _ownerTransferPending,
     toolsAllowProvenance: _toolsAllowProvenance,
+    deliveryConversation: _deliveryConversation,
     ...executableJob
   } = job;
+  // The internal result conversation adds no capability to the run: it only selects where the
+  // settled result lands, so choosing or clearing it keeps requester-bound authority.
+  if (executableJob.delivery?.sessionKey !== undefined) {
+    const { sessionKey: _sessionKey, ...delivery } = executableJob.delivery;
+    return resolveCronJobConfigRevision({ ...executableJob, delivery });
+  }
   return resolveCronJobConfigRevision(executableJob);
 }
 

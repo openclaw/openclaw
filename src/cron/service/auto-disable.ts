@@ -38,6 +38,7 @@ export function buildCronAutoDisableNotice(params: {
 export function queueCronAutoDisableNotification(params: {
   job: CronJob;
   reason: CronAutoDisableReason;
+  atMs: number;
   consecutiveErrors: number;
   deferredNotifications: DeferredCronNotifications;
 }): void {
@@ -45,6 +46,7 @@ export function queueCronAutoDisableNotification(params: {
     kind: "auto-disabled",
     job: cronNotificationJob(params.job),
     text: buildCronAutoDisableNotice(params),
+    atMs: params.atMs,
   });
 }
 

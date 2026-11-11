@@ -226,8 +226,10 @@ export function resolveFailureAlert(
       ? (normalizeOptionalThreadValue(route?.threadId) ??
         (primaryThreadFallbackMatches ? primaryAnnounceRoute?.threadId : undefined))
       : undefined;
+  // An explicit failure route, even "last" without a recipient, never reuses a selected conversation.
   const primaryRouteMatches =
     primaryRecipientMatches &&
+    !(job.delivery?.sessionKey !== undefined && alternateRoute !== null) &&
     accountId === primaryAnnounceRoute?.accountId &&
     normalizeOptionalStringifiedId(threadId) ===
       normalizeOptionalStringifiedId(primaryAnnounceRoute?.threadId);

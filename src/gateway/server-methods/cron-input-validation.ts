@@ -13,7 +13,10 @@ import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-co
 import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
+import {
+  resolveCronJobEffectiveAgentId,
+  tryResolveCronJobEffectiveAgentId,
+} from "../../cron/agent-id.js";
 import {
   assertValidCronAnnounceDelivery,
   assertValidCronFailureAlert,
@@ -37,6 +40,7 @@ import { applyJobPatch } from "../../cron/service/jobs.js";
 import {
   isCronOperatorSourceParent,
   resolveCronDeliverySessionKey,
+  resolveCronSelectedConversation,
   resolveCronSessionTargetSessionKey,
 } from "../../cron/session-target.js";
 import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
@@ -600,6 +604,10 @@ export async function cronRunQueuesBehindCaller(params: {
   if (!delivery.requested) {
     return false;
   }
+  const selected = resolveCronSelectedConversation(job);
+  if (selected !== undefined) {
+    return selected !== null && isCallerSession(selected.sessionKey);
+  }
   const sourceSessionKey = resolveCronDeliverySessionKey(job);
   try {
     const resolved = await resolveDeliveryTarget(
@@ -621,4 +629,46 @@ export async function cronRunQueuesBehindCaller(params: {
     // The run is already enqueued; uncertain routing must not hold its caller's lane.
     return true;
   }
+}
+
+/**
+ * Resolves `delivery.sessionKey` into the exact conversation incarnation that receives results.
+ * Callers check session-ref scope first; this checks the conversation itself is usable.
+ */
+export async function captureCronDeliveryConversation(params: {
+  cfg: OpenClawConfig;
+  job: Pick<CronJob, "agentId" | "sessionKey" | "sessionTarget" | "delivery">;
+  defaultAgentId: string | undefined;
+}): Promise<NonNullable<CronStoredJob["deliveryConversation"]> | undefined> {
+  const requested = params.job.delivery?.sessionKey;
+  if (requested === undefined) {
+    return undefined;
+  }
+  const agentId = resolveCronJobEffectiveAgentId(params.job, params.defaultAgentId);
+  const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: params.cfg,
+    key: requested,
+    agentId,
+  });
+  if (normalizeAgentId(loaded.agentId) !== agentId) {
+    throw new Error(
+      `cron delivery.sessionKey conversation ${requested} belongs to agent ${loaded.agentId}; this automation runs as agent ${agentId}`,
+    );
+  }
+  const entry = loaded.entry;
+  if (!entry?.sessionId) {
+    throw new Error(
+      `cron delivery.sessionKey conversation ${requested} was not found for agent ${agentId}; choose an existing conversation`,
+    );
+  }
+  if (typeof entry.archivedAt === "number") {
+    throw new Error(
+      `cron delivery.sessionKey conversation ${requested} is archived; restore it or choose another conversation`,
+    );
+  }
+  return {
+    sessionKey: loaded.canonicalKey,
+    sessionId: entry.sessionId,
+    ...(entry.lifecycleRevision ? { lifecycleRevision: entry.lifecycleRevision } : {}),
+  };
 }

@@ -537,10 +537,12 @@ export function cronPatchSessionRefsMatchCaller(
     return true;
   }
   const target = patch.sessionTarget?.trim();
-  return [patch.sessionKey, target?.startsWith("session:") ? target.slice(8) : undefined].every(
-    (ref) => {
-      const agentId = parseAgentIdFromSessionRef(ref, callerScope.agentId);
-      return !agentId || normalizeAgentId(agentId) === callerScope.agentId;
-    },
-  );
+  return [
+    patch.sessionKey,
+    target?.startsWith("session:") ? target.slice(8) : undefined,
+    patch.delivery?.sessionKey,
+  ].every((ref) => {
+    const agentId = parseAgentIdFromSessionRef(ref, callerScope.agentId);
+    return !agentId || normalizeAgentId(agentId) === callerScope.agentId;
+  });
 }

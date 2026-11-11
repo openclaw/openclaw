@@ -13,6 +13,7 @@ import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { prepareAutomationSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveHookExternalContentSource } from "../security/external-content-source.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { isCronWithinActiveHours } from "./active-hours.js";
 import { isCronExecutionIdle } from "./execution-idle.js";
 import { requiresExternalCronDelivery } from "./isolated-agent/delivery-target.js";
@@ -27,7 +28,10 @@ import { appendCronJobScratchPrompt, buildCronCommandBody } from "./run-prompt.j
 import { isCronScratchEffectivelyEmpty } from "./scratch-contract.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
 import type { CronServiceDeps } from "./service/state.js";
-import { resolveCronDeliverySessionKey } from "./session-target.js";
+import {
+  resolveCronDeliverySessionKey,
+  resolveCronSelectedConversation,
+} from "./session-target.js";
 import { resolveCronJobsStorePathFromConfigAsync } from "./store.js";
 import type { CronResolvedDeliveryState } from "./types.js";
 
@@ -108,10 +112,13 @@ export async function runCronSessionTurn(
       assertCurrent();
     }
     const requestedChat = delivery?.deliveryRequested && delivery.deliveryPlan.mode !== "webhook";
+    const selectedConversation = requestedChat ? resolveCronSelectedConversation(job) : undefined;
+    const selectedDelivery = selectedConversation !== undefined;
     const deliverySessionKey = resolveCronDeliverySessionKey(job);
     // Only a result committed to this same destination can satisfy an internal announcement.
     const conversationDelivery = Boolean(
       requestedChat &&
+      !selectedDelivery &&
       delivery &&
       !delivery.resolvedDelivery.ok &&
       !delivery.resolvedDelivery.sourceConversationUnavailable &&
@@ -135,15 +142,18 @@ export async function runCronSessionTurn(
       requestedChat &&
       !delivery.resolvedDelivery.ok &&
       !conversationDelivery &&
+      !selectedDelivery &&
       !deliverySuppressionReason
         ? delivery.resolvedDelivery.error.message
         : undefined;
     // Failed owner resolution cannot inherit a remembered group route.
-    const route = delivery
-      ? delivery.resolvedDelivery.ok
-        ? delivery.resolvedDelivery
-        : undefined
-      : params.deliveryContext;
+    const route = selectedDelivery
+      ? { channel: INTERNAL_MESSAGE_CHANNEL }
+      : delivery
+        ? delivery.resolvedDelivery.ok
+          ? delivery.resolvedDelivery
+          : undefined
+        : params.deliveryContext;
     let checkedDeliveryConfig: OpenClawConfig | undefined;
     const assertDeliveryCurrent = () => {
       // Delivery owners also assert before the first preparation; beforeDeliver
@@ -159,16 +169,20 @@ export async function runCronSessionTurn(
       if (delivery) {
         const current = await resolveCronDeliveryContext({ ...params, cfg });
         assertCurrent();
-        const sameRoute = conversationDelivery
-          ? !current.resolvedDelivery.ok &&
-            !current.resolvedDelivery.sourceConversationUnavailable &&
+        const sameRoute = selectedDelivery
+          ? current.deliveryPlan.mode === "announce" &&
+            !current.resolvedDelivery.ok &&
             !requiresExternalCronDelivery(current.deliveryPlan, current.resolvedDelivery)
-          : current.resolvedDelivery.ok &&
-            route &&
-            current.resolvedDelivery.channel === route.channel &&
-            current.resolvedDelivery.to === route.to &&
-            current.resolvedDelivery.accountId === route.accountId &&
-            current.resolvedDelivery.threadId === route.threadId;
+          : conversationDelivery
+            ? !current.resolvedDelivery.ok &&
+              !current.resolvedDelivery.sourceConversationUnavailable &&
+              !requiresExternalCronDelivery(current.deliveryPlan, current.resolvedDelivery)
+            : current.resolvedDelivery.ok &&
+              route &&
+              current.resolvedDelivery.channel === route.channel &&
+              current.resolvedDelivery.to === route.to &&
+              current.resolvedDelivery.accountId === route.accountId &&
+              current.resolvedDelivery.threadId === route.threadId;
         if (!current.deliveryRequested || !sameRoute) {
           throw new Error(
             "Automation delivery policy or route changed while queued; inspect the run and retry with the current destination",
@@ -321,7 +335,9 @@ export async function runCronSessionTurn(
         onExecutionPhase: params.onExecutionPhase,
       },
       deliver: delivery
-        ? Boolean(requestedChat && !deliveryError && !deliverySuppressionReason)
+        ? Boolean(
+            requestedChat && !selectedDelivery && !deliveryError && !deliverySuppressionReason,
+          )
         : true,
     });
     // Source, notice, and Cron custody remain live until the controller settles.
@@ -331,9 +347,12 @@ export async function runCronSessionTurn(
       : undefined;
     const conversationDelivered =
       conversationDelivery && result.conversationResultCommitted === true;
-    const delivered = result.deliveryAmbiguous
-      ? undefined
-      : result.delivered || conversationDelivered;
+    const selectedOutcome = result.selectedConversationDelivery;
+    const delivered = selectedDelivery
+      ? selectedOutcome?.status === "delivered"
+      : result.deliveryAmbiguous
+        ? undefined
+        : result.delivered || conversationDelivered;
     return {
       ...result.automationResult,
       status: result.admissionDeferred ? "skipped" : result.status === "completed" ? "ok" : "error",
@@ -360,8 +379,13 @@ export async function runCronSessionTurn(
             failureNotification: { status: "not-requested" },
           } satisfies CronResolvedDeliveryState)
         : undefined,
-      deliveryError: result.deliveryError ?? deliveryError,
-      deliveryAttempted: result.deliveryAttempted || conversationDelivered,
+      deliveryError:
+        selectedOutcome?.status === "not-delivered"
+          ? selectedOutcome.error
+          : (result.deliveryError ?? deliveryError),
+      deliveryAttempted: selectedDelivery
+        ? selectedOutcome !== undefined
+        : result.deliveryAttempted || conversationDelivered,
       deliverySuppressionReason: result.deliverySuppressionReason ?? deliverySuppressionReason,
       ...(delivery
         ? {
@@ -374,7 +398,7 @@ export async function runCronSessionTurn(
                 satisfiesSourceDelivery: delivered === true,
                 unverifiedMessageToolDelivery: false,
               },
-              fallbackUsed: conversationDelivered,
+              fallbackUsed: conversationDelivered || selectedOutcome?.status === "delivered",
               delivered,
             }),
           }

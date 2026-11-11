@@ -16,7 +16,11 @@ import {
   toolsAllowRequestsWebSearch,
 } from "../run-diagnostics.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
-import { resolveCronDeliverySessionKey } from "../session-target.js";
+import {
+  CRON_SELECTED_CONVERSATION_UNBOUND_MESSAGE,
+  resolveCronDeliverySessionKey,
+  resolveCronSelectedConversation,
+} from "../session-target.js";
 import type {
   CronDeliveryTrace,
   CronDeliveryTraceMessageTarget,
@@ -257,8 +261,12 @@ export async function resolveCronDeliveryContext(params: {
     resolveDeliveryTarget,
     resolveMessageToolDeliveryFormatPrompt,
   } = await loadCronDeliveryRuntime();
+  // A silent job's selected conversation receives notices only, never its result.
+  const selectedConversation =
+    deliveryPlan.mode === "announce" ? resolveCronSelectedConversation(params.job) : undefined;
   const resolvedDelivery =
     deliveryPlan.mode === "webhook" ||
+    selectedConversation !== undefined ||
     (deliveryPlan.mode === "none" && !hasExplicitCronDeliveryTarget(deliveryPlan))
       ? {
           ok: false as const,
@@ -270,7 +278,11 @@ export async function resolveCronDeliveryContext(params: {
           error: new Error(
             deliveryPlan.mode === "webhook"
               ? "webhook delivery has no chat target"
-              : "delivery is disabled",
+              : selectedConversation
+                ? "the selected conversation receives the result; no external route"
+                : selectedConversation === null
+                  ? CRON_SELECTED_CONVERSATION_UNBOUND_MESSAGE
+                  : "delivery is disabled",
           ),
         }
       : await resolveDeliveryTarget(params.cfg, params.agentId, {

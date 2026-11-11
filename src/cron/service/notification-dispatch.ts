@@ -39,6 +39,10 @@ export async function dispatchCronNotification(
         );
   }
   if (notification.kind === "auto-disabled") {
+    if (notification.job.deliveryConversation && state.deps.sendCronFailureAlert) {
+      transportSelectedSafetyNotice(state, notification, routing);
+      return;
+    }
     await enqueueCronNotification(
       state,
       notification.job,
@@ -49,6 +53,44 @@ export async function dispatchCronNotification(
   } else {
     await transportFailureAlert(state, notification, routing);
   }
+}
+
+/**
+ * A safety notice for a job with a selected conversation commits there. A notice proven not
+ * delivered (deleted or reset conversation) goes to the owning agent's in-app queue instead.
+ */
+function transportSelectedSafetyNotice(
+  state: CronServiceState,
+  notification: Extract<CronNotificationIntent, { kind: "auto-disabled" }>,
+  routing: CronNotificationRouting,
+): void {
+  void state.deps
+    .sendCronFailureAlert?.({
+      job: notification.job,
+      routing,
+      payload: { text: notification.text },
+      runAtMs: notification.atMs,
+      channel: "last",
+      mode: "announce",
+      notice: "auto-disabled",
+      onDeliverySettled: async (outcome) => {
+        if (outcome.status === "not-delivered") {
+          await enqueueCronNotification(
+            state,
+            notification.job,
+            notification.text,
+            "auto-disabled",
+            routing,
+          );
+        }
+      },
+    })
+    .catch((err: unknown) => {
+      state.deps.log.warn(
+        { jobId: notification.job.id, err: String(err) },
+        "cron: auto-disable notice delivery failed",
+      );
+    });
 }
 
 /**
@@ -228,6 +270,7 @@ async function transportFailureAlert(
       mode: params.route.mode,
       accountId: params.route.accountId,
       threadId: params.route.threadId,
+      alternateRoute: params.route.alternateRoute,
       ...(params.route.alternateRoute ? { inheritSessionThread: false as const } : {}),
       onDeliverySettled: async (outcome) => {
         const recordResult = await recordFailureAlertOutcome(

@@ -21,6 +21,7 @@ import {
   createCronRunDiagnosticsFromError,
   mergeCronRunDiagnostics,
 } from "../run-diagnostics.js";
+import { resolveCronResultConversation } from "../session-target.js";
 import type { CronDeliveryTrace, CronRunTelemetry } from "../types.js";
 import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
 import type { DispatchCronDeliveryState } from "./delivery-dispatch-types.js";
@@ -375,8 +376,9 @@ export async function finalizeCronRun(params: {
     deliveryAttemptFence: prepared.input.deliveryAttemptFence,
     agentId: prepared.agentId,
     agentSessionKey: prepared.agentSessionKey,
-    sourceSessionKey: prepared.sourceSessionKey,
-    sourceSessionGeneration: prepared.sourceSessionGeneration,
+    // A selected conversation replaces the creating conversation as the result conversation
+    // only; execution context above keeps the creator's identity.
+    ...resolveCronResultConversation(prepared.input.job, prepared),
     runSessionKey: prepared.runSessionKey,
     sessionId: prepared.currentRunSessionId(),
     lifecycleRevision: prepared.cronSession.lifecycleRevision,

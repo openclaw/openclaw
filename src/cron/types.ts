@@ -71,6 +71,11 @@ export type CronDelivery = {
   threadId?: string | number;
   /** Explicit channel account id for multi-account setups (e.g. multiple Telegram bots). */
   accountId?: string;
+  /**
+   * Internal conversation that receives announce results and primary-route failure notices
+   * instead of the creating conversation or a channel. The host captures its generation.
+   */
+  sessionKey?: string;
   bestEffort?: boolean;
   /** Additional webhook destination used when a job must keep chat delivery. */
   completionDestination?: CronCompletionDestination;
@@ -106,6 +111,7 @@ export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode" | "bestEffort"
   to?: string | null;
   threadId?: string | number | null;
   accountId?: string | null;
+  sessionKey?: string | null;
   completionDestination?: CronCompletionDestination | null;
   failureDestination?: CronFailureDestinationPatch | null;
 };
@@ -432,6 +438,13 @@ export type CronJob = CronJobBase<
   state: CronJobState;
 };
 
+/** One exact conversation incarnation; a reset or deleted conversation no longer matches. */
+export type CronConversationBinding = {
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision?: string;
+};
+
 /** Store-only proof omitted from public Gateway results and the CronJob wire/type contract. */
 export type CronToolsAllowProvenance =
   | {
@@ -470,11 +483,12 @@ export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource
   /** Captured inference owner; private and independent of scheduled tool authority. */
   inferenceBinding?: import("./inference-binding.js").CronInferenceBinding;
   /** Creation-bound destination for isolated results when no external route exists. */
-  sourceConversation?: {
-    sessionKey: string;
-    sessionId: string;
-    lifecycleRevision?: string;
-  };
+  sourceConversation?: CronConversationBinding;
+  /**
+   * Host-captured generation of `delivery.sessionKey`; never public input. Present exactly when
+   * that key is set, and independent of the execution identity anchored by `sourceConversation`.
+   */
+  deliveryConversation?: CronConversationBinding;
   /** Original native process grant, independent of mutable payload authority; store-private. */
   streamOperatorSource?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot;
   /** Trusted logical sandbox and original access basis, never public create/patch input. */

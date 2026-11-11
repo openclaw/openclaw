@@ -22,7 +22,11 @@ import {
   mergeCronRunDiagnostics,
 } from "../cron/run-diagnostics.js";
 import { createCronExecutionId } from "../cron/run-id.js";
-import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
+import {
+  CRON_SELECTED_CONVERSATION_UNBOUND_MESSAGE,
+  resolveCronDeliverySessionKey,
+  resolveCronSelectedConversation,
+} from "../cron/session-target.js";
 import type {
   CronDeliveryTrace,
   CronStoredJob,
@@ -110,6 +114,7 @@ export async function finalizeCronCompletionAnnouncement(params: {
     return finish(false);
   }
 
+  const selected = resolveCronSelectedConversation(params.job);
   const { agentId, cfg } = resolveAgent();
   const inspectUrl = resolveControlUiAutomationRunUrl(cfg, {
     jobId: params.job.id,
@@ -121,23 +126,29 @@ export async function finalizeCronCompletionAnnouncement(params: {
   const abortSignal = params.abortSignal ?? new AbortController().signal;
   let mayHaveReachedRecipient = false;
   try {
-    const resolved = await resolveDeliveryTarget(cfg, agentId, {
-      ...plan,
-      sessionKey: resolveCronDeliverySessionKey(params.job),
-      sessionTarget: params.job.sourceConversation ? params.job.sessionTarget : undefined,
-      sourceConversation: params.job.sourceConversation,
-    });
-    if (!resolved.ok && requiresExternalCronDelivery(plan, resolved)) {
+    if (selected === null) {
+      throw new Error(CRON_SELECTED_CONVERSATION_UNBOUND_MESSAGE);
+    }
+    // A selected conversation replaces channel routing; it never falls back to the creator.
+    const resolved = selected
+      ? undefined
+      : await resolveDeliveryTarget(cfg, agentId, {
+          ...plan,
+          sessionKey: resolveCronDeliverySessionKey(params.job),
+          sessionTarget: params.job.sourceConversation ? params.job.sessionTarget : undefined,
+          sourceConversation: params.job.sourceConversation,
+        });
+    if (resolved && !resolved.ok && requiresExternalCronDelivery(plan, resolved)) {
       throw resolved.error;
     }
-    const conversation = resolved.ok ? undefined : params.job.sourceConversation;
-    if ((conversation || resolved.ok) && params.runStartedAtMs === undefined) {
+    const conversation = selected ?? (resolved?.ok ? undefined : params.job.sourceConversation);
+    if ((conversation || resolved?.ok) && params.runStartedAtMs === undefined) {
       throw new Error("cron result is missing its occurrence start time");
     }
-    if (!resolved.ok && !conversation) {
+    if (resolved && !resolved.ok && !conversation) {
       throw resolved.error;
     }
-    if (resolved.ok) {
+    if (resolved?.ok) {
       const result = await sendCronAnnouncePayloadStrict({
         deps: params.deps,
         cfg,

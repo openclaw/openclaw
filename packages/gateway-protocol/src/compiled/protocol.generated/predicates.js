@@ -1163,9 +1163,9 @@ var External = [
     /(^kind$|^message$|^model$|^fallbacks$|^thinking$|^timeoutSeconds$|^allowUnsafeExternalContent$|^lightContext$|^skipIfScratchEmpty$|^includeReasoning$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^kind$|^argv$|^cwd$|^env$|^input$|^timeoutSeconds$|^noOutputTimeoutSeconds$|^outputMaxBytes$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^kind$|^script$|^timeoutSeconds$|^toolBudget$|^toolsAllow$|^toolsAllowIsDefault$)/u,
-    /(^mode$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^target$|^directPolicy$|^to$)/u,
+    /(^mode$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^target$|^directPolicy$|^to$|^sessionKey$)/u,
     /(^threadId$|^channel$|^to$|^mode$|^accountId$)/u,
-    /(^mode$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^target$|^directPolicy$|^completionDestination$|^to$)/u,
+    /(^mode$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^target$|^directPolicy$|^completionDestination$|^to$|^sessionKey$)/u,
     /(^mode$|^to$)/u,
     /(^mode$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^to$)/u,
     /(^threadId$|^after$|^channel$|^to$|^cooldownMs$|^includeSkipped$|^mode$|^accountId$)/u,
@@ -1179,7 +1179,7 @@ var External = [
     /(^kind$|^message$|^model$|^fallbacks$|^thinking$|^timeoutSeconds$|^allowUnsafeExternalContent$|^lightContext$|^skipIfScratchEmpty$|^includeReasoning$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^kind$|^argv$|^cwd$|^env$|^input$|^timeoutSeconds$|^noOutputTimeoutSeconds$|^outputMaxBytes$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^kind$|^script$|^timeoutSeconds$|^toolBudget$|^toolsAllow$|^toolsAllowIsDefault$)/u,
-    /(^mode$|^target$|^directPolicy$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^completionDestination$|^to$)/u,
+    /(^mode$|^target$|^directPolicy$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^completionDestination$|^to$|^sessionKey$)/u,
     /(^threadId$|^channel$|^to$|^mode$|^accountId$)/u,
     /(^mode$|^to$)/u,
     /(^threadId$|^after$|^channel$|^to$|^cooldownMs$|^includeSkipped$|^mode$|^accountId$)/u,
@@ -10963,7 +10963,8 @@ var External = [
     (value.directPolicy === void 0 ||
       !("directPolicy" in value) ||
       check_1647(value.directPolicy)) &&
-    (value.to === void 0 || !("to" in value) || check_568(value.to)),
+    (value.to === void 0 || !("to" in value) || check_568(value.to)) &&
+    (value.sessionKey === void 0 || !("sessionKey" in value) || check_568(value.sessionKey)),
   check_1641 = (value) => check_1642(value) || check_1112(value),
   check_1642 = (value) => typeof value == "string" && value === "last",
   check_1643 = (value) =>
@@ -11006,7 +11007,8 @@ var External = [
     (value.completionDestination === void 0 ||
       !("completionDestination" in value) ||
       check_1650(value.completionDestination)) &&
-    (value.to === void 0 || !("to" in value) || check_568(value.to)),
+    (value.to === void 0 || !("to" in value) || check_568(value.to)) &&
+    (value.sessionKey === void 0 || !("sessionKey" in value) || check_568(value.sessionKey)),
   check_1650 = (value) =>
     typeof value == "object" &&
     value !== null &&
@@ -11277,7 +11279,8 @@ var External = [
     (value.completionDestination === void 0 ||
       !("completionDestination" in value) ||
       check_1691(value.completionDestination)) &&
-    (value.to === void 0 || !("to" in value) || check_1689(value.to)),
+    (value.to === void 0 || !("to" in value) || check_1689(value.to)) &&
+    (value.sessionKey === void 0 || !("sessionKey" in value) || check_1689(value.sessionKey)),
   check_1681 = (value) => check_434(value) || check_1645(value) || check_135(value),
   check_1682 = (value) => check_1683(value) || check_13(value),
   check_1683 = (value) => typeof value == "string" && value === "owner",

@@ -2,6 +2,7 @@ import type { SessionEventTarget } from "../../auto-reply/reply/session-event-co
 /** Manual cron wake helper for queueing system events into sessions. */
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isSubagentSessionKey, normalizeOptionalAgentId } from "../../routing/session-key.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { CronAgentSelectionRequiredError } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
@@ -65,10 +66,14 @@ export async function enqueueCronNotification(
   if (!agentId) {
     throw new CronAgentSelectionRequiredError();
   }
+  // An absent route lets session-event admission inherit main's remembered external channel.
+  // A selected-conversation fallback is explicitly internal, even when its binding is missing.
   const deliveryContext =
-    sessionKey || (kind === "auto-disabled" && agentId)
-      ? await state.deps.resolveOriginDeliveryContext?.({ agentId, sessionKey })
-      : undefined;
+    job.deliveryConversation !== undefined
+      ? { channel: INTERNAL_MESSAGE_CHANNEL }
+      : sessionKey || (kind === "auto-disabled" && agentId)
+        ? await state.deps.resolveOriginDeliveryContext?.({ agentId, sessionKey })
+        : undefined;
   if (!state.deps.enqueueSessionEvent) {
     throw new Error("Session event execution is unavailable; restart the Gateway and retry");
   }

@@ -23,6 +23,7 @@ export type DispatchCronDeliveryParams = {
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
   agentId: string;
   agentSessionKey: string;
+  /** Conversation that receives a routeless result: the selected one, else the creator's. */
   sourceSessionKey?: string;
   sourceSessionGeneration?: { sessionId: string; lifecycleRevision: string | undefined };
   runSessionKey: string;

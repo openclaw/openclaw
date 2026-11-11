@@ -274,6 +274,7 @@ export function planCronJobMutation(
         isJobActive: () => previousJob?.state.runningAtMs !== undefined,
       });
     }
+    reconcileCronDeliveryConversation(nextJob, options.deliveryConversation);
     if (previousJob?.pluginCommand !== undefined) {
       // Disable preserves the original envelope, requester authority, and attempt count.
       plan.job = nextJob;
@@ -393,4 +394,26 @@ export function planCronJobMutation(
     }
   }
   return plan;
+}
+
+/**
+ * Pairs the public `delivery.sessionKey` with its host-captured generation. Clearing the key
+ * drops the binding; a key without a matching capture fails closed instead of guessing.
+ */
+function reconcileCronDeliveryConversation(
+  job: CronStoredJob,
+  captured: CronStoredJob["deliveryConversation"],
+): void {
+  const sessionKey = job.delivery?.sessionKey;
+  if (sessionKey === undefined) {
+    delete job.deliveryConversation;
+    return;
+  }
+  const binding = captured ?? job.deliveryConversation;
+  if (binding?.sessionKey !== sessionKey) {
+    throw new Error(
+      "cron delivery.sessionKey has no Gateway-captured conversation; set it through cron.add or cron.update",
+    );
+  }
+  job.deliveryConversation = { ...binding };
 }

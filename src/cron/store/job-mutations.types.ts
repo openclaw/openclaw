@@ -18,6 +18,7 @@ type CronJobMutationOptions = Pick<
   | "createdActor"
   | "inferenceBinding"
   | "sourceConversation"
+  | "deliveryConversation"
   | "operatorSource"
   | "operatorSourceExecutionRevision"
   | "skillLibrarySelections"

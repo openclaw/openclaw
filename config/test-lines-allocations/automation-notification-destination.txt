@@ -1,0 +1,8 @@
+# Selected conversation: Gateway capture/access, result persistence, failure/safety routing,
+# stale generation rejection, alternate-route precedence, inferred owning-agent regressions,
+# and real session-event fallback admission with remembered external delivery. The port to
+# current main adds configured default-destination precedence, human-owner conversation access,
+# and silent busy-skip suppression with explicit alert and safety notices still delivered.
+# Shared-session selection adds real Gateway current/persistent delivery, stale/none,
+# retained execution replies and native/source-mirror settlement regressions.
+1525

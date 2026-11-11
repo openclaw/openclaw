@@ -77,6 +77,41 @@ it("binds a recorded caller origin to executable inputs but not display metadata
     }),
   ).toBe(false);
 });
+it("keeps requester authority when only the selected result conversation changes", () => {
+  const job = {
+    ...toolJob(["message"]),
+    payload: { kind: "agentTurn", message: "read", toolsAllow: ["message"] },
+    delivery: { mode: "announce" },
+    owner: { sessionKey: "agent:main:local", accountId: "work" },
+    scheduledToolPolicy: {
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:local",
+      ownerAccountId: "work",
+    },
+    toolsAllowProvenance: {
+      version: 1,
+      source: "authenticated-requester",
+      callerOrigin: { kind: "local" },
+    },
+  } satisfies CronStoredJob;
+  const inbox = "agent:main:dashboard:inbox";
+
+  expect(
+    cronJobMessageActionAuthorityInputsEqual(job, {
+      ...job,
+      delivery: { mode: "announce", sessionKey: inbox },
+      deliveryConversation: { sessionKey: inbox, sessionId: "inbox-session" },
+    }),
+  ).toBe(true);
+  // An external route still changes where the run's message tool may send.
+  expect(
+    cronJobMessageActionAuthorityInputsEqual(job, {
+      ...job,
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
+    }),
+  ).toBe(false);
+});
 it("admits message access for an automatic snapshot that runs with its owner's tools", () => {
   const job = toolJob(["read"]);
   job.payload = { kind: "agentTurn", message: "post", toolsAllow: ["read"] };

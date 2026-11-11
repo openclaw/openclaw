@@ -512,7 +512,8 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                   (deliveryValue == null || delivery) &&
                   (mode === "" || mode === "announce") &&
                   !hasTarget &&
-                  delivery?.target !== "owner";
+                  delivery?.target !== "owner" &&
+                  delivery?.sessionKey == null;
                 if (shouldInfer) {
                   const inferred = await resolveCronCreationDelivery({
                     cfg: runtimeConfig,
