@@ -9,7 +9,7 @@ import {
   resolveGatewayLaunchAgentLabel,
 } from "./constants.js";
 import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
-import { execLaunchctl } from "./launchd-exec.js";
+import { execLaunchctl, formatLaunchctlResultDetail } from "./launchd-exec.js";
 import { assertValidLaunchAgentLabel } from "./launchd-label.js";
 import { readLaunchAgentProgramArgumentsFromFile } from "./launchd-plist.js";
 import { resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
@@ -153,7 +153,9 @@ export async function findStaleOpenClawUpdateLaunchdJobs(
   }
   const result = await execLaunchctl(["list"]);
   if (result.code !== 0) {
-    return [];
+    throw new Error(
+      `launchctl list failed (exit ${result.code}): ${formatLaunchctlResultDetail(result)}`,
+    );
   }
   // Never report the active gateway label as stale even when a wrapper exposes
   // update-like launchd metadata through the current environment.

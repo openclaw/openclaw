@@ -137,7 +137,9 @@ describe("transcript projection", () => {
     vi.useRealTimers();
   });
 
-  it("updates live text without projecting rows, but projects visibility and completion", async () => {
+  it("parks hidden live text without projecting rows and catches up on return", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    onTestFinished(() => visibility.mockRestore());
     const paneId = "stream-leaf-projection";
     const transcript = createTestTranscript(paneId);
     const projectRows = vi.spyOn(transcriptIndex, "projectTranscriptIndex");
@@ -182,6 +184,20 @@ describe("transcript projection", () => {
       expect(currentBubble()!).toBe(bubble);
       expect(bubble.textContent).toContain(text);
     }
+
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    flush();
+    for (const text of ["Hidden reply", "Hidden reply is complete."]) {
+      changeText(text);
+      expect(bubble.textContent).toContain("Reply grows again.");
+      expect(bubble.textContent).not.toContain("Hidden reply");
+    }
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    flush();
+    expect(currentBubble()).toBe(bubble);
+    expect(bubble.textContent).toContain("Hidden reply is complete.");
 
     // A sibling projection update replaces the live resolver's reactive owner.
     updateContext(true);
@@ -414,7 +430,7 @@ describe("transcript projection", () => {
     expect(names()).toEqual([]);
   });
 
-  it("updates automatic reply attribution when only the session owner changes", () => {
+  it("updates automatic reply attribution when only the session owner changes", async () => {
     const own = personMessage("alex", "Alex", 1);
     const props = threadProps("projection-owner", "agent:main:main", [
       own,
@@ -429,6 +445,7 @@ describe("transcript projection", () => {
         owner: { actor: { type: "human", id, identity: { type: "profile", id } } },
       };
       view.draw();
+      await waitForSolid(() => expect(view.query(".chat-bubble")).not.toBeNull());
       expect(view.query(".chat-reply-attribution__name")?.textContent).toBe(
         id === "riley" ? "You" : undefined,
       );
@@ -632,7 +649,7 @@ describe("voice reconciliation", () => {
 
   it.each(["absent", "empty", "ID-less"] as const)(
     "skips the voice membership scan for %s captions",
-    (kind) => {
+    async (kind) => {
       const messages = [savedMessage("Saved message", "voice:saved")];
       const map = vi.spyOn(messages, "map");
       const props = threadProps(`voice-${kind}`, undefined, messages);
@@ -643,12 +660,15 @@ describe("voice reconciliation", () => {
             ? () => []
             : () => [{ id: "live", role: "user", text: "Still speaking", isStreaming: true }];
 
-      expect(voiceProjection(props)()).toEqual(kind === "ID-less" ? ["Still speaking"] : []);
+      const project = voiceProjection(props);
+      await waitForSolid(() =>
+        expect(project()).toEqual(kind === "ID-less" ? ["Still speaking"] : []),
+      );
       expect(membershipScans(map.mock.calls)).toEqual([]);
     },
   );
 
-  it("uses one raw-history scan, preserving pending captions and refreshing replaced history", () => {
+  it("uses one raw-history scan, preserving pending captions and refreshing replaced history", async () => {
     const messages = [
       savedMessage("Hidden saved words", "voice:saved"),
       savedMessage("Pending input", "pending:input"),
@@ -672,7 +692,7 @@ describe("voice reconciliation", () => {
     const project = voiceProjection(props);
     const pendingCaptions = ["Live caption", "Pending input caption", "Pending send caption"];
 
-    expect(project()).toEqual(["Unsaved caption", ...pendingCaptions]);
+    await waitForSolid(() => expect(project()).toEqual(["Unsaved caption", ...pendingCaptions]));
     expect(membershipScans(map.mock.calls)).toHaveLength(1);
 
     props.messages = [savedMessage("New saved words", "voice:unsaved"), ...messages.slice(1)];

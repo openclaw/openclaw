@@ -45,6 +45,7 @@ import {
 import { ensureGitRepo } from "./workspace-git.js";
 import { LEGACY_WORKSPACE_STATE_CURRENT_FILENAME } from "./workspace-legacy-state.js";
 import {
+  captureWorkspacePreparationGuard,
   maybeWriteWorkspaceAttestation,
   runWorkspacePreparation,
 } from "./workspace-preparation.js";
@@ -320,6 +321,13 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   const beforeFileMutation = createWorkspaceFileMutationGuard(params.guard);
   const { bootstrapExists } = params;
 
+  // An explicitly seeded author bootstrap is pending input, not stale default
+  // onboarding. Its removal (or an explicit completion marker) consumes it;
+  // installed profiles and skills must not complete it before the first turn.
+  if (bootstrapExists && params.generatedHashes?.has(DEFAULT_BOOTSTRAP_FILENAME)) {
+    return { repaired: false, bootstrapExists, state: params.state };
+  }
+
   if (
     bootstrapExists
       ? !(await workspaceProfileLooksConfigured({
@@ -366,6 +374,12 @@ async function collectGeneratedBootstrapHashes(
   previousHashes?: ReadonlyMap<string, string>,
 ): Promise<Map<string, string>> {
   const hashes = new Map<string, string>();
+  // Only the explicit seed owner introduces this row. Preparation retains its
+  // custody while the input exists, including author edits, and drops it on consumption.
+  const seededBootstrapHash = previousHashes?.get(DEFAULT_BOOTSTRAP_FILENAME);
+  if (seededBootstrapHash && (await pathExists(path.join(dir, DEFAULT_BOOTSTRAP_FILENAME)))) {
+    hashes.set(DEFAULT_BOOTSTRAP_FILENAME, seededBootstrapHash);
+  }
   for (const fileName of GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES) {
     try {
       const content = await fs.readFile(path.join(dir, fileName), "utf-8");
@@ -485,15 +499,6 @@ type EnsuredAgentWorkspace = {
   bootstrapPending?: boolean;
   identityPathCreated?: boolean;
 };
-
-function captureWorkspacePreparationGuard(guard?: WorkspaceStateGuard) {
-  return (
-    guard && {
-      ...guard,
-      recoveryHoldPredicate: structuredClone(guard.recoveryHoldPredicate),
-    }
-  );
-}
 
 export async function ensureAgentWorkspace(
   params?: EnsureAgentWorkspaceParams,
@@ -636,7 +641,7 @@ async function ensureAgentWorkspaceOwned(
   assertExpiryEvidence = captureWorkspaceStateFilesystemGuard(dir, !recentAttestation);
 
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
-  if (!params?.ensureBootstrapFiles) {
+  if (!params?.ensureBootstrapFiles || initialState.setup.bootstrapDeferred) {
     const hasContentEvidence = await hasSkipBootstrapWorkspaceContentEvidence(dir);
     if (recentAttestation && !hasContentEvidence) {
       throw new WorkspaceVanishedError({ workspaceDir: dir });

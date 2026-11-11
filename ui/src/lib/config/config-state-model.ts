@@ -13,6 +13,7 @@ export type ConfigAutoSaveStatus =
   | "idle"
   | "saving"
   | "saved"
+  | "deferred"
   | "rejected"
   | "error"
   | "conflict"

@@ -182,10 +182,7 @@ export abstract class AppSidebarBase {
   ) {
     for (const key of Object.keys(appSidebarProperties)) {
       Object.defineProperty(this, key, {
-        get: () =>
-          key === "sidebarAgentsMode"
-            ? (this.sidebarSnapshot?.mode ?? Reflect.get(hostElement, key))
-            : Reflect.get(hostElement, key),
+        get: () => Reflect.get(hostElement, key),
         set: (value: unknown) => {
           Reflect.set(hostElement, key, value);
         },

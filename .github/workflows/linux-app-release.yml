@@ -81,11 +81,54 @@ jobs:
         uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout selected tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: refs/tags/${{ steps.request.outputs.release_tag }}
-          fetch-depth: 0
-          persist-credentials: false
+        env:
+          RELEASE_TAG: ${{ steps.request.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import os
+          import sys
+
+          from ci_git_owner import FetchTimeout, GitFailure, backoff, git_output, run_git
+
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          release_tag = os.environ["RELEASE_TAG"]
+          run_git(workspace, "init", workspace)
+          run_git(workspace, "config", "gc.auto", "0")
+          run_git(workspace, "remote", "add", "origin", "https://github.com/openclaw/openclaw.git")
+          for attempt in range(1, 4):
+              try:
+                  run_git(
+                      workspace,
+                      "fetch",
+                      "--force",
+                      "--no-tags",
+                      "origin",
+                      f"+refs/tags/{release_tag}:refs/tags/{release_tag}",
+                      timeout=120,
+                      reclaim_locks=True,
+                  )
+                  break
+              except (FetchTimeout, GitFailure):
+                  if attempt == 3:
+                      print("Failed to fetch selected release tag after 3 attempts.", file=sys.stderr)
+                      raise SystemExit(1)
+                  print(f"::warning::Selected release tag fetch attempt {attempt}/3 failed; retrying.")
+                  backoff(attempt * 5)
+
+          tag_sha = git_output(workspace, "rev-parse", f"refs/tags/{release_tag}^{{commit}}").rstrip("\n")
+          run_git(
+              workspace,
+              "checkout",
+              "--detach",
+              tag_sha,
+              timeout=120,
+              reclaim_locks=True,
+          )
+          if git_output(workspace, "rev-parse", "HEAD").rstrip("\n") != tag_sha:
+              print("Selected release tag checkout did not preserve its exact commit.", file=sys.stderr)
+              raise SystemExit(1)
+          PYTHON
 
       - name: Checkout trusted release tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

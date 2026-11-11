@@ -194,6 +194,33 @@ async function packageFixture(
   return { params, root, launcher, installedPrefixes, expectOriginal };
 }
 
+it.each([
+  [undefined, "global-install-failed"],
+  ["EACCES", "global-install-permission-denied"],
+] as const)("classifies a package-update catch (%s) as %s", async (code, reason) => {
+  const { params, expectOriginal } = await packageFixture(base, "2.0.0");
+  const result = await runPackageInstallUpdate({
+    ...params,
+    validateCandidate: async () => {
+      throw Object.assign(new Error("Candidate validation failed"), { code });
+    },
+  });
+  expect(result).toMatchObject({
+    status: "error",
+    reason,
+    failedStep: {
+      name: "package-update",
+      exitCode: 1,
+      failureFacts: expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringContaining("Candidate validation failed"),
+        }),
+      ]),
+    },
+  });
+  await expectOriginal();
+});
+
 it.each(["guidance", "staging"])(
   "carries the owner's permission retry outcome through %s",
   async (consumer) => {

@@ -336,7 +336,12 @@ export async function publishCodexThreadInferenceBinding(
         params.inferenceProviderRoutes,
       );
     }
-    return { ...binding, preparedServiceTier: params.appServer.serviceTier };
+    return {
+      ...binding,
+      preparedServiceTier: params.appServer.serviceTier,
+      // Preflight stored its effective config here; reporting reuses it instead of re-reading.
+      ...(params.nativeConfig ? { preparedEffectiveConfig: params.nativeConfig } : {}),
+    };
   };
   return params.authority ? await params.authority.withCurrent(publish) : publish();
 }

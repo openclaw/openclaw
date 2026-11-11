@@ -25,6 +25,54 @@ follow [trusted-main npm recovery](extended-stable-publish.md#trusted-main-npm-r
 for plugin source inputs and the matching core evidence handoff. It does not use
 the shared publish parent or authorize ClawHub publication.
 
+### Audit, bind, or revoke a plugin npm trusted publisher
+
+Use npm 11.15.0 or newer; `pnpm exec npm` selects this checkout's pinned npm.
+The operator needs package write access, account-level 2FA, and supported npm
+authentication. The package must already exist, so a first-package bootstrap
+still follows the approved token route before adding its trusted publisher.
+Bypass-2FA granular tokens and legacy basic authentication cannot manage trust.
+
+List the package's current binding and retain its ID for any revocation:
+
+```bash
+pnpm exec npm trust list <package-name> --json
+```
+
+Do not infer a binding from package metadata or a previously successful release.
+The same state is visible at npmjs.com → the package → **Settings** → **Trusted
+publishing**.
+
+Create the exact, case-sensitive OpenClaw plugin publication binding:
+
+```bash
+pnpm exec npm trust github <package-name> \
+  --repo=openclaw/openclaw \
+  --file=plugin-npm-release.yml \
+  --env=npm-publish \
+  --allow-publish
+```
+
+The workflow filename is the filename only, without `.github/workflows/`.
+`--allow-publish` is required because this workflow uses direct `npm publish`;
+it does not require staged publishing or separate `npm dist-tag` permission.
+npm does not validate the OIDC fields when the binding is created. A new binding
+expires unless its first successful publish occurs within two days, so create it
+only when the package is ready for its approved first OIDC publication.
+
+A binding cannot be edited. To replace or revoke one, first copy `<trust-id>`
+from `npm trust list`, then run:
+
+```bash
+pnpm exec npm trust revoke <package-name> --id=<trust-id>
+```
+
+List the package again to verify revocation. For replacement, create the exact
+binding above and run the read-only trusted-publisher exchange below before
+publication is dispatched or redispatched. Revocation alone does not authorize
+a token fallback or publication retry. Repeat these operations for every package
+in the selected release roster because npm stores trust per package.
+
 Publication promotes previously qualified bytes. Bind the successful Full
 Release Validation manifest, exact target SHA, successful attempt, and npm
 preflight artifact identities. Current manifests contain npm qualification, so

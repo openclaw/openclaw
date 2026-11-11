@@ -250,6 +250,18 @@ export function assertLocalWorkspacePersistentExecutionCurrentInDatabase(
 }
 
 export const localWorkspaceReadOperations = {
+  "localWorkspace.readBacking": (input: { id: string }, db: EngineConnection) => ({
+    type: "localWorkspace.readBacking" as const,
+    row: tableExists(db, table)
+      ? executeSqliteQueryTakeFirstSync(
+          db,
+          query(db)
+            .selectFrom(table)
+            .select(["session_key", "projection_path", "baseline_ref"])
+            .where("worktree_id", "=", input.id),
+        )
+      : undefined,
+  }),
   "localWorkspace.sweepCandidates": (input: { epoch: number }, db: EngineConnection) => ({
     type: "localWorkspace.sweepCandidates" as const,
     candidates: runSqliteReadSnapshotSync(db, () =>

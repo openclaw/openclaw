@@ -302,23 +302,16 @@ function getBoundedLines(text: string, maxLines: number, maxScanChars: number): 
     .map((line) => truncateUtf16Safe(line, EDIT_CANDIDATE_MAX_LINE_CHARS));
 }
 
-function scoreCandidate(expected: string, candidate: string): number {
-  const normalizedExpected = expected.trim();
+function scoreCandidate(expected: string, candidate: string, minScore: number): number {
   const normalizedCandidate = candidate.trim();
-  const maxLength = Math.max(normalizedExpected.length, normalizedCandidate.length);
-  if (maxLength === 0) {
-    return 0;
-  }
-
-  // Length alone sets an upper bound on the possible similarity score.
-  if (
-    Math.min(normalizedExpected.length, normalizedCandidate.length) / maxLength <
-    EDIT_CANDIDATE_MIN_SCORE
-  ) {
-    return 0;
-  }
-
-  return 1 - levenshteinDistance(normalizedExpected, normalizedCandidate) / maxLength;
+  const maxLength = Math.max(expected.length, normalizedCandidate.length);
+  // Round outward: converting a previous score back to distance can lose precision.
+  const distance = levenshteinDistance(
+    expected,
+    normalizedCandidate,
+    Math.ceil((1 - minScore) * maxLength),
+  );
+  return distance === null ? 0 : 1 - distance / maxLength;
 }
 
 function describeIndentation(line: string): string {
@@ -365,21 +358,25 @@ function getCandidateHint(content: string, oldText: string): string {
     (best, line) => (line.trim().length > best.trim().length ? line : best),
     "",
   );
-  if (!expected.trim()) {
+  const normalizedExpected = expected.trim();
+  if (!normalizedExpected) {
     return "";
   }
-  const candidates = getBoundedLines(
-    content,
-    EDIT_CANDIDATE_MAX_LINES,
-    EDIT_CANDIDATE_MAX_SCAN_CHARS,
-  )
-    .map((line, index): EditCandidate | undefined => {
-      const score = scoreCandidate(expected, line);
-      return score >= EDIT_CANDIDATE_MIN_SCORE ? { lineNumber: index + 1, line, score } : undefined;
-    })
-    .filter((candidate): candidate is EditCandidate => candidate !== undefined)
-    .toSorted((left, right) => right.score - left.score || left.lineNumber - right.lineNumber)
-    .slice(0, EDIT_CANDIDATE_LIMIT);
+  const candidates: EditCandidate[] = [];
+  getBoundedLines(content, EDIT_CANDIDATE_MAX_LINES, EDIT_CANDIDATE_MAX_SCAN_CHARS).forEach(
+    (line, index) => {
+      const score = scoreCandidate(
+        normalizedExpected,
+        line,
+        candidates[EDIT_CANDIDATE_LIMIT - 1]?.score ?? EDIT_CANDIDATE_MIN_SCORE,
+      );
+      if (score >= EDIT_CANDIDATE_MIN_SCORE) {
+        candidates.push({ lineNumber: index + 1, line, score });
+        candidates.sort((left, right) => right.score - left.score);
+        candidates.length = Math.min(candidates.length, EDIT_CANDIDATE_LIMIT);
+      }
+    },
+  );
   if (candidates.length === 0) {
     return "";
   }

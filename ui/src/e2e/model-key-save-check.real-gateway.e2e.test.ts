@@ -134,14 +134,14 @@ suite.define(() => {
         await page.goto(await open("settings/model-providers"));
         await waitForControlUiGatewayReady(page);
         const row = await expandProvider(page, "fixture");
-        const replace = async (key: string) => {
+        const enterKey = async (key: string) => {
           const button = row.getByRole("button", { name: "Replace API key: Fixture", exact: true });
           if ((await button.count()) > 0) {
             await button.click();
           }
           await row.getByLabel("API key", { exact: true }).fill(key);
-          await row.getByRole("button", { name: "Save", exact: true }).click();
         };
+        const save = () => row.getByRole("button", { name: "Save", exact: true }).click();
 
         for (const [key, reason] of [
           ["sk-synthetic-revoked", /didn’t accept it\. Authentication failed\./u],
@@ -149,7 +149,9 @@ suite.define(() => {
           // A 5xx says nothing about the key, so it's reported as an unfinished check.
           ["sk-synthetic-servererror", /check didn’t finish\. The connection check failed\./u],
         ] as const) {
-          const { text, ms } = await saveAndRead(row, () => replace(key));
+          // Measure Save through its result, after opening and filling the form.
+          await enterKey(key);
+          const { text, ms } = await saveAndRead(row, save);
           expect(text, key).not.toMatch(/API key saved\.(?! but)/u);
           expect(text, key).toMatch(reason);
           expect(ms, key).toBeLessThan(2_000);
@@ -162,7 +164,8 @@ suite.define(() => {
           }
         }
 
-        const good = await saveAndRead(row, () => replace("sk-synthetic-good"));
+        await enterKey("sk-synthetic-good");
+        const good = await saveAndRead(row, save);
         expect(good.text).toContain("API key saved and verified.");
         expect(await row.getByLabel("API key", { exact: true }).count()).toBe(0);
 

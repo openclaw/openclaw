@@ -257,6 +257,9 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
 
   function setRouteData(data: DevicesRouteData | undefined) {
     applyRouteData(data);
+    if (data && gatewayBinding.connected && gatewayBinding.isRouteDataCurrent(data)) {
+      void context.runtimeConfig.refresh({ background: true }).catch(() => undefined);
+    }
     ensureInitialData();
     publishData();
   }

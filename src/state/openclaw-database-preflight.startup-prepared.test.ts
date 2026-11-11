@@ -54,7 +54,11 @@ function createFleet() {
     expectInspections: (count: number) =>
       expect(onAgentInspection).toHaveBeenLastCalledWith(
         count === 0
-          ? { schemaInspectionCount: 0, schemaProcessCount: 0, schemaSnapshotCount: 0 }
+          ? expect.objectContaining({
+              schemaInspectionCount: 0,
+              schemaProcessCount: 0,
+              schemaSnapshotCount: 0,
+            })
           : expect.objectContaining({ schemaInspectionCount: count }),
       ),
     ready: () =>

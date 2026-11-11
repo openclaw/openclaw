@@ -125,6 +125,54 @@ test("New session command discovery previews admitted project skills under runti
   });
 });
 
+test("restricted creators preview project skills only from public repositories", async () => {
+  await withSkillState(async (root) => {
+    const workspace = await initializeRepository(root, "workspace");
+    await putSkill(path.join(workspace, "skills"), "agent-fixture");
+    const projects: Record<string, string> = {};
+    for (const [kind, name] of [
+      ["public", "openclaw/project-skills-public"],
+      ["private", "openclaw/project-skills-private"],
+    ] as const) {
+      const repo = await initializeRepository(root, kind, `https://github.com/${name}.git`);
+      await putSkill(path.join(repo, "skills"), `${kind}-fixture`);
+      projects[kind] = (await registerProjectRegistry({ path: repo })).id;
+    }
+    const cfg = agentConfig(workspace, {
+      skills: ["agent-fixture", "public-fixture", "private-fixture"],
+    });
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const visibility = url.endsWith("/repos/openclaw/project-skills-public")
+        ? "public"
+        : "private";
+      return new Response(JSON.stringify({ visibility }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    try {
+      // The team contributor role: session creation without operator.write.
+      const contributor = ["operator.read", "operator.sessions.write"];
+      const agentOnly = [{ name: "agent_fixture", description: "agent-fixture" }];
+      expect(
+        skillCommands(await listCommands(cfg, { projectId: projects.public }, contributor)),
+      ).toEqual([...agentOnly, { name: "public_fixture", description: "public-fixture" }]);
+      expect(
+        skillCommands(await listCommands(cfg, { projectId: projects.private }, contributor)),
+      ).toEqual(agentOnly);
+      expect(skillCommands(await listCommands(cfg, { projectId: projects.private }))).toEqual([
+        ...agentOnly,
+        { name: "private_fixture", description: "private-fixture" },
+      ]);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 test("command catalogs distinguish manual-only skills from slash-only bundle templates", async () => {
   await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, () =>
     withSkillState(async (root) => {
