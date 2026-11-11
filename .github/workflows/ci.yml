@@ -2313,6 +2313,7 @@ jobs:
           DISCORD_PROOF_REPORT
           }
 
+          # A missing startup asset rebuild must finish before any verifier forks
           startup_assets=success
           startup_builder=(node --import tsx scripts/ensure-cli-startup-build.mts)
           if [[ ! -f scripts/ensure-cli-startup-build.mts ]]; then
