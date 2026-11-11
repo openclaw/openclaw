@@ -384,11 +384,9 @@ export const GatewayConfigSchema = z
             /** Revision-scoped delegation from OpenClaw Enterprise's private browser proxy. */
             delegation: z
               .strictObject({
-                authority: z.literal("oce"),
                 credentialFile: z
                   .string()
                   .refine(isAbsolute, "Expected an absolute credential file path"),
-                subjectPrefix: z.literal("oce:v1:"),
               })
               .optional(),
             /** Optional verified GitHub identity from one explicitly trusted Access OIDC provider. */

@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { GatewayConfigSchema } from "../config/zod-schema.gateway.js";
 import { captureGatewayAuthPolicy, isGatewayAuthPolicyCurrent } from "./auth-policy.js";
 import {
   authorizeHttpGatewayConnect,
@@ -30,7 +31,7 @@ function fixture() {
           userHeader: "x-occ-identity",
           allowLoopback: true,
           allowUsers: ["static@example.test"],
-          delegation: { authority: "oce", credentialFile, subjectPrefix: "oce:v1:" },
+          delegation: { credentialFile },
         },
       },
       trustedProxies: ["127.0.0.1"],
@@ -53,6 +54,7 @@ function fixture() {
 
 it("admits the delegated person on HTTP and WS independently of the static roster", async () => {
   const { cfg, subject, request } = fixture();
+  expect(GatewayConfigSchema.safeParse(cfg.gateway).success).toBe(true);
   for (const authorize of [authorizeHttpGatewayConnect, authorizeWsControlUiGatewayConnect]) {
     const result = await authorize({
       auth: resolveGatewayAuth({ authConfig: cfg.gateway?.auth }),
@@ -72,7 +74,19 @@ it("admits the delegated person on HTTP and WS independently of the static roste
 });
 
 it("refuses invalid delegation and alternate credentials", async () => {
-  const { cfg, request, key, subject } = fixture();
+  const { cfg, request, key, subject, credentialFile } = fixture();
+  for (const delegation of [
+    {},
+    { credentialFile: "relative/key" },
+    { credentialFile, authority: "oce" },
+    { credentialFile, subjectPrefix: "oce:v1:" },
+  ]) {
+    expect(
+      GatewayConfigSchema.safeParse({
+        auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-occ-identity", delegation } },
+      }).success,
+    ).toBe(false);
+  }
   const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth });
   const cases = [
     request({ "x-occ-browser-key": undefined }),

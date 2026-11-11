@@ -55,7 +55,7 @@ test("delegated browsers retain profile identity and enforce scopes and current 
         allowLoopback: true,
         allowUsers: ["external@example.test"],
         deviceAutoApprove: { enabled: true, scopes: ["operator.admin"] },
-        delegation: { authority: "oce", credentialFile, subjectPrefix: "oce:v1:" },
+        delegation: { credentialFile },
       },
     },
     {
