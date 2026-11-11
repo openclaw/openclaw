@@ -277,7 +277,8 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
       (error): error is Error =>
         error instanceof Error &&
         (error.name === "StateDatabaseAccessError" ||
-          error.name === "StateDatabaseMaintenanceScopeError"),
+          error.name === "StateDatabaseMaintenanceScopeError" ||
+          error.name === "GatewayLockNamespaceError"),
     );
   const reason = (error: unknown) =>
     `[openclaw] Reason: ${formatCliOperatorError(error, { argv, env })}`;
