@@ -10,6 +10,10 @@ import {
   recordAgentCleanupFailure,
   createAgentCleanupScope,
 } from "../agents/run-cleanup-timeout.js";
+import {
+  stopOneShotBrowserBridges,
+  withOneShotBrowserBridgeScope,
+} from "../agents/sandbox/browser-bridges.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { EmbeddedStateLockHandle } from "../infra/embedded-state-lock.js";
@@ -92,7 +96,7 @@ function isStructuredTimeoutError(error: unknown): boolean {
 }
 
 /** Run one isolated embedded agent turn and project its stable CLI result. */
-export async function agentExecCommand(
+async function runAgentExecCommand(
   positionalMessage: string | undefined,
   opts: AgentExecCliOptions,
   runtime: RuntimeEnv,
@@ -375,6 +379,11 @@ export async function agentExecCommand(
   const recordCleanupError = (error: unknown) => {
     cleanupError = error;
   };
+  try {
+    await stopOneShotBrowserBridges();
+  } catch (error) {
+    cleanupError ??= error;
+  }
   const stopAudit = async () => await stopLocalAuditWriter?.();
   await (temporaryDatabaseScope ? temporaryDatabaseScope.run(stopAudit) : stopAudit()).catch(
     () => undefined,
@@ -463,4 +472,13 @@ export async function agentExecCommand(
     runtime.error(envelope.error.message);
   }
   return commandResult;
+}
+
+/** Run an embedded CLI turn with its own browser-bridge ownership context. */
+export function agentExecCommand(
+  positionalMessage: string | undefined,
+  opts: AgentExecCliOptions,
+  runtime: RuntimeEnv,
+): Promise<AgentExecCommandResult> {
+  return withOneShotBrowserBridgeScope(() => runAgentExecCommand(positionalMessage, opts, runtime));
 }

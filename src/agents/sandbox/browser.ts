@@ -25,6 +25,7 @@ import {
   BROWSER_BRIDGES,
   stopCachedBrowserBridge,
   stopCachedBrowserBridgesForContainer,
+  trackOneShotBrowserBridge,
 } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
@@ -552,12 +553,14 @@ async function ensureSandboxBrowserContainer(
         resolveSandboxNoVncToken: consumeNoVncObserverToken,
       });
       params.assertCurrent?.();
-      BROWSER_BRIDGES.set(params.scopeKey, {
+      const cachedBridge = {
         bridge,
         containerName,
         authToken: desiredAuthToken,
         authPassword: desiredAuthPassword,
-      });
+      };
+      BROWSER_BRIDGES.set(params.scopeKey, cachedBridge);
+      trackOneShotBrowserBridge(params.scopeKey, cachedBridge);
     }
 
     params.assertCurrent?.();
