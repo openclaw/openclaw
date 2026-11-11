@@ -188,10 +188,12 @@ Native ChatGPT forks use independent connections without consuming or replacing
 the parent's continuation. Supported APIs are OpenAI Responses (including native
 ChatGPT), Chat Completions, and Anthropic Messages. Other APIs, including Bedrock,
 fail before dispatch because their transports cannot enforce live fork authority.
-Tool choice is set to `none` to prevent hosted tool execution; local tool calls
-are denied, with at most two additional inference attempts. On Anthropic, changing
-tool choice invalidates the messages cache, while the tool and system caches can
-remain reusable.
+Local tool calls are denied, with at most two additional inference attempts.
+OpenAI forks set tool choice to `none`. Anthropic forks keep the parent's tool
+choice, because changing it invalidates the messages cache, unless the request
+carries a provider-hosted tool such as web search; then tool choice is `none`, so
+the provider never runs it. Live forks also send the parent's normalized tool-call
+IDs, so an Anthropic fork can reuse the parent's cached messages.
 
 Read-only forks do not acquire workspace placement authority, write a transcript,
 or change the parent's history. Normal parent settlement preserves a fork's read

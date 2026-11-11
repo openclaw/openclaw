@@ -3,8 +3,10 @@
 Every beta, stable, and extended-stable release ends with a retrospective in
 `openclaw/tideclaw`. It is a closeout step, not optional polish: the release
 is not done until the retrospective PR is open and its ledger update passes.
-Write it after publication, platform assets, and main closeout are terminal, or
-when execution hands off to another operator (a frozen Part 1 snapshot).
+Write it after core publication, platform assets, and main closeout are terminal,
+or when execution hands off to another operator (a frozen Part 1 snapshot).
+ClawHub never delays this PR: record pending or failed ClawHub work with its
+owner, exact run/attempt, evidence, and next action; append its outcome later.
 
 ## Collect while releasing
 

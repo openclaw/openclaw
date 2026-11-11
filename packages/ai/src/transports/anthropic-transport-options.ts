@@ -99,6 +99,7 @@ export function resolveAnthropicTransportOptions(
     anthropicCompactThreshold: options?.anthropicCompactThreshold,
     cacheTtlPruning: options?.cacheTtlPruning,
     onClaudeCodeVersionRequired: options?.onClaudeCodeVersionRequired,
+    onFastModeUnsupported: options?.onFastModeUnsupported,
     ...(options?.authProfileId ? { authProfileId: options.authProfileId } : {}),
   } satisfies AnthropicTransportOptions);
   resolved.reasoning = applyAnthropicThinkingOptions(model, resolved, options, "transport");

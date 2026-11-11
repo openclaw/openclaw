@@ -321,8 +321,10 @@ Current-target `build-artifacts` uses the existing 16-class. A [controlled Testb
 
 Existing recommendation-based promotions from the 8-class remain for `checks-node-compact-large-5` and `checks-node-compact-large-9`. Extension bundles follow the planner's runner metadata: the former bundle-16/bundle-25 overrides would attach old recommendations to different work after compaction. The former 32-to-16 overrides for `checks-node-compact-small-3`, `checks-node-compact-small-4`, and `checks-node-compact-small-10` are removed so these rows retain their planner-owned parallel or tooling capacity. Numbered bins can contain different work across profiles and revisions; the retained compact recommendations use a 24-hour window and still need ownership-based replacement when those bins change. A later recommendation identified CPU saturation for `build-artifacts` on the 16-class. Current complete-job duration and memory headroom still need measurement; the earlier controlled proof retains its original source scope.
 
-Current-target `checks-ui-e2e-real-gateway` rows use the 16-class. Frozen or
-unclassified targets retain the 32-class. The
+In Boat mode, `checks-ui-e2e-real-gateway` runs directly on GitHub-hosted
+`ubuntu-24.04`, including full release validation with a configured runner group.
+Other backends retain their routing: current targets use the 16-class, while
+frozen or unclassified targets retain the 32-class. The
 planner balances serial fixtures and audited parallel standalone files in the
 first row; the second owns the remaining parallel files. The first row also owns
 the desktop transport proof when selected by full manual/release validation or
@@ -330,7 +332,7 @@ a direct desktop-spec edit. Both rows retain their existing worker limits, build
 ordering, hosted fallbacks, and test deadlines. Runtime-only preparation leaves
 SDK declaration generation and validation with `build-artifacts`. The split adds
 one job and possible registration when the lane is selected, while ordinary PRs
-continue to omit it. Backend routing is unchanged. Exact-head
+continue to omit it. Exact-head
 CI measures complete row walls, including setup and transport proof.
 
 An earlier 16-class attempt exceeded the 20-minute Blacksmith budget.
@@ -413,8 +415,12 @@ GitHub App with organization self-hosted runner write access and a dedicated
 runner group. `OPENCLAW_RELEASE_RUNNER_GROUP` continues to select the existing
 hosted runners. App token creation must succeed before a VM is provisioned;
 a missing app ID or private key stops provisioning.
-The runner group must admit the nightly workflow on `main` and Full Release
-Validation on each immutable `release-ci/` transport ref. Install a Crabbox release supporting
+The runner group must admit the nightly workflow on `main` and
+`full-release-state-watcher.yml` at `ad1621f7e9d896dfdcc202d007e766e6c30153df`.
+Full Release Validation pins that reviewed watcher definition from its immutable
+`release-ci/` refs; the watcher checks out the caller's pinned tooling and admitted
+verifier. When changing the watcher definition, update the caller pin and
+runner-group entry together. Install a Crabbox release supporting
 `actions register --receipt` and `actions unregister --receipt` before enabling
 the backend. The provisioning preflight rejects older clients before creating
 a VM.
@@ -483,6 +489,7 @@ The repository variable `OPENCLAW_CI_RUNNER_BACKEND` controls the runner backend
 | unset or `blacksmith` | Blacksmith-first, with the existing manual-dispatch and fork fallbacks                 | Blacksmith-first, with the existing manual-dispatch and fork fallbacks           | Existing behavior is unchanged                                                        |
 | `github`              | GitHub-hosted                                                                          | GitHub-hosted                                                                    | Every configurable job remains hosted                                                 |
 | `hybrid`              | Ordinary upstream same-repository critical controls and light lanes use hosted runners | Blacksmith on attempt 1; GitHub-hosted on `github.run_attempt > 1`               | Rerunning a failed or stuck Blacksmith job automatically moves it to hosted capacity  |
+| `boat`                | Hybrid logical plan with admitted Boat Linux runners                                   | Boat on admitted first attempts; GitHub-hosted otherwise                         | Only same-repository runs authored and started by `vincentkoc` may allocate Boat      |
 | `runson`              | Hybrid baseline                                                                        | Hybrid baseline, with pure cron child rows on RunsOn for eligible first attempts | Automatic Spot-interruption retries disabled; other reruns retain the hybrid fallback |
 
 Configurable heavy lanes are `build-artifacts` and `android`. The macOS Swift and iOS build jobs use GitHub-hosted `xcode-27` with Xcode 27; iOS screenshot capture uses `xcode-27-xlarge`. The focused `macos-node` lane uses GitHub-hosted `xcode-27` in every backend mode, with the same test inventory and two-worker limit. Ordinary push and scheduled runs in `openclaw/openclaw`, and its same-repository PRs, use hosted `ubuntu-24.04` for `preflight`, the selected `pr-failure-report`, and `openclaw/ci-gate` when `OPENCLAW_CI_RUNNER_BACKEND=hybrid`. Fork first attempts retain their existing Blacksmith preflight and gate; their reporter is already hosted. Runner groups remain honored. The `checks-windows` job uses `windows-2025` in every backend mode, retaining the optional full-release runner group. Its selected rows count toward the existing hosted-row budget on eligible non-frozen first attempts; the 40-row base and 45-row total limits are unchanged. Outside these macOS and Windows routes, all `workflow_dispatch` qualification/release overrides, retries, and backend modes keep their existing routes. The logical planner profile, cache trust, steps and deadlines are unchanged. These controls remove three Blacksmith assignments per eligible PR and two per eligible main run, with no new jobs. They count in the existing [hosted budget](/ci/capacity#bounded-hybrid-hosted-offload); this is mandatory routing, independent of optional offload admission. Hosted assignment can still delay completion; see [measurements and estimated cost](/ci/routing-costs#hosted-assignment-on-the-critical-path). `security-fast` uses Blacksmith only on eligible hybrid first attempts when the [hosted budget](/ci/capacity#bounded-hybrid-hosted-offload) cannot admit optional work, and stays hosted outside `hybrid`. It waits for preflight to count the selected hosted rows, and still executes after a preflight failure unless the workflow is canceled. Security hooks use pinned installed packages and local hook definitions, so they no longer initialize remote Git repositories. For ordinary same-repository hybrid runs, `security-fast` retains a Blacksmith control assignment only when optional hosted admission is closed. Existing conservative registration reservations remain unchanged; this routing change does not assert free organization-wide capacity. Hybrid sends the compact Node matrix, up to 80 compact rows plus separately appended plugin fallback rows, thirteen-row `checks-ui-e2e` matrix for targets with the named-project contract, the `checks-ui-e2e-real-gateway` lane that shares its serial Chromium workload, four-row QA Smoke matrix on upstream automatic runs (six rows for manual dispatches), `checks-ui`, `check-lint`, `check-test-types`, the five `check-test-types-core-*` rows, `check-dependencies`, `check-additional-extension-package-boundary`, `check-additional-runtime-topology-architecture`, and `report-plugin-sdk-api-diff` to Blacksmith on attempt 1. Eligible two-child ordinary compact rows request `blacksmith-32vcpu-ubuntu-2404`; bins containing the full `agentic-cli` group request `blacksmith-32vcpu-ubuntu-2404` after planning. Other compact-small rows retain `blacksmith-4vcpu-ubuntu-2404`, compact-large rows retain `blacksmith-8vcpu-ubuntu-2404`, and the planner's measured small queue-tail promotions retain their 8-vCPU labels. Within that set, only the browser-extension E2E row may move to hosted Ubuntu; together with `security-fast`, preflight admits at most two optional rows below the 45-row hosted limit. Every other configurable `ci.yml` lane stays hosted in hybrid, including the remaining lint/check rows, docs, and Python skills. Separate Opengrep workflows remain GitHub-hosted.
@@ -529,26 +536,38 @@ A maintainer can dispatch `ci.yml` with `runner_backend=boat`,
 current same-repository PR head. The workflow branch and revision must match
 that head. Existing maintainer and exact-head admission applies.
 
-The default-shape first attempt runs only `build-artifacts` on `boat-xlarge`,
-using store-only dependency setup. Other runner routes use `hybrid`.
-Retries use the existing hosted route. Boat is not a repository backend value;
-this pilot does not change defaults, fork admission, or worker limits. The Boat
-GitHub integration, repository access, and account capacity must be configured
-before dispatch. Resource, cache, and artifact behavior still require live
-qualification before expanding the cutover.
+`OPENCLAW_CI_RUNNER_BACKEND=boat` uses the existing hybrid logical plan. Only
+same-repository first attempts authored and started by `vincentkoc` may allocate
+Boat runners. Other authors, starters, forks, and retries use GitHub-hosted
+runners. A maintainer qualification dispatch retains the existing exact-head
+admission and checks the target PR author as well as the starting actor.
 
-For artifact consumer qualification, set `ci_shape=main`. The Boat build keeps
-the 35-minute dispatch budget, and the plan selects the existing macOS runtime
-and published-driver artifact consumers even for a CI-only change. Those
-consumers remain selected on hosted retries. The macOS scope retains its native
-Node, Swift, and shared-package checks; no platform proof moves to Boat.
+Final Linux jobs map the Blacksmith 4/8-class to `boat`, 16-class to `boat-large`,
+and 32-class to `boat-xlarge`. Node jobs retain their logical 2/4/8-CPU budgets;
+group memory floors can select a larger physical runner without increasing those
+budgets. Rows that prepare the real worker compiler use at least `boat-large`
+(8 CPUs, 16 GiB), retaining their logical CPU budget. The selected board-store job requires 28 GiB and uses `boat-xlarge` with
+a 4-CPU budget. Baseline ratchets use the 16-GiB `boat-large` class. Actual RAM
+still gates overlap and memory-qualified workers. Node test children drop the
+inherited read/search capability so ordinary Unix permission checks apply.
+Android uses `boat-large`; its compact and main-PR test profiles retain their
+logical two-CPU budget. Full core lint uses five separate stripes with a 25-minute
+job timeout on the first Boat attempt, including setup. Other backends and hosted
+retries retain 15 minutes. Aside from the prepared-workspace exception below,
+Node packing, groups, timing identities, explicit workers, heaps, native providers,
+and release runner groups are unchanged. The
+build retains its 35-minute Boat budget.
 
-With `ci_shape=main` and `test_runtime_policy=node`, the first attempt also routes
-`checks-node-compact-large-4` to `boat-xlarge` when the existing plan selects its
-8-class, serial, source-only row. It retains the planned groups, worker limits,
-8-GiB Node heap, and 60-minute job budget. This row uses store-only dependency
-setup; failed-job-only retries stay hosted even when preflight outputs are reused.
-Retire the build and row overrides when the general Boat backend replaces this pilot.
+The prepared-workspace startup test runs in its own GitHub-hosted `ubuntu-24.04`
+row in Boat mode. Other files retain their Boat placement. The hosted row bypasses
+release runner groups and keeps its two-worker limit, preparation, and original
+job deadline; the test's 30-second child limit is unchanged.
+
+Boat uses store-only dependency setup. Scheduled cache warmers stay on hosted
+Ubuntu and retain the existing hosted namespace; a cache miss is valid. The
+former build and named Node-row pilots are replaced by this general route.
+Failed-job-only retries retain their emitted plan but execute on hosted runners
+without the Boat CPU cap. Rerunning all jobs creates a new GitHub-hosted plan.
 
 ### RunsOn qualification
 
