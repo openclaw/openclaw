@@ -12,6 +12,10 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createAgentSchemaInspectionWorker } from "../../state/openclaw-agent-schema-inspection-worker.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-schema-versions.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -263,11 +267,11 @@ describe("diagnostics.heapSnapshot", () => {
   ])("captures a native snapshot: $name", { timeout: 30_000 }, async ({ tracking }, { signal }) => {
     vi.restoreAllMocks();
     const ownerUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.snapshot);
-    const stateOwnerUrl = resolveRuntimeWorkerUrl({
-      currentModuleUrl: import.meta.url,
-      sourceWorkerName: "../../state/openclaw-state-db",
-      distWorkerPath: "state/openclaw-state-db.js",
-    });
+    let sealedPath: string | undefined;
+    if (!tracking) {
+      sealedPath = openOpenClawStateDatabase().path + ".seal";
+      await closeOpenClawStateDatabaseAsync();
+    }
     const cpuOwnerUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.cpu);
     const source = `
 import assert from 'node:assert/strict';
@@ -276,12 +280,9 @@ import { Session, url } from 'node:inspector/promises';
 import path from 'node:path';
 import { captureDiagnosticHeapSnapshot } from ${JSON.stringify(ownerUrl.href)};
 const tracking = ${JSON.stringify(tracking)};
-let sealedPath;
+const sealedPath = ${JSON.stringify(sealedPath)};
 let sealBefore;
 if (!tracking) {
-  const { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } = await import(${JSON.stringify(stateOwnerUrl.href)});
-  sealedPath = openOpenClawStateDatabase().path + '.seal';
-  await closeOpenClawStateDatabaseAsync();
   sealBefore = await readFile(sealedPath, 'utf8');
   const { captureDiagnosticCpuProfile } = await import(${JSON.stringify(cpuOwnerUrl.href)});
   const cpu = await captureDiagnosticCpuProfile({ windows: 1, windowMs: 100, signal: new AbortController().signal, hasAuthority: () => true });
