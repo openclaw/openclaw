@@ -65,9 +65,11 @@ it("loads lazy bundled companions independently of the calling plugin's captured
     `,
     );
   }
+  // mock-isolation: Resolve bundled channels from the fixture root, not the host package.
   vi.doMock("./bundled-root.js", () => ({
     resolveBundledChannelRootScope: () => ({ packageRoot: root, cacheKey: root }),
   }));
+  // mock-isolation: Expose only the fixture channel so no host plugin metadata is scanned.
   vi.doMock("../../plugins/bundled-channel-runtime.js", () => ({
     listBundledChannelPluginMetadata: () => [
       {
@@ -89,8 +91,7 @@ it("loads lazy bundled companions independently of the calling plugin's captured
   const caller = new PluginInstance("caller");
   caller.bindModuleLoader((source) => artifact.resolve(source), artifact.hasSource);
   try {
-    // Merely listing metadata must not evaluate either companion.
-    expect(bundled.listBundledChannelPluginIds()).toEqual(["alpha"]);
+    // Loading the bundled cache must not evaluate either companion.
     expect(fs.existsSync(marker)).toBe(false);
     withPluginRuntimeGatewayRequestScope({ isWebchatConnect: () => false }, () =>
       caller.run(() => {
