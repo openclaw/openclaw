@@ -5,7 +5,7 @@ import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { withManagedWorktreeGit } from "./checkout-policy.js";
 import { worktreePathExists } from "./git.js";
 import { getRegistryWorktreeProvisionedPaths } from "./registry.js";
-import { resolveRepository } from "./service-preparation.js";
+import { resolveRepository } from "./repository-paths.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 /** A broken link is orphaned only when its original repository is still available. */

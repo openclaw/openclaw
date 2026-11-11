@@ -7,11 +7,11 @@ import * as sessionDirs from "../../agents/session-dirs.js";
 import type { OpenClawConfig } from "../config.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { replaceSessionEntry } from "./session-accessor.js";
+import { resolveExistingAgentSessionStoreTargetsSync } from "./targets-discovery.native.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
-  resolveExistingAgentSessionStoreTargetsSync,
 } from "./targets.js";
 import {
   countMatching,
@@ -24,28 +24,34 @@ import {
 } from "./targets.test-support.js";
 
 describe("resolveAgentSessionStoreTargetsSync", () => {
-  it("resolves one requested agent store from the direct path", async () => {
-    await withTempHome(async (home) => {
-      const customRoot = path.join(home, "custom-state");
-      const storePaths = await createAgentSessionStores(customRoot, ["main", "codex"]);
-      const cfg: OpenClawConfig = {
-        ...createCustomRootCfg(customRoot, "main"),
-        agents: { entries: { main: {}, codex: {} } },
-      };
-      const enumerateAgentDirs = vi.spyOn(sessionDirs, "resolveAgentSessionDirsFromAgentsDirSync");
-      try {
-        expect(resolveAgentSessionStoreTargetsSync(cfg, "codex", { env: process.env })).toEqual([
-          {
-            agentId: "codex",
-            storePath: storePaths.codex,
-          },
-        ]);
-        expect(enumerateAgentDirs).not.toHaveBeenCalled();
-      } finally {
-        enumerateAgentDirs.mockRestore();
-      }
-    });
-  });
+  it.each([
+    ["direct", resolveAgentSessionStoreTargetsSync],
+    ["existing-only", resolveExistingAgentSessionStoreTargetsSync],
+  ] as const)(
+    "resolves one requested %s agent store without broad directory discovery",
+    async (_name, resolve) => {
+      await withTempHome(async (home) => {
+        const customRoot = path.join(home, "custom-state");
+        const storePaths = await createAgentSessionStores(customRoot, ["main", "codex"]);
+        const cfg: OpenClawConfig = {
+          ...createCustomRootCfg(customRoot, "main"),
+          agents: { entries: { main: {}, codex: {} } },
+        };
+        const enumerateAgentDirs = vi.spyOn(
+          sessionDirs,
+          "resolveAgentSessionDirsFromAgentsDirSync",
+        );
+        try {
+          expect(resolve(cfg, "codex", { env: process.env })).toEqual([
+            { agentId: "codex", storePath: storePaths.codex },
+          ]);
+          expect(enumerateAgentDirs).not.toHaveBeenCalled();
+        } finally {
+          enumerateAgentDirs.mockRestore();
+        }
+      });
+    },
+  );
 
   it("finds discovered directories whose names normalize to the requested agent", async () => {
     await withTempHome(async (home) => {
@@ -66,26 +72,6 @@ describe("resolveAgentSessionStoreTargetsSync", () => {
 });
 
 describe("resolveExistingAgentSessionStoreTargetsSync", () => {
-  it("resolves configured stores without broad directory discovery", async () => {
-    await withTempHome(async (home) => {
-      const customRoot = path.join(home, "custom-state");
-      const storePaths = await createAgentSessionStores(customRoot, ["main", "codex"]);
-      const cfg: OpenClawConfig = {
-        ...createCustomRootCfg(customRoot, "main"),
-        agents: { entries: { main: {}, codex: {} } },
-      };
-      const enumerateAgentDirs = vi.spyOn(sessionDirs, "resolveAgentSessionDirsFromAgentsDirSync");
-      try {
-        expect(
-          resolveExistingAgentSessionStoreTargetsSync(cfg, "codex", { env: process.env }),
-        ).toEqual([{ agentId: "codex", storePath: storePaths.codex }]);
-        expect(enumerateAgentDirs).not.toHaveBeenCalled();
-      } finally {
-        enumerateAgentDirs.mockRestore();
-      }
-    });
-  });
-
   it("requires agent-specific rows instead of fixed-store file existence", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "shared", "sessions.json");

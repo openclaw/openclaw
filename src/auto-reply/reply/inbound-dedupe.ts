@@ -1,4 +1,3 @@
-// Tracks inbound message ids to avoid duplicate reply runs.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

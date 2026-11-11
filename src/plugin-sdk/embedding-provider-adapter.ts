@@ -4,4 +4,4 @@ export {
   mapBatchEmbeddingsByIndex,
   sanitizeEmbeddingCacheHeaders,
 } from "../../packages/memory-host-sdk/src/host/embedding-provider-adapter-utils.js";
-export type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
+export type { MemoryEmbeddingProviderAdapter } from "../plugins/registry-contribution-types.js";

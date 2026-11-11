@@ -1,5 +1,6 @@
-// Control UI CSS hygiene: plain stylesheets plus css`` templates in Lit
-// components (postcss-lit). Error-class rules only — oxfmt owns formatting.
+// Control UI stylesheet hygiene. Error-class rules only — oxfmt owns formatting.
+import selectorIndexingAllowances from "./stylelint-selector-indexing-baseline.json" with { type: "json" };
+
 const selectorFunction = String.raw`\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)`;
 const selectorTail = String.raw`(?:[^([]|${selectorFunction}|\[[^\]]*\])*`;
 const selectorCompound = String.raw`(?:[^\s>+~(),[\]]|${selectorFunction}|\[[^\]]*\])*`;
@@ -14,7 +15,9 @@ const appAncestorSubject = String.raw`(?:${appAncestor}|${ancestorSelectorList})
 
 export default {
   extends: "stylelint-config-recommended",
+  plugins: ["./stylelint-selector-indexing.mjs"],
   rules: {
+    "openclaw/no-unindexed-selector-list": [true, { allowances: selectorIndexingAllowances }],
     // Chromium builds one invalidation set for every non-subject :has(). A universal
     // selector or pseudo-element after one widens it to whole subtrees (~9 ms per
     // insertion with 534 messages), ::placeholder on the :has() compound cost ~8 ms, and
@@ -78,10 +81,6 @@ export default {
       rules: {
         "color-no-hex": null,
       },
-    },
-    {
-      files: ["**/*.ts"],
-      customSyntax: "postcss-lit",
     },
   ],
 };

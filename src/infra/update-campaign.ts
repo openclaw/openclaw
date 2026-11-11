@@ -27,14 +27,15 @@ type UpdateCampaignAdoptionResult =
 type UpdateCampaignAnnouncement = {
   target: UpdateCampaignTarget;
   inspect?: Partial<GatewayActiveWorkInspectors>;
-  apply: (context: { forced: boolean }) => Promise<"handoff" | "applied" | "failed">;
+  apply: (context: {
+    forced: boolean;
+    target: UpdateCampaignTarget;
+  }) => Promise<"handoff" | "applied" | "failed">;
+  canStart?: () => boolean;
   onChange: (campaign: UpdateCampaignState | undefined) => void;
 };
 
 function sameTarget(a: UpdateCampaignTarget, b: UpdateCampaignTarget): boolean {
-  if (a.kind !== b.kind) {
-    return false;
-  }
   if (a.kind === "package" && b.kind === "package") {
     return a.version === b.version;
   }
@@ -72,6 +73,20 @@ export class UpdateCampaignController {
     return true;
   }
 
+  /** Rearm an existing Git announcement using its owner-held apply policy. */
+  refreshGitTarget(target: Extract<UpdateCampaignTarget, { kind: "git" }>): boolean {
+    if (this.campaign?.state === "applying") {
+      return false;
+    }
+    const announcement = this.announcement;
+    if (announcement?.target.kind === "git") {
+      this.announce({ ...announcement, target });
+    } else {
+      this.reconcileTarget(target);
+    }
+    return true;
+  }
+
   announce(announcement: UpdateCampaignAnnouncement): void {
     if (!this.reconcileTarget(announcement.target)) {
       return;
@@ -79,6 +94,10 @@ export class UpdateCampaignController {
     if (this.target && this.campaign && sameTarget(this.target, announcement.target)) {
       this.announcement = announcement;
       this.reconcile();
+      return;
+    }
+
+    if (announcement.canStart?.() === false) {
       return;
     }
 
@@ -260,17 +279,18 @@ export class UpdateCampaignController {
     });
     if (runApply) {
       // An apply can settle after clear/new announce; only its originating campaign may be cleared.
-      void trackAsyncWork(() => announcement.apply({ forced })).then(
+      const clearIfCurrent = () => {
+        if (this.campaign?.id === campaign.id) {
+          this.clear();
+        }
+      };
+      void trackAsyncWork(() => announcement.apply({ forced, target: announcement.target })).then(
         (outcome) => {
-          if (outcome === "failed" && this.campaign?.id === campaign.id) {
-            this.clear();
+          if (outcome === "failed") {
+            clearIfCurrent();
           }
         },
-        () => {
-          if (this.campaign?.id === campaign.id) {
-            this.clear();
-          }
-        },
+        clearIfCurrent,
       );
     }
   }

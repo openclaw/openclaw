@@ -112,17 +112,11 @@ const STATUS_REACTION_EMOJI_KEYS = Object.keys(
   TELEGRAM_STATUS_REACTION_VARIANTS,
 ) as StatusReactionEmojiKey[]; // SAFETY: The private literal has exactly these keys.
 
-export function resolveTelegramStatusReactionEmojis(params: {
-  initialEmoji: string;
-  overrides?: StatusReactionEmojis;
-}): Required<StatusReactionEmojis> {
-  const { overrides } = params;
-  const queuedFallback = normalizeOptionalString(params.initialEmoji) ?? DEFAULT_EMOJIS.queued;
-  const emojis = { ...DEFAULT_EMOJIS, queued: queuedFallback };
-  for (const key of STATUS_REACTION_EMOJI_KEYS) {
-    emojis[key] = normalizeOptionalString(overrides?.[key]) ?? emojis[key];
-  }
-  return emojis;
+export function resolveTelegramStatusReactionEmojis(
+  initialEmoji: string,
+): Required<StatusReactionEmojis> {
+  const queuedFallback = normalizeOptionalString(initialEmoji) ?? DEFAULT_EMOJIS.queued;
+  return { ...DEFAULT_EMOJIS, queued: queuedFallback };
 }
 
 export function buildTelegramStatusReactionVariants(
@@ -151,16 +145,10 @@ export function resolveTelegramReactionEmoji(emoji: string): TelegramReactionEmo
 function extractTelegramAllowedReactions(
   chat: TelegramChatDetails | null | undefined,
 ): TelegramAllowedReaction[] | null | undefined {
-  if (!chat) {
-    return undefined;
-  }
-  const availableReactions = chat.available_reactions;
-  if (availableReactions === undefined) {
-    return undefined;
-  }
+  const availableReactions = chat?.available_reactions;
   if (availableReactions == null) {
-    // Explicit null means all emoji reactions are allowed in this chat.
-    return null;
+    // Null allows all reactions; missing metadata still needs getChat resolution.
+    return availableReactions;
   }
   if (!Array.isArray(availableReactions)) {
     return [];
@@ -222,10 +210,10 @@ export function resolveTelegramReactionVariant(params: {
 
   for (const candidate of variants) {
     const emoji = resolveTelegramReactionEmoji(candidate);
-    if (!emoji) {
-      continue;
-    }
-    if (params.allowedEmojiReactions == null || params.allowedEmojiReactions.has(emoji)) {
+    if (
+      emoji &&
+      (params.allowedEmojiReactions == null || params.allowedEmojiReactions.has(emoji))
+    ) {
       return emoji;
     }
   }

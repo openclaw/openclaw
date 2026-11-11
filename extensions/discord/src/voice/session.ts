@@ -13,13 +13,6 @@ export const CAPTURE_FINALIZE_GRACE_MS = 2_000;
 export const VOICE_CONNECT_READY_TIMEOUT_MS = 30_000;
 export const VOICE_RECONNECT_GRACE_MS = 15_000;
 
-export function resolveVoiceTimeoutMs(value: number | undefined, fallbackMs: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return fallbackMs;
-  }
-  return Math.floor(value);
-}
-
 export type VoiceOperationResult = {
   ok: boolean;
   message: string;
@@ -43,11 +36,7 @@ export type VoiceSessionGeneration = {
 export type DiscordVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
 
 export function resolveDiscordVoiceMode(voice: DiscordAccountConfig["voice"]): DiscordVoiceMode {
-  const mode = voice?.mode;
-  if (mode === "stt-tts" || mode === "bidi") {
-    return mode;
-  }
-  return "agent-proxy";
+  return voice?.mode ?? "agent-proxy";
 }
 
 export function isDiscordRealtimeVoiceMode(
@@ -83,16 +72,10 @@ export type VoiceRealtimeSession = {
     userId: string,
     recordingInput?: DiscordRealtimeRecordingInput,
   ) => VoiceRealtimeSpeakerTurn;
-  close: () => void | Promise<void>;
+  close: (disposition?: "abort" | "text-fallback") => void | Promise<void>;
   connect: () => Promise<void>;
   canReceiveDuringPlayback: () => boolean;
 };
-
-type VoiceRealtimeLifecycle =
-  | { status: "inactive"; generation: number }
-  | { status: "starting"; generation: number; instance: VoiceRealtimeSession }
-  | { status: "active"; generation: number; instance: VoiceRealtimeSession }
-  | { status: "stopped"; generation: number; reason: string };
 
 export type VoiceGuildLifecycle =
   | { status: "inactive"; generation: number }
@@ -114,7 +97,6 @@ export type VoiceSessionEntry = {
   guildName?: string;
   channelId: string;
   channelName?: string;
-  sessionChannelId: string;
   voiceSessionKey: string;
   route: ReturnType<typeof resolveAgentRoute>;
   audio: import("./audio-transport.js").DiscordAudioTransport;
@@ -127,10 +109,14 @@ export type VoiceSessionEntry = {
   >;
   ttsStreamFallbackWarned: boolean;
   capture: VoiceCaptureState;
-  realtimeLifecycle: VoiceRealtimeLifecycle;
+  realtimeLifecycle:
+    | { status: "inactive" }
+    | { status: "starting"; instance: VoiceRealtimeSession }
+    | { status: "active"; instance: VoiceRealtimeSession }
+    | { status: "stopped"; reason: string };
   transcripts?: DiscordVoiceTranscriptCapture;
   receiveRecovery: VoiceReceiveRecoveryState;
-  stop: (reason?: string) => void | Promise<void>;
+  stop: (reason?: string, disposition?: "abort" | "text-fallback") => void | Promise<void>;
 };
 
 export function logVoiceVerbose(message: string): void {

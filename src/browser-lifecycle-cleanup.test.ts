@@ -22,7 +22,13 @@ describe("cleanupBrowserSessionsForLifecycleEnd", () => {
 
     await expect(
       cleanupBrowserSessionsForLifecycleEnd({
-        sessionKeys: ["", "  session-a  ", "session-a", "session-b"],
+        sessionKeys: [
+          "",
+          "global",
+          "  agent:alpha:global  ",
+          "agent:alpha:global",
+          "agent:beta:global",
+        ],
         isCurrent,
         prepareCurrent,
         onWarn,
@@ -30,7 +36,7 @@ describe("cleanupBrowserSessionsForLifecycleEnd", () => {
     ).resolves.toBeUndefined();
 
     expect(closeTrackedBrowserTabsForSessions).toHaveBeenCalledWith({
-      sessionKeys: ["session-a", "session-b"],
+      sessionKeys: ["agent:alpha:global", "agent:beta:global"],
       isCurrent,
       prepareCurrent,
       onWarn,
@@ -41,7 +47,7 @@ describe("cleanupBrowserSessionsForLifecycleEnd", () => {
     await expect(
       cleanupBrowserSessionsForLifecycleEnd({
         cfg: { browser: { enabled: false } } as OpenClawConfig,
-        sessionKeys: ["session-a"],
+        sessionKeys: ["agent:alpha:global"],
       }),
     ).resolves.toBeUndefined();
 
@@ -52,7 +58,7 @@ describe("cleanupBrowserSessionsForLifecycleEnd", () => {
     await expect(
       cleanupBrowserSessionsForLifecycleEnd({
         cfg: { plugins: { entries: { browser: { enabled: false } } } } as OpenClawConfig,
-        sessionKeys: ["session-a"],
+        sessionKeys: ["agent:alpha:global"],
       }),
     ).resolves.toBeUndefined();
 
@@ -66,7 +72,7 @@ describe("cleanupBrowserSessionsForLifecycleEnd", () => {
 
     await expect(
       cleanupBrowserSessionsForLifecycleEnd({
-        sessionKeys: ["session-a"],
+        sessionKeys: ["agent:alpha:global"],
         onError,
       }),
     ).resolves.toBeUndefined();

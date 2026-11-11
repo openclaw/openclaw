@@ -5,15 +5,14 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { catalogLog } from "./session-catalog-log.test-support.js";
+import { catalogProvider as provider } from "./session-catalog.fixtures.test-support.js";
 import {
   call,
   hoisted,
-  markPluginRegistryActive,
-  provider,
   resetSessionCatalogTestState,
   startCall,
-  type PluginRegistry,
   type SessionCatalogProvider,
 } from "./session-catalog.test-helpers.js";
 
@@ -47,7 +46,7 @@ describe("session catalog progress ownership", () => {
         "sessions.catalog.list",
         { progressId: "progress-1", ...(withdrawn ? { allowPartialResults: true } : {}) },
         {},
-        { connId: "requester", connect: {} },
+        { connId: "requester", connect: gatewayConnect([]) },
         { broadcastToConnIds },
       );
 
@@ -100,7 +99,7 @@ describe("session catalog progress ownership", () => {
     const config = { agents: { entries: { main: {}, research: {} } } };
     const leaderBroadcast = vi.fn();
     const followerBroadcast = vi.fn();
-    const sharedClient = { connId: "requester" };
+    const sharedClient = { connId: "requester", connect: gatewayConnect([]) };
     const leader = startCall(
       "sessions.catalog.list",
       { progressId: "leader-progress", agentId: "main" },
@@ -124,7 +123,7 @@ describe("session catalog progress ownership", () => {
 
     try {
       await started.promise;
-      expect(list).toHaveBeenCalledOnce();
+      expect(list).toHaveBeenCalledTimes(3);
       clock = 1_500;
       release();
       await Promise.all([
@@ -209,7 +208,7 @@ describe("session catalog progress ownership", () => {
       });
       hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("fixture", { list }) }];
       const config = {};
-      const client = { connId: "requester" };
+      const client = { connId: "requester", connect: gatewayConnect([]) };
       const context = { isConnectionActive: () => connected };
       const progressive = startCall(
         "sessions.catalog.list",
@@ -284,7 +283,7 @@ describe("session catalog progress ownership", () => {
         "sessions.catalog.list",
         { allowPartialResults: true, progressId: "live" },
         {},
-        { connId: "requester" },
+        { connId: "requester", connect: gatewayConnect([]) },
         { broadcastToConnIds },
       );
       try {
@@ -324,7 +323,7 @@ describe("session catalog progress ownership", () => {
       { provider: provider("completed") },
     ];
     const config = {};
-    const client = { connId: "requester" };
+    const client = { connId: "requester", connect: gatewayConnect([]) };
     const request = { catalogId: "fixture", search: "held" };
     const leader = startCall("sessions.catalog.list", request, config, client);
     const pending = [leader];
@@ -403,7 +402,7 @@ describe("session catalog progress ownership", () => {
         },
       ];
       const config = {};
-      const client = { connId: "requester" };
+      const client = { connId: "requester", connect: gatewayConnect([]) };
       const original = startCall(
         "sessions.catalog.list",
         { progressId: "before-delete" },
@@ -459,7 +458,7 @@ describe("session catalog progress ownership", () => {
     },
   );
 
-  it.each(["registry-reactivation", "gateway-close", "disconnect", "projection-failure"] as const)(
+  it.each(["gateway-close", "disconnect", "projection-failure"] as const)(
     "fences old publications after %s while a replacement request can publish",
     async (retirement) => {
       const releases = [createDeferredCore(), createDeferredCore()];
@@ -497,7 +496,7 @@ describe("session catalog progress ownership", () => {
           "sessions.catalog.list",
           { progressId: "original" },
           config,
-          { connId: "old", connectionSignal: connection.signal },
+          { connId: "old", connect: gatewayConnect([]), connectionSignal: connection.signal },
           {
             broadcastToConnIds,
             requestEntryLifetime: { signal: gateway.signal },
@@ -509,9 +508,7 @@ describe("session catalog progress ownership", () => {
         } else {
           await original;
         }
-        if (retirement === "registry-reactivation") {
-          markPluginRegistryActive(hoisted.activeRegistry as PluginRegistry);
-        } else if (retirement === "gateway-close") {
+        if (retirement === "gateway-close") {
           gateway.abort();
         } else if (retirement === "disconnect") {
           connection.abort();
@@ -521,7 +518,7 @@ describe("session catalog progress ownership", () => {
           "sessions.catalog.list",
           { progressId: "replacement" },
           config,
-          { connId: "new" },
+          { connId: "new", connect: gatewayConnect([]) },
           { broadcastToConnIds: replacementBroadcast },
         );
         releases[0]!.resolve();

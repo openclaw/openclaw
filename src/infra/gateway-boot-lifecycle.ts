@@ -1,42 +1,73 @@
 // Persists gateway boot outcomes for supervisor crash-loop decisions.
-import { randomUUID } from "node:crypto";
 import { formatCliCommand } from "../cli/command-format.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  executeExistingOpenClawStateRead,
-  withExistingOpenClawStateDatabaseReadOnly,
-} from "../state/openclaw-state-db-readonly.js";
+import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import {
   buildGatewayCrashLoopBreakerDecision,
-  inspectGatewayCrashLoopBreakerInDatabase,
   maintenanceStartupReasons,
 } from "./gateway-boot-lifecycle.kernel.js";
 import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+  publishGatewayRecentCrashes,
+  formatGatewayCrash,
+  type GatewayCrashRecord,
+} from "./gateway-crash.js";
+import { resolveGatewayPlatformSupervisor } from "./gateway-supervision.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
+import { detectGatewayRespawnSupervisorIdentity } from "./supervisor-markers.js";
+
+export async function readGatewayRecentCrashesAsync(
+  env = process.env,
+): Promise<GatewayCrashRecord[]> {
+  const reply = await executeExistingOpenClawStateRead(
+    { env },
+    { type: "gatewayBoot.crashes", input: undefined },
+    { signal: getAsyncWorkSignal(), current: true },
+  );
+  return reply?.crashes ?? [];
+}
+
+/** Reports the predecessor once, after startup, through the boot owner's worker. */
+export async function reportPreviousGatewayCrash(
+  previous: GatewayCrashRecord,
+  log: Pick<SubsystemLogger, "warn">,
+  env = process.env,
+): Promise<void> {
+  let crash = previous;
+  try {
+    const { readGatewayCrashCause } = await import("../daemon/gateway-crash-cause.js");
+    const evidence = await readGatewayCrashCause(previous, env);
+    if (evidence) {
+      const context = captureOpenClawStateWorkerContext({ env });
+      const result = await runOpenClawStateWorkerOperation(context, (scope) =>
+        scope.execute({
+          type: "gatewayBoot.enrichCrash",
+          input: { bootId: previous.bootId, evidence },
+        }),
+      );
+      publishGatewayRecentCrashes(result.crashes);
+      crash = result.crash ?? previous;
+    }
+  } catch {
+    // Inspection and enrichment cannot erase the durable unclean-exit fact.
+  }
+  log.warn(`previous Gateway run ended unexpectedly: ${formatGatewayCrash(crash)}`);
+}
 
 export {
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
-  GATEWAY_CRASH_LOOP_RECOVERED_REASON,
+  GATEWAY_SIGNAL_REPEAT_WINDOW_MS,
 } from "./gateway-boot-lifecycle.kernel.js";
 
-// Keep enough history for operator forensics while bounding lifecycle-segment
-// growth. Retention must comfortably exceed GATEWAY_BOOT_LOOP_WINDOW_MS.
-const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
 export const GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS = 500;
-export const GATEWAY_SIGNAL_REPEAT_WINDOW_MS = 5 * 60_000;
 
 export function formatGatewayRepeatedSignalHint(
   signal: NodeJS.Signals,
@@ -84,52 +115,83 @@ export type GatewayCrashLoopBreakerDecision = ReturnType<
   typeof buildGatewayCrashLoopBreakerDecision
 >;
 
-export function readGatewayLastShutdown(
-  env: NodeJS.ProcessEnv = process.env,
-): { reason: string | null; completedAtMs: number } | undefined {
-  try {
-    return withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => {
-        const row = executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db)
-            .selectFrom("gateway_boot_lifecycle")
-            .select(["reason", "completed_at_ms as completedAtMs"])
-            .where("outcome", "in", ["clean_stop", "planned_restart", "forced_stop"])
-            .where("completed_at_ms", "is not", null)
-            .orderBy("completed_at_ms", "desc")
-            .limit(1),
-        );
-        return row?.completedAtMs == null
-          ? undefined
-          : { ...row, completedAtMs: row.completedAtMs };
-      },
-      { env },
-    );
-  } catch {
-    return undefined;
-  }
+export type GatewayRestartResumeWindow = { startedAt: number; endedAt: number };
+export type GatewayRestartResumeWindows = Record<string, GatewayRestartResumeWindow[]>;
+
+export type GatewayBootLifecycleStart = {
+  decision: GatewayCrashLoopBreakerDecision;
+  id: string | undefined;
+  restartResumeWindow?: GatewayRestartResumeWindow;
+  restartResumeWindows?: GatewayRestartResumeWindows;
+  previousCrash?: GatewayCrashRecord;
+};
+
+/** Inspection keeps snapshot preparation off the caller's event loop. */
+export async function readGatewayLastShutdownAsync(env = process.env) {
+  const reply = await executeExistingOpenClawStateRead(
+    { env },
+    { type: "gatewayBoot.lastShutdown", input: undefined },
+    { signal: getAsyncWorkSignal() },
+  );
+  return reply?.shutdown;
 }
 
-export function readGatewayLastInstallationReplacement(env: NodeJS.ProcessEnv = process.env) {
-  const lastShutdown = readGatewayLastShutdown(env);
-  if (!lastShutdown?.reason?.startsWith("gateway.installation_replaced:")) {
-    return undefined;
-  }
-  return { reason: lastShutdown.reason, completedAtMs: lastShutdown.completedAtMs };
+export async function readGatewayLastInstallationReplacementAsync(env = process.env) {
+  const lastShutdown = await readGatewayLastShutdownAsync(env);
+  return lastShutdown?.reason?.startsWith("gateway.installation_replaced:")
+    ? { reason: lastShutdown.reason, completedAtMs: lastShutdown.completedAtMs }
+    : undefined;
 }
 
-export function inspectGatewayCrashLoopBreaker(
+/** Decide from prior boots, then record this boot in the existing lifecycle writer. */
+export async function beginGatewayBootLifecycle(
   env: NodeJS.ProcessEnv = process.env,
   nowMs = Date.now(),
-): GatewayCrashLoopBreakerDecision {
+  previousOwner?: { pid: number; heartbeatAt?: number },
+): Promise<GatewayBootLifecycleStart> {
+  // A new startup owns the serving process's diagnostic projection, including failed admission.
+  publishGatewayRecentCrashes([]);
   try {
-    const { db } = openOpenClawStateDatabase({ env });
-    return inspectGatewayCrashLoopBreakerInDatabase(db, nowMs);
+    const context = captureOpenClawStateWorkerContext({ env });
+    const supervisor = detectGatewayRespawnSupervisorIdentity();
+    const result = await runOpenClawStateWorkerOperation(context, (scope) =>
+      scope.execute({
+        type: "gatewayBoot.begin",
+        input: {
+          nowMs,
+          previousOwner,
+          metadata: {
+            version: VERSION,
+            commit: resolveRuntimeServiceCommit() ?? undefined,
+            runtime: process.versions.bun
+              ? `Bun ${process.versions.bun}`
+              : `Node ${process.versions.node}`,
+            supervisor: supervisor ?? undefined,
+            systemdInvocationId: supervisor?.kind === "systemd" ? env.INVOCATION_ID : undefined,
+          },
+        },
+      }),
+    );
+    if (result.crashes) {
+      publishGatewayRecentCrashes(result.crashes);
+    }
+    return result;
   } catch (err) {
     gatewayLifecycleLog.warn(`crash-loop breaker state unavailable; fail-open: ${String(err)}`);
-    return buildGatewayCrashLoopBreakerDecision({ uncleanBoots: 0 });
+    return { decision: buildGatewayCrashLoopBreakerDecision({ uncleanBoots: 0 }), id: undefined };
   }
+}
+
+/** A completed agent pass retires only the crash intervals captured by that boot. */
+export async function completeGatewayAgentRestartRecovery(
+  agentId: string,
+  through: number,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const context = captureOpenClawStateWorkerContext({ env });
+  await runOpenClawStateWorkerOperation(context, (scope) =>
+    scope.execute({ type: "gatewayBoot.recoveredAgent", input: { agentId, through } }),
+  );
 }
 
 /** Runtime readers share the boot owner's decision without opening SQLite on the main thread. */
@@ -143,48 +205,7 @@ export async function inspectGatewayCrashLoopBreakerAsync(
     { type: "gatewayBoot.breaker", input: nowMs },
     { signal, current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "gatewayBoot.breaker")) {
-    throw new Error("Unexpected Gateway crash-loop breaker result");
-  }
   return reply?.decision ?? buildGatewayCrashLoopBreakerDecision({ uncleanBoots: 0 });
-}
-
-export function recordGatewayBootStart(
-  env: NodeJS.ProcessEnv = process.env,
-  nowMs = Date.now(),
-  reason?: string,
-): string | undefined {
-  const bootId = randomUUID();
-  try {
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .deleteFrom("gateway_boot_lifecycle")
-            .where("started_at_ms", "<", nowMs - GATEWAY_BOOT_LIFECYCLE_RETENTION_MS),
-        );
-        executeSqliteQuerySync(
-          db,
-          kysely.insertInto("gateway_boot_lifecycle").values({
-            boot_id: bootId,
-            pid: process.pid,
-            started_at_ms: nowMs,
-            completed_at_ms: null,
-            outcome: null,
-            startup_reason: reason ?? null,
-            reason: null,
-          }),
-        );
-      },
-      { env },
-    );
-    return bootId;
-  } catch (err) {
-    gatewayLifecycleLog.warn(`failed to persist gateway boot start; fail-open: ${String(err)}`);
-    return undefined;
-  }
 }
 
 /**
@@ -219,12 +240,12 @@ export async function recordGatewayCrashLoopRecovery(
   }
 }
 
-export function completeGatewayBootLifecycle(
+export async function completeGatewayBootLifecycle(
   bootId: string | undefined,
   completion: GatewayBootLifecycleCompletion,
   env: NodeJS.ProcessEnv = process.env,
   nowMs = Date.now(),
-): void {
+): Promise<void> {
   if (!bootId) {
     return;
   }
@@ -237,39 +258,26 @@ export function completeGatewayBootLifecycle(
           ? "SIGINT"
           : undefined;
   try {
-    const recentStops = runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .updateTable("gateway_boot_lifecycle")
-            .set({
-              completed_at_ms: nowMs,
-              outcome: completion.outcome,
-              ...(completion.startupReason ? { startup_reason: completion.startupReason } : {}),
-              reason: completion.reason ?? null,
-            })
-            .where("boot_id", "=", bootId),
-        );
-        return signal
-          ? executeSqliteQueryTakeFirstSync(
-              db,
-              kysely
-                .selectFrom("gateway_boot_lifecycle")
-                .select((eb) => eb.fn.countAll<number>().as("count"))
-                .where("outcome", "=", "clean_stop")
-                .where("reason", "=", completion.reason ?? null)
-                .where("completed_at_ms", ">=", nowMs - GATEWAY_SIGNAL_REPEAT_WINDOW_MS),
-            )?.count
-          : undefined;
-      },
-      { env },
+    const context = captureOpenClawStateWorkerContext({ env });
+    const recentStops = await runOpenClawStateWorkerOperation(context, (scope) =>
+      scope.execute({
+        type: "gatewayBoot.complete",
+        input: { bootId, completion, nowMs, countSignalStops: signal !== undefined },
+      }),
     );
     if (signal && recentStops !== undefined && recentStops >= 3) {
-      gatewayLifecycleLog.warn(
-        formatGatewayRepeatedSignalHint(signal, recentStops, "stopped after"),
-      );
+      // A declared platform supervisor stops and replaces processes on purpose
+      // (Pod deletes, rollouts); repeated stops there are not a competing owner.
+      const platformSupervisor = resolveGatewayPlatformSupervisor(env);
+      if (platformSupervisor) {
+        gatewayLifecycleLog.info(
+          `stopped after ${signal} ${recentStops} times in 5 min (${platformSupervisor === "kubernetes" ? "Kubernetes" : "external supervisor"} manages this Gateway)`,
+        );
+      } else {
+        gatewayLifecycleLog.warn(
+          formatGatewayRepeatedSignalHint(signal, recentStops, "stopped after"),
+        );
+      }
     }
   } catch (err) {
     gatewayLifecycleLog.warn(`failed to persist gateway boot outcome; fail-open: ${String(err)}`);

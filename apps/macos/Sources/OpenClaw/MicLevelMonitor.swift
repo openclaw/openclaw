@@ -1,10 +1,8 @@
 import AVFoundation
 import OpenClawKit
-import OSLog
 import SwiftUI
 
 actor MicLevelMonitor {
-    private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.meter")
     private var engine: AVAudioEngine?
     private var update: (@MainActor @Sendable (Double) -> Void)?
     private var deliveryTask: Task<Void, Never>?
@@ -25,8 +23,6 @@ actor MicLevelMonitor {
             self.update = onLevel
             return
         }
-        self.logger.info(
-            "mic level monitor start (\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public))")
         self.lastUpdate = .now
         self.lastPublishedLevel = self.smoothedLevel
         guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {

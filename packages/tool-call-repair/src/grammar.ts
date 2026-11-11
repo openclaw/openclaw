@@ -151,7 +151,12 @@ export function indexOfAsciiMarkerIgnoreCase(text: string, marker: string, start
   return -1;
 }
 
-function scanXmlishNameEnd(text: string, start: number, isNameChar = isXmlishNameChar): number {
+/** Scan at most one character beyond the accepted tool-name limit. */
+export function scanToolCallNameEnd(
+  text: string,
+  start: number,
+  isNameChar = isXmlishNameChar,
+): number {
   let end = start;
   while (isNameChar(text[end]) && end - start < 121) {
     end += 1;
@@ -181,7 +186,7 @@ export function scanXmlishToolCall(
     }
     cursor += FUNCTION_OPEN.length;
     const nameStart = cursor;
-    cursor = scanXmlishNameEnd(text, nameStart);
+    cursor = scanToolCallNameEnd(text, nameStart);
     name = { start: nameStart, end: cursor };
     syntax = "function";
     if (cursor - nameStart > 120) {
@@ -197,7 +202,7 @@ export function scanXmlishToolCall(
   } else if (text[cursor] === "[") {
     cursor += 1;
     const firstNameStart = cursor;
-    cursor = scanXmlishNameEnd(text, firstNameStart, isPlainTextToolNameChar);
+    cursor = scanToolCallNameEnd(text, firstNameStart, isPlainTextToolNameChar);
     if (cursor - firstNameStart > 120) {
       return { kind: "invalid", at: cursor };
     }
@@ -211,7 +216,7 @@ export function scanXmlishToolCall(
       syntax = "tool-bracket";
       cursor += 1;
       const nameStart = cursor;
-      cursor = scanXmlishNameEnd(text, nameStart, isPlainTextToolNameChar);
+      cursor = scanToolCallNameEnd(text, nameStart, isPlainTextToolNameChar);
       name = { start: nameStart, end: cursor };
       if (cursor - nameStart > 120) {
         return { kind: "invalid", at: cursor };
@@ -283,7 +288,7 @@ export function scanXmlishToolCall(
     }
     if (startsWithAsciiMarkerIgnoreCase(text, markerStart, PARAMETER_OPEN)) {
       const nameStart = markerStart + PARAMETER_OPEN.length;
-      const nameEnd = scanXmlishNameEnd(text, nameStart);
+      const nameEnd = scanToolCallNameEnd(text, nameStart);
       if (nameEnd - nameStart > 120) {
         return { kind: "invalid", at: markerStart, candidate: candidate(markerStart) };
       }

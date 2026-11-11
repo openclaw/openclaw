@@ -64,7 +64,6 @@ export function createSubscriptionMock(): SubscriptionMock {
     getSourceReplyDelivered: () => undefined,
     getSourceReplyDeliveryState: () => undefined,
     endsWithSourceProgress: () => false,
-    getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
     getToolAutoDeliveryMediaUrls: () => [] as string[],
     hasToolMediaBlockReply: () => false,

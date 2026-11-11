@@ -5,6 +5,7 @@ import { createMergePatch } from "../config/merge-patch.js";
 import { resolveIsConfigReadOnly } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { buildRuntimeConfigSchemaFromRegistry } from "../config/runtime-schema.js";
+import { preparePluginDoctorContractModules } from "../plugins/doctor-contract-preparation.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
@@ -13,6 +14,7 @@ export async function reportDoctorExternalConfigRepairs(
   ctx: DoctorHealthFlowContext,
 ): Promise<void> {
   const snapshot = await readConfigFileSnapshot({ observe: false });
+  await preparePluginDoctorContractModules({ config: ctx.cfg, surfaces: ["configRepair"] });
   const candidate = restoreDoctorConfigEnvRefs(
     ctx.cfg,
     ctx.configResult.referenceSource,

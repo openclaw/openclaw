@@ -30,10 +30,14 @@ type CommandSecretProviderOverrides = {
   webFetch?: string;
 };
 
+const WEB_PROVIDER_OVERRIDES = [
+  ["webSearch", "search", "webSearchProviders"],
+  ["webFetch", "fetch", "webFetchProviders"],
+] as const;
+
 function hasProviderOverrides(overrides: CommandSecretProviderOverrides | undefined): boolean {
-  return (
-    normalizeOptionalString(overrides?.webSearch) !== undefined ||
-    normalizeOptionalString(overrides?.webFetch) !== undefined
+  return WEB_PROVIDER_OVERRIDES.some(
+    ([key]) => normalizeOptionalString(overrides?.[key]) !== undefined,
   );
 }
 
@@ -47,15 +51,12 @@ function applyProviderOverridesToConfig(
   const next = cloneConfigWithResolutionFacts(config);
   const tools = (next.tools ??= {}) as Record<string, unknown>;
   const web = (tools.web ??= {}) as Record<string, unknown>;
-  const webSearch = normalizeOptionalString(overrides?.webSearch);
-  if (webSearch) {
-    const search = (web.search ??= {}) as Record<string, unknown>;
-    search.provider = webSearch;
-  }
-  const webFetch = normalizeOptionalString(overrides?.webFetch);
-  if (webFetch) {
-    const fetch = (web.fetch ??= {}) as Record<string, unknown>;
-    fetch.provider = webFetch;
+  for (const [key, kind] of WEB_PROVIDER_OVERRIDES) {
+    const provider = normalizeOptionalString(overrides?.[key]);
+    if (provider) {
+      const tool = (web[kind] ??= {}) as Record<string, unknown>;
+      tool.provider = provider;
+    }
   }
   return next;
 }
@@ -69,10 +70,7 @@ function isProviderOverridePath(params: {
   path: string;
   providerOverrides: CommandSecretProviderOverrides | undefined;
 }): boolean {
-  for (const [overrideKey, kind, contract] of [
-    ["webSearch", "search", "webSearchProviders"],
-    ["webFetch", "fetch", "webFetchProviders"],
-  ] as const) {
+  for (const [overrideKey, kind, contract] of WEB_PROVIDER_OVERRIDES) {
     const provider = normalizeOptionalString(params.providerOverrides?.[overrideKey]);
     if (!provider) {
       continue;

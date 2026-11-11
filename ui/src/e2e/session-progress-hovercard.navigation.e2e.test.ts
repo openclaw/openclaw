@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -33,10 +34,7 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
         if (width === 390) {
-          await page
-            .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-            .first()
-            .click();
+          await navigationDrawerToggle(page).click();
         }
         const link = page.locator(
           `.sidebar-recent-session[data-session-key="${sessionKey}"] .sidebar-recent-session__link`,

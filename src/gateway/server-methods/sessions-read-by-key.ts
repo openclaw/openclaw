@@ -1,12 +1,19 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { validateSessionsDescribeParams } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  validateSessionsDescribeParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import type { NativeSubagentsSnapshot } from "../../../packages/gateway-protocol/src/schema/native-subagents.js";
+import { validateNativeSubagentsSnapshot } from "../../../packages/gateway-protocol/src/session-result-validators.js";
+import { captureAgentHarnessLifecycleHooks } from "../../agents/harness/registry-lifecycle.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
-import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
+import { prepareSessionRowPublication } from "../session-row-presentation.js";
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import {
   authorizeIncognitoSessionTarget,
@@ -25,6 +32,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
     context,
     client,
     sessionMutationAuthorization,
+    signal,
   }) => {
     if (!assertValidParams(params, validateSessionsDescribeParams, "sessions.describe", respond)) {
       return;
@@ -34,48 +42,169 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       return;
     }
     const projection = requireSessionRowProjection(context);
-    await withReadySessionRows(
-      projection,
-      (cfg) => {
-        const agent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
-        const denied = authorizeIncognitoSessionTarget({
-          client: client ?? null,
-          sessionKey: key,
-          target: null,
-        });
-        return agent.ok && !denied ? [{ key, agentId: agent.agentId }] : [];
-      },
-      (read) => {
+    const queries = (cfg: Parameters<typeof resolveRequestedSessionAgentId>[0]) => {
+      const agent = resolveRequestedSessionAgentId(cfg, key, params.agentId, "read");
+      const denied = authorizeIncognitoSessionTarget({
+        client: client ?? null,
+        sessionKey: key,
+        target: null,
+      });
+      return agent.ok && !denied ? [{ key, agentId: agent.agentId }] : [];
+    };
+    const selected = await withReadySessionRows(projection, queries, (read) => {
+      sessionMutationAuthorization?.assertCurrent();
+      const requestedAgent = resolveRequestedSessionAgentId(
+        read.state.cfg,
+        key,
+        params.agentId,
+        "read",
+      );
+      if (!requestedAgent.ok) {
+        respond(false, undefined, requestedAgent.error);
+        return undefined;
+      }
+      const query = { key, agentId: requestedAgent.agentId };
+      const presentation = prepareSessionRowPublication(
+        projection,
+        Date.now(),
+        read,
+      )(
+        client,
+        createVisibleActiveSessionRunProjector(
+          read.state.rowContext.projectedAgentRuns,
+          undefined,
+          context.resolveGatewayContext,
+          read.physicalPaths,
+        ),
+      ).getPresentation();
+      const denied = presentation.authorizeDescription(query);
+      if (denied) {
+        respond(false, undefined, denied);
+        return undefined;
+      }
+      const record = read.describe(query);
+      if (
+        !record ||
+        (hasOperatorBoundary(client, read.state.policyConfig) &&
+          !presentation.sharing.canReadTarget(presentation.target(query)!))
+      ) {
+        respond(true, { session: null });
+        return undefined;
+      }
+      if (params.includeNativeSubagents) {
+        return record;
+      }
+      respond(true, { session: presentation.present(record, params) });
+      return undefined;
+    });
+    if (!selected) {
+      return;
+    }
+    try {
+      const readParams = {
+        agentId: selected.agentId,
+        sessionKey: selected.key,
+        sessionId: selected.entry.sessionId,
+        lifecycleRevision: selected.entry.lifecycleRevision,
+        storePath: selected.storeTarget.storePath,
+      };
+      // Observe retained work even when its parent's selected runtime has since changed.
+      const owners = captureAgentHarnessLifecycleHooks("readNativeSubagents");
+      let active = true;
+      const assertCurrent = () => {
+        signal?.throwIfAborted();
         sessionMutationAuthorization?.assertCurrent();
-        const requestedAgent = resolveRequestedSessionAgentId(read.state.cfg, key, params.agentId);
-        if (!requestedAgent.ok) {
-          respond(false, undefined, requestedAgent.error);
-          return;
+        if (!projection.isCurrent(selected)) {
+          throw new Error("Session changed while reading native subagents");
         }
-        const query = { key, agentId: requestedAgent.agentId };
-        const presentation = prepareProjectedSessionPresentation(
-          read,
-          client,
-          Date.now(),
-          createVisibleActiveSessionRunProjector(context, read.state.rowContext.projectedAgentRuns),
+        if (!active || owners.some((owner) => !owner.isCurrent())) {
+          throw new Error("Native subagent observation owner changed");
+        }
+      };
+      try {
+        assertCurrent();
+        const snapshots = await Promise.all(
+          owners.map(async (owner) => {
+            const observed = await owner.prepare({ ...readParams, assertCurrent });
+            assertCurrent();
+            if (observed !== undefined && !validateNativeSubagentsSnapshot(observed)) {
+              throw new Error("Invalid native subagent observation");
+            }
+            return (
+              observed && {
+                coverage: observed.coverage,
+                children: observed.children.map((child) => ({
+                  id: `${owner.registration.harness.id}:${child.id}`,
+                  label: child.label,
+                  status: child.status,
+                })),
+                truncated: observed.truncated,
+              }
+            );
+          }),
         );
-        const denied = presentation.authorizeDescription(query);
-        if (denied) {
-          respond(false, undefined, denied);
-          return;
+        const available = snapshots.filter((observed) => observed !== undefined);
+        const children = available.flatMap((observed) => observed.children);
+        const nativeSubagents: NativeSubagentsSnapshot | undefined = available.length
+          ? {
+              coverage: "live",
+              children: children.slice(0, 128),
+              truncated: children.length > 128 || available.some((observed) => observed.truncated),
+            }
+          : undefined;
+        assertCurrent();
+        if (nativeSubagents !== undefined && !validateNativeSubagentsSnapshot(nativeSubagents)) {
+          throw new Error("Invalid combined native subagent observation");
         }
-        const record = read.describe(query);
-        if (
-          !record ||
-          (hasOperatorBoundary(client, read.state.policyConfig) &&
-            presentation.sharing.entryFilter?.(record.key, record.entry) === false)
-        ) {
-          respond(true, { session: null });
-          return;
-        }
-        respond(true, { session: presentation.present(record, params) });
-      },
-    );
+        await withReadySessionRows(projection, queries, (read) => {
+          assertCurrent();
+          sessionMutationAuthorization?.assertCurrent();
+          const presentation = prepareSessionRowPublication(
+            projection,
+            Date.now(),
+            read,
+          )(
+            client,
+            createVisibleActiveSessionRunProjector(
+              read.state.rowContext.projectedAgentRuns,
+              undefined,
+              context.resolveGatewayContext,
+              read.physicalPaths,
+            ),
+          ).getPresentation();
+          const query = { key, agentId: selected.agentId };
+          const denied = presentation.authorizeDescription(query);
+          if (denied) {
+            respond(false, undefined, denied);
+            return;
+          }
+          const current = read.describe(query, selected);
+          if (
+            !current ||
+            current.entry.sessionId !== selected.entry.sessionId ||
+            current.entry.lifecycleRevision !== selected.entry.lifecycleRevision ||
+            (hasOperatorBoundary(client, read.state.policyConfig) &&
+              !presentation.sharing.canReadTarget(presentation.target(query)!))
+          ) {
+            respond(true, { session: null });
+            return;
+          }
+          assertCurrent();
+          respond(true, {
+            session: presentation.present(current, params),
+            ...(nativeSubagents === undefined ? {} : { nativeSubagents }),
+          });
+        });
+      } finally {
+        active = false;
+      }
+    } catch {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "Unable to read native subagents"),
+      );
+    }
   },
   "sessions.get": async ({
     params,
@@ -98,6 +227,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
         context.getRuntimeConfig(),
         key,
         normalizeOptionalString(p.agentId),
+        "read",
       );
     const queries = () => {
       const requested = requestedAgent();
@@ -113,7 +243,11 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       const record = read.describe({ key, agentId: requested.agentId });
       const policyConfig = read.state.policyConfig;
       const boundaryFilter = hasOperatorBoundary(client, policyConfig)
-        ? createSessionListEntryFilter({ client, cfg: policyConfig })
+        ? createSessionListEntryFilter({
+            client,
+            cfg: policyConfig,
+            membership: record?.membership,
+          })
         : undefined;
       if (!record?.entry.sessionId || boundaryFilter?.(record.key, record.entry) === false) {
         respond(true, { messages: [] }, undefined);
@@ -153,7 +287,11 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
         : undefined;
       const policyConfig = read.state.policyConfig;
       const boundaryFilter = hasOperatorBoundary(client, policyConfig)
-        ? createSessionListEntryFilter({ client, cfg: policyConfig })
+        ? createSessionListEntryFilter({
+            client,
+            cfg: policyConfig,
+            membership: current?.membership,
+          })
         : undefined;
       if (
         !current ||

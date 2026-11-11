@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 export type GatewayRunRuntimeHooks = {
+  /** Exact Gateway cleanup disposition; absent when startup never reached its owner. */
+  onProcessResourcesSettled?: (outcome: "drained" | "retained") => void;
   releaseManagedProxy?: () => Promise<void> | void;
   refreshManagedProxy?: (config: OpenClawConfig["proxy"]) => Promise<void> | void;
 };

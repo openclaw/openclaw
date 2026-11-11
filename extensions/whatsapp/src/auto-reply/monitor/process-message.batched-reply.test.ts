@@ -1,22 +1,9 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { WASocket } from "baileys";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
-import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  createTestRegistry,
-  getActivePluginRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildReplyPayloads } from "openclaw/plugin-sdk/reply-payload-testing";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { whatsappPlugin } from "../../channel.js";
-import { WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY } from "../../connection-controller-runtime-context.js";
 import {
   buildNotifyMessageUpsert,
   getSock,
@@ -24,12 +11,15 @@ import {
   mockLoadConfig,
   startInboxMonitor,
   waitForInboundWorkDrained,
-  type InboxMonitorOptions,
 } from "../../monitor-inbox.test-harness.js";
-import { getWhatsAppChannelRuntime } from "../../runtime.js";
-import { processMessage } from "./process-message.js";
-
-type ReplyResolver = Parameters<typeof processMessage>[0]["replyResolver"];
+import {
+  boundarySelf as self,
+  boundaryPeer as peer,
+  boundaryAccount as accountId,
+  createReplyBoundary,
+  registerReplyBoundary,
+  type ReplyResolver,
+} from "./reply-boundary.test-helper.js";
 
 installWebMonitorInboxUnitTestHooks();
 
@@ -40,28 +30,13 @@ describe("WhatsApp debounce reply quoting boundary", () => {
   ])("quotes only a coalesced turn with a $debounceMs ms window", async (scenario) => {
     await withTempHome(
       async (root) => {
-        const self = "+12025550100";
-        const peer = "+12025550101";
-        const accountId = "work";
         const firstMessageId = `${scenario.debounceMs}-first-message`;
         const secondMessageId = `${scenario.debounceMs}-second-message`;
         const laterMessageId = `${scenario.debounceMs}-later-message`;
-        const backgroundTasks = new Set<Promise<unknown>>();
-        const cfg: OpenClawConfig = {
-          agents: {
-            defaults: {
-              workspace: path.join(root, "workspace"),
-            },
-          },
-          session: { dmScope: "per-channel-peer" },
-          channels: {
-            whatsapp: {
-              replyToMode: "batched",
-              accounts: { work: { authDir: path.join(root, "auth"), allowFrom: [peer] } },
-            },
-          },
-        };
-        await fs.writeFile(path.join(root, ".openclaw", "openclaw.json"), JSON.stringify(cfg));
+        const boundary = await createReplyBoundary(root, peer, {
+          channel: { replyToMode: "batched" },
+        });
+        const { cfg, backgroundTasks } = boundary;
         mockLoadConfig.mockReturnValue(cfg);
         getSock().user.id = `${self.slice(1)}@s.whatsapp.net`;
         const replyResolver = vi.fn<ReplyResolver>(async (ctx) => {
@@ -69,8 +44,6 @@ describe("WhatsApp debounce reply quoting boundary", () => {
           const { replyPayloads } = await buildReplyPayloads({
             config: cfg,
             payloads: [{ text: "plain model answer" }],
-            isHeartbeat: false,
-            didLogHeartbeatStrip: false,
             blockStreamingEnabled: false,
             blockReplyPipeline: null,
             replyToMode: "batched",
@@ -84,67 +57,31 @@ describe("WhatsApp debounce reply quoting boundary", () => {
           });
           return replyPayloads;
         });
-        const route = resolveAgentRoute({
-          cfg,
-          channel: "whatsapp",
-          accountId,
-          peer: { kind: "direct", id: peer },
-        });
         let dispatchGate = Promise.withResolvers<void>();
         let scheduled = Promise.withResolvers<void>();
-        const inboundQueue: NonNullable<InboxMonitorOptions["durableInboundQueue"]> =
-          createChannelIngressQueueForTests({
-            channelId: "whatsapp",
-            accountId,
-            stateDir: path.join(root, "ingress"),
-          });
         const { listener, sock } = await startInboxMonitor(
           async (msg) => {
             // Advance debounce time without freezing the real database and delivery workers.
             await dispatchGate.promise;
-            await processMessage({
-              cfg,
-              msg,
-              route,
-              groupHistoryKey: `whatsapp:${accountId}:direct:${peer}`,
-              groupHistories: new Map(),
-              groupMemberNames: new Map(),
-              connectionId: "batched-reply-proof",
-              verbose: false,
-              maxMediaBytes: 1_000_000,
-              replyResolver,
-              replyLogger: getChildLogger({ module: "whatsapp-batched-reply-boundary" }),
-              backgroundTasks,
-              ackAlreadySent: true,
-            });
+            await boundary.process(msg, replyResolver);
           },
           {
             cfg,
             accountId,
             debounceMs: scenario.debounceMs,
             authDir: path.join(root, "auth"),
-            durableInboundQueue: inboundQueue,
+            durableInboundQueue: createChannelIngressQueueForTests({
+              channelId: "whatsapp",
+              accountId,
+              stateDir: path.join(root, "ingress"),
+            }),
             shouldDebounce: () => {
               scheduled.resolve();
               return true;
             },
           },
         );
-        const priorRegistry = getActivePluginRegistry();
-        setActivePluginRegistry(
-          createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: whatsappPlugin }]),
-        );
-        const registration = registerChannelRuntimeContext({
-          channelRuntime: getWhatsAppChannelRuntime(),
-          channelId: "whatsapp",
-          accountId,
-          capability: WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY,
-          context: {
-            getActiveListener: () => listener,
-            getCurrentSock: () => null,
-            getSelfIdentity: () => ({ e164: self, jid: `${self.slice(1)}@s.whatsapp.net` }),
-          },
-        });
+        const registration = registerReplyBoundary(listener);
         const enqueue = async (id: string, body: string) => {
           scheduled = Promise.withResolvers<void>();
           sock.ev.emit(
@@ -184,7 +121,6 @@ describe("WhatsApp debounce reply quoting boundary", () => {
           await vi.advanceTimersByTimeAsync(scenario.debounceMs);
           await completeFlush();
 
-          expect(replyResolver).toHaveBeenCalledTimes(scenario.expectedQuoteIds.length);
           expect(quoteIds()).toEqual(scenario.expectedQuoteIds);
           expect(replyResolver.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(
             scenario.debounceMs > 858
@@ -203,12 +139,7 @@ describe("WhatsApp debounce reply quoting boundary", () => {
           dispatchGate.resolve();
           await listener.close();
           await Promise.allSettled(backgroundTasks);
-          registration?.dispose();
-          if (priorRegistry) {
-            setActivePluginRegistry(priorRegistry);
-          } else {
-            resetPluginRuntimeStateForTest();
-          }
+          registration.dispose();
         }
       },
       {

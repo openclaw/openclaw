@@ -1,4 +1,5 @@
 // Handles fast version output before the full CLI graph loads.
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRootVersionInvocation } from "./cli/argv.js";
 import { resolveCliContainerTarget } from "./cli/container-target.js";
 
@@ -10,19 +11,19 @@ export function tryHandleRootVersionFastPath(argv: string[]): boolean {
     return false;
   }
   const onError = async (error: unknown) => {
-    const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+    const detail = error instanceof Error ? formatErrorStackWithMessage(error) : String(error);
     const message = `[openclaw] Failed to resolve version: ${detail}\n`;
     try {
       const [{ loadCliDotEnv }, { formatConsoleDiagnosticBlock }] = await Promise.all([
         import("./cli/dotenv.js"),
         import("./logging/json-console-line.js"),
       ]);
-      loadCliDotEnv({ quiet: true });
-      process.stderr.write(formatConsoleDiagnosticBlock({ level: "error", message }));
+      loadCliDotEnv();
+      process.stderr.write(formatConsoleDiagnosticBlock({ message }));
     } catch {
       process.stderr.write(message);
     } finally {
-      process.exit(1);
+      process.exitCode = 1;
     }
   };
 
@@ -30,7 +31,7 @@ export function tryHandleRootVersionFastPath(argv: string[]): boolean {
     .then(([{ VERSION }, { resolveCommitHash }]) => {
       const commit = resolveCommitHash({ moduleUrl: import.meta.url });
       console.log(commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`);
-      process.exit(0);
+      process.exitCode = 0;
     })
     .catch(onError);
   return true;

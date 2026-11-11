@@ -4,23 +4,8 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { listAgentEntries, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveConfiguredTalkSpeechProviderId } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveEffectiveTtsConfig } from "../tts/tts-config.js";
+import { isTtsConfigReservedKey, resolveEffectiveTtsConfig } from "../tts/tts-config.js";
 import { isConfigActivationValueEnabled } from "./gateway-startup-plugin-contracts.js";
-
-const TTS_PROVIDER_CONFIG_RESERVED_KEYS = new Set([
-  "auto",
-  "enabled",
-  "maxTextLength",
-  "mode",
-  "modelOverrides",
-  "persona",
-  "personas",
-  "prefsPath",
-  "provider",
-  "providers",
-  "summaryModel",
-  "timeoutMs",
-]);
 
 /** Normalizes configured TTS provider ids for startup plugin selection. */
 function normalizeConfiguredSpeechProviderIdForStartup(value: unknown): string | undefined {
@@ -46,7 +31,7 @@ function resolveProviderConfigActivation(
   }
 
   for (const [key, providerConfig] of Object.entries(ttsConfig)) {
-    if (TTS_PROVIDER_CONFIG_RESERVED_KEYS.has(key) || !isRecord(providerConfig)) {
+    if (isTtsConfigReservedKey(key) || !isRecord(providerConfig)) {
       continue;
     }
     if (normalizeConfiguredSpeechProviderIdForStartup(key) === providerId) {
@@ -116,7 +101,7 @@ function addConfiguredTtsProviderIds(target: Set<string>, value: unknown): void 
     }
   }
   for (const [key, providerConfig] of Object.entries(value)) {
-    if (TTS_PROVIDER_CONFIG_RESERVED_KEYS.has(key) || !isRecord(providerConfig)) {
+    if (isTtsConfigReservedKey(key) || !isRecord(providerConfig)) {
       continue;
     }
     if (isConfigActivationValueEnabled(providerConfig)) {

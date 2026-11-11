@@ -1,0 +1,5 @@
+572
+# Own net regression-test lines only: retained producer payload authentication,
+# separate P/Q admission, original parent/coverage rejection, current attempts,
+# plugin Q-policy adoption, and bounded streaming integrity. Includes formatting.
+# No allocation for the 177 inherited lines reported by CI job 128869352052.

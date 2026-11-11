@@ -59,15 +59,6 @@ const EXEC_SECRET_REF_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$/;
 /** Canonical id for file secret providers that expose exactly one value. */
 export const SINGLE_VALUE_FILE_REF_ID = "value";
 
-type ExecSecretRefIdValidationReason = "pattern" | "traversal-segment";
-
-type ExecSecretRefIdValidationResult =
-  | { ok: true }
-  | {
-      ok: false;
-      reason: ExecSecretRefIdValidationReason;
-    };
-
 type SecretRefDefaultsCarrier = {
   secrets?: {
     /** Explicit per-source provider aliases selected by the operator. */
@@ -174,22 +165,18 @@ export function isValidSecretProviderAlias(value: string): boolean {
   return SECRET_PROVIDER_ALIAS_PATTERN.test(value);
 }
 
-export function validateExecSecretRefId(value: string): ExecSecretRefIdValidationResult {
+export function isValidExecSecretRefId(value: string): boolean {
   if (!EXEC_SECRET_REF_ID_PATTERN.test(value)) {
-    return { ok: false, reason: "pattern" };
+    return false;
   }
   // The JSON schema uses a negative lookahead for traversal. Runtime validation keeps the same
-  // rule explicit so UI/doctor flows can explain the safer failure class.
+  // rule explicit so config, plugin SDK, and Gateway validation accept the same ids.
   for (const segment of value.split("/")) {
     if (segment === "." || segment === "..") {
-      return { ok: false, reason: "traversal-segment" };
+      return false;
     }
   }
-  return { ok: true };
-}
-
-export function isValidExecSecretRefId(value: string): boolean {
-  return validateExecSecretRefId(value).ok;
+  return true;
 }
 
 export function isValidSecretRef(ref: SecretRef): boolean {
@@ -199,14 +186,11 @@ export function isValidSecretRef(ref: SecretRef): boolean {
   if (!isValidSecretProviderAlias(ref.provider)) {
     return false;
   }
-  if (ref.source === "env") {
+  if (ref.source === "env" || ref.source === "store") {
     return isValidEnvSecretRefId(ref.id);
   }
   if (ref.source === "file") {
     return isValidFileSecretRefId(ref.id);
-  }
-  if (ref.source === "store") {
-    return isValidEnvSecretRefId(ref.id);
   }
   return isValidExecSecretRefId(ref.id);
 }
@@ -240,19 +224,15 @@ export function normalizeAndGroupSecretRefs(refs: SecretRef[]): ProviderRefGroup
         `Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
       );
     }
-    if (ref.source === "env" && !isValidEnvSecretRefId(id)) {
+    if ((ref.source === "env" || ref.source === "store") && !isValidEnvSecretRefId(id)) {
+      const label = ref.source === "env" ? "Env" : "Store";
       throw new Error(
-        `Env secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
+        `${label} secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
       );
     }
     if (ref.source === "file" && !isValidFileSecretRefId(id)) {
       throw new Error(
         `File secret reference id must be an absolute JSON pointer or "value" (ref: ${ref.source}:${ref.provider}:${id}).`,
-      );
-    }
-    if (ref.source === "store" && !isValidEnvSecretRefId(id)) {
-      throw new Error(
-        `Store secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
       );
     }
     if (ref.source === "exec" && !isValidExecSecretRefId(id)) {

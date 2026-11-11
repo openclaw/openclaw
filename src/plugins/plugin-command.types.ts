@@ -7,6 +7,7 @@ import type {
   PluginConversationBindingRequestParams,
   PluginConversationBindingRequestResult,
 } from "./conversation-binding.types.js";
+import type { PluginRequesterModels } from "./model-catalog.types.js";
 
 type ChannelId = import("../channels/plugins/types.core.js").ChannelId;
 
@@ -80,7 +81,13 @@ export type PluginCommandContext = {
   diagnosticsSessions?: PluginCommandDiagnosticsSession[];
   /** Host-bound runtime capabilities scoped to this command invocation. */
   runtimeContext?: {
+    /** Read-only requester/session-bound catalog, when explicitly requested and admitted. */
+    models?: PluginRequesterModels;
     llm?: Pick<import("./runtime/types-core.js").PluginRuntimeCore["llm"], "complete">;
+    /** Native helpers bound to this authenticated command invocation. */
+    subagents?: import("./runtime/types-native-subagent.js").NativeSubagentRuntime;
+    /** Bounded native schedules admitted by this external requester invocation only. */
+    scheduledTurns?: import("./runtime/types-scheduled-turns.js").PluginCommandScheduledTurns;
     compactCurrent?: () => Promise<{
       compacted: boolean;
       reason?: string;
@@ -102,9 +109,13 @@ export type PluginCommandContext = {
 };
 
 export type PluginCommandResult = ReplyPayload & {
-  /** Allows the agent session to continue processing after the command. */
-  continueAgent?: boolean;
-  /** Suppresses channel fallback replies when the handler already delivered a response. */
+  /**
+   * Continues the agent turn after the command. `true` keeps the original message text;
+   * `{ prompt }` replaces the turn text, so the agent and transcript see `prompt` as this
+   * turn's user message, the same way core command rewrites appear. Earlier history is untouched.
+   */
+  continueAgent?: boolean | { prompt: string };
+  /** The handler already delivered its response: send neither the result text nor a missing-reply notice. */
   suppressReply?: boolean;
 };
 
@@ -130,6 +141,9 @@ export type AgentPromptGuidanceEntry = {
 };
 
 export type AgentPromptGuidance = string | AgentPromptGuidanceEntry;
+
+/** Opt-in command runtime families; future families extend this union. */
+export type PluginCommandRuntimeCapability = "subagents" | "models" | "scheduledTurns";
 
 export type OpenClawPluginCommandDefinition = {
   /** Command name without leading slash (e.g., "tts") */
@@ -171,6 +185,8 @@ export type OpenClawPluginCommandDefinition = {
   requireAuth?: boolean;
   /** Operator scopes required by gateway clients; command owners may satisfy this on chat surfaces. */
   requiredScopes?: OperatorScope[];
+  /** Optional invocation capabilities; subagents requires a manifest contract and requireAuth: true. */
+  runtimeCapabilities?: readonly PluginCommandRuntimeCapability[];
   /** Whether a trusted bundled handler needs owner status for subcommand-level authorization. */
   exposeSenderIsOwner?: boolean;
   /**

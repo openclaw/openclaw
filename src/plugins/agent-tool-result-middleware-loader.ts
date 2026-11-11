@@ -1,12 +1,13 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
-import type {
-  AgentToolResultMiddleware,
-  AgentToolResultMiddlewareRuntime,
-} from "./agent-tool-result-middleware-types.js";
-import { listAgentToolResultMiddlewares } from "./agent-tool-result-middleware.js";
+import type { AgentToolResultMiddlewareRuntime } from "./agent-tool-result-middleware-types.js";
+import { listAgentToolResultMiddlewareRegistrations } from "./agent-tool-result-middleware.js";
 import { loadPluginRegistryHandle } from "./loader.js";
-import type { PluginAgentToolResultMiddlewareOwner, PluginRegistry } from "./registry-types.js";
+import type {
+  PluginAgentToolResultMiddlewareOwner,
+  PluginAgentToolResultMiddlewareRegistration,
+  PluginRegistry,
+} from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 
 const log = createSubsystemLogger("plugins/agent-tool-result-middleware");
@@ -24,10 +25,10 @@ function listRuntimeMiddlewareOwnerPluginIds(
   return pluginIds;
 }
 
-export async function loadAgentToolResultMiddlewaresForRuntime(params: {
+export async function loadAgentToolResultMiddlewareRegistrationsForRuntime(params: {
   runtime: AgentToolResultMiddlewareRuntime;
-}): Promise<AgentToolResultMiddleware[]> {
-  const activeHandlers = listAgentToolResultMiddlewares(params.runtime);
+}): Promise<PluginAgentToolResultMiddlewareRegistration[]> {
+  const activeRegistrations = listAgentToolResultMiddlewareRegistrations(params.runtime);
 
   try {
     const activeRegistry = getActivePluginRegistry();
@@ -43,7 +44,7 @@ export async function loadAgentToolResultMiddlewaresForRuntime(params: {
       }
     }
     if (missingOwners.length === 0) {
-      return activeHandlers;
+      return activeRegistrations;
     }
     const missingPluginIds = missingOwners.map((owner) => owner.pluginId);
     const missingPluginIdSet = new Set(missingPluginIds);
@@ -65,16 +66,13 @@ export async function loadAgentToolResultMiddlewaresForRuntime(params: {
             channelPluginLoadIntent: "full",
           });
 
-    const missingHandlers = runtimeRegistry.agentToolResultMiddlewares
-      .filter(
-        (entry) =>
-          missingPluginIdSet.has(entry.pluginId) && entry.runtimes.includes(params.runtime),
-      )
-      .map((entry) => entry.handler);
-    return [...activeHandlers, ...missingHandlers];
+    const missingRegistrations = runtimeRegistry.agentToolResultMiddlewares.filter(
+      (entry) => missingPluginIdSet.has(entry.pluginId) && entry.runtimes.includes(params.runtime),
+    );
+    return [...activeRegistrations, ...missingRegistrations];
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     log.warn(`[${params.runtime}] failed to load tool result middleware plugins: ${detail}`);
-    return listAgentToolResultMiddlewares(params.runtime);
+    return listAgentToolResultMiddlewareRegistrations(params.runtime);
   }
 }

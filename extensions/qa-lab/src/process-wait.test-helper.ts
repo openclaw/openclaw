@@ -1,19 +1,11 @@
 // Qa Lab plugin module implements process wait helper behavior.
 import { setTimeout as sleep } from "node:timers/promises";
+import { isProcessAlive } from "../../test-support/process.test-support.js";
 
 const POLL_INTERVAL_MS = 10;
 // Generous ceiling for loaded CI runners: callers synchronize on the asserted
 // state, so a large bound only delays failure reporting, never success.
 const DEFAULT_WAIT_TIMEOUT_MS = 10_000;
-
-export function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export async function waitForDead(pid: number, timeoutMs = DEFAULT_WAIT_TIMEOUT_MS): Promise<void> {
   const deadlineAt = Date.now() + timeoutMs;

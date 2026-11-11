@@ -29,7 +29,7 @@ All channels support DM policies and group policies:
 <Note>
 `channels.defaults.groupPolicy` applies only when the resolved channel policy is unset. The channel schemas listed on the [per-channel pages](/gateway/config-channels) default the root to `allowlist`; set `channels.<channel>.groupPolicy` explicitly to choose another policy.
 Pairing codes expire after 1 hour. Pending pairing requests are capped at **3 per account** (scoped by channel and account id).
-If a provider block is missing entirely (`channels.<provider>` absent), runtime group policy falls back to `allowlist` (fail-closed) with a startup warning.
+If a provider block is missing entirely (`channels.<provider>` absent), runtime group policy falls back to `allowlist` (rejecting groups not on the list) with a startup warning.
 </Note>
 
 ## Channel model overrides
@@ -70,9 +70,11 @@ For group/thread conversations, keys are channel-specific group IDs, topic IDs, 
 
 DM-specific keys only match in direct-message conversations; they do not affect group/thread routing.
 
-## Channel defaults and heartbeat
+<a id="channel-defaults-and-heartbeat" />
 
-Use `channels.defaults` for shared group-policy, implicit-mention, and heartbeat behavior across providers. Changes refresh loaded channel runtimes without restarting the Gateway; manually stopped accounts stay stopped:
+## Channel defaults
+
+Use `channels.defaults` for shared group-policy and implicit-mention behavior across providers. Changes refresh loaded channel runtimes without restarting the Gateway; manually stopped accounts stay stopped:
 
 ```json5
 {
@@ -85,11 +87,6 @@ Use `channels.defaults` for shared group-policy, implicit-mention, and heartbeat
         quotedBot: true,
         threadParticipation: true,
       },
-      heartbeatVisibility: {
-        showOk: false,
-        showAlerts: true,
-        useIndicator: true,
-      },
     },
   },
 }
@@ -98,15 +95,18 @@ Use `channels.defaults` for shared group-policy, implicit-mention, and heartbeat
 - `channels.defaults.groupPolicy`: fallback group policy when a provider-level `groupPolicy` is unset.
 - `channels.defaults.contextVisibility`: default supplemental context visibility mode for all channels. Values: `all` (default, include all quoted/thread/history context), `allowlist` (only include context from allowlisted senders), `allowlist_quote` (same as allowlist but keep explicit quote/reply context). Per-channel override: `channels.<channel>.contextVisibility`.
 - `channels.defaults.implicitMentions`: controls which supported inbound facts count as mentions. `replyToBot`, `quotedBot`, and `threadParticipation` each default to `true`, preserving current behavior. The names are positive: set a flag to `false` to stop that fact from bypassing mention gating. Among bundled channels, Mattermost, Slack, and Tlon read this policy; on those channels you can also override it per channel with `channels.<channel>.implicitMentions` or per account with `channels.<channel>.accounts.<id>.implicitMentions`, and each flag resolves account -> channel -> defaults independently. Other bundled channels that produce implicit mention facts do not currently read these settings, so on those channels the facts always count as mentions and the override has no effect. Native explicit mentions are always allowed, and a flag has no effect when the channel does not produce that fact. See [Mention gating](/channels/groups#mention-gating-default) for the current producer matrix. These settings do not change outbound reply/thread modes or authorized command handling.
-- `channels.defaults.heartbeatVisibility.showOk`: deliver legacy `HEARTBEAT_OK` acknowledgments when the monitor has nothing to report (default `false`).
-- `channels.defaults.heartbeatVisibility.showAlerts`: deliver user-facing heartbeat monitor alerts (default `true`).
-- `channels.defaults.heartbeatVisibility.useIndicator`: emit heartbeat status indicator events (default `true`).
+
+Legacy core `heartbeatVisibility` settings move to each migrated automation's
+delivery policy. Run `openclaw doctor --fix`; see [Heartbeat migration](/gateway/heartbeat).
+Channel-specific transport keepalives are separate and unchanged.
 
 ## Multi-account (all channels)
 
 Run multiple accounts per channel (each with its own `accountId`):
 
-This pattern applies to channels that support `accounts`. Microsoft Teams uses only the channel-level `channels.msteams` configuration.
+This pattern applies to channels that support `accounts`, including Microsoft
+Teams. Teams bot identity and webhook paths stay account-specific; shared
+policy and delivery settings can inherit from `channels.msteams`.
 
 ```json5
 {
@@ -130,9 +130,9 @@ This pattern applies to channels that support `accounts`. Microsoft Teams uses o
 - `default` is used when `accountId` is omitted (CLI + routing).
 - Env tokens only apply to the **default** account.
 - Base channel settings apply to all accounts unless overridden per account.
-- For Discord, Google Chat, iMessage, Signal, Slack, Telegram, and WhatsApp, an omitted account `groupPolicy` or `dmPolicy` inherits the channel policy. An explicit account value wins, including `allowlist` or `pairing`. With no applicable policy configured, group access stays `allowlist` and DMs use `pairing`.
+- For Discord, Google Chat, iMessage, Microsoft Teams, Signal, Slack, Telegram, and WhatsApp, an omitted account `groupPolicy` or `dmPolicy` inherits the channel policy. An explicit account value wins, including `allowlist` or `pairing`. With no applicable policy configured, group access stays `allowlist` and DMs use `pairing`.
 - WhatsApp also inherits shared settings from `accounts.default` before falling back to the channel root; Google Chat uses shared `accounts.default` settings below root settings. See the channel pages for these exceptions and collection-merging rules.
 - Use `bindings[].match.accountId` to route each account to a different agent.
-- If you add a non-default account via `openclaw channels add` (or channel onboarding) while still on a single-account top-level channel config, OpenClaw promotes account-scoped top-level single-account values into the channel account map first so the original account keeps working. Most channels move them into `channels.<channel>.accounts.default`; Matrix can preserve an existing matching named/default target instead.
+- If you add a non-default account via `openclaw channels add` (or channel onboarding) while still on a single-account top-level channel config, OpenClaw promotes account-scoped top-level single-account values into the channel account map first so the original account keeps working. Most channels move them into `channels.<channel>.accounts.default`; Matrix can preserve an existing matching named/default target instead. Microsoft Teams promotes the original bot identity while preserving shared root policies.
 - Existing channel-only bindings (no `accountId`) keep matching the default account; account-scoped bindings remain optional.
 - `openclaw doctor --fix` also repairs mixed shapes by moving account-scoped top-level single-account values into the promoted account chosen for that channel. Most channels use `accounts.default`; Matrix can preserve an existing matching named/default target instead.

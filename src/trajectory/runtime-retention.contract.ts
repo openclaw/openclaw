@@ -1,8 +1,6 @@
-import type { PreparedCanonicalSessionValidationSchema } from "../state/openclaw-agent-canonical-validation-schema.js";
+import type { DatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
 
 export type TrajectoryRuntimeRetentionInput = { sessionId: string; maxGlobalRuntimeBytes?: number };
-
-export type TrajectoryRuntimeRetentionLease = { trajectoryRetentionLease: SharedArrayBuffer };
 
 export function readTrajectoryRuntimeRetentionLease(attachment: unknown): Int32Array {
   if (
@@ -31,13 +29,11 @@ export type TrajectoryRuntimeRetentionPlan = {
   }[];
 };
 
-export type TrajectoryRuntimeRetentionReadOperations = {
-  "trajectoryRetention.read": {
-    input: TrajectoryRuntimeRetentionInput & {
-      agentId: string;
-      now: number;
-      schemaContract?: PreparedCanonicalSessionValidationSchema;
-    };
-    output: TrajectoryRuntimeRetentionPlan;
-  };
+export type TrajectoryRetentionWorkerInput = {
+  kind: "trajectory-retention";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+  expectedIdentity: DatabaseFileIdentity;
+  input: TrajectoryRuntimeRetentionInput;
+  now: number;
 };
