@@ -394,6 +394,9 @@ extension OpenClawChatView {
         let isAtLiveEdge = distanceFromBottom <= Layout.liveEdgeThreshold
         guard self.scroll.isAtLiveEdge != isAtLiveEdge else { return }
         self.scroll.isAtLiveEdge = isAtLiveEdge
+        #if os(iOS)
+        self.scroll.hasNewerContentBelow = !isAtLiveEdge
+        #endif
         #if !os(iOS)
         guard self.hasPerformedInitialScroll else { return }
         if isAtLiveEdge, !self.scroll.isUserScrolling, !self.isFollowingTurn, self.searchMessageID == nil {
@@ -1116,7 +1119,12 @@ extension OpenClawChatView {
             self.searchMessageID = nil
             self.scroll.followTarget = .latest
             self.scroll.hasNewerContentBelow = false
+            #if os(iOS)
+            self.scroll.readerAnchor.release()
+            self.scrollCommand.cancel()
+            #else
             self.moveScrollPosition(to: self.scrollerBottomID)
+            #endif
         } label: {
             Image(systemName: "arrow.down")
                 .font(.system(size: 15, weight: .semibold))

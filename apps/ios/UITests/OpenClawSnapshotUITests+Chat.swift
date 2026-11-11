@@ -443,16 +443,14 @@ extension OpenClawSnapshotUITests {
         self.assertElementHasRenderedContent(finalReply, named: "reply after explicit Jump")
         self.attachScreenshot(named: "reader-returned-to-latest")
 
-        // Status-bar navigation is reader intent, not a keyboard-avoidance animation.
-        // The system status bar is visible but is not in this app's accessibility tree.
-        // Target the visible clock, not the empty margin left of the status items.
-        let navigationBar = app.navigationBars.firstMatch
-        let statusBarHeight = navigationBar.frame.minY - app.frame.minY
-        XCTAssertGreaterThan(statusBarHeight, 0)
-        XCTAssertEqual(app.state, .runningForeground, "Native navigation requires the app in the foreground")
-        self.attachScreenshot(named: "reader-before-status-bar-navigation")
-        app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: app.frame.width * 0.18, dy: statusBarHeight * 0.4)).tap()
+        // Target the actual system clock AX element without activating SpringBoard.
+        XCTAssertEqual(app.state, .runningForeground)
+        self.attachScreenshot(named: "reader-before-system-clock")
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let clock = springboard.statusBars.staticTexts.firstMatch
+        XCTAssertTrue(clock.waitForExistence(timeout: 3))
+        XCTAssertEqual(app.state, .runningForeground)
+        clock.tap()
         guard app.state == .runningForeground else {
             XCTFail("Status-bar input left the app; this is not native-navigation evidence")
             return

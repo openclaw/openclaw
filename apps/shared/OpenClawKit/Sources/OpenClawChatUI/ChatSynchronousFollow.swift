@@ -11,6 +11,7 @@ struct ChatSynchronousFollowProbe: UIViewRepresentable {
         var observations: [NSKeyValueObservation] = []
         var followState: ChatScrollFollowState?
         var reconciling = false
+        var keyboardObservers: [NSObjectProtocol] = []
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
@@ -31,8 +32,26 @@ struct ChatSynchronousFollowProbe: UIViewRepresentable {
             guard let scroll = parent as? UIScrollView, scroll !== self.scroller else { return }
             self.observations.removeAll()
             self.scroller = scroll
+            if self.keyboardObservers.isEmpty {
+                for name in [
+                    UIResponder.keyboardWillChangeFrameNotification,
+                    UIResponder.keyboardDidChangeFrameNotification,
+                ] {
+                    self.keyboardObservers.append(NotificationCenter.default.addObserver(
+                        forName: name,
+                        object: nil,
+                        queue: .main)
+                    { [weak self] _ in
+                        MainActor.assumeIsolated {
+                            guard let self else { return }
+                            self.reconcile()
+                        }
+                    })
+                }
+            }
             self.observations = [
-                scroll.observe(\.contentSize, options: [.new]) { [weak self] _, _ in
+                scroll.observe(\.contentSize, options: [.old, .new]) { [weak self] _, change in
+                    guard change.oldValue != change.newValue else { return }
                     MainActor.assumeIsolated { self?.reconcile() }
                 },
                 scroll.observe(\.bounds, options: [.old, .new]) { [weak self] _, change in
@@ -79,6 +98,10 @@ struct ChatSynchronousFollowProbe: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ probe: Probe, coordinator: ()) {
+        for observer in probe.keyboardObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        probe.keyboardObservers.removeAll()
         probe.observations.removeAll()
         probe.scroller = nil
         probe.followState = nil
