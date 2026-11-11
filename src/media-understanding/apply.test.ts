@@ -274,15 +274,15 @@ describe("applyMediaUnderstanding", () => {
 
   it("echoes current audio to the originating account but not quoted audio", async () => {
     const quoted = await attachment("quoted.ogg", createSafeAudioFixtureBuffer(2048), "audio/ogg");
-    const current = await attachment("current.ogg", createSafeAudioFixtureBuffer(2048), "audio/ogg");
-    const ctx = mediaCtx([current, { ...quoted, source: "quote" }]);
+    const now = await attachment("now.ogg", createSafeAudioFixtureBuffer(2048), "audio/ogg");
+    const ctx = mediaCtx([now, { ...quoted, source: "quote" }]);
     Object.assign(ctx, { Provider: "voicechat", From: "+10000000001", AccountId: "acc1" });
     const attachments = { mode: "all", maxAttachments: 2 } as const;
     const cfg = createGroqAudioConfig({ echoTranscript: true, attachments });
     await applyAudio(ctx, async (req) => ({ text: `heard ${req.fileName}` }), { cfg });
     expect(ctx.Transcript).toContain("heard quoted.ogg");
     expect(mockDeliverOutboundPayloads).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ accountId: "acc1", payloads: [{ text: '📝 "heard current.ogg"' }] }),
+      expect.objectContaining({ accountId: "acc1", payloads: [{ text: '📝 "heard now.ogg"' }] }),
     );
   });
 
