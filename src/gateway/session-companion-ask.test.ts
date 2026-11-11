@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
@@ -14,6 +16,7 @@ import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metad
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import { createSessionCompanion } from "./session-companion.js";
 
@@ -242,6 +245,26 @@ describe("session companion embedded invocation", () => {
     admitWrite.mockReset().mockImplementation(async (_manager, write) => write());
     removeSession.mockResolvedValue(undefined);
     runEmbeddedAgent.mockReset().mockResolvedValue(completion("The session is reading a file."));
+  });
+
+  it("refuses Side chat in a workspace needing repair before model execution", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await fs.writeFile(
+        path.join(state.workspaceDir, "openclaw-workspace-state.json"),
+        "retained",
+      );
+      const cfg = config({ workspace: state.workspaceDir, utilityModel: "test/model-a" });
+      const companion = createCompanion(cfg);
+      const respond = await companion.rpc({ question: question.question });
+      expectRpcError(respond, {
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("openclaw doctor --fix"),
+        retryable: false,
+      });
+      expect(respond.mock.calls[0]?.[2]?.message).not.toContain(state.workspaceDir);
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(prepareCliRunContext).not.toHaveBeenCalled();
+    });
   });
 
   it.each(["denied-primary", "embedded-cleanup", "cli-cleanup"] as const)(

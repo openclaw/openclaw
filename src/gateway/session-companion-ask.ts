@@ -23,7 +23,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveChatAttachmentMaxBytes } from "./chat-attachment-policy.js";
 import { parseMessageWithAttachments, type ChatAttachment } from "./chat-attachments.js";
 import type { SessionCompanionContextReader } from "./session-companion-context.js";
-import { SessionCompanionAskError } from "./session-companion-errors.js";
+import { assertWorkspaceReady, SessionCompanionAskError } from "./session-companion-errors.js";
 import {
   buildSessionCompanionSystemPrompt,
   resolveSessionCompanionModel,
@@ -143,6 +143,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       "Side chat on a CLI runtime cannot read images. Choose an image-capable utility model and retry.",
     );
   }
+  assertWorkspaceReady(params.workspaceDir);
   const runId = `session-companion-${randomUUID()}`;
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.agentId,
