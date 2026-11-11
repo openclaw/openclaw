@@ -4,6 +4,9 @@ import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
+import { createTestInstance } from "../../../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../../../plugins/plugin-invocation-scope.js";
+import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   mergeAcceptedSessionSpawnsForRun,
@@ -13,6 +16,7 @@ import {
 import {
   readAdmittedRunOperatorAuthority,
   getAdmittedRunDelegatedAuthority,
+  resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import {
@@ -37,6 +41,7 @@ type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
 export function registerYieldedRequesterBatchCase(
   options: BoundaryHarness & {
     waitForEmbeddedRun: WaitForEmbeddedRun;
+    settleRootWork: (keepObserving?: boolean) => Promise<void>;
     createBoundParent: () => Promise<BoundParent>;
     createGuestParent: (audit?: boolean) => Promise<{
       bound: BoundParent;
@@ -44,7 +49,7 @@ export function registerYieldedRequesterBatchCase(
     }>;
   },
 ) {
-  it.for(["system", "guest", "cancel-and-replace"] as const)(
+  it.for(["system", "guest", "cancel-and-replace", "revoke-after-yield"] as const)(
     "continues a yielded nested parent once through its accepted child batch (%s)",
     async (actor, { signal }) => {
       const registry = await import("../registry/subagent-registry.js");
@@ -59,7 +64,10 @@ export function registerYieldedRequesterBatchCase(
       vi.mocked(announce.runSubagentAnnounceFlow).mockImplementation(
         nativeAnnounce.runSubagentAnnounceFlow,
       );
-      const guest = actor === "guest" ? await options.createGuestParent(false) : undefined;
+      const guest =
+        actor === "guest" || actor === "revoke-after-yield"
+          ? await options.createGuestParent(false)
+          : undefined;
       const bound = guest?.bound ?? (await options.createBoundParent());
       const { context, runtime } = await options.createBoundGateway(bound);
       const waitCleanup = new AbortController();
@@ -80,10 +88,12 @@ export function registerYieldedRequesterBatchCase(
       const delivery = await import("../announce/subagent-announce-delivery.js");
       const deliver = delivery.deliverSubagentAnnouncement;
       const delivered = createDeferred<Awaited<ReturnType<typeof deliver>>>();
+      const deliveryResults: Array<Awaited<ReturnType<typeof deliver>>> = [];
       const deliveryObserver = vi
         .spyOn(delivery, "deliverSubagentAnnouncement")
         .mockImplementation(async (params) => {
           const result = await deliver(params);
+          deliveryResults.push(result);
           if (
             params.sourceTool === "subagent_settle" &&
             params.requesterSessionKey === bound.parentSessionKey
@@ -96,6 +106,11 @@ export function registerYieldedRequesterBatchCase(
         createDeferred(),
       );
       let childCalls = 0;
+      const instance = createTestInstance("yield-child-tool");
+      const pluginScope = new PluginInvocationScope(createEmptyPluginRegistry(), [instance]);
+      const childTool = instance.wrap(() => "CHILD_TOOL_OK");
+      const toolResults: string[] = [];
+      const deniedTool = createDeferred<unknown>();
       const childResult = createDeferred<EmbeddedAgentRunResult>();
       const parentStarted = createDeferred();
       const parentCalls: string[] = [];
@@ -111,6 +126,11 @@ export function registerYieldedRequesterBatchCase(
           }
           await params.onExecutionStarted?.();
           if (params.sessionKey !== bound.parentSessionKey) {
+            const assertChildCurrent = expectDefined(
+              resolveAdmittedRunActiveAssertion(admitted, params.abortSignal),
+              "child execution authority",
+            );
+            assertChildCurrent();
             childStarts[childCalls++]!.resolve();
             const aborted = createDeferred<EmbeddedAgentRunResult>();
             const abortChild = () =>
@@ -121,13 +141,31 @@ export function registerYieldedRequesterBatchCase(
             }
             let result: EmbeddedAgentRunResult;
             try {
-              result = await Promise.race([childResult.promise, aborted.promise]);
+              // A held tool can resume after cancellation; its original authority must reject it.
+              result =
+                actor === "revoke-after-yield"
+                  ? await childResult.promise
+                  : await Promise.race([childResult.promise, aborted.promise]);
             } finally {
               params.abortSignal?.removeEventListener("abort", abortChild);
             }
             if (result.meta.aborted) {
               return result;
             }
+            try {
+              assertChildCurrent();
+            } catch (error) {
+              if (actor !== "revoke-after-yield") {
+                throw error;
+              }
+              deniedTool.resolve(error);
+              return { payloads: [], meta: { durationMs: 1, aborted: true } };
+            }
+            if (actor === "revoke-after-yield") {
+              deniedTool.resolve(undefined);
+            }
+            toolResults.push(childTool());
+            assertChildCurrent();
             await recordFinal(bound, params, "Nested child result.");
             return result;
           }
@@ -172,7 +210,7 @@ export function registerYieldedRequesterBatchCase(
         });
         const acceptedSpawns: AcceptedSessionSpawn[] = [];
         for (const index of childStarts.keys()) {
-          const spawned = await invokeSpawn(`yielded-child-${index}`);
+          const spawned = await pluginScope.run(() => invokeSpawn(`yielded-child-${index}`));
           const accepted = expectDefined(
             normalizeAcceptedSessionSpawnResult(spawned),
             "actual accepted spawn",
@@ -211,7 +249,7 @@ export function registerYieldedRequesterBatchCase(
                 ),
             );
             expect(cancelled.details).toMatchObject({ found: true, killed: true });
-            await settleSubagentRegistryPersistenceWork();
+            await settleSubagentRegistryPersistenceWork(() => options.settleRootWork(true));
             // The real cancellation owner confirms and retires its acknowledged kills.
             await vi.waitFor(() => {
               for (const cancelledChild of acceptedSpawns) {
@@ -250,6 +288,24 @@ export function registerYieldedRequesterBatchCase(
         bound.admission.close();
         bound.parent.cleanup();
         guest?.source.closeRequest();
+        pluginScope.release();
+        if (actor === "revoke-after-yield") {
+          expectDefined(guest, "guest operator source").source.revoke();
+          childResult.resolve(visibleResult("Nested child result."));
+          expect(await withinTest(deniedTool.promise, signal)).toBeInstanceOf(Error);
+          await vi.waitFor(() => {
+            const child = subagentRuns.get(childRunId!);
+            expect(!child || child.execution.status === "terminal").toBe(true);
+          });
+          await settleSubagentRegistryPersistenceWork(() => options.settleRootWork(true));
+          expect(toolResults).toEqual([]);
+          expect(parentCalls).toEqual([]);
+          expect(deliveryResults.some((result) => result.delivered)).toBe(false);
+          expect(loadSubagentRegistryFromSqlite().get(childRunId)?.delivery?.status).not.toBe(
+            "delivered",
+          );
+          return;
+        }
         childResult.resolve(visibleResult("Nested child result."));
         const deliveryResult = await withinTest(delivered.promise, signal);
         expect(deliveryResult, JSON.stringify(deliveryResult)).toMatchObject({ delivered: true });
@@ -259,8 +315,9 @@ export function registerYieldedRequesterBatchCase(
           parentStarted.promise,
           childStarts.length + 1,
         );
-        await settleSubagentRegistryPersistenceWork();
+        await settleSubagentRegistryPersistenceWork(() => options.settleRootWork(true));
         expect(admissionFailures).toEqual([]);
+        expect(toolResults).toEqual(["CHILD_TOOL_OK"]);
         expect(parentCalls).toHaveLength(1);
         expect(parentCalls[0]).toContain("Nested child result.");
         const durable = loadSubagentRegistryFromSqlite().get(childRunId);
@@ -269,6 +326,7 @@ export function registerYieldedRequesterBatchCase(
       } catch (error) {
         failures.push(error);
       } finally {
+        pluginScope.release();
         childResult.resolve(visibleResult("Nested child result."));
         deliveryObserver.mockRestore();
         runtime.lifecycle.waitForAgent = waitForRegisteredParent;

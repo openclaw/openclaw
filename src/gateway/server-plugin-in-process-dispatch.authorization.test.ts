@@ -12,6 +12,10 @@ import {
   getOwnedSessionTranscriptActor,
   withOwnedSessionTranscriptWrites,
 } from "../config/sessions/transcript-write-context.js";
+import { pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
+import { createTestInstance } from "../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readGlobalSingleton } from "../shared/global-singleton.js";
@@ -89,6 +93,31 @@ describe("typed in-process agent authorization", () => {
   beforeEach(() => {
     startTurn.mockReset();
     waitForTurn.mockReset();
+  });
+
+  it("starts a child outside the spawning plugin invocation", async () => {
+    const context = createContext();
+    const registry = createEmptyPluginRegistry();
+    const instance = createTestInstance("child-scope-probe");
+    const parent = new PluginInvocationScope(registry, [instance]);
+    let childEffect: (() => string) | undefined;
+    const tool = instance.wrap(() => "child tool completed");
+    startTurn.mockImplementation(async ({ io }) => {
+      const childScope = pluginInvocationContext.getStore();
+      childEffect = () =>
+        childScope ? (childScope.lookup(instance)?.run(tool) ?? tool()) : tool();
+      io.emitAcceptance([true, { runId: "scope-child", status: "accepted" }, undefined]);
+    });
+    await parent.run(() =>
+      dispatchGatewayMethodInProcess(
+        "agent",
+        { message: "probe", idempotencyKey: "scope-child" },
+        { forceSyntheticClient: true, resolveGatewayContext: () => context },
+      ),
+    );
+    parent.release();
+    expect(childEffect).toBeDefined();
+    expect(childEffect!()).toBe("child tool completed");
   });
 
   it("releases session fact observers after a typed child launch", async () => {
