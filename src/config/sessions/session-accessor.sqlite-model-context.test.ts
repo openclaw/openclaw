@@ -222,3 +222,34 @@ it("reuses freshly decoded model payloads while keeping stored and subsequent co
       expect(decoded).toContain(event);
     }
   }));
+
+it("retains whole policy when hydrating synthetic pairing provenance", () =>
+  withOpenClawTestState({ label: "whole-synthetic-model-context" }, async (state) => {
+    const scope = await seedScope(state, "whole-synthetic");
+    const manager = await SessionManager.openAsync(scope);
+    await manager.appendMessageAsync(
+      makeAgentAssistantMessage({
+        content: [{ type: "toolCall", id: "read", name: "skills_read", arguments: {} }],
+        stopReason: "toolUse",
+      }),
+    );
+    await manager.appendMessageAsync({
+      role: "toolResult",
+      toolCallId: "read",
+      toolName: "skills_read",
+      content: [{ type: "text", text: "Missing tool result" }],
+      details: { contentPolicy: "whole", openclawSyntheticMissingToolResult: true, opaque: true },
+      isError: true,
+      timestamp: 1,
+    });
+    const original = JSON.stringify(loadTranscriptEventsSync(scope));
+    const projected = await SessionManager.openModelContextAsync(scope);
+    const result = projected
+      .buildSessionContext()
+      .messages.find((message) => message.role === "toolResult");
+    expect(result).toMatchObject({
+      details: { contentPolicy: "whole", openclawSyntheticMissingToolResult: true },
+    });
+    expect(result && "details" in result ? result.details : undefined).not.toHaveProperty("opaque");
+    expect(JSON.stringify(loadTranscriptEventsSync(scope))).toBe(original);
+  }));

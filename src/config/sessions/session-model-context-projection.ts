@@ -104,8 +104,17 @@ export function projectModelContextEventSql(
     event,
     paths.map((path) => sql.val(path)),
   );
-  const modelEvent = /* kysely-allow-raw: tool result details are not model input; other details can be runtime context. */ sql<string>`CASE WHEN ${role} = 'toolResult'
-    THEN ${jsonRemovePaths(db, projected, [sql.lit("$.message.details")])} ELSE ${projected} END`;
+  const withoutDetails = jsonRemovePaths(db, projected, [sql.lit("$.message.details")]);
+  const modelEvent = /* kysely-allow-raw: Preserve only the whole-delivery contract, not opaque tool metadata. */ sql<string>`CASE WHEN ${role} = 'toolResult'
+    THEN CASE WHEN ${jsonPathValue(db, projected, sql.lit("$.message.details.contentPolicy"))} = 'whole'
+      THEN ${jsonSetPath(
+        db,
+        withoutDetails,
+        sql.lit("$.message.details"),
+        jsonObjectValue(db, { contentPolicy: sql.lit("whole") }),
+        true,
+      )} ELSE ${withoutDetails} END
+    ELSE ${projected} END`;
   const boundedEvent = toolResultOmission
     ? /* kysely-allow-raw: omit only selected result bodies before hydration; durable rows remain unchanged. */ sql<string>`CASE WHEN ${toolResultOmission} IS NOT NULL AND ${role} = 'toolResult'
       THEN ${jsonSetPath(
@@ -392,8 +401,12 @@ function postgresModelEventSql(event: Expression<unknown>, role: Expression<unkn
   for (const key of MODEL_CONTEXT_PRIVATE_METADATA_KEYS) {
     projected = /* kysely-allow-raw: Closed private metadata paths retain the existing model projection. */ sql`(${projected}::jsonb #- ${sql.lit(`{message,__openclaw,${key}}`)}::text[])`;
   }
-  return /* kysely-allow-raw: Keep the model payload binary until byte accounting or hydration. */ sql`CASE WHEN ${role} = 'toolResult'
-    THEN ${projected} #- '{message,details}' ELSE ${projected} END`;
+  const withoutDetails = sql`(${projected} #- '{message,details}')`;
+  return /* kysely-allow-raw: Keep only semantic whole-delivery policy in the binary model payload. */ sql`CASE WHEN ${role} = 'toolResult'
+    THEN CASE WHEN ${projected} #> '{message,details,contentPolicy}' = '"whole"'::jsonb
+      THEN jsonb_set(${withoutDetails}, '{message,details}', '{"contentPolicy":"whole"}'::jsonb)
+      ELSE ${withoutDetails} END
+    ELSE ${projected} END`;
 }
 
 function postgresNavigationObjectSql(event: Expression<unknown>, keys: readonly string[]) {

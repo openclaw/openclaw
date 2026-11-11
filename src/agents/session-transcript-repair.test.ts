@@ -601,6 +601,10 @@ describe("stripToolResultDetails", () => {
   it("strips opaque details and keeps synthetic projections stable", () => {
     const input = castAgentMessages([
       { ...textToolResult("call_1", "read", "ok"), details: { internal: true } },
+      {
+        ...textToolResult("whole", "skills_read", "instructions"),
+        details: { contentPolicy: "whole", internal: "opaque" },
+      },
       { ...textAssistant("keep me"), details: { no: "touch" } },
       user("hello"),
       {
@@ -614,10 +618,11 @@ describe("stripToolResultDetails", () => {
     expect(Object.hasOwn(out[0] ?? {}, "details")).toBe(false);
     expect((out[0] ?? {}).role).toBe("toolResult");
 
-    expect(Object.hasOwn(out[1] ?? {}, "details")).toBe(true);
-    expect((out[1] ?? {}).role).toBe("assistant");
-    expect((out[2] ?? {}).role).toBe("user");
-    expect(out[3]?.details).toEqual({ openclawSyntheticMissingToolResult: true });
+    expect(out[1]?.details).toEqual({ contentPolicy: "whole" });
+    expect(Object.hasOwn(out[2] ?? {}, "details")).toBe(true);
+    expect((out[2] ?? {}).role).toBe("assistant");
+    expect((out[3] ?? {}).role).toBe("user");
+    expect(out[4]?.details).toEqual({ openclawSyntheticMissingToolResult: true });
     expect(stripToolResultDetails(out)).toBe(out);
   });
 });

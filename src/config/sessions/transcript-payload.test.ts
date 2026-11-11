@@ -15,8 +15,10 @@ import {
   getMessageRangeReaders,
   parseActiveTranscriptMessageRow,
 } from "./session-accessor.sqlite-projection-read.js";
+import { projectSessionModelContextEntry } from "./session-model-context-entry.js";
 import {
   projectModelContextEventSql,
+  projectModelContextJson,
   projectModelContextNavigationSql,
   projectResetBoundaryNavigationSql,
 } from "./session-model-context-projection.js";
@@ -707,4 +709,54 @@ describe("transcript payload storage boundary", () => {
       reader.close();
     }
   });
+});
+
+it("retains only whole-delivery policy across native, deep and memory model projections", () => {
+  const database = openNodeSqliteDatabase(":memory:");
+  try {
+    const db = getNodeSqliteKysely(database);
+    for (const contentPolicy of ["whole", "partial", null, false, ["whole"], { value: "whole" }]) {
+      for (const depth of [0, 1_100]) {
+        let opaque: unknown = "private metadata";
+        for (let index = 0; index < depth; index++) {
+          opaque = { nested: opaque };
+        }
+        const entry = {
+          type: "message" as const,
+          id: "result",
+          parentId: null,
+          timestamp: "2026-11-11T00:00:00Z",
+          message: {
+            role: "toolResult" as const,
+            toolCallId: "read",
+            toolName: "skills_read",
+            content: [{ type: "text" as const, text: "visible instructions" }],
+            details: { contentPolicy, opaque },
+            isError: false,
+            timestamp: 1,
+          },
+        };
+        const raw = JSON.stringify(entry);
+        const native = executeSqliteQueryTakeFirstSync(
+          database,
+          db.selectNoFrom(
+            projectModelContextEventSql(database, sql.val(raw), sql.lit(0)).as("event"),
+          ),
+        );
+        for (const projected of [
+          JSON.parse(native!.event),
+          JSON.parse(projectModelContextJson(raw, false)),
+          projectSessionModelContextEntry(entry, { entry, omitCheckpoint: false }),
+        ]) {
+          expect(projected.message.details).toEqual(
+            contentPolicy === "whole" ? { contentPolicy: "whole" } : undefined,
+          );
+          expect(projected.message.content).toEqual(entry.message.content);
+        }
+        expect(JSON.stringify(entry)).toBe(raw);
+      }
+    }
+  } finally {
+    database.close();
+  }
 });

@@ -7,17 +7,36 @@ import { memoizeFrozenPlainDataProjection } from "./immutable-data.js";
 // have its visible content; copying this storage-only payload duplicates the prompt.
 export const MODEL_CONTEXT_PRIVATE_METADATA_KEYS = ["upstreamUserText"] as const;
 
+/** Keep delivery and pairing semantics without exposing opaque tool metadata. */
+export function projectToolResultDetailsForModel(
+  value: unknown,
+): Record<string, unknown> | undefined {
+  const details = asOptionalRecord(value);
+  if (!details) {
+    return undefined;
+  }
+  const whole = details.contentPolicy === "whole";
+  const missing = details[SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY] === true;
+  if (!whole && !missing) {
+    return undefined;
+  }
+  if (Object.keys(details).length === Number(whole) + Number(missing)) {
+    return details;
+  }
+  return {
+    ...(whole ? { contentPolicy: "whole" } : {}),
+    ...(missing ? { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true } : {}),
+  };
+}
+
 const stripDetails = memoizeFrozenPlainDataProjection((record: Record<string, unknown>) => {
-  const details = asOptionalRecord(record.details);
-  if (
-    details?.[SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY] === true &&
-    Object.keys(details).length === 1
-  ) {
+  const details = projectToolResultDetailsForModel(record.details);
+  if (details && details === record.details) {
     return record;
   }
   const sanitized = { ...record };
-  if (details?.[SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY] === true) {
-    sanitized.details = { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true };
+  if (details) {
+    sanitized.details = details;
   } else {
     delete sanitized.details;
   }

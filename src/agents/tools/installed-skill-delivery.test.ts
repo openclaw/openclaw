@@ -7,6 +7,7 @@ import {
 } from "../embedded-agent-runner/tool-result-truncation.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { convertToLlm } from "../sessions/messages.js";
+import { projectSessionModelContextEntries } from "../sessions/session-manager-codec.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
   makeAgentAssistantMessage,
@@ -20,7 +21,14 @@ import { createToolSearchTools } from "../tool-search.js";
 import { createInstalledSkillTools } from "./installed-skill-tools.js";
 
 for (const deferred of [false, true]) {
-  it.each(["fits", "live limit", "prompt limit", "envelope limit", "cache TTL"] as const)(
+  it.each([
+    "fits",
+    "live limit",
+    "prompt limit",
+    "envelope limit",
+    "cache TTL",
+    "model boundary",
+  ] as const)(
     `delivers whole instructions or refuses %s through ${deferred ? "deferred dispatch" : "native read"}`,
     async (scenario) => {
       const body =
@@ -30,7 +38,9 @@ for (const deferred of [false, true]) {
           : "Complete synthetic example.\n".repeat(
               scenario === "live limit"
                 ? 6_500
-                : scenario === "prompt limit" || scenario === "cache TTL"
+                : scenario === "prompt limit" ||
+                    scenario === "cache TTL" ||
+                    scenario === "model boundary"
                   ? 1_000
                   : 1,
             )) +
@@ -79,6 +89,12 @@ for (const deferred of [false, true]) {
         scenario === "prompt limit"
           ? truncateOversizedToolResultsInMessages(context, 300_000, 1_024).messages
           : context;
+      if (scenario === "model boundary") {
+        const modelMessages = projectSessionModelContextEntries(session.getBranch()).flatMap(
+          (entry) => (entry.type === "message" ? [entry.message] : []),
+        );
+        projected = truncateOversizedToolResultsInMessages(modelMessages, 50_000, 16_000).messages;
+      }
       if (scenario === "cache TTL") {
         const original = structuredClone(context);
         const projectionState = createToolResultPromptProjectionState();

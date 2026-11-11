@@ -14,6 +14,7 @@ import {
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import { projectToolResultDetailsForModel } from "../../shared/model-context-message.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { chunkItems } from "../../utils/chunk-items.js";
@@ -477,7 +478,10 @@ function withTranscriptContextSnapshot<T>(
                   hydrated.message.role === "toolResult"
                 ) {
                   // Retain pairing provenance after SQL removes opaque tool details.
-                  hydrated.message.details = { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true };
+                  hydrated.message.details = {
+                    ...projectToolResultDetailsForModel(hydrated.message.details),
+                    [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true,
+                  };
                 }
                 payloads.set(entry, hydrated);
               };
