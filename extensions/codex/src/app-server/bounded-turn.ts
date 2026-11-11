@@ -423,7 +423,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         const completed = result.turn?.error;
         // Preserve recorded failure details when the completion adds none.
         const retainPrior =
-          priorFailure instanceof Error &&
+          priorFailure !== undefined &&
           completed?.codexErrorInfo == null &&
           (!completed?.message || completed.message === notification?.message);
         const failure =

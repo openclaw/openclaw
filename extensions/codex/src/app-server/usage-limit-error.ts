@@ -19,6 +19,7 @@ import {
   resolveCodexUsageLimitResetAtMs,
   shouldRefreshCodexRateLimitsForUsageLimitMessage,
 } from "./rate-limits.js";
+import { CodexAppServerRpcError } from "./rpc-error.js";
 
 const CODEX_USAGE_LIMIT_RATE_LIMIT_REFRESH_TIMEOUT_MS = 5_000;
 
@@ -258,9 +259,12 @@ function readCodexTurnStartUsageLimitErrorSource(
   const notificationError = readCodexErrorNotification(errorNotification);
   const errorPayload = readCodexErrorPayload(error);
   const rateLimits = errorPayload.rateLimits ?? readRecentCodexRateLimits(client);
-  // An unbound notice may belong to an older turn; the failed RPC owns explicit facts.
+  // Explicit RPC failures own their facts; unbound notices only enrich a matching local error.
   const source =
-    notificationError?.codexErrorInfo != null && errorPayload.codexErrorInfo == null
+    !(error instanceof CodexAppServerRpcError) &&
+    notificationError?.codexErrorInfo != null &&
+    errorPayload.codexErrorInfo == null &&
+    notificationError.message === errorPayload.message
       ? notificationError
       : errorPayload;
   // The cached snapshot may predate this attempt or belong to another turn on

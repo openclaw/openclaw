@@ -195,18 +195,19 @@ it.each([
 it.each([
   { info: { httpConnectionFailed: { httpStatusCode: 401 } }, status: 401 },
   { info: "usageLimitExceeded", status: 429 },
+  { info: undefined, status: undefined },
 ])(
-  "retains ordinary structured failure before a detail-less completion: $status",
+  "retains ordinary failure before a detail-less completion: $status",
   async ({ info, status }) => {
-    const message = status === 401 ? "ordinary refusal" : "You've reached your usage limit.";
+    const message = status === 429 ? "You've reached your usage limit." : "ordinary refusal";
     const fake = createClientFactory({
       errorBeforeCompletion: { message, codexErrorInfo: info, willRetry: false },
       terminalStatus: "failed",
-      terminalError: { message },
+      terminalError: { message: status === undefined ? "" : message },
     });
     await expect(runRestricted(fake)).rejects.toMatchObject({
-      status,
-      message: status === 401 ? message : expect.stringContaining("subscription usage limit"),
+      ...(status === undefined ? {} : { status }),
+      message: status === 429 ? expect.stringContaining("subscription usage limit") : message,
     });
   },
 );
