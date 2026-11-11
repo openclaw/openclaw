@@ -12,6 +12,7 @@ import {
   type SubagentRegistryHarness,
   waitForFast,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -49,6 +50,8 @@ export function registerSubagentWaitExpiryTests(params: {
     mockGatewayMethods(mocks.callGateway, {
       "agent.wait": { status: "timeout", endedAt: startedAt + 2_000 },
     });
+    // The late event re-reads a row whose payload cleanup already released.
+    mocks.persistRegistryRows.mockImplementation(saveSubagentRegistryChangesToSqlite);
     mocks.entries = {
       "agent:main:subagent:child": createSessionEntry({
         updatedAt: startedAt,
@@ -117,6 +120,8 @@ export function registerSubagentWaitExpiryTests(params: {
       "agent:main:subagent:child": createSessionEntry({
         updatedAt: startedAt,
         status: undefined,
+        // Terminal session effects run only for the incarnation the run owns.
+        lifecycleRevision: "revision-child",
       }),
     };
 
@@ -148,6 +153,9 @@ export function registerSubagentWaitExpiryTests(params: {
       },
     });
 
+    // The child's own end event settles the run. It reports an end past the
+    // explicit deadline, so the ordinary deadline clamp applies to that real
+    // event; the earlier expiry observation contributed no terminal state.
     await waitForFast(() => {
       const completedRun = findRequesterRun("run-boundary-timeout");
       expect(completedRun?.execution.status).toBe("terminal");
@@ -168,6 +176,11 @@ export function registerSubagentWaitExpiryTests(params: {
       expect(mocks.onSubagentEnded).toHaveBeenCalledTimes(1);
     });
     await settleRootWork();
+    expect(
+      (mocks.runSubagentAnnounceFlow.mock.calls as unknown as Record<string, unknown>[][]).map(
+        ([announceParams]) => announceParams?.deliveryPhase,
+      ),
+    ).toEqual(["wait-expiry", undefined]);
   });
 
   it.each(["grace", "delivery"] as const)(
@@ -296,13 +309,22 @@ export function registerSubagentWaitExpiryTests(params: {
         },
       });
       await waitForFast(() => {
-        // Completion publishes a replacement row, so the settled state is read
-        // from the registry rather than from the pre-completion `run`.
-        const settled = findRequesterRun(runId);
-        expect(settled?.execution.status).toBe("terminal");
-        expect(settled?.completion?.resultText).toBe("FINAL after notification settlement");
+        expect(findRequesterRun(runId)?.execution.status).toBe("terminal");
         expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
         expect(mocks.cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledOnce();
+      });
+      // A delivered completion releases the row's payload, so the child's real
+      // result is read from the terminal announcement that carried it.
+      const terminalAnnounce = getMockCallArg(
+        mocks.runSubagentAnnounceFlow,
+        1,
+        0,
+        "terminal announce after notification settlement",
+      );
+      expect(terminalAnnounce.deliveryPhase).toBeUndefined();
+      expect(terminalAnnounce.terminalReply).toEqual({
+        disposition: "visible",
+        text: "FINAL after notification settlement",
       });
     },
   );
@@ -500,6 +522,9 @@ export function registerSubagentWaitExpiryTests(params: {
 
     const settleRootWork = observeRootWork();
     await hydrateAndActivateRegistry();
+    // Hydration alone restores history; only a live execution owner resumes a wait.
+    mocks.hasLiveAgentRunContext.mockReturnValue(true);
+    params.getRegistry().resumeSubagentRun("run-resumed-near-deadline");
 
     await waitForFast(() => {
       expect(waitTimeouts).toEqual([1_000]);
@@ -573,70 +598,7 @@ export function registerSubagentWaitExpiryTests(params: {
     },
   );
 
-  // `rpc` is a cancellation only on a non-ok wait; a model/ACP "stop" that ends
-  // an otherwise successful wait is a normal completion. `aborted` and
-  // `superseded` are cancellations from their reason alone.
-  it.each([
-    { stopReason: "rpc", status: "error" },
-    { stopReason: "aborted", status: "ok" },
-    { stopReason: "superseded", status: "ok" },
-  ] as const)(
-    "publishes $stopReason agent.wait snapshots only after killed reconciliation",
-    async ({ stopReason, status }) => {
-      mockGatewayMethods(mocks.callGateway, {
-        "agent.wait": {
-          status,
-          startedAt: 100,
-          endedAt: 250,
-          stopReason,
-        },
-      });
-
-      await params.getRegistry().registerSubagentRun({
-        runId: `run-${stopReason}-wait`,
-        task: "aborted wait",
-        expectsCompletionMessage: true,
-      });
-
-      await waitForFast(() => {
-        const run = findRequesterRun(`run-${stopReason}-wait`);
-        expect(run?.endedReason).toBe("subagent-killed");
-        expect(run?.suppressAnnounceReason).toBe("killed");
-      });
-      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-
-      await params.getRegistry().testing.sweepOnceForTests();
-      await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1));
-      const announceParams = expectRecordFields(
-        getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "aborted wait announce"),
-        { childRunId: `run-${stopReason}-wait` },
-        "aborted wait announce params",
-      );
-      expectRecordFields(
-        announceParams.outcome,
-        {
-          status: "error",
-          disposition: "killed",
-          error: "subagent run terminated",
-          startedAt: 100,
-          endedAt: 250,
-          elapsedMs: 150,
-        },
-        "aborted wait announce outcome",
-      );
-
-      await waitForFast(() => {
-        expect(
-          params
-            .getRegistry()
-            .listSubagentRunsForRequester("agent:main:main")
-            .some((entry) => entry.runId === `run-${stopReason}-wait`),
-        ).toBe(false);
-      });
-    },
-  );
-
-  it("reconciles a provisionally announced run from persisted terminal state during sweep", async () => {
+  it("leaves a provisionally announced run for its lifecycle owner during sweep", async () => {
     mockPendingAgentWait();
     const persistedStartedAt = Date.parse("2026-03-24T11:58:00Z");
     const persistedEndedAt = persistedStartedAt + 111;
@@ -653,7 +615,7 @@ export function registerSubagentWaitExpiryTests(params: {
     vi.setSystemTime(persistedStartedAt - 1);
     await params.getRegistry().registerSubagentRun({
       runId: "run-stale-terminal",
-      task: "settle from persisted terminal state",
+      task: "settle only from the child's own end event",
     });
     // Published rows are frozen, so the provisional markers are committed
     // through the registry worker exactly as the expiry reporter commits them.
@@ -664,44 +626,31 @@ export function registerSubagentWaitExpiryTests(params: {
 
     vi.setSystemTime(new Date("2026-03-24T12:02:00Z"));
     await params.getRegistry().testing.sweepOnceForTests();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    await waitForFast(() => {
-      // The sweep also announces unrelated fixture runs, so select this run's
-      // call rather than assuming it announced first.
-      const calls = mocks.runSubagentAnnounceFlow.mock.calls as unknown as Record<
-        string,
-        unknown
-      >[][];
-      const announceParams = expectRecordFields(
-        getMockCallArg(
-          mocks.runSubagentAnnounceFlow,
-          calls.findIndex(([announceCall]) => announceCall?.childRunId === "run-stale-terminal"),
-          0,
-          "stale terminal announce",
-        ),
-        { childRunId: "run-stale-terminal" },
-        "stale terminal announce",
-      );
-      expectRecordFields(
-        announceParams.outcome,
-        { status: "ok", endedAt: persistedEndedAt },
-        "stale terminal announce outcome",
-      );
+    // The sweep must not synthesize a terminal state for a run that was only
+    // announced provisionally, even when the session row already looks done.
+    const swept = findRequesterRun("run-stale-terminal");
+    expect(swept?.execution.status).toBe("running");
+    expect(swept?.execution.endedAt).toBeUndefined();
+    expect(swept?.execution.outcome).toBeUndefined();
+    expect(swept?.waitExpiryAnnouncedAt).toBe(persistedStartedAt + 60_001);
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+
+    getLifecycleHandler()({
+      runId: "run-stale-terminal",
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: persistedStartedAt, endedAt: persistedEndedAt },
     });
-
-    const run = findRequesterRun("run-stale-terminal");
-    expect(run?.execution.endedAt).toBe(persistedEndedAt);
-    expectRecordFields(
-      run?.execution.outcome,
-      {
-        status: "ok",
-        endedAt: persistedEndedAt,
-      },
-      "stale terminal run outcome",
-    );
-    // Cleanup publishes another replacement row, so re-read it each poll.
-    await waitForFast(() =>
-      expect(findRequesterRun("run-stale-terminal")?.cleanupCompletedAt).toBeTypeOf("number"),
-    );
+    await waitForFast(() => {
+      const run = findRequesterRun("run-stale-terminal");
+      expect(run?.execution.endedAt).toBe(persistedEndedAt);
+      expectRecordFields(
+        run?.execution.outcome,
+        { status: "ok", startedAt: persistedStartedAt, endedAt: persistedEndedAt, elapsedMs: 111 },
+        "lifecycle-owned outcome after sweep",
+      );
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
   });
 }

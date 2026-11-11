@@ -702,7 +702,7 @@ describe("subagent registry seam flow", () => {
     expect(requesterTranscriptWrite).not.toHaveBeenCalled();
   });
 
-  it("keeps published timeout stable when pre-deadline success arrives late", async () => {
+  it("settles from the child's real end after a provisional wait expiry", async () => {
     const runId = "run-timeout-late-lifecycle-predeadline-ok";
     const startedAt = Date.now();
     mockAgentWait({ status: "timeout" });

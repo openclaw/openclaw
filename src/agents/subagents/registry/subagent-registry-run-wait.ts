@@ -355,9 +355,8 @@ export abstract class SubagentWaitManager {
             };
             await this.options.reportSubagentWaitExpiry(waitExpiryForRetry);
             // Do not keep a second long-poll alive after the parent has been
-            // notified. The periodic registry sweeper remains the settlement
-            // backstop: once the run context disappears, it reconciles the
-            // persisted terminal session state or records a lost-context error.
+            // notified. The child's own lifecycle end event settles the run
+            // from its real outcome; the sweeper never synthesizes one.
             return;
           }
           await completeWithDeadline(observedStartedAt, timeoutEndedAt, now, () =>
