@@ -5,11 +5,14 @@ import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import { getPluginValueInstance, wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 
-export const capabilityCatalogFamilies = [
-  "speechProviders",
-  "realtimeTranscriptionProviders",
-  "realtimeVoiceProviders",
+const CAPABILITY_CATALOG_FAMILIES = [
+  { family: "speechProviders", method: "synthesize" },
+  { family: "realtimeTranscriptionProviders", method: "createSession" },
+  { family: "realtimeVoiceProviders", method: "createBridge" },
 ] as const;
+
+export const capabilityCatalogFamilies: readonly (typeof CAPABILITY_CATALOG_FAMILIES)[number]["family"][] =
+  CAPABILITY_CATALOG_FAMILIES.map(({ family }) => family);
 
 /** Materialize one registration without copying its descriptor or invoking provider operations. */
 export function resolveCapabilityProviderRegistration<T extends { id: string }>(
@@ -53,17 +56,13 @@ export function resolvePluginCapabilityCatalog(
   if (!isRecord(catalog)) {
     throw new Error("default export must synchronously provide a capability descriptor collection");
   }
-  const methods = {
-    speechProviders: "synthesize",
-    realtimeTranscriptionProviders: "createSession",
-    realtimeVoiceProviders: "createBridge",
-  } as const;
   for (const [family, providers] of Object.entries(catalog)) {
-    if (!Object.hasOwn(methods, family)) {
+    const method = CAPABILITY_CATALOG_FAMILIES.find(
+      (descriptor) => descriptor.family === family,
+    )?.method;
+    if (!method) {
       throw new Error(`unknown capability catalog family: ${family}`);
     }
-    // SAFETY: the own-key check above narrows this string to the closed family map.
-    const method = methods[family as keyof typeof methods];
     if (
       !Array.isArray(providers) ||
       providers.some(

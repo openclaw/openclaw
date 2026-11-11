@@ -29,7 +29,7 @@ export async function authorizeSlackDirectMessage(params: {
   }
 
   const sender = await params.resolveSenderName(params.senderId);
-  const senderName = sender?.name ?? undefined;
+  const senderName = sender.name;
   const allowMatch = resolveSlackAllowListMatch({
     allowList: params.allowFromLower,
     teamId: params.eventScope?.teamId ?? params.ctx.teamId,

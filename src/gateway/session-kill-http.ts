@@ -3,6 +3,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { killSubagentRunAdmin } from "../agents/subagents/registry/subagent-control.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import {
   sendInvalidRequest,
   sendJson,
@@ -16,7 +20,7 @@ import {
 } from "./http-utils.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 export async function handleSessionKillHttpRequest(
   req: IncomingMessage,
@@ -46,6 +50,7 @@ export async function handleSessionKillHttpRequest(
     return true;
   }
 
+  const capturedKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   const requestAuth = await authorizeGatewayHttpRequestOrReply({
     ...opts,
     req,
@@ -76,40 +81,75 @@ export async function handleSessionKillHttpRequest(
     sendInvalidRequest(res, requestedAgent.error.message);
     return true;
   }
-  const { entry, canonicalKey } = loadSessionEntry(sessionKey, {
-    agentId: requestedAgent.agentId,
-  });
-  if (!entry) {
-    sendJson(res, 404, {
-      ok: false,
-      error: {
-        type: "not_found",
-        message: `Session not found: ${sessionKey}`,
+  const kill = async (
+    entry: SessionEntry | undefined,
+    canonicalKey: string,
+    assertCurrent: () => void,
+  ) => {
+    if (!entry) {
+      sendJson(res, 404, {
+        ok: false,
+        error: {
+          type: "not_found",
+          message: `Session not found: ${sessionKey}`,
+        },
+      });
+      return true;
+    }
+
+    const result = await killSubagentRunAdmin(
+      {
+        cfg,
+        sessionKey: canonicalKey,
+        agentId: requestedAgent.agentId,
       },
+      { assertCurrent },
+    );
+
+    assertCurrent();
+    if (result.found && result.error) {
+      sendJson(res, 503, {
+        ok: false,
+        error: { type: "unavailable", message: result.error },
+      });
+      return true;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      killed: result.killed,
     });
     return true;
+  };
+  if (isIncognitoSessionKey(capturedKey)) {
+    const result = await withSessionActorStorage(
+      { sessionKey: capturedKey, agentId: requestedAgent.agentId },
+      {
+        lifetime: {
+          assertCurrent: requestAuth.assertCurrent,
+          assertReadable: requestAuth.assertCurrent,
+        },
+        authority: {
+          assertCurrent: requestAuth.assertCurrent,
+          authorize: () => requestAuth.assertCurrent(),
+        },
+      },
+      async (memory) => {
+        const entry = memory.actor.snapshot(memory.authority)?.entry;
+        return kill(entry, capturedKey, () => {
+          requestAuth.assertCurrent();
+          memory.actor.assertReadable();
+        });
+      },
+    );
+    return result ?? kill(undefined, capturedKey, requestAuth.assertCurrent);
   }
-
-  const result = await killSubagentRunAdmin(
-    {
-      cfg,
-      sessionKey: canonicalKey,
-      agentId: requestedAgent.agentId,
-    },
-    { assertCurrent: requestAuth.assertCurrent },
-  );
-
-  if (result.found && result.error) {
-    sendJson(res, 503, {
-      ok: false,
-      error: { type: "unavailable", message: result.error },
-    });
-    return true;
-  }
-
-  sendJson(res, 200, {
-    ok: true,
-    killed: result.killed,
+  const { entry, canonicalKey } = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg,
+    key: sessionKey,
+    agentId: requestedAgent.agentId,
+    assertActive: requestAuth.assertCurrent,
+    excludeInternalEffects: true,
   });
-  return true;
+  return kill(entry, canonicalKey, requestAuth.assertCurrent);
 }

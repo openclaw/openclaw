@@ -2,6 +2,10 @@
 import { createHash } from "node:crypto";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   loadExactSessionEntryReadOnly,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -42,7 +46,14 @@ const SESSION_BINDING_COUNT = 47_794;
 const ADVISORY_MANAGED_THREAD_COUNT = 2_206;
 const INCIDENT_ROW_COUNT = 50_000;
 
-const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-doctor-incident-");
+const sessionDirs = useSessionStoreTempDirs(
+  (cleanup) =>
+    afterAll(async () => {
+      await cleanup();
+      clearRuntimeConfigSnapshot();
+    }),
+  "openclaw-codex-doctor-incident-",
+);
 
 const stableKey = (sessionKey: string, agentId = "main") =>
   `session-key:${agentId}:${createHash("sha256").update(sessionKey).digest("base64url")}`;
@@ -63,6 +74,7 @@ describe("doctor incident-scale Codex binding repair", () => {
       agents: { entries: { main: {} } },
       plugins: { entries: { codex: { enabled: true } } },
     };
+    setRuntimeConfigSnapshot(config);
 
     const rows: Parameters<typeof seedPluginStateEntriesForTests>[0] = [];
     const retain = (key: string, sessionId: string, extra: Record<string, unknown> = {}) => {

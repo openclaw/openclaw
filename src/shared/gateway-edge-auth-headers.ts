@@ -10,12 +10,10 @@ const TRANSPORT_OWNED_HEADERS = new Set([
   "sec-websocket-extensions",
 ]);
 
-type EdgeAuthShapeIssue = {
+export function findEdgeAuthIssue(headers: Record<string, unknown>): {
   message: string;
   headerName?: string;
-};
-
-export function findEdgeAuthIssue(headers: Record<string, unknown>): EdgeAuthShapeIssue | null {
+} | null {
   const entries = Object.entries(headers);
   if (entries.length === 0) {
     return { message: "invalid gateway.remote.edgeAuth: header map must not be empty" };

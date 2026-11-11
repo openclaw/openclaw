@@ -21,5 +21,7 @@ export const stateMigrations = [
     id: "discord-legacy-state",
     label: "Discord command deployment cache",
     resolvePlans: detectDiscordCommandDeployCacheMigration,
+    // Command reconciliation rebuilds this cache; no data needs to be retained.
+    collectBackupResources: () => [],
   }),
 ];

@@ -1,5 +1,6 @@
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { PluginStateNativeBindingPlan } from "../../plugin-state/plugin-state-native-binding.types.js";
+import type { PluginStateCommitReceipt } from "../../plugin-state/plugin-state-publication.js";
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type {
@@ -37,6 +38,7 @@ export type SessionNativeBindingReceipt = {
   operationId: string;
   agent: "pending" | "committed" | "rolled-back";
   bindings: ("pending" | "absent" | "deleted" | "restored")[];
+  pluginState?: PluginStateCommitReceipt | { kind: "unknown"; identity: string | symbol };
   receipt?: SessionEntryPatchReceipt;
   compensationFailure?: OpenClawStateWorkerErrorPayload;
 };

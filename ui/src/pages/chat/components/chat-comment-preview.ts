@@ -1,13 +1,3 @@
-import { html, nothing, type TemplateResult } from "lit";
-import { icons } from "../../../components/icons.ts";
-import { scrollState } from "../../../components/scroll-state.ts";
-import { t } from "../../../i18n/index.ts";
-import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import { renderAttachmentChip } from "./chat-attachment-preview-chip.ts";
-import "../../../styles/chat/selection-annotations.css";
-
-registerChatMessageMetadataEnglish();
-
 export type CommentPreview = { text: string; comment: string };
 
 /** Rendered selection length disambiguates headings without assuming DOM offsets include line breaks. */
@@ -41,71 +31,4 @@ export function parseCommentAttachment(value: string): CommentPreview | null {
     return null;
   }
   return { text, comment: rest ? rest.slice(commentPrefix.length) : "" };
-}
-
-export function renderCommentPreviewRow(
-  comment: CommentPreview,
-  actions: TemplateResult | typeof nothing = nothing,
-) {
-  return html`<li class="chat-comment-preview__item">
-    <div class="chat-comment-preview__body">
-      <span class="muted">${t("chat.messages.annotationSelectedText")}</span>
-      <div
-        class="chat-comment-preview__text chat-comment-preview__text--selection"
-        .textContent=${comment.text}
-      ></div>
-      ${
-        comment.comment
-          ? html`<span class="muted">${t("chat.messages.annotationUserComment")}</span>
-              <div
-                class="chat-comment-preview__text chat-comment-preview__text--comment"
-                tabindex="0"
-                role="region"
-                aria-label=${t("chat.messages.annotationUserComment")}
-                .textContent=${comment.comment}
-                ${scrollState()}
-              ></div>`
-          : nothing
-      }
-    </div>
-    ${actions}
-  </li>`;
-}
-
-export function renderCommentPreviewChip(
-  count: number,
-  content: TemplateResult,
-  onReveal?: () => void,
-  removal?: { onRemove: (event: Event) => void; disabled: boolean },
-  elementRef?: (element: Element | undefined) => void,
-) {
-  return html`<openclaw-tooltip
-    class=${removal ? "chat-comment-preview chat-comment-preview--editable" : "chat-comment-preview"}
-    placement="top-start"
-    auto-size
-    .describe=${false}
-    .openOnClick=${true}
-    .hoverDismissDelay=${removal ? 200 : undefined}
-  >
-    ${renderAttachmentChip({
-      label: t(count === 1 ? "chat.messages.annotationCount" : "chat.messages.annotationsCount", {
-        count: String(count),
-      }),
-      icon: icons.messageSquare,
-      onReveal,
-      onClick: onReveal,
-      elementRef,
-      removal: removal ? { ...removal, label: t("chat.messages.removeAnnotations") } : undefined,
-    })}
-    <div
-      slot="content"
-      class="chat-comment-preview__scroll"
-      tabindex="0"
-      role="region"
-      aria-label=${t("chat.messages.annotations")}
-      ${scrollState()}
-    >
-      ${content}
-    </div>
-  </openclaw-tooltip>`;
 }

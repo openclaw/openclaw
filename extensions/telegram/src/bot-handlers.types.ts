@@ -4,8 +4,8 @@ import type {
   OpenClawConfig,
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginCommandDispatch } from "openclaw/plugin-sdk/plugin-command-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { TelegramBotDeps } from "./bot-deps.js";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 import type {
   TelegramMessageProcessingResult,
@@ -42,7 +42,13 @@ type TelegramMessageProcessorTurnContext = {
 
 type ProcessTelegramMessageOptions = Pick<
   BuildTelegramMessageContextParams,
-  "allMedia" | "storeAllowFrom" | "options" | "replyMedia" | "replyChain" | "promptContext"
+  | "allMedia"
+  | "storeAllowFrom"
+  | "options"
+  | "replyMedia"
+  | "replyChain"
+  | "promptContext"
+  | "resolveSenderMedia"
 > & {
   ctx: TelegramContext;
   turnContext: TelegramMessageProcessorTurnContext;
@@ -52,9 +58,13 @@ type ProcessTelegramMessage = (
   options: ProcessTelegramMessageOptions,
 ) => Promise<TelegramMessageProcessingResult>;
 
-export type TelegramResolvedGroupConfig = ReturnType<
-  BuildTelegramMessageContextParams["resolveTelegramGroupConfig"]
->;
+/** Runs a native plugin command that continued as a native command turn in the message pipeline. */
+export type TelegramPluginCommandContinuation = (params: {
+  ctx: TelegramContext;
+  threadSpec: TelegramThreadSpec;
+  storeAllowFrom: string[];
+  pluginCommandDispatch: PluginCommandDispatch;
+}) => Promise<void>;
 
 export type TelegramNativeCommandCallbackDispatcher = (params: {
   botUser: Context["me"];
@@ -64,7 +74,6 @@ export type TelegramNativeCommandCallbackDispatcher = (params: {
 
 type TelegramHandlerLogger = {
   info: (fields: Record<string, unknown>, message: string) => void;
-  warn: (fields: Record<string, unknown>, message: string) => void;
 };
 
 export type RegisterTelegramHandlerParams = {
@@ -78,7 +87,6 @@ export type RegisterTelegramHandlerParams = {
   telegramTransport?: TelegramTransport;
   runtime: RuntimeEnv;
   telegramCfg: TelegramAccountConfig;
-  telegramDeps: TelegramBotDeps;
   resolveGroupPolicy: (chatId: string | number, cfg: OpenClawConfig) => ChannelGroupPolicy;
   resolveGroupActivation: BuildTelegramMessageContextParams["resolveGroupActivation"];
   resolveGroupRequireMention: BuildTelegramMessageContextParams["resolveGroupRequireMention"];

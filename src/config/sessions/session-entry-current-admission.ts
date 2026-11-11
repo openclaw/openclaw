@@ -16,9 +16,26 @@ function decodeSessionEntryCurrentFacts(
   if (!isRecord(value) || typeof value.sessionId !== "string") {
     throw new Error("Session currency facts have an invalid entry identity");
   }
+  const folder = value.deviceFolder;
+  let deviceFolder: SessionEntryCurrentFacts["deviceFolder"];
+  if (folder !== undefined) {
+    if (
+      !isRecord(folder) ||
+      typeof folder.deviceId !== "string" ||
+      typeof folder.path !== "string"
+    ) {
+      throw new Error("Session currency facts have an invalid device folder projection");
+    }
+    deviceFolder = { deviceId: folder.deviceId, path: folder.path };
+  }
   if (capability) {
     return {
+      ...(deviceFolder ? { deviceFolder } : {}),
       sessionId: value.sessionId,
+      createdVia: value.createdVia,
+      clientCapabilities: Array.isArray(value.clientCapabilities)
+        ? value.clientCapabilities.filter((cap): cap is string => typeof cap === "string")
+        : undefined,
       spawnedBy: value.spawnedBy,
       spawnDepth: value.spawnDepth,
       completionOwnerSessionKey: value.completionOwnerSessionKey,
@@ -28,30 +45,24 @@ function decodeSessionEntryCurrentFacts(
       inheritedToolPolicySource: value.inheritedToolPolicySource,
       inheritedToolAllow: value.inheritedToolAllow,
       inheritedToolDeny: value.inheritedToolDeny,
+      delegatedToolPolicy: value.delegatedToolPolicy,
     };
   }
-  const recovery = value.subagentRecovery;
-  if (recovery !== undefined && !isRecord(recovery)) {
-    throw new Error("Session currency facts have an invalid recovery projection");
-  }
   return {
+    ...(deviceFolder ? { deviceFolder } : {}),
     sessionId: value.sessionId,
     previousSessionId: value.previousSessionId,
     ...(value.archivedAt === undefined ? {} : { archivedAt: value.archivedAt }),
     ...(value.repositoryWorkspaceId === undefined
       ? {}
       : { repositoryWorkspaceId: value.repositoryWorkspaceId }),
+    goal: value.goal,
     lifecycleRevision: value.lifecycleRevision,
     lifecycleRunId: value.lifecycleRunId,
+    lastRunId: value.lastRunId,
     activeWriterRunId: value.activeWriterRunId,
-    ...(recovery
-      ? {
-          subagentRecovery: {
-            lastRunId: recovery.lastRunId,
-            sessionLifecycleRunId: recovery.sessionLifecycleRunId,
-          },
-        }
-      : {}),
+    skillLibrarySelections: value.skillLibrarySelections,
+    executionPolicy: value.executionPolicy,
   };
 }
 

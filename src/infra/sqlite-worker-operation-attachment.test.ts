@@ -7,13 +7,14 @@ import {
   withSqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
 import { runSqliteWorkerAttachmentFramingProof } from "./sqlite-worker-operation-attachment.test-support.js";
+import { getWorkerMessageMetrics } from "./worker-message-metrics.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("shares the queued attachment only inside its active operation scope", async () => {
+it("shares the prepared attachment only inside its active operation scope", async () => {
   const admission = createSqliteWorkerOperationAdmission(() => {}, { label: "scope-fixture" });
   try {
-    const afterScope = withSqliteWorkerOperationAdmission({ port: admission.port }, () => {
+    const afterScope = withSqliteWorkerOperationAdmission(admission, () => {
       const attachment = takeSqliteWorkerOperationAdmissionAttachment();
       expect(attachment).toEqual({ label: "scope-fixture" });
       expect(takeSqliteWorkerOperationAdmissionAttachment()).toBe(attachment);
@@ -25,7 +26,12 @@ it("shares the queued attachment only inside its active operation scope", async 
   }
 });
 
-it("retains queued attachments until complete inline and framed worker commands execute", async () => {
+it("carries attachments with inline and framed commands without separate authority messages", async () => {
+  const authorityMessages = () =>
+    getWorkerMessageMetrics().find(
+      (metric) => metric.kind === "authority" && metric.direction === "to_worker",
+    )?.messages ?? 0;
+  const before = authorityMessages();
   const proof = await runSqliteWorkerAttachmentFramingProof(
     path.join(dirs.make("sqlite-attachment-framing-"), "unused.sqlite"),
   );
@@ -34,4 +40,5 @@ it("retains queued attachments until complete inline and framed worker commands 
     backendClosed: true,
     databaseCreated: true,
   });
+  expect(authorityMessages() - before).toBe(0);
 });

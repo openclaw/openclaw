@@ -1,0 +1,2 @@
+# Regressions: rollback acquires state ownership after a signal cancels CLI work; repair restores the Gateway a killed updater stopped.
+95

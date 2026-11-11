@@ -9,7 +9,7 @@
  *    production activation path, so `getActivePluginRegistry()` returns the same
  *    registry the Gateway would serve status from.
  *  - The refusals are produced by the real `registerTypedHook` policy branch in
- *    `src/plugins/registry-registrars-tools-hooks.ts`; this script never
+ *    `src/plugins/registry-registrars.ts`; this script never
  *    hand-builds a `blockedHooks` record.
  *  - The compact surface is the real `collectRuntimePluginHealthSnapshot()` +
  *    `formatCompactPluginHealthLine()` pair that `src/status/status-text.ts`
@@ -52,7 +52,7 @@
  * terminated, on the success, failure, and throw paths alike, so repeated runs
  * do not accumulate temporary roots in the OS temp dir.
  *
- * Run: pnpm tsx scripts/proof-136474-blocked-hook-registrations.ts
+ * Run: node --import ./scripts/tsx.mjs scripts/proof-136474-blocked-hook-registrations.ts
  */
 import fs from "node:fs";
 import os from "node:os";

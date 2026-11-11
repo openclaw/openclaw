@@ -12,7 +12,6 @@ type TelegramMiniAppInitData = {
 export function validateTelegramMiniAppInitData(params: {
   initData: string;
   botToken: string;
-  nowMs?: number;
 }): TelegramMiniAppInitData | null {
   const initData = params.initData.trim();
   const botToken = params.botToken.trim();
@@ -33,7 +32,7 @@ export function validateTelegramMiniAppInitData(params: {
     return null;
   }
   const authDateMs = authDateSeconds * 1000;
-  const ageMs = (params.nowMs ?? Date.now()) - authDateMs;
+  const ageMs = Date.now() - authDateMs;
   if (ageMs < 0 || ageMs > INIT_DATA_MAX_AGE_MS) {
     return null;
   }

@@ -36,7 +36,7 @@ describe("loadOpenClawPlugins conversation-access and prompt-injection hook poli
         entries: {
           "hook-policy": {
             hooks: {
-              allowPromptInjection: false,
+              allowPromptModification: false,
               allowConversationAccess: true,
             },
           },
@@ -54,7 +54,7 @@ describe("loadOpenClawPlugins conversation-access and prompt-injection hook poli
     });
     const blockedDiagnostics = registry.diagnostics.filter((diag) =>
       diag.message.includes(
-        "blocked by plugins.entries.hook-policy.hooks.allowPromptInjection=false; the handler is not registered and will never run",
+        "blocked by plugins.entries.hook-policy.hooks.allowPromptModification=false; the handler is not registered and will never run",
       ),
     );
     expect(blockedDiagnostics).toHaveLength(1);
@@ -67,14 +67,14 @@ describe("loadOpenClawPlugins conversation-access and prompt-injection hook poli
         hookName: "before_prompt_build",
         reason: "prompt-injection-denied",
         severity: "warn",
-        configPath: "plugins.entries.hook-policy.hooks.allowPromptInjection",
+        configPath: "plugins.entries.hook-policy.hooks.allowPromptModification",
         message:
-          'typed hook "before_prompt_build" blocked by plugins.entries.hook-policy.hooks.allowPromptInjection=false; the handler is not registered and will never run',
+          'typed hook "before_prompt_build" blocked by plugins.entries.hook-policy.hooks.allowPromptModification=false; the handler is not registered and will never run',
         source: expect.any(String),
       },
     ]);
   });
-  it("attributes the two prompt-injection conversation hooks to allowPromptInjection when conversation access is unset", () => {
+  it("attributes the two prompt-injection conversation hooks to allowPromptModification when conversation access is unset", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "injection-precedence",
@@ -88,8 +88,8 @@ describe("loadOpenClawPlugins conversation-access and prompt-injection hook poli
     // `agent_turn_prepare` and `before_prompt_build` are the only two hooks that
     // are BOTH prompt-injection hooks and conversation hooks, and the
     // prompt-injection branch is evaluated first. So a non-bundled plugin with
-    // `allowPromptInjection: false` and no `allowConversationAccess` setting at
-    // all gets a "warn" attributed to allowPromptInjection -- not the "error"
+    // `allowPromptModification: false` and no `allowConversationAccess` setting at
+    // all gets a "warn" attributed to allowPromptModification -- not the "error"
     // that an unset allowConversationAccess produces on its own. This is the
     // precedence exception the config reference and plugin guide document.
     const registry = loadRegistryFromSinglePlugin({
@@ -98,7 +98,7 @@ describe("loadOpenClawPlugins conversation-access and prompt-injection hook poli
         allow: ["injection-precedence"],
         entries: {
           "injection-precedence": {
-            hooks: { allowPromptInjection: false },
+            hooks: { allowPromptModification: false },
           },
         },
       },
@@ -119,13 +119,13 @@ describe("loadOpenClawPlugins conversation-access and prompt-injection hook poli
         hookName: "agent_turn_prepare",
         reason: "prompt-injection-denied",
         severity: "warn",
-        configPath: "plugins.entries.injection-precedence.hooks.allowPromptInjection",
+        configPath: "plugins.entries.injection-precedence.hooks.allowPromptModification",
       },
       {
         hookName: "before_prompt_build",
         reason: "prompt-injection-denied",
         severity: "warn",
-        configPath: "plugins.entries.injection-precedence.hooks.allowPromptInjection",
+        configPath: "plugins.entries.injection-precedence.hooks.allowPromptModification",
       },
     ]);
     // The implicit-deny escalation must not leak through the earlier branch.

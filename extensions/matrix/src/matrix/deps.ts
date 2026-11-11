@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import {
+  resolveRuntimeDependencyEntrypointUrl,
+  runCommandWithTimeout,
+} from "openclaw/plugin-sdk/process-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 
 const REQUIRED_MATRIX_PACKAGES = [
@@ -90,7 +94,11 @@ function resolveMatrixCryptoNativeBindingPath(): string | null {
   }
   try {
     return path.join(
-      path.dirname(defaultResolveFn("@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js")),
+      path.dirname(
+        fileURLToPath(
+          resolveRuntimeDependencyEntrypointUrl("matrixCryptoDownload", import.meta.url),
+        ),
+      ),
       filename,
     );
   } catch {
@@ -137,7 +145,9 @@ async function ensureMatrixCryptoRuntimeOnce(): Promise<void> {
     }
   }
 
-  const scriptPath = defaultResolveFn("@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js");
+  const scriptPath = fileURLToPath(
+    resolveRuntimeDependencyEntrypointUrl("matrixCryptoDownload", import.meta.url),
+  );
   let failure: string | undefined;
   try {
     const result = await runCommandWithTimeout([process.execPath, scriptPath], {

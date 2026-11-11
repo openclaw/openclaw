@@ -15,8 +15,23 @@ export type NativeCaptureMaintenance = {
   startup?: boolean;
 };
 /** The process-wide capture owner installs this observer once. */
+const observedNativeLoadPaths = new Set<string>();
+const nativeLoadObservers = new Set<(filename: string) => void>();
+
+export function recordPluginNativeLoad(filename: string): void {
+  observedNativeLoadPaths.add(
+    process.platform === "win32" ? normalizeWindowsPathPreservingCase(filename) : filename,
+  );
+}
+
+export function subscribePluginNativeLoads(observer: (filename: string) => void): () => void {
+  nativeLoadObservers.add(observer);
+  return () => {
+    nativeLoadObservers.delete(observer);
+  };
+}
+
 function observePluginNativeLoads(): ReadonlySet<string> {
-  const paths = new Set<string>();
   const loadAddon = process.dlopen.bind(process);
   // Node keeps main-thread addons loaded: https://github.com/nodejs/node/blob/v24.8.0/src/env.cc#L1050
   // Windows mapped-image unlink fails (access denied becomes EPERM):
@@ -27,13 +42,16 @@ function observePluginNativeLoads(): ReadonlySet<string> {
   process.dlopen = (...args) => {
     try {
       const file = fs.realpathSync.native(args[1]);
-      paths.add(process.platform === "win32" ? normalizeWindowsPathPreservingCase(file) : file);
+      recordPluginNativeLoad(file);
+      for (const observer of nativeLoadObservers) {
+        observer(file);
+      }
     } catch {
       // Observation must not replace the native loader's return or original error.
     }
     return loadAddon(...args);
   };
-  return paths;
+  return observedNativeLoadPaths;
 }
 
 export function createPluginNativeCaptureCustody(ownedRoots: Set<string>) {

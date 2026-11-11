@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { isPollVoteEchoText } from "./poll-vote-echo.js";
+import { recordPollVote, suppressPollVoteEcho } from "./poll-vote-echo.js";
 
-describe("isPollVoteEchoText", () => {
+const ROUTE = "imessage:chat-1";
+let sessionCount = 0;
+
+function suppressesEcho(option: string, outboundText: string): boolean {
+  const sessionKey = `poll-vote-echo-${++sessionCount}`;
+  recordPollVote(sessionKey, ROUTE, option);
+  return suppressPollVoteEcho(sessionKey, ROUTE, "send", { text: outboundText });
+}
+
+describe("poll vote echo suppression", () => {
   it.each([
     ["Lobster 🦞 ", "🦞 Lobster."],
     ["USA 🇺🇸 ", "🇺🇸 USA."],
@@ -15,7 +24,7 @@ describe("isPollVoteEchoText", () => {
     ["Lobster 🦞", "Lobster."],
     ["🍎", "🍎"],
   ])("matches the same label and emoji signature: %s", (option, outboundText) => {
-    expect(isPollVoteEchoText(option, outboundText)).toBe(true);
+    expect(suppressesEcho(option, outboundText)).toBe(true);
   });
 
   it.each([
@@ -29,6 +38,6 @@ describe("isPollVoteEchoText", () => {
     ["Blue", "Red"],
     ["", ""],
   ])("does not collapse distinct labels or emoji: %s / %s", (option, outboundText) => {
-    expect(isPollVoteEchoText(option, outboundText)).toBe(false);
+    expect(suppressesEcho(option, outboundText)).toBe(false);
   });
 });

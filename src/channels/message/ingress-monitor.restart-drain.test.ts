@@ -233,9 +233,9 @@ it("releases a claim without an attempt when suspension closes during the claim"
     const payload: StoredEvent = { version: 1, rawEvent: JSON.stringify(raw) };
     const claimReady = createDeferredCore();
     const returnClaim = createDeferredCore();
-    const claimNext = queue.claimNext.bind(queue);
-    const claimNextSpy = vi.spyOn(queue, "claimNext").mockImplementationOnce(async (...args) => {
-      const claim = await claimNext(...args);
+    const claimEvent = queue.claim.bind(queue);
+    const claimSpy = vi.spyOn(queue, "claim").mockImplementationOnce(async (...args) => {
+      const claim = await claimEvent(...args);
       // Keep the monitor awaiting the result after the real SQLite claim commits.
       claimReady.resolve();
       await returnClaim.promise;
@@ -269,7 +269,7 @@ it("releases a claim without an attempt when suspension closes during the claim"
       ]);
       expect(pending[0]).not.toHaveProperty("lastAttemptAt");
       expect(pending[0]).not.toHaveProperty("lastError");
-      expect(claimNextSpy).toHaveBeenCalledOnce();
+      expect(claimSpy).toHaveBeenCalledOnce();
       expect(activity.at(-1)).toBe(false);
 
       expect(suspension?.release()).toBe(true);
@@ -288,7 +288,7 @@ it("releases a claim without an attempt when suspension closes during the claim"
       await monitor.stop();
       suspension?.rollback();
       suspension?.release();
-      claimNextSpy.mockRestore();
+      claimSpy.mockRestore();
     }
   });
 });
@@ -343,21 +343,30 @@ it.each(["pause", "stop"] as const)(
   },
 );
 
-it("propagates a rejected pump wrapper without spinning idle or stop waits", async () => {
+it.each(["sync", "async"] as const)("recovers after a %s pump wrapper rejection", async (mode) => {
   await withQueue(async (queue) => {
     const rejection = new Error("pump wrapper rejected");
+    let reject = true;
     const monitor = createMonitor(
       queue,
       async () => {},
       undefined,
-      async () => {
-        throw rejection;
+      (work) => {
+        if (!reject) {
+          return work();
+        }
+        if (mode === "sync") {
+          throw rejection;
+        }
+        return Promise.reject(rejection);
       },
     );
     monitor.start();
-
     await expect(monitor.waitForIdle()).rejects.toBe(rejection);
-    await expect(monitor.stop()).rejects.toBe(rejection);
+    reject = false;
+    monitor.requestDrain();
+    await expect(monitor.waitForIdle()).resolves.toBeUndefined();
+    await expect(monitor.stop()).resolves.toBeUndefined();
   });
 });
 

@@ -1,6 +1,8 @@
 // Daemon runtime hint tests cover platform-specific daemon guidance.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildPlatformRuntimeLogHints, buildPlatformServiceStartHints } from "./runtime-hints.js";
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("buildPlatformRuntimeLogHints", () => {
   it("renders launchd log hints on darwin", () => {
@@ -53,9 +55,9 @@ describe("buildPlatformRuntimeLogHints", () => {
 
 describe("buildPlatformServiceStartHints", () => {
   it("builds platform-specific service start hints", () => {
+    vi.stubGlobal("process", { ...process, platform: "darwin" });
     expect(
       buildPlatformServiceStartHints({
-        platform: "darwin",
         installHint: "openclaw gateway install",
         startCommand: "openclaw gateway",
         launchAgentPlistPath: "~/Library/LaunchAgents/com.openclaw.gateway.plist",
@@ -67,9 +69,9 @@ describe("buildPlatformServiceStartHints", () => {
       "openclaw gateway",
       "launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.openclaw.gateway.plist",
     ]);
+    vi.stubGlobal("process", { ...process, platform: "linux" });
     expect(
       buildPlatformServiceStartHints({
-        platform: "linux",
         installHint: "openclaw gateway install",
         startCommand: "openclaw gateway",
         launchAgentPlistPath: "~/Library/LaunchAgents/com.openclaw.gateway.plist",

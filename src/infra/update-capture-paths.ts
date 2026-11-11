@@ -91,11 +91,7 @@ function resolveCapturePath(
       try {
         stat = fs.lstatSync(entry);
       } catch (error) {
-        if (
-          hasErrnoCode(error, "ENOENT") ||
-          hasErrnoCode(error, "ENOTDIR") ||
-          hasErrnoCode(error, "ELOOP")
-        ) {
+        if (["ENOENT", "ENOTDIR", "ELOOP"].some((code) => hasErrnoCode(error, code))) {
           return undefined;
         }
         throw new Error("Private update capture marker is unreadable; export refused.", {

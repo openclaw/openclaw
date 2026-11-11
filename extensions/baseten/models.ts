@@ -2,9 +2,10 @@ import {
   buildManifestModelProviderConfig,
   readManifestProviderDefaultModelRef,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
-import type {
-  ModelCompatConfig,
-  ModelDefinitionConfig,
+import {
+  resolveDefaultModelMaxTokens,
+  type ModelCompatConfig,
+  type ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   asNonArrayRecord,
@@ -15,7 +16,17 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-const BASETEN_MANIFEST_CATALOG = manifest.modelCatalog.providers.baseten;
+const declaredCatalog = manifest.modelCatalog.providers.baseten;
+export const BASETEN_DECISION_MODEL_IDS = new Set(
+  declaredCatalog.models
+    .filter((model) => model.inference?.chat === false)
+    .map((model) => model.id),
+);
+// Decision-only rows have no conversational token budget or chat transport.
+const BASETEN_MANIFEST_CATALOG = {
+  ...declaredCatalog,
+  models: declaredCatalog.models.filter((model) => model.inference?.chat !== false),
+};
 const BASETEN_MODEL_COMPAT = new Map(
   buildManifestModelProviderConfig({
     providerId: "baseten",
@@ -23,7 +34,6 @@ const BASETEN_MODEL_COMPAT = new Map(
   }).models.map(({ id, compat }) => [id, compat]),
 );
 const DEFAULT_CONTEXT_WINDOW = 128_000;
-const DEFAULT_MAX_TOKENS = 8_192;
 
 const CHAT_TEMPLATE_THINKING_MODEL_IDS = new Set([
   "zai-org/glm-4.7",
@@ -37,6 +47,7 @@ const CHAT_TEMPLATE_THINKING_MODEL_IDS = new Set([
 const BASE_COMPAT: ModelCompatConfig = {
   supportsStore: false,
   supportsDeveloperRole: false,
+  supportsReasoningEffort: false,
   supportsUsageInStreaming: true,
   supportsStrictMode: true,
   supportsTools: true,
@@ -55,7 +66,7 @@ export function usesBasetenChatTemplateThinking(modelId: string): boolean {
 export function buildBasetenModelCompat(modelId: string): ModelCompatConfig {
   return {
     ...BASE_COMPAT,
-    ...structuredClone(BASETEN_MODEL_COMPAT.get(modelId)),
+    ...BASETEN_MODEL_COMPAT.get(modelId),
   };
 }
 
@@ -76,20 +87,6 @@ function readPerTokenPrice(value: unknown): number | undefined {
     : undefined;
 }
 
-function applyLiveReasoningEffortCompat(
-  fallbackCompat: ModelCompatConfig,
-  supportsReasoningEffort: boolean,
-): ModelCompatConfig {
-  if (supportsReasoningEffort) {
-    return { ...fallbackCompat, supportsReasoningEffort: true };
-  }
-  const compat = { ...fallbackCompat };
-  delete compat.supportsReasoningEffort;
-  delete compat.supportedReasoningEfforts;
-  delete compat.reasoningEffortMap;
-  return compat;
-}
-
 function projectLiveModel(
   row: Record<string, unknown>,
   fallback: ModelDefinitionConfig | undefined,
@@ -98,7 +95,7 @@ function projectLiveModel(
     return undefined;
   }
   const id = normalizeOptionalString(row.id);
-  if (!id) {
+  if (!id || id.startsWith("decision-models/")) {
     return undefined;
   }
 
@@ -108,6 +105,10 @@ function projectLiveModel(
   const inputPrice = readPerTokenPrice(pricing.prompt);
   const outputPrice = readPerTokenPrice(pricing.completion);
   const cacheReadPrice = readPerTokenPrice(pricing.input_cache_read);
+  const contextWindow =
+    asPositiveSafeInteger(Number(row.context_length)) ??
+    fallback?.contextWindow ??
+    DEFAULT_CONTEXT_WINDOW;
   // These current DeepSeek rows omit feature flags documented by Baseten's serving API.
   const hasDocumentedSparseFeatures =
     ["deepseek-ai/DeepSeek-V4.1-Flash", "deepseek-ai/DeepSeek-V4-Pro-0813"].includes(id) &&
@@ -118,9 +119,14 @@ function projectLiveModel(
   const supportsReasoningEffort =
     features.has("reasoning_effort") ||
     (hasDocumentedSparseFeatures && fallbackCompat.supportsReasoningEffort === true);
-  const compat = hasLiveFeatures
-    ? applyLiveReasoningEffortCompat(fallbackCompat, supportsReasoningEffort)
-    : fallbackCompat;
+  let compat = fallbackCompat;
+  if (hasLiveFeatures) {
+    compat = { ...fallbackCompat, supportsReasoningEffort };
+    if (!supportsReasoningEffort) {
+      delete compat.supportedReasoningEfforts;
+      delete compat.reasoningEffortMap;
+    }
+  }
 
   return {
     id,
@@ -139,14 +145,11 @@ function projectLiveModel(
       cacheRead: cacheReadPrice ?? fallback?.cost.cacheRead ?? 0,
       cacheWrite: fallback?.cost.cacheWrite ?? 0,
     },
-    contextWindow:
-      asPositiveSafeInteger(Number(row.context_length)) ??
-      fallback?.contextWindow ??
-      DEFAULT_CONTEXT_WINDOW,
+    contextWindow,
     maxTokens:
       asPositiveSafeInteger(Number(row.max_completion_tokens)) ??
       fallback?.maxTokens ??
-      DEFAULT_MAX_TOKENS,
+      resolveDefaultModelMaxTokens(contextWindow),
     compat,
   };
 }
@@ -174,7 +177,11 @@ export function projectBasetenLiveModels(rows: readonly unknown[]): ModelDefinit
 /** Resolves a forward-compatible Baseten model id not yet in the bundled catalog. */
 export function resolveBasetenDynamicModel(modelId: string) {
   const id = modelId.trim();
-  if (!id || BASETEN_MODEL_CATALOG.some((model) => model.id === id)) {
+  if (
+    !id ||
+    id.startsWith("decision-models/") ||
+    BASETEN_MODEL_CATALOG.some((model) => model.id === id)
+  ) {
     return undefined;
   }
   return {
@@ -187,7 +194,7 @@ export function resolveBasetenDynamicModel(modelId: string) {
     input: ["text"] as Array<"text" | "image">,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
+    maxTokens: resolveDefaultModelMaxTokens(DEFAULT_CONTEXT_WINDOW),
     compat: buildBasetenModelCompat(id),
   };
 }

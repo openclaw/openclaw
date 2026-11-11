@@ -1,13 +1,18 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { addMeetingSetupCheck } from "openclaw/plugin-sdk/meeting-runtime";
+import {
+  addMeetingSetupCheck,
+  resolveMeetingBrowserNodeInfo,
+} from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GoogleMeetConfig, GoogleMeetModeInput, GoogleMeetTransport } from "./config.js";
 import { getGoogleMeetSetupStatus } from "./setup.js";
-import { resolveChromeNodeInfo } from "./transports/chrome-browser-proxy.js";
 import { assertGoogleMeetAudioAvailable } from "./transports/chrome.js";
-import { GOOGLE_MEET_NODE_COMMAND } from "./transports/google-meet-platform-constants.js";
+import {
+  GOOGLE_MEET_BROWSER_NODE_ADAPTER,
+  GOOGLE_MEET_NODE_COMMAND,
+} from "./transports/google-meet-platform-constants.js";
 import { normalizeDialInNumber } from "./transports/twilio.js";
 
 function collectChromeAudioCommands(config: GoogleMeetConfig): string[] {
@@ -54,9 +59,10 @@ export async function getGoogleMeetRuntimeSetupStatus(params: {
   });
   if (shouldCheckChromeNode) {
     try {
-      const node = await resolveChromeNodeInfo({
+      const node = await resolveMeetingBrowserNodeInfo({
         runtime: params.runtime,
         requestedNode: params.config.chromeNode.node,
+        adapter: GOOGLE_MEET_BROWSER_NODE_ADAPTER,
       });
       const label = node.displayName ?? node.remoteIp ?? node.nodeId ?? "connected node";
       status = addMeetingSetupCheck(status, {

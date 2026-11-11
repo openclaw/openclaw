@@ -5,7 +5,7 @@ import UIKit
 struct OpenClawBrandTests {
     @Test func `brand colors meet text contrast in both appearances`() {
         let foregroundColors = [
-            ("accent", OpenClawBrand.uiAccentForeground),
+            ("accent", OpenClawBrand.uiAccent),
             ("accentHot", OpenClawBrand.uiAccentHotForeground),
             ("ok", OpenClawBrand.uiOK),
             ("warn", OpenClawBrand.uiWarn),
@@ -34,12 +34,12 @@ struct OpenClawBrandTests {
             }
 
             let pillBackground = Self.composite(
-                OpenClawBrand.uiAccentForeground,
+                OpenClawBrand.uiAccent,
                 alpha: style == .dark ? 0.12 : 0.08,
                 over: .secondarySystemGroupedBackground,
                 traits: traits)
-            #expect(Self.contrastRatio(OpenClawBrand.uiAccentForeground, pillBackground, traits: traits) >= 4.5)
-            #expect(Self.contrastRatio(OpenClawBrand.uiAccent, .white, traits: traits) >= 4.5)
+            #expect(Self.contrastRatio(OpenClawBrand.uiAccent, pillBackground, traits: traits) >= 4.5)
+            #expect(Self.contrastRatio(OpenClawBrand.uiAccentFill, .white, traits: traits) >= 4.5)
         }
     }
 

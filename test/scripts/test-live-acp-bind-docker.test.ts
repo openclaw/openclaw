@@ -15,39 +15,16 @@ expect(setupParts).toHaveLength(2);
 const setupEndParts = setupParts[1]!.split(setupEnd);
 expect(setupEndParts).toHaveLength(2);
 const setup = setupEndParts[0]!;
+const writeExecutable = (file: string, text: string) => writeFileSync(file, text, { mode: 0o755 });
 
 it.each([
-  {
-    existing: "claude",
-    installedVersion: "9.1.0",
-    mode: "subscription",
-    key: "unset",
-    installs: false,
-  },
-  {
-    existing: "claude-real",
-    installedVersion: "9.1.0",
-    mode: "api-key",
-    key: "fixture-key",
-    installs: false,
-  },
-  {
-    existing: undefined,
-    installedVersion: undefined,
-    mode: "subscription",
-    key: "unset",
-    installs: true,
-  },
-  {
-    existing: "claude-real",
-    installedVersion: "9.0.0",
-    mode: "api-key",
-    key: "fixture-key",
-    installs: true,
-  },
-])(
-  "prepares $mode Claude from $existing at installed version $installedVersion",
-  ({ existing, installedVersion, mode, key, installs: shouldInstall }) => {
+  ["claude", "9.1.0", "subscription", "unset", false],
+  ["claude-real", "9.1.0", "api-key", "fixture-key", false],
+  [undefined, undefined, "subscription", "unset", true],
+  ["claude-real", "9.0.0", "api-key", "fixture-key", true],
+] as const)(
+  "prepares %s version %s with %s auth (%s, install=%s)",
+  (existing, installedVersion, mode, key, shouldInstall) => {
     const home = createTempDir("openclaw-acp-claude-setup-");
     const bin = path.join(home, "bin");
     const prefix = path.join(home, "npm");
@@ -56,49 +33,38 @@ it.each([
     const installs = path.join(home, "installs");
     const fixture = path.join(home, "claude-fixture");
     const acpxDir = path.join(home, "extensions", "acpx");
-    const adapterDir = path.join(
-      acpxDir,
-      "node_modules",
-      "@agentclientprotocol",
-      "claude-agent-acp",
-    );
+    const adapterDir = path.join(acpxDir, "node_modules/@agentclientprotocol/claude-agent-acp");
     const sdkDir = path.join(adapterDir, "node_modules", "@anthropic-ai", "claude-agent-sdk");
-    mkdirSync(bin);
-    mkdirSync(installedBin, { recursive: true });
-    mkdirSync(sdkDir, { recursive: true });
-    writeFileSync(path.join(acpxDir, "package.json"), '{"name":"@openclaw/acpx"}\n');
-    writeFileSync(
-      path.join(adapterDir, "package.json"),
-      '{"name":"@agentclientprotocol/claude-agent-acp"}\n',
-    );
-    writeFileSync(
-      path.join(sdkDir, "package.json"),
-      '{"name":"@anthropic-ai/claude-agent-sdk","exports":{".":"./sdk.mjs"},"claudeCodeVersion":"9.1.0"}\n',
-    );
+    for (const dir of [bin, installedBin, sdkDir]) {
+      mkdirSync(dir, { recursive: true });
+    }
+    const manifest = (dir: string, data: object) =>
+      writeFileSync(path.join(dir, "package.json"), `${JSON.stringify(data)}\n`);
+    manifest(acpxDir, {});
+    manifest(adapterDir, {});
+    manifest(sdkDir, {
+      exports: { ".": "./sdk.mjs" },
+      claudeCodeVersion: "9.1.0",
+    });
     writeFileSync(path.join(sdkDir, "sdk.mjs"), "export {};\n");
     const executable =
       '#!/bin/sh\nprintf "%s:%s\\n" "$*" "${ANTHROPIC_API_KEY-unset}" >> "$TEST_CALLS"\nprintf "9.1.0 (Claude Code)\\n"\n';
-    writeFileSync(fixture, executable, { mode: 0o755 });
+    writeExecutable(fixture, executable);
     if (existing) {
-      writeFileSync(path.join(installedBin, existing), executable, { mode: 0o755 });
+      writeExecutable(path.join(installedBin, existing), executable);
     }
     if (installedVersion) {
       const packageDir = path.join(prefix, "lib", "node_modules", "@anthropic-ai", "claude-code");
       mkdirSync(packageDir, { recursive: true });
-      writeFileSync(
-        path.join(packageDir, "package.json"),
-        `${JSON.stringify({ version: installedVersion })}\n`,
-      );
+      manifest(packageDir, { version: installedVersion });
     }
-    writeFileSync(
+    writeExecutable(
       path.join(bin, "npm"),
       '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_INSTALLS"\ncp "$TEST_CLAUDE_FIXTURE" "$NPM_CONFIG_PREFIX/bin/claude"\n',
-      { mode: 0o755 },
     );
-    writeFileSync(
+    writeExecutable(
       path.join(bin, "timeout"),
       '#!/bin/sh\ncase "$1" in --kill-after=*) shift;; esac\nshift\nexec "$@"\n',
-      { mode: 0o755 },
     );
     const result = spawnSync("bash", ["-c", setup], {
       cwd: home,

@@ -1,21 +1,115 @@
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  uniqueValues,
+} from "@openclaw/normalization-core/string-normalization";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import { registerContextEngineInRegistry } from "../context-engine/registry.js";
 import { DecisionProviderHost } from "../decisions/provider-host.js";
+import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
+import type { HookEntry } from "../hooks/types.js";
+import { withTimeout } from "../infra/fs-safe.js";
+import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
+import {
+  agentToolResultMiddlewareRegistrationCoversTool,
+  appendAgentToolResultMiddlewareScope,
+  normalizeAgentToolResultMiddlewareRuntimeIds,
+  normalizeAgentToolResultMiddlewareRuntimes,
+} from "./agent-tool-result-middleware.js";
+import {
+  resolveConversationAccessAllowed,
+  resolvePromptInjectionAllowed,
+} from "./hook-policy-decisions.js";
+import { PLUGIN_HOOK_METADATA } from "./hook-types.js";
 import { registerPluginInteractiveHandlerInRegistry } from "./interactive-registry.js";
+import { recordPluginLoadDiagnostic } from "./load-diagnostics.js";
+import type { PluginDiagnostic } from "./manifest-types.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createHostRegistrars } from "./registry-registrars-host.js";
 import { createNetworkRegistrars } from "./registry-registrars-network.js";
 import { createOperationRegistrars } from "./registry-registrars-operations.js";
 import { createProviderRegistrars } from "./registry-registrars-providers.js";
-import { createToolHookRegistrars } from "./registry-registrars-tools-hooks.js";
-import type { PluginRegistryState } from "./registry-state.js";
-import type { PluginRecord } from "./registry-types.js";
+import {
+  resolveTypedHookTimeoutMs,
+  type PluginRegistryState,
+  type PluginTypedHookPolicy,
+} from "./registry-state.js";
+import type {
+  PluginAgentToolResultMiddlewareRegistration,
+  PluginBlockedHookReason,
+  PluginRecord,
+} from "./registry-types.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
-import type { OpenClawPluginApi, PluginRegistrationMode } from "./types.js";
+import { normalizePluginToolContractNames, normalizePluginToolNames } from "./tool-contracts.js";
+import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
+import { inspectOpenDictionaryToolSchemas } from "./tool-schema-diagnostics.js";
+import {
+  isPluginHookAgentTrigger,
+  isPluginHookName,
+  isPluginHookReplyDispatchKind,
+  isPromptInjectionHookName,
+} from "./types.js";
+import type {
+  OpenClawPluginApi,
+  PluginRegistrationMode,
+  OpenClawPluginHookOptions,
+  OpenClawPluginToolContext,
+  OpenClawPluginToolFactory,
+  OpenClawPluginToolOptions,
+  PluginHookHandlerMap,
+  PluginHookName,
+  PluginHookRegistrationOptions,
+} from "./types.js";
+
+function normalizeHookEligibility<T>(value: unknown, isEligible: (item: unknown) => item is T) {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const entries = Array.from(value);
+  if (entries.length === 0 || !entries.every(isEligible)) {
+    return undefined;
+  }
+  return uniqueValues(entries);
+}
+
+/**
+ * The implicit conversation-access refusal is the only one the operator did not
+ * ask for: a non-bundled plugin registers a conversation hook, nobody ever set
+ * `allowConversationAccess`, and the default deny silently disables the handler
+ * while `api.on()` reports nothing back. That combination has shipped
+ * multi-day silent degradation, so the message must carry the config path, the
+ * remedy, and how to verify — and it is emitted at `error`, unlike the two
+ * deliberate denials below.
+ */
+function formatImplicitConversationAccessBlockDiagnostic(params: {
+  pluginId: string;
+  hookName: PluginHookName;
+  configPath: string;
+}): string {
+  return (
+    `typed hook "${params.hookName}" from non-bundled plugin "${params.pluginId}" was NOT registered: ` +
+    `conversation hooks need an explicit grant and ${params.configPath} is unset, so the plugin's ` +
+    `handler is inactive even though api.on() reported no error. ` +
+    `Fix: set "${params.configPath}": true; the default hybrid config reload applies it to the ` +
+    `running Gateway without a restart (with gateway.reload.mode "off", run ` +
+    `\`openclaw plugins reload ${params.pluginId}\`). ` +
+    `To keep the hook blocked without this error, set it to false. ` +
+    `Verify with \`openclaw plugins inspect ${params.pluginId} --runtime\` or \`/status plugins\`.`
+  );
+}
+
+function canRegisterInstalledTrustedHook(record: PluginRecord): boolean {
+  return record.origin === "bundled" || (record.enabled && record.explicitlyEnabled === true);
+}
+
+// Transferred services must not capture their original registration's registry.
+function startDecisionProviderService() {}
 
 /** Compose domain registrars over one explicit mutable registry state. */
 export function createPluginRegistrars(state: PluginRegistryState) {
-  const { registry, reportRegistrationError, reportRegistrationWarning } = state;
+  const { registry, pushDiagnostic, reportRegistrationError, reportRegistrationWarning } = state;
+  const providers = createProviderRegistrars(state);
 
   const registerDecisionProvider = (
     record: PluginRecord,
@@ -26,11 +120,13 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       !id ||
       id !== provider.id ||
       id.includes("/") ||
-      provider.contractVersion !== 1 ||
+      (provider.contractVersion !== 1 && provider.contractVersion !== 2) ||
       typeof provider.evaluate !== "function" ||
-      (provider.isReady !== undefined && typeof provider.isReady !== "function")
+      (provider.contractVersion === 1 &&
+        provider.isReady !== undefined &&
+        typeof provider.isReady !== "function")
     ) {
-      reportRegistrationError(record, "invalid version 1 decision provider contract");
+      reportRegistrationError(record, "invalid versioned decision provider contract");
       return;
     }
     if (!record.contracts?.decisionProviders?.includes(id)) {
@@ -44,10 +140,44 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `decision provider already registered: ${id}`);
       return;
     }
-    const host = new DecisionProviderHost(provider, record);
+    let canonical = registry.providers.find((entry) => entry.provider.id === id);
+    if (provider.contractVersion === 2) {
+      if (canonical && canonical.pluginId !== record.id) {
+        reportRegistrationError(
+          record,
+          `decision provider identity is owned by another plugin: ${id}`,
+        );
+        return;
+      }
+      if (canonical && provider.provider) {
+        reportRegistrationError(
+          record,
+          `provider already registered; omit the duplicate definition: ${id}`,
+        );
+        return;
+      }
+      if (!canonical) {
+        if (!provider.provider) {
+          reportRegistrationError(
+            record,
+            `version 2 decisions require a shared provider definition: ${id}`,
+          );
+          return;
+        }
+        providers.registerProvider(record, { ...provider.provider, id });
+        canonical = registry.providers.find(
+          (entry) => entry.provider.id === id && entry.pluginId === record.id,
+        );
+        if (!canonical) {
+          return;
+        }
+      }
+    }
+    const host = new DecisionProviderHost(provider, record, canonical);
     registry.decisionProviders.push({ pluginId: record.id, host });
     record.services.push(`decisions:${id}`);
-    getPluginInstance(record)?.lifecycle.onDispose(() => host.stop());
+    const stop = host.stop.bind(host);
+    getPluginInstance(record)?.lifecycle.onDispose(stop);
     // The service is a physical-settlement owner. Reload also closes admission
     // before earlier sidecar and memory drains can wait on decision work.
     registry.services.push({
@@ -55,7 +185,7 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       id: `decisions:${id}`,
       origin: record.origin,
       source: record.source,
-      service: { id: `decisions:${id}`, start() {}, stop: () => host.stop() },
+      service: { id: `decisions:${id}`, start: startDecisionProviderService, stop },
     });
   };
 
@@ -94,6 +224,16 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `context engine id reserved by core: ${normalizedId}`);
       return;
     }
+    if (
+      record.declaredContextEngineIds &&
+      !record.declaredContextEngineIds.includes(normalizedId)
+    ) {
+      reportRegistrationError(
+        record,
+        `context engine "${normalizedId}" is not declared in manifest contextEngineIds`,
+      );
+      return;
+    }
     getPluginInstance(record)?.admitFactory(factory);
     const result = registerContextEngineInRegistry(
       registry,
@@ -108,7 +248,9 @@ export function createPluginRegistrars(state: PluginRegistryState) {
     if (!result.ok) {
       reportRegistrationError(
         record,
-        `context engine already registered: ${normalizedId} (${result.existingOwner})`,
+        result.existingOwner === null
+          ? `context engine has no approved selected owner: ${normalizedId}`
+          : `context engine already registered: ${normalizedId} (${result.existingOwner})`,
       );
       return;
     }
@@ -130,7 +272,7 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `compaction provider "${id}" registration missing summarize`);
       return;
     }
-    const existing = registry.compactionProviders.find((entry) => entry.provider.id === id);
+    const existing = registry.compactionProviders.find((entry) => entry.provider.id.trim() === id);
     if (existing) {
       const ownerDetail = existing.ownerPluginId ? ` (owner: ${existing.ownerPluginId})` : "";
       reportRegistrationError(
@@ -232,14 +374,422 @@ export function createPluginRegistrars(state: PluginRegistryState) {
     registry.memoryCorpusSupplements.push({ pluginId: record.id, supplement });
   };
 
+  const { createRegistration, registryParams, pluginsWithChannelRegistrationConflict } = state;
+  const declaredToolNames = new WeakMap<PluginRecord, ReadonlySet<string>>();
+
+  const registerAgentToolResultMiddleware = (
+    record: PluginRecord,
+    handler: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[0],
+    options: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[1],
+    policy?: PluginTypedHookPolicy,
+  ) => {
+    if (typeof handler !== "function") {
+      reportRegistrationError(record, "agent tool result middleware must be a function");
+      return;
+    }
+    const declared = normalizeAgentToolResultMiddlewareRuntimeIds(
+      record.contracts?.agentToolResultMiddleware,
+    );
+    const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options, declared);
+    const matcher = normalizePluginToolMatcher(options?.matcher);
+    if (runtimes.length === 0) {
+      reportRegistrationError(
+        record,
+        "agent tool result middleware must target at least one supported runtime",
+      );
+      return;
+    }
+    const missing = runtimes.filter((runtime) => !declared.includes(runtime));
+    if (missing.length > 0) {
+      reportRegistrationError(
+        record,
+        `plugin must declare contracts.agentToolResultMiddleware for: ${missing.join(", ")}`,
+      );
+      return;
+    }
+    if (!canRegisterInstalledTrustedHook(record)) {
+      reportRegistrationError(
+        record,
+        "plugin must be explicitly enabled to register agent tool result middleware",
+      );
+      return;
+    }
+    const existing = registry.agentToolResultMiddlewares.find(
+      (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
+    );
+    if (existing) {
+      appendAgentToolResultMiddlewareScope(existing, { runtimes, matcher });
+      return;
+    }
+    const timeoutMs = resolveTypedHookTimeoutMs({ hookName: "after_tool_call", policy });
+    const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
+      if (
+        !agentToolResultMiddlewareRegistrationCoversTool(registration, ctx.runtime, event.toolName)
+      ) {
+        return;
+      }
+      try {
+        // fs-safe bounds only this await; it cannot cancel plugin work, so late side effects remain possible.
+        return await withTimeout(
+          Promise.resolve(handler(event, ctx)),
+          timeoutMs ?? 0,
+          `agent tool result middleware for ${record.id}`,
+        );
+      } catch (error) {
+        registryParams.logger.warn(
+          `[plugins] agent tool result middleware failed for ${record.id}`,
+        );
+        throw error;
+      }
+    };
+    const registration: PluginAgentToolResultMiddlewareRegistration = {
+      ...createRegistration(record, {
+        handler: safeHandler,
+        runtimes,
+        scopes: [{ runtimes, ...(matcher ? { matcher } : {}) }],
+      }),
+      rawHandler: handler,
+    };
+    registry.agentToolResultMiddlewares.push(registration);
+  };
+
+  const registerTool = (
+    record: PluginRecord,
+    tool: AnyAgentTool | OpenClawPluginToolFactory | OpenClawPluginToolFactory<2>,
+    opts?: OpenClawPluginToolOptions,
+  ) => {
+    if (pluginsWithChannelRegistrationConflict.has(record.id)) {
+      return;
+    }
+    let declaredNames = declaredToolNames.get(record);
+    if (!declaredNames) {
+      declaredNames = new Set(normalizePluginToolContractNames(record.contracts));
+      declaredToolNames.set(record, declaredNames);
+    }
+    if (declaredNames.size === 0) {
+      reportRegistrationError(
+        record,
+        "plugin must declare contracts.tools before registering agent tools",
+      );
+      return;
+    }
+    const names = [...(opts?.names ?? []), ...(opts?.name ? [opts.name] : [])];
+    const optional = opts?.optional === true;
+    const versioned = typeof tool !== "function" && "contextVersion" in tool;
+    if (versioned && (tool.contextVersion !== 2 || typeof tool.create !== "function")) {
+      reportRegistrationError(record, "unsupported plugin tool context version");
+      return;
+    }
+    const factory: OpenClawPluginToolFactory =
+      typeof tool === "function"
+        ? tool
+        : versioned
+          ? (ctx) => {
+              if (!ctx.assertInvocationCurrent) {
+                throw new Error("Version 2 tool factories require host invocation authority");
+              }
+              return tool.create({
+                ...ctx,
+                get senderIsOwner() {
+                  return ctx.senderIsOwner;
+                },
+                assertInvocationCurrent: ctx.assertInvocationCurrent,
+              });
+            }
+          : (_ctx: OpenClawPluginToolContext) => tool;
+    if (typeof tool !== "function" && !versioned) {
+      names.push(tool.name);
+    }
+    const normalized = normalizePluginToolNames(names);
+    const undeclared = normalized.filter((name) => !declaredNames.has(name));
+    if (undeclared.length > 0) {
+      reportRegistrationError(
+        record,
+        `plugin must declare contracts.tools for: ${undeclared.join(", ")}`,
+      );
+      return;
+    }
+    const promptGuidance = opts?.promptGuidance?.trim();
+    if (opts?.promptGuidance !== undefined && (!promptGuidance || normalized.length === 0)) {
+      // Guidance is gated on the registration's declared names; a factory that names its
+      // tools only at run time could never show it.
+      reportRegistrationError(
+        record,
+        "tool promptGuidance must be non-empty text on a registration with name or names",
+      );
+      return;
+    }
+    if (normalized.length > 0) {
+      record.toolNames.push(...normalized);
+    }
+    const warnedTools = new Set<string>();
+    const diagnose = (tools: AnyAgentTool[]) => {
+      for (const diagnostic of inspectOpenDictionaryToolSchemas(tools, warnedTools)) {
+        warnedTools.add(diagnostic.toolName);
+        const paths = diagnostic.violations.slice(0, 12);
+        const remaining = diagnostic.violations.length - paths.length;
+        const summary = paths.join(", ") + (remaining > 0 ? `, +${remaining} more` : "");
+        const warning: PluginDiagnostic = {
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `tool "${diagnostic.toolName}": open object without declared properties, patternProperties, or additionalProperties will be closed on strict-compat providers (${summary}). Use explicit additionalProperties: true or openRecord(description) for dictionaries.`,
+        };
+        state.pushDiagnostic(warning);
+        recordPluginLoadDiagnostic(warning);
+      }
+    };
+    if (typeof tool !== "function" && !versioned) {
+      // Static schemas are inspected eagerly, best-effort; their accessors stay intact
+      // so unreadable schemas still reach per-tool runtime quarantine.
+      diagnose([tool]);
+    }
+    const inspectedFactory: OpenClawPluginToolFactory = (ctx) => {
+      const result = factory(ctx);
+      if (result) {
+        diagnose(Array.isArray(result) ? result : [result]);
+      }
+      return result;
+    };
+    getPluginInstance(record)?.admitFactory(inspectedFactory, "tool");
+    registry.tools.push({
+      ...createRegistration(record, {
+        factory: inspectedFactory,
+        ...(versioned ? { contextVersion: 2 as const } : {}),
+        names: normalized,
+        optional,
+        workspaceAccess:
+          opts?.workspaceAccess ?? (typeof tool !== "function" && !versioned ? "execute" : true),
+        ...(promptGuidance ? { promptGuidance } : {}),
+        origin: record.origin,
+      }),
+      // Host-owned membership must not re-enter the callable wrapper's graph walk.
+      declaredNames,
+    });
+  };
+
+  const registerHook = (
+    record: PluginRecord,
+    events: string | string[],
+    handler: InternalHookHandler,
+    opts: OpenClawPluginHookOptions | undefined,
+    config: OpenClawPluginApi["config"],
+    pluginConfig: unknown,
+  ) => {
+    const normalizedEvents = normalizeStringEntries(Array.isArray(events) ? events : [events]);
+    // Typed lifecycle names (before_tool_call, message_received, ...) are dispatched only by
+    // the typed hook runner; registerHook uses the legacy internal-hook path so they never
+    // fire. Warn so authors move to `api.on(...)` instead of trusting a false "loaded".
+    for (const event of normalizedEvents) {
+      if (isPluginHookName(event)) {
+        reportRegistrationWarning(
+          record,
+          `hook event "${event}" is dispatched by the typed hook runner only; ` +
+            `api.registerHook registrations for it are not invoked. ` +
+            `Use api.on("${event}", ...) instead.`,
+        );
+      }
+    }
+    const entry = opts?.entry ?? null;
+    const hookName = entry?.hook.name ?? opts?.name?.trim();
+    if (!hookName) {
+      throw new Error("hook registration missing name");
+    }
+    const existingHook = registry.hooks.find(
+      (entryLocal) => entryLocal.entry.hook.name === hookName,
+    );
+    if (existingHook) {
+      reportRegistrationError(
+        record,
+        `hook already registered: ${hookName} (${existingHook.pluginId})`,
+      );
+      return;
+    }
+    const description = entry?.hook.description ?? opts?.description ?? "";
+    const hookEntry: HookEntry = {
+      ...(entry ?? { frontmatter: {}, invocation: { enabled: true } }),
+      hook: {
+        ...(entry?.hook ?? {
+          filePath: record.source,
+          baseDir: path.dirname(record.source),
+          handlerPath: record.source,
+        }),
+        name: hookName,
+        description,
+        source: "openclaw-plugin",
+        pluginId: record.id,
+      },
+      metadata: { ...entry?.metadata, events: normalizedEvents },
+    };
+    record.hookNames.push(hookName);
+    registry.hooks.push({
+      pluginId: record.id,
+      entry: hookEntry,
+      events: normalizedEvents,
+      source: record.source,
+    });
+    const hookSystemEnabled = config?.hooks?.internal?.enabled !== false;
+    if (!hookSystemEnabled || opts?.register === false) {
+      return;
+    }
+    for (const event of normalizedEvents) {
+      const wrappedHandler: typeof handler = async (evt) => {
+        const context = evt.context;
+        const hadPluginConfig = Object.hasOwn(context, "pluginConfig");
+        const previousPluginConfig = context.pluginConfig;
+        // Internal hooks share one context; restore per-plugin config after each handler.
+        context.pluginConfig = pluginConfig;
+        try {
+          return await handler({ ...evt, context });
+        } finally {
+          if (hadPluginConfig) {
+            context.pluginConfig = previousPluginConfig;
+          } else {
+            delete context.pluginConfig;
+          }
+        }
+      };
+      registry.legacyInternalHooks.push({
+        pluginId: record.id,
+        name: hookName,
+        event,
+        handler: wrappedHandler,
+      });
+    }
+  };
+
+  const registerTypedHook = <K extends PluginHookName>(
+    record: PluginRecord,
+    hookName: K,
+    handler: PluginHookHandlerMap[K],
+    opts?: PluginHookRegistrationOptions<K>,
+    policy?: PluginTypedHookPolicy,
+  ) => {
+    if (!isPluginHookName(hookName)) {
+      reportRegistrationWarning(record, `unknown typed hook "${String(hookName)}" ignored`);
+      return;
+    }
+    // Records the refusal on the registry as well as emitting the diagnostic, so
+    // "is any hook of mine refused?" stays answerable after the startup scroll
+    // is gone. `api.on()` returns void, so the plugin itself can never observe
+    // that its handler was refused.
+    const blockTypedHook = (params: {
+      reason: PluginBlockedHookReason;
+      severity: "warn" | "error";
+      configPath: string;
+      message: string;
+    }) => {
+      pushDiagnostic({
+        level: params.severity,
+        pluginId: record.id,
+        source: record.source,
+        code: "hook-registration-blocked",
+        message: params.message,
+      });
+      registry.blockedHooks.push({
+        pluginId: record.id,
+        hookName,
+        reason: params.reason,
+        severity: params.severity,
+        configPath: params.configPath,
+        message: params.message,
+        source: record.source,
+      });
+    };
+    if (!resolvePromptInjectionAllowed(policy) && isPromptInjectionHookName(hookName)) {
+      // Deliberate operator configuration: stays a warning.
+      const configPath = `plugins.entries.${record.id}.hooks.allowPromptModification`;
+      blockTypedHook({
+        reason: "prompt-injection-denied",
+        severity: "warn",
+        configPath,
+        message:
+          `typed hook "${hookName}" blocked by ${configPath}=false; ` +
+          `the handler is not registered and will never run`,
+      });
+      return;
+    }
+    const conversationAccessAllowed = resolveConversationAccessAllowed(record.origin, policy);
+    if (PLUGIN_HOOK_METADATA[hookName].conversationAccess && !conversationAccessAllowed) {
+      const configPath = `plugins.entries.${record.id}.hooks.allowConversationAccess`;
+      // An operator who wrote `false` chose this outcome, whatever the plugin's
+      // origin, so it stays a warning. This check must come first: a non-bundled
+      // plugin with an explicit `false` also satisfies the implicit-deny
+      // condition below, and reporting that as an error would raise the severity
+      // of a decision the operator made and tell them to set a key they already
+      // set.
+      if (policy?.allowConversationAccess === false) {
+        blockTypedHook({
+          reason: "conversation-access-denied",
+          severity: "warn",
+          configPath,
+          message:
+            `typed hook "${hookName}" blocked by ${configPath}=false; ` +
+            `the handler is not registered and will never run`,
+        });
+        return;
+      }
+      // Implicit deny: nobody expressed an opinion. See the formatter's note.
+      blockTypedHook({
+        reason: "conversation-access-missing",
+        severity: "error",
+        configPath,
+        message: formatImplicitConversationAccessBlockDiagnostic({
+          pluginId: record.id,
+          hookName,
+          configPath,
+        }),
+      });
+      return;
+    }
+    const timeoutMs = resolveTypedHookTimeoutMs({ hookName, opts, policy });
+    const eligibleTriggers =
+      hookName === "before_agent_reply"
+        ? normalizeHookEligibility(opts?.eligibleTriggers, isPluginHookAgentTrigger)
+        : undefined;
+    const eligibleDispatchKinds =
+      hookName === "reply_dispatch"
+        ? normalizeHookEligibility(opts?.eligibleDispatchKinds, isPluginHookReplyDispatchKind)
+        : undefined;
+    const matcher =
+      hookName === "before_tool_call" || hookName === "after_tool_call"
+        ? normalizePluginToolMatcher(opts?.matcher)
+        : undefined;
+    if (opts?.matcher && hookName !== "before_tool_call" && hookName !== "after_tool_call") {
+      reportRegistrationWarning(record, `typed hook "${hookName}" ignores tool matcher`);
+    }
+    record.hookCount += 1;
+    registry.typedHooks.push({
+      pluginId: record.id,
+      ...(opts?.registrationId ? { registrationId: opts.registrationId } : {}),
+      hookName,
+      handler,
+      ...(matcher ? { matcher } : {}),
+      priority: opts?.priority,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(eligibleTriggers ? { eligibleTriggers } : {}),
+      ...(eligibleDispatchKinds ? { eligibleDispatchKinds } : {}),
+      ...(hookName === "before_prompt_build" && opts?.requiresToolAuthority === true
+        ? { requiresToolAuthority: true }
+        : {}),
+      ...(hookName === "session_end" && conversationAccessAllowed
+        ? { conversationAccessAllowed: true }
+        : {}),
+      source: record.source,
+    });
+  };
+
   return {
     registerDecisionProvider,
     registerInteractiveHandler,
     registerContextEngine,
     registerCompactionProvider,
-    ...createToolHookRegistrars(state),
+    registerAgentToolResultMiddleware,
+    registerTool,
+    registerHook,
+    registerTypedHook,
     ...createNetworkRegistrars(state),
-    ...createProviderRegistrars(state),
+    ...providers,
     ...createOperationRegistrars(state),
     ...createHostRegistrars(state),
     registerMemoryCapability,

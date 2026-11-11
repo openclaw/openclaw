@@ -39,7 +39,7 @@ function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
   let lastIndex = 0;
   let inThinking = false;
   for (const match of text.matchAll(THINKING_TAG_RE)) {
-    const idx = match.index ?? 0;
+    const idx = match.index;
     if (isInsideCode(idx, codeRegions)) {
       continue;
     }
@@ -65,10 +65,9 @@ function isPartialReasoningTagPrefix(text: string): boolean {
   );
 }
 
-type TelegramReasoningSplit = {
-  reasoningText?: string;
-  answerText?: string;
-};
+type TelegramReasoningSplit =
+  | { reasoningText?: string; answerText?: never }
+  | { reasoningText?: never; answerText: string };
 
 export function splitTelegramReasoningText(
   text?: string,

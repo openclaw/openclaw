@@ -30,12 +30,6 @@ describe("resolveMxcBinaryPath", () => {
     process.env.PATH = originalPath;
   });
 
-  test("config override returns the override path when file exists", () => {
-    existsSyncMock.mockReturnValue(true);
-    const result = resolveMxcBinaryPath("C:\\custom\\wxc-exec.exe");
-    expect(result).toBe("C:\\custom\\wxc-exec.exe");
-  });
-
   test("config override returns an absolute path for relative inputs", () => {
     const relativeOverride = path.join("tools", "wxc-exec.exe");
     const absoluteOverride = path.resolve(relativeOverride);

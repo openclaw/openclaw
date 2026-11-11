@@ -13,7 +13,7 @@ struct ChatSessionIconPicker: View {
     @State private var selectedColor: String?
     @State private var selectedIcon: String?
 
-    // ui/src/components/session-icon-picker.ts:13 and session-agent-status.ts:16 define the stored choices.
+    // ui/src/components/session-icon-choices.ts and session-agent-status.ts define the stored choices.
     private let emoji = ["🦞", "🚀", "🐛", "✅", "🔥", "📦", "🧪", "📝", "🔍", "⚡", "🎯"]
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {

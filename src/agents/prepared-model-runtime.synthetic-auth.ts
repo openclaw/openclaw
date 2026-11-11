@@ -15,6 +15,9 @@ export function preparedSyntheticAuthProviderScope(
   if (scoped.has("openai")) {
     scoped.add("codex");
   }
+  if (scoped.has("anthropic")) {
+    scoped.add("claude-cli");
+  }
   return scoped;
 }
 
@@ -40,7 +43,8 @@ export function listPreparedSyntheticAuthProviderRefs(
           : [],
       ),
     ),
-  ].toSorted((left, right) => left.localeCompare(right));
+    // oxlint-disable-next-line unicorn/no-array-sort -- This deduplicated array is fresh and private until returned.
+  ].sort((left, right) => left.localeCompare(right));
 }
 
 export function listRegistrySyntheticAuthProviderRefs(registry: PluginRegistry | undefined) {

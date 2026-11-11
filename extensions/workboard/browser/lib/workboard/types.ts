@@ -1,6 +1,7 @@
 import type {
   WorkboardBoardSummary,
   WorkboardCard,
+  WorkboardCardCursor,
   WorkboardPriority,
   WorkboardStatus,
   WorkboardTemplateId,
@@ -72,6 +73,7 @@ export type WorkboardUiState = {
   mutationReadiness: "ready" | "canonical_reload_required" | "stale_edit_draft";
   error: string | null;
   cards: WorkboardCard[];
+  nextCursor: WorkboardCardCursor | null;
   boards: WorkboardBoardSummary[];
   statuses: readonly WorkboardStatus[];
   lastDispatchSummary: WorkboardDispatchSummary | null;

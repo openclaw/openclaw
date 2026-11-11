@@ -1,0 +1,4 @@
+# Regression coverage for showing an open session as archived during its Undo window:
+# browser flow (banner, kept draft, banner Unarchive cancel, sending state), toast
+# cancellation signal and held-vs-sending state.
+55

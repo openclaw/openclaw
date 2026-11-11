@@ -9,7 +9,7 @@ import {
   browseClawHubCatalog,
   CatalogDiscoveryRequestError,
   searchClawHubCatalogKeywords,
-} from "../../plugins/catalog-discovery.js";
+} from "../../plugins/catalog-discovery-runtime.js";
 import { resolveSkillsAgentWorkspace } from "./skills-workspace-handler.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler, type Validator } from "./validation.js";

@@ -2,42 +2,30 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { formatContextJsonBlock } from "../../../auto-reply/reply/channel-prompt-context.js";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
+import { groupPluginRecords as groupRecords } from "../../../plugins/record-groups.js";
 import {
   hasInterSessionUserProvenance,
   INTER_SESSION_PROMPT_PREFIX_BASE,
 } from "../../../sessions/input-provenance.js";
 import { isTextContentBlock } from "../../content-blocks.js";
-import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { resolveTranscriptPolicy } from "../../transcript-policy.js";
-import type { TranscriptPolicy } from "../../transcript-policy.types.js";
+import type {
+  CurrentUserTimestampMatch,
+  UserTranscriptContext,
+} from "./attempt-llm-boundary.types.js";
 import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
-
-export type UserTranscriptContext = {
-  runtimeMessage: AgentMessage;
-  transcriptMessage: AgentMessage;
-};
-
-export type CurrentUserTimestampMatch = {
-  timestamp: number;
-  text: string;
-  alternateText?: string;
-  runtimeTimestamp?: number;
-};
 
 // Mirrors LEADING_TIMESTAMP_PREFIX_RE in strip-inbound-meta.ts so sender
 // projection never displaces or duplicates a cache-stable timestamp envelope.
 const LEADING_TIMESTAMP_ENVELOPE_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
 const CONVERSATION_INFO_LABEL = markInboundContextLabel("Conversation info:");
 
-export function splitLeadingTimestampEnvelope(text: string): {
+function splitLeadingTimestampEnvelope(text: string): {
   body: string;
   envelope: string;
 } {
   const envelope = text.match(LEADING_TIMESTAMP_ENVELOPE_RE)?.[0] ?? "";
-  return { envelope, body: envelope ? text.slice(envelope.length) : text };
+  return { envelope, body: text.slice(envelope.length) };
 }
 
 function readFirstUserText(content: unknown): string | undefined {
@@ -72,15 +60,10 @@ export function resolveUserTranscriptMessages(
   }
   const resolved = Array.from(
     { length: messages.length },
-    () => undefined as AgentMessage | undefined,
+    (): AgentMessage | undefined => undefined,
   );
   const unusedContexts = new Set(contexts);
-  const byRuntimeMessage = new Map<AgentMessage, UserTranscriptContext[]>();
-  for (const context of unusedContexts) {
-    const bucket = byRuntimeMessage.get(context.runtimeMessage) ?? [];
-    bucket.push(context);
-    byRuntimeMessage.set(context.runtimeMessage, bucket);
-  }
+  const byRuntimeMessage = groupRecords(unusedContexts, (context) => context.runtimeMessage);
   // Reserve object-identity matches before structural fallback so duplicate
   // timestamp/text turns cannot consume a later message's exact pairing.
   for (const [index, message] of messages.entries()) {
@@ -166,8 +149,7 @@ function normalizePersistedSenderValue(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.replaceAll("\u0000", "").trim();
-  return normalized || undefined;
+  return value.replaceAll("\u0000", "").trim() || undefined;
 }
 
 type PersistedSender = {
@@ -313,39 +295,4 @@ export function findActiveUserMessageIndex(messages: AgentMessage[]): number {
     }
   }
   return -1;
-}
-
-type AttemptRuntimeModelContext = NonNullable<
-  Parameters<AgentRuntimePlan["transcript"]["resolvePolicy"]>[0]
->;
-
-/**
- * Resolves the transcript policy for an embedded attempt. RuntimePlan owns the
- * policy when present; otherwise the older provider/config/env resolver remains
- * the compatibility path for callers that have not produced a runtime plan yet.
- */
-export function resolveAttemptTranscriptPolicy(params: {
-  runtimePlan?: AgentRuntimePlan;
-  runtimePlanModelContext: AttemptRuntimeModelContext;
-  provider: string;
-  modelId: string;
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): TranscriptPolicy {
-  return (
-    params.runtimePlan?.transcript.resolvePolicy(params.runtimePlanModelContext) ??
-    resolveTranscriptPolicy({
-      modelApi: params.runtimePlanModelContext.modelApi,
-      directApiKey: params.runtimePlanModelContext.directApiKey,
-      provider: params.provider,
-      modelId: params.modelId,
-      config: params.config,
-      workspaceDir: params.runtimePlanModelContext.workspaceDir,
-      env: params.env ?? process.env,
-      model:
-        typeof params.runtimePlanModelContext.model?.id === "string"
-          ? (params.runtimePlanModelContext.model as ProviderRuntimeModel)
-          : undefined,
-    })
-  );
 }

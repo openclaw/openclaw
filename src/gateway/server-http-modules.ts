@@ -34,8 +34,8 @@ export const getSessionKillHttpModule = createLazyRuntimeModule(
 export const getToolsInvokeHttpModule = createLazyRuntimeModule(
   () => import("./tools-invoke-http.js"),
 );
-export const getUserProfilesHttpModule = createLazyRuntimeModule(
-  () => import("./user-profiles-http.js"),
+export const getBrowserPairHttpModule = createLazyRuntimeModule(
+  () => import("./browser-pair-http.js"),
 );
 export const getDevicePairingJoinHttpModule = createLazyRuntimeModule(
   () => import("./device-pairing-join-http.js"),
