@@ -525,6 +525,7 @@ openclaw-pending-session-create {
 @media (max-width: 640px) {
   .chat-model-recovery {
     grid-template-columns: 18px minmax(0, 1fr);
+    column-gap: 6px;
   }
 
   .chat-model-recovery .btn.chat-error__refresh {
