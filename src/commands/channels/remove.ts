@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { applyChannelAccountRemoval } from "../../channels/plugins/account-config-mutation.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import { listReadOnlyChannelPluginsForConfigAsync } from "../../channels/plugins/read-only.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   formatUnknownChannelMessage,
@@ -54,7 +54,7 @@ export async function channelsRemoveCommand(
 
       if (useWizard && prompter) {
         await prompter.intro("Remove channel account");
-        const readOnlyPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
+        const readOnlyPlugins = await listReadOnlyChannelPluginsForConfigAsync(cfg, {
           includeSetupFallbackPlugins: true,
         });
         const selectedChannel = await prompter.select({

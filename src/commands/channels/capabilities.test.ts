@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
   replaceConfigFile: vi.fn<(params: Parameters<typeof replaceConfigFile>[0]) => Promise<void>>(),
   refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
   resolveInstallableChannelPlugin: vi.fn(),
-  listReadOnlyChannelPluginsForConfig: vi.fn(),
+  listReadOnlyChannelPluginsForConfigAsync: vi.fn(),
 }));
 
 vi.mock("../../cli/command-secret-gateway.js", () => ({
@@ -27,7 +27,7 @@ vi.mock("../../cli/command-secret-gateway.js", () => ({
 }));
 
 vi.mock("../../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: mocks.listReadOnlyChannelPluginsForConfig,
+  listReadOnlyChannelPluginsForConfigAsync: mocks.listReadOnlyChannelPluginsForConfigAsync,
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -119,7 +119,7 @@ describe("channelsCapabilitiesCommand", () => {
       writeOptions: {},
     }));
     mocks.replaceConfigFile.mockResolvedValue(undefined);
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
+    mocks.listReadOnlyChannelPluginsForConfigAsync.mockReturnValue([]);
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: {} },
       configChanged: false,
@@ -161,7 +161,7 @@ describe("channelsCapabilitiesCommand", () => {
     plugin.config.listAccountIds = listAccountIds;
     plugin.config.resolveAccount = resolveAccount;
     plugin.status = { probeAccount };
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+    mocks.listReadOnlyChannelPluginsForConfigAsync.mockReturnValue([plugin]);
 
     const failure = channelsCapabilitiesCommand(options, runtime);
 
@@ -173,7 +173,7 @@ describe("channelsCapabilitiesCommand", () => {
     });
     expect(logs).toStrictEqual([]);
     expect(errors).toStrictEqual([]);
-    expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledTimes(calls);
+    expect(mocks.listReadOnlyChannelPluginsForConfigAsync).toHaveBeenCalledTimes(calls);
     expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledTimes(calls);
     expect(listAccountIds).not.toHaveBeenCalled();
     expect(resolveAccount).not.toHaveBeenCalled();
@@ -241,7 +241,7 @@ describe("channelsCapabilitiesCommand", () => {
           return pending();
         },
       };
-      mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+      mocks.listReadOnlyChannelPluginsForConfigAsync.mockReturnValue([plugin]);
 
       const result = channelsCapabilitiesCommand({ json: true, timeout: "1000" }, runtime);
       await vi.advanceTimersByTimeAsync(1_000);

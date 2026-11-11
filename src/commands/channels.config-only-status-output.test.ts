@@ -42,7 +42,7 @@ vi.mock("../channels/plugins/index.js", () => ({
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig,
+  listReadOnlyChannelPluginsForConfigAsync: listReadOnlyChannelPluginsForConfig,
 }));
 
 function registerPlugins(...plugins: ChannelPlugin[]) {

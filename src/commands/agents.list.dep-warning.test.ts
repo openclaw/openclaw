@@ -36,6 +36,7 @@ describe("agents list deprecation warnings", () => {
     const stateDir = makePluginLoaderTempDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const persistedAuthPath = path.join(stateDir, "linked-auth");
+    const asyncProbePath = path.join(stateDir, "async-probe");
     const { channelId, pluginDir } = writeBundledSetupChannelPlugin({ persistedAuthPath });
     const packagePath = path.join(pluginDir, "package.json");
     const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8"));
@@ -48,7 +49,10 @@ exports.hasAuth = () => {
   process.emitWarning("Plugin ${channelId}: sync auth state is deprecated", { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" });
   return fs.existsSync(${JSON.stringify(persistedAuthPath)});
 };
-exports.hasAuthAsync = async () => fs.existsSync(${JSON.stringify(persistedAuthPath)});`,
+exports.hasAuthAsync = async () => {
+  fs.writeFileSync(${JSON.stringify(asyncProbePath)}, "called");
+  return fs.existsSync(${JSON.stringify(persistedAuthPath)});
+};`,
     );
     fs.writeFileSync(persistedAuthPath, "linked");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -79,6 +83,7 @@ exports.hasAuthAsync = async () => fs.existsSync(${JSON.stringify(persistedAuthP
     const emittedCodes = emitWarning.mock.calls.map(
       ([, options]) => (options as { code?: string } | undefined)?.code,
     );
+    expect(fs.existsSync(asyncProbePath)).toBe(true);
     expect(emittedCodes).not.toContain("DEP_PLUGIN_SDK");
     expect(warnings.filter((warning) => warning.code === "DEP_PLUGIN_SDK")).toEqual([]);
   });
