@@ -66,7 +66,7 @@ it.each([
   });
   expect(container.querySelector(".chat-send-btn--stop")).not.toBeNull();
   if (status) {
-    expect(workingStatus(container)).toContain(status);
+    await waitForSolid(() => expect(workingStatus(container)).toContain(status));
     expect(container.querySelector(".chat-error")).toBeNull();
   } else {
     await waitForSolid(() => expect(container.textContent).toContain("The answer is ready."));

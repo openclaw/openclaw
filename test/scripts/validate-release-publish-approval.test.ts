@@ -311,6 +311,7 @@ function approvalRun(overrides: Record<string, unknown> = {}) {
     status: "in_progress",
     url: "https://github.com/openclaw/openclaw/actions/runs/123",
     workflowName: "OpenClaw Release Publish",
+    path: ".github/workflows/openclaw-release-publish.yml",
     ...overrides,
   };
 }
@@ -355,6 +356,23 @@ function runClawHubApproval(
 }
 
 describe("scripts/validate-release-publish-approval.mjs", () => {
+  it.each([
+    "OpenClaw Release Publish [v2026.11.5-beta.2]",
+    "ClawHub registry update [v2026.11.5-beta.2]",
+  ])("accepts the trusted workflow with dynamic run name %s", (workflowName) => {
+    const result = runApprovalScript(approvalRun({ workflowName }));
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it.each(["", ".github/workflows/plugin-npm-release.yml"])(
+    "rejects a matching run name with untrusted workflow path %j",
+    (workflowPath) => {
+      const result = runApprovalScript(approvalRun({ path: workflowPath }));
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("untrusted workflow path");
+    },
+  );
+
   it.each<[Fields, Partial<typeof approvalEnv>, number]>([
     [{ headBranch: "main" }, {}, 1],
     [{ conclusion: "success", status: "completed" }, {}, 1],

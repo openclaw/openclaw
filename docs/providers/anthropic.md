@@ -182,15 +182,18 @@ OpenClaw release:
         an explicit logged-out response or a `claude` executable missing from
         `PATH` blocks the native route, while a timeout or unreadable response
         allows Claude to try the request. Captures expire
-        after one minute. If a selected native login is unavailable, spawn admission
-        rechecks it immediately, so signing in does not require a Gateway restart.
+        after one minute. Model lists, chat model pickers, and `/model` recheck an
+        expired capture, and spawn admission rechecks an unavailable native login
+        immediately, so signing in after Gateway start does not require a restart.
 
         For native-login users, the model picker reads Claude Code's own model menu
         in the background, without sending a prompt or using an inference turn.
         It shows unique native model IDs as `anthropic/<id>` on the Claude CLI
         runtime, with the effort levels reported by Claude Code. Models that allow
         thinking to be disabled also offer `/think off`, independently of those
-        effort levels. Models with mandatory adaptive thinking do not offer `off`.
+        effort levels. Claude Code's menu reports which models allow disabled
+        thinking and which support fast mode; OpenClaw reads those flags instead of
+        model-name rules.
         Account and organization restrictions therefore affect the menu. The hosted
         OpenClaw catalog adds metadata only to those exact IDs; it cannot add native models.
         New native models do not require an OpenClaw upgrade or a catalog edit.
@@ -265,10 +268,13 @@ OpenClaw release:
     openclaw models auth login --provider anthropic --method setup-token
     ```
 
-    Direct Messages API requests using a setup token advertise a maintained
-    Claude Code client version, or the installed CLI version when newer.
-    Anthropic uses that identity to gate newer models. A missing, older, or
-    failed CLI check uses OpenClaw's maintained version floor. Discovery is
+    Direct Messages API requests using a setup token advertise a Claude Code
+    client version, or the installed CLI version when newer. Anthropic uses that
+    identity to gate newer models. When Anthropic rejects a request because the
+    version is too old, OpenClaw adopts the version named in the rejection,
+    resends the request once, and keeps that version for later requests until
+    the process restarts. A new model therefore needs no OpenClaw update; each
+    new process pays for at most one rejected request. Discovery is
     shared with the CLI backend and cached for the resolved executable file.
     After an in-place update or symlink change, the next request checks the new
     file without a Gateway restart. Failed checks keep the floor until the
@@ -916,8 +922,12 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
 <AccordionGroup>
   <Accordion title="Fast mode">
-    For Claude Opus 5.5, Opus 5, and Opus 4.8, OpenClaw's shared `/fast` toggle uses
-    Anthropic's native fast mode for direct API-key traffic to `api.anthropic.com`.
+    For Claude Fable 5.2, Opus 5.5, Opus 5, Opus 4.8, and Claude models released after
+    this OpenClaw version, OpenClaw's shared `/fast` toggle uses Anthropic's native fast
+    mode for direct API-key traffic to `api.anthropic.com`. If Anthropic answers that a
+    model does not support the `speed` parameter, OpenClaw resends that request at
+    standard speed and stops offering native fast mode for the model, including after a
+    restart. That one resent request is estimated at fast-mode prices.
 
     | Command | Maps to |
     | --- | --- |
@@ -939,13 +949,14 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     ```
 
     <Note>
-    - Native fast mode is a research preview with up to 2.5x higher output-token throughput. It is billed at `$8/$40` per million input/output tokens for Opus 5.5 and `$10/$50` for Opus 5 and Opus 4.8. OpenClaw applies the same 2x multiplier to cache pricing in its cost estimate.
-    - Native fast mode only applies to direct `api.anthropic.com` requests made with an API key. OAuth/subscription-token requests, Claude CLI, proxies, Bedrock, Vertex, and Foundry never receive the beta or `speed` field.
+    - Native fast mode is a research preview with up to 2.5x higher output-token throughput. It is billed at twice the standard rates, for example `$16/$80` per million input/output tokens for Fable 5.2, `$8/$40` for Opus 5.5, and `$10/$50` for Opus 5 and Opus 4.8. OpenClaw applies the same 2x multiplier to cache pricing in its cost estimate.
+    - Native fast mode only applies to direct `api.anthropic.com` requests made with an API key, and to the Claude CLI runtime. OAuth/subscription-token API requests, proxies, Bedrock, Vertex, and Foundry never receive the beta or `speed` field.
+    - On the Claude CLI runtime, `/fast on` launches Claude Code with `--fast-mode on` for models whose Claude Code menu reports fast mode. Claude Code sends the fast request; when Anthropic refuses it (for example, without usage credits), Claude Code resends the turn at standard speed.
     - Accounts need fast-mode access and a non-zero fast-mode rate limit. Anthropic returns a fast-specific `429` when the separate fast quota is exhausted or zero.
     - For other direct Anthropic models, `/fast` retains the existing Priority Tier mapping: on uses `service_tier: "auto"` and off uses `service_tier: "standard_only"`.
     - Explicit `serviceTier` or `service_tier` params override `/fast` when both are set.
     - Claude Sonnet 5.5 and Sonnet 5 support neither native fast mode nor Priority Tier, so OpenClaw omits both fields.
-    - The Control UI disables confirmed no-op Fast choices, including Claude CLI, Sonnet 5.5, Sonnet 5, and requests governed by an explicit service tier. Saved Fast preferences remain clearable; unknown route or auth facts preserve existing controls.
+    - The Control UI disables confirmed no-op Fast choices, including Claude CLI models whose menu does not report fast mode, Sonnet 5.5, Sonnet 5, and requests governed by an explicit service tier. Saved Fast preferences remain clearable; unknown route or auth facts preserve existing controls.
 
     </Note>
 
@@ -1096,12 +1107,14 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     window by default; no `params.context1m: true` needed.
   </Accordion>
 
-  <Accordion title="Claude Code native subagents on managed turns">
+  <Accordion title="Claude Code native subagents and web search on managed turns">
     `plugins.entries.anthropic.config.managedNativeTools` keeps selected Claude
-    Code orchestration tools on `claude-cli` turns that OpenClaw manages. It is
-    off by default. `default` applies to every agent; `agents.<id>` replaces it
-    for one agent, and `[]` opts that agent out. Accepted values: `Agent`,
-    `Workflow`.
+    Code orchestration tools and native web search on `claude-cli` turns that
+    OpenClaw manages. It is off by default. `default` applies to every agent;
+    `agents.<id>` replaces it for one agent, and `[]` opts that agent out.
+    Accepted values: `Agent`, `Workflow`, `WebSearch`. `WebSearch` uses Claude Code's
+    server-side search, billed to the Claude login, so no OpenClaw search provider is needed; it
+    is kept only while the agent's tool policy allows `web_search`.
 
     ```json5
     {
@@ -1109,7 +1122,10 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
         entries: {
           anthropic: {
             config: {
-              managedNativeTools: { default: ["Agent", "Workflow"], agents: { ops: [] } },
+              managedNativeTools: {
+                default: ["Agent", "Workflow", "WebSearch"],
+                agents: { ops: [] },
+              },
             },
           },
         },

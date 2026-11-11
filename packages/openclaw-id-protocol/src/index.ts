@@ -13,4 +13,5 @@ export * from "./invites.js";
 export * from "./node-invites.js";
 export * from "./enrollment/sas.js";
 export * from "./enrollment/owner-cert.js";
+export * from "./enrollment/rebind.js";
 export * from "./authority/index.js";
