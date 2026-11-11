@@ -134,6 +134,9 @@ const registrations = {
   users: {
     register: async (program) => (await import("../users-cli.js")).registerUsersCli(program),
   },
+  id: {
+    register: async (program) => (await import("../id-cli.js")).registerIdCli(program),
+  },
   node: { register: async (program) => (await import("../node-cli.js")).registerNodeCli(program) },
   connect: {
     register: async (program) => (await import("../connect-cli.js")).registerConnectCli(program),

@@ -13,7 +13,6 @@ import {
 import {
   downloadExactActionsArtifactArchive,
   inspectActionsArtifactZip,
-  readBoundedResponseBody,
 } from "./actions-artifact-archive.mjs";
 import { canonicalizeJsonValue } from "./canonical-json.mjs";
 import {
@@ -152,28 +151,7 @@ function dependencies(repository, deps) {
         if (params.token) {
           return downloadExactActionsArtifactArchive({
             ...params,
-            ...(deps.immutableReads
-              ? {
-                  fetchImpl: async (url, options) => {
-                    const route = String(url).replace(
-                      "https://api.github.com/repos/" + repository + "/",
-                      "",
-                    );
-                    if (!route.endsWith("/zip")) {
-                      return fetch(url, options);
-                    }
-                    const bytes = await deps.immutableReads.bytes(route, async () => {
-                      const response = await fetch(url, options);
-                      return readBoundedResponseBody(response, {
-                        expectedBytes: params.expected.artifactSizeBytes,
-                        maxBytes: MAX_RELEASE_ARTIFACT_BYTES,
-                        label: "Child evidence archive",
-                      });
-                    });
-                    return new Response(bytes);
-                  },
-                }
-              : {}),
+            immutableReads: deps.immutableReads,
           });
         }
         // Local verifiers can use gh's authenticated session without exporting

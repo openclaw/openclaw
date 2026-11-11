@@ -17,6 +17,7 @@ import { runEmbeddedSessionFork } from "./embedded-agent-runner/session-fork.js"
 import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
 import { mapThinkingLevelForProvider, mapThinkingLevel } from "./embedded-agent-runner/utils.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import { resolveThinkingSelection } from "./model-thinking-default.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
@@ -78,6 +79,20 @@ function resolveSideQuestionStream(input: SideQuestionStreamInput) {
   if (params.toolCalls !== "deny") {
     return streamFn;
   }
+  // Anthropic serves a fork the parent's cached prefix only at the parent's thinking config, so
+  // resolve the level as the parent's turn does: session override, then agent/model defaults.
+  // Other APIs keep the session override until their cache behavior is measured.
+  const thinkLevel =
+    runtimeModel.api === "anthropic-messages"
+      ? resolveThinkingSelection({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          provider: runtimeModel.provider,
+          model: runtimeModel.id,
+          level: params.resolvedThinkLevel,
+          agentRuntime: "openclaw",
+        }).level
+      : params.resolvedThinkLevel;
   const workspaceOnly = resolveEffectiveToolFsWorkspaceOnly({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -99,7 +114,7 @@ function resolveSideQuestionStream(input: SideQuestionStreamInput) {
         }),
     ),
   };
-  const thinkingLevel = mapThinkingLevelForProvider(params.resolvedThinkLevel, runtimeModel);
+  const thinkingLevel = mapThinkingLevelForProvider(thinkLevel, runtimeModel);
   applyExtraParamsToAgent(
     agent,
     params.cfg,

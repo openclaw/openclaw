@@ -120,8 +120,8 @@ of those capabilities.
 
 V3 changes only by adding fields. Readers ignore fields they do not know, at any
 level, so a newer publisher never needs a v4 for an additive change. The
-publisher still rejects unknown row, provider, and pricing fields, so typos
-there fail before publication. Never
+publisher still rejects unknown row, provider, pricing, and `inference` fields, so
+typos there fail before publication. Never
 rename, retype, remove, or reuse a v3 field. Mark every non-chat row with
 `inference.chat: false` so older readers keep it out of chat.
 
