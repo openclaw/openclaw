@@ -23,9 +23,9 @@ const hasGnuShell =
 
 function registerFileTests(storage: "local" | "remote") {
   const memory = "MEMORY.md";
-  const original = "# Memory\n";
+  const original = "\uFEFF# Memory: café \uFFFD\n";
   const edited = "# Memory\n- operator note\n";
-  const learned = "# Memory\n- agent learned a birthday\n";
+  const learned = `${original}- agent learned a birthday\n`;
   const drafts = ["# Memory\n- first operator\n", "# Memory\n- second operator\n"] as const;
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let workspace: string;
@@ -89,6 +89,25 @@ function registerFileTests(storage: "local" | "remote") {
   function writeFile(content: string, name = memory) {
     fs.writeFileSync(path.join(storageDir, name), content);
   }
+
+  it("preserves malformed source bytes for editor reads and checked saves", async () => {
+    const filename = path.join(storageDir, memory);
+    const bytes = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]);
+    fs.writeFileSync(filename, bytes);
+    await expect(
+      invokeFiles("agents.files.get", { agentId: "main", name: memory }),
+    ).rejects.toThrow('Agent document "MEMORY.md" must be valid UTF-8.');
+    expect(await setFile(edited, { expectedHash: hashContent("stale") })).toMatchObject({
+      ok: false,
+      error: { details: { type: "agent_file_conflict" } },
+    });
+    await expect(
+      setFile(edited, { expectedHash: createHash("sha256").update(bytes).digest("hex") }),
+    ).rejects.toThrow('Agent document "MEMORY.md" must be valid UTF-8.');
+    expect(fs.readFileSync(filename)).toEqual(bytes);
+    expect(await setFile(edited)).toMatchObject({ ok: true });
+    expect(readFile()).toBe(edited);
+  });
 
   it.each(["x", "é"])("bounds UTF-8 bytes (%s)", async (character) => {
     const name = "AGENTS.md";

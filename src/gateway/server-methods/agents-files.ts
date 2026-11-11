@@ -27,6 +27,7 @@ import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
+import { decodeUtf8Input } from "../../infra/utf8-input.js";
 import { resolveConfiguredAgentIdOrRespondError } from "./agent-id-shared.js";
 import { respondError } from "./response.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -151,13 +152,13 @@ async function readWorkspaceFileContent(
       if (data.length > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
         throw new Error("Workspace document exceeds its read bound");
       }
-      return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(data);
+      return decodeUtf8Input(data, `Agent document "${name}"`);
     }
     const workspaceRoot = await root(workspaceDir);
     const safeRead = await workspaceRoot.read(name, {
       hardlinks: "reject",
     });
-    return safeRead.buffer.toString("utf-8");
+    return decodeUtf8Input(safeRead.buffer, `Agent document "${name}"`);
   } catch (err) {
     if (isMissingPathError(err)) {
       return undefined;
@@ -187,12 +188,17 @@ export async function buildIdentityMarkdownOrRespondUnsafe(params: {
 async function readWorkspaceFileHash(
   workspaceRoot: WorkspaceRoot,
   name: string,
+  expectedHash: string,
 ): Promise<string | undefined> {
   try {
     const safeRead = await workspaceRoot.read(name, {
       hardlinks: "reject",
     });
-    return sha256Hex(safeRead.buffer);
+    const hash = sha256Hex(safeRead.buffer);
+    if (hash === expectedHash) {
+      decodeUtf8Input(safeRead.buffer, `Agent document "${name}"`);
+    }
+    return hash;
   } catch (err) {
     if (isMissingPathError(err)) {
       return undefined;
@@ -325,7 +331,7 @@ export const agentFileHandlers: Pick<
         size: data.length,
         updatedAtMs: Math.floor(stat.mtimeMs),
         hash: sha256Hex(data),
-        content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(data),
+        content: decodeUtf8Input(data, `Agent document "${name}"`),
       };
     } else {
       let safeRead: ReadResult;
@@ -349,7 +355,7 @@ export const agentFileHandlers: Pick<
         size: safeRead.stat.size,
         updatedAtMs: Math.floor(safeRead.stat.mtimeMs),
         hash: sha256Hex(safeRead.buffer),
-        content: safeRead.buffer.toString("utf-8"),
+        content: decodeUtf8Input(safeRead.buffer, `Agent document "${name}"`),
       };
     }
     respondFile(file);
@@ -426,6 +432,9 @@ export const agentFileHandlers: Pick<
               throw new Error("Workspace document exceeds its read bound");
             }
             currentHash = sha256Hex(data);
+            if (currentHash === expectedHash) {
+              decodeUtf8Input(data, `Agent document "${name}"`);
+            }
           }
           if (currentHash !== expectedHash) {
             return { currentHash };
@@ -456,7 +465,7 @@ export const agentFileHandlers: Pick<
             return undefined;
           }
           if (expectedHash) {
-            const currentHash = await readWorkspaceFileHash(writeRoot, name);
+            const currentHash = await readWorkspaceFileHash(writeRoot, name, expectedHash);
             if (currentHash !== expectedHash) {
               return { currentHash };
             }
