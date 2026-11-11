@@ -11,11 +11,13 @@ import type { OperationalRunInstanceRef } from "../../operational-run-instance.j
 import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
 import {
   matchesSubagentChildSessionOwner,
+  resolveRecordedRequester,
   resolveSubagentChildAgentId,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import { SubagentRunIndex } from "./subagent-registry-memory-index.js";
 import type { SubagentCompletionCustody } from "./subagent-registry-memory.types.js";
 import {
   publishSubagentRunChanges,
@@ -154,47 +156,6 @@ export function freezeSubagentRunReadRecord<T extends SubagentRunReadRecord>(rec
 
 const emptyRunBucket: readonly SubagentRunRecord[] = Object.freeze([]);
 
-class SubagentRunIndex extends Map<string, SubagentRunRecord[]> {
-  constructor(private readonly keyFor: (entry: SubagentRunRecord) => string | undefined) {
-    super();
-  }
-
-  update(previous?: SubagentRunRecord, entry?: SubagentRunRecord): void {
-    const previousKey = previous && this.keyFor(previous);
-    const key = entry && this.keyFor(entry);
-    if (previousKey && previousKey !== key) {
-      const bucket = this.get(previousKey);
-      const position = bucket && previous ? bucket.indexOf(previous) : -1;
-      if (bucket && position >= 0) {
-        bucket.splice(position, 1);
-        if (bucket.length === 0) {
-          this.delete(previousKey);
-        }
-      }
-    }
-    if (!key || !entry) {
-      return;
-    }
-    const bucket = this.get(key);
-    if (bucket?.length === 1 && bucket[0] === previous) {
-      bucket[0] = entry;
-    } else if (bucket) {
-      // Replacement moves to the end, preserving the collector's last-published lookup.
-      const position = previous ? bucket.indexOf(previous) : -1;
-      if (position >= 0) {
-        bucket.splice(position, 1);
-      }
-      bucket.push(entry);
-    } else {
-      this.set(key, [entry]);
-    }
-  }
-
-  getLatest(key: string): SubagentRunRecord | undefined {
-    return this.get(key)?.at(-1);
-  }
-}
-
 // Preflight consults the collector lookup on every Gateway agent request, so it
 // must stay O(1) regardless of retained collector records. The map subclass
 // maintains the index whenever the row owner publishes a new immutable value.
@@ -304,6 +265,9 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     row: SubagentRunRecord,
     source: SubagentCompletionCustody["authority"],
     requesterRunInstance?: OperationalRunInstanceRef,
+    requesterCompletion: SubagentCompletionCustody["requesterCompletion"] = requesterRunInstance
+      ? { runId: requesterRunInstance.runId }
+      : undefined,
   ) {
     const entry = this.currentValue(row);
     const key = getSubagentRunRuntimeKey(entry);
@@ -323,6 +287,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       authority: source,
       entry,
       requesterRunInstance,
+      requesterCompletion,
       stop: () => source.signal.removeEventListener("abort", revoked),
     };
     const revoked = () => this.releaseCompletionAuthority(custody.entry);
@@ -338,6 +303,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
     if (custody && instance && isSameSubagentRunOwner(this.get(entry.runId), entry)) {
       custody.requesterRunInstance = instance;
+      custody.requesterCompletion = { runId: instance.runId };
     }
   }
 
@@ -345,6 +311,24 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     return isSameSubagentRunOwner(this.get(entry.runId), entry)
       ? this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.requesterRunInstance
       : undefined;
+  }
+
+  /** Completion follows task adoption without changing the original execution receipt. */
+  getRequesterCompletion(entry: SubagentRunRecord) {
+    return isSameSubagentRunOwner(this.get(entry.runId), entry)
+      ? this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.requesterCompletion
+      : undefined;
+  }
+
+  /** Retain the accepted terminal postimage before a later turn replaces the session row. */
+  recordRequesterCompletion(sessionKey: string, agentId: string, runId: string): void {
+    for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
+      const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(child));
+      const requesterAgentId = resolveRecordedRequester(child);
+      if (custody?.requesterCompletion?.runId === runId && requesterAgentId === agentId) {
+        custody.requesterCompletion = { runId, ended: true };
+      }
+    }
   }
 
   releaseCompletionAuthority(observed: SubagentRunRecord): void {
@@ -451,6 +435,25 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   /** Committed replacement transfers custody without reviving a retired source. */
   transferCompletionAuthority(previous: SubagentRunRecord, next: SubagentRunRecord): void {
     transferFollowupCohort(previous, next);
+    if (
+      previous.runId !== next.runId &&
+      matchesSubagentChildSessionOwner(previous, next.childSessionKey, next.childAgentId) &&
+      (previous.taskRunId ?? previous.runId) === (next.taskRunId ?? next.runId)
+    ) {
+      // Advance descendant accounting only after this task's replacement commits.
+      // Keep the original instance for active-turn receipt checks.
+      for (const child of getSubagentRunsForRequesterSession(previous.childSessionKey)) {
+        if (
+          !matchesSubagentChildSessionOwner(next, child.requesterSessionKey, child.requesterAgentId)
+        ) {
+          continue;
+        }
+        const childCustody = this.completionAuthorities.get(getSubagentRunRuntimeKey(child));
+        if (childCustody?.requesterCompletion?.runId === previous.runId) {
+          childCustody.requesterCompletion = { runId: next.runId };
+        }
+      }
+    }
     const previousKey = getSubagentRunRuntimeKey(previous);
     const nextKey = getSubagentRunRuntimeKey(next);
     if (this.retiredCompletionEntries.has(previousKey)) {

@@ -27,5 +27,5 @@ export function createOpenClawCodingTools(options?: PluginCodingToolsOptions): A
     method: "createOpenClawCodingTools",
     replacement: "await createOpenClawCodingToolsAsync()",
   });
-  return createOpenClawCodingToolsInternal(options);
+  return createOpenClawCodingToolsInternal({ ...options, unverifiedExecutionPolicy: true });
 }

@@ -267,6 +267,7 @@ jobs:
         id: manifest
         env:
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
+          OPENCLAW_CI_RUNNER_BACKEND: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}
           OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ inputs.test_runtime_policy }}
           PHASE: ${{ github.event_name == 'schedule' && 'independent' || inputs.phase }}
           NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ steps.node_test_exclusions.outputs.patterns_json }}
@@ -278,9 +279,16 @@ jobs:
 
           import { blacksmithRunnerLabel } from "./.frv-tooling/scripts/lib/ci-blacksmith-capacity.mjs";
 
+          const hourlyBoat = process.env.GITHUB_EVENT_NAME === "schedule" &&
+            process.env.OPENCLAW_CI_RUNNER_BACKEND === "boat";
+          const boatRunners = {
+            "blacksmith-2vcpu-ubuntu-2404": "boat",
+            "blacksmith-4vcpu-ubuntu-2404": "boat-large",
+          };
           const createMatrix = (include) => ({
             include: include.map((row) => {
-              const label = row.runner_label ?? blacksmithRunnerLabel(row.runner);
+              const physicalLabel = row.runner_label ?? blacksmithRunnerLabel(row.runner);
+              const label = hourlyBoat ? boatRunners[physicalLabel] ?? physicalLabel : physicalLabel;
               return label ? { ...row, runner_label: label } : row;
             }),
           });

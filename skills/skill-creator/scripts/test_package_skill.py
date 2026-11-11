@@ -91,7 +91,7 @@ class TestPackageSkillSecurity(TestCase):
                 self.assertIsNotNone(package_skill(str(skill_dir), str(out_dir)))
                 original = archive.read_bytes()
 
-            for operation in ("zipfile.ZipFile.write", "os.walk"):
+            for operation in ("pathlib.Path.mkdir", "zipfile.ZipFile.write", "os.walk"):
                 with self.subTest(existing=existing, operation=operation):
                     with patch(operation, side_effect=OSError("fixture I/O failure")):
                         self.assertIsNone(package_skill(str(skill_dir), str(out_dir)))

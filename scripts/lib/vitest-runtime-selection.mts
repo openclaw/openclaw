@@ -33,7 +33,9 @@ const runtimeOnlyUnitFiles = new Set([
   "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
   "src/agents/sessions/agent-session-steering-context.test.ts",
   "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
+  "src/agents/subagents/registry/subagent-control.accounting.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts",
+  "src/agents/tools/sessions-send-communication.test.ts",
   "src/auto-reply/reply/commands-system-prompt.test.ts",
   "src/auto-reply/reply/dispatch-acp.test.ts",
   "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
@@ -50,7 +52,12 @@ const runtimeOnlyUnitFiles = new Set([
   "src/flows/doctor-health.update-schema.test.ts",
   "src/gateway/client-callsites.guard.test.ts",
   "src/gateway/server-methods/session-catalog-privacy.test.ts",
+  "src/gateway/server-methods/sessions-lifecycle-dormant.test.ts",
   "src/gateway/server.beam-owned-view.test.ts",
+  "src/gateway/server.subagent-transcript-conflict.test.ts",
+  "src/gateway/session-row-projection.subagent-index.test.ts",
+  "src/gateway/session-subagent-resume.test.ts",
+  "src/gateway/session-utils.queued-collector-narrow-abort.test.ts",
   "src/gateway/talk/client-permission-parity.test.ts",
   "src/gateway/tool-resolution.swarm-collector.test.ts",
   "src/plugins/doctor-repair-setup.test.ts",
@@ -95,11 +102,16 @@ const toolingOnlyUnitFiles = new Set([
   "test/extension-test-boundary.test.ts",
   "test/plugin-extension-import-boundary.test.ts",
   "test/scripts/vitest-prebuilt-ai.test.ts",
+  "test/scripts/check-database-worker-ratchet.test.ts",
   "test/scripts/ci-changed-build-selection.test.ts",
+  "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
+  "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
   "test/scripts/ci-changed-node-test-plan.integration.test.ts",
   "test/scripts/ci-workflow-cost.test.ts",
   "test/scripts/ci-ui-e2e-selection.test.ts",
+  "test/scripts/database-worker-compat.test.ts",
   "test/scripts/eager-import-closure.test.ts",
+  "test/scripts/personal-credential-writer-guard.test.ts",
   "test/scripts/pr-wrapper-source-closure.test.ts",
   "test/scripts/update-restart-module-outcome.test.ts",
   "test/scripts/vitest-isolated.test.ts",
@@ -288,6 +300,9 @@ export function shouldPrepareVitestCoreWorkers(
   }
   const configs = [config];
   const workers = [
+    ...(includesRuntimeConfig(configs, "test/vitest/vitest.unit-fast.config.ts")
+      ? ["src/agents/sessions/windows-git-bash-path.test.ts"]
+      : []),
     ...(includesRuntimeConfig(configs, "test/vitest/vitest.infra.config.ts")
       ? databaseWorkerCoreTestFiles
       : []),

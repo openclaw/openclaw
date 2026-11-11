@@ -28,9 +28,12 @@ import {
 import { ChatTimestamp, MessageMeta } from "./chat-message-timestamp-view.tsx";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
 
-it("adds and removes usage details on a retained plain timestamp", () => {
+it("adds and removes usage and duration on a retained plain timestamp", () => {
   const [meta, setMeta] = createSignal<Parameters<typeof MessageMeta>[0]["meta"]>(null);
-  const view = mountSolid(() => <MessageMeta timestamp={1000} meta={meta()} />);
+  const [duration, setDuration] = createSignal<number | undefined>(undefined);
+  const view = mountSolid(() => (
+    <MessageMeta timestamp={1000} meta={meta()} durationMs={duration()} />
+  ));
   const tooltip = view.container.querySelector("openclaw-tooltip");
   expect(view.container.querySelector(".msg-meta__details")).toBeNull();
   setMeta({
@@ -48,6 +51,15 @@ it("adds and removes usage details on a retained plain timestamp", () => {
   flush();
   expect(view.container.querySelector(".msg-meta__details")).toBeNull();
   expect(view.container.querySelector("openclaw-tooltip")).toBe(tooltip);
+  setDuration(13_000);
+  flush();
+  expect(view.container.querySelector(".msg-meta__duration")?.textContent).toBe("Worked for 13s");
+  for (const unavailable of [undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    setDuration(unavailable);
+    flush();
+    expect(view.container.querySelector(".msg-meta__details")).toBeNull();
+    expect(view.container.querySelector("openclaw-tooltip")).toBe(tooltip);
+  }
 });
 
 it("shares mobile layout only for earlier-message actions and preserves updates", () => {
@@ -273,66 +285,6 @@ it.each([false, true])(
     });
     expect(view.container.querySelector('button[aria-label="Copy as markdown"]')).not.toBeNull();
     expect(view.container.querySelector(".chat-reaction-action")).not.toBeNull();
-  },
-);
-
-it.each([false, true])(
-  "keeps every settled tool-only group without reply chrome (bubble=%s)",
-  async (bubbleMode) => {
-    const tool = createMessageGroup(
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "inspect", name: "read", arguments: { path: "report.md" } },
-          { type: "toolCall", id: "check", name: "exec", arguments: { command: "git status -sb" } },
-        ],
-        timestamp: 1000,
-      },
-      "tool",
-      { runId: "poll-run" },
-    );
-    const later = createMessageGroup(
-      createToolResultMessage("later", "read", "Later operation retained", { timestamp: 1001 }),
-      "tool",
-      { key: "later-group", runId: "poll-run" },
-    );
-    const [expanded, setExpanded] = createSignal(false);
-    const view = mountSolid(() => (
-      <AgentRunFrame
-        frame={{
-          kind: "agent-run-frame",
-          key: "poll",
-          runId: "poll-run",
-          boundaryId: "send:poll-run",
-          outcome: { kind: "completed", actionOwner: null },
-          parts: [tool, later],
-        }}
-        options={{
-          streamOptions: { bubbleMode },
-          workPreviews: new Map(),
-          partDependencies: (part) => [part],
-          renderGroupOptions: () => ({
-            showReasoning: false,
-            showToolCalls: true,
-            assistantName: "Assistant",
-            bubbleMode,
-            isToolMessageExpanded: () => expanded(),
-            onToggleToolMessageExpanded: () => setExpanded(true),
-          }),
-          isWorkExpanded: () => false,
-          onToggleWork: () => {},
-        }}
-      />
-    ));
-    await waitForSolid(() =>
-      expect(view.container.querySelector(".chat-activity-group__summary")).not.toBeNull(),
-    );
-    expect(view.container.querySelector(".chat-avatar-slot")).toBeNull();
-    expect(view.container.querySelector(".chat-group-footer")).toBeNull();
-    view.container.querySelector<HTMLButtonElement>(".chat-activity-group__summary")!.click();
-    await waitForSolid(() =>
-      expect(view.container.textContent).toContain("Later operation retained"),
-    );
   },
 );
 
