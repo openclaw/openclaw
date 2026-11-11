@@ -6,14 +6,14 @@ sandbox-projection owners against seven first-parent main advances. Reuse the
 fixture must contain `fixture-base`, its real pnpm lockfile, and its source-dependent
 installation script. The input repository is read-only. Every output directory
 must be new, and each run clones its own source repository and local origin.
-Each arm also requires a pristine writable snapshot of the synthetic agent state
-described below. Both fixture entrypoints must be copied unchanged into the
-baseline checkout.
+All arms reuse the same physical synthetic agent state described below, opening
+fresh storage owners in a fresh process. Copy the replay, seed verifier, and cleanup
+helper unchanged into the baseline checkout.
 
 ```sh
 node --import ./scripts/tsx.mjs scripts/perf/workspace-template-morning-measure.ts \
   --fixture /path/to/synthetic-fixture --output /path/to/new-output \
-  --state-dir /path/to/pristine-writable-state-snapshot \
+  --state-dir /path/to/campaign-agent-state \
   --image local-node-pnpm-image --prewarm
 ```
 
@@ -57,12 +57,14 @@ scale proof. `morning-agent-seed.json` records file/page/allocated bytes, row co
 schema version, source head, seed resources, all seeded metadata's digest, and a
 bounded transcript-payload sample digest.
 
-On Btrfs, create the seed directory as a subvolume, let the helper close all storage
-owners, mark that seed read-only, then create one writable subvolume snapshot per
-arm. This shares the 35 GiB immutable extents rather than copying them for every
-sample. The payload owns these snapshots and removes each only after the replay
-exits and its builders/storage owners settle. The replay never deletes the supplied
-`--state-dir`. Reserve enough actual host space for an 80 GiB loop filesystem,
+Keep the original seeded file writable at the same path throughout the campaign.
+Normal owner shutdown publishes its genuine clean-close seal; the next fresh
+process consumes that seal through normal admission. Do not clone the database
+between arms: changing physical file identity invalidates the seal and measures a
+cold integrity scan before the morning workload. Do not synthesize, copy, or edit
+seals, disable admission, or suppress maintenance. Record real admission evidence
+and unchanged device/inode/birth-time identity. The replay never deletes the supplied
+`--state-dir`. Reserve enough actual host space for an 80 GiB Btrfs loop filesystem,
 tooling and host headroom; require at least 96 GiB free after tooling preparation.
 The loop must fit the seed, workspace/template working set and the real owner's
 8 GiB safety reserve. A 40 GiB loop cannot hold this combined fixture safely.
@@ -79,6 +81,18 @@ metadata, transcript count/sample digest and schema version. A complete arm adds
 exactly nine session entries/windows through the normal writer. Results retain the
 before evidence; `agent-state-after.json` records the verified final shape. Source
 and installer-output assertions still apply to every foreground request.
+
+Each arm uses a unique output basename and corresponding session-key namespace.
+Cleanup detaches those sessions and retires that arm's worktrees, snapshots,
+projections, templates and builders through their existing owners before normal
+database close. It preserves all original seed rows. The twelve-arm campaign adds
+108 session entries/windows (1.08% of the seeded session count); report actual row,
+page and allocated-byte growth after every arm. Registry bookkeeping, maintenance
+timestamps and OS cache warmth may carry forward; fresh processes reset JavaScript
+caches. Counterbalanced pairs and A/A controls remain mandatory. A failed arm stops
+the campaign; do not continue using partially cleaned state. Qualify this lifecycle
+first with a small baseline/candidate/baseline sequence, including genuine seal
+reuse, seed preservation and zero live workspace/template/builder custody.
 
 Earlier runs with a small agent database remain archived separately and cannot
 qualify this combined scale requirement. The push pattern, request composition,
@@ -138,10 +152,11 @@ template wait without recording a new build. Main-isolate allocation excludes
 workers/native code; process CPU includes JS workers but excludes Git, Docker,
 and container CPU. Report these boundaries explicitly.
 
-The script closes its scheduler, retires only builders registered in its isolated
-state, closes that state, and removes its generated source/workspace trees through
-the native filesystem owner. The payload separately retires the supplied state
-snapshot. JSON and runtime logs remain. Cleanup and seed verification are outside
+The script closes its scheduler, retires its recorded resources through the lifecycle
+owners, closes storage, and removes its generated source/workspace trees through
+the native filesystem owner. `cleanup.json` records the zero-live-custody checks.
+The payload retires the shared synthetic state only after the entire campaign.
+JSON and runtime logs remain. Cleanup and seed verification are outside
 measured rows. The combined workload contains 62,000 payload files /
 1,100,004,000 bytes per checkout plus an approximately 35 GiB agent database with
 10,000 sessions. It does not claim full Gateway/model/channel startup proof or

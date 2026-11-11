@@ -50,19 +50,27 @@ function inspect(stateDir: string, sessions: number) {
       }
     }
   }
-  const stats = fs.statSync(databasePath);
+  const stats = fs.statSync(databasePath, { bigint: true });
   const pageSize = count("PRAGMA page_size");
   const pageCount = count("PRAGMA page_count");
   return {
     databasePath,
-    fileBytes: stats.size,
-    allocatedBytes: stats.blocks * 512,
+    fileBytes: Number(stats.size),
+    allocatedBytes: Number(stats.blocks) * 512,
+    physicalIdentity: {
+      device: stats.dev.toString(),
+      inode: stats.ino.toString(),
+      birthtimeNs: stats.birthtimeNs.toString(),
+    },
     pageSize,
     pageCount,
     freePages: count("PRAGMA freelist_count"),
     schemaVersion: count("PRAGMA user_version"),
     sessions: count("SELECT count(*) FROM session_nodes"),
     windows: count("SELECT count(*) FROM session_windows"),
+    unexpectedSessions: count(
+      "SELECT count(*) FROM session_nodes WHERE session_key NOT LIKE 'agent:fixture:team-shape-session-%' AND session_key NOT LIKE 'agent:fixture:morning-%'",
+    ),
     transcriptEvents: count("SELECT count(*) FROM transcript_events"),
     seededSessions,
     metadataSha256: metadata.digest("hex"),
@@ -72,16 +80,20 @@ function inspect(stateDir: string, sessions: number) {
 
 type SeedProof = { sessions: number; fullScale: boolean; evidence: ReturnType<typeof inspect> };
 
-export function verifyMorningAgentSeed(stateDir: string, addedSessions = 0) {
+export function verifyMorningAgentSeed(stateDir: string, addedSessions?: number) {
   const proof: SeedProof = JSON.parse(fs.readFileSync(path.join(stateDir, PROOF), "utf8"));
   const evidence = inspect(stateDir, proof.sessions);
   assert.equal(evidence.seededSessions, proof.sessions);
-  assert.equal(evidence.sessions, proof.evidence.sessions + addedSessions);
-  assert.equal(evidence.windows, proof.evidence.windows + addedSessions);
+  assert.equal(evidence.unexpectedSessions, 0);
+  assert(evidence.sessions >= proof.evidence.sessions);
+  const added = addedSessions ?? evidence.sessions - proof.evidence.sessions;
+  assert.equal(evidence.sessions, proof.evidence.sessions + added);
+  assert.equal(evidence.windows, proof.evidence.windows + added);
   assert.equal(evidence.transcriptEvents, proof.evidence.transcriptEvents);
   assert.equal(evidence.schemaVersion, proof.evidence.schemaVersion);
   assert.equal(evidence.metadataSha256, proof.evidence.metadataSha256);
   assert.equal(evidence.sampledTranscriptSha256, proof.evidence.sampledTranscriptSha256);
+  assert.deepEqual(evidence.physicalIdentity, proof.evidence.physicalIdentity);
   return { fullScale: proof.fullScale, ...evidence };
 }
 
