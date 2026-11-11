@@ -22,7 +22,10 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
-import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
 import type {
   MessageActionInput,
   MessageActionResult,
@@ -444,6 +447,19 @@ describe("message tool unconfirmed delivery", () => {
     await expect(tool.execute("send", { action: "send", message: "hello" })).rejects.toBe(error);
   });
 
+  it("keeps a provider-proven rejection actionable", async () => {
+    const rejection = new PlatformMessageNotDispatchedError("MatrixError: [403] M_FORBIDDEN", {
+      cause: new Error("MatrixError: [403] M_FORBIDDEN"),
+      retryable: false,
+    });
+    const error = new OutboundDeliveryError("message failed: MatrixError: [403] M_FORBIDDEN", {
+      cause: rejection,
+      sentBeforeError: true,
+    });
+    error.queueCustody = "held";
+    const { tool } = createFailingMessageTool(error);
+    await expect(tool.execute("send", { action: "send", message: "hello" })).rejects.toBe(error);
+  });
 });
 
 it.each(["read", "edit", "delete", "pin", "unpin"] as const)(

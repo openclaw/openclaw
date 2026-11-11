@@ -28,6 +28,7 @@ import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
+import { findPlatformMessageRejectedError } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
@@ -116,6 +117,9 @@ export function projectMessageActionPartialDelivery(error: unknown) {
  */
 export function projectDeliveryOutcomeResult(error: unknown) {
   if (isOutboundDeliveryError(error) && error.sentBeforeError && error.results.length === 0) {
+    if (findPlatformMessageRejectedError(error)) {
+      return undefined;
+    }
     const retainedQueueCustody = error.queueCustody === "held";
     const owner = retainedQueueCustody
       ? "The gateway owns reconciliation and the send may already have been delivered; do not resend it."
