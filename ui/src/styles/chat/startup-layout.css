@@ -1217,14 +1217,17 @@ openclaw-chat-sidebar-region,
 
 .sidebar-region--desktop .chat-thread {
   --chat-table-reserved-space: var(--chat-details-space, 0px);
-
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--chat-details-space, 0px);
-  align-content: start;
 }
 
-.sidebar-region--desktop .chat-thread-inner {
-  grid-column: 1;
+.chat-thread-content {
+  width: 100%;
+}
+
+.sidebar-region--desktop .chat-thread-content {
+  /* Firefox omits trailing grid padding from its scroll range. Keep the
+     scrollport in block flow and reserve Details in a separate containing
+     block so percentage and intrinsic reading-width caps retain their meaning. */
+  width: calc(100% - var(--chat-details-space, 0px));
 }
 
 .sidebar-region--desktop .chat-main__conversation-frame[data-details-instant],
