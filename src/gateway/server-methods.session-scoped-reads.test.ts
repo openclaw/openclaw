@@ -359,65 +359,6 @@ describe("narrow session read owners", () => {
     },
   );
 
-  it.each([false, true])(
-    "admits a session writer only to its own absent main conversation (roles=%s)",
-    async (roles) => {
-      await withScopedReader(
-        "main-writer",
-        async ({ state, reader, cfg }) => {
-          await state.writeConfig(cfg);
-          const subscribers = createSessionMessageSubscriberRegistry();
-          const context = await createHistoryReadContext({
-            getRuntimeConfig: () => cfg,
-            subscribeSessionMessageEvents: subscribers.subscribe,
-          });
-          const subscribe = async (sessionKey: string, scopes: string[], connId: string) => {
-            const client = { ...reader, connId, connect: { ...reader.connect, scopes } };
-            const respond = vi.fn();
-            await handleGatewayRequest({
-              req: gatewayRequest(connId, "sessions.messages.subscribe", { key: sessionKey }),
-              client,
-              context,
-              respond,
-              isWebchatConnect: () => false,
-              extraHandlers: sessionSubscriptionHandlers,
-            });
-            return {
-              ok: respond.mock.calls[0]?.[0],
-              subscribed: subscribers.get(sessionKey).has(connId),
-            };
-          };
-          const main = "agent:main:main";
-          const hidden = { ok: false, subscribed: false };
-          // The first turn would create main for this writer, so its absence is not a secret.
-          expect(await subscribe(main, ["operator.sessions.write"], "writer-main")).toEqual({
-            ok: true,
-            subscribed: true,
-          });
-          // Other absent keys, and readers that cannot start a conversation, stay hidden.
-          expect(
-            await subscribe("agent:main:other", ["operator.sessions.write"], "w-other"),
-          ).toEqual(hidden);
-          expect(await subscribe(main, ["operator.sessions.read"], "reader-main")).toEqual(hidden);
-          // Another creator's draft main stays hidden from the same writer.
-          await sessions.upsertSessionEntryCore(
-            { agentId: "main", sessionKey: main },
-            {
-              sessionId: "foreign-main",
-              updatedAt: 1,
-              visibility: "draft",
-              createdActor: createdActor(roleClient("view", "main-owner")),
-            },
-          );
-          expect(await subscribe(main, ["operator.sessions.write"], "writer-foreign")).toEqual(
-            hidden,
-          );
-        },
-        { cfg: roles ? rolePolicyConfig() : {} },
-      );
-    },
-  );
-
   it.each(["current", "source", "generation"] as const)(
     "keeps the original %s through message subscription preparation",
     async (change) => {

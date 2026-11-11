@@ -195,10 +195,11 @@ Own-work methods, including message sending, ordinary session creation,
 recovery, and forks, accept `operator.sessions.write` where their parameters
 do not require administrator access. Session ownership, current authority,
 agent access, and runtime and sandbox requirements still apply.
-Before anyone has used an agent's main conversation, a session writer can open
-it, subscribe to it, and send its first turn, which makes them its creator.
-Session-only readers, and other conversations that do not exist yet, still get
-the same not-found answer as a hidden conversation.
+Before anyone has used an agent's main conversation, a session writer allowed
+to start sessions for that agent can open it, subscribe to it, and send its
+first turn, which makes them its creator. Session-only readers, writers whose
+role excludes that agent, and other conversations that do not exist yet still
+get the same not-found answer as a hidden conversation.
 
 Session readers can read visible dashboards and receive their updates and focus
 commands. Session writers can arrange tabs and put widgets on their own

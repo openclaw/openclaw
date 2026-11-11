@@ -4,7 +4,6 @@ import {
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope.js";
-import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import {
@@ -15,9 +14,8 @@ import { isConfiguredSessionStoreAgentId } from "../config/sessions/targets-conf
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import type { SessionOperatorScope } from "../shared/session-method-scopes-base.js";
-import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import { sessionMethodDatabaseAdmission } from "./session-method-policy.js";
 import {
   resolveRequestedSessionAgentId,
@@ -194,32 +192,8 @@ export const readProjectedSessionMutationTarget = (
   return { status: "ready", target: { ...state.target, readSource } };
 };
 
-/**
- * A session writer's first turn on an agent's main conversation creates it and records the caller
- * as creator, so its absence discloses nothing. Every other missing key stays indistinguishable
- * from a hidden one for narrow readers.
- */
-export function isStartableMainSession(params: {
-  cfg: OpenClawConfig;
-  client: GatewayClient | null | undefined;
-  sessionKey: string;
-  agentId: string;
-}): boolean {
-  if (!operatorScopeSatisfied("operator.sessions.write", params.client?.connect.scopes ?? [])) {
-    return false;
-  }
-  const canonicalKey = (sessionKey: string) =>
-    resolveSessionStoreIdentity({ cfg: params.cfg, sessionKey, agentId: params.agentId })
-      .canonicalKey;
-  return (
-    canonicalKey(params.sessionKey) ===
-    canonicalKey(resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId }))
-  );
-}
-
 export function readSessionMutationTarget(params: {
   cfg: OpenClawConfig;
-  client?: GatewayClient | null;
   context: GatewayRequestContext;
   expectedTarget?: { storePath: string };
   method: string;
@@ -294,16 +268,7 @@ export function readSessionMutationTarget(params: {
         key: params.targetRef.sessionKey,
         agentId: agent.agentId,
       });
-      if (
-        !row &&
-        params.sessionScope === "operator.sessions.read" &&
-        !isStartableMainSession({
-          cfg: params.sessionRowRead.state.cfg,
-          client: params.client,
-          sessionKey: params.targetRef.sessionKey,
-          agentId: agent.agentId,
-        })
-      ) {
+      if (!row && params.sessionScope === "operator.sessions.read") {
         return { error: hiddenSessionNotFound(params.targetRef.sessionKey) };
       }
       const readSource = row && params.sessionRowRead.readSource(row);
