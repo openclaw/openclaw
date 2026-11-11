@@ -238,7 +238,7 @@ const clientGrantsByToken = resolveGlobalMap<string, StoredMcpLoopbackClientGran
  * `clientGrantsByToken`, so a grant that is transferred, deactivated, or
  * revoked can find (and settle) its own waiter rather than leaking one.
  */
-const nativeToolAllowlistWaitersByToken = resolveGlobalMap<string, Deferred<void>>(
+const nativeToolAllowlistWaitersByToken = resolveGlobalMap<string, Deferred>(
   Symbol.for("openclaw.mcpNativeToolAllowlistWaiters"),
   "close-and-restart",
 );
@@ -684,7 +684,7 @@ export async function waitForMcpLoopbackClientGrantNativeToolAllowlist(params: {
   }
   let waiter = nativeToolAllowlistWaitersByToken.get(params.token);
   if (!waiter) {
-    waiter = createDeferredCore<void>();
+    waiter = createDeferredCore();
     nativeToolAllowlistWaitersByToken.set(params.token, waiter);
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
