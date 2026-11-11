@@ -18,7 +18,7 @@ import {
   resolveTextChunkLimit,
 } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   asOptionalRecord,
@@ -43,7 +43,7 @@ import {
   getSlackWriteClient,
 } from "./client.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
-import { enrichSlackWebApiError } from "./errors.js";
+import { enrichSlackWebApiError, getSlackWebApiErrorData } from "./errors.js";
 import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "./limits.js";
 import type { SlackEventScope } from "./monitor/event-scope.js";
@@ -165,6 +165,23 @@ export function setSlackDefaultSendIdentity(accountId: string, identity?: SlackS
   } else {
     slackDefaultSendIdentities.delete(normalizedAccountId);
   }
+}
+
+const slackSendLog = createSubsystemLogger("gateway/channels/slack").child("send");
+
+// Configuration rejections never succeed on retry, so the reply text must not wait on them.
+// Transient codes keep the retry path, which still delivers the attachment.
+const SLACK_PERMANENT_UPLOAD_REJECTIONS: Readonly<Record<string, string>> = {
+  missing_scope: "add the files:write bot scope and reinstall the Slack app",
+  not_allowed_token_type: "send files with a bot token",
+};
+
+function resolvePermanentSlackUploadRejection(err: unknown): string | undefined {
+  if (asOptionalRecord(err)?.code !== "slack_webapi_platform_error") {
+    return undefined;
+  }
+  const code = normalizeOptionalString(getSlackWebApiErrorData(err)?.error);
+  return code && Object.hasOwn(SLACK_PERMANENT_UPLOAD_REJECTIONS, code) ? code : undefined;
 }
 
 function readSlackRequestErrorMessage(value: unknown): string {
@@ -871,6 +888,7 @@ export async function sendMessageSlack(
         return deliveryResult;
       };
       let didDispatch = false;
+      let uploadedMedia = Boolean(opts.mediaUrl);
       const dispatchOnce = async () => {
         if (didDispatch) {
           return;
@@ -1035,33 +1053,54 @@ export async function sendMessageSlack(
         let chunksToPost: string[];
         if (opts.mediaUrl) {
           const [firstChunk, ...rest] = resolvedChunks;
-          lastMessageId = await uploadSlackFile({
-            client: delivery.upload?.client ?? client,
-            completionClient: client,
-            channelId,
-            mediaUrl: opts.mediaUrl,
-            mediaAccess: opts.mediaAccess,
-            uploadFileName: opts.uploadFileName,
-            uploadTitle: opts.uploadTitle,
-            mediaLocalRoots: opts.mediaLocalRoots,
-            mediaReadFile: opts.mediaReadFile,
-            caption: firstChunk,
-            threadTs: opts.threadTs,
-            maxBytes: mediaMaxBytes,
-            ...(opts.forceDocument ? { optimizeImages: false } : {}),
-            onPlatformSendDispatch: dispatchOnce,
-            assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
-            ...(delivery.upload ? { auditContext: delivery.upload.auditContext } : {}),
-          });
-          await reportDelivery(
-            createSlackSendResult(
-              lastMessageId,
+          let rejectedUploadCode: string | undefined;
+          try {
+            lastMessageId = await uploadSlackFile({
+              client: delivery.upload?.client ?? client,
+              completionClient: client,
               channelId,
-              "media",
-              normalizeSlackThreadTsCandidate(opts.threadTs),
-            ),
-          );
-          chunksToPost = rest;
+              mediaUrl: opts.mediaUrl,
+              mediaAccess: opts.mediaAccess,
+              uploadFileName: opts.uploadFileName,
+              uploadTitle: opts.uploadTitle,
+              mediaLocalRoots: opts.mediaLocalRoots,
+              mediaReadFile: opts.mediaReadFile,
+              caption: firstChunk,
+              threadTs: opts.threadTs,
+              maxBytes: mediaMaxBytes,
+              ...(opts.forceDocument ? { optimizeImages: false } : {}),
+              onPlatformSendDispatch: dispatchOnce,
+              assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
+              ...(delivery.upload ? { auditContext: delivery.upload.auditContext } : {}),
+            });
+          } catch (err) {
+            // The caption rides on the upload; a pre-dispatch API rejection
+            // (e.g. missing files:write) must not take the reply text with it.
+            rejectedUploadCode = resolvePermanentSlackUploadRejection(err);
+            if (didDispatch || !firstChunk || !rejectedUploadCode) {
+              throw err;
+            }
+          }
+          if (rejectedUploadCode) {
+            slackSendLog.warn(
+              `attachment upload rejected (${rejectedUploadCode}); delivering reply text without it: ${SLACK_PERMANENT_UPLOAD_REJECTIONS[rejectedUploadCode]}`,
+            );
+            uploadedMedia = false;
+            chunksToPost = [
+              ...resolvedChunks,
+              `(attachment could not be uploaded: ${rejectedUploadCode})`,
+            ];
+          } else {
+            await reportDelivery(
+              createSlackSendResult(
+                lastMessageId,
+                channelId,
+                "media",
+                normalizeSlackThreadTsCandidate(opts.threadTs),
+              ),
+            );
+            chunksToPost = rest;
+          }
         } else {
           chunksToPost = resolvedChunks.length ? resolvedChunks : [""];
         }
@@ -1072,11 +1111,11 @@ export async function sendMessageSlack(
 
       let questionDelivery: SlackSendResult | undefined;
       for (const [partIndex, part] of messages.entries()) {
-        const carriesPrimaryMessageOptions = partIndex === 0 && !opts.mediaUrl;
+        const carriesPrimaryMessageOptions = partIndex === 0 && !uploadedMedia;
         const baseMetadata = carriesPrimaryMessageOptions ? opts.metadata : undefined;
         // Every post carries its index/count so reconciliation proves the complete
         // logical text send and never mistakes a partial chunk fanout for success.
-        const metadata = opts.mediaUrl
+        const metadata = uploadedMedia
           ? baseMetadata
           : withSlackDeliveryMetadata(baseMetadata, {
               queueId: opts.deliveryQueueId,
@@ -1085,7 +1124,7 @@ export async function sendMessageSlack(
               partIndex,
               partCount: messages.length,
             });
-        if (partIndex === 0 && !opts.mediaUrl) {
+        if (partIndex === 0 && !uploadedMedia) {
           await dispatchOnce();
         }
         const partDelivery = await postPart({
