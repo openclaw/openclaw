@@ -59,6 +59,8 @@ const enSettings = {
     },
     copyId: "Copy ID",
     setDefault: "Set default",
+    accessRestricted:
+      "You do not have access to this agent setting. Ask a Gateway operator for access.",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -631,7 +633,6 @@ const enSettings = {
     enabledSummary: "{enabled}/{total} enabled",
     enableAll: "Enable all",
     disableAll: "Disable all",
-    loadConfig: "Load the config to change tool profiles.",
     explicitAllowlist: "This agent uses a tool allowlist. Manage it in Config:",
     globalAllowlist: "Agent overrides can’t enable tools blocked by the global allowlist:",
     loadingCatalog: "Loading tools…",
@@ -762,10 +763,12 @@ const enSettings = {
       p99Hint: "99% of measured pings completed in this time or less.",
       unit: "ms",
       failed: "Last ping failed. Retrying…",
+      unavailable: "Ping isn’t available for this connection.",
     },
     activity: {
       title: "Gateway activity",
       failed: "Couldn’t refresh activity. Retrying…",
+      unavailable: "Host activity isn’t available for this connection.",
       offline: "Reconnect to see activity.",
     },
     access: {
@@ -816,6 +819,17 @@ const enSettings = {
       devcontainer: "Dev container",
       detected: "Detected",
       phases: {
+        retainedGit: "Verify retained Git identity",
+        retainedManifest: "Verify retained manifest",
+        inspection: "Inspect retained workspace",
+        seedPreparation: "Prepare seed paths",
+        seedTransfer: "Import seed objects",
+        seedVerification: "Verify seed",
+        seedCheckout: "Check out seed",
+        seedManifest: "Read seed manifest",
+        gitUpdate: "Copy or update workspace",
+        toolchainPreparation: "Prepare toolchain",
+        preparedManifest: "Capture prepared manifest",
         onCreate: "onCreateCommand",
         updateContent: "updateContentCommand",
         detectedInstall: "Install dependencies",
@@ -1155,6 +1169,14 @@ const enSettings = {
       replace: "Replace",
       replaceNamed: "Replace API key",
       saved: "API key saved.",
+      verified: "API key saved and verified.",
+      checking: "Checking…",
+      checkFailed:
+        "API key saved, but the provider didn’t accept it. {reason} Enter a different key.",
+      checkInconclusive:
+        "API key saved, but the check didn’t finish. {reason} Use Test access to try again.",
+      checkUnavailable:
+        "API key saved, but OpenClaw couldn’t check it. Use Test access to try again.",
       authModeBlocked: "API key changes aren’t available with the current sign-in method.",
     },
     probe: {
@@ -1200,6 +1222,8 @@ const enSettings = {
         "This removes the saved accounts for {provider} available to this agent. Shared accounts are also removed for other agents that use them. Active replies for this provider on the selected agent may stop.",
       keys: "Saved API keys for {key} and its configured aliases will also be deleted. Provider settings and external secrets stay in place.",
       kept: "Kept: {source}. Remove account access at its source to stop using it fully.",
+      defaults:
+        "Defaults for all agents keep using {models}. Choose another model or add an account again so replies keep working.",
       secretReferences: "Secret references in {keys}",
       accessChanged:
         "The connection, agent, or access changed. No further credentials were removed.",
@@ -1214,6 +1238,8 @@ const enSettings = {
       selectProvider: "Select a provider",
       save: "Save provider",
       saved: "Added {provider}",
+      verified: "Added {provider}. Access verified.",
+      ready: "Added {provider}. {model} is ready to chat.",
     },
     defaults: {
       title: "Defaults for all agents",
@@ -1248,7 +1274,7 @@ const enSettings = {
         "Uses the selected model's thinking policy instead of saving a global thinking override.",
       fastModeHelpLabel: "About speed defaults",
       fastModeHelp:
-        "Sets the global default for new sessions. Auto starts fast and returns to standard after the model's configured interval. On requests fast mode, Off requests standard, and Ultrafast requests the Ultrafast service tier when available. Saved preferences remain unchanged when capabilities change.",
+        "Sets the global default for new sessions. Auto starts fast and returns to standard after the model's configured interval. Fast requests fast mode, Off requests standard, and Ultrafast requests the Ultrafast service tier when available. Saved preferences remain unchanged when capabilities change.",
       fastModeDefaultHelp:
         "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
     },
@@ -1326,6 +1352,29 @@ const enSettings = {
       automaticUpdates: "Automatic updates",
       automaticUpdatesDescription:
         "Schedule available updates automatically. Dev auto-updates apply to git checkouts.",
+      schedule: "Update schedule",
+      scheduleDescription:
+        "Times use the Gateway host's timezone, not this browser's. This controls when an update starts; rollout delays, idle checks, and the countdown still apply.",
+      schedulePreset: {
+        hourly: "Hourly (default)",
+        daily: "Daily",
+        weekly: "Weekly",
+        custom: "Custom cron",
+      },
+      scheduleTime: "Time of day",
+      scheduleDay: "Day of the week",
+      scheduleWeekday: {
+        "0": "Sunday",
+        "1": "Monday",
+        "2": "Tuesday",
+        "3": "Wednesday",
+        "4": "Thursday",
+        "5": "Friday",
+        "6": "Saturday",
+      },
+      scheduleCron: "Cron expression",
+      scheduleCronHint:
+        "For example, 30 3 * * 1-5 starts updates at 03:30 on weekdays. Missed times are skipped. Update Gateway and Hold 1 h remain explicit overrides.",
       devPackageAutomaticHint:
         "Automatic dev updates require a source (git) install. This install is a package install — use stable or beta for automatic updates.",
       extendedStableAutomaticHint:
@@ -1974,7 +2023,8 @@ const enSettings = {
       modelAuto: "auto ({model})",
       modelConfigured: "configured ({model})",
       modelDisabled: "disabled",
-      modelUnavailable: "unavailable (no small model)",
+      modelUnavailable: "Utility model status unavailable",
+      modelNotLoaded: "Utility model status not loaded",
       modelPicker: "Small model",
       modelPickerHint: "Used for observer digests and other short utility tasks.",
       modelCatalogUnavailable: "Explicit model catalog unavailable",
@@ -1988,6 +2038,8 @@ const enSettings = {
       gateway: "Gateway",
       status: "Status",
     },
+    readRestricted: "These settings are managed by Gateway operators.",
+    readDisconnected: "Reconnect to load these Gateway settings.",
     root: "<root>",
     itemCount: "[{count} item]",
     itemCountPlural: "[{count} items]",
@@ -2002,6 +2054,7 @@ const enSettings = {
     autoSavePaused: registerSettingsSidebarEnglish.catalog.configView.autoSavePaused,
     saveNow: registerSettingsSidebarEnglish.catalog.configView.saveNow,
     autoSaveFailed: registerSettingsSidebarEnglish.catalog.configView.autoSaveFailed,
+    autoSaveDeferred: registerSettingsSidebarEnglish.catalog.configView.autoSaveDeferred,
     autoSaveRejected: registerSettingsSidebarEnglish.catalog.configView.autoSaveRejected,
     discardChanges: registerSettingsSidebarEnglish.catalog.configView.discardChanges,
     discardChangesTitle: registerSettingsSidebarEnglish.catalog.configView.discardChangesTitle,

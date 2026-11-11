@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import { describe, expect, it } from "vitest";
+import { extractWikiLinks } from "./markdown-links.js";
 import {
   extractHumanNotesBlock,
+  formatWikiLink,
   parseWikiMarkdown,
   preserveHumanNotesBlock,
   renderWikiMarkdown,
@@ -130,10 +133,22 @@ it.each([
   expect(scanWikiSummary(markdown)).toMatchObject(expected);
 });
 
-it("keeps inline link filtering while parsing CommonMark destinations", () => {
+it.each(["Plain", "[x]", "[x", "]", "a\\", "`C:\\x[y]`", "*raw* _text_ &amp; <tag>"])(
+  "renders native link titles literally: %s",
+  (title) => {
+    const relativePath = "sources/meeting notes.md";
+    for (const sourceRelativeTo of ["index.md", "entities/plan.md"]) {
+      const link = formatWikiLink({ renderMode: "native", relativePath, sourceRelativeTo, title });
+      expect(extractWikiLinks(link, sourceRelativeTo)).toEqual([relativePath]);
+      expect(JSON.stringify(fromMarkdown(link))).toContain(`"value":${JSON.stringify(title)}`);
+    }
+  },
+);
+
+it("filters literal links while parsing CommonMark destinations", () => {
   const markdown = [
-    '[[Wiki target|Alias]]\n\n[Plan](../syntheses/plan(v2).md?view=full#details "Project plan")\n\n[Escaped](../syntheses/plan\\(v3\\).md)\n\n![Image](../assets/diagram.png)',
-    "[External](https://example.com/page.md)\n\n[Anchor](#details)\n\n`[Inline code](inline.md)`\n\n```markdown\n[Fenced code](fenced.md)\n```",
+    '\\\\[[Wiki target|Alias]]\n\n[Plan](../syntheses/plan(v2).md?view=full#details "Project plan")\n\n[Escaped](../syntheses/plan\\(v3\\).md)\n\n![Image](../assets/diagram.png)',
+    "[External](https://example.com/page.md)\n\n[Anchor](#details)\n\n`[Inline code](inline.md)`\n\n```markdown\n[Fenced code](fenced.md)\n```\n\n<!-- [[missing-comment]] [[Literal]] -->\n<!--\n[[missing-multiline]]\n-->\n\\[[missing-escape]] and \\[[Literal]]\n\\\\\\[[missing-odd-run]]",
     "<!-- openclaw:wiki:related:start -->\n\n[Generated](generated.md)\n\n<!-- openclaw:wiki:related:end -->",
     "[Reference][ref]\n\n[ref]: reference.md\n\n[Notes](../syntheses/plan%20notes.md)\n\n[Cafe](../syntheses/caf%C3%A9.md#menu)\n\n[Malformed](../syntheses/100%.md)",
   ].join("\n\n");

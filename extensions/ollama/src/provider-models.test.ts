@@ -158,9 +158,10 @@ describe("ollama provider models", () => {
   });
 
   it.each<[name: string, url: string, maxTokens: number, remote?: Partial<OllamaTagModel>]>([
-    ["local-model", localUrl, 8192],
-    ["minimax-m3", localUrl, 8192],
-    ["kimi-k3", localUrl, 8192],
+    // Local output defaults keep half of the 32k local num_ctx cap for the prompt.
+    ["local-model", localUrl, 16_384],
+    ["minimax-m3", localUrl, 16_384],
+    ["kimi-k3", localUrl, 16_384],
     ["minimax-m3", "https://ollama.com", 131_072],
     ["kimi-k3", "https://ollama.com", 1_048_576],
     ["glm-5.2:cloud", localUrl, 131_072],

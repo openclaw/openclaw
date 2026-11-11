@@ -207,6 +207,7 @@ export async function prepareWorkerGitHubEnvironment(params: {
       permissions.groupWritable ||
       permissions.worldWritable
     ) {
+      await removeManagedGitHubProfile(profileDir);
       log.warn(`GitHub binding skipped: profile is not owner-only: ${profileDir}`);
       return undefined;
     }

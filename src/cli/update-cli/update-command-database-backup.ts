@@ -30,6 +30,7 @@ import {
   type OwnedManagedUpdateContext,
 } from "./update-command-managed-context.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import type { PreManagedServiceStop } from "./update-command-service.js";
 
 type Progress = MutableUpdateExecutionParams["progress"];
 
@@ -76,6 +77,30 @@ export async function assertUpdatePostgresCaptureOwnership(params: {
       `Update refused before changing the install: PostgreSQL database backup requires exclusive state ownership (${unavailable}). Stop the Gateway through its service owner, then rerun openclaw update.`,
     );
   }
+}
+
+/**
+ * Candidate validation runs before the managed-service stop and can take minutes. Only a running
+ * service the updater stops (owned or unresolved), or a Gateway a foreground update parks, can
+ * release a live owner before activation; refuse any other held owner before validation. The
+ * probe before activation still covers an owner that starts later.
+ */
+export async function assertUpdatePostgresOwnerReleasable(params: {
+  config: Parameters<typeof resolveDatabaseFamilyEngines>[0];
+  env: NodeJS.ProcessEnv;
+  hasRun: boolean;
+  parksBeforeActivation: boolean;
+  service: Pick<PreManagedServiceStop, "running" | "serviceUpdateVerdict"> | undefined;
+}): Promise<void> {
+  const { hasRun, service } = params;
+  const stopped =
+    service?.running &&
+    (service.serviceUpdateVerdict?.kind === "owned" ||
+      service.serviceUpdateVerdict?.kind === "unresolved");
+  if (!hasRun || params.parksBeforeActivation || stopped) {
+    return;
+  }
+  await assertUpdatePostgresCaptureOwnership({ config: params.config, env: params.env });
 }
 
 export async function captureUpdateDatabases(params: {
@@ -272,6 +297,7 @@ export async function restoreFailedUpdateDatabases(params: {
   if (params.backup.migration && params.backup.migration.backup !== params.backup.directory) {
     return await refuse("Migration receipt belongs to a different database backup");
   }
+  let liveMutationStarted = false;
   try {
     // Every restore path, including a settled Doctor failure before finalization,
     // must retain this run's matching recovery pair in the restored database.
@@ -285,6 +311,9 @@ export async function restoreFailedUpdateDatabases(params: {
         ? { runId: pair.cohort.runId, transactionId: pair.cohort.transactionId }
         : undefined,
       expectedGenerations: params.backup.migration?.to ?? params.backup.sourceGenerations,
+      onLiveMutation: () => {
+        liveMutationStarted = true;
+      },
     });
     if (migratedPaths === null) {
       return await refuse(
@@ -310,15 +339,19 @@ export async function restoreFailedUpdateDatabases(params: {
     assertCurrent();
     return true;
   } catch (cause) {
+    // Lock contention or a changed snapshot left the live databases as they were.
+    const untouched = !liveMutationStarted && !hasCommandProcessCleanupError(cause);
     // A partly restored shared ledger must never be reopened by candidate
     // finalization: that would migrate the recovery image again.
     params.result.recovery = {
       serviceRestartSafe: false,
       reason: "state-migration-started",
-      dataAtRisk: "rollback-state-unverified",
+      dataAtRisk: untouched ? "state-migrated-no-rollback" : "rollback-state-unverified",
     };
     throw new UpdateCommandRecoveryPendingError(
-      `Database rollback could not finish (data at risk: rollback-state-unverified); keep the Gateway stopped. Preserve ${params.backup.directory} and <database>.migrated-${params.runId}. Run the compatible candidate's Doctor to inspect recovery before restarting.`,
+      untouched
+        ? `Database rollback could not start and left the current databases unchanged: ${formatErrorMessage(cause)}. Keep the Gateway stopped and preserve ${params.backup.directory}. Run the compatible candidate's Doctor to inspect recovery before restarting.`
+        : `Database rollback could not finish (data at risk: rollback-state-unverified); keep the Gateway stopped. Preserve ${params.backup.directory} and <database>.migrated-${params.runId}. Run the compatible candidate's Doctor to inspect recovery before restarting.`,
       { cause },
     );
   }

@@ -57,6 +57,7 @@ jobs:
             scripts/linux-app-channel.mjs
             scripts/lib/release-version.mjs
             scripts/lib/record-shared.mjs
+            scripts/lib/plain-gh.mjs
             scripts/release-tooling-identity.mjs
           sparse-checkout-cone-mode: false
 

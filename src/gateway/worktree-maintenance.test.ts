@@ -1,10 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { WorktreeWarmPoolRequest } from "../agents/worktrees/template-registry.js";
-import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
+import type { ManagedWorktreeGcResult, ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import {
   getRuntimeConfigSnapshot,
   resetConfigRuntimeState,
@@ -17,6 +19,8 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { prepareScratchMaintenanceTargets } from "./scratch-maintenance-custody.js";
 import {
   notifyGatewayWorktreeArchive,
   requestGatewayWorktreeMaintenance,
@@ -28,9 +32,56 @@ vi.mock("./worker-environments/local-workspace-gc.js", () => ({
   sweepLocalWorkspaceManifests: vi.fn(async () => {}),
 }));
 
+// mock-isolation: Run custody has its own integration suite; these fixtures own scheduling.
+vi.mock("./scratch-maintenance-custody.js", () => ({
+  prepareScratchMaintenanceTargets: vi.fn(async () => ({ targets: [], release: () => {} })),
+}));
+
+const cleanupRecord: ManagedWorktreeRecord = {
+  id: "worktree",
+  name: "expired",
+  repoFingerprint: "repository",
+  repoRoot: "/repository",
+  path: "/worktree",
+  branch: "expired",
+  baseRef: "main",
+  ownerKind: "session",
+  ownerId: "agent:main:expired",
+  createdAt: 1,
+  lastActiveAt: 1,
+};
+
 function completedResult(): ManagedWorktreeGcResult {
   return { ...new WorktreeGcProgress().result, limitsSatisfied: true };
 }
+
+it("expires disposable scratch on the existing maintenance pass and records the outcome", async () => {
+  const dirs = createTrackedTempDirs();
+  try {
+    const root = await fs.realpath(await dirs.make("worktree-maintenance-scratch-"));
+    const scratch = path.join(root, ".openclaw/tmp/proof.txt");
+    await fs.mkdir(path.dirname(scratch), { recursive: true });
+    await fs.writeFile(scratch, "proof");
+    await fs.utimes(scratch, 1, 1);
+    vi.mocked(prepareScratchMaintenanceTargets).mockResolvedValueOnce({
+      targets: [{ root, kind: "checkout", isLive: () => false }],
+      release: () => {},
+    });
+    vi.spyOn(managedWorktrees, "gc").mockResolvedValue(completedResult());
+    await using fixture = maintenanceFixture();
+    fixture.clock.setTime(1_800_000_000_000);
+    const owner = fixture.start();
+    const receipt = owner.request();
+    await fixture.run();
+    expect(owner.request({ jobId: receipt.jobId })).toMatchObject({
+      state: "completed",
+      scratch: { entriesRemoved: 1, bytesRemoved: 5, skippedLive: 0, errors: [] },
+    });
+    await expect(fs.stat(scratch)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    await dirs.cleanup();
+  }
+});
 
 function maintenanceFixture(config: OpenClawConfig = {}) {
   const clock = createGatewaySchedulerClock();
@@ -320,13 +371,17 @@ it.each([
   },
 );
 
-it("admits only one expired checkout per minute across a cohort and subsequent sweeps", async () => {
+it("admits only one checkout or template removal per minute across cohorts and sweeps", async () => {
   await using fixture = maintenanceFixture();
   const removed: number[] = [];
   vi.spyOn(managedWorktrees, "gc").mockImplementation(async (params = {}) => {
     const progress = completedResult();
     for (let index = 0; index < 3; index++) {
-      await params.beforeRemoval?.();
+      if (index === 1) {
+        await params.beforeTemplateRemoval?.();
+      } else {
+        await params.beforeRemoval?.(cleanupRecord);
+      }
       removed.push(fixture.clock.clock.now());
       progress.removed.push(String(index));
       await params.checkpoint?.(progress);
@@ -352,41 +407,49 @@ it("admits only one expired checkout per minute across a cohort and subsequent s
   await vi.waitFor(() => expect(removed).toHaveLength(4));
 });
 
-it.each(["recover", "stop", "configuration"])(
-  "pauses removals under host pressure and handles %s before acquiring custody",
-  async (outcome) => {
-    const probe = vi.fn().mockResolvedValue(true);
-    vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(probe);
-    const config: OpenClawConfig = {};
-    await using fixture = maintenanceFixture(config);
-    const removed = vi.fn();
-    vi.spyOn(managedWorktrees, "gc").mockImplementation(async (params = {}) => {
-      await params.beforeRemoval!();
-      removed();
-      return completedResult();
-    });
-    const owner = fixture.start();
-    owner.request();
-    void fixture.run();
-    await vi.waitFor(() => expect(probe).toHaveBeenCalledOnce());
-    await fixture.clock.advanceBy(299_999);
-    expect(removed).not.toHaveBeenCalled();
-    if (outcome === "stop") {
-      await owner.stop();
+it.each([
+  ["checkout", "recover"],
+  ["checkout", "stop"],
+  ["checkout", "configuration"],
+  ["template", "recover"],
+  ["template", "stop"],
+  ["template", "configuration"],
+])("pauses %s removal under host pressure and handles %s", async (kind, outcome) => {
+  const probe = vi.fn().mockResolvedValue(true);
+  vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(probe);
+  const config: OpenClawConfig = {};
+  await using fixture = maintenanceFixture(config);
+  const removed = vi.fn();
+  vi.spyOn(managedWorktrees, "gc").mockImplementation(async (params = {}) => {
+    if (kind === "template") {
+      await params.beforeTemplateRemoval!();
     } else {
-      probe.mockResolvedValue(false);
-      if (outcome === "configuration") {
-        config.worktreeRoot = "/synthetic/replaced";
-        setRuntimeConfigSnapshot(config);
-      }
-      await fixture.clock.advanceBy(1);
-      await vi.waitFor(() =>
-        expect(outcome === "recover" ? fixture.onComplete : fixture.onError).toHaveBeenCalledOnce(),
-      );
+      await params.beforeRemoval!(cleanupRecord);
     }
-    expect(removed).toHaveBeenCalledTimes(outcome === "recover" ? 1 : 0);
-  },
-);
+    removed();
+    return completedResult();
+  });
+  const owner = fixture.start();
+  owner.request();
+  void fixture.run();
+  await vi.waitFor(() => expect(probe).toHaveBeenCalledOnce());
+  await fixture.clock.advanceBy(299_999);
+  expect(removed).not.toHaveBeenCalled();
+  if (outcome === "stop") {
+    await owner.stop();
+  } else {
+    probe.mockResolvedValue(false);
+    if (outcome === "configuration") {
+      config.worktreeRoot = "/synthetic/replaced";
+      setRuntimeConfigSnapshot(config);
+    }
+    await fixture.clock.advanceBy(1);
+    await vi.waitFor(() =>
+      expect(outcome === "recover" ? fixture.onComplete : fixture.onError).toHaveBeenCalledOnce(),
+    );
+  }
+  expect(removed).toHaveBeenCalledTimes(outcome === "recover" ? 1 : 0);
+});
 
 it("waits for admitted cleanup to settle when stopped and withdraws its authority immediately", async () => {
   await using fixture = maintenanceFixture();

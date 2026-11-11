@@ -15,6 +15,7 @@ import {
   type ControlUiMockGatewayScenario,
   waitForControlUiRoute,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import type { NativeControlUiMockGatewayScenario } from "../../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import type { ProjectionFamily } from "../../ui/src/test-helpers/control-ui-projection-fixture-contract.ts";
 import { mcpResourceHtml } from "../../ui/src/test-helpers/control-ui-team-scale-widget-html.ts";
 import { cronListResponseFixture } from "../../ui/src/test-helpers/cron.ts";
@@ -37,9 +38,12 @@ import {
   openInteractionPanel,
   openNavigationDrawer,
   prepareChat,
+  scrollTranscriptToTop,
 } from "./control-ui-interaction-navigation.ts";
+import { logbookReadinessScenarios } from "./control-ui-logbook-readiness-scenarios.ts";
 import { runProjectionFixture } from "./control-ui-projection-fixtures.ts";
 import type { ControlUiResourceCounts } from "./control-ui-resource-counts.ts";
+import { skillsReadinessScenarios } from "./control-ui-skills-readiness-scenarios.ts";
 import {
   exerciseWorkboardResourceFixture,
   idleWorkboardResourceFixture,
@@ -83,7 +87,7 @@ export type InteractionEvidence = Record<string, number | boolean>;
 type InteractionSession = GatewaySessionRow &
   NonNullable<ControlUiMockGatewayScenario["sessions"]>[number];
 export type InteractionFixtureOverrides = Omit<
-  Partial<ControlUiMockGatewayScenario>,
+  Partial<NativeControlUiMockGatewayScenario>,
   "sessions"
 > & {
   sessions?: InteractionSession[];
@@ -152,7 +156,7 @@ export function createScenarioFixture(
   version: string,
   scenario: InteractionScenario,
   sandbox?: InteractionSandbox,
-): ControlUiMockGatewayScenario & { sessions: InteractionSession[] } {
+): NativeControlUiMockGatewayScenario & { sessions: InteractionSession[] } {
   const base = createInteractionFixture(buildId, version, scenario.fixture, sandbox);
   const overrides = scenario.fixtureOverrides?.(sandbox, base);
   return {
@@ -1186,15 +1190,7 @@ async function runTranscriptPlatformEvents(page: Page): Promise<InteractionEvide
     activePane,
   );
   try {
-    const thread = page.locator(`${activePane} .chat-thread`);
-    await thread.hover();
-    await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
-    await thread.getByText("Transcript 0 message 0.", { exact: false }).waitFor();
-    await page.waitForFunction(
-      (selector) => document.querySelector(selector)?.scrollTop === 0,
-      `${activePane} .chat-thread`,
-    );
-    await frames(page);
+    const scroll = await scrollTranscriptToTop(page);
     const retirement = await original.evaluate((nodes) => ({
       initialDisclosureNodes: nodes.length,
       initialDisclosureNodesStillConnected: nodes.filter((node) => node.isConnected).length,
@@ -1206,6 +1202,7 @@ async function runTranscriptPlatformEvents(page: Page): Promise<InteractionEvide
       syntheticFontEvents: 9,
       nativeViewportChanges: 2,
       nativeReducedMotionChanges: 2,
+      ...scroll,
       ...platformTranscriptEvidence("before", before),
       ...platformTranscriptEvidence("afterPlatformEvents", afterPlatformEvents),
       ...platformTranscriptEvidence("after", await platformTranscriptSnapshot(page)),
@@ -1605,7 +1602,7 @@ async function prepareCron(page: Page) {
   }
 }
 
-async function settingsSection(
+export async function settingsSection(
   page: Page,
   path: string,
   routeId: "appearance" | "connection" | "notifications",
@@ -1875,11 +1872,13 @@ async function searchProviderModels(page: Page) {
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
+  ...skillsReadinessScenarios,
   ...dataActivityLiveScenarios,
   ...dataActivityScenarios,
   ...dataBoardScenarios,
   ...dataCatalogScenarios,
   ...dataLogScenarios,
+  ...logbookReadinessScenarios,
   ...dataUsageDetailScenarios,
   ...dataUsageScenarios,
   ...(
@@ -2733,23 +2732,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     route: controlUiSessionPath(sessionKeys[0]),
     expected: "The first message of the 400-message transcript enters the viewport.",
     prepare: prepareChat,
-    run: async (page) => {
-      const thread = page.locator(`${activePane} .chat-thread`);
-      if (page.viewportSize()!.width < 768) {
-        // Playwright's mobile WebKit driver has no wheel input. Use the same
-        // native scrollport jump in both mobile engines (not a wheel-latency sample).
-        await thread.evaluate((element) => element.scrollTo({ top: 0, behavior: "instant" }));
-      } else {
-        await thread.hover();
-        await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
-      }
-      await thread.getByText("Transcript 0 message 0.", { exact: false }).waitFor();
-      await page.waitForFunction(
-        (selector) => document.querySelector(selector)?.scrollTop === 0,
-        `${activePane} .chat-thread`,
-      );
-      await frames(page);
-    },
+    run: scrollTranscriptToTop,
   },
   {
     id: "sidebar-toggle",

@@ -35,10 +35,7 @@ function themeBranding(settings: UiPreferences, catalogTheme?: CatalogTheme) {
   );
 }
 
-function subscribeMediaQuery(query: string, onChange: () => void): (() => void) | undefined {
-  if (typeof globalThis.matchMedia !== "function") {
-    return undefined;
-  }
+function subscribeMediaQuery(query: string, onChange: () => void): () => void {
   return listen(globalThis.matchMedia(query), "change", onChange);
 }
 
@@ -178,7 +175,18 @@ export function createApplicationTheme(
     try {
       const { createThemeCatalog } = await import("./theme-catalog.ts");
       if (!disposed) {
-        catalog = createThemeCatalog(gateway, publish, listeners.publish);
+        catalog = createThemeCatalog(
+          gateway,
+          () => {
+            // Built-in and locally imported palettes do not depend on the server catalog.
+            if (settings.theme.includes("/")) {
+              publish();
+            } else {
+              listeners.publish();
+            }
+          },
+          listeners.publish,
+        );
         catalogLoadError = undefined;
       }
     } catch (error) {
@@ -301,7 +309,7 @@ export function createApplicationTheme(
       stopGateway();
       presentationGeneration += 1;
       detachSystemThemeListener();
-      chromeBreakpointCleanup?.();
+      chromeBreakpointCleanup();
       listeners.clear();
     },
   };

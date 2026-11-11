@@ -129,10 +129,12 @@ it("retains callable authority only for the opted-in plugin in a mixed generatio
   const lease = await acquire(input);
   try {
     expect(ordinary.hasRetainedConsumers).toBe(false);
+    expect(ordinary.retainedWorkCount).toBe(0);
     expect(overlapping.hasRetainedConsumers).toBe(true);
     for (const instance of instances) {
       const call = instance.wrap(() => instance.pluginId);
       expect(lease.run(call)).toBe(instance.pluginId);
+      expect(instance.retainedWorkCount).toBe(1);
       instance.quiesce();
       if (instance === ordinary) {
         expect(() => lease.run(call)).toThrow("reloaded or disabled");

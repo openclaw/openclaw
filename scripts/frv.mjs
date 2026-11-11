@@ -34,6 +34,7 @@ import {
   MAX_RELEASE_ARTIFACT_BYTES,
   planReleaseChildRerun,
   readReleaseJobListing,
+  releaseWatcherJobName,
   releaseChildSpec,
   releaseChildSpecs,
   releaseGhRateLimitRetryAt,
@@ -1163,7 +1164,9 @@ async function inspectQualificationStatus(plan, runId, client) {
     ...parentJobBlockers(currentJobs, parent.run_attempt),
     ...childJobBlockers(status.children, plan.targetVersion),
   ];
-  const drainJobs = currentJobs.filter((job) => job.name === "Diagnostic Drain");
+  const drainJobs = currentJobs.filter(
+    (job) => releaseWatcherJobName(job.name) === "Diagnostic Drain",
+  );
   const drainJob = drainJobs.length === 1 ? drainJobs[0] : undefined;
   const drain = {
     status: drainJob?.status ?? "unknown",
@@ -1185,7 +1188,10 @@ async function inspectQualificationStatus(plan, runId, client) {
       decision = validateReleaseStateArtifact(artifact, { executionPlan: plan }, "decision");
     } else if (
       parent.status === "completed" ||
-      currentJobs.some((job) => job.name === "Release Decision" && job.status === "completed")
+      currentJobs.some(
+        (job) =>
+          releaseWatcherJobName(job.name) === "Release Decision" && job.status === "completed",
+      )
     ) {
       observationErrors.push("Decision evidence unavailable");
     }

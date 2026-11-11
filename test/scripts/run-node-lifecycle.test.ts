@@ -21,7 +21,7 @@ import {
 } from "../../scripts/lib/local-build-metadata.mts";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import { writeUpdateCompatibilityChunks } from "../../scripts/lib/update-compat-chunks.mts";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveNodeCompilerArgs } from "../../scripts/lib/vitest-node-args.mts";
 import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mts";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
@@ -245,7 +245,7 @@ process.kill(process.pid, "SIGKILL");
 it.runIf(process.platform !== "win32")(
   "preserves gateway watch signal loss across compile-cache process replacement",
   async ({ signal }) => {
-    const nodeArgs = resolveVitestNodeArgs();
+    const nodeArgs = resolveNodeCompilerArgs();
     await withShimFixture("scripts/run-node.mjs", async (fixture) => {
       const { checkoutRoot, fixtureRoot, implementationPath } = fixture;
       const childPidPath = path.join(fixtureRoot, "child.pid");

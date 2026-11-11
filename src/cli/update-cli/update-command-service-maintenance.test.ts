@@ -21,6 +21,7 @@ import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { stopSupervisedPredecessorGateway } from "../../infra/update-candidate-predecessor-stop.js";
 import { createDoctorServiceInspectionBudget } from "../../infra/update-doctor-deadline.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
@@ -694,6 +695,31 @@ it.each(["before stop", "after stop"] as const)(
       }
     }),
 );
+
+it("records the update's own Gateway stop so repair can restore it after the updater dies", () =>
+  withServiceHome(async (home) => {
+    const env = { ...process.env };
+    const run = createUpdateRun({ trigger: "cli" }, { env });
+    mockMaintenanceService(home, {
+      stop: vi.fn<GatewayService["stop"]>(async ({ onMutation }) => {
+        onMutation?.({ mode: "systemctl-stop" });
+      }),
+    });
+    const updateRun = { runId: run.runId, env };
+    const { recordPhase } = createUpdateCommandExecutionGuards({ run: updateRun }, process.cwd());
+    await maybeStopManagedServiceBeforeMutableUpdate({
+      updateRun,
+      recordPhase,
+      ...maintenanceDefaults,
+      root: process.cwd(),
+      phase: "prepare",
+    });
+    expect(findUpdateGatewayStop([getUpdateRun(run.runId, { env })!])).toEqual({
+      runId: run.runId,
+      started: false,
+    });
+    await closeStateDatabaseForTest();
+  }));
 
 it.each(["respawning", "unloaded", "disabled"] as const)(
   "candidate Doctor preserves native stop/recovery ownership with no Gateway lease: %s",

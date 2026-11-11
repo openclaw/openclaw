@@ -8,6 +8,7 @@ import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import * as worker from "../state/openclaw-state-worker-store.js";
 import { createConfigIO } from "./io.factory.js";
@@ -252,6 +253,20 @@ describe("last-known-good promotion after accepted writes", () => {
       }
     },
   );
+
+  it("promotes the first config written to a previously absent path", async () => {
+    const { configPath, env, io, root } = acceptedWriteFixture();
+    openOpenClawStateDatabase({ env });
+    const before = await io.readConfigFileSnapshot();
+    expect(before.exists).toBe(false);
+    await io.writeConfigFile({ gateway: { mode: "local" } }, { baseSnapshot: before });
+    const current = await io.readConfigFileSnapshot();
+    const entry = readConfigHealthStateFromStore({ env, homedir: () => root, logger: console })
+      .entries?.[configPath];
+    expect(entry?.lastObservedSuspiciousSignature ?? null).toBeNull();
+    expect(entry?.lastKnownGood?.bytes).toBe(Buffer.byteLength(current.raw!));
+    await expectPromotion(io, current);
+  });
 
   it("restores an absent health baseline when a first accepted write rolls back", async () => {
     const initialConfig = verboseConfig();

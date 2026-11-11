@@ -83,7 +83,8 @@ it("uses direct OpenClaw functions and hosted web search for subscription sharin
       selectedAuthMode: "oauth",
       selectedAuthFlow: "chatgpt-token-sharing",
     },
-  } as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
+    prompt: { resolveSystemPromptContribution: () => undefined },
+  } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
   const nativeCodeModeEnabled = shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
     nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
   });
@@ -846,6 +847,9 @@ describe("Codex app-server turn params", () => {
         sandbox: "danger-full-access",
         serviceTier: "flex",
         personality: "none",
+        baseInstructions: expect.stringContaining(
+          "You are a personal assistant running inside OpenClaw.",
+        ),
         developerInstructions: resumeParams.developerInstructions,
       });
       expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
@@ -1576,10 +1580,13 @@ describe("Codex app-server supervised branch lifecycle", () => {
     expect(startParams).toMatchObject({
       model: "native-effective",
       modelProvider: "native-provider",
-      developerInstructions: agentWorkspaceDeveloperInstructions,
+      developerInstructions: `<thread_policy>\n${agentWorkspaceDeveloperInstructions}\n</thread_policy>`,
       dynamicTools,
       environments: [{ environmentId: "local", cwd: workspaceDir }],
     });
+    // Reports adopt the base rendered for the probed native model, not the pre-probe estimate.
+    expect(startParams.baseInstructions).toEqual(expect.stringContaining("## Codex Runtime"));
+    expect(materialized.preparedOpenClawBaseInstructions).toBe(startParams.baseInstructions);
     for (const config of [forkParams.config, startParams.config] as Array<
       Record<string, unknown>
     >) {
@@ -1661,7 +1668,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
     expect(request.mock.calls[4]?.[1]).not.toHaveProperty("modelProvider");
     const resumedParams = request.mock.calls[4]?.[1];
     expect(resumedParams).toMatchObject({
-      developerInstructions: agentWorkspaceDeveloperInstructions,
+      developerInstructions: `<thread_policy>\n${agentWorkspaceDeveloperInstructions}\n</thread_policy>`,
       config: expect.any(Object),
     });
     const resumedConfig = (resumedParams as { config: Record<string, unknown> }).config;

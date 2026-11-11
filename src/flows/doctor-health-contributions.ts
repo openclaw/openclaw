@@ -220,7 +220,10 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
   // legacy-state detect/migrate pair reads the config.
-  await runCoreContributionHealth(ctx, ["core/doctor/removed-workspaces-state"]);
+  await runCoreContributionHealth(ctx, [
+    "core/doctor/removed-workspaces-state",
+    "core/doctor/session-archive-read-cache",
+  ]);
   const doctorOnlyStateMigrations = ctx.options.repair === true || ctx.options.yes === true;
   if (
     !doctorOnlyStateMigrations ||
@@ -690,15 +693,21 @@ async function runDoctorHealthContributionList(
 export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {
   const contributions = resolveDoctorHealthContributions();
   if (ctx.retirementOnly) {
-    const blocker =
-      (ctx.configResult.retirementOnly !== true &&
-        `config.${ctx.configResult.retirementOnlyBlocker ?? "preparation"}`) ||
-      (Boolean(ctx.agentDatabaseRefusals?.length) && "agent-admission") ||
-      (Boolean(ctx.healthFindings?.length) && "startup-findings") ||
-      (Boolean(ctx.updateWarnings?.length) && "startup-warnings");
-    if (blocker) {
+    const blockers = [
+      ...(ctx.configResult.retirementOnly !== true
+        ? (ctx.configResult.retirementOnlyBlockers ?? ["preparation"]).map(
+            (reason) => `config.${reason}`,
+          )
+        : []),
+      Boolean(ctx.agentDatabaseRefusals?.length) && "agent-admission",
+      Boolean(ctx.healthFindings?.length) && "startup-findings",
+      Boolean(ctx.updateWarnings?.length) && "startup-warnings",
+    ].filter((blocker): blocker is string => Boolean(blocker));
+    if (blockers.length > 0) {
       ctx.retirementOnly = false;
-      ctx.runtime.error(`Retirement-only Doctor widened: ${blocker}`);
+      for (const blocker of blockers) {
+        ctx.runtime.error(`Retirement-only Doctor widened: ${blocker}`);
+      }
     }
   }
   if (ctx.retirementOnly) {

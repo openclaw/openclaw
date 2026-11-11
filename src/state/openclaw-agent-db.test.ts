@@ -86,6 +86,7 @@ import {
   createCanonicalAgentIndexDrift,
   createTranscriptIdempotencyIndexDrift,
   createUnsafeIndexDrift,
+  expectCanonicalAgentIndexRepair,
 } from "./sqlite-index-drift.test-support.js";
 import {
   collectSqliteSchemaShape,
@@ -1926,16 +1927,9 @@ it("does not chmod shared parent directories for explicit database paths", () =>
 
 it("repairs every missing or drifted canonical agent-state named index", () => {
   const { options, dbPath } = createDatabaseFixture();
-  const canonicalShape = normalizeSqliteSchemaShapeSql(
-    createSqliteSchemaShapeFromSql(new URL("./openclaw-agent-schema.sql", import.meta.url)),
-  );
   createCanonicalAgentIndexDrift(dbPath);
   const reopened = openAgentDb(options);
-  expect(
-    normalizeSqliteSchemaShapeSql(
-      collectSqliteSchemaShape(requireNativeSqliteDatabase(reopened.db)),
-    ),
-  ).toEqual(canonicalShape);
+  expectCanonicalAgentIndexRepair(requireNativeSqliteDatabase(reopened.db));
   expect(readPragma(reopened.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   expectRows(
     reopened.db,

@@ -225,12 +225,6 @@
 /* On a phone both lanes share one column at the top: the center lane, then
  * arrivals. Each toast spans the screen between the gutters. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  /* Touch has no hover: an open stack shows every dismiss button. */
-  .app-toast-lane[data-open] > .app-toast > .app-toast__dismiss {
-    opacity: 1;
-    scale: 1;
-  }
-
   .app-toast--anchored {
     max-width: calc(var(--app-toast-anchor-width) - 24px);
   }

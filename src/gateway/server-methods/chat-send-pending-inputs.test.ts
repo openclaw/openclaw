@@ -36,7 +36,7 @@ import { readMentionInbox, dismissMentionInbox } from "../mention-inbox.test-sup
 import { refusePendingInputCommit } from "../pending-input-commit.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import * as sharingTargetRead from "../session-sharing-target-read.js";
-import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
+import { dispatchInboundMessageMock, installGatewayTestHooks, testState } from "../test-helpers.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { registerChatCollectedInputReplayCases } from "./chat-send-collected-input-replay.test-support.js";
 import { registerChatHistoryDeliveryCases } from "./chat-send-history-delivery.test-support.js";
@@ -152,6 +152,8 @@ describe("ordinary chat input admission", () => {
 
   async function createGuestMentionFixture() {
     const fixture = await createMentionFixture({ active: false, guest: true });
+    // Mention authority tests do not own background model calls for session naming.
+    await patchSessionEntryCore(fixture.scope, () => ({ displayName: "Guest mentions" }));
     const cfg = getRuntimeConfig();
     setRuntimeConfigSnapshot({
       ...cfg,
@@ -297,14 +299,16 @@ describe("ordinary chat input admission", () => {
 
   it("creates recipient-only mentions at original message commit, never at the queued ACK", async () => {
     await using fixture = await createMentionFixture();
-    const ack = await fixture.send();
+    const atAck = vi.fn(() => ({
+      transcript: fixture.readTranscript(),
+      notifications: fixture.mentionBroadcast.mock.calls.length,
+    }));
+    const ack = await fixture.send(vi.fn<RespondFn>(() => void atAck()));
     expectStarted(ack);
-    expect(await fixture.read()).toEqual([]);
-    const recorder = await fixture.dispatchedRecorder;
+    expect(atAck).toHaveReturnedWith({ transcript: fixture.activeTranscript, notifications: 0 });
     const sql = observeHostDataSql();
-    let committed: Awaited<ReturnType<typeof recorder.persistApproved>>;
     try {
-      committed = await recorder.persistApproved();
+      await fixture.finishDispatch();
       await fixture.read();
       const sqlArgs = sql.calls.flatMap((call) => call.mock.calls).flat();
       expect(
@@ -320,7 +324,16 @@ describe("ordinary chat input admission", () => {
     } finally {
       sql.restore();
     }
-    expect(committed?.appended).toBe(true);
+    const committed = fixture
+      .readTranscript()
+      .filter(isRecord)
+      .find(
+        (event) =>
+          isRecord(event.message) &&
+          event.message.idempotencyKey === `${fixture.params.idempotencyKey}:user`,
+      );
+    expect(committed).toBeDefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     expect(
       loadSessionEntry(fixture.scope)?.profileInvolvement?.profiles[
         fixture.bobClient.authenticatedUserProfile.profileId
@@ -328,7 +341,7 @@ describe("ordinary chat input admission", () => {
     ).toMatchObject({ hidden: false, lastMention: { sequence: expect.any(Number) } });
     expect(await fixture.read()).toMatchObject([
       {
-        messageId: committed?.messageId,
+        messageId: committed?.id,
         senderProfileId: fixture.client.authenticatedUserProfile?.profileId,
         excerpt: fixture.params.message,
       },
@@ -338,7 +351,6 @@ describe("ordinary chat input admission", () => {
     const id = (await fixture.read())[0]?.id;
     expect(id).toBeDefined();
     await dismissMentionInbox(fixture.inbox, fixture.bobClient, id ? [id] : []);
-    await recorder.persistApproved();
     await fixture.send();
     expect(await fixture.read()).toEqual([]);
   });
@@ -364,10 +376,10 @@ describe("ordinary chat input admission", () => {
   it("does not notify when approval replaces the selected token", async () => {
     await using fixture = await createMentionFixture({ preserveContent: false });
     await fixture.send();
-    const recorder = await fixture.dispatchedRecorder;
-    const committed = await recorder.persistApproved();
-    expect(committed?.message.content).toBe(fixture.approvedContent);
-    expect(committed?.message["__openclaw"]?.humanMentions).toBeUndefined();
+    await fixture.finishDispatch();
+    const committed = fixture.readTranscript().at(-1);
+    expect(committed).toMatchObject({ message: { content: fixture.approvedContent } });
+    expect(committed).not.toHaveProperty("message.__openclaw.humanMentions");
     expect(await fixture.read()).toEqual([]);
   });
 
@@ -376,7 +388,6 @@ describe("ordinary chat input admission", () => {
     async (identity) => {
       await using fixture = await createMentionFixture();
       await fixture.send();
-      const recorder = await fixture.dispatchedRecorder;
       if (identity === "expired") {
         fixture.context.dedupe.clear();
       }
@@ -408,7 +419,7 @@ describe("ordinary chat input admission", () => {
       } finally {
         read.mockRestore();
       }
-      await recorder.persistApproved();
+      await fixture.finishDispatch();
       expect(await fixture.read()).toHaveLength(1);
       expect(await fixture.read(fixture.carolClient)).toEqual([]);
     },
@@ -861,7 +872,10 @@ describe("ordinary chat input admission", () => {
   it.each(["sender", "payload", "cancelled"] as const)(
     "never re-adopts recorded input when its %s changes",
     async (change) => {
+      testState.agentsConfig = { entries: { main: { identity: { name: "Robo" } } } };
       await using fixture = await createMentionFixture({ preserveContent: true });
+      // This case needs an agent-owned pending input to cancel before its original commit.
+      fixture.params.message += " Robo, please review too.";
       const { recorder, original } = await admitPending(fixture);
       if (change === "cancelled") {
         recorder?.finishPendingInput?.("cancelled");

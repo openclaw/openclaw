@@ -6,10 +6,12 @@ import {
   type SessionPendingInput,
 } from "../../config/sessions/session-accessor.js";
 import {
+  getRpcSourceForGateway,
   getRpcSourceIdentity,
   isRpcSourceQueued,
   listRpcSourceEntries,
 } from "../../sessions/session-controller.rpc-sources.js";
+import { readSessionControllerSteerNow } from "../../sessions/session-controller.steer.js";
 import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
 import {
   createCurrentUserProfileMessageProjector,
@@ -21,6 +23,7 @@ import {
   captureRpcSourceScopeMatcher,
   type SessionRuntimeScope,
 } from "../session-runtime-scope.js";
+import type { GatewayContextResolver } from "./types.js";
 
 const PENDING_INPUT_DISPLAY_MAX_BYTES = 128 * 1024;
 // Correlation is useful for browser UUIDs, but arbitrary external run IDs must
@@ -38,7 +41,7 @@ export function captureQueuedChatInputRunIds(
         runId.length > PENDING_INPUT_CORRELATION_MAX_CHARS ||
         !matchesScope(source) ||
         !isRpcSourceQueued(source) ||
-        source.input.custody.enqueued !== true ||
+        source.input.phase !== "waiting" ||
         source.input.injection !== undefined
       ) {
         return [];
@@ -93,6 +96,8 @@ export async function readChatPendingInputs(
     maxChars: number;
     queuedRunIds?: ReadonlySet<string>;
     cronStorePath?: string;
+    resolveGatewayContext?: GatewayContextResolver;
+    physicalPaths?: SessionRuntimeScope["physicalPaths"];
   },
 ): Promise<ChatPendingInputsPage> {
   const page = await listSessionPendingInputs(scope, {
@@ -104,6 +109,13 @@ export async function readChatPendingInputs(
     options.cronStorePath,
   );
   const projectProfile = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
+  const matchesScope =
+    scope.storePath &&
+    captureRpcSourceScopeMatcher({
+      storePath: scope.storePath,
+      physicalPaths: options.physicalPaths,
+      resolveGatewayContext: options.resolveGatewayContext,
+    });
   const visible = page.items.flatMap((input) => {
     const message = projectPendingInputMessage(
       input,
@@ -139,6 +151,21 @@ export async function readChatPendingInputs(
         display.runId = item.runId;
         if (item.state === "queued" && options.queuedRunIds?.has(item.runId)) {
           display.queued = true;
+        }
+        if (item.state === "queued") {
+          const source = getRpcSourceForGateway(item.runId, options.resolveGatewayContext);
+          if (source) {
+            const identity = getRpcSourceIdentity(source);
+            if (
+              matchesScope &&
+              matchesScope(source) &&
+              identity.agentId === scope.agentId &&
+              identity.sessionKey === scope.sessionKey &&
+              identity.sessionId === scope.sessionId
+            ) {
+              display.steerNow = readSessionControllerSteerNow(source.input);
+            }
+          }
         }
       }
       return display;

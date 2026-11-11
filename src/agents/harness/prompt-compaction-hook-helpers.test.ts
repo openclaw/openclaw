@@ -15,6 +15,7 @@ import { clearActivePluginRegistry, setActivePluginRegistry } from "../../plugin
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withAuthorizedPromptBuildTurn } from "../authorized-prompt-build.js";
 import { forgetPromptBuildDrainCacheForRun } from "../plugin-turn-context.js";
 import { awaitAgentHarnessAgentEndHook } from "./lifecycle-hook-helpers.js";
 import { resolveAgentHarnessBeforePromptBuildResult as buildBase } from "./prompt-compaction-hook-helpers.js";
@@ -183,6 +184,31 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect(retained[0]).not.toBe(retained[1]);
     expect(messages[0]!.content[0]!.arguments.nested.value).toBe("original");
   });
+  it("reports continuity once per logical turn across fallback candidates", async () => {
+    const seen: unknown[] = [];
+    installHooks(
+      promptHook(
+        (event) => {
+          seen.push((event as { continuity?: unknown }).continuity);
+          return { prependContext: `restored ${seen.length}` };
+        },
+        { requiresToolAuthority: true },
+      ),
+    );
+    const build = (state: "resumed" | "invalidated") =>
+      buildPrompt({
+        toolAuthority: toolAuthority(),
+        continuity: { state, history: "none" },
+      });
+    const prompts = await withAuthorizedPromptBuildTurn(async () => [
+      (await build("invalidated")).prompt,
+      (await build("invalidated")).prompt,
+    ]);
+    expect(prompts).toEqual(["restored 1\n\nhello", "restored 1\n\nhello"]);
+    expect(seen).toEqual([{ state: "invalidated", history: "none" }]);
+    expect((await build("resumed")).prompt).toBe("restored 2\n\nhello");
+    expect(seen[1]).toEqual({ state: "resumed", history: "none" });
+  });
   it("preserves registration chaining while isolating prepare and authorized dispatches", async () => {
     const messages = [{ role: "user", content: [{ type: "text", text: "original" }] }];
     const calls: string[] = [];
@@ -231,6 +257,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     });
     expect(calls).toEqual(["prepare", "first", "second", "build", "authorized"]);
     expect(result.prompt).toBe("prepare\n\nfirst\n\nsecond\n\nauthorized\n\nhello");
+    expect(result).not.toHaveProperty("systemPromptReplaced");
     expect(messages[0]!.content[0]!.text).toBe("original");
   });
   it("classifies restrictive globs before building system instructions", async () => {
@@ -253,6 +280,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect(build).toHaveBeenCalledWith({ toolsAllow, hasToolRestrictions: true });
     expect(result).toMatchObject({
       toolsAllow,
+      systemPromptReplaced: true,
       threadDeveloperInstructions: "hook replacement",
       turnDeveloperInstructions:
         "---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nbefore replacement\n\n---\n\n---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nafter replacement\n\n---",

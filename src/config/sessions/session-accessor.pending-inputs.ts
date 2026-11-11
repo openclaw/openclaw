@@ -62,6 +62,7 @@ import { readPendingInputSource } from "./session-pending-input-source.js";
 import { preparePendingInputStore, type PendingInputScope } from "./session-pending-input-store.js";
 import {
   isFinalInputCompletion,
+  isSessionPendingInputRetiredByUser,
   parseSessionPendingInputMessage,
 } from "./session-pending-input-value.js";
 import {
@@ -213,9 +214,15 @@ type PendingInputStageOptions = PendingInputRequest & {
   lifecycleAdmission?: SessionInputLifecycleAdmission;
   onCommitted?: (receipt: SessionPendingInputReceipt) => void;
   authority?: SessionPendingInputAuthority;
+  recoverySource?: SessionPendingInputOwner["recoverySource"];
   trackCompletion?: boolean;
   /** A current explicit operation may retry its cancelled, unconsumed input. */
   retryCancelled?: boolean;
+  /**
+   * Durable channel redelivery mints a new run for the same source turn. It may
+   * reopen only its own byte-identical attempt that was cancelled before consumption.
+   */
+  reclaimCancelledSourceTurn?: boolean;
   assertCurrent: () => void;
   /** Fresh source acceptance only; recorded pending and transcript inputs keep their prior consent. */
   assertFreshInputCurrent?: SessionSourceAssertion;
@@ -359,10 +366,22 @@ async function stagePreparedPendingInput(
         );
       }
     };
+    // A channel retry after a pre-consumption failure carries a fresh run ID. Without
+    // reopening that dead attempt, every redelivery conflicts until ingress gives up.
+    const reclaimsCancelledSourceTurn =
+      options.reclaimCancelledSourceTurn === true &&
+      !previous &&
+      existing?.state === "cancelled" &&
+      existing.consumed_event_id == null &&
+      existing.request_hash === requestHash &&
+      !isSessionPendingInputRetiredByUser(existing.message_json);
+    const reopensCancelled =
+      existing?.state === "cancelled" &&
+      (options.retryCancelled === true || reclaimsCancelledSourceTurn);
     if (existing) {
       if (
         !matchesSessionPendingInputRequest(existing, stableMessage, requestHash) ||
-        existing.run_id !== options.runId
+        (existing.run_id !== options.runId && !reclaimsCancelledSourceTurn)
       ) {
         throw new Error("Pending input idempotency key conflicts with the accepted input");
       }
@@ -379,12 +398,11 @@ async function stagePreparedPendingInput(
       }
       assertUnowned();
       if (
-        (!options.requestFingerprint && !options.trackCompletion) ||
-        (existing.state !== "queued" &&
-          !(options.retryCancelled && existing.state === "cancelled")) ||
+        (!options.requestFingerprint && !options.trackCompletion && !reclaimsCancelledSourceTurn) ||
+        (existing.state !== "queued" && !reopensCancelled) ||
         (existing.lifecycle_generation === lifecycleGeneration &&
           !options.trackCompletion &&
-          !(options.retryCancelled && existing.state === "cancelled"))
+          !reopensCancelled)
       ) {
         throw new Error("Pending input ownership ended; submit a new turn to continue");
       }
@@ -501,6 +519,21 @@ async function stagePreparedPendingInput(
       ...(complete ? { complete, completeAsync } : {}),
       settled: store.settled,
     };
+    const ownerScope = {
+      runId: options.runId,
+      recoverySource: options.recoverySource,
+      sessionActor: scope.sessionActor,
+      agentId: scope.agentId,
+      databaseAgentId: store.databaseAgentId,
+      sessionId: scope.sessionId,
+      sessionKey: store.sessionKey,
+      databasePath: store.path,
+      workerDatabasePath: store.workerDatabasePath,
+      idempotencyKey: identity.idempotencyKey,
+      lifecycleGeneration,
+      config: options.config,
+      authority: options.authority,
+    };
     if (committed) {
       if (options.trackCompletion) {
         const committedHash = resolveCommittedPendingInputRequestHash(
@@ -523,24 +556,14 @@ async function stagePreparedPendingInput(
         await assertCurrent();
       }
       owner = {
-        sessionActor: scope.sessionActor,
-        agentId: scope.agentId,
-        databaseAgentId: store.databaseAgentId,
+        ...ownerScope,
         inputId: randomUUID(),
         transcriptInputId: committed.messageId,
-        sessionId: scope.sessionId,
-        sessionKey: store.sessionKey,
-        databasePath: store.path,
-        workerDatabasePath: store.workerDatabasePath,
-        idempotencyKey: identity.idempotencyKey,
-        lifecycleGeneration,
         messageJson: JSON.stringify(committed.message),
-        config: options.config,
         assertCurrent: () => {
           store.assertCurrent();
           options.assertCurrent();
         },
-        authority: options.authority,
         consumed: true,
         finish,
       };
@@ -618,24 +641,14 @@ async function stagePreparedPendingInput(
               );
             }
             owner = {
-              sessionActor: scope.sessionActor,
-              agentId: scope.agentId,
-              databaseAgentId: store.databaseAgentId,
+              ...ownerScope,
               inputId: staged.input_id,
               transcriptInputId: staged.input_id,
-              sessionId: scope.sessionId,
-              sessionKey: store.sessionKey,
-              databasePath: store.path,
-              workerDatabasePath: store.workerDatabasePath,
-              idempotencyKey: identity.idempotencyKey,
-              lifecycleGeneration,
               messageJson: staged.message_json,
-              config: options.config,
               assertCurrent: () => {
                 store.assertCurrent();
                 assertAdmittedCurrent();
               },
-              authority: options.authority,
               ...(existing ? { dedupeRetryAvailable: true as const } : {}),
               finish,
             };

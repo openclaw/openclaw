@@ -293,14 +293,14 @@ export async function advanceConfigHealthBaselineForAcceptedWrite(
             stat: null,
           })
         : null;
-    const preserveBaseline =
-      !before ||
-      resolveConfigObserveSuspiciousReasons({
-        ...before,
-        parsed: source.parsed,
-        lastKnownGood: baseline.comparisonBaseline,
-        lastObservedSuspiciousSignature: baseline.previousSuspiciousSignature,
-      }).length > 0;
+    const preserveBaseline = before
+      ? resolveConfigObserveSuspiciousReasons({
+          ...before,
+          parsed: source.parsed,
+          lastKnownGood: baseline.comparisonBaseline,
+          lastObservedSuspiciousSignature: baseline.previousSuspiciousSignature,
+        }).length > 0
+      : source.exists;
     const nextBaseline = preserveBaseline ? baseline.previousLastKnownGood : current;
     const nextSignature = preserveBaseline
       ? createInheritedConfigAnomalySignature(current.hash)

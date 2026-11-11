@@ -58,13 +58,10 @@ describe("AppSidebar session ownership", () => {
         "agent:main:shared",
         "agent:main:collab",
       ]);
-      const result = harness.sessions.state.result;
-      const solo = result?.sessions.find((row) => row.key.endsWith(":solo"));
-      const shared = result?.sessions.find((row) => row.key.endsWith(":shared"));
-      const collab = result?.sessions.find((row) => row.key.endsWith(":collab"));
-      if (!result || !solo || !shared || !collab) {
-        throw new Error("expected participant rows");
-      }
+      const result = harness.result;
+      const solo = harness.row("agent:main:solo");
+      const shared = harness.row("agent:main:shared");
+      const collab = harness.row("agent:main:collab");
       setEffectiveOwner(solo, { type: "human", id: "profile-ada", label: "Ada" });
       solo.hasActiveRun = true;
       solo.status = "running";
@@ -220,10 +217,7 @@ describe("AppSidebar session ownership", () => {
         "agent:main:a",
         "agent:main:b",
       ]);
-      const result = harness.sessions.state.result;
-      if (!result) {
-        throw new Error("expected session list");
-      }
+      const result = harness.result;
       for (const row of result.sessions) {
         setEffectiveOwner(row, { type: "human", id: "profile-ada", label: "Ada" });
         row.participants = [{ identity: { type: "profile", id: "profile-ada" }, label: "Ada" }];
@@ -272,10 +266,7 @@ describe("AppSidebar session ownership", () => {
     gateway.publish({ hello: sessionSharingHello(true) });
     const keys = ["main", "b1", "a1", "b2", "a2"].map((id) => `agent:main:${id}`);
     const harness = createSessionsHarness("main", keys);
-    const result = harness.sessions.state.result;
-    if (!result) {
-      throw new Error("expected session list");
-    }
+    const result = harness.result;
     for (const [index, id, label, updatedAt] of [
       [1, "profile-bob", "Bob", 40],
       [2, "profile-ada", "Ada", 40],
@@ -301,7 +292,7 @@ describe("AppSidebar session ownership", () => {
 
     let menu = await openSessionMenu(sidebar);
     expect(await sessionMenuChoice(menu, "sort:people")).toBeNull();
-    expect((await sessionMenuChoice(menu, "sort:created"))?.getAttribute("aria-selected")).toBe(
+    expect((await sessionMenuChoice(menu, "sort:updated"))?.getAttribute("aria-selected")).toBe(
       "true",
     );
     sidebar.dismissTransientMenus();
@@ -370,7 +361,7 @@ describe("AppSidebar session ownership", () => {
     );
   });
 
-  it("groups sessions by owner based on the live session-owner roster", async () => {
+  it("keeps owner sections tied to readable rows when the owner facet changes", async () => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
     gateway.publish({
       hello: sessionSharingHello(false),
@@ -381,12 +372,9 @@ describe("AppSidebar session ownership", () => {
       "agent:main:ada",
       "agent:main:zoe",
     ]);
-    const result = harness.sessions.state.result;
-    const ada = result?.sessions.find((row) => row.key.endsWith(":ada"));
-    const zoe = result?.sessions.find((row) => row.key.endsWith(":zoe"));
-    if (!result || !ada || !zoe) {
-      throw new Error("expected owner rows");
-    }
+    const result = harness.result;
+    const ada = harness.row("agent:main:ada");
+    const zoe = harness.row("agent:main:zoe");
     setEffectiveOwner(ada, { type: "human", id: "profile-ada", label: "Ada" });
     setEffectiveOwner(zoe, {
       type: "human",
@@ -454,12 +442,11 @@ describe("AppSidebar session ownership", () => {
     result.owners = [{ type: "human", id: "profile-zoe", label: "Zoe" }];
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
-    expect(ownerSections()).toHaveLength(0);
+    expect(ownerSections()).toHaveLength(2);
     menu = await openSessionMenu(sidebar);
-    expect(await sessionMenuChoice(menu, "grouping:person")).toBeNull();
-    expect(
-      (await sessionMenuChoice(menu, "grouping:category"))?.getAttribute("aria-selected"),
-    ).toBe("true");
+    expect((await sessionMenuChoice(menu, "grouping:person"))?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
     sidebar.dismissTransientMenus();
 
     result.owners = [
@@ -479,12 +466,9 @@ describe("AppSidebar session ownership", () => {
       "agent:main:archived",
       "agent:main:collaborator",
     ]);
-    const result = harness.sessions.state.result;
-    const archived = result?.sessions.find((row) => row.key.endsWith(":archived"));
-    const collaborator = result?.sessions.find((row) => row.key.endsWith(":collaborator"));
-    if (!result || !archived || !collaborator) {
-      throw new Error("expected archive attribution rows");
-    }
+    const result = harness.result;
+    const archived = harness.row("agent:main:archived");
+    const collaborator = harness.row("agent:main:collaborator");
     archived.archived = true;
     archived.archivedBy = {
       type: "human",

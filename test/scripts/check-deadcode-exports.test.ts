@@ -570,16 +570,17 @@ const unrelatedArgs = [
     expect(compiled).not.toContain("prepareTtsRequest as");
   });
 
-  it("models telemetry only through live source imports", () => {
+  it("models named consumers only through live source imports", () => {
     const compile = createDynamicConsumerCompiler();
     for (const [relative, name] of [
       ["scripts/perf/transcript-broadcast-measure.ts", "installTeamStressTelemetryIpc"],
       ["test/scripts/team-shape-stress.test.ts", "startTeamStressTelemetry"],
+      ["scripts/perf/update-doctor-generation-measure.ts", "readUpdatePhysicalDatabaseGenerations"],
     ] as const) {
       const file = path.resolve(relative);
       const source = fs.readFileSync(file, "utf8");
       expect(compile()).toContain(`${name} as __dynamic`);
-      const removed = replaceFixture(source, name, "");
+      const removed = replaceFixture(source, name, "otherConsumer");
       expect(compile(new Map([[file, removed]]))).not.toContain(`${name} as __dynamic`);
     }
   });
@@ -690,10 +691,11 @@ function other(lineageCompletion: typeof lineageWriter) {
     const wrapper = fs.readFileSync(wrapperPath, "utf8");
     const expected = [
       "claimCreatedAnchor",
-      "collectUnusedDependencyCaches",
       "dependencyCacheRoot",
       "holdDependencyCache",
       "publishDependencyCache",
+      "stageDependencyCache",
+      "sweepDependencyCaches",
       "privateDependencyDonor",
       "withDependencyCacheLock",
       "recoverDependencyCache",
@@ -716,7 +718,7 @@ function other(lineageCompletion: typeof lineageWriter) {
       expected.filter((name) => name !== "dependencyCacheRoot"),
     );
     for (const disconnected of [
-      replaceFixture(wrapper, '"$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs"', '""'),
+      replaceFixture(wrapper, '"$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs" <<', '"" <<'),
       replaceFixture(wrapper, "pathToFileURL(process.argv[6])", "pathToFileURL(process.argv[5])"),
       replaceFixture(wrapper, "const { claimCreatedAnchor,", "// const { claimCreatedAnchor,"),
       replaceFixture(
@@ -728,7 +730,11 @@ function other(lineageCompletion: typeof lineageWriter) {
       expect(compile(disconnected)).toEqual(["recoverDependencyCache"]);
     }
     for (const disconnected of [
-      replaceFixture(wrapper, '"$script_parent_dir/pr-lib/cache-lifetime.mjs"', '""'),
+      replaceFixture(
+        wrapper,
+        'node --input-type=module - "$script_parent_dir/pr-lib/cache-lifetime.mjs"',
+        'node --input-type=module - ""',
+      ),
       replaceFixture(wrapper, "pathToFileURL(process.argv[2])", "pathToFileURL(process.argv[3])"),
       replaceFixture(
         wrapper,

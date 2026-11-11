@@ -25,42 +25,62 @@ it("rejects inferred thenables at the private worker boundary and preserves rele
     "extensions/memory-core/src/memory-entry-origins.worker.ts",
     "extensions/memory-core/src/standing-intents.worker.ts",
     "extensions/memory-core/src/memory/manager-publication.worker.ts",
+    "src/infra/sqlite-transaction.ts",
+    "src/infra/sqlite-transaction-types.ts",
+    "src/infra/sqlite-source-fence.ts",
+    "src/infra/sqlite-store.worker.ts",
+    "src/agents/auth-profiles/inline-usage.worker.ts",
+    "src/agents/harness/context-engine-turn-outbox.worker.ts",
+    "src/agents/plugin-model-catalog.worker.ts",
+    "src/boards/sqlite-board-store.worker.ts",
+    "src/config/sessions/session-sharing-store.worker.ts",
+    "src/config/sessions/session-transcript-projection-publication.worker.ts",
+    "src/session-cards/progress-card-store.worker.ts",
   ];
-  const bodies = [...transactionNames, "runSqliteSingleStatementSync"].map(
-    (name) => `
-const ${name}Result: number = worker.${name}(database, () => 7);
-worker.${name}(database, () => {});
-worker.${name}(database, () => { throw new Error("stopped"); });
+  const transactions = [
+    ...transactionNames.map((name) => ({ name, call: `worker.${name}(database` })),
+    { name: "reserved", call: "native.runSqliteReservedTransactionSync(database" },
+    { name: "coreWorker", call: "native.runSqliteWorkerTransactionSync(context" },
+  ];
+  const bodies = [
+    ...transactions,
+    { name: "singleStatement", call: "worker.runSqliteSingleStatementSync(database" },
+  ].map(({ name, call }) => {
+    const options = name === "reserved" ? ", {}" : "";
+    return `
+const ${name}Result: number = ${call}, () => 7${options});
+${call}, () => {}${options});
+${call}, () => { throw new Error("stopped"); }${options});
 // @ts-expect-error an async callback escapes the synchronous transaction
-worker.${name}(database, async () => 7);
+${call}, async () => 7${options});
 // @ts-expect-error non-async Promise returns also escape the transaction
-worker.${name}(database, () => Promise.resolve(7));
+${call}, () => Promise.resolve(7)${options});
 // @ts-expect-error a union must not discard its asynchronous branch
-worker.${name}(database, mixed);
+${call}, mixed${options});
 // @ts-expect-error inline union inference must retain its asynchronous branch
-worker.${name}(database, () => Math.random() ? 7 : Promise.resolve(7));
+${call}, () => Math.random() ? 7 : Promise.resolve(7)${options});
 // @ts-expect-error PromiseLike has the same transaction lifetime violation
-worker.${name}(database, thenable);
+${call}, thenable${options});
 // @ts-expect-error contextual unknown must not widen an inferred Promise result
-const ${name}Unknown: unknown = worker.${name}(database, async () => 7);
+const ${name}Unknown: unknown = ${call}, async () => 7${options});
 // @ts-expect-error contextual void must not erase an inferred Promise result
-const ${name}Void: void = worker.${name}(database, async () => {});
+const ${name}Void: void = ${call}, async () => {}${options});
 // @ts-expect-error synchronous result types must stay correlated with the callback
-const ${name}Wrong: string = worker.${name}(database, () => 7);
-`,
-  );
-  const commits = transactionNames.map(
-    (name) => `
-worker.${name}(database, () => 7, { withCommit(commit) { commit(); } });
-worker.${name}(database, () => 7, { withCommit(commit) { commit(); return 1; } });
+const ${name}Wrong: string = ${call}, () => 7${options});
+`;
+  });
+  const commits = transactions.map(
+    ({ call }) => `
+${call}, () => 7, { withCommit(commit) { commit(); } });
+${call}, () => 7, { withCommit(commit) { commit(); return 1; } });
 // @ts-expect-error asynchronous commit guards must not outlive the transaction
-worker.${name}(database, () => 7, { withCommit: async (commit) => commit() });
+${call}, () => 7, { withCommit: async (commit) => commit() });
 // @ts-expect-error mixed commit results also contain an asynchronous branch
-worker.${name}(database, () => 7, { withCommit: mixedCommit });
+${call}, () => 7, { withCommit: mixedCommit });
 // @ts-expect-error inline mixed commit inference must retain its asynchronous branch
-worker.${name}(database, () => 7, { withCommit: (commit) => Math.random() ? commit() : Promise.resolve() });
+${call}, () => 7, { withCommit: (commit) => Math.random() ? commit() : Promise.resolve() });
 // @ts-expect-error PromiseLike commit results must remain synchronous
-worker.${name}(database, () => 7, { withCommit: thenableCommit });
+${call}, () => 7, { withCommit: thenableCommit });
 `,
   );
   const session = createNativeTypeScriptProject({
@@ -75,9 +95,13 @@ worker.${name}(database, () => 7, { withCommit: thenableCommit });
       }),
       [sourceFileName]: `
 import type { DatabaseSync } from "node:sqlite";
+import * as native from "../infra/sqlite-transaction.js";
+import { runSqliteSourceFence } from "../infra/sqlite-source-fence.js";
 import * as worker from "./sqlite-worker-runtime.js";
 import * as legacy from "./sqlite-runtime.js";
 declare const database: DatabaseSync;
+declare const context: Parameters<typeof native.runSqliteWorkerTransactionSync>[0];
+declare const fence: Parameters<typeof runSqliteSourceFence>[0];
 declare const mixed: () => number | Promise<number>;
 declare const thenable: () => PromiseLike<number>;
 declare const mixedCommit: (commit: () => void) => void | Promise<void>;
@@ -92,6 +116,23 @@ function wrap<Result>(operation: worker.SynchronousSqliteCallback<Result>): Resu
 }
 const forwarded: number = forward(() => 7);
 const wrapped: number = wrap(() => 7);
+function coreForward<Result>(operation: worker.SynchronousSqliteCallback<Result>): Result {
+  return native.runSqliteWorkerTransactionSync(context, operation);
+}
+function reservedWrap<Result>(operation: worker.SynchronousSqliteCallback<Result>): Result {
+  return native.runSqliteReservedTransactionSync(database, () => operation(), {});
+}
+const coreForwarded: number = coreForward(() => 7);
+const reservedWrapped: number = reservedWrap(() => 7);
+const inOperation = <Result>(operation: () => Result): Result => operation();
+function fenceForward<Result>(operation: worker.SynchronousSqliteCallback<Result>): Promise<Result> {
+  return runSqliteSourceFence(fence, inOperation, operation);
+}
+const fenced: Promise<number> = fenceForward(() => 7);
+// @ts-expect-error the reserved execution producer must finish before settlement
+runSqliteSourceFence(fence, inOperation, async () => 7);
+// @ts-expect-error a reserved producer must retain its asynchronous union branch
+runSqliteSourceFence(fence, inOperation, mixed);
 worker.ensureOpenClawAgentStandingIntentsSchema(database, forward);
 // @ts-expect-error schema transaction runners must also finish synchronously
 worker.ensureOpenClawAgentStandingIntentsSchema(database, async (install) => install());
