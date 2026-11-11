@@ -74,6 +74,9 @@ public struct OpenClawIDNodeTrustTarget: Sendable {
     public let peerKey: String
     public let state: OpenClawIDNodeTrustState
     public let evidence: Data
+    /// The verified snapshot's node enrollment keys. An operator key requested with the node
+    /// appears here only when the owner approved it with the node.
+    public let nodePeerKeys: [String]
 }
 
 /// Verified observations survive a refused dialing verdict. Persist observation before using verdict.
@@ -197,6 +200,7 @@ public enum OpenClawIDNodeTrust {
             let sequence = try fields["seq"]!.number()
             let issued = try fields["issued_at"]!.number()
             let snapshotBinding = try fields["binding_seq"]!.number(minimum: 1)
+            let nodePeerKeys = try self.strings(fields["node_peer_keys"]!, prefix: "iroh:")
             if snapshotBinding > bindingSequence {
                 return .init(observation: pinned, verdict: .failure(.rollback))
             }
@@ -220,7 +224,7 @@ public enum OpenClawIDNodeTrust {
                 .rollback
             } else if snapshotBinding < bindingSequence {
                 .rollback
-            } else if try !self.strings(fields["node_peer_keys"]!, prefix: "iroh:").contains(peerKey) {
+            } else if try !nodePeerKeys.contains(peerKey) {
                 .notAdmitted
             } else {
                 nil
@@ -235,7 +239,8 @@ public enum OpenClawIDNodeTrust {
                 serverKey: server,
                 peerKey: peerKey,
                 state: observation ?? candidate,
-                evidence: OpenClawIDCanonicalJSON.object(response).encoded)
+                evidence: OpenClawIDCanonicalJSON.object(response).encoded,
+                nodePeerKeys: nodePeerKeys)
             return .init(observation: observation, verdict: .success(target))
         } catch let error as OpenClawIDNodeEnrollmentError {
             return .init(observation: pinned, verdict: .failure(error))

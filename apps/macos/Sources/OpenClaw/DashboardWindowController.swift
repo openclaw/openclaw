@@ -136,6 +136,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         url: URL,
         auth: DashboardWindowAuth,
         websiteDataStore: WKWebsiteDataStore,
+        isolatesReadingTabs: Bool = false,
         updater: UpdaterProviding? = nil,
         updateBridgeEnabled: Bool = true,
         tlsParams: GatewayTLSParams? = nil,
@@ -195,8 +196,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.documentHost = documentHost
         self.webView = documentHost.webView
 
-        let readingDataStore = browserSessionLease?.session == nil ? websiteDataStore : WKWebsiteDataStore
-            .nonPersistent()
+        let readingDataStore = browserSessionLease?.session == nil && !isolatesReadingTabs
+            ? websiteDataStore : WKWebsiteDataStore.nonPersistent()
         let dashboardPane = BrowserProfileImportBannerView.makeDashboardPane(webView: self.webView)
         self.nativeBrowser = DashboardNativeBrowserHost(
             dashboardWebView: self.webView,

@@ -26,10 +26,7 @@ struct OnboardingNodeInvitationServiceTests {
                 Issue.record("Unavailable enrollment must not prepare node capabilities")
                 throw CocoaError(.featureUnsupported)
             },
-            install: { _ in
-                Issue.record("Unavailable enrollment must not install a node")
-                return false
-            })
+            install: { _, _ in Issue.record("Unavailable enrollment must not install a node") })
         let model = OnboardingOpenClawIDModel(service: service)
         #expect(model.begin(.joinNode) == nil)
         #expect(model.step == .nodeInvitation)
@@ -62,7 +59,7 @@ struct OnboardingNodeInvitationServiceTests {
     }
 
     @Test(arguments: [false, true])
-    func `one owner approval installs node and chat once, and cancellation rejects a late descriptor`(
+    func `one owner approval installs once, reads the chat grant from the signed snapshot, and cancellation rejects a late descriptor`(
         cancel: Bool) async throws
     {
         let fixtureURL = URL(fileURLWithPath: #filePath)
@@ -84,7 +81,7 @@ struct OnboardingNodeInvitationServiceTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let database = root.appendingPathComponent("node.sqlite")
         let http = DescriptorGate(response: response)
-        var installed: [MacNodeOpenClawIDTarget] = []
+        var installed: [(target: MacNodeOpenClawIDTarget, chat: Bool)] = []
         let operatorSeed = Data(repeating: 9, count: 32)
         let service = OnboardingNodeInvitationService(
             databaseURL: database,
@@ -96,10 +93,7 @@ struct OnboardingNodeInvitationServiceTests {
             operatorIdentityStore: { _ in FixtureIdentity(seed: operatorSeed) },
             http: http,
             now: { fixture.now },
-            install: {
-                installed.append($0)
-                return true
-            })
+            install: { installed.append(($0, $1)) })
         let model = OnboardingOpenClawIDModel(service: service)
         #expect(model.accountUnavailableReason != nil)
         await model.begin(.joinNode)?.value
@@ -129,15 +123,17 @@ struct OnboardingNodeInvitationServiceTests {
             #expect(model.step == .signIn)
             #expect(model.error == nil)
         } else {
-            #expect(model.step == .connected(claw: hostname))
-            #expect(installed.count == 1)
+            // The fixture snapshot admits only W, so the owner approved the node alone and the
+            // primary connection is left as it was.
+            #expect(model.step == .nodeConnection(claw: hostname, connected: true))
+            #expect(installed.count == 1 && installed.first?.chat == false)
             model.cancel()
         }
         let store = OpenClawIDNodeNativeTrustStore(
-            databaseURL: database, enrollmentID: installed.first?.enrollmentID ?? UUID(), assertCurrent: {})
+            databaseURL: database, enrollmentID: installed.first?.target.enrollmentID ?? UUID(), assertCurrent: {})
         let saved = try await store.savedEnrollment(hostname: hostname)
         #expect((saved != nil) == !cancel)
-        if let selected = installed.first { #expect(saved?.enrollmentID == selected.enrollmentID) }
+        if let selected = installed.first { #expect(saved?.enrollmentID == selected.target.enrollmentID) }
         await store.close()
         #expect(await http.requestCount == 2)
         #expect(await http.redemptionCarriesOperatorKey)

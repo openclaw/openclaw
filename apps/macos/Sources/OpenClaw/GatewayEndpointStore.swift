@@ -798,6 +798,10 @@ actor GatewayEndpointStore {
     {
         // SourceSnapshot owns route credentials and identity. Publish every ready
         // path through one derivation so local, direct, and tunnel routes cannot drift.
+        // The OpenClaw ID tunnel key is the credential; configured shared secrets belong
+        // to whatever Gateway they were saved for and never travel to the claw.
+        let token = openClawIDSession == nil ? source.token : nil
+        let password = openClawIDSession == nil ? source.password : nil
         let mode: AppState.ConnectionMode = source.mode == .local ? .local : .remote
         let tls = GatewayTLSRoute.resolve(
             url: url,
@@ -805,8 +809,8 @@ actor GatewayEndpointStore {
             configuredFingerprint: mode == .local ? nil : source.remoteTLSFingerprint)
         let changed = self.resolvedEndpoint.map { endpoint in
             endpoint.config.url != url ||
-                endpoint.config.token != source.token ||
-                endpoint.config.password != source.password ||
+                endpoint.config.token != token ||
+                endpoint.config.password != password ||
                 !GatewayTLSRoute.hasSameConnectionIdentity(endpoint.tls, tls) ||
                 endpoint.deviceAuthGatewayID != source.deviceAuthGatewayID ||
                 endpoint.routeAuthority != routeAuthority
@@ -817,7 +821,7 @@ actor GatewayEndpointStore {
         // First readiness keeps its admitted authority; source replacement and
         // endpoint loss already retired it. Do not discard the first handshake result.
         let endpoint = GatewayConnection.EndpointSnapshot(
-            config: (url, source.token, source.password),
+            config: (url, token, password),
             tls: tls,
             routeAuthority: routeAuthority,
             deviceAuthGatewayID: source.deviceAuthGatewayID,
@@ -827,8 +831,8 @@ actor GatewayEndpointStore {
         self.setState(.ready(
             mode: mode,
             url: url,
-            token: source.token,
-            password: source.password,
+            token: token,
+            password: password,
             routeRevision: self.routeRevision))
         return endpoint
     }

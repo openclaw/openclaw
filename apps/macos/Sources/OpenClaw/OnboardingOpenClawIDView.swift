@@ -131,8 +131,8 @@ struct OnboardingOpenClawIDContent: View {
         case let .nodeConnection(claw, _):
             self.heading("This Mac joined \(claw)", subtitle: "The owner approved it as a node only.")
             self.row(
-                "Node connected",
-                detail: "The assistant can use the Mac capabilities the owner approved.",
+                "Node approved",
+                detail: "This Mac connects in the background; the menu bar shows its status.",
                 icon: "checkmark.circle")
             self.row(
                 "Chat isn’t available",
@@ -214,10 +214,10 @@ struct OnboardingOpenClawIDContent: View {
             self.browserApproval(approvalURL)
             Button("Continue chat setup") { self.action(.requestChat) }.buttonStyle(.borderedProminent)
         case let .connected(claw):
-            self.heading("You’re all set!", subtitle: "Connected to \(claw) through OpenClaw ID.")
+            self.heading("You’re all set!", subtitle: "\(claw) approved this Mac through OpenClaw ID.")
             self.row(
-                "Node connected",
-                detail: "This Mac’s approved capabilities are available.",
+                "Node approved",
+                detail: "This Mac’s approved capabilities connect in the background.",
                 icon: "checkmark.circle")
             self.row(
                 "Chat and dashboard ready",

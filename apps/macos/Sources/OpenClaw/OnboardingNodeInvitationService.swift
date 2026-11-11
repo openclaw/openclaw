@@ -21,13 +21,13 @@ final class OnboardingNodeInvitationService: OnboardingOpenClawIDService {
     private let operatorIdentityStore: (UUID) -> any OpenClawIDNodeIdentityStore
     private let http: any OpenClawIDNodeEnrollmentHTTP
     private let now: @Sendable () -> Int64
-    private let install: (MacNodeOpenClawIDTarget) async -> Bool
+    private let install: (MacNodeOpenClawIDTarget, _ chatGranted: Bool) async -> Void
     private var invitation: String?
     private var origin: String?
     private var hostname: String?
     private var description: OpenClawIDNodeEnrollmentDescription?
     private var authority: MacNodeOpenClawIDRouteAuthority?
-    private var enrollment: Task<MacNodeOpenClawIDTarget, Error>?
+    private var enrollment: Task<(target: MacNodeOpenClawIDTarget, chatGranted: Bool), Error>?
     private var installedTarget: MacNodeOpenClawIDTarget?
 
     convenience init() {
@@ -36,37 +36,27 @@ final class OnboardingNodeInvitationService: OnboardingOpenClawIDService {
             unavailableReason: OpenClawIDNodeNativeEndpoint.isPackaged ? nil :
                 "Node invitations are not available in this build because the native transport is not packaged.",
             describeNode: { try await MacNodeModeCoordinator.shared.openClawIDEnrollmentDescription() },
-            install: { await Self.installApprovedMac($0) })
+            install: { await Self.installApprovedMac($0, chatGranted: $1) })
     }
 
-    /// Makes the approved claw this Mac's working setup: node route, primary chat/dashboard
-    /// connection over the operator key, and the bundled runtime node commands execute with.
-    /// Returns whether chat answered; false means the owner approved the node alone.
-    private static func installApprovedMac(_ target: MacNodeOpenClawIDTarget) async -> Bool {
-        MacNodeModeCoordinator.shared.selectOpenClawIDTarget(target, operatorRequested: true)
+    /// Makes the approved claw this Mac's working setup: node route, the bundled runtime node
+    /// commands execute with and, when the owner granted chat, the primary chat/dashboard
+    /// connection over the operator key. A node-only approval leaves the primary connection alone.
+    private static func installApprovedMac(_ target: MacNodeOpenClawIDTarget, chatGranted: Bool) async {
+        MacOpenClawIDOperatorRoute.shared.stop()
+        MacNodeModeCoordinator.shared.selectOpenClawIDTarget(target, operatorRequested: chatGranted)
         MacNodeModeCoordinator.shared.start()
         if BundledRuntime.isBundledApp {
             // Exec policy resolves the CLI from the prepared runtime; a node-only Mac never
             // started a local Gateway, which is what prepares it otherwise.
             _ = try? await BundledRuntime.seed()
         }
-        MacOpenClawIDOperatorRoute.shared.stop()
+        guard chatGranted else { return }
         let state = AppStateStore.shared
-        let previous = (state.connectionMode, state.remoteTransport, state.remoteUrl)
         state.remoteTransport = .direct
         state.remoteUrl = "wss://\(target.hostname)"
         state.connectionMode = .remote
         await GatewayEndpointStore.shared.refresh()
-        do {
-            _ = try await GatewayConnection.shared.request(method: "health", params: nil, timeoutMs: 30000)
-            return true
-        } catch {
-            // Approved as a node only: keep the primary connection the person already had.
-            MacOpenClawIDOperatorRoute.shared.stop()
-            (state.connectionMode, state.remoteTransport, state.remoteUrl) = previous
-            await GatewayEndpointStore.shared.refresh()
-            return false
-        }
     }
 
     init(
@@ -81,7 +71,7 @@ final class OnboardingNodeInvitationService: OnboardingOpenClawIDService {
         },
         http: any OpenClawIDNodeEnrollmentHTTP = OpenClawIDNodeEnrollmentURLSession(),
         now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970) },
-        install: @escaping (MacNodeOpenClawIDTarget) async -> Bool)
+        install: @escaping (MacNodeOpenClawIDTarget, _ chatGranted: Bool) async -> Void)
     {
         self.databaseURL = databaseURL
         self.unavailableReason = unavailableReason
@@ -148,7 +138,7 @@ final class OnboardingNodeInvitationService: OnboardingOpenClawIDService {
                     let operatorIdentity = try await OpenClawIDNodeIdentity.loadOrCreate(store: operatorIdentityStore)
                     try authority.check()
                     let client = OpenClawIDNodeEnrollmentClient(http: http, trustStore: store, now: now)
-                    _ = try await client.enroll(
+                    let verified = try await client.enroll(
                         joinLink: invitation,
                         discoveryOrigin: origin,
                         identity: identity,
@@ -160,8 +150,12 @@ final class OnboardingNodeInvitationService: OnboardingOpenClawIDService {
                         })
                     try authority.check()
                     await store.close()
-                    return MacNodeOpenClawIDTarget(
-                        hostname: hostname, enrollmentID: id, databaseURL: databaseURL, identityStore: identityStore)
+                    // The owner granted chat only if the verified snapshot admits the operator key.
+                    return (
+                        MacNodeOpenClawIDTarget(
+                            hostname: hostname, enrollmentID: id, databaseURL: databaseURL,
+                            identityStore: identityStore),
+                        verified.nodePeerKeys.contains(operatorIdentity.peerKey))
                 } catch {
                     codes.continuation.finish(throwing: error)
                     await store.close()
@@ -177,13 +171,16 @@ final class OnboardingNodeInvitationService: OnboardingOpenClawIDService {
             guard let enrollment = self.enrollment, let authority = self.authority else {
                 throw OpenClawIDNodeEnrollmentError.notAdmitted
             }
-            let target = try await enrollment.value
+            let (target, chatGranted) = try await enrollment.value
             try authority.check()
-            guard self.installedTarget == nil else { return .connected(claw: target.hostname) }
-            self.installedTarget = target
-            let chat = await self.install(target)
-            try authority.check()
-            return chat ? .connected(claw: target.hostname) : .nodeConnection(claw: target.hostname, connected: true)
+            if self.installedTarget == nil {
+                self.installedTarget = target
+                await self.install(target, chatGranted)
+                try authority.check()
+            }
+            // "connected" reports the owner's signed approval; the node and chat connections
+            // then come up through the app's normal status reporting.
+            return chatGranted ? .connected(claw: target.hostname) : .nodeConnection(claw: target.hostname, connected: true)
         default:
             throw CocoaError(.featureUnsupported)
         }

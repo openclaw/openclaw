@@ -46,7 +46,9 @@ final class DashboardManager {
     @ObservationIgnored private let routeProbe: @Sendable (DashboardRouteProbePurpose) async -> Void
     @ObservationIgnored private let endpointStateProvider: @Sendable () async -> GatewayEndpointState
     @ObservationIgnored let mainWindowAutosaveName: String
-    @ObservationIgnored let websiteDataStore: WKWebsiteDataStore
+    @ObservationIgnored private let websiteDataStore: WKWebsiteDataStore
+    /// In-memory store for the OpenClaw ID operator dashboard, separate from every other page.
+    @ObservationIgnored private(set) lazy var operatorDashboardStore = WKWebsiteDataStore.nonPersistent()
     @ObservationIgnored private var profileBrowserStores: [String: DashboardBrowserSessionStore] = [:]
     @ObservationIgnored private(set) var profileCredentialRevisions: [String: UInt64] = [:]
     @ObservationIgnored private(set) var unavailableProfileIDs: Set<String> = []
@@ -1204,7 +1206,8 @@ extension DashboardManager {
         let controller = DashboardWindowController(
             url: configuration.url,
             auth: configuration.auth,
-            websiteDataStore: browserStore?.dataStore ?? self.websiteDataStore,
+            websiteDataStore: configuration.operatorDataStore ?? browserStore?.dataStore ?? self.websiteDataStore,
+            isolatesReadingTabs: configuration.operatorDataStore != nil,
             updater: self.updater,
             updateBridgeEnabled: primaryLocal && Self.updateBridgeEnabled(mode: configuration.mode),
             tlsParams: configuration.tlsParams,

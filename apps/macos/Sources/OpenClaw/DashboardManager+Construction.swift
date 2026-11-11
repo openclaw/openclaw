@@ -25,6 +25,8 @@ extension DashboardManager {
         var autoStartSignIn = false
         var legacyNativeCredentials: DashboardNativeGatewayAuth.LegacyCredentials?
         var nativeAuthProvider: DashboardNativeGatewayAuth.Provider?
+        /// Set for the OpenClaw ID operator proxy: the only store holding its cookie.
+        var operatorDataStore: WKWebsiteDataStore?
     }
 
     struct SupersededDashboardPresentation: Error {}
@@ -260,9 +262,11 @@ extension DashboardManager {
             : nil
         let url = try identityURL ?? GatewayEndpointStore.dashboardURL(
             for: dashboardConfig, mode: mode, remoteBasePath: remoteBasePath)
-        if let operatorDashboard {
-            // The proxy admits only this launch's cookie; set it before the document loads.
-            await self.websiteDataStore.httpCookieStore.setCookie(operatorDashboard.cookie)
+        // Cookies ignore ports, so the proxy cookie lives only in a store that loads nothing else:
+        // other loopback servers, the local Gateway and reading tabs never receive it.
+        let operatorDataStore = operatorDashboard.map { _ in self.operatorDashboardStore }
+        if let operatorDashboard, let operatorDataStore {
+            await operatorDataStore.httpCookieStore.setCookie(operatorDashboard.cookie)
         }
         try browserSession?.validate(for: url)
         let legacyCredentials: DashboardNativeGatewayAuth.LegacyCredentials? = if identityURL == nil,
@@ -278,8 +282,9 @@ extension DashboardManager {
         } else {
             .nativeDevice(
                 gatewayUrl: Self.websocketURLString(for: url),
-                token: token,
-                password: config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
+                token: operatorDashboard == nil ? token : nil,
+                password: operatorDashboard == nil
+                    ? config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty : nil,
                 legacyCredentials: legacyCredentials?.credentials)
         }
         let name = target == .primary ? "OpenClaw"
@@ -296,7 +301,8 @@ extension DashboardManager {
             browserSession: browserSession,
             legacyNativeCredentials: legacyCredentials,
             nativeAuthProvider: auth.usesNativeDevice ? self
-                .nativeAuthProvider(target: target, endpoint: endpoint) : nil), endpoint)
+                .nativeAuthProvider(target: target, endpoint: endpoint) : nil,
+            operatorDataStore: operatorDataStore), endpoint)
     }
 
     func nativeAuthProvider(
