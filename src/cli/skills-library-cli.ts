@@ -16,6 +16,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import {
@@ -66,8 +67,9 @@ export function registerSkillsLibraryCli(skills: Command): void {
     );
   const execute = <T>(
     command: Command,
-    action: (opts: GatewayRpcOpts) => Promise<T>,
+    action: (opts: GatewayRpcOpts, signal?: AbortSignal) => Promise<T>,
     format: (result: T) => string,
+    readOnly = false,
   ) =>
     runCommandWithRuntime(defaultRuntime, async () => {
       const commandOptions = command.opts<GatewayRpcOpts>();
@@ -82,7 +84,11 @@ export function registerSkillsLibraryCli(skills: Command): void {
         expectFinal: value("expectFinal"),
         json: value("json"),
       };
-      const result = await action(opts);
+      const signal = readOnly ? getAsyncWorkSignal() : undefined;
+      const result = await action(opts, signal);
+      if (signal?.aborted) {
+        return;
+      }
       if (opts.json) {
         defaultRuntime.writeJson(result);
       } else {
@@ -99,11 +105,16 @@ export function registerSkillsLibraryCli(skills: Command): void {
     .action((opts: LibraryOptions, command: Command) =>
       execute(
         command,
-        (rpc) =>
-          callGatewayFromCliWithTransport<SkillsLibraryListResult>("skills.library.list", rpc, {
-            scope: opts.scope,
-            ...(opts.session ? { sessionKey: opts.session } : {}),
-          }),
+        (rpc, signal) =>
+          callGatewayFromCliWithTransport<SkillsLibraryListResult>(
+            "skills.library.list",
+            rpc,
+            {
+              scope: opts.scope,
+              ...(opts.session ? { sessionKey: opts.session } : {}),
+            },
+            { signal },
+          ),
         (result) =>
           [
             `Default target: ${result.defaultTarget}`,
@@ -135,6 +146,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
           ]
             .map(sanitizeTerminalText)
             .join("\n"),
+        true,
       ),
     );
 
@@ -145,7 +157,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
     .action((skillId: string, opts: LibraryOptions, command: Command) =>
       execute(
         command,
-        (rpc) => {
+        (rpc, signal) => {
           if (opts.session && !opts.revision) {
             throw new Error("--session requires --revision to read an exact selected pin.");
           }
@@ -157,6 +169,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
               ...(opts.revision ? { revision: opts.revision } : {}),
               ...(opts.session ? { sessionKey: opts.session } : {}),
             },
+            { signal },
           );
         },
         (result) =>
@@ -177,6 +190,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
             ),
             "",
           ].join("\n"),
+        true,
       ),
     );
 

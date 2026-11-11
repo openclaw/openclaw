@@ -12,8 +12,13 @@ const mocks = vi.hoisted(() => ({
   writeStdout: vi.fn(),
   error: vi.fn(),
   exit: vi.fn(),
+  signal: undefined as AbortSignal | undefined,
 }));
 vi.mock("./gateway-rpc.runtime.js", () => ({ callGatewayFromCliRuntime: mocks.call }));
+vi.mock("../shared/async-work-scope.js", async (importActual) => ({
+  ...(await importActual<typeof import("../shared/async-work-scope.js")>()),
+  getAsyncWorkSignal: () => mocks.signal,
+}));
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: {
@@ -69,6 +74,7 @@ async function parse(args: string[]) {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  mocks.signal = undefined;
   directory = await fs.mkdtemp(path.join(os.tmpdir(), "skill-library-cli-"));
   await fs.writeFile(
     path.join(directory, "SKILL.md"),
@@ -99,6 +105,16 @@ afterEach(async () => {
 });
 
 describe("skills library CLI", () => {
+  it.each([
+    ["list", []],
+    ["read", [skillId]],
+  ])("prints no read reply that lands after Ctrl+C (%s)", async (name, args) => {
+    mocks.signal = AbortSignal.abort();
+    await parse([name, ...args, "--json"]);
+    expect(mocks.call).toHaveBeenCalled();
+    expect(mocks.writeJson).not.toHaveBeenCalled();
+  });
+
   it.each(["list", "create", "import", "rollback", "refresh"])(
     "inherits connection and JSON options before or after %s",
     async (name) => {
@@ -200,14 +216,14 @@ describe("skills library CLI", () => {
       "skills.library.list",
       expect.anything(),
       { scope: "all", sessionKey },
-      undefined,
+      { signal: undefined },
     );
     await parse(["read", skillId, "--session", sessionKey, "--revision", revision, "--json"]);
     expect(mocks.call).toHaveBeenLastCalledWith(
       "skills.library.read",
       expect.anything(),
       { skillId, sessionKey, revision },
-      undefined,
+      { signal: undefined },
     );
     expect(mocks.writeJson).toHaveBeenLastCalledWith(read);
     mocks.call.mockClear();
