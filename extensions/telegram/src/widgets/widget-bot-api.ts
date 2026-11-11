@@ -40,13 +40,14 @@ type TelegramWidgetRawApi = {
  * same transformers (throttler, request authority), so only the method typings are added here.
  */
 export function telegramWidgetApi(api: { raw: object }): TelegramWidgetRawApi {
-  return api.raw as unknown as TelegramWidgetRawApi;
+  // SAFETY: grammY's raw client forwards every Bot API method name; these are Bot API 10.4 methods.
+  return api.raw as TelegramWidgetRawApi;
 }
 
 export type TelegramWidgetQuery = {
   id: string;
   from: User;
-  chat: Chat;
+  chat: Chat.PrivateChat;
   message_id: number;
   data: string;
 };
@@ -65,17 +66,32 @@ export function readTelegramWidgetQuery(update: unknown): TelegramWidgetQuery | 
     typeof from.id !== "number" ||
     !isRecord(chat) ||
     typeof chat.id !== "number" ||
-    typeof chat.type !== "string" ||
+    // Widgets reach production only in private chats; other routes carry no reply target.
+    chat.type !== "private" ||
     typeof messageId !== "number" ||
     typeof data !== "string"
   ) {
     return undefined;
   }
+  const text = (value: unknown) => (typeof value === "string" ? value : undefined);
+  const firstName = text(from.first_name) ?? "";
   return {
     id,
-    // SAFETY: Telegram's Update schema defines these objects; the fields routing reads are checked above.
-    from: from as unknown as User,
-    chat: chat as unknown as Chat,
+    from: {
+      id: from.id,
+      is_bot: from.is_bot === true,
+      first_name: firstName,
+      ...(text(from.last_name) ? { last_name: text(from.last_name) } : {}),
+      ...(text(from.username) ? { username: text(from.username) } : {}),
+      ...(text(from.language_code) ? { language_code: text(from.language_code) } : {}),
+    },
+    chat: {
+      id: chat.id,
+      type: "private",
+      first_name: text(chat.first_name) ?? firstName,
+      ...(text(chat.last_name) ? { last_name: text(chat.last_name) } : {}),
+      ...(text(chat.username) ? { username: text(chat.username) } : {}),
+    },
     message_id: messageId,
     data,
   };

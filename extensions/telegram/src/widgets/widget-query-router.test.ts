@@ -2,11 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 
 const lookupTelegramSentWidget = vi.hoisted(() => vi.fn());
 const recordResult = vi.hoisted(() => vi.fn());
+// mock-isolation: widget records live in the plugin-state database, which these unit tests do not open.
 vi.mock("./widget-store.js", () => ({
   lookupTelegramSentWidget,
   recordTelegramWidgetTap: vi.fn(),
 }));
 const runtimeConfig = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
+// mock-isolation: each test swaps in its own Gateway config snapshot.
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
   readRuntimeConfig: () => runtimeConfig.current,
 }));

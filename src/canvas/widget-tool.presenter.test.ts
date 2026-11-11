@@ -69,7 +69,7 @@ describe("show_widget current-channel presentation", () => {
       parts: [],
       sentAt: 1,
     };
-    const channelPresenter = (present: ReturnType<typeof vi.fn>) =>
+    const channelPresenter = (present: Parameters<typeof currentPresenter>[0]) =>
       currentPresenter(present, {
         capabilities: {
           sourceKinds: ["html"],

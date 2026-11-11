@@ -20,7 +20,6 @@ export async function sendTelegramWidget(params: {
   cfg: OpenClawConfig;
   accountId: string;
   to: string;
-  messageThreadId?: number;
   source: string;
   title: string;
   name: string;
@@ -31,7 +30,6 @@ export async function sendTelegramWidget(params: {
       to: params.to,
       context,
       opts: {},
-      thread: { messageThreadId: params.messageThreadId },
     });
     const caption = Array.from(params.title).slice(0, TELEGRAM_WIDGET_CAPTION_MAX_CHARS).join("");
     const request: TelegramSendWidgetParams = {

@@ -34,7 +34,6 @@ type TelegramWidgetRoute = {
   accountId: string;
   to: string;
   chatId: string;
-  messageThreadId?: number;
 };
 
 const unavailable = (message: string) => ({
@@ -62,7 +61,14 @@ function resolveTelegramWidgetRoute(
     return undefined;
   }
   const target = parseTelegramTarget(to);
-  if (target.chatType !== "direct" || target.directMessagesTopicId !== undefined) {
+  // Taps are routed back without a thread, so topics (bot-created or DM topics) stay unrouted.
+  const threadId = context.deliveryContext?.threadId;
+  if (
+    target.chatType !== "direct" ||
+    target.directMessagesTopicId !== undefined ||
+    target.messageThreadId !== undefined ||
+    (threadId !== undefined && threadId !== null && String(threadId) !== "")
+  ) {
     return undefined;
   }
   const account = resolveTelegramAccount({
@@ -73,16 +79,7 @@ function resolveTelegramWidgetRoute(
   if (!account.enabled || account.tokenStatus !== "available" || account.config.widgets !== true) {
     return undefined;
   }
-  const threadId = context.deliveryContext?.threadId;
-  const messageThreadId =
-    target.messageThreadId ?? (typeof threadId === "number" ? threadId : undefined);
-  return {
-    cfg,
-    accountId: account.accountId,
-    to,
-    chatId: target.chatId,
-    ...(messageThreadId !== undefined ? { messageThreadId } : {}),
-  };
+  return { cfg, accountId: account.accountId, to, chatId: target.chatId };
 }
 
 function widgetReceipt(messageId: number | string) {
@@ -179,7 +176,6 @@ async function presentTelegramWidget(
     cfg: route.cfg,
     accountId: route.accountId,
     to: route.to,
-    ...(route.messageThreadId !== undefined ? { messageThreadId: route.messageThreadId } : {}),
     source,
     title: params.title,
     name: params.name,
@@ -193,6 +189,7 @@ async function presentTelegramWidget(
 }
 
 export function registerTelegramWidgetPresenter(api: OpenClawPluginApi): void {
+  // SAFETY: the plugin runtime's current config is the Gateway's validated OpenClawConfig.
   const currentConfig = () => api.runtime.config.current() as OpenClawConfig;
   api.registerWidgetPresenter({
     target: "current_channel",

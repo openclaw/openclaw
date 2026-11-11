@@ -230,6 +230,7 @@ G.addEventListener = function (t, f, o) { Node.prototype.addEventListener.call(G
 G.removeEventListener = function (t, f) { Node.prototype.removeEventListener.call(G, t, f); };
 G.dispatchEvent = function (e) { e.target = G; e.currentTarget = G; var list = G._l && G._l[e.type]; if (list) list.slice().forEach(function (x) { x.fn.call(G, e); }); return true; };
 function fireTap(el) {
+  for (var n = el; n && n.nodeType === 1; n = n.parentNode) if (n.hasAttribute("disabled")) return;
   var prev = gesture; gesture = true;
   try {
     ["pointerdown", "touchstart", "mousedown", "pointerup", "touchend", "mouseup", "click"].forEach(function (t) {
@@ -406,6 +407,8 @@ function clickTargets() {
   var out = [];
   eachElement(body, function (el) {
     if (el.hasAttribute("hidden") || el.style._map.get("display") === "none") return false;
+    // A disabled control cannot be tapped in Telegram.
+    if (el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true") return false;
     var handled = (el._on && el._on.click) || el.hasAttribute("onclick") || (el._l && (el._l.click || el._l.pointerdown || el._l.pointerup || el._l.touchstart || el._l.mousedown));
     var hasElementKids = el.children.length > 0;
     if (el.localName === "button" || el.getAttribute("role") === "button" || (handled && !hasElementKids)) out.push(el);

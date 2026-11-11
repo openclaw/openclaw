@@ -16,6 +16,7 @@ vi.mock("./widget-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./widget-check.js")>()),
   checkTelegramWidget,
 }));
+// mock-isolation: widget records live in the plugin-state database, which these unit tests do not open.
 vi.mock("./widget-store.js", () => ({
   lookupTelegramWidgetTap,
   lookupTelegramSentWidget,
@@ -133,19 +134,19 @@ describe("Telegram widget presenter", () => {
     expect(editTelegramWidgetState).toHaveBeenCalledWith(expect.objectContaining({ state: "" }));
   });
 
-  it("stays off until channels.telegram.widgets is true", () => {
+  it("matches only private chats outside topics, and only with widgets enabled", () => {
+    const match = (context: Parameters<Presenter["availability"]>[0]) =>
+      registerPresenter().match?.(context);
+    expect(match(dm)).toBe(true);
+    expect(match({ ...dm, currentChannelId: "telegram:-100123" })).toBe(false);
+    expect(match({ ...dm, messageChannel: "discord" })).toBe(false);
+    // Taps come back without a thread, so topics never get widgets.
+    expect(match({ ...dm, currentMessagingTarget: "telegram:111:topic:77" })).toBe(false);
+    expect(match({ ...dm, deliveryContext: { threadId: "77" } })).toBe(false);
     config = widgetsConfig();
-    expect(registerPresenter().match(dm)).toBe(false);
+    expect(match(dm)).toBe(false);
     config = widgetsConfig(false);
-    expect(registerPresenter().match(dm)).toBe(false);
-    config = widgetsConfig(true);
-  });
-
-  it("matches only private chats on Telegram", () => {
-    const presenter = registerPresenter();
-    expect(presenter.match(dm)).toBe(true);
-    expect(presenter.match({ ...dm, currentChannelId: "telegram:-100123" })).toBe(false);
-    expect(presenter.match({ ...dm, messageChannel: "discord" })).toBe(false);
+    expect(match(dm)).toBe(false);
   });
 
   it("sends raw widget code as a new message outside a tap turn", async () => {

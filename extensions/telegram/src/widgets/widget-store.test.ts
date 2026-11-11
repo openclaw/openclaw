@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 const register = vi.hoisted(() => vi.fn());
+// mock-isolation: a failing state store stands in for the plugin runtime database.
 vi.mock("../runtime.js", () => ({
   getTelegramRuntime: () => ({
     state: { openKeyedStoreV2: () => ({ register, lookup: vi.fn() }) },

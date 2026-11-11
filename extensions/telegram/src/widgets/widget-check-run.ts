@@ -26,6 +26,7 @@ type IntlRequest = { kind: string; locale?: string | string[]; opts?: object; va
 // Telegram bridges Intl to the client platform; the trial run bridges it to the host's Intl.
 function runIntl(json: string): string {
   try {
+    // SAFETY: the guest shim builds this JSON; each field is type-checked below before use.
     const { kind, locale, opts, value } = JSON.parse(json) as IntlRequest;
     const options = opts && typeof opts === "object" ? opts : undefined;
     let out: string;
@@ -34,6 +35,7 @@ function runIntl(json: string): string {
     } else if (kind === "date") {
       out = new Intl.DateTimeFormat(locale, options).format(Number(value));
     } else if (kind === "date-method" && Array.isArray(value)) {
+      // SAFETY: the shim sends date-method values as [method name, epoch ms].
       const [method, time] = value as [string, number];
       const date = new Date(time);
       out =
@@ -47,14 +49,16 @@ function runIntl(json: string): string {
     } else if (kind === "relative" && Array.isArray(value)) {
       out = new Intl.RelativeTimeFormat(locale, options).format(
         Number(value[0]),
+        // SAFETY: Intl validates the unit and throws, which is reported back to the guest.
         String(value[1]) as Intl.RelativeTimeFormatUnit,
       );
     } else if (kind === "list" && Array.isArray(value)) {
+      // SAFETY: Intl validates the options object and throws on bad values.
       out = new Intl.ListFormat(locale, options as Intl.ListFormatOptions).format(
         value.map(String),
       );
     } else {
-      return JSON.stringify({ error: `Unsupported Intl request ${String(kind)}` });
+      return JSON.stringify({ error: `Unsupported Intl request ${kind}` });
     }
     return JSON.stringify({ value: out });
   } catch (error) {
@@ -85,7 +89,7 @@ export async function runTelegramWidgetCheck(
         const dumped = vm.dump(reason);
         const text =
           dumped && typeof dumped === "object" && "message" in dumped
-            ? String((dumped as { message: unknown }).message)
+            ? String(dumped.message)
             : String(dumped);
         if (!text.includes("not available in widgets")) {
           rejections.push(`Unhandled promise rejection: ${text}`);
@@ -94,6 +98,7 @@ export async function runTelegramWidgetCheck(
     },
   });
   try {
+    // SAFETY: the shim only calls __intl with JSON.stringify output, a string.
     vm.newFunction("__intl", (arg) => vm.newString(runIntl(vm.dump(arg) as string))).consume((fn) =>
       vm.global.setProp("__intl", fn),
     );
@@ -164,6 +169,7 @@ export async function runTelegramWidgetCheck(
     // Findings so far are still valid after an interrupt; give the report its own short budget.
     timedOut = false;
     deadline = performance.now() + 250;
+    // SAFETY: the shim's report() returns JSON.stringify({ errors: string[], ... }).
     const report = JSON.parse(String(call("report"))) as { errors: string[] };
     driver.dispose();
     const errors = [...report.errors, ...rejections];

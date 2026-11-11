@@ -6,7 +6,12 @@ const DEFAULT_TELEGRAM_UPDATE_TYPES: ReadonlyArray<TelegramUpdateType> =
   API_CONSTANTS.DEFAULT_UPDATE_TYPES;
 
 // Bot API 10.4 widget taps. grammY 1.46 types stop at Bot API 10.3; Telegram accepts the name.
-const TELEGRAM_WIDGET_QUERY_UPDATE = "widget_query" as string as TelegramUpdateType;
+const TELEGRAM_WIDGET_QUERY_UPDATE = bindUpdateName("widget_query");
+
+function bindUpdateName(name: string): TelegramUpdateType {
+  // SAFETY: Bot API 10.4 lists widget_query as an update type; only grammY's typings predate it.
+  return name as TelegramUpdateType;
+}
 
 export function resolveTelegramAllowedUpdates(): ReadonlyArray<TelegramUpdateType> {
   // OpenClaw does not request stoppable drafts. Subscribing without a handler

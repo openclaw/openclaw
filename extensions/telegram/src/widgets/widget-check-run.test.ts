@@ -67,6 +67,11 @@ TelegramWidget.onEvent('chatDataChanged',draw);draw();</script>`;
     ).toEqual({ errors: [] });
   });
 
+  it("does not tap disabled buttons", async () => {
+    const source = `<button disabled onclick="JSON.parse(TelegramWidget.chatData).choice.id">Confirm</button>`;
+    expect(await check(source, { state: '{"choice":null}' })).toEqual({ errors: [] });
+  });
+
   it("resolves request() with Telegram's acknowledgment object", async () => {
     const source = `<p id=o></p><button onclick="TelegramWidget.request('vote').then(function(a){document.getElementById('o').textContent=String(a.result===null)})">Vote</button>`;
     expect(await check(source)).toEqual({ errors: [] });
