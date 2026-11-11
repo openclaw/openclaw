@@ -54,7 +54,9 @@ export function install(buffer, root, databasePath) {
   registerHooks({
     load(url, context, next) {
       if (
-        /\/src\/state\/openclaw-agent-(?:db-lifecycle|execution-close|db-resources)\.ts$/.test(url)
+        /\/src\/state\/openclaw-agent-(?:db-close|db-lifecycle|execution-close|db-resources)\.ts$/.test(
+          url,
+        )
       ) {
         const source = fs
           .readFileSync(new URL(url), "utf8")
@@ -79,7 +81,7 @@ export function install(buffer, root, databasePath) {
       return next(url, context);
     },
   });
-  const terminate = Worker.prototype.terminate;
+  const terminate = Reflect.get(Worker.prototype, "terminate");
   Worker.prototype.terminate = function () {
     return traceAsync("worker-terminate", () => terminate.call(this));
   };
