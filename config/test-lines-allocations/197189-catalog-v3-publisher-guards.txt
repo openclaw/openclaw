@@ -1,0 +1,5 @@
+# Regressions for six catalog publish defects from the v3 pre-flip audit, each red on the base:
+# released-reader row loss and v3 detection, staged-worker truncation, strict inference fields,
+# chat:false on media-only providers, v1 overflow without destroying v2/v3, and the shrink guard.
+# Net growth after consolidating the decisions suite into the guards suite. Exact for PR #197189.
+297

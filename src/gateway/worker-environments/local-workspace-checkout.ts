@@ -44,6 +44,12 @@ async function configureProjectionFetch(
     signal: params.signal,
     beforeRun: params.assertCurrent,
   };
+  // Git-owned projection metadata; shared base clones must never get shallow defaults.
+  await requireGit(
+    params.destination,
+    ["config", "--local", "--replace-all", "openclaw.projection", "true"],
+    options,
+  );
   const origin = await runGit(params.source, ["config", "--get", "remote.origin.url"], options);
   if (origin.code !== 0 && origin.code !== 1) {
     throw commandError("git config remote.origin.url", origin);
@@ -163,11 +169,14 @@ export async function prepareLocalWorkspaceCheckout(params: {
     if (params.retainedCommit) {
       // A session may receive only this commit's source, including through Git objects.
       // Template metadata is host-owned; every imported object lives in a pack.
+      phases.mark(`${RECONCILE_PHASE}.checkout.repack`);
       await git(["reflog", "expire", "--expire=all", "--all"]);
-      await git(["repack", "-ad"]);
+      // Reuse compressed objects without searching the entire snapshot for new deltas.
+      await git(["repack", "-ad", "--window=0"]);
       current();
       await fs.writeFile(path.join(repo, ".git", "shallow"), params.baseCommit + "\n");
     }
+    phases.mark(`${RECONCILE_PHASE}.checkout.configure`);
     await configureProjectionFetch(params, cleanEnv);
   } finally {
     phases.mark(`${RECONCILE_PHASE}.checkout.cleanup`);
@@ -217,6 +226,7 @@ export async function initializeLocalWorkspaceProjection(params: {
       signal,
       assertCurrent: current,
     };
+    const buildCacheInputs = await params.buildCacheInputs();
     phases.mark(`${RECONCILE_PHASE}.template`);
     const cloned =
       dependencies &&
@@ -224,6 +234,7 @@ export async function initializeLocalWorkspaceProjection(params: {
         await import("./local-workspace-template.js")
       ).cloneLocalWorkspaceTemplate({
         ...checkout,
+        buildCacheInputs,
         repoRoot: params.owner.worktree.repoRoot,
         templateRoot: path.dirname(parent),
         env: params.owner.env ?? process.env,
@@ -247,14 +258,16 @@ export async function initializeLocalWorkspaceProjection(params: {
       await configureProjectionFetch(checkout, checkoutGitEnvironment(temporary));
     }
     phases.mark(`${RECONCILE_PHASE}.manifest_scan`);
-    const initial = await timeWorktreePreparationPhase("snapshot", async () =>
-      captureWorkspaceManifestDocument({
-        root: repo,
-        baseCommit: params.baseCommit,
-        buildCacheInputs: new Set(await params.buildCacheInputs()),
-        signal,
-      }),
-    );
+    const initial =
+      cloned ||
+      (await timeWorktreePreparationPhase("snapshot", async () =>
+        captureWorkspaceManifestDocument({
+          root: repo,
+          baseCommit: params.baseCommit,
+          buildCacheInputs: new Set(buildCacheInputs),
+          signal,
+        }),
+      ));
     current();
     phases.mark(`${RECONCILE_PHASE}.publish`);
     await fs.rename(repo, params.projectionPath);

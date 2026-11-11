@@ -8,7 +8,9 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { gitNullConfigPath, gitReadOnlyEnvironment } from "../infra/git-exec.js";
 import { appendGitConfig, gitMaintenanceEnvironment } from "../infra/git-maintenance-env.js";
 import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-network-retry.js";
+import { withGitObjectStoreTransport } from "../infra/git-object-store-transport.js";
 import { createCommandError } from "../process/command-error.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -158,36 +160,80 @@ export async function requireGitHubPublicationCommit(
   failure: string,
   options: { contents?: boolean; commitPresent?: boolean; baseBranch?: string } = {},
 ) {
+  const promisor = `remote.${githubRepositoryUrl(repository, host)}.promisor`;
   const fetch = async (missing?: string[], tips = [sha]) => {
-    const result = await run(
-      [
-        ...GITHUB_CREDENTIAL_ARGS,
-        "-c",
-        `core.hooksPath=${os.devNull}`,
-        "-c",
-        "core.fsmonitor=false",
-        "fetch",
-        "--no-auto-maintenance",
-        "--no-tags",
-        "--no-write-fetch-head",
-        "--recurse-submodules=no",
-        // Match managed base refresh: omit unrelated session histories from negotiation.
-        ...tips.map((tip) => `--negotiation-tip=${tip}`),
-        // Keep ancestry and tree metadata; callers request file contents below.
-        ...(missing ? ["--refetch", "--stdin"] : ["--filter=blob:none"]),
-        "--",
-        githubRepositoryUrl(repository, host),
-        ...(missing ? [] : [sha]),
-      ],
-      { cwd, env, ...(missing ? { input: `${missing.join("\n")}\n` } : {}) },
-    );
-    if (result.code !== 0 || result.error) {
-      throw createGitHubPublicationGitError(
-        failure,
-        missing ? "content fetch" : "commit fetch",
-        result,
-        DEFAULT_COMMAND_TIMEOUT_MS,
+    const command = async (directory: string, argv: string[], gitEnv = env, input?: string) => {
+      const result = await run(argv, { cwd: directory, env: gitEnv, input });
+      if (result.error && hasCommandProcessCleanupError(result.error)) {
+        throw result.error;
+      }
+      if (result.code !== 0 || result.error) {
+        throw createGitHubPublicationGitError(
+          failure,
+          missing ? "content fetch" : "commit fetch",
+          result,
+          DEFAULT_COMMAND_TIMEOUT_MS,
+        );
+      }
+      return result.stdout.toString("utf8").trim();
+    };
+    const acquire = (directory: string, gitEnv: NodeJS.ProcessEnv) =>
+      command(
+        directory,
+        [
+          ...GITHUB_CREDENTIAL_ARGS,
+          "-c",
+          `core.hooksPath=${os.devNull}`,
+          "-c",
+          "core.fsmonitor=false",
+          ...(directory === cwd ? [] : ["-c", "core.alternateRefsCommand=true"]),
+          ...(missing ? ["-c", "fetch.negotiationAlgorithm=noop"] : []),
+          "fetch",
+          "--no-auto-maintenance",
+          "--no-tags",
+          "--no-write-fetch-head",
+          "--recurse-submodules=no",
+          // Match managed base refresh: omit unrelated session histories from negotiation.
+          ...tips.map((tip) => `--negotiation-tip=${tip}`),
+          // Explicit blob wants still hydrate; retain promisor packs for both fetch paths.
+          "--filter=blob:none",
+          ...(missing ? ["--quiet", "--stdin"] : []),
+          "--",
+          githubRepositoryUrl(repository, host),
+          ...(missing ? [] : [`${sha}:refs/openclaw/fetched/${sha}`]),
+        ],
+        gitEnv,
+        missing ? `${missing.join("\n")}\n` : undefined,
       );
+    // Git must register a new URL's promisor in the source repository before
+    // temporary metadata can borrow its object store without losing lazy hydration.
+    const registered =
+      tips.length > 0
+        ? await command(cwd, ["git", "config", "--type=bool", "--default=false", "--get", promisor])
+        : "false";
+    // Without a cached base, retain Git's ordinary discovery of common history.
+    if (registered !== "true" && !missing) {
+      await acquire(cwd, env);
+    } else {
+      if (missing && registered !== "true") {
+        await command(cwd, ["git", "config", promisor, "true"]);
+      }
+      const isolatedEnv = {
+        ...env,
+        GIT_DIR: undefined,
+        GIT_COMMON_DIR: undefined,
+        GIT_WORK_TREE: undefined,
+      };
+      await withGitObjectStoreTransport(
+        cwd,
+        (directory, args) => command(directory, ["git", ...args], isolatedEnv),
+        (directory, objects) =>
+          acquire(directory, { ...isolatedEnv, GIT_OBJECT_DIRECTORY: objects }),
+      );
+    }
+    if (!missing && registered === "true") {
+      // Temporary transport metadata is discarded; retain successful acquisition in the owner.
+      await command(cwd, ["git", "update-ref", `refs/openclaw/fetched/${sha}`, sha]);
     }
   };
   if (!options.commitPresent) {
@@ -252,16 +298,17 @@ export async function requireGitHubPublicationCommit(
       .filter((line) => line.startsWith("?"))
       .map((line) => line.slice(1));
   };
-  const missing = await missingObjects();
-  if (missing.length) {
-    // A known partial-clone commit can still lack its tree contents after fetch.
-    // Hydrate through the selected authenticated URL before any offline snapshots.
+  let missing = await missingObjects();
+  // A missing tree reveals its blobs after the first filtered fetch; explicit
+  // blob wants complete the snapshot in at most one further batch.
+  for (let round = 0; missing.length && round < 2; round++) {
     await fetch(missing);
-    if ((await missingObjects("content verification")).length) {
-      throw new Error(
-        `${failure} Git content verification failed: required objects are still missing after fetching.`,
-      );
-    }
+    missing = await missingObjects("content verification");
+  }
+  if (missing.length) {
+    throw new Error(
+      `${failure} Git content verification failed: required objects are still missing after fetching.`,
+    );
   }
 }
 

@@ -214,7 +214,9 @@ export async function attachAuthenticatedGatewayConnect(
   const rolesConfigured = Boolean(context.configSnapshot.gateway?.roles);
   // Only an owner-bound ingress grant receives the shared owner role bypass;
   // an OpenClaw ID owner device is the Gateway owner.
-  const openclawIdPrincipal = authMethod === "trusted-proxy" ? authResult.openclawId : undefined;
+  const openclawIdPrincipal =
+    remoteIngressPrincipal?.openclawIdPrincipal ??
+    (authMethod === "trusted-proxy" ? authResult.openclawId : undefined);
   const operatorOwner =
     role === "operator" &&
     (authMethod === "token" ||
@@ -554,8 +556,8 @@ export async function attachAuthenticatedGatewayConnect(
     if (!remoteIngressPrincipal) {
       prepareGatewayConnectOperatorAccess(nextClient);
     }
-  } catch {
-    await rejectGatewayConnectOperatorAccess(context);
+  } catch (error) {
+    await rejectGatewayConnectOperatorAccess(context, error);
     return;
   }
   if (!profileLifecycle.isCurrent(preparedProfile)) {

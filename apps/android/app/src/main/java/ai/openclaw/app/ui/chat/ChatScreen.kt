@@ -394,6 +394,7 @@ internal fun ChatScreen(
   val sessionCreating by viewModel.chatSessionCreating.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val talkStatusText by viewModel.talkModeStatusText.collectAsState()
+  val talkMicrophoneMuted by viewModel.talkMicrophoneMuted.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val selectedActiveRun by viewModel.chatSelectedActiveRunPresentation.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
@@ -961,7 +962,15 @@ internal fun ChatScreen(
       )
     }
     if (talkActive) {
-      ChatNotice(title = nativeString("Talk"), body = talkStatusText)
+      ChatNotice(
+        title = if (talkMicrophoneMuted) nativeString("Talk · Microphone muted") else nativeString("Talk"),
+        body = talkStatusText,
+      ) {
+        TalkMicrophoneButton(
+          muted = talkMicrophoneMuted,
+          onClick = { viewModel.setTalkMicrophoneMuted(!talkMicrophoneMuted) },
+        )
+      }
     }
     ChatSwarmProgress(groups = swarmGroups)
   }
@@ -2962,6 +2971,7 @@ private fun DiffStatChip(
 private fun ChatNotice(
   title: String,
   body: String,
+  trailingContent: (@Composable () -> Unit)? = null,
 ) {
   Surface(
     modifier = Modifier.fillMaxWidth(),
@@ -2980,6 +2990,7 @@ private fun ChatNotice(
         Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
         Text(text = body, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       }
+      trailingContent?.invoke()
     }
   }
 }

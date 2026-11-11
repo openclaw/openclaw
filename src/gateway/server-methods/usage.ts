@@ -633,10 +633,15 @@ export const usageHandlers: GatewayRequestHandlers = {
               aggregates: accumulator.finish(),
             };
       }
-      const creatorOptions = new Map<string, SessionUsageCreator>();
+      const creatorOptions = new Map<string, SessionUsageCreator & { sessionCount: number }>();
       for (const row of visible) {
         if (row.creatorKey) {
-          creatorOptions.set(row.creatorKey, { key: row.creatorKey, actor: row.createdActor });
+          const option = creatorOptions.get(row.creatorKey);
+          creatorOptions.set(row.creatorKey, {
+            key: row.creatorKey,
+            actor: row.createdActor,
+            sessionCount: (option?.sessionCount ?? 0) + 1,
+          });
         }
       }
       const partial = budget.exhausted()

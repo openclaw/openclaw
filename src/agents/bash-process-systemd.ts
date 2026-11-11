@@ -122,6 +122,7 @@ export async function launchDurableProcess(params: LaunchOptions): Promise<{ uni
     RemainAfterExit: "yes",
     KillMode: "control-group",
     TimeoutStopSec: "10s",
+    LimitCORE: 0,
     StandardInput: "null",
     StandardOutput: `append:${params.logPath}`,
     StandardError: "inherit",

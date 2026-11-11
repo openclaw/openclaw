@@ -378,6 +378,8 @@ const startupEnglish = {
     dashboard: "Dashboard",
   },
   common: {
+    reportBug: "Report a bug",
+    suggestFeature: "Suggest a feature",
     showDetails: "Show details",
     uploadsDisabled: "File and image uploads are disabled.",
     ok: "OK",

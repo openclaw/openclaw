@@ -298,7 +298,7 @@ describe("session activity semantics", () => {
               mainKey: "main",
               globalScope,
             },
-            filters: { query: "", ownerId: "", sort: "updated" },
+            filters: { query: "", ownerIds: [], sort: "updated", view: "grid", group: "none" },
             handlers: { onFilterChange: vi.fn() },
           }),
         { container },

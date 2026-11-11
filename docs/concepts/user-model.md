@@ -402,7 +402,9 @@ The account arrow beside **Publish PR** appears only when both shared and person
 
 An existing `gh` login in the Gateway's runtime environment is supported; connecting **My GitHub** is optional and does not replace that login. A login on your browser's computer does not automatically authenticate a remote Gateway. When no publication account is selectable, the row distinguishes missing credentials, failed or rate-limited account verification, and an unsupported session workspace. Follow the displayed recovery guidance instead of reconnecting for a verification or workspace failure. Session-scoped shared publication requires a session-owned worktree or repository workspace with a supported GitHub origin; ordinary agent `git` and `gh` commands remain separate from this publication eligibility check.
 
-An unbound local chat can publish a committed task checkout with `github_publish` and `workspacePath`. OpenClaw prepares the session workspace and resumes the same conversation; the original checkout stays unchanged. The resumed turn keeps the requesting turn's owner access while that requester's authority stays current, so follow-up owner-only tools work without another message. Once the conversation owns a managed worktree, omit `workspacePath` or use that worktree’s path—not the original source or skills directory. Publishing that owned checkout does not require `operator.admin`, even when the checkout is outside the agent’s default workspace; the same session-write and current-access checks apply. Adopting a new, unbound checkout still requires the existing workspace-path permissions. A different checkout needs a separate session; publication never silently rebinds the current conversation.
+A local chat can publish a committed task checkout with `github_publish` and `workspacePath`. If the conversation has no publication workspace and omits `workspacePath`, the error asks the agent to retry with the known checkout's absolute path. OpenClaw creates a linked publication task with its own managed checkout and resumes the requesting conversation at its original workspace. The source checkout stays unchanged, including when publication fails. Later work in another repository does not inherit that publication checkout. Retries use the original task and accepted snapshot; status, PR metadata actions, and completion receipts remain available from the requesting conversation, including after a Gateway restart. If that task is deleted, retry reports the missing source; use the original request ID to inspect its receipt. A deliberately prepared PR keeps its own default target.
+
+The requesting turn retains its original permission ceiling and current-access checks; task creation grants no extra tool, host-path, or GitHub permissions. Selecting a new checkout uses the existing workspace-path permissions. Publishing a checkout already owned by the conversation does not require `operator.admin`, even outside the agent's default workspace. Omit `workspacePath` or use its managed checkout path for that flow. In a writable sandbox-backed conversation, explicitly select an existing PR with `prepare_pr`; this keeps deliberate PR-workspace selection separate from one publication's custody. For conversations adopted by an earlier version, see [managed workspace recovery](/concepts/managed-worktrees#session-worktrees).
 
 The composer shows either unpublished branch changes or PR rows. New changes replace earlier PR history, including changes made after merging on the same branch. The account arrow appears only while publication is idle and the account selection is unlocked. Publication recovery stays inside an unpublished branch row. When PR rows are visible, recovery appears separately because a session publication attempt does not necessarily belong to any listed PR. Failed attempts use a collapsed **Publication attempt failed** disclosure; expand it to inspect the original account, error, and recovery actions. When OpenClaw verifies that a failed shared attempt’s accepted changes are already published in the matching PR, it stops offering that obsolete failure as recovery—even after reloading or starting later work. The historical receipt remains unchanged and can still be read explicitly. Unpublished or unverified changes retain their failure; refreshing a receipt never retries publication. Pending status and confirmation details remain expanded. Successful publication shows a compact PR link until GitHub metadata supplies the normal PR row; it does not add a separate publication card.
 
@@ -466,26 +468,24 @@ Navigation changes on read-only connections or connections without a durable
 profile stay browser-local rather than writing shared server configuration. See [Navigation rail](/web/control-ui/sessions-and-sidebar#navigation-rail).
 
 The Sessions owner filter is stored separately in the browser for each Gateway
-and profile. A profile without a saved choice starts with **My sessions**;
-unresolved identities and connections without a durable profile show **All owners**.
+and profile. Without a saved choice it starts with **All owners**, including for
+unresolved identities and connections without a durable profile; guests start with
+**Involving me**.
 Choosing **Involving me**, **All owners**, or a person changes that owner filter
 directly.
 
 ## Write directives, not observations
 
-Each entry has a metadata line followed by one imperative directive:
+Write one current imperative directive per entry. No metadata is required:
 
 ```md
-<!-- observed: 2026-07-27 | status: active -->
-
 - Prefer concise progress updates during implementation work.
 ```
 
 Use these rules:
 
 - Begin with an imperative such as `Always`, `Never`, or `Prefer`.
-- Record the date the preference was observed.
-- Use only `active` or `superseded` for status.
+- Keep only current preferences in this file.
 - Keep one behavioral instruction per directive.
 - Store only details that improve assistance. Do not turn the file into a dossier.
 
@@ -493,29 +493,21 @@ PrefEval found that preference following degrades sharply in longer conversation
 
 ## Supersede in place
 
-When a preference changes, update its existing section. Do not append a second active directive elsewhere in the file.
+When a preference changes, replace the old directive in its existing section. Do not keep contradictory directives in the file.
 
 Before:
 
 ```md
-<!-- observed: 2026-05-10 | status: active -->
-
 - Prefer detailed explanations for every code change.
 ```
 
 After:
 
 ```md
-<!-- observed: 2026-05-10 | status: superseded -->
-
-- Prefer detailed explanations for every code change.
-
-<!-- observed: 2026-07-27 | status: active -->
-
 - Prefer concise implementation summaries unless more detail is requested.
 ```
 
-Keep the superseded entry next to its replacement so the current directive is unambiguous. HorizonBench reports that systems often select an originally stated preference after the user has changed it ([arXiv:2604.17283](https://arxiv.org/abs/2604.17283)). Append-only contradictory history recreates that failure mode.
+If the change history matters, record it with an observation date in `memory/YYYY-MM-DD.md`, explicitly noting which preference replaced the old one. Keep that history out of the always-injected `USER.md`. HorizonBench reports that systems often select an originally stated preference after the user has changed it ([arXiv:2604.17283](https://arxiv.org/abs/2604.17283)). Append-only contradictory history recreates that failure mode.
 
 ## Choose the right file
 
@@ -532,9 +524,13 @@ Keep the superseded entry next to its replacement so the current directive is un
 
 `USER.md` has a fixed 4,000-character bootstrap cap, smaller than the general per-file budget. The `agents.defaults.bootstrapMaxChars` and `agents.entries.*.bootstrapMaxChars` settings can only lower this cap for `USER.md`; they cannot raise it. Profile guidance is meant to stay directive-sized so it cannot crowd project rules or durable facts out of the shared prompt budget.
 
+The loader treats this file as plain text: headings, whitespace, HTML comments, and superseded entries all count toward the cap. It does not parse `observed` dates or filter `status: superseded`. The older dated-comment format was bookkeeping for humans and the model, not a runtime freshness, priority, or expiration mechanism. Existing files still load, but remove that metadata when compacting them.
+
+Over-budget shared files are truncated from the middle, so an active directive can be omitted. Personal files are omitted entirely when over budget, as described above. Increasing the general per-file limit cannot bypass the fixed USER cap.
+
 When `USER.md` approaches the cap:
 
-1. Remove stale superseded entries (keep the replacement next to the old entry so the current directive stays unambiguous).
+1. Remove metadata comments and superseded directives; preserve useful history in daily memory first.
 2. Move durable facts and lessons that do not change how you should be assisted into `MEMORY.md`.
 3. Move detailed observations and running project context into daily `memory/YYYY-MM-DD.md` files.
 4. Use [standing intents](/concepts/standing-intents) for event-conditioned future actions, so the trigger stays injected without the full detail.

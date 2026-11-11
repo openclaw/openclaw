@@ -236,6 +236,20 @@ export function startWorktreeMaintenance(params: {
             current.startedAt = scheduler.now();
             let batchStartedAt = scheduler.now();
             let batchItems = 0;
+            const beforeRemoval = async () => {
+              assertCurrent();
+              if (scheduler.now() < nextRemovalAt) {
+                await pause(nextRemovalAt - scheduler.now());
+              }
+              while (await hasIoPressure()) {
+                assertCurrent();
+                await pause(PRESSURE_BACKOFF_MS);
+              }
+              assertCurrent();
+              nextRemovalAt = scheduler.now() + REMOVAL_INTERVAL_MS;
+              batchStartedAt = scheduler.now();
+              batchItems = 0;
+            };
             // The scheduler already detaches this job and joins its tracked cleanup.
             // Preserve that work scope when admitting the maintenance root.
             return runWithGatewayIndependentRootWorkAdmission(
@@ -249,19 +263,9 @@ export function startWorktreeMaintenance(params: {
                   commitGuard: assertCurrent,
                   beforeRemoval: async (record) => {
                     await closeScratchCleanupCursor(scratchCursor, record.path);
-                    assertCurrent();
-                    if (scheduler.now() < nextRemovalAt) {
-                      await pause(nextRemovalAt - scheduler.now());
-                    }
-                    while (await hasIoPressure()) {
-                      assertCurrent();
-                      await pause(PRESSURE_BACKOFF_MS);
-                    }
-                    assertCurrent();
-                    nextRemovalAt = scheduler.now() + REMOVAL_INTERVAL_MS;
-                    batchStartedAt = scheduler.now();
-                    batchItems = 0;
+                    await beforeRemoval();
                   },
+                  beforeTemplateRemoval: beforeRemoval,
                   checkpoint: async (progress) => {
                     Object.assign(current, progress);
                     assertCurrent();
@@ -341,6 +345,30 @@ export function startWorktreeMaintenance(params: {
     },
   };
   owners.set(params.getRuntimeConfig, owner);
+  // Cleanup can wait hours for paced removals or host pressure. Git owns its own
+  // lease, hourly deadline, and bounded backlog policy independently of that sweep.
+  scheduler.schedule({
+    id: "maintenance:worktrees:git",
+    delayMs: PRESSURE_BACKOFF_MS,
+    everyMs: PRESSURE_BACKOFF_MS,
+    phase: "maintenance",
+    run: () =>
+      runWithGatewayIndependentRootWorkAdmission(
+        async () => {
+          await previousDrain;
+          assertActive();
+          await managedWorktrees.maintainGit({
+            signal: scheduler.signal,
+            commitGuard: assertActive,
+            checkBacklog: true,
+          });
+        },
+        "runtime:worktree-git-maintenance",
+        scheduler.signal,
+      ).catch((error: unknown) =>
+        params.onError(`Worktree Git maintenance failed: ${String(error)}`),
+      ),
+  });
   scheduler.schedule({
     id: "maintenance:worktrees",
     delayMs: WORKTREE_GC_INTERVAL_MS,

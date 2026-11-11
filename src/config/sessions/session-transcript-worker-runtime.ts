@@ -3,6 +3,7 @@ import {
   hasSqliteDatabaseSchemaAdmissionForPath,
   hasSqliteDatabaseSchemaAdmissionForIdentity,
 } from "../../infra/sqlite-database-admission.js";
+import { getArtifactPreservingSqliteRead } from "../../infra/sqlite-snapshot-source.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions, WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
@@ -294,6 +295,7 @@ export function retainSessionHistoryWorkerDatabase(
                         );
                       }
                       input.preserveSourceArtifacts = true;
+                      input.inspectionSnapshot = getArtifactPreservingSqliteRead(database.path);
                       input.inspectionSourcePath = options.readSourcePath;
                       inspectionIdentity ??= input.expectedIdentity;
                       if (inspectionIdentity) {

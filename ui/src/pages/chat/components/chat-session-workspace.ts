@@ -3,6 +3,11 @@ import {
   parseManagedOutgoingArtifactId,
 } from "../../../../../src/gateway/managed-outgoing-artifact-id.ts";
 import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
+import {
+  SESSION_FILES_DISPLAY_DEFAULTS,
+  type SessionFilesDisplay,
+} from "../../../app/settings-contract.ts";
+import { patchSettings } from "../../../app/settings.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
@@ -431,6 +436,17 @@ export function createSessionWorkspaceProps(
     },
     onSessionExpandedChange: (expanded: boolean) => {
       workspace.tree!.sessionExpanded = expanded;
+      publish();
+    },
+    sessionFilesDisplay: state.settings?.sessionFilesDisplay ?? SESSION_FILES_DISPLAY_DEFAULTS,
+    onSessionFilesDisplayChange: (display: Partial<SessionFilesDisplay>) => {
+      // A browser-wide preference, like the dashboards gallery: every Files panel follows it.
+      state.settings = patchSettings({
+        sessionFilesDisplay: {
+          ...(state.settings?.sessionFilesDisplay ?? SESSION_FILES_DISPLAY_DEFAULTS),
+          ...display,
+        },
+      });
       publish();
     },
     onNavigationScroll: (area: "tree" | "session", top: number) => {

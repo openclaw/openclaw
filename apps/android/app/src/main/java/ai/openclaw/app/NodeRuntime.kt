@@ -556,6 +556,9 @@ internal class NotificationNodeEventOutbox(
   }
 }
 
+/** Distinguishes a stalled TLS probe from a WebSocket connect timeout; only the former can offer manual pin entry. */
+internal const val GATEWAY_TLS_HANDSHAKE_TIMEOUT_REASON = "tls-handshake-timeout"
+
 data class GatewayConnectionProblem(
   val code: String?,
   val message: String,
@@ -1387,6 +1390,9 @@ class NodeRuntime internal constructor(
     var waitingForAdmission = true
     var deadlineExpired = false
 
+    // Set by the timeout recovery action: open manual pin entry instead of re-probing a handshake that stalls.
+    var manualTlsTrust = false
+
     override fun invoke(): Boolean = isCurrent()
   }
 
@@ -2188,6 +2194,9 @@ class NodeRuntime internal constructor(
 
   val talkModeEnabled: StateFlow<Boolean>
     get() = talkMode.isEnabled
+
+  val talkMicrophoneMuted: StateFlow<Boolean>
+    get() = talkMode.isMicrophoneMuted
 
   val talkModeListening: StateFlow<Boolean>
     get() = talkMode.isListening
@@ -3568,6 +3577,8 @@ class NodeRuntime internal constructor(
 
   fun setTalkModeEnabled(value: Boolean): Unit = setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
 
+  fun setTalkMicrophoneMuted(value: Boolean): Unit = talkMode.setMicrophoneMuted(value)
+
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
     runTalkPttCommand {
       talkMode.finishingPushToTalkCaptureId?.let {
@@ -4254,8 +4265,12 @@ class NodeRuntime internal constructor(
       }
     }
 
-  fun refreshGatewayConnection(isCurrent: () -> Boolean = { true }) {
+  fun refreshGatewayConnection(
+    isCurrent: () -> Boolean = { true },
+    manualTlsTrust: Boolean = false,
+  ) {
     val intent = beginGatewayReplacementOperation(isCurrent) ?: return
+    intent.manualTlsTrust = manualTlsTrust
     intent.handedOff = true
     launchGatewayLifecycle(intent) {
       val endpoint = connectedEndpoint
@@ -4595,6 +4610,23 @@ class NodeRuntime internal constructor(
     if (tls != null) {
       val storedFingerprint = tls.expectedFingerprint
       intent.handedOff = true
+      if (intent.manualTlsTrust && storedFingerprint == null) {
+        launchGatewayLifecycle({ isCurrentConnectAttempt(connectAttemptId) }) {
+          finishGatewayConnectionOperation(intent)
+          setStandaloneGatewayStatus(gatewayTlsProbeFailureMessage(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT), operation = intent)
+          publishGatewayTrustPromptIfCurrent(
+            connectAttemptId = connectAttemptId,
+            prompt =
+              GatewayTrustPrompt(
+                endpoint = endpoint,
+                fingerprintSha256 = null,
+                auth = auth,
+                probeFailure = GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT,
+              ),
+          )
+        }
+        return
+      }
       tlsProbeJob =
         scope.launch {
           val tlsProbe =
@@ -4665,10 +4697,10 @@ class NodeRuntime internal constructor(
               is GatewayTlsTrustDecision.Failed -> {
                 clearAcceptedConnectAttempt()
                 val problem =
-                  if (decision.reason == GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE) {
-                    gatewayConnectionProblem(gatewayNetworkConnectError(), false, endpoint)
-                  } else {
-                    null
+                  when (decision.reason) {
+                    GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE -> gatewayConnectionProblem(gatewayNetworkConnectError(), false, endpoint)
+                    GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT -> gatewayConnectionProblem(gatewayNetworkConnectError(timedOut = true).copy(message = gatewayTlsTimeoutText.source), false, endpoint).copy(reason = GATEWAY_TLS_HANDSHAKE_TIMEOUT_REASON)
+                    GatewayTlsProbeFailure.TLS_UNAVAILABLE -> null
                   }
                 setStandaloneGatewayStatus(problem?.message ?: gatewayTlsProbeFailureMessage(decision.reason), problem, operation = intent)
               }

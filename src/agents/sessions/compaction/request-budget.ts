@@ -1,4 +1,6 @@
+import { resolveSummaryFloorChars } from "../../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { SAFETY_MARGIN } from "../../compaction-planning.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
 import {
@@ -104,6 +106,15 @@ export function createCompactionRequestBudget(params: {
   };
 }
 
+/** Legacy standalone compaction relies on its fixed ceiling; opt-in growth needs a window budget. */
+export function createStandaloneCompactionRequestBudget(
+  params: Parameters<typeof createCompactionRequestBudget>[0] & { maxSummaryChars?: number },
+): CompactionRequestBudget | undefined {
+  return (params.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS) > MAX_COMPACTION_SUMMARY_CHARS
+    ? createCompactionRequestBudget(params)
+    : undefined;
+}
+
 /** Reconcile only queued context; prepared user, image, and transient costs stay owned upstream. */
 export function withCompactionQueuedContext(
   budget: CompactionRequestBudget,
@@ -156,6 +167,37 @@ export function estimateCompactedRequestTokens(
   );
 }
 
+/**
+ * Summary tokens a replacement without a foreground budget may spend in the window beside its
+ * fixed prompt, tools and retained history, in the same units as the foreground summary budget.
+ * An unknown window yields no limit.
+ */
+export function replayTokenBudget(
+  session: {
+    agent: {
+      state: Pick<Parameters<typeof createCompactionRequestBudget>[0], "systemPrompt" | "tools">;
+    };
+  },
+  model: { contextWindow?: number },
+  settings: { reserveTokens: number },
+  messages: AgentMessage[],
+): number | undefined {
+  if (!model.contextWindow || model.contextWindow <= 0) {
+    return undefined;
+  }
+  const { systemPrompt, tools } = session.agent.state;
+  const budget = createCompactionRequestBudget({
+    contextWindow: 0,
+    reserveTokens: 0,
+    systemPrompt,
+    tools,
+  });
+  const remaining =
+    model.contextWindow - settings.reserveTokens - estimateCompactedRequestTokens(messages, budget);
+  // The estimator above carries the safety margin; the summary is fitted without it.
+  return Math.floor(remaining / SAFETY_MARGIN) - 1;
+}
+
 export function assertCompactionRequestCanFit(
   messages: AgentMessage[],
   budget: CompactionRequestBudget | undefined,
@@ -178,6 +220,7 @@ export function assertCompactionRequestCanFit(
 export function resolveCompactionRetentionBudget(
   budget: CompactionRequestBudget,
   messages: AgentMessage[],
+  maxSummaryChars = MAX_COMPACTION_SUMMARY_CHARS,
 ) {
   const preferredTokens =
     budget.contextWindow - budget.reserveTokens - budget.fixedTokens - budget.pendingTokens;
@@ -188,13 +231,19 @@ export function resolveCompactionRetentionBudget(
   const summaryTokens = estimateCompactionHistoryTokens([
     {
       role: "compactionSummary",
-      summary: "x".repeat(MAX_COMPACTION_SUMMARY_CHARS),
+      // The cut keeps room for the floor committed beside a full summary.
+      summary: "x".repeat(maxSummaryChars + resolveSummaryFloorChars(maxSummaryChars)),
       tokensBefore: 0,
       timestamp: 0,
     },
   ]);
   return {
-    maxTokens,
+    // The legacy fallback can prefer useful reduction over fitting in one pass.
+    // A raised artifact ceiling must not use that fallback to exceed the window.
+    maxTokens:
+      maxSummaryChars > MAX_COMPACTION_SUMMARY_CHARS
+        ? Math.min(maxTokens, budget.contextWindow - budget.fixedTokens - budget.pendingTokens)
+        : maxTokens,
     reserveTokens: summaryTokens,
   };
 }
