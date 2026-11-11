@@ -124,7 +124,6 @@ suite.define(() => {
           const dialog = page.getByRole("dialog", { name: "Turn on remote access", exact: true });
           await dialog.getByText(/Available: https/).waitFor();
           await dialog.getByRole("button", { name: "Continue", exact: true }).click();
-          await dialog.getByRole("button", { name: "Create recovery kit", exact: true }).click();
           const password = dialog.locator('input[autocomplete="new-password"]');
           await password.waitFor();
           expect(await password.getAttribute("type")).toBe("password");

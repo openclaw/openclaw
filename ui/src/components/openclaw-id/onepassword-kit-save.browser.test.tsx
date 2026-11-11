@@ -29,7 +29,12 @@ it("offers the official login save only when enabled, without confirming or subm
       saved={false}
       onContinue={continued}
     >
-      <RecoveryKitPanel details={details} saved={false} onSaved={saved} />
+      <RecoveryKitPanel
+        details={details}
+        accountEmail="owner@example.test"
+        saved={false}
+        onSaved={saved}
+      />
       <button type="submit" disabled>
         Continue
       </button>
