@@ -15,6 +15,7 @@ import { sanitizeExecApprovalDisplayText } from "../infra/exec-approval-text-san
 import { SESSION_EXEC_OVERRIDES_NOTE } from "../infra/exec-approvals-effective.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { callGatewayFromCliWithTransport, type GatewayRpcOpts } from "./gateway-rpc.js";
 
 const TERMINAL_TOOLS = ["exec", "process"] as const;
@@ -38,6 +39,7 @@ export type ExecPolicyToolAccess = {
 export async function buildExecPolicyToolAccess(
   config: OpenClawConfig,
   options: ExecPolicyShowOptions,
+  signal?: AbortSignal,
 ): Promise<ExecPolicyToolAccess> {
   const requestedAgent = options.agent?.trim();
   const sessionKey = options.session?.trim();
@@ -72,7 +74,7 @@ export async function buildExecPolicyToolAccess(
         "tools.effective",
         options,
         { ...(agentId ? { agentId } : {}), sessionKey },
-        { progress: false, sharedStateMode: "read-only" },
+        { progress: false, sharedStateMode: "read-only", signal },
       );
       if (agentId && result.agentId !== agentId) {
         throw new Error("The Gateway returned tool access for a different agent.");

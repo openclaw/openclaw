@@ -84,6 +84,7 @@ const mocks = await vi.hoisted(async () => {
     defaultRuntime,
     runtimeErrors,
     callGateway: vi.fn(),
+    signal: undefined as AbortSignal | undefined,
     replaceConfigFile: vi.fn(replaceConfig),
     readConfigFileSnapshot:
       vi.fn<() => Promise<{ path: string; hash: string; config: OpenClawConfig }>>(),
@@ -150,6 +151,13 @@ vi.mock("./gateway-rpc.js", async () => {
   return { ...actual, callGatewayFromCliWithTransport: mocks.callGateway };
 });
 
+vi.mock("../shared/async-work-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../shared/async-work-scope.js")>(
+    "../shared/async-work-scope.js",
+  );
+  return { ...actual, getAsyncWorkSignal: () => mocks.signal };
+});
+
 describe("exec-policy CLI", () => {
   const runExecPolicyCommand = async (args: string[]) => {
     const program = new Command();
@@ -166,6 +174,7 @@ describe("exec-policy CLI", () => {
     mocks.state.hash = "approvals-hash";
     mocks.runtimeErrors.length = 0;
     mocks.callGateway.mockReset();
+    mocks.signal = undefined;
     for (const mock of Object.values(mocks.defaultRuntime)) {
       mock.mockClear();
     }
@@ -242,6 +251,27 @@ describe("exec-policy CLI", () => {
       expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
     },
   );
+
+  it("prints no session preview that lands after Ctrl+C", async () => {
+    mocks.state.config = { agents: { ownership: "explicit", entries: { main: {} } } };
+    mocks.callGateway.mockResolvedValueOnce({
+      agentId: "main",
+      profile: "full",
+      groups: [],
+      toolAccess: {
+        checked: "live-session",
+        profiles: [{ profile: "full", source: "tools.profile", active: true }],
+        tools: ["exec", "process"].map((id) => ({ id, status: "available", reasons: [] })),
+      },
+    });
+    mocks.signal = AbortSignal.abort();
+
+    await runExecPolicyCommand(["show", "--session", "agent:main:main", "--json"]);
+
+    expect(mocks.callGateway).toHaveBeenCalled();
+    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
+  });
 
   it.each<[string, Record<string, AgentEntryConfig>, string, boolean]>([
     ["qualified session without local agents", {}, "agent:remote:main", false],
