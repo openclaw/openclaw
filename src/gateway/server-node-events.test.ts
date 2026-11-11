@@ -592,9 +592,9 @@ describe("notifications changed events", () => {
     );
   });
 
-  it("does not admit another turn when notifications.changed event is deduped", async () => {
+  it("queues notifications as passive context without starting agent turns", async () => {
     enqueue.mockReturnValueOnce({ id: "notification-event" }).mockReturnValueOnce(undefined);
-    const { notify } = nodeFixture();
+    const { notify, addChatRun } = nodeFixture();
     const payload = {
       packageName: "com.example.chat",
       title: "Message",
@@ -602,16 +602,42 @@ describe("notifications changed events", () => {
     };
     await notify(payload);
     await notify(payload);
+    await notify({ change: "removed" });
 
-    expect(enqueue).toHaveBeenCalledTimes(2);
-    expect(handoff).toHaveBeenCalledTimes(1);
+    expect(enqueue).toHaveBeenCalledTimes(3);
+    expect(enqueue).toHaveBeenNthCalledWith(
+      1,
+      "Notification posted (node=node key=notif package=com.example.chat): Message - Ping from Alex",
+      expect.objectContaining({ contextKey: "notification:notif" }),
+    );
+    expectNoCalls(handoff, dispatch, addChatRun);
+  });
+  it("never starts an agent turn for a burst of notifications on any route", async () => {
+    const { notify, addChatRun } = nodeFixture();
+    for (let i = 0; i < 100; i += 1) {
+      const sessionKey = i % 3 === 0 ? `node-key-${i}` : undefined;
+      if (sessionKey) {
+        lookupSession.mockReturnValueOnce(buildSessionLookup(sessionKey));
+      }
+      await notify({
+        key: `notif-${i}`,
+        change: i % 2 === 0 ? "posted" : "removed",
+        packageName: `com.example.app${i % 7}`,
+        title: `Title ${i}`,
+        text: `Body ${i}`,
+        sessionKey,
+      });
+    }
+
+    expect(enqueue).toHaveBeenCalledTimes(100);
+    expectNoCalls(handoff, dispatch, addChatRun);
   });
   it.each([
     ["removed", undefined, "agent:ops:main", "ops", "com.example.mail"],
     ["posted", "node-key", "agent:main:node-key", "main", undefined],
   ] as const)(
     "routes %s notifications with session key %s",
-    async (change, requestedKey, sessionKey, agentId, packageName) => {
+    async (change, requestedKey, sessionKey, _agentId, packageName) => {
       if (requestedKey) {
         lookupSession.mockReturnValueOnce({
           ...buildSessionLookup(requestedKey),
@@ -626,10 +652,7 @@ describe("notifications changed events", () => {
         `Notification ${change} (node=node key=notif${packageName ? ` package=${packageName}` : ""})`,
         expect.objectContaining(routing),
       );
-      expect(handoff).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ source: "device", agentId, sessionKey }),
-      );
+      expect(handoff).not.toHaveBeenCalled();
     },
   );
 

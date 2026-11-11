@@ -2,17 +2,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  captureSessionEventTargetForHost,
-  enqueueSessionEventForHost,
-} from "../auto-reply/reply/session-event-handoff.js";
+import { captureSessionEventTargetForHost } from "../auto-reply/reply/session-event-handoff.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions/main-session.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import {
-  consumeSelectedSystemEventEntries,
-  enqueueSystemEventEntry,
-} from "../infra/system-events.js";
+import { enqueueSystemEventEntry } from "../infra/system-events.js";
 import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
 import {
   captureNodeEventConfig,
@@ -122,33 +116,9 @@ export async function handleNodeNotificationEvent(
     },
     agentId,
   );
-  const occurrence = enqueueSystemEventEntry(summary, eventOptions);
-  if (occurrence) {
-    try {
-      const receipt = enqueueSessionEventForHost(summary, {
-        agentId,
-        sessionKey,
-        source: "device",
-        contextKey: eventOptions.contextKey,
-        expectedTarget,
-        occurrences: [occurrence],
-        createIfMissing: true,
-        assertAcceptanceCurrent,
-      });
-      source?.pending.push(receipt.settled);
-      const accepted = await receipt.accepted;
-      if (!accepted.ok) {
-        throw new Error(accepted.error);
-      }
-      void receipt.settled.then((outcome) => {
-        if (outcome.status !== "completed") {
-          ctx.logGateway.warn(`notification event not delivered node=${nodeId}: ${outcome.status}`);
-        }
-      });
-    } catch (error) {
-      consumeSelectedSystemEventEntries(eventOptions.sessionKey, [occurrence]);
-      throw error;
-    }
-  }
+  // Device notifications are passive context: the next real turn in the target session drains
+  // them. They never start a turn of their own; one agent turn per posted/removed event turned
+  // every phone notification into a full model run.
+  enqueueSystemEventEntry(summary, eventOptions);
   return undefined;
 }

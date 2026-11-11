@@ -36,7 +36,6 @@ it.each([
   { name: "system-agent notification", event: "notifications.changed", explicit: false },
   { name: "authorized exec completion", event: "exec.finished", explicit: true },
   { name: "unmatched exec completion", event: "exec.finished", explicit: true, denied: true },
-  { name: "rejected notification", event: "notifications.changed", explicit: true, rejected: true },
   { name: "rejected exec completion", event: "exec.finished", explicit: true, rejected: true },
 ])(
   "preserves the loaded global owner for $name",
@@ -134,7 +133,8 @@ it.each([
           sessionId: "research-session",
         }),
       };
-      if (denied) {
+      if (denied || event === "notifications.changed") {
+        // Notifications stay passive context for the owner's next turn; they never start one.
         expect(enqueueSessionEvent).not.toHaveBeenCalled();
       } else {
         expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
