@@ -89,7 +89,6 @@ describe("background result payload projection", () => {
         },
       });
       expect(result).toEqual({ ok: true });
-      const entry = loadSessionEntryReadOnly({ sessionKey: DESTINATION_KEY, storePath });
       const messages = (
         await loadTranscriptEvents({
           sessionKey: DESTINATION_KEY,

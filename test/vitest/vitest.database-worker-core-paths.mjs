@@ -24,6 +24,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/config/sessions/session-actor-initialization.test.ts",
   "test/scripts/upgrade-survivor-acp-metadata.test.ts",
   "src/gateway/server-methods/chat-send-admission.reads.test.ts",
+  "src/sessions/background-result-payloads.test.ts",
   "src/sessions/background-session-result.test.ts",
   "src/sessions/confirmed-visible-message.integration.test.ts",
   "src/agents/tools/message-tool.scheduled-lifetime.test.ts",
