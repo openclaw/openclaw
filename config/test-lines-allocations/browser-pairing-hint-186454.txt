@@ -1,0 +1,2 @@
+# Regression coverage for unparsable gateway hints in extension pairing.
+17
