@@ -191,6 +191,7 @@ for (const runtime of ["node", "node-short-path"] as const) {
             preparedEntrypoint: compositionEntrypoint,
             root: fixture.packageRoot,
             importRoot,
+            runtime,
           });
           await fs.writeFile(
             path.join(fixture.packageRoot, "package.json"),
@@ -229,10 +230,11 @@ for (const runtime of ["node", "node-short-path"] as const) {
                 TMP: directory,
                 TEMP: directory,
               },
-              // Keep only the three fixture-owned proof records, even when a failed
-              // child reaches the guard. A parent-only prefix excludes child-output replay.
+              // Keep failure receipts independent of the eight coarse progress stages.
+              // Parent-only prefixes exclude raw child-output replay at the guard.
               interact: (child) => {
                 let records = 0;
+                let progressRecords = 0;
                 const observe = () => {
                   let pending = "";
                   return (chunk: string) => {
@@ -244,6 +246,11 @@ for (const runtime of ["node", "node-short-path"] as const) {
                         records++ < 4
                       ) {
                         console.log("RETAINED_CLI_PROOF " + line.slice(0, 4_096));
+                      } else if (
+                        line.startsWith('{"phase":"cli-composition-progress"') &&
+                        progressRecords++ < 9
+                      ) {
+                        console.log("RETAINED_CLI_PROGRESS " + line.slice(0, 4_096));
                       }
                     }
                   };

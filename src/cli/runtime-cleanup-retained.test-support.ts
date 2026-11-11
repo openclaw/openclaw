@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { registerHooks } from "node:module";
 import path from "node:path";
@@ -20,6 +21,7 @@ export async function copyCliRetainedCompositionGraph(params: {
   preparedEntrypoint: URL;
   root: string;
   importRoot: string;
+  runtime: "node" | "node-short-path";
 }): Promise<void> {
   const entry = fileURLToPath(params.preparedEntrypoint);
   const marker = path.sep + "dist" + path.sep;
@@ -27,7 +29,11 @@ export async function copyCliRetainedCompositionGraph(params: {
   assert(index >= 0, "composition requires the prepared JavaScript graph");
   const source = entry.slice(0, index + marker.length);
   const destination = path.join(params.root, "dist");
-  const manifest: { fixtures?: { retainedCliComposition?: string[] } } = JSON.parse(
+  const manifest: {
+    identity: string;
+    outputs: Record<string, string>;
+    fixtures?: { retainedCliComposition?: string[] };
+  } = JSON.parse(
     await fs.readFile(path.join(source, "..", "manifest.json"), "utf8"),
   );
   const files = manifest.fixtures?.retainedCliComposition;
@@ -54,13 +60,48 @@ export async function copyCliRetainedCompositionGraph(params: {
   }
   // Only dispatch is substituted. The entrypoint, runCli, registry, retention,
   // database and every finalizer remain the actual prepared production modules.
+  const route = "legacy-finalizer/src/cli/route.js";
   await fs.writeFile(
-    path.join(destination, "legacy-finalizer/src/cli/route.js"),
+    path.join(destination, route),
     "export async function tryRouteCli() { await globalThis.__openclawRetainedCompositionCommand(); return true; }\n",
   );
+  // Export only relative names and digests, never compiler input paths or config.
+  // This completes before child launch, outside its unchanged deadlock guard.
+  const proofDirectory = process.env.OPENCLAW_RETAINED_CLI_PROOF_DIR;
+  if (proofDirectory) {
+    const copied = [];
+    for (const name of [...new Set([...files, route])].toSorted()) {
+      const bytes = await fs.readFile(path.join(destination, name));
+      copied.push({ path: name, sha256: createHash("sha256").update(bytes).digest("hex") });
+    }
+    const inventory = {
+      runtime: params.runtime,
+      manifestIdentity: manifest.identity,
+      fullOutputCount: Object.keys(manifest.outputs).length,
+      selectedFileCount: files.length,
+      copiedFileCount: copied.length,
+      substitutions: [route],
+      selected: files.map((name) => ({ path: name, sha256: manifest.outputs[name] })),
+      copied,
+    };
+    await fs.mkdir(proofDirectory, { recursive: true });
+    await fs.writeFile(
+      path.join(proofDirectory, params.runtime + ".json"),
+      JSON.stringify(inventory, null, 2) + "\n",
+    );
+  }
 }
 
 async function runComposition(fixture: CliRetainedCompositionFixture): Promise<void> {
+  const started = performance.now();
+  const observePhase = (stage: string) =>
+    console.log(
+      JSON.stringify({
+        phase: "cli-composition-progress",
+        stage,
+        elapsedMs: Math.round(performance.now() - started),
+      }),
+    );
   const moduleUrl = (relative: string) =>
     pathToFileURL(path.join(fixture.importRoot, "dist/legacy-finalizer/src", relative)).href;
   const physicalUrl = (relative: string) =>
@@ -140,6 +181,7 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
     await import(moduleUrl(cliRetainedCompositionModules.swap));
   const { captureRuntimeWorkerSource }: typeof import("../infra/runtime-worker-generation.js") =
     await import(moduleUrl(cliRetainedCompositionModules.workerGeneration));
+  observePhase("owners-loaded");
   let store: Awaited<ReturnType<typeof acquireDebugProxyCaptureStoreAsync>>["store"] | undefined;
   let resource: ReturnType<typeof setInterval> | undefined;
   let disposeCalls = 0;
@@ -165,6 +207,7 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
       // Acquire outside the update worker generation: the executable owns this
       // resource until its later finalizers, not just until retention settlement.
       ({ store } = await acquireDebugProxyCaptureStoreAsync());
+      observePhase("store-acquired");
       await store.upsertSession({
         id: "retained-cli",
         startedAt: 1,
@@ -216,6 +259,7 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
         agentDir: fixture.root,
         workspaceDir: fixture.root,
       });
+      observePhase("retention-start");
       await withRetainedUpdateRuntime(cleanupUrl, async (retain) => {
         const retained = await retain({
           mutationRoots: [fixture.root],
@@ -223,11 +267,14 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
           timeoutMs: 30_000,
           assertCurrent() {},
         });
+        observePhase("retention-done");
         assert(retained && retained.entries > 0, "running source was not retained");
         retainedRegistryUrl = captureRuntimeWorkerSource(new URL(registryUrl)).moduleUrl.href;
         retainedCleanupUrl = captureRuntimeWorkerSource(new URL(cleanupUrl)).moduleUrl.href;
         assert.notEqual(retainedRegistryUrl, registryUrl, "registry source was not retained");
+        observePhase("swap-start");
         const result = await swapStagedPackageInstall({ ...fixture.swap, timeoutMs: 30_000 });
+        observePhase("swap-done");
         assert.equal(result.status, "committed", JSON.stringify(result));
         await assert.rejects(fs.stat(new URL(physicalUrl("cli/runtime-cleanup.js"))), {
           code: "ENOENT",
@@ -236,6 +283,7 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
       });
       settled = true;
       phases.push("retention-settled");
+      observePhase("retention-settled");
       observation = registerHooks({
         resolve(specifier, context, nextResolve) {
           if (context.parentURL === cleanupUrl && settled) {
@@ -252,6 +300,7 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
   await withCliProcessScope(() =>
     runMainOrRootHelp(argv, {
       finalize: async () => {
+        observePhase("finalizer");
         if (disposeCalls !== 1) {
           // Bind the failure receipt to the unchanged assertion at this boundary.
           console.log(

@@ -49,7 +49,7 @@ export function createVitestWorkerFixtureGraph(outDir: string) {
       for (const root of roots) {
         visit(normalize(root));
       }
-      return [...selected].sort();
+      return [...selected].toSorted();
     },
   };
 }

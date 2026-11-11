@@ -42,6 +42,8 @@ jobs:
           "CLI cleanup/retained-update composition; dispatch substituted. Junction and complete self-update unproved; immutable 2026.11.3 unchanged." | Set-Content .artifacts/cli-composition/scope.txt
       - name: Prove repaired canonical and short-path composition
         shell: pwsh
+        env:
+          OPENCLAW_RETAINED_CLI_PROOF_DIR: .artifacts/cli-composition/repaired-graph
         run: |
           node scripts/run-vitest.mjs src/cli/runtime-cleanup-scope.retirement.test.ts --maxWorkers=1 -t "drains real CLI resources" 2>&1 | Tee-Object .artifacts/cli-composition/repaired.log
           exit $LASTEXITCODE
@@ -56,11 +58,15 @@ jobs:
           git diff -- src/infra/update-retained-runtime.ts src/infra/update-retained-runtime-imports.ts > .artifacts/cli-composition/baseline-owner.diff
       - name: Preserve pre-fix canonical control
         shell: pwsh
+        env:
+          OPENCLAW_RETAINED_CLI_PROOF_DIR: .artifacts/cli-composition/baseline-canonical-graph
         run: |
           node scripts/run-vitest.mjs src/cli/runtime-cleanup-scope.retirement.test.ts --maxWorkers=1 -t "after node retained-update composition" 2>&1 | Tee-Object .artifacts/cli-composition/baseline-canonical.log
           exit $LASTEXITCODE
       - name: Require pre-fix admitted alias cleanup failure
         shell: pwsh
+        env:
+          OPENCLAW_RETAINED_CLI_PROOF_DIR: .artifacts/cli-composition/baseline-alias-graph
         run: |
           node scripts/run-vitest.mjs src/cli/runtime-cleanup-scope.retirement.test.ts --maxWorkers=1 -t "after node-short-path retained-update composition" 2>&1 | Tee-Object .artifacts/cli-composition/baseline-alias.log
           $status = $LASTEXITCODE
@@ -174,11 +180,39 @@ jobs:
       - uses: ./.github/actions/setup-node-env
         with:
           semantic-checks: "true"
+          install-bun: ${{ github.job == 'static-tests' && 'false' || 'true' }}
           cache-mode: "off"
+      - uses: ./.github/actions/setup-test-bun
+        if: github.job == 'static-tests'
+      - name: Record exact pinned test runtime
+        if: github.job == 'static-tests'
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { execFileSync } from "node:child_process";
+          import { createHash } from "node:crypto";
+          import fs from "node:fs";
+          const pin = JSON.parse(fs.readFileSync("scripts/lib/openclaw-bun.json", "utf8"));
+          const query = (...args) => execFileSync("bun", args, { encoding: "utf8" }).trim();
+          const executable = query("-p", "process.execPath");
+          const observed = {
+            version: query("--version"),
+            revision: query("--revision"),
+            commit: query("-p", "Bun.revision"),
+            executableSha256: createHash("sha256").update(fs.readFileSync(executable)).digest("hex"),
+          };
+          const artifact = pin.artifacts["linux-x64"];
+          assert.equal(observed.revision, pin.revision);
+          assert.equal(observed.commit, pin.commit);
+          assert.equal(observed.executableSha256, artifact.executableSha256);
+          fs.writeFileSync(".artifacts/composition-static/bun-runtime.json",
+            JSON.stringify({ pin: { tag: pin.tag, commit: pin.commit, revision: pin.revision, artifact }, observed }, null, 2) + "\n");
+          NODE
       - name: Run selected proof
         env:
           LANE: ${{ github.job }}
           FIXTURE_ONLY: ${{ inputs.fixture_only }}
+          OPENCLAW_RETAINED_CLI_PROOF_DIR: .artifacts/composition-static/fixture-graph
         run: |
           set -euo pipefail
           case "$LANE" in

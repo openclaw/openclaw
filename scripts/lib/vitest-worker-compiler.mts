@@ -435,7 +435,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   const fixtures = {
     retainedCliComposition: fixtureGraph.select([
       ...Object.values(cliRetainedCompositionModules).map((name) => legacyOutputPrefix + "src/" + name),
-      ...runtimeProcessCoreEntrypoints.map((entry) => entry.distWorkerPath),
+      ...runtimeProcessCoreEntrypoints.map((processEntry) => processEntry.distWorkerPath),
       managedHandoffRuntimeEntrypoint.distWorkerPath,
       packageActivationRuntimeEntrypoint.distWorkerPath,
     ]),
@@ -467,11 +467,13 @@ async function writeVitestWorkerManifest(
   const buildInfo = `${JSON.stringify(resolveBuildInfo({ rootDir: root }), null, 2)}\n`;
   fs.writeFileSync(path.join(outDir, "build-info.json"), buildInfo, restored ? {} : { flag: "wx" });
   outputs["build-info.json"] = hashVitestWorkerArtifact(buildInfo);
-  if (fixtures) {
-    fixtures = {
-      retainedCliComposition: [...new Set([...fixtures.retainedCliComposition, "build-info.json"])].sort(),
-    };
-  }
+  const completedFixtures = fixtures
+    ? {
+        retainedCliComposition: [
+          ...new Set([...fixtures.retainedCliComposition, "build-info.json"]),
+        ].toSorted(),
+      }
+    : undefined;
   const sortedInputs = Object.fromEntries(
     Object.entries(inputs).toSorted(([a], [b]) => a.localeCompare(b)),
   );
@@ -479,11 +481,11 @@ async function writeVitestWorkerManifest(
     Object.entries(outputs).toSorted(([a], [b]) => a.localeCompare(b)),
   );
   const manifest: VitestWorkerManifest = {
-    identity: hashVitestWorkerArtifact(JSON.stringify([sortedInputs, sortedOutputs, fixtures])),
+    identity: hashVitestWorkerArtifact(JSON.stringify([sortedInputs, sortedOutputs, completedFixtures])),
     inputs: sortedInputs,
     outputs: sortedOutputs,
     durationMs: performance.now() - started,
-    ...(fixtures ? { fixtures } : {}),
+    ...(completedFixtures ? { fixtures: completedFixtures } : {}),
     ...(cacheSignature ? { cacheSignature } : {}),
   };
   // Restoration verified these bytes before transferring exclusive ownership.
