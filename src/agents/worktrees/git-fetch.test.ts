@@ -151,13 +151,13 @@ it.each([
   },
 );
 
-it.each(["default", "negotiation tip"])(
-  "preserves custom tracking mappings with %s while recovering missing tips",
-  async (mode) => {
+it.each(["", "--negotiation-tip=HEAD", "--quiet"])(
+  "preserves custom tracking mappings with optional flag %s while recovering missing tips",
+  async (flag) => {
     await config(source, "uploadpack.allowAnySHA1InWant", "true");
     await git(source, ["update-ref", "-d", "refs/heads/main"]);
     await config(clone, "remote.origin.fetch", "+refs/heads/keep:refs/remotes/origin/main");
-    expect((await fetch(...(mode === "default" ? [] : ["--negotiation-tip=HEAD"]))).code).toBe(0);
+    expect((await fetch(...(flag ? [flag] : []))).code).toBe(0);
     expect(await ref(clone, "refs/remotes/origin/main")).toBe(tip);
     expect(await trackingRefs(clone)).toBe("refs/remotes/origin/retired");
   },

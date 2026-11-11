@@ -1,9 +1,10 @@
+import { writeFile } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import QRCode from "qrcode";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
-  captureUiProof,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
@@ -11,8 +12,8 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
-const sessionKey = "agent:main:gtc-demo";
-const title = "GTC demo";
+const sessionKey = "agent:main:dashboard:619dfdde-5f1b-4f7f-be9c-68ab72f812f8";
+const title = "Recognizable halftone claw QR for public conversations";
 const owner = { type: "human", id: "owner", label: "Owner" };
 const phase = process.env.OPENCLAW_PUBLIC_SHARE_QR_PHASE ?? "after";
 
@@ -77,6 +78,46 @@ async function expectQrEncodes(qr: Locator, url: string) {
   expect(rendered.width / (size + quiet * 2)).toBeGreaterThanOrEqual(2.5);
 }
 
+async function expectClaw(qr: Locator, page: Page, surface: Locator, url: string, name: string) {
+  const toggle = surface.getByRole("button", { name: "Use claw QR", exact: true });
+  if (name.includes("desktop")) {
+    await surface.locator(".chat-pane__sharing-url").focus();
+    await page.keyboard.press("Tab");
+    expect(await toggle.evaluate((element) => element === document.activeElement)).toBe(true);
+    await page.keyboard.press("Enter");
+  } else {
+    await toggle.click();
+  }
+  const image = surface.getByRole("img", {
+    name: "Claw QR code for the public link",
+    exact: true,
+  });
+  await image.waitFor();
+  await image.evaluate(async (element) => {
+    if (element instanceof HTMLImageElement) {
+      await element.decode();
+    }
+  });
+  const download = surface.getByRole("link", { name: "Download claw QR" });
+  expect(await download.getAttribute("href")).toBe(await image.getAttribute("src"));
+  const frame = await takeControlUiScreenshotFrame(page, surface, [image, download], {
+    elements: [image],
+    scrollTo: image,
+    animations: "disabled",
+  });
+  await writeFile(suite.artifactDir + "/" + name + ".png", frame.png);
+  await writeFile(suite.artifactDir + "/display.png", frame.elements[0]!.png);
+  const downloaded = page.waitForEvent("download");
+  await download.click();
+  const file = await downloaded;
+  expect(file.suggestedFilename()).toBe("openclaw-public-link-qr.png");
+  await file.saveAs(suite.artifactDir + "/export.png");
+  await writeFile(suite.artifactDir + "/url.txt", url);
+  await surface.getByRole("button", { name: "Use standard QR", exact: true }).click();
+  await qr.waitFor();
+  await expectQrEncodes(qr, url);
+}
+
 suite.define(() => {
   for (const colorScheme of ["light", "dark"] as const) {
     it(`shows a QR code for the copied public link in the desktop sharing menu (${colorScheme})`, async () => {
@@ -99,7 +140,13 @@ suite.define(() => {
             expect(qrBox!.x).toBeGreaterThanOrEqual(panelBox!.x);
             expect(qrBox!.x + qrBox!.width).toBeLessThanOrEqual(panelBox!.x + panelBox!.width);
           }
-          await captureUiProof(suite, page, `public-share-qr-desktop-${colorScheme}-${phase}.png`);
+          await expectClaw(
+            panel.getByRole("img", { name: "QR code for the public link", exact: true }),
+            page,
+            panel,
+            (await url.textContent())!,
+            `halftone-after-desktop-${colorScheme}`,
+          );
         },
       );
     });
@@ -135,7 +182,13 @@ suite.define(() => {
             expect(qrBox!.x).toBeGreaterThanOrEqual(0);
             expect(qrBox!.x + qrBox!.width).toBeLessThanOrEqual(390);
           }
-          await captureUiProof(suite, page, `public-share-qr-mobile-${colorScheme}-${phase}.png`);
+          await expectClaw(
+            sharing.getByRole("img", { name: "QR code for the public link", exact: true }),
+            page,
+            sharing,
+            (await url.textContent())!,
+            `halftone-after-mobile-${colorScheme}`,
+          );
         },
       );
     });

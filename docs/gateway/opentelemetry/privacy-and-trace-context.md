@@ -47,8 +47,10 @@ request trace; longer values make the request frame invalid. `tracestate` and
 Raw model/tool content is **not** exported by default. Spans carry bounded
 identifiers (channel, provider, model, error category, hash-only request ids,
 tool source, tool owner, skill name/source) and never include prompt text,
-response text, tool inputs, tool outputs, skill file paths, or session keys.
-Values that look like scoped agent session keys (for example starting with
+response text, tool inputs, tool outputs, skill file paths, or session keys
+while `diagnostics.otel.captureContent` is unset (see
+[Session identity](#session-identity)). Values that look like scoped agent
+session keys (for example starting with
 `agent:`) are replaced with `unknown` on low-cardinality attributes. OTLP log
 records keep severity, logger, available code locations, trusted trace context, and
 sanitized attributes by default; the raw log message body is exported only
@@ -57,6 +59,30 @@ locations to avoid capturing a stack for each routine message. Talk metrics expo
 bounded event metadata (mode, transport, provider, event type) - no
 transcripts, audio payloads, session ids, turn ids, call ids, room ids, or
 handoff tokens.
+
+## Session identity
+
+Trace backends group spans into conversations by a session attribute, which the
+default redaction removes. When `diagnostics.otel.captureContent` is `true`,
+run-scoped spans (run, message and prompt processing, model call, model usage,
+harness, tool execution, and skill use) carry:
+
+- `gen_ai.conversation.id`: the GenAI semantic-conventions attribute that
+  Langfuse, LangWatch, Phoenix, and other vendor-neutral backends read for
+  grouping, valued with the session id.
+- `openclaw.session.id`: the same session id under the OpenClaw-native key.
+
+The value is the session id — the durable identifier OpenClaw assigns at
+session creation, not the session key — so backends group every turn of a
+session into one conversation. A `/new` reset clears history but preserves the
+durable session id, so reset continuations stay grouped in the same backend
+conversation; a fresh conversation id arises when a session is first created.
+The raw session key (which can embed channel
+peer ids and collides across Gateways that share a collector) is never
+exported. Session ids are still stable identifiers of a conversation; the
+shared `captureContent` gate exists so identity travels only to a collector
+already trusted with raw prompt and tool content. Metric attributes never
+carry session identifiers.
 
 Skill-use spans can include a SHA-256 fingerprint of the instructions actually
 delivered while tracing is active, even with content capture disabled. This

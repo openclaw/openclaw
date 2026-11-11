@@ -1,0 +1,2 @@
+67
+# Native selected/unselected double-click rename, exact session patch, and read-only/navigation regression coverage.

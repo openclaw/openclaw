@@ -351,6 +351,9 @@ export function prepareGroupedMessage(
     assistantViewBlocks.length !== 0 ||
     inlineViewBlocks.length !== 0;
   const clawHubCards = normalizedMessage.content.filter((item) => item.type === "clawhub");
+  const templatePluginCards = normalizedMessage.content.filter(
+    (item) => item.type === "template_plugin_install",
+  );
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const reasoningMarkdown = extractedThinking ? `_Reasoning:_\n\n${extractedThinking}` : null;
@@ -412,6 +415,7 @@ export function prepareGroupedMessage(
     !hasToolCards &&
     !hasMediaContent &&
     clawHubCards.length === 0 &&
+    templatePluginCards.length === 0 &&
     !normalizedMessage.replyTarget;
 
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
@@ -479,6 +483,7 @@ export function prepareGroupedMessage(
     assistantViewBlocks,
     inlineViewBlocks,
     clawHubCards,
+    templatePluginCards,
     reasoningMarkdown,
     markdown,
     markdownRenderOptions,

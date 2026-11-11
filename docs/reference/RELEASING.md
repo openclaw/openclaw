@@ -28,7 +28,11 @@ the regular stable channel. Its GitHub release is not marked Latest. A monthly
 line retires when `main` advances into the next month. Maintain only one
 extended-stable line: the trailing completed month relative to `main`'s version;
 older `.33+` lines are retired. Publishing a retired line requires an explicit
-maintainer decision; never bypass the release guards.
+maintainer decision; never bypass the release guards. The shared publisher records
+that decision with `retired_line_publication_reason` in its human-approved
+`npm-release` receipt, scoped to the exact release tag, source, channel, and
+parent attempt. Empty or historical ordinary approvals do not authorize a
+retired-line publication; all source, validation, and live-authority gates remain.
 
 ## Version naming
 
@@ -288,6 +292,13 @@ or publication. Report hosted evidence and untested deployment prerequisites
 separately; a local green check is not a hosted release receipt.
 
 ## Packages and apps can become available at different times
+
+Selected official npm plugins publish successfully before core npm. ClawHub
+registry publication starts at its existing dispatch point and runs independently
+thereafter. ClawHub planning, authorization, dispatch, publication, verification,
+and recovery never block core npm, GitHub release finalization, main closeout,
+or the release retrospective PR. Pending or failed ClawHub work remains visible
+with its own owner and follow-up; a core release does not claim it is complete.
 
 A published Gateway release does not mean every native app is ready. Signing and publishing the apps can
 finish separately from npm, Docker, and the GitHub release.

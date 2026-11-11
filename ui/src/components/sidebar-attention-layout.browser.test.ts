@@ -315,8 +315,8 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
 
       shell.append(nativeChrome);
       document.documentElement.classList.add("openclaw-native-web-chrome");
-      expect(bounds(attention).left).toBe(bounds(chrome).right + 8);
-      expect(bounds(nativeChrome).left).toBeGreaterThanOrEqual(bounds(attention).right + 8);
+      // Current Mac navigation keeps Inbox in the rail; this floating fixture
+      // only covers the retained native borderless appearance.
       const expectTransparent = () =>
         expect(style(inbox)).toMatchObject({
           borderTopWidth: "0px",

@@ -271,6 +271,34 @@ describe("Gateway timed work", () => {
     await scheduler.stop();
   });
 
+  it("fences wakeups before retiring authority and still joins running work", async () => {
+    const { time, scheduler, job, at } = fixture();
+    const scope = scheduler.scope();
+    const release = createDeferredCore();
+    const running = job(
+      "running",
+      { delayMs: 0, everyMs: 100 },
+      vi.fn(() => release.promise),
+      scope,
+    );
+    const wake = time.wake();
+    const waiting = job("waiting", { delayMs: 100 });
+    scheduler.fence();
+    expect(scheduler.signal.aborted).toBe(false);
+    expect(scope.signal.aborted).toBe(false);
+    const late = job("late", { delayMs: 0 }, vi.fn(), scope);
+    await at(1_100, [running, 1], [waiting, 0], [late, 0]);
+    expect(time.armedAtMs).toBeNull();
+    const stopped = vi.fn();
+    const stop = scheduler.stop().then(stopped);
+    expect(scope.signal.aborted).toBe(true);
+    expect(stopped).not.toHaveBeenCalled();
+    release.resolve();
+    await Promise.all([wake, stop]);
+    expect(stopped).toHaveBeenCalledOnce();
+    expect(scheduler.nextWakeAtMs).toBeNull();
+  });
+
   it("coalesces sleep and forward jumps into one pass while retaining absolute deadlines", async () => {
     const { scheduler, job, at } = fixture();
     const deadline = vi.fn();

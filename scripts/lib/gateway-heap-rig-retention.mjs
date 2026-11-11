@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 /** Private IPC to the synthetic Gateway; never attaches to an operator process. */
-export async function captureHeapRigRetention(child, action, mode) {
+export async function captureHeapRigRetention(child, action, mode, snapshotPath) {
   const id = randomUUID();
   const reply = Promise.withResolvers();
   const listener = (message) => {
@@ -17,10 +17,10 @@ export async function captureHeapRigRetention(child, action, mode) {
   child.on("message", listener);
   const timeout = setTimeout(
     () => reply.reject(new Error("Retention checkpoint timed out")),
-    120_000,
+    snapshotPath ? 300_000 : 120_000,
   );
   try {
-    child.send({ channel: "heap-rig-retention", id, action, mode });
+    child.send({ channel: "heap-rig-retention", id, action, mode, snapshotPath });
     return await reply.promise;
   } finally {
     clearTimeout(timeout);
