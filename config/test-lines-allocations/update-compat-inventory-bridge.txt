@@ -1,0 +1,2 @@
+28
+# CLI regressions for unbridgeable inventories, missing builds, and read-only validation.

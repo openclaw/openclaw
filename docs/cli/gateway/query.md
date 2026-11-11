@@ -48,6 +48,10 @@ before retrying.
 When you set `--url`, the CLI does not fall back to config or environment credentials. Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
 </Note>
 
+Invalid client ports and combining `--port` with `--url` report their specific
+input error with exit code 1. JSON error envelopes remain unchanged, including
+the separate options-phase errors from `setup` and `onboard`.
+
 WebSocket opening-handshake timeouts report a Gateway transport error with
 `ETIMEDOUT`, including the target and a status-check hint. JSON error output uses
 `error.type: "gateway_transport_error"`, as for other connection failures.

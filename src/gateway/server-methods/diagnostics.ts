@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  validateDiagnosticsCpuProfileParams,
   validateDiagnosticsHeapProfileParams,
   validateDiagnosticsHeapSnapshotParams,
 } from "../../../packages/gateway-protocol/src/schema/diagnostics.js";
@@ -70,13 +71,12 @@ export const diagnosticsHandlers: GatewayRequestHandlers = {
   },
   "diagnostics.cpuProfile": profileHandler(
     "CPU profile",
-    (params): params is Record<string, unknown> =>
-      isRecord(params) && Object.keys(params).length === 0,
-    "diagnostics.cpuProfile accepts only empty params",
-    async (_params, authority) => {
+    validateDiagnosticsCpuProfileParams,
+    "diagnostics.cpuProfile accepts only integer windows (1–30) and windowMs (100–5000)",
+    async (params, authority) => {
       const { captureDiagnosticCpuProfile } =
         await import("../../logging/diagnostic-cpu-profile.js");
-      return captureDiagnosticCpuProfile(authority);
+      return captureDiagnosticCpuProfile({ ...params, ...authority });
     },
   ),
   "diagnostics.heapProfile": profileHandler(

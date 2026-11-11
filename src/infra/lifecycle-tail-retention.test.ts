@@ -11,10 +11,13 @@ it.for([
   ["native-source", 2],
   ["question-cleanup", 2],
   ["worker-pool", 3],
+  ["cleanup-deadline", 2],
 ] as const)(
   "releases completed caller context from %s",
   async ([resource, collected], { signal }) => {
     const root = fixture.createTempDir("openclaw-lifecycle-tail-retention-");
+    const executable =
+      resource === "worker-pool" || resource === "cleanup-deadline" ? process.execPath : undefined;
     const result = await fixture.track(
       runNodeScript(
         (workerArgv) => [
@@ -31,7 +34,7 @@ it.for([
           signal,
           requireProcessTreeExit: process.platform !== "win32",
           maxBuffer: 64 * 1024,
-          ...(resource === "worker-pool" ? { executable: process.execPath } : {}),
+          executable,
         },
       ),
     );
@@ -40,9 +43,7 @@ it.for([
     expect(JSON.parse(result.stdout)).toEqual({
       resource,
       collected,
-      ...(resource === "worker-pool"
-        ? { runtime: process.versions.bun ? "bun" : "node" }
-        : { reused: true }),
+      runtime: executable && process.versions.bun ? "bun" : "node",
     });
   },
 );

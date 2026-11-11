@@ -18,7 +18,7 @@ Wire Gmail inbox triggers to OpenClaw through Google Pub/Sub and `gog gmail watc
 Not on Gmail? The [IMAP email trigger plugin](/automation/imap) watches an existing IMAP mailbox without Google PubSub or a public webhook.
 
 <Note>
-**Prerequisites:** `gcloud` CLI, `gog` (gogcli) authorized for the watched Gmail account, OpenClaw hooks enabled, an HTTPS push endpoint reachable by Pub/Sub (Tailscale Funnel in the recommended setup), and a working sandbox backend. The example below uses the default Docker backend; build its image first by following [Sandbox images and setup](/gateway/sandboxing#images-and-setup), or configure another supported backend.
+**Prerequisites:** `gcloud` CLI, `gog` (gogcli) authorized for the watched Gmail account (v0.48.0 or a build supporting both `--token-env` and `--hook-token-env` is recommended), OpenClaw hooks enabled, an HTTPS push endpoint reachable by Pub/Sub (Tailscale Funnel in the recommended setup), and a working sandbox backend. The example below uses the default Docker backend; build its image first by following [Sandbox images and setup](/gateway/sandboxing#images-and-setup), or configure another supported backend.
 </Note>
 
 ### Configure a restricted Gmail reader (recommended)
@@ -134,6 +134,10 @@ Check forwarding and completion separately. A watcher success only acknowledges 
 ### Gateway auto-start
 
 When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `gog gmail watch serve` on boot and auto-renews the watch. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
+
+OpenClaw probes the selected Gog executable before watch registration. Supporting builds receive both tokens through child-only environment sources automatically. Older Gog continues working with legacy arguments and one actionable warning per watcher lifecycle. If support cannot be verified, the connection continues with a distinct warning. Both tokens remain visible to other local users with process access while legacy arguments are in use; upgrading Gog is required to remove this exposure. Serve failures never downgrade a watcher that selected environment transport.
+
+Interactive setup and foreground runs can offer upgrades for eligible, unpinned Homebrew installations. Declining preserves the existing connection. Gateway startup never upgrades packages. Doctor reports configured Gmail installations and can upgrade eligible Homebrew installs through an explicit `openclaw doctor --repair`; an OpenClaw updater's internal Doctor pass only reports the finding. Custom wrappers and pins remain operator-managed. After upgrading, restart the watcher or Gateway. See [Gog compatibility and upgrades](/cli/webhooks#webhooks-gmail-run).
 
 After sleep, an overdue renewal runs once instead of replaying missed intervals.
 Shutdown cancels and waits for any in-flight renewal before stopping the watcher.

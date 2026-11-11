@@ -2,6 +2,7 @@
 import { localeLowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { capCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/query.js";
 import type {
   CompactionSummarizationInstructions,
@@ -32,6 +33,16 @@ const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, include identifiers only when needed for continuity; do not enforce literal-preservation rules.";
 
+const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
+const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
+
+export function resolveQualityGuardMaxRetries(value: number | undefined): number {
+  return Math.min(
+    MAX_QUALITY_GUARD_MAX_RETRIES,
+    Math.max(0, Math.floor(value ?? DEFAULT_QUALITY_GUARD_MAX_RETRIES)),
+  );
+}
+
 export function resolveSummaryReserveTokens(
   requestedReserveTokens: number,
   model: NonNullable<Parameters<typeof summarizeCompactionHistory>[0]["model"]>,
@@ -53,6 +64,38 @@ export function nestRequiredSummaryHeadings(text: string): string {
       ? heading.replace("##", "###")
       : heading,
   );
+}
+
+const SPLIT_TURN_SECTION_HEADING = "**Turn Context (split turn):**";
+
+function nestMarkdownHeadings(text: string): string {
+  return text.replace(/^##(?=[ \t]+\S)/gmu, "###");
+}
+
+export function normalizeLegacySplitTurnSummary(summary: string | undefined): string | undefined {
+  const splitTurnStart = summary?.indexOf(SPLIT_TURN_SECTION_HEADING) ?? -1;
+  if (!summary || splitTurnStart < 0) {
+    return summary;
+  }
+  const splitTurnContentStart = splitTurnStart + SPLIT_TURN_SECTION_HEADING.length;
+  // Shipped safeguard summaries nested a second complete summary after this owned boundary.
+  // Demote its headings only in the next model input; the persisted old boundary stays untouched.
+  return `${summary.slice(0, splitTurnContentStart)}${nestRequiredSummaryHeadings(summary.slice(splitTurnContentStart))}`;
+}
+
+export function formatGeneratedSplitTurnSection(
+  summary: string,
+  onTruncated: () => void,
+  maxChars: number,
+): string {
+  const heading = `${SPLIT_TURN_SECTION_HEADING}\n\n`;
+  const summaryBudget = maxChars - heading.length;
+  const nestedSummary = nestMarkdownHeadings(summary);
+  const cappedSummary = capCompactionSummary(nestedSummary, summaryBudget);
+  if (cappedSummary.length < nestedSummary.length) {
+    onTruncated();
+  }
+  return `${heading}${cappedSummary}`;
 }
 
 /** Wraps operator-provided compaction instruction text as untrusted prompt data. */

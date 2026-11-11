@@ -55,7 +55,7 @@ suite.define(() => {
 
     const prompt = "send with the new reasoning and speed";
     await sendMessage(page, prompt);
-    await page.locator(".chat-queue").getByText("Applying chat settings").waitFor({
+    await page.locator(".chat-queue").getByText("Applying session settings").waitFor({
       timeout: 10_000,
     });
     expect(await gateway.getRequests("chat.send")).toHaveLength(0);
@@ -91,7 +91,7 @@ suite.define(() => {
     await waitForRequests(gateway, "sessions.list", listsBefore + 1, rosterMatch);
     await page.keyboard.press("Escape");
     await sendMessage(page, "send after my settings");
-    await page.locator(".chat-queue").getByText("Applying chat settings").waitFor();
+    await page.locator(".chat-queue").getByText("Applying session settings").waitFor();
     expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     await evaluateControlUiContext(page, (application) => {
       void application.sessions.refresh({ force: true, backgroundHydrate: true });

@@ -107,7 +107,7 @@ describe("composer session library ownership", () => {
       const feedback = await library.activate("refresh", read.entry.skillId);
       expect(feedback).toBe(
         outcome === "success"
-          ? "Skill selections updated for the next turn. An active turn keeps its current revision."
+          ? "Skill selections updated for the next reply. A reply in progress keeps its current revision."
           : null,
       );
       expect(library.busy).toBe(false);

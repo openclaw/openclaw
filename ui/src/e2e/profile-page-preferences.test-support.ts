@@ -101,12 +101,20 @@ export function defineProfilePreferenceTests({
 
           await gateway.setMethodResponse("users.self", { profile });
           const readsBeforeRefresh = (await gateway.getRequests("users.self")).length;
+          const prefMatch = {
+            keys: [GIT_COAUTHOR_PREFERENCE_KEY, "github.prAttribution.enabled"],
+          };
+          const prefsBeforeRefresh = (
+            await gateway.getRequests("users.prefs.get", prefMatch, { exactParams: true })
+          ).length;
           await page.locator(".profile-refresh").click();
           await gateway.waitForRequest("users.self", { after: readsBeforeRefresh });
-          const prefGet = await gateway.waitForRequest("users.prefs.get");
-          expect(prefGet.params).toEqual({
-            keys: [GIT_COAUTHOR_PREFERENCE_KEY, "github.prAttribution.enabled"],
+          const prefGet = await gateway.waitForRequest("users.prefs.get", {
+            after: prefsBeforeRefresh,
+            match: prefMatch,
+            exactParams: true,
           });
+          expect(prefGet.params).toEqual(prefMatch);
           const account = githubRow.getByRole("link", { name: "@octocat" });
           await expect(account).toBeVisible();
           await expect(account).toHaveAttribute("href", profile.githubIdentity.profileUrl);

@@ -8,6 +8,7 @@ import type {
   CliBackendTurnStatus,
 } from "openclaw/plugin-sdk/cli-backend";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as stdio from "openclaw/plugin-sdk/process-runtime";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -22,6 +23,7 @@ import {
   prepareClaudeCli,
   resultDetail,
   waitForProcessExit,
+  withClaudeCliTestDeadline,
 } from "./cli-runtime.test-support.js";
 import { executeClaudeCli, type ClaudeCliExecuteContext } from "./cli.runtime.js";
 
@@ -173,7 +175,7 @@ describe("Claude native stdio boundary", () => {
     { scenario: "shutdown-eof", name: "native parent exits immediately on EOF" },
   ])("reaps the native process tree when $name", async ({ scenario }, { signal }) => {
     const context = await createContext(scenario);
-    const iterator = executeClaudeCli(context)[Symbol.asyncIterator]();
+    const iterator = executeClaudeCli(withClaudeCliTestDeadline(context))[Symbol.asyncIterator]();
     const first = await iterator.next();
     expect(first.value).toMatchObject({
       subtype: "fixture_shutdown",
@@ -232,9 +234,7 @@ describe("Claude native stdio boundary", () => {
         });
       }
       expect(() => process.kill(Number(first.pid), 0)).toThrow();
-      if (fails) {
-        expect(liveSession.current()).toBeUndefined();
-      }
+      expect(liveSession.current() === undefined).toBe(fails);
     } finally {
       gate.resolve();
     }
@@ -254,17 +254,51 @@ describe("Claude native stdio boundary", () => {
     await expectWarmResume(context, next);
   });
 
-  it("rejects startup when the owner refuses capture", async () => {
-    const liveSession = createLiveSession();
-    const reason = new Error("Synthetic capture owner rejected this run.");
-    liveSession.activate = () => {
-      throw reason;
-    };
-    const context = await createContext("normal", { liveSession });
-    await expect(collect(context)).rejects.toBe(reason);
-    expect(liveSession.current()).toBeUndefined();
-    await expect(access(fixtureFile(context, "fixture.pid"))).rejects.toThrow();
-  });
+  it.each(["capture", "missing command", "unconfirmed cleanup", "pre-aborted"] as const)(
+    "preserves startup failure ownership for %s",
+    async (failure) => {
+      const cleanup = vi.fn(async () => {});
+      const liveSession = createLiveSession(cleanup);
+      const register = vi.spyOn(liveSession, "register");
+      const reason =
+        failure === "unconfirmed cleanup"
+          ? new stdio.OwnedStdioCleanupError("synthetic startup cleanup was not confirmed")
+          : new Error(`Synthetic startup failure: ${failure}.`);
+      const createData = vi.fn(() => Buffer.from("synthetic unused credential"));
+      if (failure === "capture") {
+        liveSession.activate = () => {
+          throw reason;
+        };
+      } else if (failure === "unconfirmed cleanup") {
+        vi.spyOn(stdio, "createOwnedStdioProcess").mockRejectedValueOnce(reason);
+        // Harness teardown must not join this deliberately unconfirmed exit.
+        register.mockImplementation(() => {});
+      }
+      const context = await createContext("normal", { liveSession });
+      if (failure === "pre-aborted") {
+        context.abortSignal = AbortSignal.abort(reason);
+      }
+      if (failure === "missing command") {
+        context.command = fixtureFile(context, "missing-claude");
+        await expect(collect(context)).rejects.toMatchObject({ code: "ENOENT" });
+        const next = await runDetail(await createContext("normal", { liveSession }));
+        expect(next).toMatchObject({ turn: 1, user: INPUT });
+        expect(cleanup).toHaveBeenCalledOnce();
+      } else {
+        await expect(collectClaudeCli(context, { fd: 3, createData })).rejects.toBe(reason);
+        if (failure === "unconfirmed cleanup") {
+          expect(register).toHaveBeenCalledOnce();
+          await expect(register.mock.calls[0]?.[0].waitForExit()).rejects.toBe(reason);
+        } else {
+          expect(liveSession.current()).toBeUndefined();
+          if (failure === "pre-aborted") {
+            expect(createData).not.toHaveBeenCalled();
+          }
+          await expect(access(fixtureFile(context, "fixture.pid"))).rejects.toThrow();
+        }
+      }
+    },
+  );
 
   it.each([
     "background-success",
@@ -282,7 +316,7 @@ describe("Claude native stdio boundary", () => {
     });
     const results: Record<string, unknown>[] = [];
     try {
-      for await (const record of executeClaudeCli(context)) {
+      for await (const record of executeClaudeCli(withClaudeCliTestDeadline(context))) {
         if (record.type !== "result") {
           continue;
         }
@@ -514,7 +548,7 @@ describe("Claude native stdio boundary", () => {
         type === "token" ? { type, token: credential } : { type, key: credential },
       );
       Object.assign(context.env, prepared.env);
-      const iterator = prepared.execute(context)[Symbol.asyncIterator]();
+      const iterator = prepared.execute(withClaudeCliTestDeadline(context))[Symbol.asyncIterator]();
       let descendantPid: number | undefined;
       try {
         const first = await iterator.next();
@@ -541,36 +575,69 @@ describe("Claude native stdio boundary", () => {
     },
   );
 
-  it.each([
-    { check: "assertCurrent", decision: "deny" },
-    { check: "assertPrivateInputCurrent", decision: "allow" },
+  it.for([
+    ["approval", "assertCurrent", "deny"],
+    ["approval", "assertPrivateInputCurrent", "allow"],
+    ["initialize", "assertCurrent", undefined],
+    ["initialize", "assertPrivateInputCurrent", undefined],
+    ["initialize", "prepareCredentialUse", undefined],
+    ["prompt", "assertPrivateInputCurrent", undefined],
   ] as const)(
-    "settles awaited hooks after $check revocation as $decision",
-    async ({ check, decision }) => {
+    "revalidates authority at %s with %s",
+    async ([stage, check, decision], { signal }) => {
       let active = true;
+      const reason = new Error("Synthetic admitted owner was released.");
       const approvalStarted = createDeferred<void>();
       const approval = createDeferred<CliBackendToolPermissionResult>();
-      const context = await createContext("revoked-approval", {
-        [check]: () => {
-          if (!active) {
-            throw new Error("Synthetic owner revoked.");
-          }
-        },
-        requestToolPermission: () => {
+      const assertActive = () => {
+        if (!active) {
+          throw reason;
+        }
+      };
+      const context = await createContext(`revoked-${stage}`, {
+        prompt: "Remember orange.",
+        promptContext: { prependContext: "saved private context" },
+        [check]: check === "prepareCredentialUse" ? async () => assertActive() : assertActive,
+        requestToolPermission: async () => {
           approvalStarted.resolve();
-          return approval.promise;
+          return stage === "approval" ? approval.promise : denied();
         },
       });
       const running = collect(context);
-      await approvalStarted.promise;
-      active = false;
-      approval.resolve({ behavior: "allow", updatedInput: { file_path: "approved.txt" } });
-      const detail = resultDetail(await running);
-      expect(detail.hookDecision).toMatchObject({
-        hookSpecificOutput: { permissionDecision: decision },
-      });
-      if (decision === "deny") {
-        expect(detail.hookDecision).not.toHaveProperty("hookSpecificOutput.updatedInput");
+      const outcome = running.catch((error: unknown) => error);
+      try {
+        if (stage === "approval") {
+          await withinTest(Promise.race([approvalStarted.promise, running]), signal);
+        } else {
+          await fixtureReadyBeforeSettlement(context, `${stage}.ready`, running, signal);
+          if (stage === "prompt") {
+            expect(await readFixture(context, "user.received")).toBe(context.prompt);
+          }
+        }
+        active = false;
+      } finally {
+        if (stage === "approval") {
+          approval.resolve({ behavior: "allow", updatedInput: { file_path: "approved.txt" } });
+        } else {
+          await releaseFixture(context, stage);
+        }
+      }
+      if (stage === "initialize") {
+        expect(await withinTest(outcome, signal)).toBe(reason);
+        expect(context.liveSession.current()).toBeUndefined();
+        await expect(access(fixtureFile(context, "user.received"))).rejects.toThrow();
+      } else {
+        const detail = resultDetail(await withinTest(running, signal));
+        expect(detail).toMatchObject(
+          stage === "prompt"
+            ? { turn: 1, user: context.prompt }
+            : { hookDecision: { hookSpecificOutput: { permissionDecision: decision } } },
+        );
+        if (stage === "prompt") {
+          expect(detail.privateContext).toBeUndefined();
+        } else if (decision === "deny") {
+          expect(detail.hookDecision).not.toHaveProperty("hookSpecificOutput.updatedInput");
+        }
       }
     },
   );
@@ -759,7 +826,7 @@ describe("Claude native stdio boundary", () => {
         injection = value;
       },
     });
-    const iterator = executeClaudeCli(context)[Symbol.asyncIterator]();
+    const iterator = executeClaudeCli(withClaudeCliTestDeadline(context))[Symbol.asyncIterator]();
     try {
       expect((await iterator.next()).value).toMatchObject({ type: "system", subtype: "init" });
       expect(injection?.isAvailable()).toBe(false);
@@ -802,43 +869,6 @@ describe("Claude native stdio boundary", () => {
     ).rejects.toThrow("revoked");
     expect(await readFixture(context, "user.received")).toBe(INPUT);
   });
-
-  it("rejects pre-aborted runs before credential reads or process creation", async () => {
-    const controller = new AbortController();
-    const reason = new Error("Synthetic owner cancelled before startup.");
-    controller.abort(reason);
-    const context = await createContext("normal", { abortSignal: controller.signal });
-    const createData = vi.fn(() => Buffer.from("synthetic unused credential"));
-    await expect(collectClaudeCli(context, { fd: 3, createData })).rejects.toBe(reason);
-    expect(createData).not.toHaveBeenCalled();
-    await expect(access(fixtureFile(context, "fixture.pid"))).rejects.toThrow();
-  });
-
-  it.for(["assertCurrent", "assertPrivateInputCurrent"] as const)(
-    "revalidates %s after initialization before sending input",
-    async (check, { signal }) => {
-      let active = true;
-      const reason = new Error("Synthetic admitted owner was released.");
-      const context = await createContext("revoked-initialize", {
-        [check]: () => {
-          if (!active) {
-            throw reason;
-          }
-        },
-      });
-      const running = collect(context);
-      const outcome = running.catch((error: unknown) => error);
-      try {
-        await fixtureReadyBeforeSettlement(context, "initialize.ready", running, signal);
-        active = false;
-      } finally {
-        await releaseFixture(context, "initialize");
-      }
-      expect(await withinTest(outcome, signal)).toBe(reason);
-      expect(context.liveSession.current()).toBeUndefined();
-      await expect(access(fixtureFile(context, "user.received"))).rejects.toThrow();
-    },
-  );
 
   it("deduplicates native user questions across hook and permission callbacks", async () => {
     const requestUserInput = vi.fn(async () => ({
@@ -891,11 +921,13 @@ describe("Claude native stdio boundary", () => {
     await releaseFixture(context, "background");
     await collect(context);
     const records: Record<string, unknown>[] = [];
-    for await (const record of executeClaudeCli({
-      ...context,
-      prompt: "next admitted turn",
-      useResume: true,
-    })) {
+    for await (const record of executeClaudeCli(
+      withClaudeCliTestDeadline({
+        ...context,
+        prompt: "next admitted turn",
+        useResume: true,
+      }),
+    )) {
       records.push(record);
       if (record.subtype === "fixture_second_turn") {
         approval.resolve({ behavior: "allow", updatedInput: { command: "echo late" } });
@@ -931,42 +963,15 @@ describe("Claude native stdio boundary", () => {
     },
   ])("ends $scenario even with listed native background work", async ({ scenario, expected }) => {
     const context = await createContext(scenario);
-    const records = await collect(context);
-    expect(records.at(-1)).toMatchObject({ type: "result", ...expected });
-    expect(records.at(-1)).not.toHaveProperty("openclaw_interim_result");
-    const firstPid = Number(await readFixture(context, "fixture.pid"));
-    expectRetired(context, firstPid);
-    const second = await collect(context, { useResume: true });
-    expect(second.at(-1)).toMatchObject({ type: "result", ...expected });
-    const secondPid = Number(await readFixture(context, "fixture.pid"));
-    expect(secondPid).not.toBe(firstPid);
-    expect(context.liveSession.current()).toBeUndefined();
-  });
-  it("withholds private context when its authority is revoked after sending the prompt", async ({
-    signal,
-  }) => {
-    let active = true;
-    const context = await createContext("revoked-prompt", {
-      prompt: "Remember orange.",
-      promptContext: { prependContext: "saved private context" },
-      assertPrivateInputCurrent: () => {
-        if (!active) {
-          throw new Error("Synthetic account reassigned after send.");
-        }
-      },
-    });
-    const running = collect(context);
-    const outcome = running.catch((error: unknown) => error);
-    try {
-      await fixtureReadyBeforeSettlement(context, "prompt.ready", running, signal);
-      expect(await readFixture(context, "user.received")).toBe("Remember orange.");
-      active = false;
-    } finally {
-      await releaseFixture(context, "prompt");
-      await withinTest(outcome, signal);
+    let previousPid: number | undefined;
+    for (const useResume of [false, true]) {
+      const records = await collect(context, { useResume });
+      expect(records.at(-1)).toMatchObject({ type: "result", ...expected });
+      expect(records.at(-1)).not.toHaveProperty("openclaw_interim_result");
+      const pid = Number(await readFixture(context, "fixture.pid"));
+      expectRetired(context, pid);
+      expect(pid).not.toBe(previousPid);
+      previousPid = pid;
     }
-    const detail = resultDetail(await running);
-    expect(detail).toMatchObject({ turn: 1, user: "Remember orange." });
-    expect(detail.privateContext).toBeUndefined();
   });
 });

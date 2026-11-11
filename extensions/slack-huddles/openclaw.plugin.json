@@ -137,5 +137,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Check whether Slack huddle participation is ready with a dedicated user account.",
+    "Help me plan notes for an active Slack huddle with participant consent before joining."
+  ]
 }

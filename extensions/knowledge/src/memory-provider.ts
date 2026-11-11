@@ -201,7 +201,7 @@ export function createKnowledgeMemoryRuntime(stores: Stores): MemoryProviderRunt
                           { id: h.record.id, revision: h.citation.revision, hash: h.citation.hash },
                           vaultId,
                         ),
-                        excerpt: `${h.record.title}\n${attribution(h.assertionOrigin, h.attribution)}\n${h.snippet.matchLocated === false ? "Opening excerpt (not the match location):\n" : ""}${h.snippet.text}`,
+                        excerpt: `${h.record.title}\n${h.via ? `Replaces ${h.via.title} (${h.via.id} revision ${h.via.revision}), which matched the query.\n` : ""}${attribution(h.assertionOrigin, h.attribution)}\n${h.snippet.matchLocated === false ? "Opening excerpt (not the match location):\n" : ""}${h.snippet.text}`,
                       },
                       h.score === null ? {} : { score: h.score },
                       {

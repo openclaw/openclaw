@@ -414,7 +414,7 @@ export async function performSessionGitHubPreparation(
         throw new Error("The accepted PR source changed; saved work was preserved.");
       }
     };
-    const accept = async () => {
+    const verify = async () => {
       if (preparedHead) {
         // Source fetches can outlive a remote head or permission observation.
         await assertExistingPullRequestWriteAccess({
@@ -424,6 +424,9 @@ export async function performSessionGitHubPreparation(
           requirePublicRepositories: inspected.requirePublicRepositories,
         });
       }
+      assertReserved();
+    };
+    const accept = async () => {
       assertReserved();
       const committedEntry = await patchSessionEntryCore(
         scope,
@@ -467,6 +470,7 @@ export async function performSessionGitHubPreparation(
               commit: binding.base.commit,
               githubHost: binding.host,
               resuming: pendingBase,
+              verify,
               accept,
             },
           }
@@ -483,6 +487,7 @@ export async function performSessionGitHubPreparation(
               emptySource,
               resuming:
                 previous !== undefined && previous.preparedHeadCommit !== previous.head.commit,
+              verify,
               accept,
             },
           }),

@@ -1,8 +1,17 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  classifyAgentRunTerminalOutcome,
+  mergeAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
+} from "../../agents/agent-run-terminal-outcome.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
-import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
+import {
+  AGENT_RUN_SUPERSEDED_STOP_REASON,
+  resolveAgentRunErrorLifecycleFields,
+} from "../../agents/run-termination.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import {
   composeSessionSourceAssertion,
@@ -156,6 +165,7 @@ function enqueueSessionEventAttempt(
   let deliverySuppressionReason: NormalizeReplySkipReason | undefined;
   let summary: string | undefined;
   let failure: Error | string | undefined;
+  let terminalOutcome: AgentRunTerminalOutcome | undefined;
   let nextCheckMs: number | undefined;
   let sourceDeliveryOutcome: SourceDeliveryOutcome | undefined;
   let automationResult: SessionEventOutcome["automationResult"];
@@ -330,7 +340,43 @@ function enqueueSessionEventAttempt(
       }
       settlement = "finished";
       const canReadmit = retainForConfigChange() && attempt < MAX_CONFIG_READMISSION_ATTEMPTS;
-      const status = signal.aborted ? "cancelled" : failure ? "failed" : "completed";
+      const result = operation?.result;
+      const failed = result?.kind === "failed";
+      const aborted = result?.kind === "aborted";
+      const terminalSignal = operation?.abortSignal.aborted ? operation.abortSignal : signal;
+      const terminalError = (failed ? result.cause : undefined) ?? failure;
+      // Frozen supersession records cancellation without aborting its signal.
+      // Watchdog failures may abort the backend without being cancellation;
+      // retain typed deadline facts ahead of the recorded cancellation defaults.
+      terminalOutcome = mergeAgentRunTerminalOutcome(
+        terminalOutcome,
+        buildAgentRunTerminalOutcomeFromLifecycleEvent({
+          phase: failed || aborted || failure ? "error" : "end",
+          data: {
+            ...(aborted ? { aborted: true } : {}),
+            ...(aborted && result.code === "aborted_for_supersession"
+              ? { stopReason: AGENT_RUN_SUPERSEDED_STOP_REASON }
+              : {}),
+            ...resolveAgentRunErrorLifecycleFields(
+              terminalError ?? terminalSignal.reason,
+              failed ? undefined : terminalSignal,
+            ),
+            ...resolveAgentRunErrorLifecycleFields(
+              terminalError ?? terminalSignal.reason,
+              undefined,
+            ),
+            error: terminalError,
+          },
+          abortSignal: failed ? undefined : terminalSignal,
+        }),
+      );
+      const classification = classifyAgentRunTerminalOutcome(terminalOutcome);
+      const status =
+        classification === "cancellation"
+          ? "cancelled"
+          : classification === "success"
+            ? "completed"
+            : "failed";
       if (status === "failed" && !canReadmit) {
         log.error("session event execution failed", {
           source: options.source,
@@ -403,10 +449,8 @@ function enqueueSessionEventAttempt(
       resolve({
         status,
         executionStarted: started,
-        interruptedByRestart:
-          status !== "completed" &&
-          resolveAgentRunErrorLifecycleFields(failure, operation?.abortSignal ?? signal)
-            .stopReason === "restart",
+        terminalOutcome,
+        interruptedByRestart: terminalOutcome.stopReason === "restart",
         delivered,
         conversationResultCommitted,
         deliveryAttempted,
@@ -630,6 +674,16 @@ function enqueueSessionEventAttempt(
           ...(options.scheduledAutomation ? { beforeScheduledStart: prepareStart } : {}),
           onStarted: start,
           onTerminal: async (runId, outcome, deliveryEvidence) => {
+            // Settlement rechecks authority and can reject after Stop. Capture the
+            // runtime's timeout/cancellation facts before that asynchronous boundary.
+            terminalOutcome = mergeAgentRunTerminalOutcome(
+              terminalOutcome,
+              buildAgentRunTerminalOutcomeFromLifecycleEvent({
+                phase: outcome === "completed" ? "end" : "error",
+                data: deliveryEvidence?.meta,
+                abortSignal: operation?.abortSignal ?? signal,
+              }),
+            );
             const terminal = await settleSessionEventTurn({
               automation: options.scheduledAutomation,
               config: { ...cfg, session: { ...cfg.session, store: storePath } },

@@ -2,12 +2,9 @@ import { randomUUID } from "node:crypto";
 import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
 import { WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
+import { readAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
-import {
-  copyAgentToolMetadata,
-  getAgentToolExecutionLocation,
-} from "../../agents/agent-tool-metadata.js";
-import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.async.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { admitEmbeddedContextEngine } from "../../agents/embedded-agent-runner/run/context-engine-admission.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
@@ -15,7 +12,6 @@ import { createModelVisibilityPolicy } from "../../agents/model-visibility-polic
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import { createSkillLibraryTool } from "../../agents/tools/skill-library-tool.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
-import { logInfo } from "../../logger.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
@@ -55,6 +51,12 @@ import {
   windowInitialMessages,
 } from "./worker-turn-payload.js";
 import { prepareWorkerTurnPrompt, WORKER_CONTEXT_ENGINE_HOST } from "./worker-turn-prompt.js";
+import {
+  filterWorkerPlacementTools,
+  prepareWorkerLaunchTools,
+  retainWorkerTurnTools,
+  resolveLocalMcpNodeId,
+} from "./worker-turn-tool-surface.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 import {
   createWorkerTurnInputAdmission,
@@ -165,16 +167,10 @@ export async function executeWorkerTurn(
         blocked = true;
       },
     };
-    const workerAdmission = bootstrapReceipt.protocolFeatures.includes(
-      WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
-    );
-    let blockedResult = workerAdmission
-      ? undefined
-      : await runPrepared(() => gateWorkerTurnInput(inputContext));
-    if (blockedResult) {
-      await releaseClaimIfOwned(params.placements, params.turnClaim);
-      return blockedResult;
-    }
+    // Project the wire handshake; the receipt also carries storage-only provenance.
+    const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
+    const workerAdmission = protocolFeatures.includes(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE);
+    let blockedResult: Awaited<ReturnType<typeof gateWorkerTurnInput>>;
     await using contextEngineAdmission = await runPrepared(() =>
       admitEmbeddedContextEngine(
         {
@@ -189,7 +185,7 @@ export async function executeWorkerTurn(
       ),
     );
     assertContextCurrent();
-    const context = await readWorkerTurnInputContext(inputContext, workerAdmission);
+    const context = await readWorkerTurnInputContext(inputContext);
     const { manager, history, userMessageAlreadyPersisted } = context;
     let baseLeafId = context.baseLeafId;
 
@@ -231,6 +227,7 @@ export async function executeWorkerTurn(
         placement.activeOwnerEpoch,
       )) === true;
     const launchToolNames = await tunnel.readLaunchToolNames();
+    const localMcpNodeId = await resolveLocalMcpNodeId(environment, bootstrapReceipt, tunnel);
     const desktop = await prepareWorkerDesktopLaunchPlan({
       desktop: environment.desktop,
       protocolFeatures: bootstrapReceipt.protocolFeatures,
@@ -255,13 +252,7 @@ export async function executeWorkerTurn(
       assertCurrent: assertSourceCurrent,
       computerAvailable: Boolean(computer),
     });
-    const {
-      admittedRunContext,
-      operationalRunInstance,
-      runtimeIdentity,
-      assertActive,
-      takeFinishingOutcome,
-    } = await prepareWorkerAgentRuntimeIdentity({
+    const turnOwner = await prepareWorkerAgentRuntimeIdentity({
       ...params,
       agentId: placement.agentId,
       runtimeInstanceId: placement.environmentId,
@@ -276,6 +267,13 @@ export async function executeWorkerTurn(
       },
       assertSourceCurrent,
     });
+    const {
+      admittedRunContext,
+      operationalRunInstance,
+      runtimeIdentity,
+      assertActive,
+      takeFinishingOutcome,
+    } = turnOwner;
     assertActive();
     const authority = runtimeIdentity.approvalAuthority;
     const authorityAbort = new AbortController();
@@ -373,10 +371,11 @@ export async function executeWorkerTurn(
                     modelId: modelRef.model,
                     modelContextWindowTokens: toolPolicy.modelContextWindowTokens,
                     runtimeToolAllowlist: turn.toolsAllow,
-                    skillWorkshop: undefined,
                     // Suppresses Workshop; the skill_library adapter replaces this tool by name.
                     skillLibraryAuthoring,
                     computerTransport: null,
+                    // Plugin tools recheck the turn's tool surface, as worker gateway tools do.
+                    assertInvocationCurrent: assertToolSurfaceCurrent,
                   },
                   undefined,
                   undefined,
@@ -387,20 +386,11 @@ export async function executeWorkerTurn(
                   additionalInheritedToolNamesRef.length = 0;
                   return [];
                 }
-                return applyEmbeddedAttemptToolsAllow(prepared, turn.toolsAllow).filter((tool) => {
-                  const location = getAgentToolExecutionLocation(tool);
-                  const reason =
-                    location.kind === "gateway"
-                      ? location.unavailableReason
-                      : !availablePlacementTools.has(tool.name) ||
-                          !launchToolNames.includes(tool.name)
-                        ? "the placement has no available execution capability"
-                        : undefined;
-                  if (reason) {
-                    logInfo(`Worker tool ${tool.name} withheld: ${reason}.`);
-                  }
-                  return !reason;
-                });
+                return filterWorkerPlacementTools(
+                  applyEmbeddedAttemptToolsAllow(prepared, turn.toolsAllow),
+                  availablePlacementTools,
+                  launchToolNames,
+                );
               },
             }),
           );
@@ -415,12 +405,15 @@ export async function executeWorkerTurn(
               additionalInheritedToolNamesRef.map((name) => ({ name })),
               turn.toolsAllow,
             ).map((tool) => tool.name),
-            tools: tools.map((tool) =>
-              copyAgentToolMetadata(tool, {
-                ...tool,
-                execute: (...args) => runPrepared(() => tool.execute(...args)),
-              }),
-            ),
+            tools: retainWorkerTurnTools(tools, {
+              localMcpNodeId:
+                capabilityProfile.policy.requesterPolicySource === "completion-handoff"
+                  ? undefined
+                  : localMcpNodeId,
+              config: turn.config,
+              agentId: placement.agentId,
+              runPrepared,
+            }),
           };
         },
       });
@@ -468,18 +461,22 @@ export async function executeWorkerTurn(
         assertCurrent: assertActive,
       };
       const promptContext = await runPrepared(() => prepareWorkerTurnPrompt(promptPreparation));
-      const allowedToolNames = surface.tools.map((tool) => tool.definition.name);
-      await params.placements.authorizeWorkerTurnTools(
-        params.turnClaim,
-        allowedToolNames,
+      using mcpQuestions = new DisposableStack();
+      const { allowedToolNames, issueLaunchAuthority } = await prepareWorkerLaunchTools({
+        ...turnOwner,
+        surface,
+        localMcpNodeId,
+        exec,
+        connectionIdentity,
+        placements: params.placements,
+        questionsEnabled: turn.config.mcp?.apps?.enabled === true,
+        assertToolSurfaceCurrent,
+        isAuthorized,
         assertTurnInputCurrent,
-      );
-      if (allowedToolNames.includes("computer")) {
-        preparedComputer?.bind(operationalRunInstance, {
-          authority: runtimeIdentity.approvalAuthority,
-          assertCurrent: assertActive,
-        });
-      }
+        preparedComputer,
+        signal,
+        mcpQuestions,
+      });
       const media = await prepareWorkerTurnMedia({
         turn: { ...turn, prompt: promptContext.prompt },
         history: promptContext.history,
@@ -489,6 +486,16 @@ export async function executeWorkerTurn(
         isAuthorized,
         signal,
       });
+      assertActive();
+      blockedResult = workerAdmission
+        ? undefined
+        : await runPrepared(() =>
+            gateWorkerTurnInput(inputContext, { ...media, prompt: turn.prompt, history }),
+          );
+      if (blockedResult) {
+        await releaseClaimIfOwned(params.placements, params.turnClaim);
+        return blockedResult;
+      }
       const skillResources = await prepareSkillResourceDelivery(
         turn.skillsSnapshot,
         () => {
@@ -513,7 +520,6 @@ export async function executeWorkerTurn(
           media,
           assertRunCurrent: assertActive,
           isAuthorized,
-          workerAdmission,
           userMessageAlreadyPersisted,
           baseLeafId,
         });
@@ -542,9 +548,9 @@ export async function executeWorkerTurn(
         );
         throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
       }
-      // Project the wire handshake; the receipt also carries storage-only provenance.
-      const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
+      const toolAuthority = issueLaunchAuthority();
       githubGrant = await bindWorkerGitHubTurn({
+        operatorAuthority: readAdmittedRunOperatorAuthority(admittedRunContext),
         session: placement,
         fact: readGitHubPublicationFact(placement),
         sessionTarget: transcriptTarget,
@@ -602,12 +608,7 @@ export async function executeWorkerTurn(
                 ackedSeq: placement.lastLiveEventAckCursor ?? 0,
                 nextSeq: (placement.lastLiveEventAckCursor ?? 0) + 1,
               },
-              toolAuthority: {
-                exec,
-                allowedToolNames: surface.tools
-                  .filter((tool) => tool.execution === "placement")
-                  .map((tool) => tool.definition.name),
-              },
+              toolAuthority,
               ...(browser && allowedToolNames.includes("browser") ? { browser } : {}),
               ...(computer && allowedToolNames.includes("computer") ? { computer } : {}),
             },
@@ -672,6 +673,7 @@ export async function executeWorkerTurn(
           onDispatchReady,
         });
       } finally {
+        mcpQuestions.dispose();
         await handoffPending;
       }
       // Node launches return only after the exact launch journal receipt is terminal,

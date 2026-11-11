@@ -3,8 +3,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { McpServerToolFilterConfig } from "../config/types.mcp.js";
 import { matchesStarSegments } from "../shared/star-pattern.js";
+import type { McpServerCatalog, McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { safeToolNameCandidate } from "./agent-bundle-mcp-names.js";
-import type { McpServerCatalog, McpToolCatalog } from "./agent-bundle-mcp-types.js";
 
 /** Match the documented MCP tool-filter glob syntax: exact text plus `*`. */
 function matchesMcpToolFilterPattern(pattern: string, value: string): boolean {

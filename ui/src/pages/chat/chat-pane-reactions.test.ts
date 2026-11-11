@@ -370,7 +370,7 @@ describe("pane reaction ownership", () => {
       failed.reject(new Error("reaction denied"));
       await replay;
       expect(showToast.mock.calls).toEqual(
-        owner === "same" ? [[{ message: "reaction denied" }]] : [],
+        owner === "same" ? [[{ severity: "error", message: "reaction denied" }]] : [],
       );
       expect(pane.state.chatError).toBeNull();
       expect(pane.state.lastError).toBeNull();

@@ -5,7 +5,11 @@ import {
   isPrivateDirectoryCreationRefused,
   markPrivateDirectoryCreationRefused,
 } from "./private-directory-creation.js";
-import { markSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
+import {
+  markSqliteInspectionOperation,
+  readSqliteInspectionOperation,
+} from "./sqlite-error-diagnostics.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import {
   createPrivateSqliteTempDirectorySync,
   resolvePrivateSqliteSnapshotStagingRoot,
@@ -15,9 +19,12 @@ import {
   removeTempDirectory,
   removeTempDirectoryAsync,
   retainSnapshotWork,
-  SqliteSnapshotCleanupError,
   retireSqliteSnapshotPayload,
 } from "./sqlite-readonly-location-cleanup.js";
+import {
+  hasSqliteSnapshotCapacityCode,
+  SqliteSnapshotCapacityError,
+} from "./sqlite-snapshot-capacity-error.js";
 import { sqliteSnapshotSourceFileSize } from "./sqlite-snapshot-policy.js";
 import {
   acquireSqliteSnapshotToken as snapshotToken,
@@ -56,11 +63,14 @@ export function sqliteSnapshotStagingError(
   markSqliteInspectionOperation(cause, "snapshot");
   let destination = allocation;
   let capacity = false;
+  let cleanupFailure = false;
   let sqliteErrcode: number | undefined;
   for (let depth = 0, error = cause; depth < 8 && error instanceof Error; depth += 1) {
-    const { code, errcode, path: errorPath }: NodeJS.ErrnoException & { errcode?: unknown } = error;
+    cleanupFailure ||=
+      error instanceof AggregateError || error instanceof SqliteSnapshotCleanupError;
+    const { errcode, path: errorPath }: NodeJS.ErrnoException & { errcode?: unknown } = error;
     // SQLite FULL and IOERR_WRITE/FSYNC/DIR_FSYNC identify destination writes.
-    capacity ||= ["ENOSPC", "EDQUOT"].includes(code ?? "") || errcode === 13;
+    capacity ||= hasSqliteSnapshotCapacityCode(error);
     if (
       capacity ||
       (typeof errcode === "number" && [13, 778, 1034, 1290].includes(errcode)) ||
@@ -95,7 +105,12 @@ export function sqliteSnapshotStagingError(
   }
   const selector = process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" ? "TMPDIR" : "XDG_CACHE_HOME";
   const message = `${cause instanceof Error ? cause.message : String(cause)}${sqliteErrcode !== undefined ? ` (SQLite errcode=${sqliteErrcode})` : ""}; snapshot staging root ${allocation ? tempDir : path.dirname(tempDir)}${capacityDetail}: ${guidance} or set ${selector} to a writable filesystem`;
-  const error = new Error(message, { cause });
+  // Capacity diagnostics alone do not establish a harmless destination failure.
+  // Source opens and unresolved cleanup retain their original blocking semantics.
+  const error =
+    capacity && !cleanupFailure && readSqliteInspectionOperation(cause) !== "source"
+      ? new SqliteSnapshotCapacityError(message, { cause })
+      : new Error(message, { cause });
   return isPrivateDirectoryCreationRefused(cause)
     ? markPrivateDirectoryCreationRefused(error)
     : error;
