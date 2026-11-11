@@ -5,6 +5,7 @@ import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   readConnectErrorDetailCode,
+  readGatewayOperatorAccessClose,
   shouldPauseGatewayReconnect,
   type ErrorShape,
   type GatewayProtocolCloseContext,
@@ -66,7 +67,10 @@ export function resolveBrowserGatewayClose(
       pendingError: nativeAuthError,
     };
   }
-  const error = pairingFailure ?? context.connectFailure?.error;
+  const accessDenial = readGatewayOperatorAccessClose(context.code, context.reason);
+  const error =
+    pairingFailure ??
+    (accessDenial ? new GatewayRequestError(accessDenial) : context.connectFailure?.error);
   const startupDelay = context.connectFailure?.reconnectDelayMs;
   if (startupDelay !== undefined) {
     return { retry: true, notify: true, reconnectDelayMs: startupDelay, pendingError: error };

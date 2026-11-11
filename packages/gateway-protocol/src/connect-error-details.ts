@@ -11,6 +11,14 @@ import {
   normalizeOptionalProtocolString,
 } from "./protocol-value-normalization.js";
 
+export {
+  gatewayOperatorAccessError,
+  isGatewayOperatorAccessRetryable,
+  readGatewayOperatorAccessCause,
+  readGatewayOperatorAccessClose,
+  type GatewayOperatorAccessCause,
+} from "./operator-access.js";
+
 /** Structured connect-error codes carried in gateway error `details.code`. */
 export const ConnectErrorDetailCodes = {
   AUTH_REQUIRED: "AUTH_REQUIRED",

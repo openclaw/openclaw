@@ -556,8 +556,8 @@ export async function attachAuthenticatedGatewayConnect(
     if (!remoteIngressPrincipal) {
       prepareGatewayConnectOperatorAccess(nextClient);
     }
-  } catch {
-    await rejectGatewayConnectOperatorAccess(context);
+  } catch (error) {
+    await rejectGatewayConnectOperatorAccess(context, error);
     return;
   }
   if (!profileLifecycle.isCurrent(preparedProfile)) {

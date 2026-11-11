@@ -15,6 +15,7 @@ import {
   formatValidationErrors,
   validateRequestFrame,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { gatewayOperatorAccessError } from "../../../../packages/gateway-protocol/src/operator-access.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import {
   createChildDiagnosticTraceContext,
@@ -37,10 +38,7 @@ import {
   isOpenClawIdTunnelPrincipalCurrent,
   recordOpenClawIdTunnelActivity,
 } from "../../openclaw-id/tunnel-principal.js";
-import {
-  GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
-  hasCurrentGatewayOperatorAccess,
-} from "../../operator-access-policy.js";
+import { hasCurrentGatewayOperatorAccess } from "../../operator-access-policy.js";
 import { onOperatorRolePolicyChanged } from "../../operator-role-policy.js";
 import { bindWebSocketRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestEntry } from "../../server-request-entry.js";
@@ -203,12 +201,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           return false;
         }
         if (!hasCurrentGatewayOperatorAccess(client.internal?.operatorAccessAuthority)) {
+          const denial = gatewayOperatorAccessError(
+            client.internal?.operatorAccessAuthority?.failureCause ?? "policy-check-failed",
+          );
+          setCloseCause("operator-access-closed", { accessCause: denial.details.accessCause });
           invalidateGatewayPolicyClient(client, {
             reason: "operator-access-closed",
             code: 4001,
-            message: GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
-            close: () => close(4001, GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE),
+            message: denial.message,
+            close: () => close(4001, denial.message),
           });
+          return false;
         }
         if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
           return false;
