@@ -103,8 +103,9 @@ export function authorizeGatewayDelegation(
     return undefined;
   }
   const generation = owner.generation;
+  const identity: DelegatedUserIdentity = { authority: delegatedProfileAuthority, subject: user };
   return Object.freeze({
-    identity: { authority: delegatedProfileAuthority, subject: user },
+    identity,
     scopes: Object.freeze([scope]),
     credentialFile: delegation.credentialFile,
     isCurrent: () => owner.generation === generation && owner.value !== undefined,
