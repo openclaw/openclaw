@@ -178,9 +178,15 @@ samples. Exited workers are not silently counted as zero allocation.
 Serial allocation passes also sample existing Git workers identified by the
 runtime's diagnostic script/thread metadata (at most 16). Each worker starts its
 CPU profiler before its heap sampler, then stops heap sampling before the CPU
-profiler. The sampler includes collected objects, uses a 32 KiB interval and does
-not force GC. Raw files include the phase and thread ID; reports retain script,
-source path, native worker CPU deltas, sampled allocation and CPU sample counts.
+profiler. Both use native runtime defaults. The qualified Node 24.22.1 APIs
+ignore option objects: worker heap sampling uses a 512 KiB interval, depth 16
+and no sampling flags. `sampledLiveAllocationBytes` covers allocations still live
+at capture, excludes collected objects/native memory, and is GC-sensitive; it
+is not total allocation or a forced-GC retained-heap measurement. Worker CPU
+profiling also uses the native default interval. Raw files include the phase and
+thread ID; reports retain script, source path, native worker CPU deltas, sampled
+live allocation and CPU sample counts. Main-isolate inspector sampling remains
+independently configured at 32 KiB with collected objects included.
 Profile windows include owner work and boundary/setup idle work; they exclude
 correctness reads and reset. CPU profile duration is elapsed coverage, not CPU
 consumption. Workers created during a window and exited workers are unmeasured;

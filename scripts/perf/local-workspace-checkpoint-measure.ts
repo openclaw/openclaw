@@ -635,15 +635,10 @@ const startSerialWorkerProfiles = async () => {
       const capture = {
         worker,
         threadId: worker.threadId,
-        cpu: await worker.startCpuProfile({ sampleInterval: 1 }),
+        cpu: await worker.startCpuProfile(),
       };
       captures.push(capture);
-      captures.at(-1)!.heap = await worker.startHeapProfile({
-        sampleInterval: 32_768,
-        forceGC: false,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      captures.at(-1)!.heap = await worker.startHeapProfile();
       captures.at(-1)!.cpuBefore = await worker.cpuUsage().catch(() => undefined);
     }
   } catch (error) {
@@ -685,7 +680,7 @@ const startSerialWorkerProfiles = async () => {
           sourcePath: path.join(sourceRoot, "src/infra/git-operation.worker.ts"),
           exited,
           errors,
-          sampledAllocatedBytes: !exited && heap ? sum(JSON.parse(heap).head) : null,
+          sampledLiveAllocationBytes: !exited && heap ? sum(JSON.parse(heap).head) : null,
           workerCpuMs:
             !exited && cpuAfter && capture.cpuBefore
               ? (cpuAfter.user +
@@ -717,7 +712,7 @@ const startSerialWorkerProfiles = async () => {
           .filter((worker) => !existing.has(worker))
           .map((worker) => worker.threadId),
         accounting:
-          "Existing Git workers only, at most 16. CPU starts before heap sampling; heap stops before CPU. Profiles include owner and boundary/setup idle work, exclude correctness/reset. Worker CPU counters span the profiled window; CPU profile duration is elapsed coverage, not consumed CPU. New/exited workers and child processes are unmeasured; failed/exited samples are null. Process CPU remains the separately measured owner counter.",
+          "Existing Git workers only, at most 16, using native profiler defaults. Qualified Node 24 uses 512 KiB heap sampling, depth 16 and no sampling flags: GC-sensitive live allocations only, not total allocation or native memory. CPU starts before heap sampling; heap stops before CPU. Profiles include owner and boundary/setup idle work, exclude correctness/reset. Worker CPU counters span the profiled window; CPU profile duration is elapsed coverage, not consumed CPU. New/exited workers and child processes are unmeasured; failed/exited samples are null. Process CPU remains the separately measured owner counter.",
       };
     } finally {
       clearInterval(stopKeepAlive);
