@@ -148,8 +148,10 @@ Run [verify](references/verify.md) first. Then check:
   claim `entities`/`dependencies`, commitment `owner`, and edge
   `from`/`to`/`label`/`source_page`. Every linked entity has an `attended` or
   `discusses` edge with a body for this meeting.
-- **State:** no updated page has a topic or section named for a date or
-  meeting, and each follows its type's layout.
+- **State:** no updated page gained a topic or section named for a date or
+  meeting, and each follows its type's layout. Older dated sections beyond the
+  retirement allowance ([retire dated sections](references/retire-dated.md))
+  are listed in the report, not a failure.
 - **Style:** check the drafts in your work files against
   [writing](references/writing.md) before publishing: names first, no stacked
   caveats, no notes to yourself, no filler lines. Don't read published pages back

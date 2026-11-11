@@ -84,7 +84,8 @@ the new text, or make sure the page still reaches that record another way: a
 claim that names the page in `entities`, or a source note between the source
 and the page. A fact stated only in text you are deleting becomes a claim
 first. Cite a current record: when a cited claim is superseded or withdrawn,
-cite its replacement or survivor instead.
+cite its survivor when it states the same fact; otherwise rewrite the sentence
+to what is true now and cite the replacement.
 
 ## Rules
 

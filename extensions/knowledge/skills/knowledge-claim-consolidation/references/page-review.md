@@ -13,11 +13,11 @@ sessions, wait for their results and give the report yourself.
 
 ## 1. Read
 
-Read the whole body, following `content.nextOffset`, and keep its revision
-and hash. List the page's claims ([linking](linking.md), One page). On a page
-with hundreds of claims, read the rows recorded since the body's `updatedAt`
-first (`knowledge_timeline` with `entity`, `timeField: "recorded_at"` and
-`since`), then older ones by group.
+Read the whole body: follow the top-level `nextOffset` with `offset` until it
+is absent, and compare the hash across chunks. Keep the revision and hash. List
+the page's claims ([linking](linking.md), One page). On a page with hundreds of
+claims, read the newest first (`knowledge_timeline` with `entity` and
+`timeField: "recorded_at"`, or the rows' days), then older ones by group.
 
 ## 2. Judge
 
@@ -26,8 +26,7 @@ Check each part and note which fail:
 - **Introduction:** does it say what the subject is, not what source mentioned
   it?
 - **State:** is each topic current? Is any decision, outcome or commitment
-  among the claims recorded since `updatedAt` missing, or does a newer claim
-  contradict the text?
+  among the newer claims missing, or does a newer claim contradict the text?
 - **Dated material:** is there a written Timeline, a section named for a date or
   source, or a paragraph that summarizes one meeting?
 - **Layout:** do the sections fit the page's type? Another type's headings fail
@@ -57,9 +56,10 @@ expected result for a current page, not a missed opportunity.
   subject become one current sentence in its topic, not a rearranged list.
 - **Layout:** move the affected text under the type's headings
   ([sections by type](profiles.md#sections-by-type)).
-- **Broken citation:** repoint it to the record that now holds the fact (the
-  superseding claim, the survivor of a withdrawal, or the page an extraction
-  moved it to).
+- **Broken citation:** repoint it to the record that now holds the same fact
+  (a duplicate's survivor, or the page an extraction moved it to). When the
+  replacement says something different (an outcome superseding a snapshot),
+  rewrite the sentence to what is true now and cite the replacement.
 
 Leave every passing part as it is. Do not reword, reorder or reorganize text
 that passes. Restructuring the whole page or splitting it needs a reason from
@@ -110,8 +110,7 @@ Skip pages it lists from the last 30 days. Choose entity pages in this order:
    `kind: "page"` and `mode: "phrase"` for `Context ·` and `Source context`,
    confirming the heading in the body. Largest first.
 2. Pages whose claims have outrun the body: among the recently active pages in
-   the Knowledge index, the ones with the most claims recorded since the page's
-   `updatedAt`.
+   the Knowledge index, the ones with the most new claims.
 3. One page the checkpoint has never listed, whatever its size, so ordinary
    pages are sampled too.
 

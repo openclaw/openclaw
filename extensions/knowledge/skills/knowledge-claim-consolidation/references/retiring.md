@@ -41,7 +41,13 @@ historical reads (`historical: true`, `lifecycle: "all"`) and
 
 A page that cites a claim you withdraw or supersede would cite an inactive
 record. Before the write, list the pages that cite the claim with
-`knowledge_connections` `direction: "backlinks"`. After it, repoint each of
-their `[[id|label]]` links to the survivor or the superseding claim with
-`knowledge_edit_body` (from a fresh full read), and check them with
-`knowledge_verify` `expectedLinks`.
+`knowledge_connections` `direction: "backlinks"`. After it, read each citing
+sentence (from a fresh full read) and fix it with `knowledge_edit_body`:
+
+- The survivor states the same fact (a duplicate): repoint the link to it.
+- The replacement says something different (an outcome superseding snapshots,
+  a correction): on an entity page, rewrite the sentence to what is true now
+  and cite the replacement. On an authored document, keep the sentence and its
+  citation and add a dated amendment citing the replacement.
+
+Check the edited pages with `knowledge_verify` `expectedLinks`.
