@@ -78,6 +78,22 @@ export function collectActiveAgentSessionWorkAdmissions(
   return collectSessionControllerTargets(owners);
 }
 
+/** In-flight acquired work only. Callers that must not abort the turn wait on this. */
+export function captureAgentWorkAdmissionSettlement(params: AgentWorkAdmissionTarget): {
+  pending: boolean;
+  released: Promise<void>;
+} {
+  const current = ownerContext.getStore();
+  const effects = [...agentEffects(params)].filter(
+    (effect) =>
+      (effect.phase === "acquired" || effect.phase === "writer") && !current?.effects.has(effect),
+  );
+  return {
+    pending: effects.length > 0,
+    released: Promise.all(effects.map((effect) => effect.ref.released)).then(() => undefined),
+  };
+}
+
 export function startAgentWorkAdmissionInterruption(
   params: AgentWorkAdmissionTarget & { reason?: Error; assertCurrent?: () => void },
 ): { released: Promise<void> } {

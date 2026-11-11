@@ -11,6 +11,13 @@ import type {
 export { WorkerTaskError } from "@openclaw/worker-runtime";
 export type { WorkerTaskResponse } from "./worker-task-pool.types.js";
 
+type SqliteCloseCore = {
+  startCloseResources(key?: string): { result: Promise<void> };
+};
+
+/** Class instances keep their core here so callers can close sqlite without a public method. */
+const sqliteCloseCores = new WeakMap<object, SqliteCloseCore>();
+
 /** Existing SDK surface; task custody remains an internal capability. */
 export class WorkerTaskPool<Input, Output> {
   private readonly core: WorkerTaskPoolCore<Input, Output>;
@@ -24,6 +31,7 @@ export class WorkerTaskPool<Input, Output> {
         getSnapshot: () => this.getSnapshot(),
       },
     );
+    sqliteCloseCores.set(this, this.core);
   }
 
   run(input: WorkerTaskInput<Input>, options: WorkerTaskOptions<Input>): Promise<Output> {
@@ -51,6 +59,17 @@ export class WorkerTaskPool<Input, Output> {
   }
 }
 
+/**
+ * Sqlite close for one pool. Class instances and owned pools register their core
+ * in the module-private map. Not a plugin SDK method.
+ */
+export function closeTaskPoolSqliteResources(
+  pool: object,
+  key?: string,
+): Promise<void> | undefined {
+  return sqliteCloseCores.get(pool)?.startCloseResources(key).result;
+}
+
 /** Internal resource owners can retain task custody or use settled ordinary reads. */
 export function createOwnedWorkerTaskPool<Input, Output>(
   options: WorkerTaskPoolOptions<Output>,
@@ -62,7 +81,7 @@ export function createOwnedWorkerTaskPool<Input, Output>(
     undefined,
     ownerOptions,
   );
-  return {
+  const owned = {
     run: (input: WorkerTaskInput<Input>, taskOptions: WorkerTaskOptions<Input>) =>
       core.run(input, taskOptions),
     rotate: () => core.rotate(),
@@ -76,4 +95,6 @@ export function createOwnedWorkerTaskPool<Input, Output>(
     getSnapshot: () => core.getSnapshot(),
     close: (error?: Error) => core.close(error),
   };
+  sqliteCloseCores.set(owned, core);
+  return owned;
 }

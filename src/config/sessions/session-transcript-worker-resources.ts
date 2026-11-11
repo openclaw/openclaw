@@ -90,7 +90,7 @@ export type HistoryDatabaseResource = {
   retire: () => Promise<void>;
 };
 
-const historyDatabases = new Map<string, HistoryDatabaseResource>();
+export const historyDatabases = new Map<string, HistoryDatabaseResource>();
 // An exact lexical lookup derives from the physical owner; it owns no separate lifecycle.
 const historyReadCandidates = new Map<string, HistoryDatabaseResource>();
 const historySetTimeout = setTimeout;

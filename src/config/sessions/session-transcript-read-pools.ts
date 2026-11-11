@@ -62,10 +62,10 @@ export function createSessionTranscriptHistoryPool(
     },
     { databaseAccess: "read-only" },
   );
-  return {
-    ...pool,
+  // Keep this object. Close looks up the core registered for the owned pool.
+  return Object.assign(pool, {
     canCloseNativeResources: () => canCloseNativeResources === true,
-  };
+  });
 }
 
 export function createUsageCostPool(

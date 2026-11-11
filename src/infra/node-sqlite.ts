@@ -8,6 +8,7 @@ import {
   bindSqliteDatabaseAdmission,
   prepareSqliteDatabaseAdmission,
 } from "./sqlite-database-admission.js";
+import { isDepartedAgentSqliteAdmission } from "./sqlite-departed-agent-admission.js";
 import { requireNodeSqlite } from "./sqlite-native-runtime.js";
 import { registerSqliteReaderConnection } from "./sqlite-reader-lifecycle.js";
 import { trackSqliteSchema } from "./sqlite-schema-facts.js";
@@ -78,6 +79,11 @@ export function openNodeSqliteDatabase(
   // Callers may pass file: URIs or already-namespaced paths from specialized
   // resolvers; location normalization must remain idempotent for those forms.
   const resolvedLocation = resolveNodeSqliteLocation(location);
+  if (options?.open !== false && isDepartedAgentSqliteAdmission(resolvedLocation)) {
+    throw new Error(
+      `SQLite database is closed because its agent left the roster: ${resolvedLocation}`,
+    );
+  }
   const identity =
     options?.open === false
       ? undefined
