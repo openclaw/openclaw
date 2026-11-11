@@ -163,7 +163,6 @@ enum GatewayOnboardingReset {
         defaults.set(false, forKey: "gateway.hasConnectedOnce")
         defaults.set(false, forKey: "gateway.manual.enabled")
         defaults.set("", forKey: "gateway.manual.host")
-        defaults.set("", forKey: "gateway.setupCode")
         defaults.set(defaults.integer(forKey: "onboarding.requestID") + 1, forKey: "onboarding.requestID")
     }
 }

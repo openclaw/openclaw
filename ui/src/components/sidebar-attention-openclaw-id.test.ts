@@ -9,7 +9,7 @@ import { client, createGatewayHarness } from "../app/overlays-access.test-suppor
 import type { SidebarAttentionStore } from "../app/sidebar-attention-store.ts";
 import type { OpenClawIdPublication, OpenClawIdStatusResult } from "../lib/openclaw-id/types.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { buildOpenClawIdKeyAttention } from "./sidebar-attention-openclaw-id.ts";
+import { readOpenClawIdKeyAttention } from "./sidebar-attention-openclaw-id.ts";
 import { createStore, cronPage } from "./sidebar-attention-store.test-support.ts";
 import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 
@@ -145,9 +145,12 @@ it("rejects an old connection reply", async () => {
   expect(h.request.mock.calls.some(([method]) => method === "openclawId.people")).toBe(false);
 });
 
-it("never offers local key recovery to a tunnel caller or an off feature", () => {
-  expect(buildOpenClawIdKeyAttention({ ...status, channel: "tunnel" }, superseded)).toBeNull();
-  expect(
-    buildOpenClawIdKeyAttention({ ...status, status: { state: "off" } }, superseded),
-  ).toBeNull();
+it("never offers local key recovery to a tunnel caller or an off feature", async () => {
+  for (const unavailable of [
+    { ...status, channel: "tunnel" as const },
+    { ...status, status: { state: "off" as const } },
+  ]) {
+    const gateway = client(vi.fn(async () => unavailable));
+    expect(await readOpenClawIdKeyAttention(gateway, () => true)).toBeNull();
+  }
 });

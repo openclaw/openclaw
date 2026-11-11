@@ -183,6 +183,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         featureMethods: [
           ...defaultControlUiFeatureMethods,
+          "agents.list",
           "config.get",
           "tools.catalog",
           "tools.effective",
