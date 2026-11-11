@@ -32,7 +32,9 @@ export function install(buffer, root) {
                   ? 2
                   : 0;
   const measure = (db, type, run) => {
-    if (!Atomics.load(view, 0) || !db.location()?.startsWith(root)) return run();
+    if (!Atomics.load(view, 0) || !db.location()?.startsWith(root)) {
+      return run();
+    }
     const store = db.location().endsWith("/agent.sqlite") ? 1 : 2;
     const start = performance.now();
     const cpu = process.threadCpuUsage();
@@ -57,14 +59,15 @@ export function install(buffer, root) {
       }
     }
   };
-  const exec = DatabaseSync.prototype.exec,
-    prepare = DatabaseSync.prototype.prepare,
-    close = DatabaseSync.prototype.close;
+  const exec = Reflect.get(DatabaseSync.prototype, "exec");
+  const prepare = Reflect.get(DatabaseSync.prototype, "prepare");
+  const close = Reflect.get(DatabaseSync.prototype, "close");
   DatabaseSync.prototype.exec = function (sql) {
     return measure(this, kind(sql), () => exec.call(this, sql));
   };
   DatabaseSync.prototype.prepare = function (sql) {
     const statement = measure(this, 1, () => prepare.call(this, sql));
+    // oxlint-disable-next-line unicorn/no-this-assignment -- Statement wrappers need both receivers.
     const db = this;
     for (const method of ["get", "all", "run"]) {
       const original = statement[method];
@@ -78,5 +81,6 @@ export function install(buffer, root) {
     return measure(this, 9, () => close.call(this));
   };
 }
-if (!isMainThread && workerData?.agentCloseTrace)
+if (!isMainThread && workerData?.agentCloseTrace) {
   install(workerData.agentCloseTrace, workerData.agentCloseRoot);
+}

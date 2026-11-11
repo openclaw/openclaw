@@ -83,7 +83,9 @@ const opts = {
   env: { ...process.env, OPENCLAW_STATE_DIR: root },
 };
 const inspector = new Session();
-if (values.profile || values.allocation) inspector.connect();
+if (values.profile || values.allocation) {
+  inspector.connect();
+}
 const sourceHash = createHash("sha256")
   .update(fs.readFileSync("src/state/openclaw-state-db-handle.ts"))
   .digest("hex");
@@ -94,7 +96,9 @@ try {
   assert.equal(seeded.db.prepare("SELECT count(*) AS n FROM transcript_events").get().n, 1000000);
   await owner.closeOpenClawAgentDatabasesAsync(root);
   for (let n = 0; n < Number(values.samples); n++) {
-    if (requestedArm === "paired") values.arm = ["close", "truncate", "truncate", "close"][n % 4];
+    if (requestedArm === "paired") {
+      values.arm = ["close", "truncate", "truncate", "close"][n % 4];
+    }
     const database = owner.openOpenClawAgentDatabase(opts);
     await database.walMaintenance.stop();
     let execution;
@@ -156,12 +160,13 @@ try {
       await inspector.post("Profiler.enable");
       await inspector.post("Profiler.start");
     }
-    if (values.allocation)
+    if (values.allocation) {
       await inspector.post("HeapProfiler.startSampling", {
         samplingInterval: 4096,
         includeObjectsCollectedByMajorGC: true,
         includeObjectsCollectedByMinorGC: true,
       });
+    }
     traceView.fill(0);
     Atomics.store(traceView, 0, 1);
     const cpu = process.cpuUsage();
@@ -195,7 +200,8 @@ try {
     let allocatedBytes = null;
     if (values.allocation) {
       const { profile } = await inspector.post("HeapProfiler.stopSampling");
-      const sum = (node) => node.selfSize + node.children.reduce((a, n) => a + sum(n), 0);
+      const sum = (node) =>
+        node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
       allocatedBytes = sum(profile.head);
     }
     if (values.profile) {
@@ -251,5 +257,7 @@ try {
 } finally {
   await owner.closeOpenClawAgentDatabasesAsync(root);
   await state.closeOpenClawStateDatabaseAsync();
-  if (values.profile || values.allocation) inspector.disconnect();
+  if (values.profile || values.allocation) {
+    inspector.disconnect();
+  }
 }
