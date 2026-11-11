@@ -125,7 +125,7 @@ describe("release approval receipt", () => {
           PUBLISH_OPENCLAW_NPM: "true",
           PLUGIN_PUBLISH_SCOPE: "all-publishable",
           PREPARED_NPM_ARTIFACT: "original-qualified-artifact",
-          CORE_PLUGIN_DEFERRALS: JSON.stringify(entries),
+          PREPARED_PUBLICATION_INPUT: JSON.stringify({ corePluginDeferrals: entries }),
           ...override,
         },
         () => [approved()],

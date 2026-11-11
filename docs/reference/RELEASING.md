@@ -170,7 +170,10 @@ original artifacts. Deferral does not authorize repacking or replacing them.
 ### Explicit beta plugin authentication deferrals
 
 For an original all-package core beta publication with prepared qualification,
-`core_plugin_deferrals` accepts an operator-reviewed JSON array. Each entry names
+the existing `prepared_plugins` JSON input accepts an optional operator-reviewed
+`corePluginDeferrals` array. An object containing only this array preserves normal
+publication; when artifact descriptors are present, retain the original `npm` and
+`clawhub` descriptors unchanged. Each entry names
 `packageName`, `version`, `sourceSha`, `reason`, and the original GitHub Actions
 job URL in `evidence`. Reasons are `npm-eneedauth` or
 `npm-trusted-publisher-exchange-http-404`; the latter describes a verified

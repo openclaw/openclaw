@@ -594,7 +594,7 @@ it("consumes the original qualified package in another run without a source inst
   const registry = npmRegistryPackument(entry.packageName, version, readFileSync(tarballPath));
   let verificationAttempt = 0;
   const deferral = { packageName: entry.packageName, version, sourceSha };
-  const verify = (requirePublished: boolean, corePluginDeferrals: typeof deferral[] = []) =>
+  const verify = (requirePublished: boolean, corePluginDeferrals: (typeof deferral)[] = []) =>
     selectUnpublishedPreparedNpmPackages({
       ...consumeParams,
       outputDir: join(root, `registry-verification-${++verificationAttempt}`),
@@ -617,9 +617,9 @@ it("consumes the original qualified package in another run without a source inst
   expect(await verify(false)).toEqual([consumeParams.package]);
   await expect(verify(true)).rejects.toThrow("complete original plugin roster");
   expect(await verify(true, [deferral])).toEqual([]);
-  await expect(verify(true, [{ ...deferral, packageName: "@openclaw/unselected" }])).rejects.toThrow(
-    "outside the original qualified roster",
-  );
+  await expect(
+    verify(true, [{ ...deferral, packageName: "@openclaw/unselected" }]),
+  ).rejects.toThrow("outside the original qualified roster");
   registry.versions[version] = published;
   published.dist.integrity = "sha512-conflicting";
   await expect(verify(false)).rejects.toThrow("registry bytes conflict");

@@ -184,8 +184,12 @@ export function validateReleaseApprovalReceipt(value) {
 }
 
 export function createReleaseApprovalReceipt(env, runGhJson = api) {
+  const preparedInput = env.PREPARED_PUBLICATION_INPUT
+    ? JSON.parse(env.PREPARED_PUBLICATION_INPUT)
+    : {};
+  const corePluginDeferrals = preparedInput.corePluginDeferrals;
   if (
-    env.CORE_PLUGIN_DEFERRALS &&
+    corePluginDeferrals !== undefined &&
     (env.PUBLISH_OPENCLAW_NPM !== "true" ||
       env.PLUGIN_PUBLISH_SCOPE !== "all-publishable" ||
       !env.PREPARED_NPM_ARTIFACT ||
@@ -207,10 +211,8 @@ export function createReleaseApprovalReceipt(env, runGhJson = api) {
     throw new Error("Release approval requires an approved npm-release environment entry.");
   }
   return validateReleaseApprovalReceipt({
-    version: env.CORE_PLUGIN_DEFERRALS ? 3 : env.RETIRED_LINE_PUBLICATION_REASON ? 2 : 1,
-    ...(env.CORE_PLUGIN_DEFERRALS
-      ? { corePluginDeferrals: JSON.parse(env.CORE_PLUGIN_DEFERRALS) }
-      : {}),
+    version: corePluginDeferrals !== undefined ? 3 : env.RETIRED_LINE_PUBLICATION_REASON ? 2 : 1,
+    ...(corePluginDeferrals !== undefined ? { corePluginDeferrals } : {}),
     ...(env.RETIRED_LINE_PUBLICATION_REASON
       ? { retiredLineReason: env.RETIRED_LINE_PUBLICATION_REASON }
       : {}),

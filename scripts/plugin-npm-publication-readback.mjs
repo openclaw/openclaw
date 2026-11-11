@@ -366,8 +366,9 @@ export async function createPluginNpmPublicationReadback(options) {
   requireValue(
     plan.sourceSha === sourceSha &&
       JSON.stringify(identities(plan.all)) === JSON.stringify(identities(packages)) &&
-      JSON.stringify(identities([...plan.candidates, ...plan.skippedPublished, ...deferredPackages])) ===
-        JSON.stringify(identities(packages)),
+      JSON.stringify(
+        identities([...plan.candidates, ...plan.skippedPublished, ...deferredPackages]),
+      ) === JSON.stringify(identities(packages)),
     "Resolved npm publication plan differs from the frozen package roster.",
   );
   requireValue(
