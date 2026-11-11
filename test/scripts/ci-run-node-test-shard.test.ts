@@ -457,6 +457,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "test/scripts/ci-changed-node-test-plan.integration.test.ts",
         "test/scripts/test-projects.test.ts",
         "test/scripts/check-database-worker-ratchet.test.ts",
+        "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
+        "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
         "test/scripts/database-worker-compat.test.ts",
         "test/scripts/personal-credential-writer-guard.test.ts",
       ],
@@ -621,6 +623,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       targets: [
         "test/scripts/run-vitest.test.ts",
         "test/scripts/check-database-worker-ratchet.test.ts",
+        "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
+        "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
         "test/scripts/database-worker-compat.test.ts",
         "test/scripts/personal-credential-writer-guard.test.ts",
       ],
