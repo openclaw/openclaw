@@ -21,10 +21,7 @@ import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { heartbeatNotifications } from "../../infra/heartbeat-events.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
+import * as agentDatabases from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
@@ -50,13 +47,18 @@ it.each([
   "sessions.abort keeps $mode acknowledgement behind its $outcome writer outcome",
   async ({ mode, outcome }) => {
     await withOpenClawTestState({ label: "abort-durability" }, async (state) => {
+      let phase = "setup";
       // Subscriptions and session writers share the serving Gateway's state custody.
       const stateOwner = acquireGatewayStateOwner({
         databasePath: resolveOpenClawStateSqlitePath(state.env),
         payload: gatewayOwnerPayload(state, readGatewayLockProcessNamespace),
       });
       await using _ = {
-        [Symbol.asyncDispose]: () => state.restoreEnv().finally(stateOwner.release),
+        [Symbol.asyncDispose]: () => {
+          phase = "fixture cleanup";
+          console.error("[pr195370-abort-phase]", { mode, outcome, phase });
+          return state.restoreEnv().finally(stateOwner.release);
+        },
       };
       const cfg = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg, cfg);
@@ -160,6 +162,7 @@ it.each([
         expect(loadSessionEntry(target)?.status).toBeUndefined();
       };
       try {
+        phase = "initial session seed";
         await replaceSessionEntry(target, { sessionId, updatedAt: 1_000 });
         const startEvent = {
           runId,
@@ -168,12 +171,14 @@ it.each([
           ts: 1_000,
           data: { phase: "start", startedAt: 1_000 },
         };
+        phase = "initial lifecycle start";
         await lifecycleState.persistGatewaySessionLifecycleEvent({
           sessionKey: target.sessionKey,
           agentId: target.agentId,
           event: startEvent,
         });
         expectActiveRow();
+        phase = "held writer entered";
         heldWriter = patchSessionEntryCore(target, async () => {
           writerEntered.resolve();
           await releaseWriter.promise;
@@ -181,6 +186,7 @@ it.each([
         });
         await writerEntered.promise;
         if (outcome === "replacement") {
+          phase = "replacement queued";
           replacement = lifecycleState.persistGatewaySessionLifecycleEvent({
             sessionKey: target.sessionKey,
             agentId: target.agentId,
@@ -194,6 +200,7 @@ it.each([
               throw writeFailure;
             });
         }
+        phase = "abort requested";
         request = Promise.resolve(
           stopSession(
             target.sessionKey,
@@ -211,9 +218,12 @@ it.each([
         await setImmediate();
         expect.soft(respond).not.toHaveBeenCalled();
         expect(loadSessionEntry(target)?.status).toBeUndefined();
+        phase = "writer release";
         releaseWriter.resolve();
         await heldWriter;
+        phase = "replacement awaited";
         await replacement;
+        phase = "request awaited";
         if (outcome === "write-failed") {
           await expect(request).rejects.toThrow(writeFailure);
           expect(respond).not.toHaveBeenCalled();
@@ -221,6 +231,7 @@ it.each([
           return;
         }
         await request;
+        phase = "final verification";
         expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
           true,
           expect.objectContaining({ ok: true, status: "aborted" }),
@@ -230,14 +241,17 @@ it.each([
           return;
         }
         expect(responseRows[0]).toMatchObject({ status: "killed", abortedLastRun: true });
-        await closeOpenClawAgentDatabasesAsync(state.root);
-        closeOpenClawAgentDatabasesForTest(state.root);
+        await agentDatabases.closeOpenClawAgentDatabasesAsync(state.root);
+        agentDatabases.closeOpenClawAgentDatabasesForTest(state.root);
         expect(loadSessionEntry({ ...target, readConsistency: "latest" })).toMatchObject({
           status: "killed",
           abortedLastRun: true,
           lastRunId: runId,
         });
         expect(loadSessionEntry(target)?.lifecycleRunId).toBeUndefined();
+      } catch (error) {
+        console.error("[pr195370-abort-phase]", { mode, outcome, phase });
+        throw error;
       } finally {
         releaseWriter.resolve();
         await heldWriter;

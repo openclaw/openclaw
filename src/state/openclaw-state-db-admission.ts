@@ -134,6 +134,18 @@ const runtimeAdmission = createStateSchemaAdmission(
 type ConnectionVersion = { schema: { admissionId: string }; facts: StateSchemaVersionFacts };
 const connectionVersions = new WeakMap<EngineConnection, ConnectionVersion>();
 
+/** Temporary passive capture: unlike the ordinary getter, this cannot refresh or publish facts. */
+export function peekStateSchemaVersionForDiagnostic(database: EngineConnection) {
+  const cached = connectionVersions.get(database);
+  return cached
+    ? {
+        userVersion: cached.facts.userVersion,
+        contentVersion: cached.facts.contentVersion,
+        admissionId: cached.schema.admissionId,
+      }
+    : { captureError: "absent" };
+}
+
 function rememberConnectionVersion(database: EngineConnection, value?: ConnectionVersion): void {
   const previous = connectionVersions.get(database);
   const install = (entry: ConnectionVersion | undefined) => {
