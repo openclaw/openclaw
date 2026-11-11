@@ -12,7 +12,7 @@ import {
   updatePanel,
 } from "./desktop-panel.test-support.ts";
 
-const UNAVAILABLE = "The requested desktop is unavailable. Retry when the machine is ready.";
+const UNAVAILABLE = "This desktop is unavailable. Try again when the device is ready.";
 const ENABLE = "Enable desktop access in OpenClaw";
 const gatewayHost: EnvironmentSummary = {
   id: "gateway",
@@ -98,12 +98,12 @@ describe("Desktop host setup guidance", () => {
       true,
     );
     await waitForSolid(() => expect(panel.textContent).toContain("Screen Sharing is available"));
-    expect(panel.textContent).toContain("Desktop access is not enabled on the Gateway host.");
-    expect(panel.textContent).toContain("shares the Gateway host's screen");
+    expect(panel.textContent).toContain("Desktop access isn’t enabled on this computer.");
+    expect(panel.textContent).toContain("shares this computer’s screen");
     expect(panel.textContent).toContain(
-      "Enable desktop access to view and control the Gateway host in OpenClaw.",
+      "Enable desktop access to view and control this computer in OpenClaw.",
     );
-    expect(panel.textContent).toContain("macOS user account on the Gateway host");
+    expect(panel.textContent).toContain("macOS account on this computer");
     expect(panel.textContent).toContain("Applies without restarting the Gateway.");
     expect(panel.textContent).toContain("reachable from other devices on your network");
     expect(panel.textContent).not.toContain(UNAVAILABLE);
@@ -126,9 +126,9 @@ describe("Desktop host setup guidance", () => {
       false,
     );
     await waitForSolid(() => expect(panel.textContent).toContain("Turn on Screen Sharing"));
-    expect(panel.textContent).toContain("On the Gateway host Mac, open System Settings");
-    expect(panel.textContent).toContain("allow the Gateway host account to Observe and Control");
-    expect(panel.textContent).not.toContain("On this Mac");
+    expect(panel.textContent).toContain("On this Mac, open System Settings");
+    expect(panel.textContent).toContain("allow this computer’s account to Observe and Control");
+
     expect(panel.textContent).toContain("reachable from other devices on your network");
     expect(panel.textContent).not.toContain(UNAVAILABLE);
     expect(button(ENABLE)).toBeUndefined();
@@ -144,7 +144,7 @@ describe("Desktop host setup guidance", () => {
     const linuxHost = { ...gatewayHost, platform: "linux" };
     const { panel, button } = await mount(linuxHost, { state: "ready" }, false);
     await waitForSolid(() => expect(panel.textContent).toContain("A desktop is available"));
-    expect(panel.textContent).toContain("desktop server on the Gateway host uses its own password");
+    expect(panel.textContent).toContain("desktop server on this computer uses its own password");
     expect(panel.textContent).toContain(
       "The desktop server may be reachable from other devices on your network.",
     );

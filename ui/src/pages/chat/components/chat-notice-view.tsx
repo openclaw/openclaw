@@ -29,6 +29,7 @@ function FailureNotice(props: ChatNoticeProps) {
     >
       <ChatRunFailureNotice
         summary={failure().summary}
+        cause={failure().cause}
         repeatCount={props.item.repeatCount}
         onRetry={actions()?.onRetry}
         editSource={actions()?.editSource}

@@ -143,6 +143,7 @@ export function parseManifest(value: string): ParsedBoardManifest {
     const declared = normalizeBoardWidgetDeclared({
       ...(netOrigins?.length ? { netOrigins } : {}),
       ...(tools?.length ? { tools } : {}),
+      ...(parsed.queries !== undefined ? { queries: parsed.queries } : {}),
     });
     return {
       ...ownership,

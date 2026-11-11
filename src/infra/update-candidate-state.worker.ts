@@ -17,12 +17,23 @@ async function snapshotCandidateState(): Promise<void> {
   }
   // SAFETY: Only typed updater launchers serialize this private worker's stdin.
   const input = JSON.parse(Buffer.concat(chunks).toString("utf8")) as UpdateStateInspectionInput;
-  const value = await inspectCandidateState(input);
-  const { writeUpdateStateResult } = await import("./update-candidate-state.result.js");
-  await writeUpdateStateResult(value, input.resultPath);
+  // A killed launcher cannot release this worker's inspection/publication lifetime.
+  const release = input.stagingTokenDirectory
+    ? (await import("./sqlite-staging-token.js")).acquireSqliteStagingToken(
+        input.stagingTokenDirectory,
+        "read",
+      )
+    : undefined;
+  try {
+    const value = await inspectCandidateState(input);
+    const { writeUpdateStateResult } = await import("./update-candidate-state.result.js");
+    await writeUpdateStateResult(value, input.resultPath);
+  } finally {
+    release?.();
+  }
 }
 
-type UpdateStateInspectionInput = { resultPath?: string } & (
+type UpdateStateInspectionInput = { resultPath?: string; stagingTokenDirectory?: string } & (
   | (Parameters<
       typeof import("./update-retained-runtime-files.js").prepareRetainedRuntimeFiles
     >[0] & {

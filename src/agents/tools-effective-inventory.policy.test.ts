@@ -233,10 +233,23 @@ describe("tool access diagnostics", () => {
     tools?: OpenClawConfig["tools"];
     inheritedToolDeny?: string[];
     available: boolean;
+    /** Built-in sub-agent denies or a configured allowlist exclude gateway and session tools. */
+    coordinationToolsExcluded?: boolean;
   }>([
     { name: "visible spawn", kind: "dashboard", createdVia: "spawn", available: true },
-    { name: "hidden helper", kind: "subagent", createdVia: "spawn", available: false },
-    { name: "unstamped dashboard child", kind: "dashboard", available: false },
+    {
+      name: "hidden helper",
+      kind: "subagent",
+      createdVia: "spawn",
+      available: false,
+      coordinationToolsExcluded: true,
+    },
+    {
+      name: "unstamped dashboard child",
+      kind: "dashboard",
+      available: false,
+      coordinationToolsExcluded: true,
+    },
     {
       name: "configured subagent deny",
       kind: "dashboard",
@@ -250,6 +263,7 @@ describe("tool access diagnostics", () => {
       createdVia: "spawn",
       tools: { subagents: { tools: { allow: ["read"] } } },
       available: false,
+      coordinationToolsExcluded: true,
     },
     {
       name: "inherited deny",
@@ -258,7 +272,7 @@ describe("tool access diagnostics", () => {
       inheritedToolDeny: ["message"],
       available: false,
     },
-  ])("resolves message availability for $name", async (scenario) => {
+  ])("resolves message and session tool availability for $name", async (scenario) => {
     const dir = sessionDirs.make();
     const sessionKey = `agent:assistant:${scenario.kind}:child`;
     const storePath = path.join(dir, "agents/assistant/sessions/sessions.json");
@@ -286,13 +300,13 @@ describe("tool access diagnostics", () => {
       agentDir: dir,
       modelApi: null,
     });
-    const toolNames = result.groups.flatMap((group) => group.tools.map((tool) => tool.id));
-    expect(toolNames.includes("message")).toBe(scenario.available);
+    const toolNames = new Set(result.groups.flatMap((group) => group.tools.map((tool) => tool.id)));
+    expect(toolNames.has("message")).toBe(scenario.available);
     expect(result.toolAccess?.tools.find((tool) => tool.id === "message")?.status).toBe(
       scenario.available ? "available" : "excluded",
     );
     for (const tool of ["gateway", "session_status", "sessions_send", "conversations_send"]) {
-      expect(toolNames).not.toContain(tool);
+      expect(toolNames.has(tool), tool).toBe(!scenario.coordinationToolsExcluded);
     }
   });
 });

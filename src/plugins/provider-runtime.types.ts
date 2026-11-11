@@ -170,6 +170,8 @@ export type ProviderResolveUsageAuthContext = {
 
 export type ProviderUsageAuthToken = {
   token: string;
+  /** Auth-store profile that supplied this credential, when known. */
+  authProfileId?: string;
   /** Provider-owned grant family used to authorize the usage endpoint. */
   authFlow?: string;
   accountId?: string;

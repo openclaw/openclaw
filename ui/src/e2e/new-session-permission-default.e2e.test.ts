@@ -37,71 +37,83 @@ async function capturePermissionPicker(
 }
 
 suite.define(() => {
-  it("shows the attended creation default without overriding an existing session or the create request", async () => {
-    const artifacts = createControlUiE2eArtifactDir("new-session-permission-default");
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const session = {
-        key: "agent:main:existing-permission",
-        kind: "direct",
-        label: "Existing session",
-        sessionId: "existing-permission-generation",
-        updatedAt: 1,
-      };
-      const gateway = await installMockGateway(page, {
-        assistantName: "Permission demo",
-        featureMethods: [
-          "agent.wait",
-          "chat.metadata",
-          "chat.startup",
-          "sessions.create",
-          "sessions.dispatch",
-          "sessions.patch",
-        ],
-        sessions: [session],
-        sessionKey: session.key,
-        methodResponses: {
-          "agents.list": {
-            agents: [
-              {
-                id: "main",
-                name: "Permission demo",
-                identity: { name: "Permission demo" },
-                defaultPermissionMode: "read-only",
-                newSessionPermissionMode: "full",
-              },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
+  it.each([
+    { scope: "operator.admin", mode: "full", label: "Full access" },
+    { scope: "operator.write", mode: "workspace", label: "Auto-review" },
+  ])(
+    "shows the attended default for $scope without overriding existing sessions or the request",
+    async ({ scope, mode, label }) => {
+      const artifacts = createControlUiE2eArtifactDir(`new-session-permission-default-${scope}`);
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const session = {
+          key: "agent:main:existing-permission",
+          kind: "direct",
+          label: "Existing session",
+          sessionId: "existing-permission-generation",
+          updatedAt: 1,
+        };
+        const gateway = await installMockGateway(page, {
+          assistantName: "Permission demo",
+          operatorScopes: ["operator.read", scope],
+          featureMethods: [
+            "agent.wait",
+            "chat.metadata",
+            "chat.startup",
+            "sessions.create",
+            "sessions.dispatch",
+            "sessions.patch",
+          ],
+          sessions: [session],
+          sessionKey: session.key,
+          methodResponses: {
+            "agents.list": {
+              agents: [
+                {
+                  id: "main",
+                  name: "Permission demo",
+                  identity: { name: "Permission demo" },
+                  defaultPermissionMode: "read-only",
+                  newSessionPermissionMode: mode,
+                },
+              ],
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
+            },
           },
-        },
-      });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
-      const existingTrigger = page.locator(
-        'openclaw-chat-pane[aria-hidden="false"] [data-chat-permission-select="true"]',
-      );
-      await expect
-        .poll(async () => (await existingTrigger.textContent())?.trim())
-        .toBe("Read only");
-      const existing = await capturePermissionPicker(page, existingTrigger, artifacts, "existing");
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
+        const existingTrigger = page.locator(
+          'openclaw-chat-pane[aria-hidden="false"] [data-chat-permission-select="true"]',
+        );
+        await expect
+          .poll(async () => (await existingTrigger.textContent())?.trim())
+          .toBe("Read only");
+        const existing = await capturePermissionPicker(
+          page,
+          existingTrigger,
+          artifacts,
+          "existing",
+        );
 
-      await page.goto(suite.server.baseUrl + "new");
-      const trigger = page.locator('[data-chat-permission-select="true"]');
-      await expect.poll(async () => (await trigger.textContent())?.trim()).toBe("Full access");
-      const creation = await capturePermissionPicker(page, trigger, artifacts, "new-session");
-      expect(await trigger.getAttribute("data-chat-select-value")).toBe("");
-      await gateway.deferNext("sessions.create");
-      await page.locator(".new-session-page__message").fill("Review the sample workspace");
-      await page.getByRole("button", { name: "Start session" }).click();
-      const request = await gateway.waitForRequest("sessions.create");
-      await writeFile(
-        artifacts + "/observations.json",
-        JSON.stringify({ existing, creation, createParams: request.params }, null, 2),
-      );
-      expect(request.params).toMatchObject({ message: "Review the sample workspace" });
-      expect(request.params).not.toHaveProperty("permissionMode");
-      expect(existing).toBe("Read only");
-      expect(creation).toBe("Full access");
-    });
-  });
+        await page.goto(suite.server.baseUrl + "new");
+        const trigger = page.locator('[data-chat-permission-select="true"]');
+        await expect.poll(async () => (await trigger.textContent())?.trim()).toBe(label);
+        const creation = await capturePermissionPicker(page, trigger, artifacts, "new-session");
+        expect(await trigger.getAttribute("data-chat-select-value")).toBe("");
+        await gateway.deferNext("sessions.create");
+        await page.locator(".new-session-page__message").fill("Review the sample workspace");
+        await page.getByRole("button", { name: "Start session" }).click();
+        const request = await gateway.waitForRequest("sessions.create");
+        await writeFile(
+          artifacts + "/observations.json",
+          JSON.stringify({ existing, creation, createParams: request.params }, null, 2),
+        );
+        expect(request.params).toMatchObject({ message: "Review the sample workspace" });
+        expect(request.params).not.toHaveProperty("permissionMode");
+        expect(existing).toBe("Read only");
+        expect(creation).toBe(label);
+      });
+    },
+  );
 });

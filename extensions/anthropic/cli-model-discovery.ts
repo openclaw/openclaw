@@ -90,6 +90,9 @@ export async function discoverClaudeCliModels(params: {
     // Claude Code lists its "default" alias first with a "Default (recommended)" label; the
     // explicit option for the same model carries the model's own name.
     const defaultAliasIds = new Set<string>();
+    // Claude Code owns what `fable`, `opus`, and `sonnet` mean; keep its selector
+    // values on the row they resolve to so runs can size context for an alias.
+    const nativeAliases = new Map<string, Set<string>>();
     for (const option of response.models) {
       if (
         !isRecord(option) ||
@@ -99,6 +102,10 @@ export async function discoverClaudeCliModels(params: {
         continue;
       }
       const id = option.resolvedModel.trim();
+      const value = typeof option.value === "string" ? option.value.trim() : "";
+      if (value && value !== "default" && value !== id) {
+        nativeAliases.set(id, (nativeAliases.get(id) ?? new Set()).add(value));
+      }
       const displayName = typeof option.displayName === "string" ? option.displayName : id;
       const existing = models.get(id);
       if (existing) {
@@ -129,6 +136,12 @@ export async function discoverClaudeCliModels(params: {
           ),
         },
       });
+    }
+    for (const [id, aliases] of nativeAliases) {
+      const model = models.get(id);
+      if (model) {
+        model.params = { ...model.params, nativeModelAliases: [...aliases].toSorted() };
+      }
     }
     return [...models.values()];
   } finally {

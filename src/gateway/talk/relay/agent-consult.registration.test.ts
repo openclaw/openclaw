@@ -31,7 +31,7 @@ import {
 } from "../../../talk/client-voice-session-write.js";
 import * as voiceSessions from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
-import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-types.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-contexts.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";

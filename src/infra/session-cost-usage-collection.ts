@@ -22,7 +22,6 @@ const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
 
 export type UsageCostCollectionAccess = {
   env?: NodeJS.ProcessEnv;
-  materializeArchive: (sourcePath: string) => Promise<string>;
   listSqliteMetadataStores: (storePath: string) => readonly string[];
   resolveSqliteStorePath: (agentId: string, storePath: string) => string;
   readSqliteArchives: (
@@ -54,25 +53,20 @@ type UsageCostJsonlSource = {
 type UsageCostSqliteFile = UsageCostTranscriptFile & { kind: "sqlite" };
 type UsageCostTranscriptSource = UsageCostJsonlSource | UsageCostSqliteFile;
 
-async function materializeUsageCostTranscriptSource(
-  source: UsageCostTranscriptSource,
-  access: UsageCostCollectionAccess,
-): Promise<UsageCostTranscriptFile> {
+// Freshness and identity describe the durable source file, never a decompressed
+// copy: archives are immutable, so a refresh decodes one only when it is stale.
+function usageCostTranscriptSourceFile(source: UsageCostTranscriptSource): UsageCostTranscriptFile {
   if (source.kind === "sqlite") {
     return source;
   }
-  const { sourcePath, stats: sourceStats } = source;
-  // Identity and freshness belong to the source; incremental offsets and
-  // byte signatures must describe the decompressed file used by readers.
-  const filePath = await access.materializeArchive(sourcePath);
-  const stats = filePath === sourcePath ? sourceStats : await fs.promises.stat(filePath);
+  const { sourcePath, stats } = source;
   return {
-    filePath,
+    filePath: resolveUsageCostTranscriptSourcePath(source),
     sourcePath,
     kind: "jsonl",
     sessionId: source.sessionId,
     size: stats.size,
-    mtimeMs: sourceStats.mtimeMs,
+    mtimeMs: stats.mtimeMs,
     device: stats.dev,
     inode: stats.ino,
   };
@@ -259,7 +253,7 @@ export async function listUsageCountedTranscriptStats(
   } & UsageCostCollectionAccess,
 ): Promise<UsageCostTranscriptFile[]> {
   const sources = await listUsageCountedTranscriptSources(agentId, params);
-  return materializeUsageCostTranscriptSources(sources, params);
+  return sources.map(usageCostTranscriptSourceFile);
 }
 
 /** Expand only the metadata sources selected by the refresh owner. */
@@ -267,6 +261,9 @@ export async function readUsageCostTranscriptSourceStats(
   sources: readonly (UsageCostJsonlSource | UsageCostSqliteEntry)[],
   access: UsageCostCollectionAccess,
 ): Promise<UsageCostTranscriptFile[]> {
+  const files = sources
+    .filter((source) => source.kind === "jsonl")
+    .map(usageCostTranscriptSourceFile);
   const sqliteFiles = await readUsageCostSqliteFiles(
     sources
       .filter((source) => source.kind === "sqlite")
@@ -274,35 +271,7 @@ export async function readUsageCostTranscriptSourceStats(
       .map((source) => parseSqliteSessionFileMarker(source.sourcePath)!),
     access,
   );
-  let sqliteIndex = 0;
-  return materializeUsageCostTranscriptSources(
-    sources.map((source) => (source.kind === "sqlite" ? sqliteFiles[sqliteIndex++] : source)),
-    access,
-  );
-}
-
-async function materializeUsageCostTranscriptSources(
-  sources: readonly (UsageCostTranscriptSource | undefined)[],
-  access: UsageCostCollectionAccess,
-): Promise<UsageCostTranscriptFile[]> {
-  // Discovery and SQLite precedence need only metadata; expand archives only for readers.
-  const { firstError, hasError, results } = await runTasksWithConcurrency({
-    tasks: sources.map((source) => async (): Promise<UsageCostTranscriptFile | undefined> => {
-      if (!source) {
-        return undefined;
-      }
-      try {
-        return await materializeUsageCostTranscriptSource(source, access);
-      } catch (error) {
-        return ignoreMissingPath(error);
-      }
-    }),
-    limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
-  });
-  if (hasError) {
-    throw firstError;
-  }
-  return results.filter((file): file is UsageCostTranscriptFile => Boolean(file));
+  return [...files, ...sqliteFiles.filter((file) => file !== undefined)];
 }
 
 async function resolveUsageCostTranscriptSource(
@@ -357,32 +326,12 @@ async function resolveUsageCostTranscriptSources(
   return results;
 }
 
-async function materializeUsageCostTranscriptSourceBestEffort(
-  source: UsageCostTranscriptSource | undefined,
-  access: UsageCostCollectionAccess,
-): Promise<UsageCostTranscriptFile | undefined> {
-  if (!source) {
-    return undefined;
-  }
-  try {
-    return await materializeUsageCostTranscriptSource(source, access);
-  } catch {
-    return undefined;
-  }
-}
-
 export async function resolveUsageCostTranscriptFiles(
   sessionFiles: readonly string[],
   access: UsageCostCollectionAccess,
 ): Promise<Array<UsageCostTranscriptFile | undefined>> {
   const sources = await resolveUsageCostTranscriptSources(sessionFiles, access);
-  const { results } = await runTasksWithConcurrency({
-    tasks: sources.map(
-      (source) => () => materializeUsageCostTranscriptSourceBestEffort(source, access),
-    ),
-    limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
-  });
-  return results;
+  return sources.map((source) => source && usageCostTranscriptSourceFile(source));
 }
 
 /** Resolve cache keys before deciding which transcripts need freshness statistics. */
@@ -397,11 +346,8 @@ export async function resolveUsageCostTranscriptPaths(
         const storePath = access.resolveSqliteStorePath(marker.agentId, marker.storePath);
         return formatSqliteSessionFileMarker({ ...marker, storePath });
       }
-      try {
-        return await access.materializeArchive(sessionFile);
-      } catch {
-        return undefined;
-      }
+      const source = await resolveUsageCostTranscriptSource(sessionFile, access);
+      return source && resolveUsageCostTranscriptSourcePath(source);
     }),
     limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
   });

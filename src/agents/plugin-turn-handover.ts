@@ -1,5 +1,6 @@
 // Hands running turns to a reloaded plugin at their next step boundary (#182024).
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
 import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
 import { pluginHandsOverTurns } from "../plugins/plugin-turn-handover-eligibility.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -8,13 +9,15 @@ import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 const log = createSubsystemLogger("agents/plugin-turn-handover");
 
 // Every plugin these registries hold that a reload has reserved.
-function reservedPluginIds(registries: readonly PluginRegistry[]): Set<string> {
-  const reserved = new Set<string>();
-  for (const registry of registries) {
-    for (const instance of collectRegistryInvocationInstances(registry)) {
-      if (instance.replacementPending) {
-        reserved.add(instance.pluginId);
-      }
+function reservedPluginInstances(
+  registries: readonly PluginRegistry[],
+  instances?: () => Iterable<PluginInstanceHandle>,
+): Set<PluginInstanceHandle> {
+  const reserved = new Set<PluginInstanceHandle>();
+  for (const instance of instances?.() ??
+    registries.flatMap((registry) => [...collectRegistryInvocationInstances(registry)])) {
+    if (instance.replacementPending) {
+      reserved.add(instance);
     }
   }
   return reserved;
@@ -37,6 +40,7 @@ function reservedPluginIds(registries: readonly PluginRegistry[]): Set<string> {
  */
 export function captureTurnHandoverRequest(
   registries: Iterable<PluginRegistry>,
+  instances?: () => Iterable<PluginInstanceHandle>,
 ): (pluginId: string, yieldHold: () => void) => void {
   const refresh = captureAgentPluginRuntimeRefresh();
   const held = [...registries];
@@ -44,25 +48,26 @@ export function captureTurnHandoverRequest(
   let scheduled = false;
   // Every plugin the reload reserved is still reserved, and every one can hand over.
   const handoverReady = () => {
-    const reserved = [...reservedPluginIds(held)];
+    const reserved = [...reservedPluginInstances(held, instances)];
     return (
-      reserved.length > 0 && reserved.every((pluginId) => pluginHandsOverTurns(held, pluginId))
+      reserved.length > 0 &&
+      reserved.every((instance) => pluginHandsOverTurns(instance.owner?.record))
     );
   };
   const decide = () => {
     scheduled = false;
     const pendingYields = yields.splice(0);
-    const reserved = [...reservedPluginIds(held)];
-    const pinning = reserved.filter((pluginId) => !pluginHandsOverTurns(held, pluginId));
+    const reserved = [...reservedPluginInstances(held, instances)];
+    const pinning = reserved.filter((instance) => !pluginHandsOverTurns(instance.owner?.record));
     if (!reserved.length || pinning.length) {
       if (pinning.length) {
         log.info(
-          `reload of ${pinning.join(", ")} keeps running turns on their admitted generations`,
+          `reload of ${pinning.map(({ pluginId }) => pluginId).join(", ")} keeps running turns on their admitted generations`,
         );
       }
       return;
     }
-    const plugins = reserved.join(", ");
+    const plugins = reserved.map(({ pluginId }) => pluginId).join(", ");
     if (!refresh.isOwned()) {
       log.info(`plugin ${plugins} reload requested; whole-run hold yields to the reload`);
       pendingYields.forEach((yieldHold) => yieldHold());

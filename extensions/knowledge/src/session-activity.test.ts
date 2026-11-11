@@ -55,9 +55,9 @@ it("session reads and writes survive service reload; retries, inspector reads, r
   };
   const receipt = await service.save_page(input, ctx);
   await service.save_page(input, context(api)); // new tool call retry must not reattribute a write
-  await service.record({ id: receipt.id }, context(api));
+  await service.record_detail({ id: receipt.id }, context(api));
   await service.grep({ query: "panel" }, context(api));
-  await service.record({ id: receipt.id }, op); // inspection is not agent activity
+  await service.record_detail({ id: receipt.id }, op); // inspection is not agent activity
   const query = { sessionKey: o.sessionKey, sessionId: o.sessionId };
   const result = await service.session_activity(query, op);
   expect(Check(contract.operations.session_activity.output, result)).toBeTruthy();
@@ -92,7 +92,7 @@ it("session reads and writes survive service reload; retries, inspector reads, r
   );
   expect(page.items[0]!.sequence > older.items[0]!.sequence).toBeTruthy();
   expect((await service.session_activity({ ...query, filter: "write" }, op)).items.length).toBe(1);
-  const record = await service.record({ id: receipt.id }, op);
+  const record = await service.record_detail({ id: receipt.id }, op);
   await service.withdraw(
     {
       requestId: randomUUID(),
@@ -177,6 +177,31 @@ it("activity filters current eligibility before pagination and keeps partitions 
     expect(second.items.length).toBe(1);
     expect(second.nextBefore).toBe(null);
     expect(sessionActivity(db, "private", "main", [], query).items.length).toBe(0);
+  } finally {
+    db.close();
+  }
+});
+
+it("session activity titles truncate without leaving a lone surrogate half", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(`CREATE TABLE session_activity (sequence INTEGER PRIMARY KEY, scope TEXT, agent_id TEXT,
+      session_key TEXT, session_id TEXT, call_id TEXT, operation TEXT, action TEXT, at TEXT, record_id TEXT,
+      revision INTEGER, UNIQUE(scope,agent_id,session_id,call_id,operation,action,record_id,revision))`);
+    // Envelope maxLength counts code points, not UTF-16 units: 199 A's + one emoji is
+    // exactly 200 code points (201 units), so vault scan accepts it and a hard
+    // slice(0, 200) would split the pair at the stored title's last code unit.
+    const boundaryTitle = `${"A".repeat(199)}😀`;
+    const active = [
+      { id: "a", title: boundaryTitle, kind: "page", type: "note", revision: 1 },
+    ] as LoadedRecord[];
+    const o = origin();
+    appendActivity(db, "private", "main", o, "write", active);
+    const out = sessionActivity(db, "private", "main", active, {
+      sessionKey: o.sessionKey,
+      sessionId: o.sessionId,
+    });
+    expect(out.items[0]!.title).toBe("A".repeat(199));
   } finally {
     db.close();
   }

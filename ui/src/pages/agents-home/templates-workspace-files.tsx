@@ -1,4 +1,5 @@
 import { createMemo, For, Show } from "solid-js";
+import { TEMPLATE_BOOTSTRAP_FILE_NAMES } from "../../../../src/templates/manifest-contract.js";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { Tooltip } from "../../components/solid/tooltip.tsx";
@@ -8,13 +9,20 @@ import type { TemplateCatalogDetail } from "./templates-catalog-client.ts";
 
 registerEnglishCatalog(registerTemplatesEnglish);
 
+// Match workspace destinations, never package-source basenames.
+const agentDocuments = new Set<string>([
+  ...TEMPLATE_BOOTSTRAP_FILE_NAMES,
+  "BOOTSTRAP.md",
+  "USER.md",
+  "MEMORY.md",
+]);
+
 // Workspace roles use exact root-relative names; nested lookalikes are ordinary files.
 const fileRoles = new Map<string, readonly [IconName, string]>([
   ["AGENTS.md", ["scrollText", "agents"]],
   ["SOUL.md", ["palette", "soul"]],
   ["USER.md", ["circleUser", "user"]],
   ["IDENTITY.md", ["bot", "identity"]],
-  ["BOOT.md", ["play", "boot"]],
   ["BOOTSTRAP.md", ["flag", "bootstrap"]],
   ["MEMORY.md", ["brain", "memory"]],
   ["TOOLS.md", ["wrench", "tools"]],
@@ -22,23 +30,19 @@ const fileRoles = new Map<string, readonly [IconName, string]>([
 ]);
 
 function fileRole(name: string): readonly [IconName, string] {
-  return (
-    fileRoles.get(name) ??
-    (/^memory\/\d{4}-\d{2}-\d{2}\.md$/u.test(name)
-      ? ["calendarClock", "dailyMemory"]
-      : ["fileText", "generic"])
-  );
+  return fileRoles.get(name) ?? ["fileText", "generic"];
 }
 
 export function TemplateWorkspaceFiles(props: {
   files: TemplateCatalogDetail["contents"]["instructions"];
-  onOpen: (name: string) => void;
+  onOpen: (name?: string) => void;
 }) {
+  const documents = createMemo(() => props.files.filter((file) => agentDocuments.has(file.name)));
   const orderedFiles = createMemo(() => {
     const preferred = ["SOUL.md", "AGENTS.md"].flatMap((name) =>
-      props.files.filter((file) => file.name === name),
+      documents().filter((file) => file.name === name),
     );
-    return [...preferred, ...props.files.filter((file) => !preferred.includes(file))];
+    return [...preferred, ...documents().filter((file) => !preferred.includes(file))];
   });
   return (
     <Show when={props.files.length}>
@@ -86,6 +90,29 @@ export function TemplateWorkspaceFiles(props: {
               </div>
             )}
           </For>
+          <Show when={documents().length < props.files.length}>
+            <div class="settings-row oc-settings-row templates-workspace-file templates-workspace-file--all">
+              <span class="plugin-capability__icon" aria-hidden="true">
+                <Icon name="folder" />
+              </span>
+              <div class="settings-row__text oc-settings-row-content">
+                <button
+                  type="button"
+                  class="templates-workspace-file__open"
+                  onClick={() => props.onOpen()}
+                >
+                  <span class="settings-row__title oc-settings-row-title">
+                    {t("templatesCatalog.viewAll")}
+                  </span>
+                </button>
+              </div>
+              <div class="settings-row__control oc-settings-row-control">
+                <span class="settings-row__chevron" aria-hidden="true">
+                  <Icon name="chevronRight" />
+                </span>
+              </div>
+            </div>
+          </Show>
         </SettingsSection>
       </div>
     </Show>

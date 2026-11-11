@@ -3,6 +3,7 @@ import type {
   AdmittedRunContext,
   AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type {
   EmbeddedAgentRunMeta,
@@ -40,6 +41,8 @@ export type SessionEventOutcome = {
   sourceDeliveryOutcome?: SourceDeliveryOutcome;
   automationResult?: CronRunTelemetry &
     Pick<CronRunOutcome, "replyDisposition" | "diagnostics" | "result">;
+  /** Recorded by the turn owner before delivery/cleanup can flatten its cause. */
+  terminalOutcome?: AgentRunTerminalOutcome;
   /** Recorded controller restart outcome, before the error is flattened. */
   interruptedByRestart?: boolean;
   error?: string;
@@ -117,6 +120,8 @@ export type SessionEventOptions = {
   deliver?: boolean;
   /** Host-owned: runtime error payloads stay in the transcript, out of chat delivery. */
   suppressErrorDelivery?: true;
+  /** Host-owned: the producer's prompt permits NO_REPLY; input provenance never selects it. */
+  replyExpectation?: "optional";
   /** Host producer remains live through admission, execution and delivery. */
   assertCurrent?: () => void;
 };

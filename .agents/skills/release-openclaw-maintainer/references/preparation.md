@@ -12,11 +12,11 @@ it. A handoff adopts the recorded cut instead of choosing another. Never absorb
 unrelated dirty files.
 
 The release branch is the active queue. Moving main is a workflow/provenance
-source, not an invitation to add fixes. Touch main before publication only for
-an operator-requested change or a critical blocker owned there that cannot be
-fixed or proven on the release branch. Keep that repair bounded, use
-`$openclaw-pr-maintainer`, then return to the release. Defer ordinary
-forward-ports until after publication.
+source, not an invitation to add fixes. Follow
+[backports and new fixes](../SKILL.md#backports-and-new-fixes): apply existing
+main fixes directly, one at a time, and prefer individual main PRs for new
+release fixes before backporting. For urgent release-first repairs, keep the
+change bounded and track an owned forward-port after publication.
 
 ## Version and channel
 

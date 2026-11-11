@@ -150,9 +150,11 @@ describe("device pairing dialog", () => {
     const { container } = mountSolid(() => <Pairing lifecycle={{ phase: "selection", access }} />);
 
     expect(container.textContent).toContain(
-      "Device capabilities plus complete Gateway controls, including settings and upgrades.",
+      "Use device tools and manage all settings and updates.",
     );
-    expect(container.textContent).toContain("Connect a computer as a command and capability host.");
+    expect(container.textContent).toContain(
+      "Let agents run commands and use tools on this device.",
+    );
     expect(container.querySelector<HTMLAnchorElement>(".device-pair-setup__help")?.href).toBe(href);
   });
 
