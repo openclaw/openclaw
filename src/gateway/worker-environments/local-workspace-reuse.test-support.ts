@@ -322,8 +322,26 @@ export async function proveWarmWorkspaceReuse(owner: LocalWorkspaceOwner) {
   await expectText(guestEdit.workspaceDir, "source.txt", "modified\n");
 
   await writeText(canonical, "source.txt", "host edit\n");
-  using hostEdit = await prepareSandboxCheckpointFixture(owner);
+  const events: diagnostics.DiagnosticPhaseSnapshot[] = [];
+  vi.spyOn(diagnostics, "createQueuedDiagnosticPhaseEmitter").mockReturnValue((event) =>
+    events.push(event),
+  );
+  using hostEdit = await withWorktreePreparationTiming("sandbox", () =>
+    prepareSandboxCheckpointFixture(owner),
+  );
   await expectText(hostEdit.workspaceDir, "source.txt", "host edit\n");
+  expect(events[0]?.details).toMatchObject({
+    "reuse.probeCanonical": expect.any(Number),
+    "reuse.capturePreparation": expect.any(Number),
+    "reuse.scan": expect.any(Number),
+    "reuse.staging": expect.any(Number),
+    "reuse.materialization": expect.any(Number),
+    "reuse.patch": expect.any(Number),
+    "reuse.preflight": expect.any(Number),
+    "reuse.acceptance": expect.any(Number),
+    "reuse.cleanup": expect.any(Number),
+    reuseDominantPhase: expect.stringMatching(/^reuse\./),
+  });
   await writeText(canonical, "added.txt", "admitted host file\n");
   await requireGit(canonical, ["add", "added.txt"]);
   using admitted = await prepareSandboxCheckpointFixture(owner);

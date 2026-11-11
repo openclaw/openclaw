@@ -218,7 +218,7 @@ an unresolved repair. List every PR created during the release (`gh pr list --au
 each repair PR with a reason; confirm its fix is on `main` and, when it is release
 tooling, on the release branch. Also remove the release's temporary worktrees,
 abandoned local cut branches, and stale `scripts/pr` worktrees. Then write the
-[retrospective](references/retrospective.md) and open its `openclaw/maintainers`
+[retrospective](references/retrospective.md) and open its `openclaw/tideclaw`
 PR with the issue-ledger update; keep a findings notes file from the start of the
 release so it can be written from evidence.
 
