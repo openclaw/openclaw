@@ -65,7 +65,7 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "Agent store is read-only",
       });
-      await expect.poll(() => status.textContent()).toContain("Save failed");
+      await expect.poll(() => status.textContent()).toContain("Couldn’t save settings. Try again.");
       expect(await name.inputValue()).toBe("Garden curator");
       expect(await page.locator("#agent-panel [role=alert]").count()).toBe(0);
       expect(await name.boundingBox()).toEqual(before);

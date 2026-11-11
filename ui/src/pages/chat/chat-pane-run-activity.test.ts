@@ -6,7 +6,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
   createComposerProps,
@@ -52,7 +52,7 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
       parentActive: true,
       expectWorking: true,
     },
-  ])("$name", ({ selectedKey, parentActive, expectWorking }) => {
+  ])("$name", async ({ selectedKey, parentActive, expectWorking }) => {
     const parentKey = "agent:main:main";
     const childKey = "agent:main:subagent:attachment-fix";
     const parent = {
@@ -92,6 +92,7 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
     const container = createApplicationContextProvider(context);
     renderChatPropsInto(container, expectDefined(pane.chatProps, "chat props"), context);
 
+    await waitForSolid(() => expect(container.querySelector(".chat-thread-inner")).not.toBeNull());
     expect(pane.chatProps?.canAbort).toBe(true);
     expect(
       container.querySelector(
@@ -169,9 +170,11 @@ describe("composer run status", () => {
         expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
       };
       await draw([], false);
-      expect(
-        container.querySelector(".chat-working-indicator .chat-reading-indicator"),
-      ).not.toBeNull();
+      await waitForSolid(() =>
+        expect(
+          container.querySelector(".chat-working-indicator .chat-reading-indicator"),
+        ).not.toBeNull(),
+      );
       await draw([child]);
       await vi.dynamicImportSettled();
       flush();
@@ -244,7 +247,7 @@ describe("composer run status", () => {
 });
 
 describe("resumed handoff list", () => {
-  it("re-renders a settled row when a listed child's name or attention changes", () => {
+  it("re-renders a settled row when a listed child's name or attention changes", async () => {
     const parent: GatewaySessionRow = { key: "agent:main:parent", kind: "direct", endedAt: 4_100 };
     const child: GatewaySessionRow = {
       key: "agent:main:subagent:docs",
@@ -280,7 +283,7 @@ describe("resumed handoff list", () => {
     pane.render();
     const container = createApplicationContextProvider(context);
     // Each draw passes the same transcript, so only the roster can refresh the row.
-    const draw = (row: GatewaySessionRow, session = parent) => {
+    const draw = async (row: GatewaySessionRow, session = parent) => {
       const props = { selectedSession: session, messages, subagentSessions: [row] };
       const chatProps = expectDefined(pane.chatProps, "chat props");
       renderChatPropsInto(
@@ -290,22 +293,27 @@ describe("resumed handoff list", () => {
       );
       flush();
       const collapsed = ".chat-handoff-resume button[aria-expanded=false]";
+      await waitForSolid(() =>
+        expect(container.querySelector(".chat-handoff-resume")).not.toBeNull(),
+      );
       container.querySelector<HTMLButtonElement>(collapsed)?.click();
       flush();
       const rows = container.querySelectorAll(".chat-handoff-resume li");
       return [...rows].map((item) => item.textContent?.replace(/\s+/gu, " ").trim());
     };
-    expect(draw(child)).toEqual(["Docs Done"]);
+    expect(await draw(child)).toEqual(["Docs Done"]);
     const renamed = { ...child, label: "Docs and changelog" };
-    expect(draw(renamed)).toEqual(["Docs and changelog Done"]);
+    expect(await draw(renamed)).toEqual(["Docs and changelog Done"]);
     const working = { ...parent, startedAt: 4_200 };
-    const pausedRows = draw({ ...renamed, subagentRunState: "paused" }, working);
+    const pausedRows = await draw({ ...renamed, subagentRunState: "paused" }, working);
     expect(pausedRows).toEqual(["Docs and changelog Paused"]);
     const agentStatus = {
       note: "Pick a release note",
       attention: "hand" as const,
       expiresAt: 9e15,
     };
-    expect(draw({ ...renamed, agentStatus })).toEqual(["Docs and changelog Needs your input"]);
+    expect(await draw({ ...renamed, agentStatus })).toEqual([
+      "Docs and changelog Needs your input",
+    ]);
   });
 });

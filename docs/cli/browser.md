@@ -33,6 +33,12 @@ stdout (`ok: false`, `error.type: "cli_error"`) and exit with status 1. Without
 Malformed request timeouts, invalid tab indexes, and Gateway request rejections
 also use this JSON failure envelope, including navigation, resize, and cookie requests.
 
+Ctrl-C or SIGTERM cancels pending reads such as status, tabs, and plain snapshots
+without printing late results. Already-accepted actions, `errors --clear`,
+`requests --clear`, and `snapshot --labels` still wait for their receipt.
+This includes the status readback for `start` and `stop`. Interrupted `doctor`
+reads do not report the browser as unhealthy.
+
 The CLI reserves 10 additional seconds beyond the request timeout for node and
 Gateway transport, allowing browser timeout diagnostics to reach the caller.
 
@@ -121,6 +127,8 @@ openclaw browser delete-profile --name work
 ```
 
 Use a specific profile with `--browser-profile <name>` on any subcommand, for example `openclaw browser --browser-profile work tabs`.
+
+Automatic local profile creation skips CDP ports already occupied by another process. The check does not reserve the port; browser launch still checks availability. Explicit ports and CDP URLs remain unchanged.
 
 On macOS, `system-profiles` lists real Chrome, Brave, Edge, or Chromium profiles available on the host. `import-profile` decrypts their cookies after one macOS Keychain/Touch ID consent prompt and injects them into a fresh OpenClaw-managed profile. It imports cookies only. Local storage and IndexedDB are unchanged. Some Google sessions use device-bound session credentials (DBSC) and can still require re-authentication after import.
 

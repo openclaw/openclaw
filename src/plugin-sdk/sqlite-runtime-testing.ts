@@ -14,7 +14,10 @@ export async function appendSqliteSessionTranscriptEventForTest(
 }
 
 export { withSessionHistoryBudgetSweepsForTest } from "../config/sessions/session-history-budget.test-support.js";
-export { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+export {
+  cleanupSessionStateForTest,
+  useSessionStoreTempDirs,
+} from "../test-utils/session-state-cleanup.js";
 export { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 export { drainSessionDiskBudgetWorkers } from "../config/sessions/disk-budget-runtime.js";
 export { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";

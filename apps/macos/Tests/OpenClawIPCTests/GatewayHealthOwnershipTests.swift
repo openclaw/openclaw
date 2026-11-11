@@ -24,7 +24,7 @@ private final class HealthGatewayFixture {
     let isReachable = LockIsolated(true)
     let gateway: GatewayConnection
     let control: ControlChannel
-    private let previousAccent = AppStateStore.shared.profileAccentHex
+    private let previousAccent = AppStateStore.shared.profileAccent
     private let previousMainKey = WorkActivityStore.shared.mainSessionKey
     private let previousMode = AppStateStore.shared.connectionMode
 
@@ -99,7 +99,7 @@ private final class HealthGatewayFixture {
         AppStateStore.shared.connectionMode = self.previousMode
         WorkActivityStore.shared.reset()
         WorkActivityStore.shared.setMainSessionKey(self.previousMainKey)
-        AppStateStore.shared.profileAccentHex = self.previousAccent
+        AppStateStore.shared.profileAccent = self.previousAccent
     }
 
     func waitForHeld(

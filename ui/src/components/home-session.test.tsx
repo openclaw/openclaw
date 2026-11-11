@@ -115,7 +115,7 @@ it.each([false, true])(
         expect(view.container.textContent).toContain("This Home is unavailable."),
       );
       expect(view.container.querySelector("openclaw-chat-pane")).toBeNull();
-      view.getByRole("button", { name: "New conversation" }).click();
+      view.getByRole("button", { name: "New session" }).click();
       expect(navigate).toHaveBeenCalledWith("new-session", { search: "?agent=main" });
     }
     expect(request).toHaveBeenCalledExactlyOnceWith("sessions.resolve", {

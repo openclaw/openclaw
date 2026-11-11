@@ -5,6 +5,11 @@ import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
+import {
+  getOrCreateSharedClientEntry,
+  getSharedCodexAppServerClientState,
+} from "./shared-client-lifecycle.js";
+import { clearSharedCodexAppServerClientIfCurrentAndUnclaimed } from "./shared-client.js";
 import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
 
@@ -52,6 +57,35 @@ describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
     expect(kill).toHaveBeenCalledWith(-root.pid, "SIGKILL");
     expect(warning).toHaveBeenCalledTimes(cleanup === "confirmed" ? 1 : 0);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("preserves the requested grace when shared retirement starts shutdown", async () => {
+    vi.useFakeTimers();
+    const harness = createClientHarness({ autoEmitExit: false });
+    Object.assign(harness.process, { pid: 12345 });
+    const snapshot = vi
+      .spyOn(processSnapshot, "readCodexAppServerProcessSnapshot")
+      .mockRejectedValue(new processSnapshot.ProcessInspectionError("unavailable"));
+    const state = getSharedCodexAppServerClientState();
+    const entry = getOrCreateSharedClientEntry(state, "delayed-clean-exit");
+    entry.client = harness.client;
+    state.entriesByClient.set(harness.client, entry);
+    const options = { forceKillDelayMs: 5_000, exitTimeoutMs: 6_000 };
+    try {
+      expect(
+        clearSharedCodexAppServerClientIfCurrentAndUnclaimed(harness.client, options).closed,
+      ).toBe(true);
+      const closing = harness.client.closeAndWait(options);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(snapshot).not.toHaveBeenCalled();
+      expect(harness.process.kill).not.toHaveBeenCalled();
+      harness.process.emit("exit", 0, null);
+      await expect(closing).resolves.toEqual({ exited: true, cleanup: "closed" });
+    } finally {
+      harness.process.emit("exit", 0, null);
+      state.clients.delete(entry.key);
+      state.entriesByClient.delete(harness.client);
+    }
   });
 
   it("lets the native server exit through its npm launcher", async () => {

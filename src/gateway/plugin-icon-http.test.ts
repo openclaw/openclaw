@@ -6,6 +6,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { syncBuiltinESMExports } from "node:module";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -19,6 +20,7 @@ import { AUTH_NONE, sendRequest, withGatewayServer } from "./server-http.test-ha
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
   encodeImage: vi.fn(),
+  fetchWithSsrFGuard: vi.fn(),
   readImageMetadata: vi.fn(),
   readRemoteMediaBuffer: vi.fn(),
   resolveCatalogIconUrl: vi.fn(),
@@ -28,6 +30,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./http-utils.js", () => ({
   authorizeControlUiReadRequestOrReply: (...args: unknown[]) => mocks.authorize(...args),
+}));
+
+vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/net/fetch-guard.js")>()),
+  fetchWithSsrFGuard: (...args: unknown[]) => mocks.fetchWithSsrFGuard(...args),
 }));
 
 vi.mock("../media/fetch.js", () => ({
@@ -142,6 +149,8 @@ afterAll(async () => {
 beforeEach(() => {
   clearPluginIconCacheForTest();
   vi.clearAllMocks();
+  mocks.fetchWithSsrFGuard.mockReset();
+  mocks.fetchWithSsrFGuard.mockRejectedValue(new Error("page unavailable"));
   writeFileSync(localIconPath, PNG_BYTES);
   writeFileSync(activityIconPath, ACTIVITY_SVG);
   mocks.resolveActivityIconSource.mockReset();
@@ -348,6 +357,85 @@ describe("Control UI plugin and catalog icon routes", () => {
       expect((await head.arrayBuffer()).byteLength).toBe(0);
     },
   );
+
+  it.each([
+    { contentType: "image/png", iconPath: "/assets/favicon.png", buffer: PNG_BYTES },
+    {
+      contentType: "image/svg+xml",
+      iconPath: "/assets/openclaw.svg",
+      buffer: Buffer.from(ACTIVITY_SVG),
+    },
+  ])(
+    "loads a declared favicon when the conventional favicon is missing ($contentType)",
+    async ({ contentType, iconPath, buffer }) => {
+      mocks.readRemoteMediaBuffer
+        .mockRejectedValueOnce(new Error("favicon.ico not found"))
+        .mockResolvedValueOnce({ buffer, contentType });
+      const release = vi.fn();
+      mocks.fetchWithSsrFGuard.mockImplementationOnce(async (options) => {
+        options.beforeRequest();
+        return {
+          response: new Response(
+            `<link rel="icon" href="/favicon.ico"><link rel="icon" href="${iconPath}" type="${contentType}">`,
+            {
+              headers: { "content-type": "text/html" },
+            },
+          ),
+          finalUrl: "https://docs.example/",
+          release,
+        };
+      });
+
+      const response = await request("/__openclaw__/link-favicon/docs.example");
+
+      expect(response.status).toBe(200);
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(
+        contentType === "image/svg+xml" ? buffer : NORMALIZED_PNG_BYTES,
+      );
+      expect(mocks.readRemoteMediaBuffer.mock.calls.map(([options]) => options.url)).toEqual([
+        "https://docs.example/favicon.ico",
+        `https://docs.example${iconPath}`,
+      ]);
+      expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://docs.example/",
+          init: expect.objectContaining({ credentials: "omit" }),
+          mode: "strict",
+        }),
+      );
+      const [options] = expectDefined(mocks.fetchWithSsrFGuard.mock.calls[0], "metadata fetch");
+      expect(() => options.resolveDispatcherPolicy(new URL("http://docs.example/"))).toThrow();
+      expect(() => options.resolveDispatcherPolicy(new URL("https://127.0.0.1/"))).toThrow();
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not fetch a declared favicon after its request authority is revoked", async () => {
+    const fetchDeclaredIcon = vi.fn();
+    mocks.readRemoteMediaBuffer
+      .mockRejectedValueOnce(new Error("favicon.ico not found"))
+      .mockImplementationOnce(async (options) => {
+        options.beforeRequest?.();
+        fetchDeclaredIcon();
+        return { buffer: PNG_BYTES, contentType: "image/png" };
+      });
+    mocks.fetchWithSsrFGuard.mockImplementationOnce(async (options) => {
+      options.beforeRequest();
+      authorityCurrent = false;
+      return {
+        response: new Response('<link rel="icon" href="/assets/favicon.png">', {
+          headers: { "content-type": "text/html" },
+        }),
+        finalUrl: "https://docs.example/",
+        release: vi.fn(),
+      };
+    });
+
+    const response = await request("/__openclaw__/link-favicon/docs.example");
+
+    expect(response.status).toBe(401);
+    expect(fetchDeclaredIcon).not.toHaveBeenCalled();
+  });
 
   it("negatively caches failed link favicon fetches", async () => {
     configForRequest = () => ({

@@ -22,12 +22,6 @@ vi.mock("./provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: mocks.resolveProviderRuntimePlugin,
 }));
 
-// mock-isolation: Load only the real auth owner while exercising the unchanged lazy runtime facade.
-vi.mock("./provider-runtime.js", async () => ({
-  prepareProviderRuntimeAuth: (await import("./provider-runtime-auth.js"))
-    .prepareProviderRuntimeAuth,
-}));
-
 const MODEL = makeProviderModelFixture({
   provider: "demo",
   id: "fixture-model",

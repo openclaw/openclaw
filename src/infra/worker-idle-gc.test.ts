@@ -1,7 +1,14 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
 
-const { collect } = vi.hoisted(() => ({ collect: vi.fn(async () => undefined) }));
+const { collect } = vi.hoisted(() => {
+  const gc = vi.fn(async () => undefined);
+  const bun = (globalThis as typeof globalThis & { Bun?: { gc(full: boolean): unknown } }).Bun;
+  if (bun) {
+    vi.spyOn(bun, "gc").mockImplementation(gc);
+  }
+  return { collect: gc };
+});
 
 vi.mock("node:inspector/promises", () => ({
   Session: class {
@@ -37,7 +44,9 @@ it("lets task bursts finish and only schedules collection after heap or external
   await vi.advanceTimersByTimeAsync(999);
   expect(collect).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(1);
-  expect(collect).toHaveBeenCalledExactlyOnceWith("HeapProfiler.collectGarbage");
+  expect(collect).toHaveBeenCalledExactlyOnceWith(
+    process.versions.bun ? true : "HeapProfiler.collectGarbage",
+  );
 
   cancelWorkerIdleGc();
   heapUsed += 32 * 1024 * 1024;

@@ -7,6 +7,7 @@ import {
   startControlUiE2eServer,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -42,6 +43,61 @@ function visibleHitTarget(element: Locator) {
 }
 
 suite.define(() => {
+  it("insets pairing fallback content and recovers the real lazy dialog", async () => {
+    await suite.withPage(
+      { ...createControlUiE2eContextOptions(), viewport: { width: 390, height: 360 } },
+      async ({ page }) => {
+        const failure = createDeferredCore();
+        let fail = true;
+        await page.route("**/src/pages/devices/view-pairing.tsx*", async (route) => {
+          await failure.promise;
+          await (fail ? route.abort() : route.fallback());
+        });
+        const gateway = await installMockGateway(page, {
+          operatorScopes: ["operator.admin"],
+          methodResponses: { "device.pair.list": { paired: [], pending: [] } },
+        });
+        try {
+          await page.goto(suite.server.baseUrl + "new");
+          await navigationDrawerToggle(page).click();
+          await page.locator("openclaw-app-sidebar:visible .sidebar-identity-card").click();
+          await page.locator('[data-value="command:pair-mobile"]').click();
+          const dialog = page.getByRole("dialog", { name: "Connect a device" });
+          await dialog.locator('[aria-busy="true"]').waitFor();
+          for (const failed of [false, true]) {
+            if (failed) {
+              failure.resolve();
+              await dialog.getByRole("button", { name: "Retry", exact: true }).waitFor();
+            }
+            const insets = await dialog.evaluate((element) => {
+              const box = element.getBoundingClientRect();
+              const title = element.querySelector("h2")!.getBoundingClientRect();
+              const actions = [...element.querySelectorAll("button")].map((button) =>
+                button.getBoundingClientRect(),
+              );
+              return {
+                left: title.left - box.left,
+                right: box.right - Math.max(...actions.map((r) => r.right)),
+                bottom: box.bottom - Math.max(...actions.map((r) => r.bottom)),
+              };
+            });
+            expect.soft(insets.left).toBeGreaterThanOrEqual(16);
+            expect.soft(insets.right).toBeGreaterThanOrEqual(16);
+            expect.soft(insets.bottom).toBeGreaterThanOrEqual(16);
+          }
+          fail = false;
+          await dialog.getByRole("button", { name: "Retry", exact: true }).click();
+          await dialog.getByRole("button", { name: "Create setup code", exact: true }).waitFor();
+          expect(await gateway.getRequests("device.pair.setupCode")).toHaveLength(0);
+          await dialog.getByRole("button", { name: "Dismiss", exact: true }).click();
+          await dialog.waitFor({ state: "hidden" });
+        } finally {
+          failure.resolve();
+        }
+      },
+    );
+  });
+
   it("keeps the connecting presentation until the shell module can commit", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const held = await holdModuleResponse(page, shellModule);
@@ -81,7 +137,7 @@ suite.define(() => {
       const reachable = createDeferredCore();
       let probes = 0;
       await page.route("**/index.html", async (route) => {
-        if (route.request().method() !== "HEAD") {
+        if (route.request().headers()["x-openclaw-reachability-probe"] !== "1") {
           await route.fallback();
           return;
         }
@@ -191,7 +247,7 @@ suite.define(() => {
       const documents = trackDocuments(page);
       let probes = 0;
       page.on("request", (request) => {
-        if (request.method() === "HEAD") {
+        if (request.headers()["x-openclaw-reachability-probe"] === "1") {
           probes += 1;
         }
       });
@@ -204,7 +260,7 @@ suite.define(() => {
       await installMockGateway(page, { awaitInitialRoster: false });
       await page.goto(`${suite.server.baseUrl}chat/main`);
       const error = page.locator(".lazy-view-error");
-      await error.getByText("Panel failed to load", { exact: true }).waitFor();
+      await error.getByText("Couldn’t load this panel.", { exact: true }).waitFor();
       expect(await error.getByRole("button", { name: "Retry", exact: true }).isVisible()).toBe(
         true,
       );
@@ -273,7 +329,7 @@ suite.define(() => {
           await composer.fill(draft);
           await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
           const failure = page.locator(".sidebar-region__right-runtime .lazy-view-error");
-          await failure.getByText("Panel failed to load", { exact: true }).waitFor();
+          await failure.getByText("Couldn’t load this panel.", { exact: true }).waitFor();
           expect(failedImports).toBe(1);
           const close = page.getByRole("button", { name: "Close Files", exact: true });
           expect(await close.count()).toBe(1);
@@ -308,33 +364,38 @@ suite.define(() => {
     },
   );
 
-  it.each(["login", "focus"] as const)("does not acquire the shell for %s", async (mode) => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const shellRequests: string[] = [];
-      page.on("request", (request) => {
-        if (shellModule.test(request.url())) {
-          shellRequests.push(request.url());
-        }
-      });
-      const gateway = await installMockGateway(page, {
-        awaitInitialRoster: false,
-        terminalEnabled: false,
-        ...(mode === "login" ? { deferredMethods: ["connect"] } : {}),
-      });
-      await page.goto(`${suite.server.baseUrl}${mode === "focus" ? "focus/terminal" : "new"}`);
-      await gateway.waitForRequest("connect");
-      if (mode === "login") {
-        await gateway.rejectDeferred("connect", {
-          code: "INVALID_REQUEST",
-          message: "token missing",
-          details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+  it.each(["login", "focus"] as const)(
+    "keeps %s outside the shell after admission",
+    async (mode) => {
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const shellRequests: string[] = [];
+        page.on("request", (request) => {
+          if (shellModule.test(request.url())) {
+            shellRequests.push(request.url());
+          }
         });
-        await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
-      } else {
-        await page.locator(".terminal-view-unavailable").waitFor();
-      }
-      expect(await page.locator("openclaw-app-shell").count()).toBe(0);
-      expect(shellRequests).toEqual([]);
-    });
-  });
+        const gateway = await installMockGateway(page, {
+          awaitInitialRoster: false,
+          terminalEnabled: false,
+          ...(mode === "login" ? { deferredMethods: ["connect"] } : {}),
+        });
+        await page.goto(`${suite.server.baseUrl}${mode === "focus" ? "focus/terminal" : "new"}`);
+        await gateway.waitForRequest("connect");
+        if (mode === "login") {
+          await page.locator("openclaw-app-shell").waitFor();
+          expect(shellRequests).toHaveLength(1);
+          await gateway.rejectDeferred("connect", {
+            code: "INVALID_REQUEST",
+            message: "token missing",
+            details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+          });
+          await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
+        } else {
+          await page.locator(".terminal-view-unavailable").waitFor();
+        }
+        expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+        expect(shellRequests).toHaveLength(mode === "login" ? 1 : 0);
+      });
+    },
+  );
 });

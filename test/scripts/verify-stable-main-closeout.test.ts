@@ -280,7 +280,7 @@ process.stdout.write('${"a".repeat(40)}\\n');
     bin,
     "gh",
     `
-const fs = require('node:fs');
+import fs from 'node:fs';
 const args = process.argv.slice(2);
 const releases = JSON.parse(fs.readFileSync(process.env.LINUX_CLOSEOUT_REMOTE, 'utf8'));
 function reply(value) { process.stdout.write(typeof value === 'string' ? value : JSON.stringify(value)); }

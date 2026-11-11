@@ -9,6 +9,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { requestCheckoutSnapshot } from "../../lib/checkout-snapshot.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -239,6 +240,11 @@ export class DraftPlaceBrowser {
     return this.projectSelection?.kind === "local" ? this.projectSelection.id : "";
   }
 
+  /** Remote and pasted repositories open through operator.write projectGitUrl. */
+  get canOpenRemoteProjects(): boolean {
+    return hasOperatorWriteAccess(this.read().context?.gateway.snapshot.hello?.auth ?? null);
+  }
+
   get remoteProject(): DraftRemoteProject | null {
     return this.projectSelection?.kind === "remote" ? this.projectSelection.project : null;
   }
@@ -351,8 +357,10 @@ export class DraftPlaceBrowser {
 
   resolveProjectRecents(params: {
     sessions: readonly {
+      deviceFolder?: unknown;
       execCwd?: unknown;
       execNode?: unknown;
+      spawnedCwd?: string;
       worktree?: { repoRoot?: unknown } | null;
     }[];
     workspace: string;
@@ -371,10 +379,20 @@ export class DraftPlaceBrowser {
     }
     const folders = new Set<string>();
     for (const row of params.sessions) {
+      // Host sessions persist their task cwd in spawnedCwd; device-folder paths
+      // live on the paired device, not this host, so they stay off folder chips.
       const folder =
-        normalizeOptionalString(row.execCwd) ?? normalizeOptionalString(row.worktree?.repoRoot);
+        normalizeOptionalString(row.execCwd) ??
+        normalizeOptionalString(row.worktree?.repoRoot) ??
+        row.spawnedCwd?.trim();
       const execNode = normalizeOptionalString(row.execNode);
-      if (!folder || execNode || folder === params.workspace || !allowGatewayFolder(folder)) {
+      if (
+        !folder ||
+        execNode ||
+        row.deviceFolder ||
+        folder === params.workspace ||
+        !allowGatewayFolder(folder)
+      ) {
         continue;
       }
       folders.add(folder);

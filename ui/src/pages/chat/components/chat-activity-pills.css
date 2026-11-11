@@ -157,15 +157,13 @@
   height: 14px;
   flex: none;
   color: var(--accent);
-  background: currentColor;
-  mask: var(--spinner-mask);
   border-radius: 999px;
   animation: btn-spinner-spin 1.6s linear infinite;
 }
 .chat-activity-pills .activity-pill__badge .activity-pill__spinner {
+  --spinner-art: var(--spinner-mask-small);
   width: 9px;
   height: 9px;
-  mask: var(--spinner-mask-small);
   animation-duration: 1.5s;
 }
 .chat-activity-pills [data-family="progress"] {
@@ -262,10 +260,16 @@
   left: 0;
   width: 100%;
   height: 6100%;
-  background: var(--accent);
-  mask: url("./chat-activity-pills-atlas.png") 0 0 / 100% 100% no-repeat;
   animation: activity-pill-frames 1.8s steps(60, end) infinite;
   will-change: transform;
+}
+/* The strip moves; its masked frames stay static inside it (see .btn__spinner). */
+.chat-activity-pills .activity-pill__atlas::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  mask: url("./chat-activity-pills-atlas.png") 0 0 / 100% 100% no-repeat;
 }
 .chat-activity-pills .activity-pill--attention::before {
   content: "";

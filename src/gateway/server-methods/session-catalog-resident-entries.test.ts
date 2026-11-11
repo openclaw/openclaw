@@ -17,7 +17,16 @@ import {
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  readAgentDatabaseAdmissionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../../state/agent-database-admission.js";
+import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import {
@@ -59,6 +68,7 @@ async function withCatalog(
     list: () => Promise<ReturnType<typeof vi.fn>>;
     setList: (list: SessionCatalogProvider["list"]) => void;
     projection: SessionRowProjection;
+    state: OpenClawTestState;
   }) => Promise<void>,
   options: { otherEntryCount?: number; agents?: OpenClawConfig["agents"] } = {},
 ) {
@@ -104,6 +114,7 @@ async function withCatalog(
     try {
       await run({
         projection,
+        state,
         setList: (list) => {
           provider.list = list;
         },
@@ -124,6 +135,69 @@ async function withCatalog(
     }
   });
 }
+
+it.each(["planning", "delivery"])(
+  "keeps healthy catalog entries when another configured agent is deleted before %s",
+  async (phase) => {
+    await withCatalog(
+      async ({ list, setList, projection, state }) => {
+        const retiringKey = "agent:retiring:adopted";
+        replaceSessionEntrySync(
+          { agentId: "retiring", sessionKey: retiringKey },
+          { ...original, sessionId: "retiring-instance" },
+        );
+        const pending = createAgentDatabaseInspectionRefusal({
+          agentId: "retiring",
+          paths: [],
+          reason: "Synthetic startup inspection",
+          pending: true,
+        });
+        const retire = () => {
+          recordAgentDatabaseAdmissions([pending], { source: "startup" });
+          beginAgentDeletionJournal({
+            agentId: "retiring",
+            operationId: "retiring-catalog",
+            agentDir: state.agentDir("retiring"),
+            workspaceDir: state.statePath("workspace-retiring"),
+            sessionsDir: state.sessionsDir("retiring"),
+            deleteFiles: false,
+            phase: "draining",
+          });
+          expect(readAgentDatabaseAdmissionRefusal("retiring")?.reason).toContain(
+            "deleted during startup inspection",
+          );
+        };
+        setList(async ({ sessionEntries }) => {
+          if (phase === "delivery") {
+            expect(sessionEntries!.entriesForAgent("retiring")).toHaveLength(1);
+            retire();
+          } else {
+            expect(sessionEntries!.entriesForAgent("retiring")).toEqual([]);
+            expect(sessionEntries!.entriesForCatalog?.().map((entry) => entry.sessionKey)).toEqual([
+              key,
+            ]);
+          }
+          return hosts([
+            session(),
+            session({ threadId: "retiring-thread", sessionKey: retiringKey }),
+          ]);
+        });
+        if (phase === "planning") {
+          retire();
+        }
+        const response = await list();
+        const returned = firstHost(response).sessions;
+        expect(returned[0]).toMatchObject({ sessionKey: key, createdActor: original.createdActor });
+        expect(returned[1]).not.toHaveProperty("sessionKey");
+        expect(returned[1]).not.toHaveProperty("createdActor");
+        expect(() => prepareSessionRowSelection(projection, { agentId: "retiring" })).toThrow(
+          "deleted during startup inspection",
+        );
+      },
+      { agents: { ownership: "explicit", entries: { main: {}, retiring: {} } } },
+    );
+  },
+);
 
 it("reads clean local catalog entries from the resident owner without SQLite", () =>
   withCatalog(async ({ list, setList }) => {

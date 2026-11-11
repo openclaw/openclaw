@@ -14,7 +14,10 @@ is a separate immediate-squash admission, not a fallback from auto/queue or a
 failed request. It verifies a prior successful CI attempt and its PR/head
 provenance, binds the reviewed prior-to-prepared delta and scoped-check
 attestations, and revalidates active organization/repository-admin authority and
-effective review rules. For attributed pre-existing failures only, it also
+effective review rules. The selected run's `head_sha` binds its tested commit;
+its associated PR number and base repository bind PR provenance. GitHub can
+refresh the nested PR head after a later push, so that snapshot does not identify
+the historical tested commit. For attributed pre-existing failures only, it also
 accepts repository write access plus active organization membership and the
 actual writer's live `always`/`pull_requests_only` bypass of every effective
 repository-owned CI-only ruleset. The ruleset must contain only GitHub Actions

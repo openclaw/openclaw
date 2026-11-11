@@ -157,7 +157,7 @@ it("dismisses the controlled Advanced page after a fork action", async () => {
   const mounted = mountSolid(() => page.content);
   flush();
   const fork = [...mounted.container.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.trim() === "Fork conversation",
+    (button) => button.textContent?.trim() === "Fork session",
   );
   expect(fork?.disabled).toBe(false);
   fork!.click();

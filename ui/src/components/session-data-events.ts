@@ -11,6 +11,7 @@ import type {
   SessionListSnapshot,
 } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { showToast } from "../lib/toast.ts";
 import type {
   SidebarSessionOwnerFilter,
   SidebarSessionStatusFilter,
@@ -38,31 +39,14 @@ type SidebarSessionListOwner = {
   sessionsLoading: boolean;
   sessionsStartupPending?: boolean;
   sessionMutationError: string | null;
+  sessionListError: string | null;
   expandedAgentId(): string;
   sessionListQuery(agentId: string): SessionListOptions;
   requestSessionDataUpdate(): void;
 };
 
-const sidebarSessionErrorOwners = new WeakMap<SidebarSessionListOwner, "list" | "action">();
-
-export function publishSidebarSessionError(
-  owner: SidebarSessionListOwner,
-  error: string | null,
-  source: "list" | "action",
-): void {
-  if (source === "list" && sidebarSessionErrorOwners.get(owner) === "action") {
-    return;
-  }
-  owner.sessionMutationError = error;
-  if (error === null) {
-    sidebarSessionErrorOwners.delete(owner);
-  } else {
-    sidebarSessionErrorOwners.set(owner, source);
-  }
-}
-
-export function clearSidebarSessionError(owner: SidebarSessionListOwner): void {
-  publishSidebarSessionError(owner, null, "action");
+export function clearSidebarSessionListError(owner: SidebarSessionListOwner): void {
+  owner.sessionListError = null;
   owner.requestSessionDataUpdate();
 }
 
@@ -74,8 +58,9 @@ export function publishScopedSessionError(
   error: unknown,
 ): void {
   if (owner.isSessionMutationScopeCurrent(scope)) {
-    publishSidebarSessionError(owner, formatUiError(error), "action");
-    owner.requestSessionDataUpdate();
+    // Action failures toast; dialogs read the retained message for their inline alert.
+    owner.sessionMutationError = formatUiError(error);
+    showToast({ severity: "error", placement: "top-right", message: owner.sessionMutationError });
   }
 }
 
@@ -167,7 +152,7 @@ export function subscribeFilteredSidebarSessions(
       return;
     }
     publishSidebarSessionList(owner, snapshot);
-    publishSidebarSessionError(owner, snapshot.error, "list");
+    owner.sessionListError = snapshot.error;
     owner.requestSessionDataUpdate();
   };
   const unsubscribe = sessions.subscribeList(scope, apply);
@@ -176,7 +161,7 @@ export function subscribeFilteredSidebarSessions(
     bootstrap?.cancelQueued(stop);
     unsubscribe();
     owner.sessionsStartupPending = false;
-    publishSidebarSessionError(owner, null, "list");
+    owner.sessionListError = null;
   };
   return stop;
 }

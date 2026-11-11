@@ -34,7 +34,11 @@ import {
 } from "./update-compat-chunks.test-support.js";
 export const it = baseIt.extend<{ tmp: string }>({
   tmp: async ({ task: _task }, use) => {
-    await withTestDir({ prefix: "openclaw-run-node-" }, use);
+    await withTestDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      // Model a standalone checkout even when the test temp root is inside another repository.
+      await fs.mkdir(path.join(tmp, ".git"));
+      await use(tmp);
+    });
   },
 });
 

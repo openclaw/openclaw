@@ -235,7 +235,6 @@ export type RetryOptions = RetryConfig & {
 
 export type RetryRuntime = {
   shouldRetry?: (err: unknown) => boolean;
-  sleep?: (ms: number) => Promise<void>;
   random?: () => number;
   createFailure?: (attemptErrors: readonly unknown[]) => Error;
 };
@@ -344,7 +343,6 @@ export function toRetryError(value: unknown, fallbackMessage = "Non-Error thrown
 }
 
 export function createRetryRunner(runtime: RetryRuntime = {}) {
-  const runtimeSleep = runtime.sleep ?? defaultSleep;
   const runtimeRandom = runtime.random ?? Math.random;
   const createFailure =
     runtime.createFailure ??
@@ -371,7 +369,7 @@ export function createRetryRunner(runtime: RetryRuntime = {}) {
             resolveRetryDelayMs(clampNumber(options.retryAfterMaxDelayMs, maxDelayMs, 0)),
           );
     const random = options.random ?? runtimeRandom;
-    const sleep = options.sleep ?? runtimeSleep;
+    const sleep = options.sleep ?? defaultSleep;
     const shouldRetry = options.shouldRetry ?? (() => true);
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -387,7 +385,7 @@ export function createRetryRunner(runtime: RetryRuntime = {}) {
           break;
         }
         if (numeric) {
-          await runtimeSleep(resolveRetryDelayMs(initialDelayMs * 2 ** (attempt - 1)));
+          await defaultSleep(resolveRetryDelayMs(initialDelayMs * 2 ** (attempt - 1)));
           continue;
         }
 

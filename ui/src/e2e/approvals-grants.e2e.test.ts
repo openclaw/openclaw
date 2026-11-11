@@ -24,6 +24,65 @@ const grant: ExecApprovalStandingGrant = {
   useCount: 3,
 };
 suite.define(() => {
+  it.each([390, 1200])("keeps history still when empty grants arrive at %ipx", async (width) => {
+    await suite.withPage(
+      { viewport: { width, height: 900 }, locale: "en-US", reducedMotion: "reduce" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          deferredMethods: ["exec.approval.grants.list"],
+          methodResponses: {
+            "exec.approval.grants.list": { grants: [] },
+            "approval.history": {
+              items: [
+                {
+                  id: "approval-resolved",
+                  status: "denied",
+                  presentation: {
+                    kind: "exec",
+                    commandText: "echo synthetic-history",
+                    allowedDecisions: ["deny"],
+                  },
+                  urlPath: "/approve/approval-resolved",
+                  createdAtMs: 1_000,
+                  expiresAtMs: 61_000,
+                  resolvedAtMs: 2_000,
+                  decision: "deny",
+                  reason: "user",
+                  source: { agentId: "main", sessionKey: "agent:main:synthetic" },
+                  resolver: { kind: "device", id: "synthetic-device" },
+                },
+              ],
+            },
+          },
+        });
+        await page.goto(new URL("settings/approvals", suite.server.baseUrl).href);
+        await gateway.waitForRequest("exec.approval.grants.list");
+        const grants = page.locator(".settings-section").filter({
+          has: page.getByRole("heading", { name: "Standing grants", exact: true }),
+        });
+        const history = page.locator(".settings-section").filter({
+          has: page.getByRole("heading", { name: "Approval history", exact: true }),
+        });
+        const log = history.getByRole("list", { name: "Approval history" });
+        await log.getByText("echo synthetic-history", { exact: true }).waitFor();
+        await grants.getByText("Unknown", { exact: true }).waitFor();
+        await page.evaluate(() => document.fonts.ready.then(() => undefined));
+        const top = () => history.evaluate((section) => section.getBoundingClientRect().top);
+        const initialTop = await top();
+        const initialLogTop = await log.evaluate((list) => list.getBoundingClientRect().top);
+        await gateway.resolveDeferred("exec.approval.grants.list");
+        await grants
+          .getByText(
+            "No standing grants yet. Choose Always allow on an automation approval to create one.",
+            { exact: true },
+          )
+          .waitFor();
+        expect(await top()).toBe(initialTop);
+        expect(await log.evaluate((list) => list.getBoundingClientRect().top)).toBe(initialLogTop);
+      },
+    );
+  });
+
   it.each([320, 390, 820, 1100, 1440])("shows grants as rows at %ipx", async (width) => {
     const command = `tar -czf /var/backups/${"workspace-".repeat(12)}.tgz ./workspace`;
     await suite.withPage(
