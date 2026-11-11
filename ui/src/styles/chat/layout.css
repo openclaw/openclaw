@@ -361,11 +361,7 @@ openclaw-pending-session-create {
 
 .chat-composer-neighbor-card.chat-cloud-disk-space-notice,
 .chat-composer-neighbor-card.chat-workspace-conflict-notice {
-  width: calc(100% - 36px);
-  max-width: var(--chat-thread-max-width, 48rem);
   margin: 8px auto 0;
-  background: var(--chat-composer-surface, var(--popover));
-  box-shadow: none;
   animation: none;
 }
 
@@ -518,7 +514,6 @@ openclaw-pending-session-create {
   .chat-model-recovery .chat-error__refresh {
     grid-column: 2;
     min-width: 0;
-    white-space: normal;
     overflow-wrap: anywhere;
   }
 
