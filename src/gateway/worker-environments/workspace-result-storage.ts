@@ -1,18 +1,36 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { runGit, requireGit } from "../../agents/worktrees/git.js";
+import { requireGit } from "../../agents/worktrees/git.js";
 import { hasErrnoCode } from "../../infra/errno.js";
-import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
+import {
+  findGitRoot,
+  readGitMetadataDirectories,
+  readGitDirectoryPointer,
+  readGitRefs,
+  resolveGitRefsBase,
+} from "../../infra/git-root.js";
 import { withWorkspaceResultRefMutation } from "./workspace-result-git.js";
 import {
-  requireWorkerResultStorageRef,
   isLocalWorkspaceBaseRefreshRef,
   WORKER_RESULT_REF_PREFIX,
   WORKER_RESULT_CANDIDATE_REF_PREFIX,
   WORKER_RESULT_CLEANUP_REF_PREFIX,
 } from "./workspace-result-inventory.js";
 
-const STORAGE_DIRECTORY = "openclaw-worker-results";
+const privateEnv: NodeJS.ProcessEnv = Object.fromEntries(
+  [
+    "DIR",
+    "COMMON_DIR",
+    "WORK_TREE",
+    "INDEX_FILE",
+    "OBJECT_DIRECTORY",
+    "ALTERNATE_OBJECT_DIRECTORIES",
+    "NAMESPACE",
+    "SHALLOW_FILE",
+    "GRAFT_FILE",
+    "REPLACE_REF_BASE",
+  ].map((name) => [`GIT_${name}`, undefined]),
+);
 
 export type WorkspaceResultStorage = {
   root: string;
@@ -20,142 +38,114 @@ export type WorkspaceResultStorage = {
   env?: NodeJS.ProcessEnv;
   commonDir?: string;
   isolated: boolean;
+  refs?: string[];
+  historyAlternates?: string;
 };
 
-function privateStorage(root: string, baseEnv: NodeJS.ProcessEnv): WorkspaceResultStorage {
-  // The Git worker broker owns baseEnv; explicit per-command deletions survive
-  // that boundary even when a pooled worker never inherited the parent's override.
-  const env: NodeJS.ProcessEnv = Object.fromEntries(
-    [
-      "DIR",
-      "COMMON_DIR",
-      "WORK_TREE",
-      "INDEX_FILE",
-      "OBJECT_DIRECTORY",
-      "ALTERNATE_OBJECT_DIRECTORIES",
-      "NAMESPACE",
-      "SHALLOW_FILE",
-      "GRAFT_FILE",
-      "REPLACE_REF_BASE",
-    ].map((name) => [`GIT_${name}`, undefined]),
-  );
-  return { root, commonDir: root, baseEnv: { ...baseEnv, ...env }, env, isolated: true };
-}
-
-function resultDirectory(gitDir: string, ref: string): string {
-  const identity = ref.slice(ref.lastIndexOf("/") + 1);
-  return path.join(
-    gitDir,
-    STORAGE_DIRECTORY,
-    isLocalWorkspaceBaseRefreshRef(ref) ? `base-refresh-${identity}` : `result-${identity}`,
-  );
-}
-
-async function repository(root: string, baseEnv: NodeJS.ProcessEnv) {
-  const probe = await runGit(root, ["rev-parse", "--absolute-git-dir", "--show-object-format"], {
-    baseEnv,
-    maxOutputBytes: 1024 * 1024,
-  });
-  if (probe.termination !== "exit" || probe.code !== 0) {
-    return undefined;
-  }
-  const output = probe.stdout.replace(/\r?\n$/u, "");
-  const separator = output.lastIndexOf("\n");
-  const common = output.slice(0, separator);
-  return {
-    gitDir: normalizeGitPathForFilesystem(
-      process.platform === "win32" ? common.replace(/\r$/u, "") : common,
-    ),
-    format: output.slice(separator + 1),
-  };
-}
-
-export async function resolveWorkspaceResultStorage(
-  root: string,
-  ref: string,
-): Promise<WorkspaceResultStorage> {
-  requireWorkerResultStorageRef(ref);
-  const baseEnv = { ...process.env };
-  const source = await repository(root, baseEnv);
-  if (source) {
-    const directory = resultDirectory(source.gitDir, ref);
-    try {
-      await fs.access(directory);
-      return privateStorage(directory, baseEnv);
-    } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
-    }
-  }
-  // Stable releases retained recovery/conflict refs in the original repository.
-  // Keep those readable until their existing settlement owner releases them.
-  return { root, baseEnv, isolated: false };
-}
-
-export async function createWorkspaceResultStorage(
-  root: string,
-  ref: string,
-  assertCurrent?: () => void,
-): Promise<WorkspaceResultStorage> {
-  requireWorkerResultStorageRef(ref);
-  const baseEnv = { ...process.env };
-  let source = await repository(root, baseEnv);
-  if (!source) {
-    assertCurrent?.();
-    await requireGit(root, ["init", "--quiet", "--object-format=sha1"], {
-      baseEnv,
-      beforeRun: assertCurrent,
-    });
-    source = (await repository(root, baseEnv))!;
-  }
-  const identity = ref.slice(ref.lastIndexOf("/") + 1);
-  const legacyRefs = isLocalWorkspaceBaseRefreshRef(ref)
+function resultRefs(ref: string): string[] {
+  return isLocalWorkspaceBaseRefreshRef(ref)
     ? [ref]
     : [
         WORKER_RESULT_REF_PREFIX,
         WORKER_RESULT_CANDIDATE_REF_PREFIX,
         WORKER_RESULT_CLEANUP_REF_PREFIX,
-      ].map((prefix) => `${prefix}/${identity}`);
-  if (
-    await requireGit(root, ["for-each-ref", "--count=1", "--format=%(refname)", ...legacyRefs], {
-      baseEnv,
-    })
-  ) {
-    // Pre-upgrade claims can retry their candidate after restart. Finish those
-    // in their original store so a private candidate cannot shadow retained refs.
-    return { root, baseEnv, isolated: false };
+      ].map((prefix) => `${prefix}/${ref.slice(ref.lastIndexOf("/") + 1)}`);
+}
+
+export async function resolveWorkspaceResultStorage(
+  root: string,
+  ref: string,
+  create?: { assertCurrent?: () => void },
+): Promise<WorkspaceResultStorage> {
+  const original: WorkspaceResultStorage = { root, baseEnv: { ...process.env }, isolated: false };
+  let source: { gitDir: string; commonDir: string } | undefined;
+  if (original.baseEnv.GIT_DIR !== undefined) {
+    let gitDir = path.resolve(root, original.baseEnv.GIT_DIR);
+    if ((await fs.stat(gitDir)).isFile()) {
+      gitDir = readGitDirectoryPointer(gitDir, "gitdir: ");
+    }
+    await fs.access(path.join(gitDir, "HEAD"));
+    source = { gitDir, commonDir: resolveGitRefsBase(path.join(gitDir, "HEAD")) };
+  } else {
+    source = readGitMetadataDirectories(root);
   }
-  const directory = resultDirectory(source.gitDir, ref);
-  const storage = privateStorage(directory, baseEnv);
-  assertCurrent?.();
-  await fs.mkdir(path.dirname(directory), { recursive: true, mode: 0o700 });
-  assertCurrent?.();
-  let created = false;
+  const repositoryRoot = source ? undefined : findGitRoot(root);
+  source ??= repositoryRoot ? readGitMetadataDirectories(repositoryRoot) : undefined;
+  if (repositoryRoot && !source) {
+    throw new Error("Cannot read workspace Git metadata");
+  }
+  if (!source && create) {
+    create.assertCurrent?.();
+    await requireGit(root, ["init", "--quiet", "--object-format=sha1"], {
+      baseEnv: original.baseEnv,
+      beforeRun: create.assertCurrent,
+    });
+    source = readGitMetadataDirectories(root)!;
+  }
+  if (!source) {
+    return original;
+  }
+  const commonDir = original.baseEnv.GIT_COMMON_DIR
+    ? path.resolve(root, original.baseEnv.GIT_COMMON_DIR)
+    : source.commonDir;
+  original.commonDir = commonDir;
+  const directory = path.join(
+    source.gitDir,
+    "openclaw-worker-results",
+    `${isLocalWorkspaceBaseRefreshRef(ref) ? "base-refresh" : "result"}-${ref.slice(ref.lastIndexOf("/") + 1)}`,
+  );
+  const storage: WorkspaceResultStorage = {
+    root: directory,
+    commonDir: directory,
+    baseEnv: original.baseEnv,
+    env: privateEnv,
+    isolated: true,
+    refs: resultRefs(ref),
+    historyAlternates: create
+      ? [
+          JSON.stringify(
+            path.resolve(
+              root,
+              original.baseEnv.GIT_OBJECT_DIRECTORY ?? path.join(commonDir, "objects"),
+            ),
+          ),
+          original.baseEnv.GIT_ALTERNATE_OBJECT_DIRECTORIES,
+        ]
+          .filter(Boolean)
+          .join(path.delimiter)
+      : undefined,
+  };
   try {
-    await fs.mkdir(directory, { mode: 0o700 });
-    created = true;
+    await fs.access(directory);
+    Object.assign(storage.baseEnv, privateEnv);
+    return storage;
   } catch (error) {
-    if (!hasErrnoCode(error, "EEXIST")) {
+    if (!hasErrnoCode(error, "ENOENT")) {
       throw error;
     }
   }
+  // Stable claims finish in their original store, including packed recovery refs.
+  if (!create || [...readGitRefs(commonDir, storage.refs!).values()].some(Boolean)) {
+    return original;
+  }
+  const format = await requireGit(root, ["rev-parse", "--show-object-format"], original);
+  create.assertCurrent?.();
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  Object.assign(storage.baseEnv, privateEnv);
   try {
     await requireGit(
       directory,
-      ["init", "--quiet", "--bare", "--template=", `--object-format=${source.format}`],
-      { baseEnv: storage.baseEnv, env: storage.env, beforeRun: assertCurrent },
+      ["init", "--quiet", "--bare", "--template=", `--object-format=${format}`],
+      { ...storage, beforeRun: create.assertCurrent },
     );
     return storage;
   } catch (error) {
-    if (created) {
-      await fs.rm(directory, { recursive: true, force: true });
-    }
+    await fs.rm(directory, { recursive: true, force: true });
     throw error;
   }
 }
 
-/** The same ref queue protects both the last-ref check and its object deletion. */
+/** The existing queue protects the last-ref decision and its object deletion. */
 export async function deleteEmptyWorkspaceResultStorage(
   storage: WorkspaceResultStorage,
 ): Promise<void> {
@@ -164,48 +154,11 @@ export async function deleteEmptyWorkspaceResultStorage(
   }
   await withWorkspaceResultRefMutation(
     storage.root,
-    async (baseEnv) => {
-      const ref = await requireGit(
-        storage.root,
-        ["for-each-ref", "--count=1", "--format=%(refname)"],
-        {
-          baseEnv,
-          env: storage.env,
-        },
-      );
-      if (!ref) {
+    async () => {
+      if (![...readGitRefs(storage.root, storage.refs!).values()].some(Boolean)) {
         await fs.rm(storage.root, { recursive: true, force: true });
       }
     },
-    { commonDir: storage.root, baseEnv: storage.baseEnv },
+    storage,
   );
-}
-
-export async function workspaceResultCleanupStores(
-  root: string,
-): Promise<WorkspaceResultStorage[]> {
-  const baseEnv = { ...process.env };
-  const source = await repository(root, baseEnv);
-  const stores: WorkspaceResultStorage[] = [{ root, baseEnv, isolated: false }];
-  if (!source) {
-    return stores;
-  }
-  // A linked worktree owns its results; scanning siblings here multiplies startup cleanup.
-  const directory = path.join(source.gitDir, STORAGE_DIRECTORY);
-  try {
-    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-      if (
-        !entry.isDirectory() ||
-        (!entry.name.startsWith("result-") && !entry.name.startsWith("base-refresh-"))
-      ) {
-        continue;
-      }
-      stores.push(privateStorage(path.join(directory, entry.name), baseEnv));
-    }
-  } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
-  }
-  return stores;
 }

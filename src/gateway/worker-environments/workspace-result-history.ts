@@ -2,7 +2,7 @@ import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { runCommandWithTimeout, runExec, spawnCommand } from "../../process/exec.js";
 import { MAX_WORKSPACE_RESULT_GIT_PACK_BYTES } from "../../worker/node-workspace-transfer-protocol.js";
@@ -25,35 +25,6 @@ import {
   type WorkspaceResultStorage,
 } from "./workspace-result-storage.js";
 
-async function historyEnvironment(
-  root: string,
-  privateEnv: NodeJS.ProcessEnv,
-  sourceEnv: NodeJS.ProcessEnv = process.env,
-): Promise<NodeJS.ProcessEnv> {
-  const objects = await runCommandWithTimeout(
-    workspaceResultGitCommand(root, [
-      "rev-parse",
-      "--path-format=absolute",
-      "--git-path",
-      "objects",
-    ]),
-    { timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS, baseEnv: sourceEnv },
-  );
-  if (objects.termination !== "exit" || objects.code !== 0) {
-    throw new Error(objects.stderr || "Cannot locate the workspace Git object store");
-  }
-  const directory = normalizeGitPathForFilesystem(objects.stdout.replace(/\r?\n$/u, ""));
-  return {
-    ...privateEnv,
-    GIT_ALTERNATE_OBJECT_DIRECTORIES: [
-      JSON.stringify(directory),
-      sourceEnv.GIT_ALTERNATE_OBJECT_DIRECTORIES,
-    ]
-      .filter(Boolean)
-      .join(path.delimiter),
-  };
-}
-
 export async function importWorkerWorkspaceHistory(params: {
   root: string;
   gitHistory?: WorkerWorkspaceGitHistory;
@@ -61,6 +32,7 @@ export async function importWorkerWorkspaceHistory(params: {
   assertCurrent?: () => void;
   baseEnv?: NodeJS.ProcessEnv;
   baseRoot?: string;
+  historyAlternates?: string;
 }): Promise<void> {
   const history = params.gitHistory;
   if (!history?.descendsFromBase || history.unavailableReason) {
@@ -88,38 +60,48 @@ export async function importWorkerWorkspaceHistory(params: {
   // Only authored-history validation borrows base objects. Synthetic snapshots
   // import without alternates so base GC cannot remove any retained result blob.
   const baseEnv = params.baseRoot
-    ? await historyEnvironment(params.baseRoot, params.baseEnv ?? process.env)
+    ? { ...params.baseEnv, GIT_ALTERNATE_OBJECT_DIRECTORIES: params.historyAlternates }
     : params.baseEnv;
-  const pack = await fs.open(params.gitPackPath, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const info = await pack.stat();
-    if (!info.isFile() || info.size > MAX_WORKSPACE_RESULT_GIT_PACK_BYTES) {
-      throw new Error("Cloud workspace Git pack exceeds its byte limit");
-    }
-    params.assertCurrent?.();
-    await runExec(
-      "git",
-      workspaceResultGitCommand(params.root, [
-        "index-pack",
-        "--stdin",
-        "--fix-thin",
-        "--strict",
-      ]).slice(1),
-      {
-        baseEnv,
-        stdinFileDescriptor: pack.fd,
-        timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
-        maxBuffer: 1024 * 1024,
-      },
-    );
-  } finally {
-    await pack.close();
+  await using pack = await fs.open(params.gitPackPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const info = await pack.stat();
+  if (!info.isFile() || info.size > MAX_WORKSPACE_RESULT_GIT_PACK_BYTES) {
+    throw new Error("Cloud workspace Git pack exceeds its byte limit");
   }
+  params.assertCurrent?.();
+  const { stdout } = await runExec(
+    "git",
+    workspaceResultGitCommand(params.root, [
+      "index-pack",
+      "--stdin",
+      "--fix-thin",
+      "--strict",
+    ]).slice(1),
+    {
+      baseEnv,
+      stdinFileDescriptor: pack.fd,
+      timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024,
+    },
+  );
+  const packHash = stdout.trim().split("\t")[1]!;
   // Verify the received graph, not just the worker's ancestry claim.
   await git(params.root, ["merge-base", "--is-ancestor", history.baseCommit, history.headCommit], {
     baseEnv,
   });
   params.assertCurrent?.();
+  if (params.baseRoot) {
+    // Retain the validated authored pack separately from synthetic result packs.
+    await fs
+      .link(
+        path.join(params.root, "objects", "pack", `pack-${packHash}.pack`),
+        path.join(params.root, `history-${history.headCommit}.pack`),
+      )
+      .catch((error: unknown) => {
+        if (!hasErrnoCode(error, "EEXIST")) {
+          throw error;
+        }
+      });
+  }
 }
 
 /** Reclaim advances only an unchanged managed branch; file reconciliation already ran. */
@@ -224,41 +206,20 @@ async function adoptWorkerWorkspaceHistory(params: {
       return fallback("the Gateway branch moved since dispatch");
     }
     if (params.historySource && head !== history.headCommit) {
-      const temporary = await fs.mkdtemp(
-        path.join(resolvePreferredOpenClawTmpDir(), "openclaw-workspace-history-"),
+      await using pack = await fs.open(
+        path.join(params.historySource.root, `history-${history.headCommit}.pack`),
+        "r",
       );
-      try {
-        const gitPackPath = path.join(temporary, "history.pack");
-        const historyEnv = await historyEnvironment(
-          params.root,
-          params.historySource.baseEnv,
+      params.assertCurrent?.();
+      await runExec(
+        "git",
+        workspaceResultGitCommand(params.root, ["index-pack", "--stdin", "--fix-thin"]).slice(1),
+        {
           baseEnv,
-        );
-        params.assertCurrent?.();
-        // Exclude the base and synthetic receipt; only authored commits enter
-        // the managed repository, immediately before its normal branch adoption.
-        await spawnCommand(
-          workspaceResultGitCommand(params.historySource.root, [
-            "pack-objects",
-            "--revs",
-            "--stdout",
-          ]),
-          {
-            baseEnv: historyEnv,
-            input: `${history.headCommit}\n^${history.baseCommit}\n`,
-            stdout: { file: gitPackPath },
-            executionTimeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
-          },
-        );
-        await importWorkerWorkspaceHistory({ ...params, gitPackPath, baseEnv });
-      } finally {
-        await fs.rm(temporary, { recursive: true, force: true });
-      }
-    } else {
-      await git(
-        params.root,
-        ["merge-base", "--is-ancestor", history.baseCommit, history.headCommit],
-        { baseEnv },
+          stdinFileDescriptor: pack.fd,
+          timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
+          maxBuffer: 1024 * 1024,
+        },
       );
     }
     const mergeIndex = ["read-tree", "-i", "-m", history.baseCommit, history.headCommit];

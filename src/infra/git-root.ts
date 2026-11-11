@@ -88,7 +88,7 @@ function readGitDirectoryPointerTarget(filePath: string, prefix = ""): string {
   return path.isAbsolute(target) ? target : `${path.dirname(filePath)}${path.sep}${target}`;
 }
 
-function readGitDirectoryPointer(filePath: string, prefix = ""): string {
+export function readGitDirectoryPointer(filePath: string, prefix = ""): string {
   return fs.realpathSync.native(readGitDirectoryPointerTarget(filePath, prefix));
 }
 

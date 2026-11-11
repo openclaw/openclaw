@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readGitRefs } from "../../infra/git-root.js";
 import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runCommandWithTimeout, runExec } from "../../process/exec.js";
+import { runExec } from "../../process/exec.js";
 import type { WorkerLocalWorkspaceReconcileRequest } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 import {
@@ -46,10 +47,8 @@ import {
   WORKER_RESULT_REF_PREFIX,
 } from "./workspace-result-inventory.js";
 import {
-  createWorkspaceResultStorage,
   resolveWorkspaceResultStorage,
   deleteEmptyWorkspaceResultStorage,
-  workspaceResultCleanupStores,
   type WorkspaceResultStorage,
 } from "./workspace-result-storage.js";
 export { adoptStagedWorkerWorkspaceHistory } from "./workspace-result-history.js";
@@ -95,67 +94,13 @@ export function isWorkerWorkspaceResultCleanupRef(ref: string): boolean {
   return ref.startsWith(`${WORKER_RESULT_CLEANUP_REF_PREFIX}/`);
 }
 
-async function hasGitAdminPath(root: string): Promise<boolean> {
-  let current = root;
-  while (true) {
-    try {
-      await fs.lstat(path.join(current, ".git"));
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      return false;
-    }
-    current = parent;
-  }
-}
-
 export async function hasWorkerWorkspaceResultRef(params: {
   root: string;
   stagedResultRef: string;
 }): Promise<boolean> {
-  let root: string;
-  try {
-    root = await fs.realpath(params.root);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
-  if (!(await hasGitAdminPath(root))) {
-    const bare = await runCommandWithTimeout(
-      gitCommand(root, ["rev-parse", "--is-bare-repository"]),
-      {
-        timeoutMs: PATCH_TIMEOUT_MS,
-        maxOutputBytes: 1024,
-      },
-    );
-    if (bare.termination !== "exit" || bare.code !== 0 || bare.stdout.trim() !== "true") {
-      return false;
-    }
-  }
-  const storage = await resolveWorkspaceResultStorage(root, params.stagedResultRef);
-  const result = await runCommandWithTimeout(
-    gitCommand(storage.root, [
-      "show-ref",
-      "--verify",
-      "--quiet",
-      requireWorkerResultStorageRef(params.stagedResultRef),
-    ]),
-    { timeoutMs: PATCH_TIMEOUT_MS, maxOutputBytes: 1024 * 1024, baseEnv: storage.baseEnv },
-  );
-  if (result.termination === "exit" && result.code === 0) {
-    return true;
-  }
-  if (result.termination === "exit" && result.code === 1) {
-    return false;
-  }
-  throw new Error((result.stderr || result.stdout || "git show-ref failed").trim());
+  const ref = requireWorkerResultStorageRef(params.stagedResultRef);
+  const storage = await resolveWorkspaceResultStorage(params.root, ref);
+  return Boolean(storage.commonDir && readGitRefs(storage.commonDir, [ref]).get(ref));
 }
 
 async function stageWorkerWorkspaceResult(
@@ -180,7 +125,9 @@ async function stageWorkerWorkspaceResult(
   try {
     storage = params.sharedResultStore
       ? { root, baseEnv: { ...process.env }, isolated: false }
-      : await createWorkspaceResultStorage(root, params.stagedResultRef, params.assertCurrent);
+      : await resolveWorkspaceResultStorage(root, params.stagedResultRef, {
+          assertCurrent: params.assertCurrent,
+        });
     const resultRoot = storage.root;
     const inputPath = path.join(temporary, "fast-import");
     await importWorkerWorkspaceHistory({
@@ -538,31 +485,22 @@ export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
   retainedRefs?: () => ReadonlySet<string> | Promise<ReadonlySet<string>>;
 }): Promise<void> {
   const root = await fs.realpath(params.root);
-  for (const storage of await workspaceResultCleanupStores(root)) {
-    const output = await requireGit(
-      storage.root,
-      ["for-each-ref", "--format=%(refname)", `${WORKER_RESULT_CLEANUP_REF_PREFIX}/`],
-      storage,
-    );
-    const cleanupRefs = output.split("\n").filter(Boolean);
-    if (cleanupRefs.length > 0) {
-      await updateWorkspaceResultRefs(
-        storage.root,
-        async () => {
-          // Read fences after inventory and the shared ref queue wait. Later
-          // claims cannot appear in these immutable claim refs.
-          const retainedRefs = await params.retainedRefs?.();
-          return cleanupRefs
-            .map(requireWorkerResultStorageRef)
-            .filter((ref) => !retainedRefs?.has(ref))
-            .map((ref) => ({ ref }));
-        },
-        undefined,
-        storage,
-      );
-    }
-    // Resume a crash after deleting the last cleanup ref but before removing its objects.
-    await deleteEmptyWorkspaceResultStorage(storage);
+  const output = await requireGit(root, [
+    "for-each-ref",
+    "--format=%(refname)",
+    `${WORKER_RESULT_CLEANUP_REF_PREFIX}/`,
+  ]);
+  const cleanupRefs = output.split("\n").filter(Boolean);
+  if (cleanupRefs.length > 0) {
+    await updateWorkspaceResultRefs(root, async () => {
+      // Read fences after inventory and the shared ref queue wait. Later
+      // claims cannot appear in these immutable claim refs.
+      const retainedRefs = await params.retainedRefs?.();
+      return cleanupRefs
+        .map(requireWorkerResultStorageRef)
+        .filter((ref) => !retainedRefs?.has(ref))
+        .map((ref) => ({ ref }));
+    });
   }
 }
 

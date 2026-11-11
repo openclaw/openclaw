@@ -7,6 +7,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { updateRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "../../agents/worktrees/service.js";
+import * as gitExec from "../../infra/git-exec.js";
 import * as processExec from "../../process/exec.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -52,7 +53,7 @@ async function repository() {
 }
 
 it("shares ref serialization and deferred retention between snapshots and result recovery", async () => {
-  let resultDiscoveries = 0;
+  let resultAdmissions = 0;
   vi.stubEnv("GIT_COMMON_DIR", undefined);
   const root = await repository();
   const other = await repository();
@@ -103,15 +104,15 @@ it("shares ref serialization and deferred retention between snapshots and result
       }
     }
     const result = await run(argv, options);
-    if (
-      commandRoot === linked &&
-      args[0] === "rev-parse" &&
-      args[1] === "--git-common-dir" &&
-      ++resultDiscoveries === 2
-    ) {
+    return result;
+  });
+  const enqueue = gitExec.enqueueGitRefMutation;
+  vi.spyOn(gitExec, "enqueueGitRefMutation").mockImplementation((cwd, common, use) => {
+    const queued = enqueue(cwd, common, use);
+    if (cwd === linked && ++resultAdmissions === 2) {
       discovered.resolve();
     }
-    return result;
+    return queued;
   });
   const pruning = service.gc();
   let move: Promise<string> | undefined;

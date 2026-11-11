@@ -474,11 +474,8 @@ describe("placement recovery session admission with persisted placements", () =>
       await coordinated.reconcileActive();
     }
     expect(inventoryRoots().toSorted()).toEqual(roots.toSorted());
-    // One storage discovery and inventory per checkout, plus the orphan's queue lookup/deletion.
-    expect(
-      gitSpawns().filter(([, child]) => child.spawnargs.includes("--absolute-git-dir")),
-    ).toHaveLength(roots.length);
-    expect(gitSpawns()).toHaveLength(roots.length * 2 + 2);
+    // One legacy inventory per checkout, plus the orphan's queue lookup/deletion.
+    expect(gitSpawns()).toHaveLength(roots.length + 2);
     expect(await readCleanupRef(orphanRoot)).toBe("");
   });
 

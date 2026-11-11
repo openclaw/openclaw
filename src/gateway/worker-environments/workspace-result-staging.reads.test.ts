@@ -50,6 +50,7 @@ type FixtureOptions = {
   objectFormat?: "sha1" | "sha256";
   linked?: boolean;
   isolated?: boolean;
+  redirected?: boolean | "gitfile";
 };
 function flipByte(bytes: Buffer, index: number, mask = 0xff) {
   bytes[index] = bytes[index]! ^ mask;
@@ -100,6 +101,7 @@ async function stagedFixture(
     objectFormat = "sha1",
     linked = false,
     isolated = false,
+    redirected = false,
   }: FixtureOptions = {},
 ) {
   const root = await fs.realpath(tempDirs.make("workspace-staged-reads-"));
@@ -137,6 +139,18 @@ async function stagedFixture(
     await git(repository, ["worktree", "add", "--quiet", "--detach", "--", linkedRoot, "HEAD"]);
     vi.stubEnv("GIT_COMMON_DIR", path.relative(linkedRoot, path.join(repository, ".git")));
     repository = linkedRoot;
+  }
+  if (redirected) {
+    const gitDir =
+      redirected === "gitfile"
+        ? path.join(repository, ".git")
+        : await git(repository, ["rev-parse", "--absolute-git-dir"]);
+    const cwd = path.join(root, "unrelated-cwd");
+    await fs.mkdir(cwd);
+    vi.stubEnv("GIT_COMMON_DIR", undefined);
+    await git(cwd, ["init", "--quiet", "--template="]);
+    vi.stubEnv("GIT_DIR", path.relative(cwd, gitDir));
+    repository = cwd;
   }
   const originalHead = linked ? await git(repository, ["rev-parse", "HEAD"]) : undefined;
   const originalObjects = isolated ? await git(repository, ["count-objects", "-v"]) : undefined;
@@ -189,10 +203,15 @@ async function stagedFixture(
   };
 }
 
-it.each([1, 300])(
-  "releases a %i-file result without adding objects to a linked workspace's base",
-  async (fileCount) => {
-    const fixture = await stagedFixture(fileCount, { linked: true, isolated: true });
+it.each([
+  [1, false],
+  [300, false],
+  [1, true],
+  [1, "gitfile"],
+] as const)(
+  "releases a %i-file result without base objects (GIT_DIR redirect: %s)",
+  async (fileCount, redirected) => {
+    const fixture = await stagedFixture(fileCount, { linked: true, isolated: true, redirected });
     await fixture.read(async (snapshot) => {
       expect(await fs.readFile(path.join(snapshot.stagingRoot, "file-000.txt"), "utf8")).toBe(
         "payload 0\n",
@@ -346,6 +365,8 @@ it("isolates cancellation and releases failed staged reads for retry", async () 
 
 it.each<[number, number, FixtureOptions]>([
   [64, 4, { linked: true }],
+  [0, 4, { linked: true, redirected: true }],
+  [0, 4, { linked: true, redirected: "gitfile" }],
   [300, 6, {}],
   [0, 4, { largeFileBytes: 64 * 1024 * 1024 }],
   [0, 4, { objectFormat: "sha256" }],

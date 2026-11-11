@@ -464,7 +464,7 @@ it.each([false, true])(
   },
 );
 
-it("does not sweep cleanup refs retained by another pending result", async () => {
+it("discovers a private cleanup store only when its receipt releases it", async () => {
   const fixture = await resultFixture("retained-cleanup", {}, { "result.txt": "worker\n" });
   const stagedResultRef = fixture.ref;
   await gitInit(local);
@@ -485,11 +485,13 @@ it("does not sweep cleanup refs retained by another pending result", async () =>
   await expect(hasRef(cleanupRef)).resolves.toBe(true);
 
   await deleteWorkerWorkspaceResultCleanupRefs({ root: local });
+  await expect(hasRef(cleanupRef)).resolves.toBe(true);
+  await deleteStagedWorkerWorkspaceResult({ root: local, stagedResultRef: cleanupRef });
   await expect(hasRef(cleanupRef)).resolves.toBe(false);
 });
 
 it.each([false, true])(
-  "reclaims private objects after interrupted last-ref cleanup (base refresh: %s)",
+  "retries receipt-owned last-ref cleanup after interruption (base refresh: %s)",
   async (refresh) => {
     const fixture = await resultFixture("interrupted-cleanup", {}, { "result.txt": "worker\n" });
     if (refresh) {
@@ -502,7 +504,7 @@ it.each([false, true])(
       { timeoutMs: 10_000, baseEnv: storage.baseEnv },
     );
     expect(removed.code).toBe(0);
-    await deleteWorkerWorkspaceResultCleanupRefs({ root: local });
+    await deleteStagedWorkerWorkspaceResult({ root: local, stagedResultRef: fixture.ref });
     await expect(fs.stat(storage.root)).rejects.toMatchObject({ code: "ENOENT" });
   },
 );
