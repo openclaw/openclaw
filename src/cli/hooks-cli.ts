@@ -498,6 +498,7 @@ export function registerHooksCli(program: Command): void {
             params: {},
             target: `hook "${name}"`,
             onForeignOwner: "refuse",
+            onlineAlternative: `While the Gateway is running, use \`${formatCliCommand(`openclaw config set hooks.internal.entries.${name}.enabled ${enabled}`)}\` instead; the Gateway hot-reloads the change without a restart.`,
             runLocal: async ({ assertCurrent }) => {
               const committed = await transformConfigFile({
                 writeOptions: { assertConfigPathForWrite: assertCurrent },

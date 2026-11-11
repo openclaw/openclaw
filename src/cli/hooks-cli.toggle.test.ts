@@ -246,11 +246,22 @@ describe("hooks CLI metadata config keys", () => {
     readConfigMachineStateMock.mockReturnValue(undefined);
   });
 
-  it("refuses hook enable while the Gateway owns state", async () => {
-    mocks.foreignOwner = true;
-    await expect(runHooks("enable", "display-name")).rejects.toThrow("stop the Gateway");
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-  });
+  it.each([
+    { action: "enable", value: true },
+    { action: "disable", value: false },
+  ])(
+    "refuses hook $action while the Gateway owns state and names the online config command",
+    async ({ action, value }) => {
+      mocks.foreignOwner = true;
+      const error = await runHooks(action, "display-name").catch((err: unknown) => err);
+      expect(error).toMatchObject({ code: "OWNER_UNAVAILABLE" });
+      expect(String((error as Error).message)).toContain("stop the Gateway");
+      expect(String((error as Error).message)).toContain(
+        `openclaw config set hooks.internal.entries.display-name.enabled ${value}`,
+      );
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects the ambiguous hook identifier shared-key without mutation", async () => {
     mocks.buildWorkspaceHookStatus.mockReturnValue({
