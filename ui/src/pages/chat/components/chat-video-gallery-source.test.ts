@@ -100,6 +100,7 @@ it("renews a selected video's ticket without interrupting playback and releases 
       artifactId: "synthetic-video",
       label: "Clip",
       mimeType: "video/mp4",
+      playback: "native",
     },
   };
   const opened = await open(first, resolve, [first, next]);
@@ -190,7 +191,13 @@ it("explicit retry clears a cached recoverable neighbor failure through its sour
   const url = "/api/chat/media/outgoing/agent%3Amain%3Amain/" + crypto.randomUUID() + "/full";
   const next: AttachmentItem = {
     type: "attachment",
-    attachment: { kind: "video", url, artifactId: "synthetic-retry", label: "Next" },
+    attachment: {
+      kind: "video",
+      url,
+      artifactId: "synthetic-retry",
+      label: "Next",
+      playback: "native",
+    },
   };
   const resolve = vi
     .fn()

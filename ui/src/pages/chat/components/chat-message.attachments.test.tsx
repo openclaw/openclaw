@@ -268,7 +268,10 @@ describe("grouped chat attachments", () => {
     renderReactiveAssistant(
       () =>
         createAssistantMessage([
-          createAttachmentBlock(source, "audio", "clip.mp3", "audio/mpeg", { artifactId }),
+          createAttachmentBlock(source, "audio", "clip.mp3", "audio/mpeg", {
+            artifactId,
+            playback: "native",
+          }),
         ]),
       {
         resolveArtifactDownload,
