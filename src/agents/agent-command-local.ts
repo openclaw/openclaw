@@ -28,7 +28,7 @@ import {
 } from "./cron-creator-authority-context.js";
 import { scopePreparedModelRuntimeLease } from "./prepared-model-runtime-generation-scope.js";
 import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
-import { runOwnedAgentCleanup } from "./run-cleanup-timeout.js";
+import { runAgentCleanupStep } from "./run-cleanup-timeout.js";
 import { measureAgentStartup } from "./startup-timing.js";
 
 type ResolvedAgentCommandDeps = Awaited<ReturnType<typeof resolveAgentCommandDeps>>;
@@ -121,11 +121,10 @@ export async function runLocalAgentCommand<TResult>(params: {
                         );
                       } finally {
                         if (opts.cleanupMemoryOnRunEnd) {
-                          // Keep indexing in its generation; the caller consumes any failure receipt.
-                          await runOwnedAgentCleanup({
+                          // Drain indexing in its generation; a failure keeps temporary state.
+                          await runAgentCleanupStep({
                             runId: prepared.runId,
                             sessionId: prepared.sessionId,
-                            oneShotCliRun: opts.oneShotCliRun,
                             step: "memory-search-managers",
                             cleanup: async () => {
                               const { closeActiveMemorySearchManagersCore } =
@@ -133,7 +132,7 @@ export async function runLocalAgentCommand<TResult>(params: {
                               await closeActiveMemorySearchManagersCore();
                             },
                             log: { warn: (message) => params.runtime.error(message) },
-                          }).catch(() => undefined);
+                          });
                         }
                       }
                     }),
