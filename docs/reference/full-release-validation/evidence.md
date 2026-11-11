@@ -83,6 +83,13 @@ claim completion of excluded packages. Before core publication, a full-scope
 parent waits for recovery of the complete original roster. Manual recovery without
 parent inputs retains the existing full-roster behavior.
 
+Recovery records a validated successor attempt in its existing result artifact
+before waiting for publication. Parent-requested recovery also updates the
+postpublish evidence attempt roster. A timeout or failed observation preserves
+the last observed status with incomplete evidence; it does not mean the accepted
+attempt disappeared or permit replacement publication. The original sealed
+manifest remains unchanged.
+
 When authenticated job evidence proves that the original publisher never ran,
 the parent can instead restore the original sealed package bytes through the
 existing prepared-artifact consumer. Successful original pack jobs authenticate
