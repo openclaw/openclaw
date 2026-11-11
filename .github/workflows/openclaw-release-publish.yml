@@ -2076,7 +2076,10 @@ jobs:
             parentWorkflow: '.github/workflows/openclaw-release-publish.yml',
             toolingRef: env.GITHUB_REF_NAME, toolingFullRef: env.GITHUB_REF,
             toolingSha: env.GITHUB_WORKFLOW_SHA, candidateSha: env.TARGET_SHA,
-            ...(env.DEFER_CLAWHUB === 'true' ? { clawHubDeferred: true } : {}),
+            // Core completion cannot attest to the independent registry lane.
+            ...(env.DEFER_CLAWHUB === 'true' ||
+                (env.CLAWHUB_ONLY !== 'true' && env.RELEASE_NPM_DIST_TAG !== 'extended-stable')
+              ? { clawHubDeferred: true } : {}),
             normalClawHubRunId: env.NORMAL_CLAWHUB_RUN_ID || null,
             normalClawHubRunAttempt: env.NORMAL_CLAWHUB_RUN_ID ? '1' : null,
           }) + '\n', { flag: 'wx' });
