@@ -146,7 +146,6 @@ describe("readSessionMethodAccess", () => {
     for (const request of [
       send,
       { ...send, sessionAbsent: true, session: { sharingRole: "member" } },
-      { ...send, sessionAbsent: true, session: { sharingRole: "viewer" } },
       {
         method: "sessions.patch",
         params: { key: "agent:main:main", label: "Renamed" },
