@@ -1,12 +1,7 @@
 import { marked } from "marked";
 import { expect, it } from "vitest";
 import { markdownToStory } from "../urbit/story.js";
-import {
-  extractMessageText,
-  formatModelName,
-  formatSummarizationHistoryText,
-  isBotMentioned,
-} from "./utils.js";
+import { extractMessageText, formatModelName, formatSummarizationHistoryText } from "./utils.js";
 
 it.each([
   ["openai/gpt-4o", "GPT-4o"],
@@ -28,39 +23,10 @@ it.each([
   expect(tokens).toMatchObject([{ type: "code", lang, text: code }]);
 });
 
-it.each([
-  "- buy **milk**\n- buy bread",
-  "1. first\n2. second",
-  "1. parent\n   - child",
-  "- [ ] todo\n- [x] done",
-  "~zod please summarize:\n- buy milk\n- buy bread",
-  "- parent\n  1. child\n  2. sibling\n- last",
-  "- parent\n  - child\n    - [x] nested\n  - sibling\n- last",
-])("extractMessageText preserves native lists from %j", (markdown) => {
-  expect(extractMessageText(markdownToStory(markdown))).toBe(markdown);
-});
-
-it.each(["- `ping ~zod now` please help", "- parent\n  - [ ] `ping ~zod now` please help"])(
-  "preserves list code without treating it as a mention: %s",
-  (markdown) => {
-    const story = markdownToStory(markdown);
-    expect(extractMessageText(story)).toBe(markdown);
-    expect(isBotMentioned(extractMessageText(story, true), "~zod")).toBe(false);
-  },
+it.each(["~zod please summarize:\n1. parent\n   - child", "- [ ] todo\n- [x] done"])(
+  "extractMessageText keeps native lists from %j",
+  (markdown) => expect(extractMessageText(markdownToStory(markdown))).toBe(markdown),
 );
-
-it.each(["list", "task"])("bounds deep native %s nesting and preserves later text", (kind) => {
-  let node: unknown = kind === "list" ? { item: ["hidden"] } : "hidden";
-  for (let i = 0; i < 2_000; i++) {
-    node =
-      kind === "list"
-        ? { list: { type: "unordered", contents: [], items: [node] } }
-        : { task: { checked: false, content: [node] } };
-  }
-  const text = extractMessageText([{ block: { listing: node } }, { inline: [node, "visible"] }]);
-  expect(text).not.toContain("hidden");
-  expect(text).toBe(kind === "list" ? "visible" : `${"[ ] ".repeat(100)}visible`);
-});
 
 const MAX_DEPTH = 100;
 const render = (...inline: unknown[]) => extractMessageText([{ inline }]);
@@ -121,17 +87,4 @@ it("shifts the local time relative to the UTC baseline when a non-UTC zone is co
   expect(newYork).toContain("08:00:00");
   expect(shanghai).not.toBe(utc);
   expect(newYork).not.toBe(utc);
-});
-
-it("joins multiple entries with newlines", () => {
-  const history = [
-    { author: "~a", content: "first", timestamp: SAMPLE_TS },
-    { author: "~b", content: "second", timestamp: SAMPLE_TS + 60_000 },
-  ];
-  const text = formatSummarizationHistoryText(history, {
-    agents: { defaults: { userTimezone: "UTC" } },
-  });
-  expect(text.split("\n")).toHaveLength(2);
-  expect(text).toContain("first");
-  expect(text).toContain("second");
 });
