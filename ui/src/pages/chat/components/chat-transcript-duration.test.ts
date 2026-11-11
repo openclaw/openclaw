@@ -129,7 +129,7 @@ it.each([
     expect(container.textContent).toContain("Finished " + runId);
     expect(container.textContent).not.toContain("Done in");
     expect(container.textContent).not.toContain("13 seconds");
-    expect(container.querySelector(".msg-meta__duration")?.textContent).toBe("Duration: 13s");
+    expect(container.querySelector(".msg-meta__duration")?.textContent).toBe("Worked for 13s");
   },
 );
 
@@ -146,18 +146,18 @@ it("keeps consecutive plain replies tied to their own timing facts", async () =>
   await flushDeferredRowPrune();
   const durations = () =>
     [...container.querySelectorAll(".msg-meta__duration")].map((node) => node.textContent);
-  expect(durations()).toEqual(["Duration: 8s", "Duration: 20s"]);
+  expect(durations()).toEqual(["Worked for 8s", "Worked for 20s"]);
   props.selectedSession = session("unrelated", 99_000, { key: props.sessionKey });
   rerender();
-  expect(durations()).toEqual(["Duration: 8s", "Duration: 5s"]);
+  expect(durations()).toEqual(["Worked for 8s", "Worked for 5s"]);
   for (const runtimeMs of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
     props.selectedSession = { ...session("second", 0), runtimeMs };
     rerender();
-    expect(durations()).toEqual(["Duration: 8s"]);
+    expect(durations()).toEqual(["Worked for 8s"]);
   }
   props.selectedSession = session("second", 20_000, { status: "running" });
   rerender();
-  expect(durations()).toEqual(["Duration: 8s"]);
+  expect(durations()).toEqual(["Worked for 8s"]);
   props.selectedSession = session("second", 20_000, { key: "agent:main:dashboard:other" });
   rerender();
   expect(durations()).toEqual([]);
@@ -203,7 +203,7 @@ it("uses matching lifecycle duration, not final-message creation time", async ()
     expect(duration()).toBe(expected);
   };
   expect(duration()).toBe("Worked for 27m 35s");
-  expect(container.querySelector(".msg-meta__duration")?.textContent).toBe("Duration: 27m 35s");
+  expect(container.querySelector(".msg-meta__duration")?.textContent).toBe("Worked for 27m 35s");
   props.transcriptMetadata = undefined;
   props.selectedSession = liveSession;
   props.selectedSession.runtimeMs = 1_660_000;

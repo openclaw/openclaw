@@ -53,7 +53,7 @@ it("adds and removes usage and duration on a retained plain timestamp", () => {
   expect(view.container.querySelector("openclaw-tooltip")).toBe(tooltip);
   setDuration(13_000);
   flush();
-  expect(view.container.querySelector(".msg-meta__duration")?.textContent).toBe("Duration: 13s");
+  expect(view.container.querySelector(".msg-meta__duration")?.textContent).toBe("Worked for 13s");
   for (const unavailable of [undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
     setDuration(unavailable);
     flush();

@@ -67,7 +67,7 @@ const enChatMessageMetadata = {
       tooLargeToDisplay: en.chat.messages.tooLargeToDisplay,
       unknownDate: "Unknown date",
       usageUnavailable: "Token usage and cost unavailable",
-      turnDuration: "Duration: {duration}",
+      turnDuration: "Worked for {duration}",
       unattributedSender: en.chat.messages.unattributedSender,
       toolSender: en.chat.messages.toolSender,
       errorSender: en.chat.messages.errorSender,
