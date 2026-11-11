@@ -141,6 +141,7 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
               const result = await fetchWithSsrFGuard({
                 url: candidate.url,
                 timeoutMs: timeoutMs(),
+                dispatcherPolicy: { mode: "env-proxy" },
                 auditContext: "fal-music-download",
               });
               try {
