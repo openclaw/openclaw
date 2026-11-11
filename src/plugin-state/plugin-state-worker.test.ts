@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { deserialize, serialize } from "node:v8";
 import { threadId, Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, vi } from "vitest";
+import { afterEach, assert, describe, expect, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -887,6 +887,7 @@ it.for(["none", "rebind", "detach", "expired"] as const)(
       boundAt: 1,
     };
     const binding = await bindCurrentConversationRecordAsync({ record: requested });
+    assert(binding, "The fixture binding must persist before testing commit authority");
     const source = captureOpenClawStateWorkerContext({ env: state.env });
     if (change === "detach") {
       await removeCurrentConversationBindingsAsync({ conversation });
