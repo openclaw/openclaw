@@ -271,11 +271,13 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
     const contained =
       result.installed && (await hasContainedVirtualStore(directory, identity.docker.workdir));
     templateGuard.commitGuard();
-    const valid = await validateTemplate(
-      directory,
-      params.baseCommit,
-      templateGuard,
-      contained ? "dependencies" : "source-only",
+    const valid = await timeWorktreePreparationPhase("templateValidateOutput", () =>
+      validateTemplate(
+        directory,
+        params.baseCommit,
+        templateGuard,
+        contained ? "dependencies" : "source-only",
+      ),
     );
     if (contained && valid) {
       log.info("sandbox dependency template prepared for the selected commit");
@@ -352,7 +354,9 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
       ) {
         return false;
       }
-      await backend.cloneTemplate(existing.path, preparing.path, templateOptions);
+      await timeWorktreePreparationPhase("templateClone", () =>
+        backend.cloneTemplate(existing.path, preparing.path, templateOptions),
+      );
       await prepare(preparing.path, templateOptions, existing.sourceCommit);
       await prepareManifest(preparing, templateOptions);
       return true;
