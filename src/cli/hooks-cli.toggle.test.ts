@@ -255,13 +255,52 @@ describe("hooks CLI metadata config keys", () => {
       mocks.foreignOwner = true;
       const error = await runHooks(action, "display-name").catch((err: unknown) => err);
       expect(error).toMatchObject({ code: "OWNER_UNAVAILABLE" });
-      expect(String((error as Error).message)).toContain("stop the Gateway");
-      expect(String((error as Error).message)).toContain(
-        `openclaw config set hooks.internal.entries.display-name.enabled ${value}`,
+      const message = String((error as Error).message);
+      expect(message).toContain("stop the Gateway");
+      expect(message).toContain(
+        `openclaw config set hooks.internal.entries.metadata-key.enabled ${value}`,
       );
+      // Enabling also needs the master switch: the entry-only write succeeds
+      // but leaves every internal hook disabled while it is false.
+      if (value) {
+        expect(message).toContain("openclaw config set hooks.internal.enabled true");
+      } else {
+        expect(message).not.toContain("openclaw config set hooks.internal.enabled true");
+      }
+      // The hot-reload promise is qualified by the reload mode.
+      expect(message).toContain("gateway.reload.mode=off");
+      expect(message).toContain("restart the Gateway");
       expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     },
   );
+
+  it("points an unknown hook at key discovery instead of a typed config path", async () => {
+    mocks.foreignOwner = true;
+    mocks.buildWorkspaceHookStatus.mockReturnValue({ ...report, hooks: [] });
+    const error = await runHooks("enable", "missing-hook").catch((err: unknown) => err);
+    expect(error).toMatchObject({ code: "OWNER_UNAVAILABLE" });
+    const message = String((error as Error).message);
+    expect(message).toContain("openclaw hooks info missing-hook --json");
+    expect(message).toContain("hookKey");
+    expect(message).not.toContain("entries.missing-hook.enabled");
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("surfaces an ambiguous hook identifier while the Gateway owns state", async () => {
+    mocks.foreignOwner = true;
+    mocks.buildWorkspaceHookStatus.mockReturnValue({
+      ...report,
+      hooks: [
+        { ...hook, name: "first-hook", hookKey: "shared-key" },
+        { ...hook, name: "second-hook", hookKey: "shared-key" },
+      ],
+    });
+    await expectToggleFailure(
+      "disable",
+      "shared-key",
+      'Error: Hook "shared-key" is ambiguous; matches: first-hook (shared-key), second-hook (shared-key). Use a unique hook name or hook key.',
+    );
+  });
 
   it("rejects the ambiguous hook identifier shared-key without mutation", async () => {
     mocks.buildWorkspaceHookStatus.mockReturnValue({
