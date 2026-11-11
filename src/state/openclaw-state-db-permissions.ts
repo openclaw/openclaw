@@ -6,9 +6,13 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readdirSync,
   statSync,
+  type Dirent,
+  type Stats,
 } from "node:fs";
 import path from "node:path";
+import { isManagedGitHubProfileId } from "../config/github-identity-profile-id.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -64,6 +68,9 @@ const PRIVATE_STATE_STORES = Object.freeze([
 
 /** Mirrors resolveUpdateCaptureRoot, which is a hard sibling of the state directory. */
 const UPDATE_CAPTURE_ROOT_SUFFIX = ".update-captures";
+
+/** Mirrors resolveManagedGitHubAgentKey, which hashes an agent id into this name. */
+const MANAGED_GITHUB_AGENT_KEY_PATTERN = /^[a-f0-9]{64}$/u;
 
 // Restoration binds every mutation to an open descriptor. Pathname chmod
 // re-resolves each component, so an alias introduced above or at the target
@@ -183,13 +190,16 @@ function restoreAdmittedModeSync(
 }
 
 /**
- * Restores a store directory, then the database files it is admitted to hold.
+ * Restores a store directory, then the files it is admitted to hold.
  *
  * Admitting the directory decides whether its children may be touched at all:
  * a refused directory may be an alias, and a pathname below it would resolve
  * through that alias to an object this installation does not own.
  */
-function restoreStoreDirectorySync(directory: string, files: readonly string[]): void {
+function restoreStoreSync(
+  directory: string,
+  candidates: (directory: string) => readonly string[],
+): void {
   const directoryFd = openStorePathSync(directory, true);
   if (directoryFd === undefined) {
     return;
@@ -198,27 +208,175 @@ function restoreStoreDirectorySync(directory: string, files: readonly string[]):
     if (!restoreAdmittedModeSync(directoryFd, directory, OPENCLAW_STATE_DIR_MODE, "directory")) {
       return;
     }
-    for (const file of files) {
-      for (const candidate of resolveSqliteDatabaseFilePaths(path.join(directory, file))) {
-        // A pathname below the admitted directory is only safe while that
-        // directory still occupies the path it was admitted at.
-        if (!describesSamePathSync(directoryFd, directory)) {
-          return;
-        }
-        const fileFd = openStorePathSync(candidate, false);
-        if (fileFd === undefined) {
-          continue;
-        }
-        try {
-          restoreAdmittedModeSync(fileFd, candidate, OPENCLAW_STATE_FILE_MODE, "file");
-        } finally {
-          closeSync(fileFd);
-        }
+    for (const candidate of candidates(directory)) {
+      // A pathname below the admitted directory is only safe while that
+      // directory still occupies the path it was admitted at.
+      if (!describesSamePathSync(directoryFd, directory)) {
+        return;
+      }
+      const fileFd = openStorePathSync(candidate, false);
+      if (fileFd === undefined) {
+        continue;
+      }
+      try {
+        restoreAdmittedModeSync(fileFd, candidate, OPENCLAW_STATE_FILE_MODE, "file");
+      } finally {
+        closeSync(fileFd);
       }
     }
   } finally {
     closeSync(directoryFd);
   }
+}
+
+/** Restores a store directory and the SQLite database files it is admitted to hold. */
+function restoreStoreDirectorySync(directory: string, files: readonly string[]): void {
+  restoreStoreSync(directory, (storeDir) =>
+    files.flatMap((file) => resolveSqliteDatabaseFilePaths(path.join(storeDir, file))),
+  );
+}
+
+/** Entries of a directory this repair may read, or none when it is absent or unreadable. */
+function readDirectorySync(directory: string): Dirent[] {
+  try {
+    return readdirSync(directory, { withFileTypes: true });
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
+      return [];
+    }
+    // Reading a store this process cannot enter leaves it exactly as found;
+    // permission hardening stays best-effort and must not take the gateway
+    // down (#91919). Unexpected failures still throw so hardening stays loud.
+    if (!hasErrnoCode(error, "EACCES") && !hasErrnoCode(error, "EPERM")) {
+      throw error;
+    }
+    if (!chmodWarnedTargets.check(directory)) {
+      stateDbLog.warn(`skipped permission restore for ${directory}: ${String(error)}`);
+    }
+    return [];
+  }
+}
+
+/**
+ * Directory names under a container that a store owner minted and still accepts.
+ *
+ * The container is not private itself: a remount widens it with the rest of the
+ * volume and nothing reads its mode. It only has to still be the directory this
+ * path names, so a symlinked scope ends the search instead of lending the
+ * repair to another tree.
+ */
+function listMintedStoreDirectoriesSync(
+  container: string,
+  accepts: (name: string) => boolean,
+): string[] {
+  const containerFd = openStorePathSync(container, true);
+  if (containerFd === undefined) {
+    return [];
+  }
+  try {
+    if (!describesSamePathSync(containerFd, container)) {
+      return [];
+    }
+    return readDirectorySync(container)
+      .filter((entry) => entry.isDirectory() && accepts(entry.name))
+      .map((entry) => entry.name);
+  } finally {
+    closeSync(containerFd);
+  }
+}
+
+/**
+ * Restores a store whose owner mints its directory and file names at runtime.
+ *
+ * The admitted directory is the whole store, so every regular file directly
+ * inside it belongs to that store and its owner reads each back at a private
+ * mode. Subdirectories are not entered: this stays a repair of the stores this
+ * installation names, not a walk of the state tree.
+ */
+function restoreMintedStoreSync(directory: string): void {
+  restoreStoreSync(directory, (storeDir) =>
+    readDirectorySync(storeDir)
+      .filter((entry) => entry.isFile())
+      .map((entry) => path.join(storeDir, entry.name)),
+  );
+}
+
+/**
+ * True while every component of `relativeDirectory` below `base` names itself.
+ *
+ * Descriptor admission refuses a symlink at the component it opens, not at the
+ * components above it: a symlinked `credentials` or `credentials/github` would
+ * resolve a store below it to a tree outside this installation, and the
+ * descriptor/name comparison cannot tell, because lstat follows the same
+ * components. Nothing below such a component belongs to this installation, so
+ * the search stops there and leaves those modes for their owner.
+ */
+function namesPlainDirectoryChainSync(base: string, relativeDirectory: string): boolean {
+  let current = base;
+  for (const part of relativeDirectory.split(path.sep)) {
+    current = path.join(current, part);
+    let entry: Stats;
+    try {
+      entry = lstatSync(current);
+    } catch (error) {
+      // An absent or unreadable component leaves nothing of ours below it.
+      if (
+        hasErrnoCode(error, "ENOENT") ||
+        hasErrnoCode(error, "ENOTDIR") ||
+        hasErrnoCode(error, "EACCES") ||
+        hasErrnoCode(error, "EPERM")
+      ) {
+        return false;
+      }
+      throw error;
+    }
+    if (!entry.isDirectory()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Restores the managed GitHub identity generations this installation minted.
+ */
+function restoreMintedGitHubStoresSync(stateDir: string): void {
+  if (!namesPlainDirectoryChainSync(stateDir, path.join("credentials", "github"))) {
+    return;
+  }
+  const managedGitHub = path.join(stateDir, "credentials", "github");
+  const scopeDirectories = ["system", "personal"].map((scope) => path.join(managedGitHub, scope));
+  // Agent-scoped identities keep their generations one level below a hashed key.
+  for (const agentKey of listMintedStoreDirectoriesSync(
+    path.join(managedGitHub, "agents"),
+    (name) => MANAGED_GITHUB_AGENT_KEY_PATTERN.test(name),
+  )) {
+    scopeDirectories.push(path.join(managedGitHub, "agents", agentKey));
+  }
+  for (const scopeDirectory of scopeDirectories) {
+    for (const profileId of listMintedStoreDirectoriesSync(
+      scopeDirectory,
+      isManagedGitHubProfileId,
+    )) {
+      restoreMintedStoreSync(path.join(scopeDirectory, profileId));
+    }
+  }
+}
+
+/**
+ * Restores the stores whose names this installation mints at runtime.
+ *
+ * Keep in step with the owners: resolveManagedGitHubProfileRoot mints one
+ * profile generation per managed identity, and both isManagedGitHubProfile and
+ * the Codex worker's readWorkerCodexRuntime refuse a store their group can
+ * read, so a remount locks the GitHub identity out of git push and leaves
+ * codex.app-server unavailable.
+ */
+function restoreMintedPrivateStoresSync(stateDir: string): void {
+  restoreMintedGitHubStoresSync(stateDir);
+  // The runtime bundle is a direct child of the state root, so its own open
+  // already refuses an alias and needs no ancestor walk of its own.
+  restoreMintedStoreSync(path.join(stateDir, "codex-runtime"));
 }
 
 /**
@@ -238,6 +396,11 @@ export function restorePrivateStateStoreModes(env: NodeJS.ProcessEnv): void {
   if (process.platform === "win32") {
     return;
   }
+  // Each store admits itself through its own descriptor, so a state directory
+  // that holds only some of them — a capture-only volume, or stores whose
+  // databases live under a custom path — is still repaired for what it holds.
+  // No installation-wide pre-check: one would skip a valid store whenever an
+  // unrelated one is absent.
   // The state root itself is deliberately left alone: a shared, group-accessible
   // state root is a supported layout, and config publication preserves its mode
   // (src/config/io.write-config.test.ts). Only the private stores under and
@@ -247,6 +410,7 @@ export function restorePrivateStateStoreModes(env: NodeJS.ProcessEnv): void {
   for (const [directory, file] of PRIVATE_STATE_STORES) {
     restoreStoreDirectorySync(path.join(stateDir, directory), [file]);
   }
+  restoreMintedPrivateStoresSync(stateDir);
 }
 
 export function ensureOpenClawStatePermissions(
