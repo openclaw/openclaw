@@ -34,9 +34,7 @@ describeTelegramDispatch("DM topic label recovery", () => {
   it("names from the first real message after a command, outside the closed turn scope", async () => {
     replyWith("Done");
     generateTopicLabel.mockImplementation(async () => {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 0);
-      });
+      await new Promise(setImmediate);
       getAsyncWorkSignal()?.throwIfAborted();
       return "Invoice review";
     });
@@ -46,9 +44,8 @@ describeTelegramDispatch("DM topic label recovery", () => {
     await dispatchWithContext({ context: command, bot, streamMode: "off" });
     expect(generateTopicLabel).not.toHaveBeenCalled();
     const turn = new AsyncWorkScope();
-    await turn.track(() =>
-      dispatchWithContext({ context: topicContext("Review an invoice", "New Thread"), bot, streamMode: "off" }),
-    );
+    const real = topicContext("Review an invoice", "New Thread");
+    await turn.track(() => dispatchWithContext({ context: real, bot, streamMode: "off" }));
     await turn.drain();
     await vi.waitFor(() => expect(edit).toHaveBeenCalledWith(123, 777, { name: "Invoice review" }));
   });
@@ -113,14 +110,13 @@ describeTelegramDispatch("DM topic label recovery", () => {
     "retries after %s even when the reply has already completed",
     async (failure) => {
       replyWith("Invoice details");
-      const generate = generateTopicLabel;
-      generate.mockImplementationOnce(async () => {
+      generateTopicLabel.mockImplementationOnce(async () => {
         if (failure === "model error") {
           throw new Error("model unavailable");
         }
         return failure === "empty" ? null : "Invoice review";
       });
-      generate.mockResolvedValue("Invoice review");
+      generateTopicLabel.mockResolvedValue("Invoice review");
       const bot = createBot();
       const edit = vi.spyOn(bot.api, "editForumTopic");
       if (failure === "Telegram error") {
@@ -133,19 +129,19 @@ describeTelegramDispatch("DM topic label recovery", () => {
       await updateTopicName(123, 777, { name: "New Thread" }, scope);
       const context = () => topicContext("Review an invoice", "New Thread");
       await dispatchWithContext({ context: context(), bot, streamMode: "off" });
-      await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(generateTopicLabel).toHaveBeenCalledTimes(1));
       if (failure === "Telegram error") {
         await vi.waitFor(() => expect(edit).toHaveBeenCalledTimes(1));
       }
       mockDefaultSessionEntry({ sessionId: "s1", systemSent: true });
       await dispatchWithContext({ context: context(), bot, streamMode: "off" });
-      await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(generateTopicLabel).toHaveBeenCalledTimes(2));
       await vi.waitFor(async () =>
         expect(await getTopicName(123, 777, scope)).toBe("Invoice review"),
       );
       const context2 = topicContext("Check the total", "Invoice review");
       await dispatchWithContext({ context: context2, bot, streamMode: "off" });
-      expect(generate).toHaveBeenCalledTimes(2);
+      expect(generateTopicLabel).toHaveBeenCalledTimes(2);
       expect(edit).toHaveBeenLastCalledWith(123, 777, { name: "Invoice review" });
     },
   );
