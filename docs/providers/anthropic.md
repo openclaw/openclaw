@@ -182,8 +182,9 @@ OpenClaw release:
         an explicit logged-out response or a `claude` executable missing from
         `PATH` blocks the native route, while a timeout or unreadable response
         allows Claude to try the request. Captures expire
-        after one minute. If a selected native login is unavailable, spawn admission
-        rechecks it immediately, so signing in does not require a Gateway restart.
+        after one minute. Model lists, chat model pickers, and `/model` recheck an
+        expired capture, and spawn admission rechecks an unavailable native login
+        immediately, so signing in after Gateway start does not require a restart.
 
         For native-login users, the model picker reads Claude Code's own model menu
         in the background, without sending a prompt or using an inference turn.
