@@ -52,19 +52,19 @@ class GatewayDiscoveryLifecycleTest {
       var browser: Job? = null
 
       fun listeners() = nsd.getDiscoveryListeners("_openclaw-gw._tcp.").orEmpty()
+
       fun advertise(
         name: String,
         host: String = "127.0.0.1",
-      ) =
-        NsdServiceInfo().apply {
-          serviceName = name
-          serviceType = "_openclaw-gw._tcp."
-          port = 18789
-          hostAddresses = listOf(InetAddress.getByName(host))
-          setAttribute("gatewayTls", "1")
-          listeners().single().onServiceFound(this)
-          nsd.registrations.last().deliver { onServiceUpdated(this@apply) }
-        }
+      ) = NsdServiceInfo().apply {
+        serviceName = name
+        serviceType = "_openclaw-gw._tcp."
+        port = 18789
+        hostAddresses = listOf(InetAddress.getByName(host))
+        setAttribute("gatewayTls", "1")
+        listeners().single().onServiceFound(this)
+        nsd.registrations.last().deliver { onServiceUpdated(this@apply) }
+      }
 
       try {
         // The sticky service's cold background runtime must resolve the saved route, not enable the mic.

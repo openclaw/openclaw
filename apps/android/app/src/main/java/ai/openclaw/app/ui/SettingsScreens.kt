@@ -1655,9 +1655,8 @@ private fun GatewaySettingsScreen(
     )
   }
 
-  DisposableEffect(viewModel, showDiscovery) {
-    val discovery = if (showDiscovery) viewModel.startGatewayDiscovery() else null
-    onDispose { discovery?.cancel() }
+  LaunchedEffect(viewModel) {
+    viewModel.loadGatewaySettings()
   }
 
   fun connectGateway(useSetupCode: Boolean) {
@@ -1795,6 +1794,10 @@ private fun GatewaySettingsScreen(
     )
     SettingsDisclosureButton(text = nativeString("Discovered"), expanded = showDiscovery, onClick = { showDiscovery = !showDiscovery })
     if (showDiscovery) {
+      DisposableEffect(viewModel) {
+        val discovery = viewModel.startGatewayDiscovery()
+        onDispose { discovery.cancel() }
+      }
       ClawPanel(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
         if (discoveredGateways.isEmpty()) {
           Text(

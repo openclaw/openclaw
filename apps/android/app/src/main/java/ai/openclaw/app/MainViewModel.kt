@@ -1258,6 +1258,8 @@ class MainViewModel internal constructor(
     launchGatewayConnectionOperation { runtime, isCurrent -> runtime.refreshGatewayConnection(isCurrent, manualTlsTrust = true) }
   }
 
+  fun loadGatewaySettings(): Unit = queueRuntimeStartup()
+
   fun startGatewayDiscovery(): Job =
     viewModelScope.launch(Dispatchers.Default) {
       ensureRuntime().discoverGateways()

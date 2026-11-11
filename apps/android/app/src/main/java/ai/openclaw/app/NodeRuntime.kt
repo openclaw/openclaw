@@ -3087,13 +3087,18 @@ class NodeRuntime internal constructor(
     // Enabled secondary Gateways can appear after the focused connection is already established.
     val discoveringSecondaryGateway =
       currentBackgroundGatewayStableIds().any { stableId ->
-        prefs.gatewayRegistry.entries.value.any { it.stableId == stableId && it.kind == GatewayRegistryEntryKind.DISCOVERED }
+        prefs.gatewayRegistry.entries.value
+          .any { it.stableId == stableId && it.kind == GatewayRegistryEntryKind.DISCOVERED }
       }
     discovery.setActive(
       mode == NodeRuntimeMode.Live &&
-        (recoveringDiscoveredGateway ||
-          (_isForeground.value &&
-            (gatewayDiscoveryConsumers > 0 || discoveringSecondaryGateway || (!_isConnected.value && !_nodeConnected.value)))),
+        (
+          recoveringDiscoveredGateway ||
+            (
+              _isForeground.value &&
+                (gatewayDiscoveryConsumers > 0 || discoveringSecondaryGateway || (!_isConnected.value && !_nodeConnected.value))
+            )
+        ),
     )
   }
 
