@@ -149,8 +149,8 @@ function buildPricingContext(
   // A vendor's catalog declares itself the model's developer (family === provider).
   const vendors = new Set(
     registry.plugins.flatMap((plugin) =>
-      Object.entries(plugin.modelCatalog?.providers ?? {}).flatMap(([provider, catalog]) =>
-        catalog.family && normalizeProviderId(catalog.family) === normalizeProviderId(provider)
+      Object.entries(plugin.modelCatalog?.providers ?? {}).flatMap(([provider, owned]) =>
+        owned.family && normalizeProviderId(owned.family) === normalizeProviderId(provider)
           ? [normalizeProviderId(provider)]
           : [],
       ),
