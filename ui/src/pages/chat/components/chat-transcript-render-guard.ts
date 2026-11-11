@@ -50,6 +50,7 @@ function groupDependencies(group: MessageGroup): readonly unknown[] {
       source.key,
       source.message,
       source.hasVisibleContent,
+      source.voiceReply,
       JSON.stringify(source.replyTarget),
       // Cards expose mutable completion/error facts even when their message is retained.
       ...extractToolCardsCached(source.message).flatMap((card) => Object.values(card)),

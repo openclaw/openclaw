@@ -271,9 +271,10 @@ export async function startChatRealtimeSession(
         state.realtimeTalk.update({
           realtimeTalkConversationState: orderRealtimeTalkConversation(
             state.realtimeTalk.snapshot.realtimeTalkConversationState,
-            orders.map(({ itemId, order }) => ({
+            orders.map(({ itemId, order, transcriptId }) => ({
               itemId: `${itemPrefix}${itemId}`,
               order: orderOffset + order,
+              transcriptId,
             })),
           ),
         });

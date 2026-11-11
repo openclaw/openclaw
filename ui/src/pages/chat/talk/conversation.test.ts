@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 // @vitest-environment node
-import { createRealtimeTalkConversationState } from "./conversation-state.ts";
-import { updateRealtimeTalkConversation } from "./conversation.ts";
+import {
+  createRealtimeTalkConversationState,
+  retainSavingRealtimeTalkCaptions,
+} from "./conversation-state.ts";
+import { orderRealtimeTalkConversation, updateRealtimeTalkConversation } from "./conversation.ts";
 
 describe("realtime Talk conversation", () => {
   let state = createRealtimeTalkConversationState();
@@ -28,6 +31,24 @@ describe("realtime Talk conversation", () => {
       transcriptId: "voice:call:1",
       isStreaming: false,
     });
+  });
+  it("keeps the saved-row identity assigned with a client transcript order", () => {
+    update("user", "Hello", false, { itemId: "a" });
+    state = orderRealtimeTalkConversation(state, [
+      { itemId: "a", order: 1, transcriptId: "voice:call:1" },
+    ]);
+    update("user", "Hello there", true, { itemId: "a", order: 1 });
+    expect(state.entries).toEqual([
+      expect.objectContaining({ text: "Hello there", order: 1, transcriptId: "voice:call:1" }),
+    ]);
+  });
+  it("keeps only finished captions awaiting their saved message when a call ends", () => {
+    update("user", "Saved question", true, { transcriptId: "voice:call:1" });
+    update("assistant", "Unsaved answer", true);
+    update("user", "Unfinished", false, { textMode: "snapshot" });
+    expect(retainSavingRealtimeTalkCaptions(state).entries).toEqual([
+      expect.objectContaining({ text: "Saved question", transcriptId: "voice:call:1" }),
+    ]);
   });
   it("keeps each caption at the history position where it started", () => {
     update("user", "Hello", false, { afterMessageId: "m-1" });

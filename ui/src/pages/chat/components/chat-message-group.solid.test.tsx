@@ -294,6 +294,33 @@ it("does not give provider speech unframed answer actions", () => {
   expect(prepared.source.displayMarkdown).toBe(speech.content);
 });
 
+it("renders speech-only Talk replies as a reply and restated speech as a disclosure", () => {
+  const speech = (id: string, content: string) => ({
+    role: "assistant",
+    content,
+    stopReason: "stop",
+    timestamp: 1000,
+    __openclaw: { id, voiceTranscript: "provider-owned" },
+  });
+  // Alone in its turn, grouping marks the speech as the reply.
+  const reply = createMessageGroup(speech("spoken-reply", "I'll check."), "assistant");
+  expect(reply.messages.map((item) => item.voiceReply)).toEqual([true]);
+  const afterAnswer = createMessageGroup(speech("spoken-restated", "It is ready."), "assistant");
+  const restated = {
+    ...afterAnswer,
+    messages: afterAnswer.messages.map(({ voiceReply: _voiceReply, ...item }) => item),
+  };
+  const options = { showReasoning: false };
+  const replyView = mountSolid(() => <MessageGroup group={reply} options={options} />);
+  expect(replyView.container.querySelector("details")).toBeNull();
+  expect(replyView.container.querySelector(".chat-bubble")?.textContent).toContain("I'll check.");
+  expect(replyView.container.querySelector(".chat-group--turn-block")).toBeNull();
+
+  const restatedView = mountSolid(() => <MessageGroup group={restated} options={options} />);
+  expect(restatedView.container.querySelector(".chat-voice-transcript details")?.open).toBe(false);
+  expect(restatedView.container.querySelector(".chat-group--turn-block")).not.toBeNull();
+});
+
 it("paints every right-side user turn with the viewer accent and only peers with identity hues", () => {
   const profile = (id: string) => ({ id, name: id, identity: { type: "profile" as const, id } });
   // [sender, viewer profile, peer]; without a viewer profile every user turn is the viewer's.

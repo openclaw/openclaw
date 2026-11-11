@@ -312,7 +312,7 @@ export function prepareGroupedMessage(
   const normalizedRole = normalizeRoleForGrouping(normalizedMessage.role);
   const workspaceConflict = workspaceResultConflictFromTranscript(message);
 
-  const voiceTranscript = isProviderVoiceTranscript(message);
+  const voiceTranscript = isProviderVoiceTranscript(message) && !opts.voiceReply;
   const isToolShell = normalizedRole === "tool";
   const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
 

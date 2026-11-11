@@ -34,6 +34,13 @@ export type RealtimeTalkTranscript = {
   order?: number;
 };
 
+export type RealtimeTalkTranscriptOrder = {
+  itemId: string;
+  order: number;
+  /** Saved-row identity, known once a client-owned transcript has its write order. */
+  transcriptId?: string;
+};
+
 export type RealtimeTalkTranscriptItem =
   | {
       type: "created";
@@ -49,7 +56,7 @@ export type RealtimeTalkCallbacks = {
   onVideoCapability?: (capable: boolean) => void;
   onInputLevel?: (level: number) => void;
   onTranscript?: (entry: RealtimeTalkTranscript) => void;
-  onTranscriptOrder?: (items: ReadonlyArray<{ itemId: string; order: number }>) => void;
+  onTranscriptOrder?: (items: ReadonlyArray<RealtimeTalkTranscriptOrder>) => void;
   onTranscriptItem?: (item: RealtimeTalkTranscriptItem) => void;
   onTalkEvent?: (event: { type: "session.ready" | "session.closed" }) => void;
   onVideoStream?: (stream: MediaStream | null) => void;

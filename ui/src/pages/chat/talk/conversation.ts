@@ -5,7 +5,7 @@ import type {
   RealtimeTalkConversationRole,
   RealtimeTalkConversationState,
 } from "./conversation-state.ts";
-import type { RealtimeTalkTranscript } from "./shared.ts";
+import type { RealtimeTalkTranscript, RealtimeTalkTranscriptOrder } from "./shared.ts";
 
 type RealtimeTalkTranscriptUpdate = RealtimeTalkTranscript & {
   nowMs?: number;
@@ -74,6 +74,7 @@ function applyRealtimeTalkTranscript(
       order: update.order,
       text: boundRealtimeConversationText(update.final ? text : (previous?.text ?? "") + text),
       isStreaming: !update.final,
+      transcriptId: previous?.transcriptId,
       afterMessageId: previous?.afterMessageId,
     };
     // Provider identities survive delayed ASR and overlapping responses. Text and
@@ -129,13 +130,22 @@ function applyRealtimeTalkTranscript(
 
 export function orderRealtimeTalkConversation(
   state: RealtimeTalkConversationState,
-  orders: ReadonlyArray<{ itemId: string; order: number }> = [],
+  orders: ReadonlyArray<RealtimeTalkTranscriptOrder> = [],
 ): RealtimeTalkConversationState {
-  const byId = new Map(orders.map(({ itemId, order }) => [`item-${itemId}`, order]));
+  const byId = new Map(orders.map((item) => [`item-${item.itemId}`, item]));
   return {
     ...state,
     entries: state.entries
-      .map((entry) => (byId.has(entry.id) ? { ...entry, order: byId.get(entry.id) } : entry))
+      .map((entry) => {
+        const assigned = byId.get(entry.id);
+        return assigned
+          ? {
+              ...entry,
+              order: assigned.order,
+              transcriptId: assigned.transcriptId ?? entry.transcriptId,
+            }
+          : entry;
+      })
       .toSorted((left, right) => (left.order ?? Infinity) - (right.order ?? Infinity))
       .slice(-MAX_CONVERSATION_ENTRIES),
   };

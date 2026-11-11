@@ -469,6 +469,7 @@ export class RealtimeTalkSession {
   ): RealtimeTalkCallbacks {
     const transcripts = new ClientVoiceTranscriptQueue(
       this.transcriptQueue,
+      owningVoiceSessionId,
       async (entryId, role, text) => {
         await retryVoiceTranscriptPersistence(
           transcriptSignal,

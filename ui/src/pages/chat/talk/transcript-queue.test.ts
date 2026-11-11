@@ -63,6 +63,44 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
+it("identifies accepted finals by the transcript row they are saved as", async () => {
+  const request = queueRequest("voice-identity", async () => undefined);
+  const onTranscript = vi.fn();
+  const onTranscriptOrder = vi.fn();
+  const { session, context, handleTranscript } = await start(request, {
+    onTranscript,
+    onTranscriptOrder,
+  });
+
+  context.callbacks.onTranscriptItem?.({
+    type: "created",
+    itemId: "question",
+    previousItemId: null,
+    role: "user",
+  });
+  handleTranscript({ role: "user", text: "Is it", final: false, itemId: "question" });
+  handleTranscript({ role: "user", text: "Is it ready?", final: true, itemId: "question" });
+  handleTranscript({ role: "assistant", text: "Checking", final: false });
+  handleTranscript({ role: "assistant", text: "Checking now.", final: true });
+  await context.flushTranscriptWrites?.();
+
+  // Captions retire against saved history rows by this identity.
+  expect(onTranscriptOrder).toHaveBeenCalledWith([
+    { itemId: "question", order: 1, transcriptId: "voice:voice-identity:1" },
+  ]);
+  expect(onTranscript.mock.calls.map(([entry]) => entry.transcriptId)).toEqual([
+    "voice:voice-identity:1",
+    "voice:voice-identity:1",
+    undefined,
+    "voice:voice-identity:2",
+  ]);
+  expect(calls(request, "talk.client.transcript").map(([, params]) => params?.entryId)).toEqual([
+    "1",
+    "2",
+  ]);
+  void session.stop();
+});
+
 it("does not admit normalized-empty finals into a stalled transcript queue", async () => {
   const firstTranscript = createDeferred();
   const transcriptEntryIds: string[] = [];

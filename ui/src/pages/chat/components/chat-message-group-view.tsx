@@ -104,8 +104,6 @@ function PreparedMessage(props: {
   const prepared = createMemo(
     () => props.prepared ?? prepareGroupMessage(props.group, props.item, props.options),
   );
-  const isStreaming = () =>
-    props.group.isStreaming && props.index === props.group.messages.length - 1;
   const options = createMemo(() => {
     const actionDetails = prepared().actions;
     let assistantMessageDisclosure: AssistantMessageDisclosure | undefined;
@@ -134,7 +132,8 @@ function PreparedMessage(props: {
         props.options.firstBubbleKey !== undefined
           ? props.options.firstBubbleKey
           : (props.group.messages.find((message) => message.hasVisibleContent)?.key ?? null),
-      isStreaming: isStreaming(),
+      isStreaming: props.group.isStreaming && props.index === props.group.messages.length - 1,
+      voiceReply: props.item.voiceReply,
       entryId,
       // Tool-row file links carry their message like rendered markdown links, so earlier
       // messages keep reading their original source; sender-owned links stay session-scoped.
@@ -186,7 +185,7 @@ function PreparedMessage(props: {
         <GroupMessageReactions
           group={props.group}
           actionDetails={prepared().actions}
-          isStreaming={isStreaming()}
+          isStreaming={options().isStreaming}
           options={props.options}
         />
       </Show>

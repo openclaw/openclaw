@@ -26,28 +26,37 @@ export function RealtimeTalkConversation(props: {
       >
         <For each={entries()} keyed={(entry) => entry.id}>
           {(entry) => (
+            // A caption is the message it becomes once saved: it shares the
+            // message group and bubble styles so the handoff does not restyle it.
             <div
               class={[
+                "chat-group",
                 "agent-chat__voice-turn",
                 {
+                  user: entry().role === "user",
+                  assistant: entry().role === "assistant",
                   "agent-chat__voice-turn--user": entry().role === "user",
                   "agent-chat__voice-turn--assistant": entry().role === "assistant",
                 },
               ]}
               data-role={entry().role}
             >
-              <span class="agent-chat__voice-turn-speaker">
-                {entry().role === "user"
-                  ? props.userName?.trim() || t("chat.reactions.you")
-                  : props.assistantName}
-              </span>{" "}
-              <span class="agent-chat__voice-turn-text">{entry().text}</span>
-              {entry().isStreaming ? (
-                <span
-                  class="agent-chat__voice-turn-stream"
-                  aria-label={t("chat.composer.stillListening")}
-                />
-              ) : undefined}
+              <div class="chat-group-messages">
+                <div class="chat-bubble">
+                  <span class="agent-chat__voice-turn-speaker sr-only">
+                    {entry().role === "user"
+                      ? props.userName?.trim() || t("chat.reactions.you")
+                      : props.assistantName}
+                  </span>{" "}
+                  <span class="agent-chat__voice-turn-text">{entry().text}</span>
+                  {entry().isStreaming ? (
+                    <span
+                      class="agent-chat__voice-turn-stream"
+                      aria-label={t("chat.composer.stillListening")}
+                    />
+                  ) : undefined}
+                </div>
+              </div>
             </div>
           )}
         </For>

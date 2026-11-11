@@ -19,6 +19,7 @@ import {
   assistantMessageCanOwnTurnActions,
   assistantMessageIsInterrupted,
   assistantMessageKind,
+  isProviderVoiceTranscript,
 } from "./chat-assistant-reply.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
 import { persistedMessageEntryId } from "./chat-thread-items.ts";
@@ -342,6 +343,10 @@ function groupChatItemSegment(
   let currentGroup: MessageGroup | null = null;
   let currentUserTurnIdentity: string | null = null;
   let currentReplyTargetKey: string | null = null;
+  // Provider speech after a backing-agent answer restates that answer. Speech
+  // before one (or with none) is the turn's reply. A window that opens mid-turn
+  // can show restated speech as a reply; that duplicate is visible, not lost.
+  let turnHasAgentAnswer = false;
 
   for (const prepared of prepareMessagesForGrouping(items)) {
     if (prepared.kind !== "message") {
@@ -383,7 +388,10 @@ function groupChatItemSegment(
         : hasPreparedActivity
           ? "tool"
           : normalizedRole;
-    const source = {
+    if (role === "user") {
+      turnHasAgentAnswer = false;
+    }
+    const source: MessageGroup["messages"][number] = {
       message: item.message,
       key: item.key,
       ...(normalized.replyTarget ? { replyTarget: normalized.replyTarget } : {}),
@@ -392,7 +400,11 @@ function groupChatItemSegment(
         (showReasoning && role === "assistant" && Boolean(extractThinkingCached(item.message))) ||
         visibleContent === "non-text" ||
         Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim()),
+      ...(isProviderVoiceTranscript(item.message) && !turnHasAgentAnswer
+        ? { voiceReply: true }
+        : {}),
     };
+    turnHasAgentAnswer ||= role === "assistant" && assistantMessageCanOwnTurnActions(item.message);
     // Projection can remove the last tool block, leaving only hidden thinking.
     // Keep recorded interruptions/errors, which have their own visible outcome.
     if (
