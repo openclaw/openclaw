@@ -88,11 +88,10 @@ function backups(file) {
     )
     .map((name) => path.join(path.dirname(file), name));
 }
-function verifyBackup(file, expected, retainedSchemaOnly = false) {
-  const candidates = backups(file);
-  const matches = retainedSchemaOnly
-    ? candidates.filter((candidate) => logicalSnapshot(candidate).version === expected.version)
-    : candidates;
+function verifyBackup(file, expected) {
+  const matches = backups(file).filter(
+    (candidate) => logicalSnapshot(candidate).version === expected.version,
+  );
   assert.equal(matches.length, 1, `Expected exactly one retained-schema backup: ${file}`);
   assert.deepEqual(logicalSnapshot(matches[0]), expected, "Backup changed retained rows/schema");
   const backupId = path
@@ -242,8 +241,8 @@ function verify(mode) {
       );
     });
   }
-  const agentBackup = verifyBackup(agentPath, before.agent, mode === "bad-local");
-  const sharedBackup = verifyBackup(sharedPath, before.shared, mode === "bad-local");
+  const agentBackup = verifyBackup(agentPath, before.agent);
+  const sharedBackup = verifyBackup(sharedPath, before.shared);
   assert.equal(agentBackup.backupId, sharedBackup.backupId, "Migration backups are not paired");
   assertSession(agentBackup.path);
   if (mode === "bad-local") {
