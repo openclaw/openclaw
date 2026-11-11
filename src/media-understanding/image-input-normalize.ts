@@ -13,9 +13,11 @@ import { MEDIA_CAPABILITY_DEFAULTS } from "./defaults.constants.js";
 
 const HEIC_MIME_RE = /^image\/hei[cf](?:-sequence)?$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
+const AVIF_MIME_RE = /^image\/avif$/i;
+const AVIF_EXT_RE = /\.avif$/i;
 const MEDIA_UNDERSTANDING_MAX_SOURCE_PIXELS = 40_000_000;
 
-/** Normalizes image bytes before provider execution, converting HEIC/HEIF inputs to JPEG. */
+/** Normalizes image bytes before provider execution, converting HEIC/HEIF and AVIF inputs to JPEG. */
 export async function normalizeImageDescriptionInput(params: {
   buffer: Buffer;
   fileName?: string;
@@ -23,16 +25,19 @@ export async function normalizeImageDescriptionInput(params: {
   maxBytes?: number;
 }): Promise<{ buffer: Buffer; mime?: string }> {
   const mime = normalizeMimeType(params.mime);
-  if (!(mime && HEIC_MIME_RE.test(mime)) && !HEIC_EXT_RE.test(params.fileName?.trim() ?? "")) {
+  const fileName = params.fileName?.trim() ?? "";
+  const isHeic = (mime !== undefined && HEIC_MIME_RE.test(mime)) || HEIC_EXT_RE.test(fileName);
+  const isAvif = (mime !== undefined && AVIF_MIME_RE.test(mime)) || AVIF_EXT_RE.test(fileName);
+  if (!isHeic && !isAvif) {
     return { buffer: params.buffer, mime: params.mime };
   }
-  const sourceMime = mime ?? "image/heic";
+  const sourceMime = mime ?? (isAvif ? "image/avif" : "image/heic");
   // Keep owned bytes through the shared MIME and size guards; only API content needs base64.
   const image = await normalizeInputImageBuffer({
     buffer: params.buffer,
     mimeType: sourceMime,
     limits: {
-      allowedMimes: new Set([sourceMime, "image/heic", "image/heif", "image/jpeg"]),
+      allowedMimes: new Set([sourceMime, "image/heic", "image/heif", "image/avif", "image/jpeg"]),
       maxBytes: params.maxBytes ?? MEDIA_CAPABILITY_DEFAULTS.image.maxBytes,
     },
   });
