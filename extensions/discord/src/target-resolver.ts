@@ -20,7 +20,7 @@ export async function resolveDiscordTarget(
     return undefined;
   }
 
-  const likelyUsername = !/^(user:|channel:|discord:|@|<@!?)|[\d]+$/.test(trimmed);
+  const likelyUsername = !/^(user:|channel:|discord:|@|<@!?)|^\d+$/.test(trimmed);
   const shouldLookup =
     /^<@!?(\d+)>$/.test(trimmed) ||
     /^(user:|discord:)/.test(trimmed) ||
