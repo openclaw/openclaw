@@ -4,14 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveDaemonRuntimePinStorePath } from "../daemon/runtime-pin-store.js";
-import type { ClientIdentityRecord } from "../infra/client-credential-operations.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
-import { runClientCredentialOperation } from "../infra/client-credential-store.js";
-import {
-  generateStoredDeviceIdentity,
-  storedDeviceIdentityToRow,
-} from "../infra/device-identity-material.js";
-import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { restorePrivateStateStoreModes } from "./openclaw-state-db-permissions.js";
 
@@ -222,47 +215,6 @@ describe.runIf(process.platform !== "win32")("restorePrivateStateStoreModes", ()
 
     expect(mode(credentials)).toBe(0o600);
     expect(fs.lstatSync(credentials).ctimeMs).toBe(before);
-  });
-
-  it("repairs a remounted installation at Gateway startup before credential admission", async () => {
-    const stateDir = path.join(dirs.make("state-store-admission-"), ".openclaw");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const identity: ClientIdentityRecord = storedDeviceIdentityToRow(
-      "node",
-      generateStoredDeviceIdentity(123),
-      456,
-    );
-    const read = () =>
-      runClientCredentialOperation(env, {
-        kind: "identity.read",
-        identity_key: identity.identity_key,
-      });
-    runClientCredentialOperation(env, { kind: "identity.create", identity });
-    const credentials = resolveClientCredentialStorePath(env);
-
-    for (const [target, broadened] of [
-      [stateDir, 0o2770],
-      [path.dirname(credentials), 0o2770],
-      [credentials, 0o660],
-    ] as const) {
-      fs.chmodSync(target, broadened);
-    }
-    expect(() => read()).toThrow("directory is unsafe");
-
-    const lock = await acquireGatewayLock({
-      env,
-      allowInTests: true,
-      timeoutMs: 0,
-      lockDir: path.join(stateDir, "locks"),
-    });
-    try {
-      expect(lock).not.toBeNull();
-      expect(read()).toEqual({ kind: "identity", identity });
-      expect(mode(path.dirname(credentials))).toBe(0o700);
-      expect(mode(credentials)).toBe(0o600);
-    } finally {
-      await lock?.release();
-    }
   });
 
   // Kept deliberately. PRIVATE_STATE_STORES repeats these path literals, and

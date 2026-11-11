@@ -15,10 +15,7 @@ import {
   createOpenClawDatabaseMaintenanceScope,
   getOpenClawDatabaseMaintenanceScope,
 } from "../state/openclaw-state-db-async-lifecycle.js";
-import {
-  ensureOpenClawStatePermissions,
-  restorePrivateStateStoreModes,
-} from "../state/openclaw-state-db-permissions.js";
+import { ensureOpenClawStatePermissions } from "../state/openclaw-state-db-permissions.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
@@ -531,8 +528,6 @@ export async function acquireGatewayLock(
                 await owner.run(() => {
                   // Offline maintenance must refuse newer schemas before changing source files.
                   if (role === "gateway") {
-                    // Remount repair belongs to startup, not ordinary shared-state commits.
-                    restorePrivateStateStoreModes(env);
                     ensureOpenClawStatePermissions(databasePath, env, { createDirectory: true });
                   }
                   return assertGatewayOwnerLeaseStopped(env, owner, role === "sqlite-maintenance");
