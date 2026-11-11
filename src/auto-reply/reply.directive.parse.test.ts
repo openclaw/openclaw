@@ -2,7 +2,10 @@ import { expect, it } from "vitest";
 import type { ModelAliasIndex } from "../agents/model-selection-shared.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { parseInlineSessionDirectives as parse } from "./reply/directive-handling.parse.js";
+import {
+  isModelIndependentDirectiveCommand,
+  parseInlineSessionDirectives as parse,
+} from "./reply/directive-handling.parse.js";
 import { resolveModelDirectiveSelection } from "./reply/model-selection-directive.js";
 
 it("preserves bytes without directives", () => {
@@ -213,4 +216,24 @@ it("prefers alias matches when fuzzy selection is ambiguous", () => {
       aliasIndex,
     }),
   ).toEqual({ ...kimi, isDefault: false, alias: "Kimi" });
+});
+
+it.each(["text", "native"] as const)("parses spaced thinking aliases in %s commands", (kind) => {
+  for (const directive of ["/think extra high", "/thinking: EXTRA  HIGH", "/t extra\thigh"]) {
+    const task = "Review  this:\n    print('a  b')";
+    expect(parse(`${directive} ${task}`, { command: { kind, name: "think" } })).toMatchObject({
+      thinkLevel: "xhigh",
+      cleaned: task,
+    });
+  }
+});
+it.each(["extra higher", "extra high-five", "extra highlight"])(
+  "preserves non-alias thinking prose: %s",
+  (task) => expect(parse(`/think ${task}`)).toMatchObject({ thinkLevel: undefined, cleaned: task }),
+);
+
+it("admits only the standalone spaced alias as a model-independent directive", () => {
+  expect(isModelIndependentDirectiveCommand("think", "extra high")).toBe(true);
+  expect(isModelIndependentDirectiveCommand("think", "extra high explain this")).toBe(false);
+  expect(isModelIndependentDirectiveCommand("think", "extra higher")).toBe(false);
 });
