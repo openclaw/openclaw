@@ -1,4 +1,5 @@
 import AppKit
+import OpenClawDiscovery
 import SwiftUI
 import Testing
 @testable import OpenClaw
@@ -6,6 +7,62 @@ import Testing
 @Suite(.serialized, .testWaitLimit)
 @MainActor
 struct GatewaySettingsSmokeTests {
+    @Test(arguments: [false, true])
+    func `existing Gateway onboarding defers the primary through sign-in cancellation`(
+        automaticLocal: Bool) async throws
+    {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = root.appendingPathComponent("openclaw.json")
+        let original = Data((automaticLocal ? #"{"gateway":{"mode":"local"}}"# : "{}").utf8)
+        try original.write(to: config)
+        try await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": config.path],
+            defaults: [connectionModeKey: nil, primaryGatewayDeferredFingerprintKey: nil, onboardingSeenKey: false])
+        {
+            let oldID = GatewayDiscoveryPreferences.preferredStableID()
+            let oldBinding = GatewayDiscoveryPreferences.preferredRouteBinding()
+            defer { GatewayDiscoveryPreferences.setPreferredStableID(oldID, routeBinding: oldBinding) }
+            let state = AppState(preview: true)
+            try #require(state.connectionMode == (automaticLocal ? .local : .unconfigured))
+            state._testEnableGatewayConfigSync()
+            let gateway = GatewayConnection(testEndpointProvider: { throw CancellationError() })
+            let discovery = GatewayDiscoveryModel(localDisplayName: "Onboarding fixture", filterLocalGateways: false)
+            let view = OnboardingView(
+                initialPage: .connection, state: state, discoveryModel: discovery, aiSetupGateway: gateway)
+            defer {
+                discovery.stop()
+                view.configuredGatewayProbe.invalidate()
+                view.aiSetup.resetForGatewayChange(clearPendingHandoff: false)
+            }
+            do {
+                try await withHostedSettings(view.environment(\.locale, Locale(identifier: "en_US"))) { _, window in
+                    try await pressGatewayButton("Connect to an existing Gateway", in: window)
+                    try await TestWait.state("connect-only onboarding sheet") { window.attachedSheet != nil }
+                    try #require(state.connectionMode == .unconfigured)
+                    #expect(state.syncGatewayConfigNow())
+                    state.applyConfigOverrides(OpenClawConfigFile.loadDict())
+                    #expect(state.connectionMode == .unconfigured)
+                    #expect(try Data(contentsOf: config) == original)
+
+                    let sheet = try #require(window.attachedSheet)
+                    try await pressGatewayButton("Cancel", in: sheet)
+                    try await TestWait.state("existing Gateway sheet dismissal") { window.attachedSheet == nil }
+                    #expect(state.connectionMode == .unconfigured)
+                    #expect(!state.onboardingSeen)
+
+                    try await pressGatewayButton("On this Mac", in: window)
+                    try await TestWait.state("explicit local selection") { state.connectionMode == .local }
+                    await state._testAwaitGatewayConfigSync()
+                }
+                await gateway.shutdown()
+            } catch {
+                await gateway.shutdown()
+                throw error
+            }
+        }
+    }
+
     @Test func `first Reconnect prefills the Gateway and Add starts a fresh empty editor`() async throws {
         try await TestIsolation.withIsolatedState {
             let profile = try MacGatewayProfile(
@@ -92,4 +149,15 @@ private func withHostedSettings<Content: View>(
     window.orderFront(nil)
     hosting.layoutSubtreeIfNeeded()
     try await body(hosting, window)
+}
+
+@MainActor
+private func pressGatewayButton(_ title: String, in window: NSWindow) async throws {
+    let button = try await AppKitTestSupport.waitForAccessibilityElement(in: window, description: title) { elements in
+        elements.first {
+            $0.accessibilityRole?() == .button && $0.isAccessibilityEnabled?() == true &&
+                AppKitTestSupport.accessibilityName(of: $0)?.contains(title) == true
+        }
+    }
+    try #require(button.accessibilityPerformPress?() == true)
 }

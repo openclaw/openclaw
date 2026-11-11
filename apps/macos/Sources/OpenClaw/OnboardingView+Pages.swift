@@ -138,6 +138,8 @@ extension OnboardingView {
                         systemImage: "globe",
                         selected: false)
                     {
+                        // Saved profiles connect independently; do not retain the automatic local primary.
+                        self.selectUnconfiguredGateway()
                         self.showBrowserGateway = true
                     }
                 }
