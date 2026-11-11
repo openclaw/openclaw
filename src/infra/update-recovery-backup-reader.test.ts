@@ -140,9 +140,9 @@ it.each(["symlink", "hardlink"] as const)(
     // Identity admission does not restore or read live config content. The same
     // recorded entry remains selected, even if its live file kind has changed.
     await expectRetained(fixture);
-    await expect(
-      fixture.read({ ...fixture.env, OPENCLAW_CONFIG_PATH: target }),
-    ).rejects.toThrow("another selected state or configuration");
+    await expect(fixture.read({ ...fixture.env, OPENCLAW_CONFIG_PATH: target })).rejects.toThrow(
+      "another selected state or configuration",
+    );
     expect(await fs.readFile(target, "utf8")).toBe("{}\n");
     expect((await fs.lstat(fixture.configPath)).isSymbolicLink()).toBe(kind === "symlink");
   },
