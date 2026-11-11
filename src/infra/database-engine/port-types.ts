@@ -29,6 +29,8 @@ export type PortDescriptor = PortSchema & {
   fragments?: readonly (PortSchema & { id: string; dependencies: readonly string[] })[];
   /** Populated from the admitted source, never from the configured feature set. */
   activeFragments?: readonly string[];
+  /** Other exact shapes of this version; admission selects the one the source holds. */
+  sourceVariants?: readonly PortDescriptor[];
   /** Retired source tables may be omitted only when empty. */
   retainedSqliteTables?: readonly string[];
   /** Inspection notes bound to this admitted source. */

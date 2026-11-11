@@ -14,7 +14,7 @@ import {
   postgresSchemaSql,
   verifyAndRecordPostgresSchema,
   readPostgresSchema,
-  verifyPostgresSchema,
+  selectPostgresMigrationSource,
   withPostgresSearchExtensions,
 } from "./postgres-schema.js";
 import { admitPostgresSearch } from "./postgres-search-schema.js";
@@ -101,23 +101,16 @@ export const databaseEngineAdapters: {
           }
           const snapshot = readPostgresSchema(db, store.namespace!, store.schema.id);
           const schema = withPostgresSearchExtensions(store.schema, snapshot);
-          verifyPostgresSchema(
+          const source = selectPostgresMigrationSource(
             db,
             store.namespace!,
-            {
-              ...schema,
-              version: version - 1,
-              postgres: migration.fromSchema.postgres,
-              postgresFragments: migration.fromSchema.postgresFragments,
-              postgresVectorDecoderVersion: migration.fromSchema.postgresVectorDecoderVersion,
-              postgresVectorSearchVersion: migration.fromSchema.postgresVectorSearchVersion,
-              postgresTextSearchVersion: migration.fromSchema.postgresTextSearchVersion,
-            },
+            schema,
+            migration,
             snapshot,
           );
           if (
             migration.schema.postgresVectorSearchVersion === 2 &&
-            migration.fromSchema.postgresVectorSearchVersion !== 2
+            source.postgresVectorSearchVersion !== 2
           ) {
             for (const definition of [
               schema.search,

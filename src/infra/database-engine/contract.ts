@@ -58,6 +58,8 @@ export type StoreSchema = {
     version: number;
     sql: string;
     fromSchema: PostgresSchemaDefinition;
+    /** Other exact predecessor shapes valid at this version; `sql` converges each to `schema`. */
+    alsoFromSchemas?: readonly PostgresSchemaDefinition[];
     schema: PostgresSchemaDefinition;
     /** Exact predecessor export needed before Doctor may advance this family. */
     backup?: PortDescriptor;

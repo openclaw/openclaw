@@ -85,26 +85,70 @@ function selectFragments(descriptor: PortDescriptor, tables: ReadonlySet<string>
   };
 }
 
+/** Pick the declared shape the source holds, comparing only the tables where the shapes differ. */
+function selectSourceVariant(
+  descriptor: PortDescriptor,
+  columnsOf: (table: string) => ReadonlySet<string>,
+): PortDescriptor {
+  if (!descriptor.sourceVariants?.length) {
+    return descriptor;
+  }
+  const candidates = [descriptor, ...descriptor.sourceVariants];
+  const shape = (candidate: PortDescriptor, name: string) =>
+    candidate.tables
+      .find((table) => table.name === name)
+      ?.columns.map((column) => column.name)
+      .toSorted()
+      .join(",");
+  const differing = descriptor.tables
+    .map((table) => table.name)
+    .filter((name) =>
+      candidates.some((candidate) => shape(candidate, name) !== shape(descriptor, name)),
+    );
+  return (
+    candidates.find((candidate) =>
+      differing.every(
+        (name) => [...columnsOf(name)].toSorted().join(",") === shape(candidate, name),
+      ),
+    ) ?? descriptor
+  );
+}
+
 /** Resolve optional schema exactly once against the source's admitted catalog. */
 export async function admitDatabasePortDescriptor(
   source: Endpoint,
   descriptor: PortDescriptor,
   requiredFragments?: readonly string[],
 ) {
-  const admitted = descriptor.activeFragments
-    ? descriptor
-    : source.engine === "sqlite"
-      ? inspectSqlitePortSchema(source.db, descriptor)
-      : selectFragments(
-          descriptor,
-          new Set(
-            readPostgresCatalog(
-              (await source.db.query(postgresCatalogQuery(source.namespace))).rows[0].catalog,
-            )
-              .filter((fact) => fact.kind === "table")
-              .map((fact) => fact.table),
-          ),
-        );
+  let admitted: PortDescriptor;
+  if (descriptor.activeFragments) {
+    admitted = descriptor;
+  } else if (source.engine === "sqlite") {
+    admitted = inspectSqlitePortSchema(
+      source.db,
+      selectSourceVariant(descriptor, (table) => readTableColumns(source.db, table)),
+    );
+  } else {
+    const catalog = readPostgresCatalog(
+      (await source.db.query(postgresCatalogQuery(source.namespace))).rows[0].catalog,
+    );
+    const columnsOf = (table: string) =>
+      new Set(
+        catalog.flatMap((fact) =>
+          fact.table === table &&
+          fact.kind === "column" &&
+          fact.value !== null &&
+          typeof fact.value === "object" &&
+          "name" in fact.value
+            ? [String(fact.value.name)]
+            : [],
+        ),
+      );
+    admitted = selectFragments(
+      selectSourceVariant(descriptor, columnsOf),
+      new Set(catalog.filter((fact) => fact.kind === "table").map((fact) => fact.table)),
+    );
+  }
   if (
     requiredFragments &&
     !isDeepStrictEqual(requiredFragments.toSorted(), admitted.activeFragments!.toSorted())

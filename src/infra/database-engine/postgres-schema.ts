@@ -239,6 +239,43 @@ export function verifyPostgresSchema(
   return schemaHash;
 }
 
+type PostgresMigrationStep = NonNullable<StoreSchema["postgresMigrations"]>[number];
+
+/** Verify the store as one of the step's exact predecessor shapes; refuse when none matches. */
+export function selectPostgresMigrationSource(
+  db: PostgresSqlConnection,
+  namespace: string,
+  schema: StoreSchema,
+  step: PostgresMigrationStep,
+  snapshot: ReturnType<typeof readPostgresSchema>,
+  preserveSeal = false,
+): PostgresMigrationStep["fromSchema"] {
+  let refusal: unknown;
+  for (const source of [step.fromSchema, ...(step.alsoFromSchemas ?? [])]) {
+    try {
+      verifyPostgresSchema(
+        db,
+        namespace,
+        {
+          ...schema,
+          version: step.version - 1,
+          postgres: source.postgres,
+          postgresFragments: source.postgresFragments,
+          postgresVectorDecoderVersion: source.postgresVectorDecoderVersion,
+          postgresVectorSearchVersion: source.postgresVectorSearchVersion,
+          postgresTextSearchVersion: source.postgresTextSearchVersion,
+        },
+        snapshot,
+        preserveSeal,
+      );
+      return source;
+    } catch (error) {
+      refusal ??= error;
+    }
+  }
+  throw refusal;
+}
+
 function verifyPostgresSchemaDefinition(
   db: PostgresSqlConnection,
   namespace: string,

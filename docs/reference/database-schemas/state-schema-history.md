@@ -77,9 +77,12 @@ with "schema drift detected against generated DDL"
 ([#196966](https://github.com/openclaw/openclaw/issues/196966)).
 
 SQLite and PostgreSQL add one nullable integer column (`INTEGER` and `bigint`)
-without a row rewrite, backfill, new index, or scan. A SQLite store that already
-gained the column from the former first-use writer keeps it unchanged. Existing
-rows read as not deferred. The verified table-scoped backup and integrity check
+without a row rewrite, backfill, new index, or scan. A store that already has the
+column keeps it and its values unchanged. That covers a SQLite store whose former
+first-use writer added it, and a PostgreSQL store bootstrapped at schema 39 from
+DDL that already declared it. The PostgreSQL step accepts exactly those two v39
+shapes; any other definition of the column is refused as drift. Rows without a
+stored value read as not deferred. The verified table-scoped backup and integrity check
 cover `workspace_setup_state` plus schema publication metadata.
 
 The column and schema/content markers publish atomically. Package metadata and

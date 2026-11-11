@@ -65,6 +65,7 @@ function legacyTemplateCatalogValue(value: unknown): unknown {
 
 export async function loadStatePortDescriptor(
   sourceVersion = OPENCLAW_STATE_SCHEMA_VERSION,
+  options: { bootstrapDeferred?: boolean } = {},
 ): Promise<PortDescriptor> {
   if (sourceVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
     const backup = stateEngineSchema.postgresMigrations?.find(
@@ -97,7 +98,7 @@ export async function loadStatePortDescriptor(
   const legacyResourceReceipts = sourceVersion < 37;
   const legacyRepositoryDisk = sourceVersion < 38;
   const legacyRetention = sourceVersion < 39;
-  const legacyBootstrapDeferral = sourceVersion < 40;
+  const legacyBootstrapDeferral = sourceVersion < 40 && !options.bootstrapDeferred;
   const currentCatalog: PostgresCatalogFact[] = [
     ...statePostgresRuntime.expectedCatalog,
     ...(source?.expectedCatalog ?? []),
@@ -284,7 +285,15 @@ export async function loadStatePortDescriptor(
     return descriptor;
   }
   if (sourceVersion >= 27) {
-    return { ...descriptor, inspectSqliteSource: undefined, migrateSqliteSource: undefined };
+    return {
+      ...descriptor,
+      inspectSqliteSource: undefined,
+      migrateSqliteSource: undefined,
+      // v39 stores bootstrapped from #196392's first-use DDL already hold the column.
+      ...(sourceVersion === 39 && !options.bootstrapDeferred
+        ? { sourceVariants: [await loadStatePortDescriptor(39, { bootstrapDeferred: true })] }
+        : {}),
+    };
   }
   const historicalSqlite = withLegacyStateWriteIndexes(descriptor.sqlite);
   const legacyIndexes = statePostgresRuntime.preWriteIndexesV27Sql;

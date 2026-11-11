@@ -20,6 +20,8 @@ import {
   postgresSchemaMetadataSql,
   getAdmittedPostgresSchema,
   postgresStoreNamespace,
+  readPostgresSchema,
+  selectPostgresMigrationSource,
 } from "./postgres-schema.js";
 import { admitPostgresSearch } from "./postgres-search-schema.js";
 import type { DatabaseEngineInput } from "./types.js";
@@ -234,9 +236,20 @@ export function openEngineStore(ref: {
             }
             if (meta.version !== schema.version) {
               if (ref.existingVersion) {
-                const source = schema.postgresMigrations?.find(
-                  (step) => step.version === Number(meta.version) + 1,
-                )?.fromSchema;
+                const step = schema.postgresMigrations?.find(
+                  (entry) => entry.version === Number(meta.version) + 1,
+                );
+                // Inspection keeps the seal; a step with several exact sources selects the stored one.
+                const source = step?.alsoFromSchemas?.length
+                  ? selectPostgresMigrationSource(
+                      db,
+                      identity.namespace,
+                      schema,
+                      step,
+                      readPostgresSchema(db, identity.namespace, schema.id),
+                      true,
+                    )
+                  : step?.fromSchema;
                 if (!source) {
                   throw new Error("Missing PostgreSQL source schema for inspection");
                 }

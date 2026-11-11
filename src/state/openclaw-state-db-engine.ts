@@ -399,8 +399,10 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     {
       version: 40,
       fromSchema: statePostgresSchemaV39,
+      // Stores bootstrapped from #196392's first-use DDL already hold the column at v39.
+      alsoFromSchemas: [statePostgresSchema],
       schema: statePostgresSchema,
-      sql: `ALTER TABLE workspace_setup_state ADD COLUMN bootstrap_deferred bigint;
+      sql: `ALTER TABLE workspace_setup_state ADD COLUMN IF NOT EXISTS bootstrap_deferred bigint;
         ${statePostgresVersionSql(40)}`,
     },
   ];
