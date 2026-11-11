@@ -69,14 +69,15 @@ async function callGatewayReadOnlyCliUnlessAborted(
   params?: unknown,
 ): Promise<{ result: unknown } | undefined> {
   const signal = getAsyncWorkSignal();
+  let result: unknown;
   try {
-    return { result: await callGatewayReadOnlyCli(method, opts, params, signal) };
+    result = await callGatewayReadOnlyCli(method, opts, params, signal);
   } catch (error) {
-    if (signal?.aborted) {
-      return undefined;
+    if (!signal?.aborted) {
+      throw error;
     }
-    throw error;
   }
+  return signal?.aborted ? undefined : { result };
 }
 
 function parseGatewayCallParams(value = "{}"): unknown {
