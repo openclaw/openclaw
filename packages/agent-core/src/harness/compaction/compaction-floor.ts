@@ -63,7 +63,8 @@ export function buildCompactionFloor(
     if (message.role !== "user" && message.role !== "assistant") {
       return;
     }
-    const text = extractCompactionMessageText(message);
+    // Redact once, before excerpts and anchors, so no detached credential fragment survives.
+    const text = redactSecrets(extractCompactionMessageText(message));
     if (!text) {
       return;
     }
@@ -97,7 +98,7 @@ export function buildCompactionFloor(
   const shown: string[] = [];
   let used = 120;
   for (const { label, text } of users.toReversed()) {
-    const line = `- [${label}]: ${clip(redactSecrets(text), MAX_FLOOR_USER_MESSAGE_CHARS)}`;
+    const line = `- [${label}]: ${clip(text, MAX_FLOOR_USER_MESSAGE_CHARS)}`;
     if (used + line.length + 1 > userBudget) {
       break;
     }
@@ -124,7 +125,7 @@ export function buildCompactionFloor(
   const anchorLines: string[] = [];
   used = 80;
   for (const anchor of ranked) {
-    const line = `- ${anchor.kind}: ${redactSecrets(anchor.value)}`;
+    const line = `- ${anchor.kind}: ${anchor.value}`;
     if (used + line.length + 1 > anchorBudget) {
       break;
     }
@@ -139,7 +140,7 @@ export function buildCompactionFloor(
 
   const outcomes = assistants
     .slice(-FLOOR_OUTCOMES)
-    .map((text) => `- ${clip(redactSecrets(text), MAX_FLOOR_OUTCOME_CHARS)}`);
+    .map((text) => `- ${clip(text, MAX_FLOOR_OUTCOME_CHARS)}`);
   if (outcomes.length > 0) {
     sections.push(["## Last assistant replies before the cut", ...outcomes].join("\n"));
   }

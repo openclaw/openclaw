@@ -35,8 +35,8 @@ describe("buildCompactionFloor", () => {
   });
 
   it("redacts credential shapes and returns nothing for tool-only regions", () => {
-    expect(buildCompactionFloor([user("use token=abcdefgh12345678 here")])).not.toContain(
-      "abcdefgh12345678",
+    expect(buildCompactionFloor([user("use token=deadbeef12345678 here")])).not.toContain(
+      "deadbeef12345678",
     );
     const toolOnly: AgentMessage = {
       role: "toolResult",
