@@ -6,14 +6,24 @@
 export const TUNNEL_EXIT_UNAVAILABLE = 78;
 /** Child exit code: the endpoint key file is unsafe or corrupt. Not retried. */
 export const TUNNEL_EXIT_KEY_REFUSED = 77;
+/** Child exit code: no file holds the endpoint key the claw is bound to. Not retried. */
+export const TUNNEL_EXIT_KEY_MISSING = 76;
+/** Child exit code: the endpoint key file holds another key than the bound one. Not retried. */
+export const TUNNEL_EXIT_KEY_MISMATCH = 75;
 
 /** Sent once, right after the child starts. */
 export type TunnelStartMessage = {
   type: "start";
   /** The only relay in the endpoint's relay map. */
   relayUrl: string;
-  /** Endpoint secret key file (32 raw bytes, 0600); created by the child on first start. */
+  /** Endpoint secret key file (32 raw bytes, 0600); created by the child while unlinked. */
   keyPath: string;
+  /**
+   * K_srv the stored binding names (`iroh:<hex>`), once the claw is linked. The child
+   * then loads only that key (promoting a staged `.next` file that holds it) and never
+   * creates one.
+   */
+  expectedEndpointKey?: string;
   /** Optional UDP bind address (`host:port`). */
   bindAddr?: string;
   /** Gateway ingress the child proxies every stream to. */

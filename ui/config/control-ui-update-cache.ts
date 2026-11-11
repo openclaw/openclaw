@@ -24,7 +24,17 @@ const sourceInputs = [
 
 function moduleKey(id: string): string {
   // Inline CSS and ordinary CSS are different modules; pnpm store versions are not.
-  return controlUiBootManifestKey(id) + (id.match(/[?#].*$/u)?.[0] ?? "");
+  const query = id.match(/[?#].*$/u)?.[0] ?? "";
+  const physical = id
+    .replace(/[?#].*$/u, "")
+    .replace(/\\/g, "/")
+    .replace(/\/node_modules\/\.pnpm\/[^/]+\/node_modules\//gu, "/node_modules/");
+  const first = physical.indexOf("/node_modules/");
+  // Hoisted installs copy one version under each dependent; keep each copy distinct.
+  if (first !== -1 && first !== physical.lastIndexOf("/node_modules/")) {
+    return physical.slice(first + 1) + query;
+  }
+  return controlUiBootManifestKey(id) + query;
 }
 
 function chunkKey(chunk: Chunk): string {

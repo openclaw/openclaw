@@ -1,0 +1,2 @@
+# Closed production-created templates replace per-case schema initialization without dropping coverage.
+37

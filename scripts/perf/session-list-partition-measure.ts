@@ -201,7 +201,14 @@ for (const [name, query] of cases.filter(
       const previous = rows[index]!;
       const row = { ...previous, entry: { ...previous.entry, updatedAt: now + revision } };
       rows[index] = row;
-      owner.change({ kind: "row", id: identity(row), key: row.key, agentId: row.agentId, row });
+      owner.change({
+        kind: "row",
+        id: identity(row),
+        key: row.key,
+        agentId: row.agentId,
+        storePath: row.storeTarget.storePath,
+        row,
+      });
     }
     if (values.cold) {
       retained.clear();

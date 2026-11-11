@@ -12,16 +12,23 @@ import {
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { resolvePendingFinalDeliveryCompletion } from "../auto-reply/reply/pending-final-delivery.js";
 import { cliRecoveryEntrypoints } from "../cli/cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
 import { resetConfigRuntimeState } from "../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronJob } from "../cron/types.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { migrateLegacyDesktopStreamOptOuts } from "../infra/device-pairing-node-desktop-migration.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { markFinal } from "../infra/outbound/delivery-completion.shard-test-support.js";
+import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../infra/outbound/delivery-queue-namespaces.js";
+import { enqueueDeliveryOnce } from "../infra/outbound/delivery-queue-storage.js";
+import type { QueuedDelivery } from "../infra/outbound/delivery-queue-types.js";
 import { dropPostgresTestSchemas } from "../infra/postgres-sync/schema-cleanup.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resetLogger } from "../logging/logger.js";
@@ -29,6 +36,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { withSecureTestNodeCommand } from "../secrets/test-node-command.test-support.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -41,6 +50,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { writeSinkPlugin } from "./gateway.sessions-send-provenance.transport.test-support.js";
 import type { toCronBroadcastEvent } from "./server-cron-plugin-job.js";
 import { installGatewayDatabaseEngine } from "./server-database-engine.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
@@ -61,8 +71,10 @@ function quoteIdentifier(value: string): string {
   return `"${value.replaceAll('"', '""')}"`;
 }
 
-async function readAnchor(state: OpenClawTestState): Promise<Anchor | undefined> {
-  const pathname = resolveOpenClawStateSqlitePath(state.env);
+async function readAnchor(
+  state: OpenClawTestState,
+  pathname = resolveOpenClawStateSqlitePath(state.env),
+): Promise<Anchor | undefined> {
   try {
     await fs.stat(pathname);
   } catch (error) {
@@ -324,6 +336,256 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       );
       expect(persisted).toEqual([{ value_json: JSON.stringify(PREFS_PATH) }]);
     }));
+
+  it(
+    "recovers a queued final receipt after its Gateway dies before queue ACK",
+    { timeout: 90_000 },
+    async ({ signal }) => {
+      await using resources = new AsyncDisposableStack();
+      type Boundary = { id: string; pid: number };
+      const held = createDeferred<Boundary>();
+      const recovered = createDeferred<Boundary>();
+      const deliveries: Array<{ to: string; text: string }> = [];
+      const summary = "Committed final result.";
+      const server = createServer((request, response) => {
+        void (async () => {
+          const body = await readRequestText(request);
+          if (request.method === "POST" && request.url === "/sink") {
+            deliveries.push(JSON.parse(body));
+            response.setHeader("content-type", "application/json");
+            response.end(JSON.stringify({ channel: "telegram", messageId: "accepted-final" }));
+          } else if (request.method === "POST" && request.url === "/ack") {
+            held.resolve(JSON.parse(body));
+            response.writeHead(204).end();
+          } else if (request.method === "POST" && request.url === "/recovered") {
+            recovered.resolve(JSON.parse(body));
+            response.writeHead(204).end();
+          } else {
+            response.writeHead(404).end();
+          }
+        })().catch((error: unknown) => response.writeHead(500).end(String(error)));
+      });
+      const serverUrl = await listenLoopback(server);
+      resources.defer(() => closeHttpServer(server));
+      // Hold the request before execution, unlike committed ACK reply-loss coverage.
+      // On restart, observe the real ACK response and advance only the Gateway clock.
+      const preload = (id: string, observe = false, offset = 0) =>
+        `data:text/javascript,${encodeURIComponent(`
+          import { Worker, isMainThread } from "node:worker_threads";
+          import { deserialize } from "node:v8";
+          if (isMainThread) {
+            const now = Date.now.bind(Date);
+            Date.now = () => now() + ${offset};
+            const post = Worker.prototype.postMessage;
+            const emit = Worker.prototype.emit;
+            let target;
+            const report = (id) => fetch(${JSON.stringify(`${serverUrl}/${observe ? "recovered" : "ack"}`)}, {
+              method: "POST", body: JSON.stringify({ id, pid: process.pid })
+            }).then((response) => { if (!response.ok) throw new Error("Boundary report failed"); });
+            Worker.prototype.postMessage = function(request, ...rest) {
+              if (request?.type === "execute") {
+                const command = deserialize(request.input);
+                if (command?.type === "deliveryQueue.ack" &&
+                    command.input?.id === ${JSON.stringify(id)}) {
+                  ${observe ? "target = { worker: this, requestId: request.id };" : "void report(command.input.id); return;"}
+                }
+              }
+              return Reflect.apply(post, this, [request, ...rest]);
+            };
+            Worker.prototype.emit = function(event, ...args) {
+              const reply = args[0];
+              if (target?.worker === this && event === "message" &&
+                  reply?.id === target.requestId && reply.ok === true) {
+                target = undefined;
+                void report(${JSON.stringify(id)});
+              }
+              return Reflect.apply(emit, this, [event, ...args]);
+            };
+          }
+        `)}`;
+      const nodeExecutable = resolveTestNodeExecPath();
+      const gatewayPrefix = [nodeExecutable];
+      const instance = await createOpenClawTestInstance({
+        name: "postgres-final-receipt-crash",
+        signal,
+        entrypoint: resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli),
+          nodeExecutable,
+        ),
+        gatewayCommandPrefix: gatewayPrefix,
+        env: {
+          [DSN_ENV]: connection,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_GATEWAY_RESTART_TRACE: "0",
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+          OPENCLAW_NO_RESPAWN: "1",
+          NODE_DISABLE_COMPILE_CACHE: "1",
+        },
+        config: {
+          database: {
+            engine: "postgres",
+            postgres: {
+              connection: { source: "env", provider: "default", id: DSN_ENV },
+              schemaPrefix: PREFIX,
+            },
+          },
+          gateway: { mode: "local" },
+          skills: { load: { watch: false } },
+        },
+      });
+      resources.defer(() => instance.cleanup());
+      state = instance.state;
+      const current = instance.state;
+      current.applyEnv();
+      const sinkPlugin = await writeSinkPlugin(current.workspaceDir, `${serverUrl}/sink`);
+      const config: OpenClawConfig = {
+        ...JSON.parse(await fs.readFile(current.configPath, "utf8")),
+        agents: {
+          defaults: {
+            workspace: current.workspaceDir,
+            skipBootstrap: true,
+          },
+          entries: { main: {} },
+        },
+        plugins: {
+          allow: ["provenance-sink"],
+          entries: { "provenance-sink": { enabled: true } },
+          load: { paths: [sinkPlugin] },
+          slots: { memory: "none" },
+        },
+        channels: {
+          telegram: {
+            enabled: true,
+            botToken: "123456:isolated-proof",
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+      };
+      await current.writeConfig(config);
+      delete instance.env.VITEST;
+      delete instance.env.NODE_ENV;
+      // Preflight owns migration completion; full runtime bootstrap belongs to the real Gateways.
+      const preflight = await runStartupConfigPreflight({ gateway: true, observe: false });
+      try {
+        expect(preflight.snapshot.valid).toBe(true);
+      } finally {
+        await preflight.pluginCache?.[Symbol.asyncDispose]();
+      }
+      await closeOpenClawAgentDatabasesAsync(current.stateDir);
+      await closeStateDatabaseForTest();
+      const bootstrapAnchor = await readAnchor(current);
+      if (!bootstrapAnchor) {
+        throw new Error("Gateway startup did not persist its PostgreSQL anchor");
+      }
+      expect(
+        await queryRows(
+          `SELECT value_json FROM ${quoteIdentifier(bootstrapAnchor.namespace)}.config_machine_state WHERE state_key = $1`,
+          [`webhookListeners:${current.configPath}`],
+        ),
+      ).toEqual([{ value_json: "true" }]);
+      await installGatewayDatabaseEngine(preflight.snapshot, preflight.databaseEngineSelection);
+      const sessionKey = "agent:main:final-receipt-crash";
+      const target = "provenance-final-receipt-crash";
+      const scope = {
+        agentId: "main",
+        sessionKey,
+        storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: current.env }),
+      };
+      const source = { sessionId: "final-receipt-crash", updatedAt: Date.now() };
+      const payloads = [{ text: summary }];
+      const context = { channel: "telegram", to: target };
+      // Seed produced output through real workers; Gateway startup owns both transport settlements.
+      await replaceSessionEntry(scope, source);
+      await markFinal(scope, source, payloads, context);
+      const completion = resolvePendingFinalDeliveryCompletion(payloads);
+      if (!completion) {
+        throw new Error("Missing queued pending-final completion");
+      }
+      await enqueueDeliveryOnce(
+        { ...context, payloads, deliveryCompletion: completion, requiresProducerClaim: true },
+        completion.deliveryId,
+        current.stateDir,
+      );
+      await closeOpenClawAgentDatabasesAsync(current.stateDir);
+      await closeStateDatabaseForTest();
+      gatewayPrefix.push("--import", preload(completion.deliveryId));
+      await instance.startGateway();
+      const firstChild = instance.child!;
+      const boundary = await withinTest(held.promise, signal);
+      expect(boundary.pid).toBe(firstChild.pid);
+      expect(boundary.id).toBe(completion.deliveryId);
+      const anchor = await readAnchor(current);
+      const agentAnchor = await readAnchor(
+        current,
+        resolveOpenClawAgentSqlitePath({ agentId: "main", env: current.env }),
+      );
+      if (!anchor || !agentAnchor) {
+        throw new Error("Gateway final delivery did not persist both PostgreSQL anchors");
+      }
+      const readEntry = async (): Promise<InternalSessionEntry> => {
+        const rows = await queryRows<{ entry_json: string }>(
+          `SELECT entry_json FROM ${quoteIdentifier(agentAnchor.namespace)}.session_nodes WHERE session_key = $1`,
+          [sessionKey],
+        );
+        expect(rows).toHaveLength(1);
+        return JSON.parse(rows[0]!.entry_json);
+      };
+      const readQueue = () =>
+        queryRows<{ status: string; entry_json: string }>(
+          `SELECT status, entry_json FROM ${quoteIdentifier(anchor.namespace)}.delivery_queue_entries WHERE queue_name = $1 AND id = $2`,
+          [OUTBOUND_DELIVERY_QUEUE_NAME, boundary.id],
+        );
+      const entry = await readEntry();
+      expect(entry.sessionId).toEqual(expect.any(String));
+      const queue = await readQueue();
+      expect(queue).toMatchObject([{ status: "pending" }]);
+      const queued: QueuedDelivery = JSON.parse(queue[0]!.entry_json);
+      const expected = {
+        intentId: expect.any(String),
+        deliveries: [
+          {
+            id: boundary.id,
+            state: "delivered",
+            receipt: { platformMessageId: "accepted-final", resultCount: 1 },
+          },
+        ],
+      };
+      expect(entry.pendingFinalDelivery).toMatchObject(expected);
+      const identity = entry.pendingFinalDelivery!;
+      expect(queued.deliveryCompletion).toMatchObject({
+        kind: "pending-final",
+        sessionKey,
+        sessionId: entry.sessionId,
+        intentId: identity.intentId,
+        deliveryId: boundary.id,
+      });
+      expect(deliveries).toMatchObject([{ to: target, text: summary }]);
+      expect(deliveries).toHaveLength(1);
+      await instance.crashGateway();
+      expect(firstChild.signalCode).toBe("SIGKILL");
+      expect((await readEntry()).pendingFinalDelivery).toEqual(identity);
+      const afterCrash = await readQueue();
+      expect(afterCrash).toMatchObject([{ status: "pending" }]);
+      const crashed: QueuedDelivery = JSON.parse(afterCrash[0]!.entry_json);
+      expect(crashed.availableAt).toEqual(expect.any(Number));
+      // Simulate elapsed lease time without rewriting custody or waiting a real minute.
+      // Workers keep their native clock; terminal-owner recovery needs no platform reclaim.
+      gatewayPrefix[2] = preload(
+        boundary.id,
+        true,
+        Math.max(0, crashed.availableAt! - Date.now()) + 1_000,
+      );
+      await instance.startGateway();
+      const ack = await withinTest(recovered.promise, signal);
+      expect(ack).toEqual({ id: boundary.id, pid: instance.child?.pid });
+      expect(ack.pid).not.toBe(firstChild.pid);
+      expect(await readQueue()).toEqual([]);
+      expect((await readEntry()).pendingFinalDelivery).toEqual(identity);
+      await instance.stopGateway();
+      expect(deliveries).toHaveLength(1);
+    },
+  );
 
   it(
     "recovers completed and interrupted one-shots after their Gateway process is killed",

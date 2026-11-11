@@ -1,4 +1,4 @@
-export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restoreGatewayService(reason, decision = params.recovery, childStatus, previousGeneration = false, updaterStopped = false) {
+export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restoreGatewayService(reason, decision = params.recovery, childStatus, previousGeneration = false, updaterStopped = false, beforeStart = () => {}) {
   if (managedUpdateLease?.action.kind !== "update" || !ownsManagedUpdateLease()) return false;
   let expectedRevision;
   const record = (restored) => recordManagedUpdateOutcome(
@@ -52,6 +52,7 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
       !ownsRecovery()) {
       return refuse("recovery refused: parked systemd service identity changed or stop is incomplete");
     }
+    beforeStart();
     const started = childStatus
       ? await restart()
       : await runOwned("systemctl", ["--user", "start", recovery.unit]);
@@ -84,6 +85,7 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
       } else if (!isLaunchdNotLoaded(before)) {
         return refuse();
       }
+      beforeStart();
       if (childStatus) {
         const restarted = await restart();
         // The guarded CLI owns its restart deadline; identity inspection gets a fresh probe budget.
@@ -113,8 +115,10 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
             }
             if (kickstarted) break;
             kickstarted = true;
+            beforeStart();
             inspection = await run(["kickstart", target]);
           } else if (isLaunchdNotLoaded(inspection)) {
+            beforeStart();
             inspection = await run(["bootstrap", "gui/" + recovery.uid, recovery.plistPath]);
           } else break;
           if (inspection.code === 0) continue;
@@ -132,6 +136,7 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
       return refuse("recovery refused: " + (error instanceof Error ? error.message : String(error)));
     }
   } else if (recovery?.kind === "schtasks") {
+    beforeStart();
     restored = (updaterStopped ? await restart() : await runOwned("schtasks.exe", ["/Run", "/TN", recovery.taskName])).code === 0;
   }
   // Manager liveness survives a failed readiness probe, but version facts require

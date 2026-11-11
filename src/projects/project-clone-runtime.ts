@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ProjectCloneFailureCause } from "../../packages/gateway-protocol/src/index.js";
+import { fetchRemoteDefault } from "../agents/worktrees/base-fetch.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import {
   executeGitCommand,
@@ -12,6 +13,7 @@ import {
 import { withGitNetworkRetry, type GitOperationStarter } from "../infra/git-network-retry.js";
 import { withGitObjectStoreTransport } from "../infra/git-object-store-transport.js";
 import { withGitRepositoryRepair } from "../infra/git-repository-repair.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
@@ -32,6 +34,7 @@ type ProjectCloneOptions = {
   token?: string;
 };
 const PROJECT_FETCH_TIMEOUT_MS = 60_000;
+const log = createSubsystemLogger("projects/clone");
 const PROJECT_REF_INVENTORY_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const PROJECT_MAINTENANCE_CONFIG = [
   ["maintenance.auto", "false"],
@@ -255,12 +258,12 @@ export async function cloneProjectCheckout(
   throw classifyProjectGitFailure(result, "clone", Boolean(options.token));
 }
 
-async function withProjectCheckoutTransport(
+async function withProjectCheckoutTransport<T>(
   input: { target: string; url: string },
   options: ProjectCloneOptions,
-  run: (staging: string, stagingOptions: ProjectCloneOptions) => Promise<void>,
-): Promise<void> {
-  await withGitObjectStoreTransport(
+  run: (staging: string, stagingOptions: ProjectCloneOptions) => Promise<T>,
+): Promise<T> {
+  return await withGitObjectStoreTransport(
     input.target,
     async (target, args) =>
       requireGitCommandOutput(
@@ -276,20 +279,60 @@ async function withProjectCheckoutTransport(
   );
 }
 
+async function readProjectCheckoutFilter(
+  input: { target: string; url: string },
+  options: ProjectCloneOptions,
+) {
+  const filterResult = await runProjectCheckoutGit(input, options, [
+    "config",
+    "--get",
+    "remote.origin.partialclonefilter",
+  ]);
+  return filterResult.code === 1 && filterResult.termination === "exit"
+    ? ""
+    : requireGitCommandOutput("git config remote.origin.partialclonefilter", filterResult).trim();
+}
+
+/** Capture an authenticated default without trusting the checkout's transport configuration. */
+export async function prepareProjectCheckoutDefaultBase(
+  input: { target: string; url: string },
+  options: ProjectCloneOptions,
+): Promise<{ baseRef: string; baseCommit: string }> {
+  const filter = await readProjectCheckoutFilter(input, options);
+  return await withProjectCheckoutTransport(input, options, async (staging, stagingOptions) => {
+    // The resolver owns source-ref publication; only transport uses clean metadata.
+    const base = await fetchRemoteDefault(
+      input.target,
+      {
+        env: {
+          ...cloneCommandEnv(input.url, options.token, options.env ?? process.env),
+          GIT_NO_LAZY_FETCH: "1",
+          GIT_OBJECT_DIRECTORY: stagingOptions.objectDirectory,
+        },
+        signal: options.signal,
+        beforeRun: options.assertCurrent,
+        startRun: options.startRun,
+      },
+      { cwd: staging, remote: input.url, filter },
+    );
+    await ensureProjectCheckoutCommit({ ...input, commit: base.commit }, options);
+    if (base.warning) {
+      log.warn(base.warning);
+    }
+    return { baseRef: base.recordRef, baseCommit: base.commit };
+  });
+}
+
 /** Refreshes refs in an existing Gateway-managed project checkout. */
 export async function refreshProjectCheckout(
   input: { target: string; url: string },
   options: ProjectCloneOptions = {},
 ): Promise<void> {
-  const [initialRefs, filterResult] = await Promise.all([
+  // Literal URLs and temporary metadata do not inherit origin's filter.
+  const [initialRefs, filter] = await Promise.all([
     readProjectRemoteRefs(input, options),
-    runProjectCheckoutGit(input, options, ["config", "--get", "remote.origin.partialclonefilter"]),
+    readProjectCheckoutFilter(input, options),
   ]);
-  // The temporary repository does not inherit the managed clone's origin filter.
-  const filter =
-    filterResult.code === 1 && filterResult.termination === "exit"
-      ? ""
-      : requireGitCommandOutput("git config remote.origin.partialclonefilter", filterResult).trim();
   let currentRefs = initialRefs;
   await withProjectCheckoutTransport(input, options, async (staging, stagingOptions) => {
     let protectedRefs: ReadonlySet<string> | undefined;
@@ -539,9 +582,11 @@ export async function ensureProjectCheckoutCommit(
   if (present.code === 0 && present.termination === "exit" && present.stdout.trim()) {
     return;
   }
+  const filter = await readProjectCheckoutFilter(input, options);
   const fetch = () =>
     command([
       "fetch",
+      ...(filter ? [`--filter=${filter}`] : []),
       "--no-auto-maintenance",
       "--no-tags",
       "--no-recurse-submodules",

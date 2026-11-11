@@ -1,0 +1,2 @@
+4
+# Existing transcript boundary regression now distinguishes same-name ID suffix collisions.
