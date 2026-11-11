@@ -50,7 +50,7 @@ export function withWorkspaceRecoveryHint(
   }
   const message = error.message.includes(".openclaw/tmp/")
     ? error.message
-    : `${error.message}. Use a relative path under \`.openclaw/tmp/\` inside the workspace for scratch/temp/meta files that file tools need to read or write later.`;
+    : `${error.message}. Use a relative path under \`.openclaw/tmp/\` inside the workspace for output files that file tools need to read or write later.`;
   const bindingHint =
     hostWorkspace && isHostRootEscapeError(error) ? ` ${workspaceBindingHint(source)}` : "";
   return new Error(`${message}${bindingHint}`, { cause: error });

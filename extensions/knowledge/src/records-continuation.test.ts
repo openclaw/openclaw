@@ -54,22 +54,26 @@ it("registered inventory follows every returned offset through a large filtered 
     throw new Error("Expected registered records tool");
   }
   const call = async (input: { query: string; limit: number; offset?: number }) =>
-    (await tool.execute(randomUUID(), input)).details as FeatureOutput<typeof contract, "records">;
+    (await tool.execute(randomUUID(), input)).details as FeatureOutput<
+      typeof contract,
+      "records_detail"
+    >;
   const control = await call({ query: "Unrelated control", limit: 50 });
   expect(control.records.map((r) => r.id)).toEqual(["project_unrelated"]);
   expect(control.total).toBe(1);
-  expect(control.nextOffset).toBeNull();
+  // Agent listings name a next offset only while more remain.
+  expect(control.nextOffset).toBeUndefined();
   const seen: string[] = [];
-  let offset: number | null = 0;
+  let offset: number | undefined = 0;
   do {
     const page = await call({ query: "Inventory", limit: 50, offset });
     expect(page.total).toBe(ids.length);
     expect(page.records.length).toBeGreaterThan(0);
     expect(page.records.length).toBeLessThanOrEqual(50);
     seen.push(...page.records.map((r) => r.id));
-    expect(page.nextOffset).toBe(seen.length < ids.length ? seen.length : null);
-    offset = page.nextOffset;
-  } while (offset !== null);
+    expect(page.nextOffset).toBe(seen.length < ids.length ? seen.length : undefined);
+    offset = page.nextOffset ?? undefined;
+  } while (offset !== undefined);
   expect(seen).toEqual(ids);
   for (const [file, text] of files) {
     expect(await readFile(file, "utf8")).toBe(text);

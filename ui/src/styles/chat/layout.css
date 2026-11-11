@@ -1549,28 +1549,56 @@ openclaw-chat-video-player {
   white-space: nowrap;
 }
 
-/* The conversation's top-right gutter, owned by one column so its members
-   stack instead of overlapping (the positioned ancestor is
-   .chat-main__conversation); content scrolls underneath it. The column is as
-   wide as its widest member — the suggestion tray, which deliberately overhangs
-   the transcript — and narrower members right-align inside it. */
+/* One gutter stacks notices and suggestions. On wide panes the tray deliberately
+   overhangs the transcript; the full-width notice lane passes pointer input through. */
 .chat-gutter-stack {
   position: absolute;
   z-index: 24;
   top: calc(var(--chat-mobile-pane-header-height, 0px) + 10px);
   right: 14px;
   display: grid;
-  width: min(450px, calc(100% - 28px));
+  grid-template-rows: auto minmax(0, 1fr);
+  width: calc(100% - 28px);
+  min-height: 0;
+  max-height: calc(100cqh - var(--chat-mobile-pane-header-height, 0px) - 20px);
   justify-items: end;
   gap: var(--space-3);
-  /* The column spans the tray's width even when only a narrow member renders,
-     so it must not swallow clicks aimed at the transcript beneath it. */
   pointer-events: none;
 }
 
 .chat-gutter-stack > * {
   pointer-events: auto;
 }
+
+/* A tray wider than half the pane has no usable side gutter. Let the existing
+   conversation flex flow reserve its real height, including expanded instructions;
+   bound that share so the transcript and composer remain available. */
+@container chat-conversation (max-width: 900px) {
+  .chat-gutter-stack:has(> .task-suggestions) {
+    position: relative;
+    inset: auto;
+    order: -1;
+    flex: 0 1 auto;
+    align-self: flex-end;
+    max-height: 40cqh;
+    margin: 10px 14px 18px;
+  }
+}
+.chat-gutter-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  width: 100%;
+  pointer-events: none;
+}
+
+.chat-gutter-header .chat-topbar-notices {
+  position: static;
+  justify-self: center;
+  max-width: min(34rem, 100%);
+  transform: none;
+}
+
 .task-suggestions {
   --task-suggestion-card-bg: color-mix(in srgb, var(--panel-strong) 72%, var(--panel-hover) 28%);
   --task-suggestion-path-bg: color-mix(in srgb, var(--panel-hover) 84%, var(--text) 16%);
@@ -1582,7 +1610,8 @@ openclaw-chat-video-player {
      against this box. Geometry otherwise comes from .chat-gutter-stack. */
   position: relative;
   display: grid;
-  width: 100%;
+  width: min(450px, 100%);
+  min-height: 0;
   overflow: visible;
   overscroll-behavior: contain;
 }
@@ -1677,7 +1706,7 @@ openclaw-chat-video-player {
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 14px;
   /* Keep header and launch controls inside short panes while the body scrolls. */
-  max-height: calc(100cqh - var(--chat-mobile-pane-header-height, 0px) - 20px);
+  max-height: 100%;
   padding: 14px 16px 17px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);

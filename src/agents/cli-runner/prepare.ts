@@ -140,7 +140,7 @@ import { prepareCliLoopbackBundleMcp } from "./loopback-bundle-mcp.js";
 import { mintCliMcpClientGrant } from "./mcp-client-grant.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
-import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
+import { detectNodeClaudePlacement } from "./prepare-claude.js";
 import { prepareCliTurnHookContext } from "./prepare-hook-context.js";
 import * as mcp from "./prepare-mcp.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
@@ -560,10 +560,10 @@ async function prepareCliRunContextWithinReadFence(
   }
   const modelDisplay = `${params.provider}/${modelId}`;
   const isClaudeCli = isClaudeCliBackendId(params.provider);
-  const requestedContextModelId = isClaudeCli ? resolveClaudeCliContextModelId(modelId) : modelId;
-  const normalizedContextModelId = isClaudeCli
-    ? resolveClaudeCliContextModelId(normalizedCatalogModel)
-    : normalizedCatalogModel;
+  // A CLI-native alias (Claude Code's `fable`) sizes context from the model the
+  // CLI's own menu resolves it to; OpenClaw keeps no alias table of its own.
+  const requestedContextModelId = params.nativeModelId ?? modelId;
+  const normalizedContextModelId = params.nativeModelId ?? normalizedCatalogModel;
   // Aliases can map a canonical id to a CLI shorthand or a user shorthand to
   // a canonical id. Resolve both identities and keep the safest owned limit.
   const contextModelIds = uniqueStrings([requestedContextModelId, normalizedContextModelId]);

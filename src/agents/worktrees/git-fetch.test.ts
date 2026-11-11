@@ -171,6 +171,38 @@ it("repairs physical tips hidden by a replacement during project refresh", async
   expect(await ref(clone, replacement)).toBe(base);
 });
 
+it.each(["worktree", "project refresh"])(
+  "negotiates %s missing-tip repair against resident history in a full blobless clone",
+  async (entry) => {
+    await config(clone, "fetch.unpackLimit", "1");
+    vi.stubEnv("GIT_CONFIG_COUNT", "1");
+    vi.stubEnv("GIT_CONFIG_KEY_0", "fetch.unpackLimit");
+    vi.stubEnv("GIT_CONFIG_VALUE_0", "1");
+    const packedObjects = async () =>
+      Number(/^in-pack: (\d+)$/m.exec(await git(clone, ["count-objects", "-v"]))![1]);
+    const before = await packedObjects();
+    if (entry === "worktree") {
+      expect((await fetch()).code).toBe(0);
+    } else {
+      await refresh();
+    }
+    expect(await git(clone, ["cat-file", "-t", tip])).toBe("commit");
+    // Only the missing tip is new; its parent and unchanged tree are already resident.
+    expect((await packedObjects()) - before).toBe(1);
+  },
+);
+
+it("repairs a missing tip below the resident negotiation commit", async () => {
+  const relative = path.join(retired.slice(0, 2), retired.slice(2));
+  const destination = path.join(clone, ".git/objects", relative);
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await fs.copyFile(path.join(source, ".git/objects", relative), destination);
+  await git(clone, ["update-ref", "refs/heads/a-descendant", retired]);
+  expect((await fetch()).code).toBe(0);
+  expect(await git(clone, ["cat-file", "-t", tip])).toBe("commit");
+  expect(await ref(clone, "refs/heads/a-descendant")).toBe(retired);
+});
+
 it("preserves tags and tracking refs when the caller disables configured pruning", async () => {
   await config(source, "uploadpack.allowAnySHA1InWant", "true");
   await git(clone, ["tag", "local-only", base]);

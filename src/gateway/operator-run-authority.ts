@@ -51,6 +51,9 @@ import {
 import { captureGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 
+const reconnectHint =
+  "Reconnect to the Gateway, then resend your message. If access is denied, ask an administrator to restore it.";
+
 type OperatorSource = {
   owners: readonly [
     gateway: object,
@@ -466,17 +469,17 @@ export async function captureGatewayOperatorRunAuthority(input: {
     ),
     (assertSources) => {
       if (revoked || references === 0) {
-        throw new Error("operator execution authority is no longer active");
+        throw new Error(`operator execution authority is no longer active. ${reconnectHint}`);
       }
       if (isSourceCurrent?.() === false || !isGatewayCurrent()) {
-        throw new Error("operator source authority is no longer active");
+        throw new Error(`operator source authority is no longer active. ${reconnectHint}`);
       }
       assertSources();
       if (openclawIdPrincipal && !isOpenClawIdTunnelPrincipalCurrent(openclawIdPrincipal)) {
         throw new Error("OpenClaw ID membership authority changed");
       }
       if (revoked || references === 0) {
-        throw new Error("operator execution authority is no longer active");
+        throw new Error(`operator execution authority is no longer active. ${reconnectHint}`);
       }
     },
   );
@@ -521,7 +524,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
     };
     subscriptions.push(
       onGatewayDeviceSourceRevoked(params.hasCurrentClientAuthority, () =>
-        revoke(new Error("operator source authority is no longer active")),
+        revoke(new Error(`operator source authority is no longer active. ${reconnectHint}`)),
       ),
       onUserProfilesChanged(() => recheck(assertCapturedRoleCurrent)),
       openclawIdPrincipal

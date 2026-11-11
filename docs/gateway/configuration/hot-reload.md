@@ -201,12 +201,27 @@ at most two retries. Once a hook, model, or delivery may have performed work, it
 does not replay the occurrence; a failed scheduled run remains visible in cron
 history and the next schedule is a separate run.
 
-Logging changes never revoke scheduled work. Once a scheduled turn selects its
+Logging changes never revoke scheduled work. Plugin changes, including turning a
+Labs plugin such as Advisor on or off, leave scheduled turns to the plugin reload:
+the turn hands over at its next step boundary or keeps its admitted plugin
+generation until it finishes, as interactive turns do. Once a scheduled turn selects its
 model, edits to another provider's model configuration also leave it running.
 Adding models to the allowlist preserves the turn while its selected model remains
 allowed; removing that permission or changing its provider's configuration still
 rechecks the occurrence under current policy. These unrelated edits do not consume
 the occurrence's bounded readmission attempts.
+
+Every session event, including a background command's completion follow-up,
+compares only the configuration its own agent uses: shared settings, agent
+defaults, and that agent's entry. Scheduled events compare the channels on their
+route and re-admit other message actions against current policy. Unscheduled
+events retain all channel configuration because their tools keep the captured
+configuration. Adding or editing another agent, including that agent's secret
+references, leaves a running
+event alone, and so do logging changes. A change to the event's own agent, the
+agent defaults, or shared settings still rechecks the occurrence under current
+policy. Only scheduled events narrow auth, model-provider, and MCP changes to
+their selected model; other session events treat any such change as relevant.
 
 Session detail and process-list reads that encounter a retired model-catalog
 callback refresh their catalog binding once before preparing the response.
