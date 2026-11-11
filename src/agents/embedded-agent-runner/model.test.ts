@@ -551,7 +551,7 @@ describe("resolveModel", () => {
     // The transport bills each call from this cost: hosted beats bundled, a placeholder never bills $0.
     expect(await resolve(undefined)).toMatchObject(hosted);
     expect(await resolve(bundled, free)).toMatchObject(bundled);
-    expect(await resolve(free)).toMatchObject(free);
+    expect(await resolve(free, free)).toMatchObject(free);
     setRemoteModelCatalogOverlaySourcesForTest();
   });
 
