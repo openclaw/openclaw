@@ -1,0 +1,2 @@
+# Keep the existing activity assertions behind completed transcript rendering.
+3

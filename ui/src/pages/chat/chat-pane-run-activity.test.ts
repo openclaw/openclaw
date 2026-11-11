@@ -92,7 +92,10 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
     const container = createApplicationContextProvider(context);
     renderChatPropsInto(container, expectDefined(pane.chatProps, "chat props"), context);
 
-    await waitForSolid(() => expect(container.querySelector(".chat-thread-inner")).not.toBeNull());
+    await waitForSolid(() => {
+      expect(container.querySelector(".chat-thread-inner")).not.toBeNull();
+      expect(container.querySelector(".chat-conversation-loading")).toBeNull();
+    });
     expect(pane.chatProps?.canAbort).toBe(true);
     expect(
       container.querySelector(
