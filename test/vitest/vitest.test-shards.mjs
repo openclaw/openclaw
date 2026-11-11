@@ -29,6 +29,11 @@ export const tuiPtyTestFiles = [
 
 export const fullSuiteVitestShards = [
   {
+    config: "test/vitest/vitest.markdown.config.ts",
+    name: "core-markdown",
+    projects: ["test/vitest/vitest.markdown.config.ts"],
+  },
+  {
     config: "test/vitest/vitest.full-core-unit-fast.config.ts",
     name: "core-unit-fast",
     projects: [

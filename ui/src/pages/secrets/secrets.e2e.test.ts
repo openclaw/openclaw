@@ -182,7 +182,7 @@ suite.define(() => {
       await rowAction(page, "SERVICE_API_KEY", "edit");
       await reject(modal(page, "Edit secret"));
 
-      const protectedBulk = await openDialog(page, "Bulk Add");
+      const protectedBulk = await openDialog(page, "Bulk add");
       await bulkValue(protectedBulk).fill("EMPTY_API_KEY=\nEMPTY_ENV=");
       await protectedBulk.getByText("1 protected secret detected").waitFor();
       await reject(protectedBulk, "EMPTY_API_KEY: Enter a value.");
@@ -204,10 +204,10 @@ suite.define(() => {
       await button(addEnv, "Save").click();
       await notice(
         page,
-        "Saved EMPTY_ENV as Agent-readable environment. It is available to Gateway-hosted agent commands from the next run.",
+        "Saved EMPTY_ENV as Agent-readable environment. It is available to Gateway-hosted agent commands from the next reply.",
       );
 
-      const envBulk = await openDialog(page, "Bulk Add");
+      const envBulk = await openDialog(page, "Bulk add");
       await bulkValue(envBulk).fill("EMPTY_BULK_ENV=");
       await envBulk.getByText("0 protected secrets detected").waitFor();
       await bulkValue(envBulk).fill('BULK_PRIVATE_KEY="line one\nline two"\nEMPTY_BULK_ENV=');
@@ -215,7 +215,7 @@ suite.define(() => {
       await button(envBulk, "Save").click();
       await notice(
         page,
-        "Saved 2 entries (1 protected, 1 agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next run.",
+        "Saved 2 entries (1 protected, 1 agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next reply.",
       );
 
       expect((await gateway.getRequests("secrets.store.set")).map(({ params }) => params)).toEqual([
@@ -274,7 +274,7 @@ suite.define(() => {
         if (replace) {
           await page
             .getByRole("alert")
-            .getByText("The secret was not deleted. Reload the list and try again.", {
+            .getByText("Couldn’t delete the secret. Reload the list and try again.", {
               exact: true,
             })
             .waitFor();

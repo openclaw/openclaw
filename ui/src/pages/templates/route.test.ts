@@ -6,6 +6,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { createChangeListeners } from "../../../../src/shared/listeners.ts";
 import { createApplicationRouter, startApplicationRouter } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -16,6 +17,7 @@ import { TemplatesPage } from "./page.tsx";
 
 async function setup(pathname: string, initialConfig: Record<string, unknown> | null = null) {
   const source = createApplicationGateway();
+  const agents = createAgentCapability(source.gateway);
   let bootstrapConfig = initialConfig;
   const configListeners = createChangeListeners();
   const runtimeConfig = createRuntimeConfigCapability(source.gateway, {
@@ -25,6 +27,7 @@ async function setup(pathname: string, initialConfig: Record<string, unknown> | 
   const context = {
     basePath: "",
     gateway: source.gateway,
+    agents,
     runtimeConfig,
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
@@ -42,6 +45,7 @@ async function setup(pathname: string, initialConfig: Record<string, unknown> | 
   onTestFinished(() => {
     router.stop();
     runtimeConfig.dispose();
+    agents.dispose();
   });
   await startApplicationRouter(router, history, "", context);
   return {
@@ -85,7 +89,7 @@ it.each([
   const loading = () => view.container.querySelector(".plugin-catalog-detail--loading");
   const explore = () => view.container.querySelector("[data-templates-explore]");
   expect(loading()).not.toBeNull();
-  expect(view.container.textContent).not.toContain("Templates is disabled");
+  expect(view.container.textContent).not.toContain("Templates is turned off");
   expect(explore()).toBeNull();
 
   const request = vi.fn(async () => ({ entries: [] }));
@@ -99,7 +103,7 @@ it.each([
   await vi.waitFor(() => expect(loading()).toBeNull());
   await vi.waitFor(() => expect(explore() !== null).toBe(enabled));
   if (!enabled) {
-    expect(view.container.textContent).toContain("Templates is disabled");
+    expect(view.container.textContent).toContain("Templates is turned off");
     expect(request).not.toHaveBeenCalled();
   }
   expect(fixture.history.location().pathname).toBe(pathname);

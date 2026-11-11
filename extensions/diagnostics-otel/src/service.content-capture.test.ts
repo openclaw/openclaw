@@ -4,7 +4,12 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expect, test } from "vitest";
 import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
-import { CHILD_SPAN_ID, createTestTrace, startOtelService } from "./service.test-helpers.js";
+import {
+  CHILD_SPAN_ID,
+  createTestTrace,
+  MODEL_CALL_FIXTURE,
+  startOtelService,
+} from "./service.test-helpers.js";
 
 const sdk = installRealOtelSdkTestHarness({ replaceTraceProvider: true });
 const content = { userPrompt: "run the task", finalResponse: "task complete" };
@@ -13,6 +18,69 @@ const run = {
   trace: createTestTrace(CHILD_SPAN_ID),
 };
 const harness = { ...run, harnessId: "claude-cli" };
+
+test("redacts captured strings before JSON escaping", async () => {
+  const { service, ctx } = await startOtelService({ traces: true, captureContent: true });
+  const canary = "DUMMY0NOT0A0REAL0SECRET0QZ7";
+  const text = `notes\npassword=${canary}\nAPI_KEY=${canary}\ttoken=${canary}\r\nsecret=${canary}`;
+  emit(
+    { type: "model.call.completed", ...MODEL_CALL_FIXTURE, durationMs: 10 },
+    {
+      modelContent: {
+        inputMessages: [{ role: "user", content: text }],
+        outputMessages: [{ role: "assistant", content: text }],
+        toolDefinitions: [{ name: "example", description: text }],
+      },
+    },
+  );
+  emit(
+    {
+      type: "tool.execution.completed",
+      ...run,
+      toolName: "example",
+      toolCallId: "tool-capture",
+      durationMs: 10,
+    },
+    { toolContent: { toolInput: { command: text }, toolOutput: { result: text } } },
+  );
+  await waitForDiagnosticEventsDrained();
+  await service.stop?.(ctx);
+  for (const [name, keys] of [
+    [
+      "openclaw.model.call",
+      [
+        "gen_ai.input.messages",
+        "input.value",
+        "gen_ai.output.messages",
+        "output.value",
+        "gen_ai.tool.definitions",
+        "openclaw.content.input_messages",
+        "openclaw.content.output_messages",
+        "openclaw.content.tool_definitions",
+      ],
+    ],
+    [
+      "openclaw.tool.execution",
+      [
+        "gen_ai.tool.call.arguments",
+        "gen_ai.tool.call.result",
+        "openclaw.content.tool_input",
+        "openclaw.content.tool_output",
+      ],
+    ],
+  ] as const) {
+    const attributes = sdk.exporter
+      .getFinishedSpans()
+      .find((span) => span.name === name)?.attributes;
+    for (const key of keys) {
+      const value = attributes?.[key];
+      expect(value, key).toBeTypeOf("string");
+      expect(value, key).toContain("notes");
+      expect(value, key).not.toContain(canary);
+      expect(() => JSON.parse(String(value)), key).not.toThrow();
+    }
+  }
+});
 
 test.each([
   ["message", true, false],

@@ -13,13 +13,15 @@ export type EnrollmentStep = (typeof ENROLLMENT_STEPS)[number];
 /**
  * Notice events the Gateway may mail. `seq_conflict` tells the one device whose root statement
  * was refused for a stale seq that the Gateway has republished its snapshot; its `ref` is the
- * Gateway's current seq. Every other event goes to all owner devices.
+ * Gateway's current seq. `rebind` tells every owner device that the claw moved to new machine
+ * keys; its `ref` is the new binding_seq. Every other event goes to all owner devices.
  */
 export const MAILBOX_NOTICE_EVENTS = [
   "kit_used",
   "redemption_pending",
   "redemption_resolved",
   "seq_conflict",
+  "rebind",
 ] as const;
 /** One of {@link MAILBOX_NOTICE_EVENTS}. */
 export type MailboxNoticeEvent = (typeof MAILBOX_NOTICE_EVENTS)[number];
@@ -29,6 +31,7 @@ export const MAILBOX_NOTICE_REF_MAX_LENGTH = 128;
 
 /** Message payloads. Every security-relevant payload is a signed statement the reader verifies. */
 export type MailboxPayload =
+  | { kind: "node_redemption"; redemption: SignedStatement<"NodeRedemption"> }
   | { kind: "invite_redemption"; redemption: SignedStatement<"InviteRedemption"> }
   /** R-signed statements: kit enrollment (add_owner_device) and other root changes. */
   | { kind: "root_statement"; statements: SignedStatement[] }
@@ -43,18 +46,23 @@ export type MailboxPayload =
 
 /**
  * Whether a notice may go to a recipient: `seq_conflict` only to one device fingerprint (the
- * refused sender), every other event to the owner devices or one device.
+ * refused sender), `rebind` only to all owner devices, every other event to the owner devices
+ * or one device.
  */
 export function noticeRecipientAllowed(event: MailboxNoticeEvent, to: MailboxRecipient): boolean {
   if (to === "gateway") {
     return false;
+  }
+  if (event === "rebind") {
+    return to === "owners";
   }
   return event === "seq_conflict" ? isKeyFingerprint(to) : true;
 }
 
 /**
  * Checks a notice's event and `ref`; for `seq_conflict` the ref must be the Gateway's current
- * seq in decimal (no sign, no leading zeros, at most 15 digits).
+ * seq and for `rebind` the new binding_seq, in decimal (no sign, no leading zeros, at most 15
+ * digits).
  */
 export function isValidNotice(event: unknown, ref: unknown): event is MailboxNoticeEvent {
   // SAFETY: widening a literal tuple to its element supertype only for the membership test.
@@ -64,7 +72,7 @@ export function isValidNotice(event: unknown, ref: unknown): event is MailboxNot
   if (ref.length === 0 || ref.length > MAILBOX_NOTICE_REF_MAX_LENGTH) {
     return false;
   }
-  return event !== "seq_conflict" || parseSeqConflictRef(ref) !== undefined;
+  return (event !== "seq_conflict" && event !== "rebind") || parseSeqConflictRef(ref) !== undefined;
 }
 
 /** The Gateway's current seq from a `seq_conflict` notice ref, or undefined if malformed. */
@@ -73,7 +81,12 @@ export function parseSeqConflictRef(ref: string): number | undefined {
 }
 
 /** Payload kinds the Gateway accepts from its mailbox. Device-signed MembershipChanges are not among them. */
-export const GATEWAY_MAILBOX_KINDS = ["invite_redemption", "root_statement", "revocation"] as const;
+export const GATEWAY_MAILBOX_KINDS = [
+  "invite_redemption",
+  "node_redemption",
+  "root_statement",
+  "revocation",
+] as const;
 
 /** Sender identity as asserted by OpenClaw ID; display only, never authority. */
 export type ReportedSender = {
@@ -85,12 +98,21 @@ export type ReportedSender = {
   reported_by: "openclaw-id";
 };
 
+/** A node has no asserted account; its fingerprint names W, never an owner device D. */
+export type ReportedNodeSender = {
+  account_id: null;
+  email: null;
+  display_name: null;
+  device_fp: KeyFingerprint;
+  reported_by: "openclaw-id";
+};
+
 /** A stored message as returned to its reader. */
 export type MailboxMessage = {
   message_id: string;
   claw_id: string;
   to: MailboxRecipient;
-  from: ReportedSender;
+  from: ReportedSender | ReportedNodeSender;
   /** Coarse location hint for approval prompts ("reported by OpenClaw ID"). */
   location_hint: string | null;
   payload: MailboxPayload;

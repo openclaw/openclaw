@@ -28,6 +28,218 @@ struct SettingsHubTests {
         }
     }
 
+    @Test func `Access cookie resource rule admits only the Gateway authority`() async throws {
+        let gateway = try #require(URL(string: "https://gateway.example.test/dashboard"))
+        let rules = try #require(AuthenticatedControlUIAccessCookieBoundary.rules(for: gateway))
+        let encoded = try #require(rules.data(using: .utf8))
+        let customGateway = try #require(URL(string: "https://gateway.example.test:8443/dashboard"))
+        let customRules = try #require(AuthenticatedControlUIAccessCookieBoundary.rules(for: customGateway))
+        let entries = try #require(JSONSerialization.jsonObject(with: encoded) as? [[String: Any]])
+        #expect((entries.first?["action"] as? [String: String])?["type"] == "block-cookies")
+        #expect(entries.count == 3)
+
+        let allowed = [
+            "https://gateway.example.test/dashboard",
+            "https://gateway.example.test:443/assets/app.js",
+            "wss://gateway.example.test/socket",
+        ]
+        let rejected = [
+            "https://gateway.example.test:8443/steal",
+            "wss://gateway.example.test:8443/socket",
+            "https://gateway.example.test.evil.test/steal",
+        ]
+        for entry in entries.dropFirst() {
+            let trigger = try #require(entry["trigger"] as? [String: String])
+            let pattern = try #require(trigger["url-filter"])
+            let expression = try NSRegularExpression(pattern: pattern)
+            let matches: (String) -> Bool = { value in
+                expression.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)) != nil
+            }
+            let usesWebSocket = pattern.hasPrefix("^wss:")
+            let expected = allowed.filter { $0.hasPrefix(usesWebSocket ? "wss:" : "https:") }
+            for value in expected {
+                #expect(matches(value))
+            }
+            for value in rejected {
+                #expect(!matches(value))
+            }
+            #expect((entry["action"] as? [String: String])?["type"] == "ignore-previous-rules")
+        }
+        let customEncoded = try #require(customRules.data(using: .utf8))
+        let customEntries = try #require(JSONSerialization.jsonObject(
+            with: customEncoded) as? [[String: Any]])
+        #expect((customEntries.first?["action"] as? [String: String])?["type"] == "block-cookies")
+        let customAllowed = [
+            "https://gateway.example.test:8443/dashboard",
+            "wss://gateway.example.test:8443/socket",
+        ]
+        let customRejected = [
+            "https://gateway.example.test/dashboard",
+            "wss://gateway.example.test:443/socket",
+            "https://gateway.example.test:9443/steal",
+            "https://gateway.example.test.evil.test/steal",
+        ]
+        for entry in customEntries.dropFirst() {
+            let trigger = try #require(entry["trigger"] as? [String: String])
+            let pattern = try #require(trigger["url-filter"])
+            let expression = try NSRegularExpression(pattern: pattern)
+            let matches: (String) -> Bool = { value in
+                expression.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)) != nil
+            }
+            let usesWebSocket = pattern.hasPrefix("^wss:")
+            let expected = customAllowed.filter { $0.hasPrefix(usesWebSocket ? "wss:" : "https:") }
+            for value in expected {
+                #expect(matches(value))
+            }
+            for value in customRejected {
+                #expect(!matches(value))
+            }
+        }
+        _ = try await WKContentRuleListStore.default().compileContentRuleList(
+            forIdentifier: "openclaw.access.cookie.boundary.test",
+            encodedContentRuleList: rules)
+        _ = try await WKContentRuleListStore.default().compileContentRuleList(
+            forIdentifier: "openclaw.access.cookie.boundary.custom-port.test",
+            encodedContentRuleList: customRules)
+    }
+
+    @Test func `dashboard cookie reaches only its selected local TLS port`() async throws {
+        let gateway = try await NativeGatewayWebSocketFixture.start(issuedDeviceTokens: [], tls: true)
+        defer { gateway.stop() }
+        let foreign = try await NativeGatewayWebSocketFixture.start(issuedDeviceTokens: [], tls: true)
+        defer { foreign.stop() }
+        let fingerprint = try #require(gateway.fingerprint)
+        #expect(foreign.fingerprint == fingerprint)
+
+        let origin = try CloudflareAccessOrigin(gateway.url())
+        let dashboardURL = origin.url.appendingPathComponent("dashboard")
+        let otherURL = try #require(URL(string: "https://127.0.0.1:\(foreign.port)/other-port"))
+        let html = """
+        <!doctype html><html><body>Dashboard<script>
+        addEventListener('load', () => {
+          void fetch('/same-port', {credentials: 'include'});
+          void fetch('\(otherURL.absoluteString)', {credentials: 'include', mode: 'no-cors'});
+        });
+        </script></body></html>
+        """
+        gateway.httpResponse = { request in
+            if request.target == "/dashboard" {
+                return .init(
+                    headers: ["Content-Type": "text/html; charset=utf-8"],
+                    body: Data(html.utf8))
+            }
+            return .init(headers: ["Content-Type": "text/plain"], body: Data("ok".utf8))
+        }
+        foreign.httpResponse = { _ in
+            .init(headers: ["Content-Type": "text/plain"], body: Data("ok".utf8))
+        }
+
+        let application = try CloudflareAccessApplication(
+            origin: origin,
+            issuer: #require(URL(string: "https://issuer.example/")),
+            audience: "dashboard-cookie-fixture")
+        let cookie = try #require(CloudflareAccessSession(
+            application: application,
+            subject: "fixture-account",
+            token: "synthetic-browser-cookie",
+            expiresAt: Date().addingTimeInterval(300))
+            .dashboardCookie(for: dashboardURL))
+        let rules = try #require(AuthenticatedControlUIAccessCookieBoundary.rules(for: dashboardURL))
+        let compiledRule = try await WKContentRuleListStore.default().compileContentRuleList(
+            forIdentifier: "openclaw.access.cookie.live-boundary.\(UUID().uuidString)",
+            encodedContentRuleList: rules)
+        let rule = try #require(compiledRule)
+        let userContentController = WKUserContentController()
+        userContentController.add(rule)
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.userContentController = userContentController
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let tls = GatewayTLSParams(
+            required: true,
+            expectedFingerprint: fingerprint,
+            allowTOFU: false,
+            storeKey: nil)
+        let coordinator = AuthenticatedControlUIWebViewCoordinator(
+            url: dashboardURL,
+            tls: tls,
+            accessCookie: cookie,
+            accessAdmissionIsCurrent: { true },
+            accessResponseCheck: { response in
+                guard response.statusCode == 200 else { throw URLError(.badServerResponse) }
+            })
+        let delegate = DashboardCookieFixtureNavigationDelegate(
+            coordinator: coordinator,
+            tls: tls,
+            selectedPort: Int(gateway.port),
+            foreignPort: Int(foreign.port))
+        webView.navigationDelegate = delegate
+        defer { coordinator.retireAccess(in: webView) }
+
+        let cookieStore = configuration.websiteDataStore.httpCookieStore
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            AuthenticatedControlUIAccessCookieInstaller.install(
+                cookie: cookie,
+                isCurrent: { true },
+                setCookie: { cookie, completion in
+                    cookieStore.setCookie(cookie) {
+                        Task { @MainActor in completion() }
+                    }
+                },
+                deleteCookie: { cookie in cookieStore.delete(cookie) },
+                load: {
+                    webView.load(URLRequest(url: dashboardURL))
+                    continuation.resume()
+                })
+        }
+        try await waitForDashboardCondition {
+            gateway.requests.contains { $0.target == "/dashboard" } &&
+                gateway.requests.contains { $0.target == "/same-port" } &&
+                foreign.requests.contains { $0.target == "/other-port" }
+        }
+        let pageRequest = try #require(gateway.requests.first { $0.target == "/dashboard" })
+        let samePortRequest = try #require(gateway.requests.first { $0.target == "/same-port" })
+        let foreignRequest = try #require(foreign.requests.first { $0.target == "/other-port" })
+        #expect(pageRequest.headers["cookie"]?.contains("CF_Authorization=synthetic-browser-cookie") == true)
+        #expect(samePortRequest.headers["cookie"]?.contains("CF_Authorization=synthetic-browser-cookie") == true)
+        #expect(foreignRequest.headers["cookie"]?.contains("CF_Authorization") != true)
+        #expect(coordinator.navigationDecision(to: otherURL, isMainFrame: true) == .cancel)
+    }
+
+    @Test func `WebView waits for Access cookie storage and drops stale grants before first load`() throws {
+        let originURL = try #require(URL(string: "https://gateway.example.test"))
+        let cookie = try #require(HTTPCookie(properties: [
+            .name: "CF_Authorization",
+            .value: "synthetic-access-token",
+            .originURL: originURL,
+            .path: "/",
+            .secure: "TRUE",
+            .expires: Date().addingTimeInterval(60),
+            HTTPCookiePropertyKey("HttpOnly"): "TRUE",
+        ]))
+        let currentGrant = AccessCookieInstallFixture()
+        currentGrant.install(cookie)
+        #expect(!currentGrant.didLoad)
+        currentGrant.completeInstallation()
+        #expect(currentGrant.didLoad)
+        #expect(!currentGrant.didDelete)
+
+        let staleGrant = AccessCookieInstallFixture()
+        staleGrant.install(cookie)
+        #expect(!staleGrant.didLoad)
+        staleGrant.isCurrent = false
+        staleGrant.completeInstallation()
+        #expect(!staleGrant.didLoad)
+        #expect(staleGrant.didDelete)
+
+        let staleCoordinator = AuthenticatedControlUIWebViewCoordinator(
+            url: originURL,
+            tls: nil,
+            accessCookie: cookie,
+            accessAdmissionIsCurrent: { false })
+        #expect(staleCoordinator.navigationDecision(to: originURL, isMainFrame: true) == .cancel)
+    }
+
     @Test func `device panels reach their native iOS destinations`() {
         let routes: [(DeviceSettingsPanel, SettingsRoute)] = [
             (.connection, .gateway),
@@ -166,6 +378,177 @@ struct SettingsHubTests {
         try await waitForDashboardCondition { !compatibility.needsGatewayUpgrade }
         #expect(!compatibility.needsGatewayUpgrade)
     }
+
+    @Test(arguments: [
+        (404, "text/plain", "Not Found", false),
+        (503, "text/plain", "Control UI assets are being prepared. Try again shortly.", false),
+        (404, "text/html", "<html><body>Sign in</body></html>", true),
+        (200, "text/plain", "ready", true),
+    ])
+    func `settings Dashboard never renders a plain Gateway error body`(
+        response: (statusCode: Int, mimeType: String, body: String, renders: Bool)) async throws
+    {
+        let server = try SettingsHubHTTPFixture(
+            body: response.body, status: response.statusCode, contentType: response.mimeType)
+        defer { server.stop() }
+        let fixture = try await DashboardResponseFixture(url: server.start())
+        let text = try await fixture.load()
+        let visibleText = response.mimeType == "text/html" ? "Sign in" : response.body
+        #expect(text.contains(visibleText) == response.renders)
+    }
+}
+
+/// Loads a Gateway URL in a real web view, with the settings coordinator deciding its navigation
+/// response policy. Only HTTP loads reach that policy with an `HTTPURLResponse`: WebKit reports
+/// custom-scheme responses as plain `URLResponse` and skips the policy for simulated requests.
+@MainActor
+final class DashboardResponseFixture: NSObject, WKNavigationDelegate {
+    let compatibility = DashboardEmbedCompatibility()
+    private let url: URL
+    private let webView: WKWebView
+    private let coordinator: AuthenticatedControlUIWebViewCoordinator
+    private var loaded: CheckedContinuation<Void, Never>?
+
+    init(url: URL) {
+        self.url = url
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        self.webView = WKWebView(frame: .zero, configuration: configuration)
+        self.coordinator = AuthenticatedControlUIWebViewCoordinator(
+            url: url, tls: nil, usesNativeEmbed: true, embedCompatibility: self.compatibility)
+        super.init()
+        self.webView.navigationDelegate = self
+    }
+
+    /// Returns the page text once WebKit commits or cancels the response.
+    func load() async throws -> String {
+        await withCheckedContinuation { continuation in
+            self.loaded = continuation
+            self.webView.load(URLRequest(url: self.url))
+        }
+        let text = try await self.webView.evaluateJavaScript("document.documentElement?.innerText ?? ''")
+        return text as? String ?? ""
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
+    {
+        let delegate: any WKNavigationDelegate = self.coordinator
+        // WebKit allows every response when the delegate does not decide.
+        if delegate.webView?(webView, decidePolicyFor: navigationResponse, decisionHandler: decisionHandler) == nil {
+            decisionHandler(.allow)
+        }
+    }
+
+    func webView(_: WKWebView, didFinish _: WKNavigation!) {
+        self.finishLoad()
+    }
+
+    func webView(_: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError _: any Error) {
+        self.finishLoad()
+    }
+
+    func webView(_: WKWebView, didFail _: WKNavigation!, withError _: any Error) {
+        self.finishLoad()
+    }
+
+    private func finishLoad() {
+        self.loaded?.resume()
+        self.loaded = nil
+    }
+}
+
+@MainActor
+private final class DashboardCookieFixtureNavigationDelegate: NSObject, WKNavigationDelegate {
+    private let coordinator: AuthenticatedControlUIWebViewCoordinator
+    private let tls: GatewayTLSParams
+    private let selectedPort: Int
+    private let foreignPort: Int
+
+    init(
+        coordinator: AuthenticatedControlUIWebViewCoordinator,
+        tls: GatewayTLSParams,
+        selectedPort: Int,
+        foreignPort: Int)
+    {
+        self.coordinator = coordinator
+        self.tls = tls
+        self.selectedPort = selectedPort
+        self.foreignPort = foreignPort
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
+    {
+        self.coordinator.webView(
+            webView, decidePolicyFor: navigationAction, decisionHandler: decisionHandler)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
+    {
+        self.coordinator.webView(
+            webView, decidePolicyFor: navigationResponse, decisionHandler: decisionHandler)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @MainActor @Sendable (
+            URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
+        let port = challenge.protectionSpace.port
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              challenge.protectionSpace.host == "127.0.0.1",
+              let trust = challenge.protectionSpace.serverTrust
+        else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+        if port == self.selectedPort {
+            self.coordinator.webView(webView, didReceive: challenge, completionHandler: completionHandler)
+            return
+        }
+        guard port == self.foreignPort,
+              GatewayTLSServerTrust.evaluate(
+                  trust: trust,
+                  host: challenge.protectionSpace.host,
+                  port: port,
+                  params: self.tls) == .accept
+        else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+        completionHandler(.useCredential, URLCredential(trust: trust))
+    }
+}
+
+@MainActor
+private final class AccessCookieInstallFixture {
+    var isCurrent = true
+    var completion: AuthenticatedControlUIAccessCookieInstaller.Completion?
+    var didLoad = false
+    var didDelete = false
+
+    func install(_ cookie: HTTPCookie) {
+        AuthenticatedControlUIAccessCookieInstaller.install(
+            cookie: cookie,
+            isCurrent: { self.isCurrent },
+            setCookie: { _, completion in self.completion = completion },
+            deleteCookie: { _ in self.didDelete = true },
+            load: { self.didLoad = true })
+    }
+
+    func completeInstallation() {
+        self.completion?()
+        self.completion = nil
+    }
 }
 
 @MainActor
@@ -179,13 +562,276 @@ private func waitForDashboardCondition(_ condition: () -> Bool) async throws {
 
 @MainActor
 final class SettingsHubVisualProofTests: XCTestCase {
+    @MainActor
+    func testIngressAuthorizedDashboardEntryPointsLoadTheSelectedGatewayPage() async throws {
+        let registryIsolation = await GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let instanceID = "settings-ingress-\(UUID().uuidString)"
+        let state = try TemporaryOpenClawState(instanceID: instanceID)
+        defer { state.restore() }
+        let previousAutoConnect = UserDefaults.standard.object(forKey: "gateway.autoconnect")
+        defer { UserDefaults.standard.set(previousAutoConnect, forKey: "gateway.autoconnect") }
+        UserDefaults.standard.set(false, forKey: "gateway.autoconnect")
+
+        let gateway = try await NativeGatewayWebSocketFixture.start(issuedDeviceTokens: [], tls: true)
+        defer { gateway.stop() }
+        gateway.acceptedOperatorScopes = ["operator.read", "operator.admin"]
+        let bodyMarker = "Clawsweeper ingress settings fixture"
+        let html = """
+        <!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+        <body><main>\(bodyMarker)</main></body></html>
+        """
+        gateway.httpResponse = { request in
+            guard ["/settings", "/focus/dashboard/main/~key/native-proof", "/focus/desktop", "/focus/terminal"]
+                .contains(request.target) else { return .init(status: 404) }
+            guard request.headers["cookie"]?.contains("CF_Authorization=") == true else {
+                return .init(status: 401)
+            }
+            return .init(
+                headers: ["Content-Type": "text/html; charset=utf-8"],
+                body: Data(html.utf8))
+        }
+
+        let origin = try CloudflareAccessOrigin(gateway.url())
+        let baseApplication = try CloudflareAccessTestTokens.application()
+        let application = CloudflareAccessApplication(
+            origin: origin,
+            issuer: baseApplication.issuer,
+            audience: baseApplication.audience)
+        let session = try CloudflareAccessTestTokens().session(
+            subject: "settings-ingress-fixture",
+            application: application)
+        let principal = try CloudflareAccessPrincipal.verified(from: session)
+        let stableID = "manual|127.0.0.1|\(gateway.port)"
+        let tls = try GatewayTLSParams(
+            required: true,
+            expectedFingerprint: XCTUnwrap(gateway.fingerprint),
+            allowTOFU: false,
+            storeKey: nil)
+        var config = GatewayConnectConfig(
+            url: gateway.url(),
+            stableID: stableID,
+            tls: tls,
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-ios",
+                clientMode: "node",
+                clientDisplayName: "Settings fixture",
+                includeDeviceIdentity: true,
+                allowStoredDeviceAuth: true,
+                deviceAuthGatewayID: stableID),
+            ingressAuthorization: nil)
+        let expectedURL = try XCTUnwrap(AuthenticatedControlUI.pageURL(
+            config: config,
+            path: "settings",
+            queryItems: []))
+        _ = try XCTUnwrap(session.dashboardCookie(for: expectedURL))
+        config.ingressAuthorization = GatewayIngressAuthorization(
+            origin: origin,
+            principal: principal,
+            revision: 1,
+            registrationID: UUID(),
+            headers: { _ in [:] },
+            isCurrent: { true },
+            dashboardCookie: { url in session.dashboardCookie(for: url) },
+            checkResponse: { response in
+                guard response.statusCode == 200 else { throw URLError(.badServerResponse) }
+            },
+            load: { request, operation in try await operation(request) })
+
+        let identity = try XCTUnwrap(DeviceIdentityStore.loadOrCreatePersisted(profile: .primary))
+        XCTAssertNil(DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId, role: "operator", gatewayID: stableID, profile: .primary))
+        let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+        var proofStage = "foreground admission"
+        do {
+            // Match OpenClawApp's initial foreground delivery before its Gateway controller connects.
+            model.setScenePhase(.active)
+            XCTAssertFalse(model.isBackgrounded)
+            // Trusted-proxy operator admission can grant admin without issuing a reusable device token.
+            model.applyGatewayConnectConfig(config)
+            proofStage = "waiting for native operator admission"
+            try await waitForDashboardCondition { model.isOperatorGatewayConnected }
+            proofStage = "reading admitted native route"
+            let admittedRoute = await model.operatorSession.currentRoute()
+            let operatorRoute = try XCTUnwrap(admittedRoute)
+            proofStage = "reading accepted native scopes"
+            let acceptedScopes = await model.operatorSession.currentOperatorScopes(ifCurrentRoute: operatorRoute)
+            XCTAssertEqual(acceptedScopes, Set(["operator.read", "operator.admin"]))
+            XCTAssertNil(DeviceAuthStore.loadToken(
+                deviceId: identity.deviceId, role: "operator", gatewayID: stableID, profile: .primary))
+            proofStage = "projecting accepted admin scope into Settings"
+            guard model.isOperatorGatewayConnected, model.hasOperatorAdminScope else {
+                throw NSError(
+                    domain: "SettingsHubVisualProofTests",
+                    code: 2,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "An accepted native admin hello must enable Settings without a persisted device token",
+                    ])
+            }
+            let appearanceModel = AppAppearanceModel()
+            let gatewayController = GatewayConnectionController(appModel: model, startDiscovery: false)
+            let sessionURL = try XCTUnwrap(SessionDashboardScreen.dashboardURL(
+                config: config, sessionKey: "agent:main:native-proof"))
+            let desktopURL = try XCTUnwrap(ControlUIHubPage.desktop(source: nil, session: nil).url(config: config))
+            let terminalURL = try XCTUnwrap(ControlUIHubPage.terminal.url(config: config))
+            let entryPoints: [(String, URL, AnyView)] = [
+                ("settings-hub", expectedURL, AnyView(SettingsHubScreen(navigationPath: .constant([]))
+                        .environment(model)
+                        .environment(appearanceModel)
+                        .environment(gatewayController)
+                        .preferredColorScheme(.light))),
+                ("dashboard-page", expectedURL, AnyView(DashboardPageScreen(path: "settings", title: "Settings")
+                        .environment(model)
+                        .environment(appearanceModel)
+                        .environment(gatewayController)
+                        .preferredColorScheme(.light))),
+                ("session-dashboard", sessionURL, AnyView(SessionDashboardScreen(
+                    sessionKey: "agent:main:native-proof", agentId: "main")
+                    .environment(model)
+                    .preferredColorScheme(.light))),
+                ("desktop", desktopURL, AnyView(ControlUIHubScreen(page: .desktop(source: nil, session: nil))
+                        .environment(model)
+                        .preferredColorScheme(.light))),
+                ("terminal", terminalURL, AnyView(ControlUIHubScreen(page: .terminal)
+                        .environment(model)
+                        .preferredColorScheme(.light))),
+            ]
+
+            var failures: [String] = []
+            for (name, pageURL, rootView) in entryPoints {
+                proofStage = "loading \(name)"
+                do {
+                    try await self.assertIngressDashboardLoaded(
+                        rootView: rootView,
+                        expectedURL: pageURL,
+                        bodyMarker: bodyMarker,
+                        gateway: gateway,
+                        attachmentName: "settings-ingress-\(name)")
+                } catch {
+                    failures.append("\(name): \(error)")
+                }
+            }
+            XCTAssertTrue(failures.isEmpty, failures.joined(separator: "; "))
+
+            proofStage = "disconnecting admitted admin route"
+            model.disconnectGateway()
+            await model.waitForGatewaySessionResetIfNeeded()
+            XCTAssertFalse(model.hasOperatorAdminScope)
+            XCTAssertFalse(model.isOperatorGatewayConnected)
+
+            gateway.acceptedOperatorScopes = ["operator.read"]
+            model.applyGatewayConnectConfig(config)
+            proofStage = "waiting for limited operator admission"
+            try await waitForDashboardCondition { model.isOperatorGatewayConnected }
+            proofStage = "reading admitted limited route"
+            let limitedRoute = await model.operatorSession.currentRoute()
+            let limitedOperatorRoute = try XCTUnwrap(limitedRoute)
+            let limitedScopes = await model.operatorSession.currentOperatorScopes(ifCurrentRoute: limitedOperatorRoute)
+            XCTAssertEqual(limitedScopes, Set(["operator.read"]))
+            XCTAssertFalse(model.hasOperatorAdminScope)
+            XCTAssertFalse(SettingsHubScreen.usesDashboard(
+                isOperatorConnected: model.isOperatorGatewayConnected,
+                hasOperatorAdminScope: model.hasOperatorAdminScope,
+                isDemoMode: false,
+                isScreenshotMode: false))
+            XCTAssertNil(DeviceAuthStore.loadToken(
+                deviceId: identity.deviceId, role: "operator", gatewayID: stableID, profile: .primary))
+        } catch {
+            XCTFail("Native Settings proof failed at \(proofStage); " +
+                "taskCancelled=\(Task.isCancelled), operatorConnected=\(model.isOperatorGatewayConnected), " +
+                "admin=\(model.hasOperatorAdminScope), errorType=\(type(of: error))")
+            model.disconnectGateway()
+            await model.waitForGatewaySessionResetIfNeeded()
+            throw error
+        }
+        model.disconnectGateway()
+        await model.waitForGatewaySessionResetIfNeeded()
+    }
+
+    @MainActor
+    private func assertIngressDashboardLoaded(
+        rootView: AnyView,
+        expectedURL: URL,
+        bodyMarker: String,
+        gateway: NativeGatewayWebSocketFixture,
+        attachmentName: String) async throws
+    {
+        let controller = UIHostingController(rootView: rootView)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first)
+        let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer {
+            window.rootViewController = nil
+            window.isHidden = true
+            previousKeyWindow?.makeKeyAndVisible()
+        }
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+
+        do {
+            try await waitForDashboardCondition {
+                guard let webView = Self.findWebView(in: controller.view) else { return false }
+                return webView.url == expectedURL && !webView.isLoading
+            }
+            let webView = try XCTUnwrap(Self.findWebView(in: controller.view))
+            guard webView.url == expectedURL else {
+                throw URLError(.badURL)
+            }
+            let body = try await webView.evaluateJavaScript("document.body.textContent") as? String ?? ""
+            guard body.contains(bodyMarker) else {
+                throw URLError(.cannotParseResponse)
+            }
+            guard let request = gateway.requests.first(where: { $0.target == expectedURL.path }),
+                  request.headers["cookie"]?.contains("CF_Authorization=") == true
+            else {
+                throw URLError(.userAuthenticationRequired)
+            }
+            let reply = try await webView.callAsyncJavaScript(
+                """
+                const reply = await window.webkit.messageHandlers.OpenClawNativeGatewayAuth.postMessage({
+                  id: 'native-settings-fixture', nonce: 'settings-nonce', signedAt: 1700000000000
+                });
+                return reply.result;
+                """,
+                arguments: [:],
+                in: nil,
+                contentWorld: .page)
+            let authorization = try XCTUnwrap(reply as? [String: Any])
+            XCTAssertEqual(authorization["auth"] as? [String: String], [:])
+            XCTAssertEqual(authorization["scopes"] as? [String], ["operator.admin", "operator.read"])
+            let device = try XCTUnwrap(authorization["device"] as? [String: Any])
+            XCTAssertEqual(device["nonce"] as? String, "settings-nonce")
+            XCTAssertFalse(try XCTUnwrap(device["signature"] as? String).isEmpty)
+            try await self.attach(controller.view, named: attachmentName, webView: webView)
+        } catch {
+            try? await self.attach(
+                controller.view,
+                named: "\(attachmentName)-failure",
+                webView: Self.findWebView(in: controller.view))
+            throw error
+        }
+    }
+
     func testOlderDashboardShowsNativeGatewayUpgradeBanner() async throws {
         let html = """
         <!doctype html><html><meta name="viewport" content="width=device-width, initial-scale=1">
         <body style="font: 17px -apple-system; padding: 24px; color: #222; background: white">
         <h1>Settings</h1><p>Manage your Gateway preferences.</p></body></html>
         """
-        let fixture = try SettingsHubHTTPFixture(html: html)
+        let fixture = try SettingsHubHTTPFixture(body: html)
         defer { fixture.stop() }
         let fixtureURL = try await fixture.start()
 
@@ -294,7 +940,7 @@ final class SettingsHubVisualProofTests: XCTestCase {
 }
 
 @MainActor
-private final class SettingsHubHTTPFixture {
+final class SettingsHubHTTPFixture {
     private struct Client {
         let connection: NWConnection
         var request = Data()
@@ -306,12 +952,12 @@ private final class SettingsHubHTTPFixture {
     private var stopped = false
     private(set) var requestCount = 0
 
-    init(html: String) throws {
+    init(body text: String, status: Int = 200, contentType: String = "text/html; charset=utf-8") throws {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         self.listener = try NWListener(using: parameters, on: .any)
-        let body = Data(html.utf8)
-        let header = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n" +
+        let body = Data(text.utf8)
+        let header = "HTTP/1.1 \(status) Fixture\r\nContent-Type: \(contentType)\r\n" +
             "Content-Length: \(body.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
         self.response = Data(header.utf8) + body
         self.listener.newConnectionHandler = { [weak self] connection in

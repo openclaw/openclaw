@@ -32,6 +32,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}${route}`);
         const editor = page.locator(".agent-chat__composer-combobox textarea");
         await editor.fill("Short draft");
+        await page.evaluate(() => document.fonts.ready.then(() => undefined));
         const shell = page.locator(".agent-chat__composer-shell");
         const measure = () =>
           editor.evaluate((el) => ({
@@ -69,6 +70,13 @@ suite.define(() => {
             return m.scrollHeight - m.height;
           })
           .toBeGreaterThan(0);
+        // Native sizing and the pane's scheduled limit must settle before saving the cap.
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
         const capped = await measure();
         for (const lines of [5, 20, 40, 200]) {
           await editor.fill("A pasted prompt line\n".repeat(lines));

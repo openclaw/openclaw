@@ -109,6 +109,7 @@ suite.define(() => {
           source: "skill",
           scope: "both",
           acceptsArgs: true,
+          skillReferenceable: true,
           skillModelVisible: true,
           textAliases: [`/${alice.entry.name}`],
         },
@@ -191,7 +192,7 @@ suite.define(() => {
       expect(await item("release-notes").count()).toBe(1);
       await waitForControlUiProofSurface(menuPanel, [
         readAction,
-        menu.getByText("Alice's library", { exact: true }),
+        menu.getByText("Alice’s library", { exact: true }),
       ]);
       const actionBounds = await menuPanel.evaluate((node) =>
         node.getBoundingClientRect().toJSON(),
@@ -251,7 +252,7 @@ suite.define(() => {
       await expect.poll(() => menu.locator('[data-value^="library-selected:"]').count()).toBe(0);
       await item("Add from libraries").waitFor();
       await gateway.waitForRequest("chat.metadata", { after: metadataBeforeActivation });
-      const notice = page.getByRole("status").filter({ hasText: /updated for the next turn/u });
+      const notice = page.getByRole("status").filter({ hasText: /updated for the next reply/u });
       await notice.waitFor();
       await notice.getByRole("button", { name: "Dismiss", exact: true }).click();
 

@@ -13,6 +13,7 @@ import { projectGateway } from "../lib/reactive/application.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 import { DialogHeader } from "./solid/dialog-header.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 
 export type InputDialogOptions = {
   title: string;
@@ -183,15 +184,15 @@ function renderInputDialog(
           <Show when={!saving()}>
             <Errored
               fallback={(error) => (
-                <div class="callout danger" role="alert">
+                <InlineAlert tone="danger" role="alert">
                   {formatUiError(error())}
-                </div>
+                </InlineAlert>
               )}
             >
               <Show when={message()}>
-                <div class="callout danger" role="alert">
+                <InlineAlert tone="danger" role="alert">
                   {message()}
-                </div>
+                </InlineAlert>
               </Show>
             </Errored>
           </Show>

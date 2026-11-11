@@ -2,6 +2,11 @@ import { createMemo } from "@solidjs/signals";
 import { createSignal, onSettled, Show } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -175,7 +180,10 @@ export function BrowserToolbar(
       case "copy":
         void copyToClipboard(activeUrl(), () => props.controller.host.isConnected).then(
           (copied) => {
-            showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+            showToast({
+              severity: copied ? "success" : "error",
+              message: t(copied ? "common.copied" : "common.copyFailed"),
+            });
           },
         );
         break;
@@ -286,11 +294,17 @@ export function BrowserToolbar(
               props.controller.urlDraftEditing = true;
               event.currentTarget.select();
             }}
-            onBlur={() => {
+            onBlur={(event) => {
+              clearCompositionEnd(event);
               setEditing(false);
             }}
             onInput={(event) => props.controller.setState("urlDraft", event.currentTarget.value)}
+            onCompositionEnd={recordCompositionEnd}
+            onKeyUp={clearCompositionEnd}
             onKeyDown={(event) => {
+              if (isComposingKeyboardEvent(event)) {
+                return;
+              }
               if (event.key === "Enter") {
                 event.preventDefault();
                 props.controller.commitUrlDraft();

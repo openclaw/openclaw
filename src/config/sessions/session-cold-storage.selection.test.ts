@@ -5,6 +5,7 @@ import {
   emptySqliteCounts,
   observeParentSqlite,
 } from "../../../test/helpers/sqlite-parent-observer.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
@@ -16,6 +17,7 @@ import {
 import * as archiveWorkers from "./session-accessor.sqlite-archive.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
+import { selectSessionColdBatch } from "./session-cold-storage-selection.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
 import {
@@ -210,6 +212,80 @@ it("propagates selection failure without a mutation or synchronous fallback", as
     observer.restore();
   }
   expectHistoryUnchanged();
+});
+
+it("scans hot-window protection only when embedded archives leave a batch slot", async () => {
+  await expect(maintain()).resolves.toEqual({
+    archivedTranscripts: 1,
+    externalizedTranscripts: 0,
+  });
+  const archive = readSessionColdTranscript(fixture.database(), historicalId)!;
+  const bytes = await fs.readFile(
+    resolveSessionColdArchivePath(fixture.scope.storePath, archive.archive_name),
+  );
+  fixture
+    .database()
+    .prepare(
+      "UPDATE session_transcript_cold_archives SET storage = 'sqlite', archive_blob = ? WHERE session_id = ?",
+    )
+    .run(bytes, historicalId);
+  fixture
+    .database()
+    .prepare(
+      "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+    )
+    .run(currentId);
+  const referenceScope = {
+    ...fixture.scope,
+    sessionKey: "agent:main:cold-reference",
+    sessionId: "cold-reference-current",
+  };
+  replaceSessionEntrySync(referenceScope, {
+    sessionId: referenceScope.sessionId,
+    updatedAt: 1,
+    previousSessionId: currentId,
+  });
+  const input = {
+    databaseOptions: fixture.options,
+    admissionIdentities: [],
+    liveSessionKeys: [],
+    cooledSessionIds: [],
+    beforeMs: 100,
+    maxTranscripts: 1,
+    maxBytes: 64 * 1024 * 1024,
+  };
+  for (const maxTranscripts of [1, 2]) {
+    const observer = observeHostDataSql();
+    try {
+      const selected = selectSessionColdBatch({ ...input, maxTranscripts });
+      expect(selected.found).toBe(true);
+      if (!selected.found) {
+        throw new Error("Cold selection database was not found");
+      }
+      expect(selected.value.externalizations.map((item) => item.session_id)).toEqual([
+        historicalId,
+      ]);
+      expect(selected.value.plans).toEqual([]);
+      expect(
+        observer.queries.some(
+          (sql) =>
+            sql.includes('from "session_nodes"') &&
+            sql.includes('"last_activity_at"') &&
+            sql.includes('"last_interaction_at"'),
+        ),
+      ).toBe(maxTranscripts > 1);
+    } finally {
+      observer.restore();
+    }
+  }
+  replaceSessionEntrySync(referenceScope, {
+    sessionId: referenceScope.sessionId,
+    updatedAt: 1,
+  });
+  const unprotected = selectSessionColdBatch({ ...input, maxTranscripts: 2 });
+  expect(unprotected.found && unprotected.value.plans.map((plan) => plan.sessionId)).toEqual([
+    currentId,
+  ]);
 });
 
 it("retains an embedded archive when its window gains an admitted owner after preparation", async () => {

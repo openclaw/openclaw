@@ -10,14 +10,17 @@ export function ElapsedTime(props: {
   minimumUnit?: "second" | "minute";
   singleUnit?: boolean;
   includeSeconds?: boolean;
+  paused?: boolean;
 }) {
   const label = createMemo(() => {
     i18nRevision();
     if (props.startMs == null) {
       return undefined;
     }
-    const minimumMs = props.minimumUnit === "minute" ? 60_000 : 1_000;
-    const elapsedMs = Math.max(minimumMs, (props.endMs ?? readVisibleTime(1_000)) - props.startMs);
+    const elapsedMs = Math.max(
+      props.minimumUnit === "minute" ? 60_000 : 1_000,
+      (props.endMs ?? (props.paused ? Date.now() : readVisibleTime(1_000))) - props.startMs,
+    );
     return props.singleUnit
       ? formatDurationHuman(elapsedMs)
       : formatDurationCompact(

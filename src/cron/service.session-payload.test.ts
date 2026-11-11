@@ -327,14 +327,26 @@ describe("unstarted scheduled admission", () => {
       expect(events.filter((event) => event.action === "finished")).toEqual([]);
       expect(sendWebhook).not.toHaveBeenCalled();
       expect(run).toHaveBeenCalledTimes(boundary === "preflight" ? 0 : 1);
+      expect(retained.state.admissionDeferred).toMatchObject({
+        sinceMs: dueAt,
+        attempts: 1,
+        retryAtMs: dueAt + 30_000,
+      });
+      expect(retained.state.admissionDeferred?.reason).toBeTruthy();
+      expect(
+        events.findLast((event) => event.action === "scheduled")?.job?.state.admissionDeferred,
+      ).toEqual(retained.state.admissionDeferred);
+      expect((await cron.status()).nextWakeAtMs).toBe(dueAt + 30_000);
+      await tick(dueAt + 2_000);
+      expect(run).toHaveBeenCalledTimes(boundary === "preflight" ? 0 : 1);
       busy = false;
-      expect((await cron.status()).nextWakeAtMs).toBe(dueAt);
-      await tick(scheduler.now() + MIN_REFIRE_GAP_MS);
+      await tick(dueAt + 30_000);
       expect(run).toHaveBeenCalledTimes(boundary === "preflight" ? 1 : 2);
       expect(sendWebhook).toHaveBeenCalledOnce();
       expect(readCronRunRecordsForTests(job.id)).toHaveLength(1);
       const completed = cron.getJob(job.id)!;
       expect(completed.state.lastRunStatus).toBe("ok");
+      expect(completed.state.admissionDeferred).toBeUndefined();
       if (scheduleKind === "at") {
         expect(completed.enabled).toBe(false);
         expect(completed.state.nextRunAtMs).toBeUndefined();

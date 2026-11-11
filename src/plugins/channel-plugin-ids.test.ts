@@ -743,7 +743,7 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
           slots: { memory: "none" },
           entries: {
             browser: { enabled: false },
-            "external-hook-policy": { hooks: { allowPromptInjection: true } },
+            "external-hook-policy": { hooks: { allowPromptModification: true } },
           },
         },
       },
@@ -1163,7 +1163,7 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
 
   it.each([
     ["conversation access", { allowConversationAccess: true }],
-    ["prompt injection", { allowPromptInjection: true }],
+    ["prompt injection", { allowPromptModification: true }],
   ] as const)("loads hook-policy plugins with only %s enabled", (_name, hooks) => {
     expectStartupPluginIds({
       config: {
@@ -1198,7 +1198,7 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
         slots: { memory: "none" },
         entries: {
           browser: { enabled: false },
-          "external-hook-policy": { hooks: { allowPromptInjection: true } },
+          "external-hook-policy": { hooks: { allowPromptModification: true } },
         },
       },
     } as OpenClawConfig;

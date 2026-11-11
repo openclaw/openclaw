@@ -1,21 +1,11 @@
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import type { Context } from "openclaw/plugin-sdk/llm";
 import { beforeEach, expect, it, vi } from "vitest";
+import { makeProviderModel } from "../../packages/ai/src/providers/provider-model.test-support.js";
 import type { AppleFmNative, AppleFmResult } from "./native.js";
 import { createAppleFmStream } from "./stream.js";
 
 const native = { run: vi.fn<AppleFmNative["run"]>() };
-const model: Model<"openai-completions"> = {
-  id: "system",
-  name: "AFM 3 Core Advanced",
-  provider: "apple-fm",
-  api: "openai-completions",
-  baseUrl: "http://127.0.0.1",
-  contextWindow: 8192,
-  maxTokens: 1024,
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-};
+const model = makeProviderModel("openai-completions", "apple-fm", "system", { reasoning: false });
 const context: Context = { messages: [], tools: [] };
 const call = { id: "call-1", name: "openclaw", arguments: { channel: "telegram" } };
 const schema = (value: object) => ({ type: "object", properties: { value }, required: ["value"] });
@@ -29,16 +19,15 @@ beforeEach(() => vi.clearAllMocks());
 it("returns a typed tool call with measured usage", async () => {
   respond({ toolCalls: [call], inputTokens: 3995, outputTokens: 18 });
   const stream = await run(model, context);
-  const events = [];
-  for await (const event of stream) {
-    events.push(event.type);
+  const events = await Array.fromAsync(stream, (event) => {
     if (event.type === "toolcall_delta") {
       expect(event.partial.content[event.contentIndex]).toHaveProperty(
         "partialJson",
         JSON.stringify(call.arguments),
       );
     }
-  }
+    return event.type;
+  });
   const result = await stream.result();
   expect(result).toMatchObject({
     stopReason: "toolUse",
@@ -64,10 +53,7 @@ it.each([
       responseFormat: schema({ type: name === "caller pattern" ? "string" : "number" }),
     }),
   });
-  const events = [];
-  for await (const event of stream) {
-    events.push(event.type);
-  }
+  const events = await Array.fromAsync(stream, (event) => event.type);
   const result = await stream.result();
   expect(result).toMatchObject({
     stopReason: "error",
@@ -93,12 +79,25 @@ it("preserves valid structured response bytes without injecting annotation defau
   expect(native.run.mock.calls[0]?.[0]).toMatchObject({ responseFormat, maxTokens: 128 });
 });
 
-it("does not publish a tool call after cancellation during native inference", async () => {
-  const abort = new AbortController();
-  native.run.mockImplementation(async () => {
-    abort.abort();
-    return { ...emptyResult, toolCalls: [call] };
-  });
-  const stream = await run(model, context, { signal: abort.signal });
-  expect(await stream.result()).toMatchObject({ stopReason: "aborted", content: [] });
-});
+it.each(["native inference", "payload preparation"])(
+  "does not publish a tool call after cancellation during %s",
+  async (phase) => {
+    const abort = new AbortController();
+    native.run.mockImplementation(async () => {
+      abort.abort();
+      return { ...emptyResult, toolCalls: [call] };
+    });
+    const stream = await run(model, context, {
+      signal: abort.signal,
+      onPayload:
+        phase === "payload preparation"
+          ? () => {
+              queueMicrotask(() => abort.abort());
+              return Promise.withResolvers<undefined>().promise;
+            }
+          : undefined,
+    });
+    expect(await stream.result()).toMatchObject({ stopReason: "aborted", content: [] });
+    expect(native.run).toHaveBeenCalledTimes(phase === "native inference" ? 1 : 0);
+  },
+);

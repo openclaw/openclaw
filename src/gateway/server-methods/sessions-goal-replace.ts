@@ -429,7 +429,7 @@ export async function replaceExecutingSessionGoal(params: {
       throw new Error("The replacement's resume target is unavailable.");
     }
     // This preimage belongs in the atomic writer, not the accepted input authority:
-    // its own successful Resume changes both the goal and lifecycleRunId.
+    // its own successful Resume changes the goal before runtime dispatch.
     const replacementSource = { runId: request.expectedRunId, goal: resumeGuard.entry!.goal! };
     resumeGuard.release();
     resumeGuard = undefined;

@@ -33,7 +33,6 @@ import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
   classifyGatewayOwnerProcessNamespace,
   describeGatewayLockHolder,
-  GATEWAY_OWNER_HEARTBEAT_STALE_MS,
   GatewayLockNamespaceError,
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
@@ -64,6 +63,7 @@ const log = createSubsystemLogger("gateway");
 
 export type GatewayOwnerLease = {
   owner: string;
+  previousOwner?: GatewayOwnerLeaseIdentity;
   ready: Promise<void>;
   markListening: () => void;
   release: () => Promise<void>;
@@ -157,6 +157,7 @@ export async function assertGatewayOwnerLeaseStopped(
         signal,
         // Offline custody follows restored files; cached read admission can retain the old inode.
         expectedSourceIdentity: readDatabasePathIdentitySync(pathname),
+        reuse: true,
       });
       authority.assertCurrent();
       releaseSnapshot = retainSnapshotTempDirectory(
@@ -341,8 +342,10 @@ export function acquireGatewayOwnerLease(params: {
         singleStatement: operation === "release" ? true : undefined,
       },
     );
+  let previousOwner: GatewayOwnerLeaseIdentity | undefined;
   const expiresAt = mutateLease("acquire", (db) => {
     const previous = resolveStoppedGatewayOwnerLease(readGatewayOwnerLeaseFromDatabase(db));
+    previousOwner = previous;
     const now = Date.now();
     const leaseExpiresAt = now + STARTUP_MIGRATION_LEASE_TTL_MS;
     const values = {
@@ -385,10 +388,8 @@ export function acquireGatewayOwnerLease(params: {
         leaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
         acquiredAt: expiresAt - STARTUP_MIGRATION_LEASE_TTL_MS,
         expiresAt,
-        // Keep holder diagnostics fresh even when its process namespace is not visible.
-        heartbeatMs: Math.floor(
-          Math.min(STARTUP_MIGRATION_LEASE_TTL_MS, GATEWAY_OWNER_HEARTBEAT_STALE_MS) / 3,
-        ),
+        // Heartbeat age is diagnostic; process evidence, not age, governs recovery.
+        heartbeatMs: Math.floor(STARTUP_MIGRATION_LEASE_TTL_MS / 3),
         ...(processOwner.startedAt === null
           ? { processOwner: { identity: processOwner, env: resolveDiagnosticProcessEnv(env) } }
           : {}),
@@ -408,6 +409,7 @@ export function acquireGatewayOwnerLease(params: {
   let released = false;
   return {
     owner: identity.owner,
+    previousOwner,
     ready,
     markListening() {
       mutateLease("listening", (db) => {

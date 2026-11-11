@@ -34,6 +34,8 @@ const observeStaging = (root = stagingRoot) => {
         const directory = path.join(root, entry.name);
         staged.add(directory);
         observeStaging(directory);
+      } else if (entry.isDirectory() && /^sqlite-[a-f0-9]{24}$/u.test(entry.name)) {
+        observeStaging(path.join(root, entry.name));
       }
     }
   } catch (error) {
@@ -108,5 +110,7 @@ console.log(
     hostLoad: loadavg(),
     rpcOk: result.rpc?.ok,
     pluginVersionDrift: result.pluginVersionDrift,
+    updateRun: result.activeRun?.runId ?? result.lastRun?.runId,
+    runStatusError: result.runStatusError,
   }),
 );

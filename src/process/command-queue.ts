@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { formatErrorMessage, readErrorName, toErrorObject } from "../infra/errors.js";
+import { readOperatorAuthorityFailure } from "../infra/operator-authority-error.js";
 import {
   diagnosticLogger as diag,
   logLaneDequeue,
@@ -166,9 +167,10 @@ function drainLane(
       // Commit the admission before invoking callbacks or logging. Both can
       // synchronously re-enter the queue, and the shared budget must already
       // account for this task when that nested admission is evaluated.
-      state.activeTasks.set(taskId, entry.sessionTarget);
-      started += 1;
       const startTime = Date.now();
+      entry.startedAt = startTime;
+      state.activeTasks.set(taskId, entry);
+      started += 1;
       void (async () => {
         try {
           if (waitedMs >= entry.warnAfterMs) {
@@ -207,7 +209,11 @@ function drainLane(
             if (!quietFailure && !isExpectedNonErrorLaneFailure(err)) {
               diag.error(
                 `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error=${JSON.stringify(formatErrorMessage(err))}`,
-                { errorName: readErrorName(err) || undefined, ...entry.taskIdentity },
+                {
+                  errorName: readErrorName(err) || undefined,
+                  ...entry.taskIdentity,
+                  ...readOperatorAuthorityFailure(err),
+                },
               );
             } else if (!quietFailure) {
               diag.debug(
@@ -355,6 +361,7 @@ export function enqueueCommandInLane<T>(
   }
   return new Promise<T>((resolve, reject) => {
     const entry: QueueEntry = {
+      lane: cleaned,
       task: () => runInAsyncContext(runWithGatewayRootWorkReadmission, task),
       resolve: (value) => resolve(value as T),
       reject,
@@ -388,7 +395,7 @@ export function enqueueCommandInLane<T>(
     drainReadyCommandLane(cleaned);
     if (entry.queued) {
       try {
-        opts?.onQueued?.();
+        opts?.onQueued?.(entry);
       } catch (err) {
         diag.error(`lane onQueued callback failed: lane=${cleaned} error="${String(err)}"`);
       }

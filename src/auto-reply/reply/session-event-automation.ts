@@ -23,6 +23,7 @@ import {
 import type {
   ScheduledSessionAutomation,
   SessionEventExecution,
+  SessionEventOptions,
   SessionEventOutcome,
   SessionEventTarget,
 } from "./session-event-contract.js";
@@ -55,8 +56,8 @@ export function prepareCronRunContinuationCleanup(
   };
 }
 
-export function resolveScheduledSessionReplyOptions(
-  automation?: ScheduledSessionAutomation,
+export function resolveSessionEventReplyOptions(
+  options: Pick<SessionEventOptions, "scheduledAutomation" | "replyExpectation">,
 ): Pick<
   GetReplyOptions,
   | "sourceReplyDeliveryMode"
@@ -64,9 +65,12 @@ export function resolveScheduledSessionReplyOptions(
   | "timeoutOverrideSeconds"
   | "bootstrapContextMode"
 > &
-  Pick<ScheduledSessionAutomation, "operatorAuthority"> & { modelOverride?: string } {
+  Pick<ScheduledSessionAutomation, "operatorAuthority"> &
+  Pick<SessionEventOptions, "replyExpectation"> & { modelOverride?: string } {
+  const automation = options.scheduledAutomation;
   if (!automation) {
-    return {};
+    // A host producer's silence permission travels only through these host-owned options.
+    return options.replyExpectation ? { replyExpectation: options.replyExpectation } : {};
   }
   const payload = automation.job.payload;
   return {
