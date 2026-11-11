@@ -492,8 +492,9 @@ a 4-CPU budget. Baseline ratchets use the 16-GiB `boat-large` class. Actual RAM
 still gates overlap and memory-qualified workers. Node test children drop the
 inherited read/search capability so ordinary Unix permission checks apply.
 Android uses `boat-large`; its compact and main-PR test profiles retain their
-logical two-CPU budget. Full core lint uses five separate stripes within the
-existing 15-minute job timeout. Node packing, groups, timing identities, explicit
+logical two-CPU budget. Full core lint uses five separate stripes with a 25-minute
+job timeout on the first Boat attempt, including setup. Other backends and hosted
+retries retain 15 minutes. Node packing, groups, timing identities, explicit
 workers, heaps, native providers, and release runner groups are unchanged. The
 build retains its 35-minute Boat budget.
 

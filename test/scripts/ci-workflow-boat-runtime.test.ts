@@ -167,6 +167,28 @@ it.each(routes)("routes real-Gateway UI for $name", (route) => {
   }
 });
 
+it.each([
+  ["boat", 1, 25],
+  ["boat", 2, 15],
+  ["github", 1, 15],
+  ["hybrid", 1, 15],
+  ["blacksmith", 1, 15],
+  ["runson", 1, 15],
+  ["", 1, 15],
+] as const)("budgets core lint for %s attempt %s", (backend, attempt, minutes) => {
+  const timeout = readCiWorkflow().jobs["check-lint-hosted-core-shard"]["timeout-minutes"];
+  expect(
+    typeof timeout === "string"
+      ? evaluateWorkflowExpression(timeout, {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: attempt,
+          preflightOutputs: { effective_runner_backend: backend },
+        })
+      : timeout,
+  ).toBe(minutes);
+});
+
 it.each(["push", "pull_request", "workflow_dispatch"] as const)(
   "keeps full Boat lint stripes separate for %s",
   (eventName) => {
