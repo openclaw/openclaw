@@ -6119,7 +6119,7 @@ describe("ci workflow guards", () => {
       "src/gateway/server-methods/models-list.native-lifecycle.integration.test.ts",
       "src/gateway/client-callsites.guard.test.ts",
       "src/auto-reply/reply/reply-turn-admission.module-identity.test.ts",
-      "src/cli/update-cli/update-repair-cancellation.test.ts",
+      "src/node-host/node-worker-launch-store.test.ts",
       workspace,
       "src/cli/update-cli.package-lifecycle.test.ts",
       "src/infra/kysely-sync.test.ts",
@@ -6160,7 +6160,8 @@ describe("ci workflow guards", () => {
     expect([undefined, hosted.runner]).toContain(hosted.runner_label);
     expect(hosted).toMatchObject({
       runner: "ubuntu-24.04",
-      cpu_budget: 8,
+      // The prepared-runtime owner is separate from the eight-CPU memory row.
+      cpu_budget: 2,
       plan_concurrency: 1,
     });
     expect(rows.flatMap(files).toSorted()).toEqual(targets.toSorted());

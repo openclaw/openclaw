@@ -505,9 +505,9 @@ export class CodeModeOutputState {
   }
 }
 
-/** Fit one returned skill string through the same terminal envelope as ordinary cell delivery. */
+/** Fit one skill page value through the same terminal envelope as ordinary cell delivery. */
 export function codeModeSkillPageFits(params: {
-  value: string;
+  value: unknown;
   maxOutputBytes: number;
   metadata: object;
   budget: ToolResultBudget;

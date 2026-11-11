@@ -249,6 +249,16 @@ export async function runBridgeRequest(params: {
     signal: params.signal,
     onUpdate: params.onUpdate,
   });
+  const skillPageFits = (value: unknown, budget: ToolResultBudget) =>
+    codeModeSkillPageFits({
+      value,
+      maxOutputBytes: params.maxOutputBytes ?? 65_536,
+      metadata: {
+        status: "completed",
+        telemetry: { ...params.runtime.telemetry(), visibleTools: ["exec", "wait"] },
+      },
+      budget: params.resultBudget ?? budget,
+    });
   try {
     params.signal?.throwIfAborted();
     const values = Array.isArray(params.request.args) ? params.request.args : [];
@@ -397,7 +407,17 @@ export async function runBridgeRequest(params: {
         ) {
           input = { ...input, awaitResults: true };
         }
-        value = await params.runtime.callExactValue(binding.id, input, callOptions());
+        value = await runWithToolResultDeliveryProjection(
+          (result, budget) =>
+            skillPageFits(
+              // The recognized reader adds its discriminant after producing the page.
+              binding.source === "openclaw" && binding.name === "read" && isRecord(result.details)
+                ? { kind: "skill_page", ...result.details }
+                : result.details,
+              budget,
+            ),
+          () => params.runtime.callExactValue(binding.id, input, callOptions()),
+        );
         break;
       }
       case "nodes": {
@@ -494,16 +514,7 @@ export async function runBridgeRequest(params: {
           throw new ToolInputError(`${toolName} is not available in this run.`);
         }
         const called = await runWithToolResultDeliveryProjection(
-          (result, budget) =>
-            codeModeSkillPageFits({
-              value: result.content[0]?.text ?? "",
-              maxOutputBytes: params.maxOutputBytes ?? 65_536,
-              metadata: {
-                status: "completed",
-                telemetry: { ...params.runtime.telemetry(), visibleTools: ["exec", "wait"] },
-              },
-              budget: params.resultBudget ?? budget,
-            }),
+          (result, budget) => skillPageFits(result.content[0]?.text ?? "", budget),
           () =>
             params.runtime.callExactId(
               binding.id,

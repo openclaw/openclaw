@@ -176,7 +176,8 @@ it("keeps Code Mode file ownership despite an unavailable same-name pin", async 
     expect(getTextContent(await read.execute("read", { name: "pinned" }))).toBe(
       `Skill location: ${path.join(library, "skills/pinned/SKILL.md")}\n` +
         "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
-        libraryBody,
+        libraryBody +
+        `\n\n[Skill page 0:${Buffer.byteLength(libraryBody)}/${Buffer.byteLength(libraryBody)}; nextCursor=null. Read all pages before applying instructions.]`,
     );
     const skill = prepared.codeModeSkills.find((entry) => entry.name === "guide")!;
     expect(await readCodeModeSkill(skill)).toBe(header + "current host body");
@@ -333,15 +334,40 @@ it.each([
         resolvedSkills: [skill, gatewayOwnedSkill],
       },
     }).find((tool) => tool.name === "read")!;
-    const readText = async (file: string, range?: { offset: number; limit: number }) =>
-      getTextContent(await read.execute("read", { path: file, ...range }));
     const target = `workspace-skill://workspace/guide/${fileName}`;
-    const range = fileName === "SKILL.md" ? { offset: 2, limit: 1 } : undefined;
-    expect(await readText(target, range)).toContain(
-      fileName === "SKILL.md" ? "Host instructions" : "Host instructions support",
-    );
-    expect(await readText(gatewaySkill.filePath)).toContain("Gateway Library instructions");
-    expect(await readText("local.txt")).toContain("Local project file");
+    const hostResult = await read.execute("read", { path: target });
+    const hostContent = "---\nname: guide\ndescription: Guide\n---\n\nHost instructions\n";
+    if (fileName === "SKILL.md") {
+      expect(hostResult.details).toMatchObject({
+        kind: "skill_page",
+        content: hostContent,
+        startByte: 0,
+        endByte: Buffer.byteLength(hostContent),
+        totalBytes: Buffer.byteLength(hostContent),
+        nextCursor: null,
+      });
+      await expect(read.execute("range", { path: target, offset: 2, limit: 1 })).rejects.toThrow(
+        "Skill instruction reads use an opaque cursor only",
+      );
+    } else {
+      expect(hostResult.details).toEqual({ kind: "text", content: "Host instructions support" });
+    }
+    const libraryContent =
+      "---\nname: guide\ndescription: Guide\n---\n\nGateway Library instructions\n";
+    expect((await read.execute("library", { path: gatewaySkill.filePath })).details).toEqual({
+      kind: "skill_page",
+      name: gatewaySkill.filePath,
+      location: gatewaySkill.filePath,
+      content: libraryContent,
+      startByte: 0,
+      endByte: Buffer.byteLength(libraryContent),
+      totalBytes: Buffer.byteLength(libraryContent),
+      nextCursor: null,
+    });
+    expect((await read.execute("local", { path: "local.txt" })).details).toEqual({
+      kind: "text",
+      content: "Local project file",
+    });
     if (workspaceOnly) {
       await expect(
         read.execute("outside", { path: path.join(root, "outside.txt") }),

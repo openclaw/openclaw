@@ -10,7 +10,8 @@ import {
 import { parseCompactSplitTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
 
 const preparedWorkspace = "src/node-host/node-worker-prepared-workspace.test.ts";
-const preparedCompanion = "src/cli/update-cli/update-repair-cancellation.test.ts";
+// The extraction fixture needs two files in the same prepared-runtime owner.
+const preparedCompanion = "src/node-host/node-worker-launch-store.test.ts";
 const planFiles = (
   job: Pick<NodeTestShard, "includePatterns" | "groups"> & { targets?: string[] },
 ) => [

@@ -218,6 +218,10 @@ describe("resolveWorkerToolAuthority", () => {
       name: skill.name,
       location: skill.filePath,
       content: skill.readContent,
+      startByte: 0,
+      endByte: Buffer.byteLength(skill.readContent),
+      totalBytes: Buffer.byteLength(skill.readContent),
+      nextCursor: null,
     });
     current = false;
     await expect(read.execute("read-closed", { name: skill.name })).rejects.toThrow(

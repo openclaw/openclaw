@@ -92,9 +92,9 @@ it.each(["allowed", "denied", "oversized"])(
           ...(cursor ? { cursor } : {}),
         });
         expect(read.success).toBe(true);
-        const text = read.contentItems.find((item) => item.type === "inputText")!;
-        if (text.type !== "inputText") {
-          throw new Error("Missing skill page");
+        const text = read.contentItems.find((item) => item.type === "inputText");
+        if (text?.type !== "inputText" || typeof text.text !== "string") {
+          throw new Error("Missing skill page text");
         }
         expect(text.text).not.toContain("truncated dynamic tool result");
         const match = /\n\n\[Skill page (\d+):(\d+)\/(\d+); nextCursor=(null|"[^"]+")\./u.exec(

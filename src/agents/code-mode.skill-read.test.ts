@@ -9,6 +9,7 @@ import {
   createFixtureSkillEntry,
 } from "../skills/test-support/test-helpers.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { wrapReadToolWithSkillContent } from "./agent-tools.skill-read.js";
 import { resolveCodeModeSkills } from "./code-mode-skills.js";
 import {
   applyCodeModeCatalog,
@@ -19,6 +20,7 @@ import { createCatalogCodeModeHarness, resetCodeModeTestState } from "./code-mod
 import { bindHostSkillCatalog } from "./harness/host-skills.js";
 import { prepareInstalledSkillCatalog } from "./installed-skill-runtime.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
+import { createReadTool } from "./sessions/tools/read.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
@@ -395,4 +397,38 @@ it("reports an unusable Code Mode page envelope instead of returning truncated i
     status: "failed",
     error: expect.stringContaining("cannot fit a usable character"),
   });
+});
+
+it("delivers recognized file pages through generic Code Mode calls without retaining truncated values", async () => {
+  const root = tempDirs.make("code-mode-recognized-skill-");
+  const location = path.join(root, "SKILL.md");
+  const content = "😀complete\r\n".repeat(200);
+  await fs.writeFile(location, content);
+  const read = wrapReadToolWithSkillContent(createReadTool(root), [{ filePath: location }]);
+  const h = createCatalogCodeModeHarness([read], {
+    codeMode: { maxOutputBytes: 1024 },
+    modelContextWindowTokens: 50_000,
+  });
+  let cursor: string | null = null;
+  let reconstructed = "";
+  do {
+    const result = await h.complete(
+      `return await read(${JSON.stringify({ path: location, ...(cursor ? { cursor } : {}) })});`,
+    );
+    expect(result).toMatchObject({ status: "completed", value: { kind: "skill_page" } });
+    const page = result.value as {
+      content: string;
+      startByte: number;
+      endByte: number;
+      totalBytes: number;
+      nextCursor: string | null;
+    };
+    expect(page.startByte).toBe(Buffer.byteLength(reconstructed));
+    expect(page.endByte).toBe(page.startByte + Buffer.byteLength(page.content));
+    expect(page.totalBytes).toBe(Buffer.byteLength(content));
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(1024);
+    reconstructed += page.content;
+    cursor = page.nextCursor;
+  } while (cursor);
+  expect(reconstructed).toBe(content);
 });
