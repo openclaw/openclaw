@@ -29,6 +29,13 @@ the `anthropic/*` one.
   An Anthropic Default row also uses this label when it will clear a pinned session runtime:
   the current session route does not describe the configured route being restored.
 
+For native login, the web picker's Claude CLI group reads the billing label from
+Claude Code's `claude auth status --json`: a Claude account shows its recognized
+plan or **Subscription**, API authentication shows **API**, and an unrecognized
+login type shows **Native login**. An explicitly selected saved account takes
+precedence. This does not import a saved account or change who manages login
+and token refresh.
+
 The web picker shows route details on hover or keyboard focus. Telegram `/models`
 shows route guidance before selection and labels models when their runtime is
 known. Model IDs and explicit runtime choices remain unchanged.

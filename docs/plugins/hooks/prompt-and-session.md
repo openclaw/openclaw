@@ -237,15 +237,19 @@ api.on(
 ```
 
 CLI runtimes report all three states. Codex reports `fresh` or `resumed` from
-its native thread binding and `invalidated` when that binding is rotated away
-before the turn starts. The embedded runtime owns its transcript and has no
+its native thread binding and `invalidated` when that binding is discarded
+before the turn starts: rotated away by the token limit, or replaced by a new
+thread when resuming fails. The embedded runtime owns its transcript and has no
 native binding, so it reports `fresh` or `resumed`. Other runtimes omit the
 field; omission means unknown. The ordinary prompt-build phase never receives
 it, because its tool restrictions are inputs to the reuse decision.
 
-The phase runs once per logical turn. When a model fallback candidate repeats
-the same request with the same tool surface, it reuses the first result instead
-of invoking handlers again, even if that candidate's session decision differs.
+The phase runs on every attempt, including each model fallback candidate. Each
+run reports that attempt's own continuity and receives that attempt's model,
+context budget, and tool authority, so handlers repeat their own model- and
+authority-keyed checks. A handler that wants to avoid repeated work across
+fallback candidates owns that cache and keys it on every input that changes its
+answer.
 
 This option requires a host that implements the post-policy phase. Published
 plugins must set `package.json` `openclaw.compat.pluginApi` to a range beginning

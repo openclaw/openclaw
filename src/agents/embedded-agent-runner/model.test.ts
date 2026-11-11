@@ -11,6 +11,7 @@ import {
 import { discoverAuthStorageFacts, discoverModelsAsync } from "../agent-model-discovery.js";
 import { clearRuntimeAuthProfileStoreSnapshots, saveAuthProfileStore } from "../auth-profiles.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
+import { MODELS_JSON_STATE } from "../models-config-state.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { registerModelAuthReadTests } from "./model.auth-read.test-support.js";
 import {
@@ -502,6 +503,42 @@ describe("resolveModel", () => {
     expect(resolveBundledProviderStaticCatalogModelMock).toHaveBeenCalledWith(lookup);
     expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModelsAsync).not.toHaveBeenCalled();
+  });
+
+  it("prices a zero-placeholder model at its resolved rate, and keeps authored zeros", async () => {
+    const rates = { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 };
+    fs.mkdirSync(state.agentDir(), { recursive: true });
+    const resolve = async (cost: typeof rates) => {
+      fs.writeFileSync(
+        `${state.agentDir()}/models.json`,
+        JSON.stringify({ providers: { google: { models: [{ id: "fresh-model", cost }] } } }),
+      );
+      MODELS_JSON_STATE.costCache.clear();
+      resolveBundledProviderStaticCatalogModelMock.mockResolvedValueOnce(
+        makeProviderModelFixture({
+          provider: "google",
+          id: "fresh-model",
+          api: "google-generative-ai",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        }),
+      );
+      const config = {};
+      const result = await resolveWithoutDiscovery("google", "fresh-model", undefined, {
+        allowBundledStaticCatalogFallback: true,
+        preparedModelRuntime: createEmptyPreparedModelRuntimeFixture({
+          agentDir: state.agentDir(),
+          config,
+          metadataSnapshot: createPluginMetadataSnapshotFixture(),
+          createStores: createEmptyAgentDiscoveryStores,
+        }),
+      });
+      return expectResolvedModel(result).cost;
+    };
+
+    // The transport bills each call from this cost: a placeholder must not record $0.
+    expect(await resolve(rates)).toMatchObject(rates);
+    const free = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    expect(await resolve(free)).toMatchObject(free);
   });
 
   it("keeps the prepared auth mode through async provider model resolution", async () => {
