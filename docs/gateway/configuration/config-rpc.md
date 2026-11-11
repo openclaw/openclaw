@@ -64,7 +64,9 @@ another billing route: a metered API key, a subscription/OAuth or token
 profile, or a CLI runtime's own credentials. Each entry is one line naming the
 consumer path, the model, and the old and new route; the Gateway log gets the
 same lines. The field is absent when nothing moved, and older Gateways never
-send it. It is advisory and never blocks the write.
+send it. It is advisory and never blocks the write. A successful `agents.update`
+that changes an agent's `model` or `agentRuntime` returns the same field;
+`agents.create` does not, because a new agent has no earlier route to compare.
 
 `config.patch` also accepts `response: "summary"` for callers that only need a
 commit acknowledgment. It omits the full config from the response. A summary

@@ -190,12 +190,14 @@ vi.mock("../../config/config.js", async (importOriginal) => {
       writeOptions?: object;
       mutate: (draft: Record<string, unknown>, context: unknown) => unknown;
     }) => {
-      const draft = structuredClone(mocks.loadConfigReturn);
+      const sourceConfig = mocks.loadConfigReturn;
+      const draft = structuredClone(sourceConfig);
       const result = await params.mutate(draft, context());
       await mocks.writeConfigFile(draft, params.writeOptions);
       mocks.loadConfigReturn = draft;
       settleApplication(params.writeOptions);
-      return { nextConfig: draft, result: mocks.omitConfigMutationResult ? undefined : result };
+      const omit = mocks.omitConfigMutationResult;
+      return { snapshot: { sourceConfig }, nextConfig: draft, result: omit ? undefined : result };
     },
     transformConfigFileWithRetry: async (params: {
       writeOptions?: object;
@@ -737,21 +739,12 @@ describe("agents.update", () => {
 
   it("rejects updating a nonexistent agent", async () => {
     mocks.findAgentEntryIndex.mockReturnValue(-1);
-
-    const respond = await call("agents.update", { agentId: "nonexistent" });
-
-    expectNotFoundResponseAndNoWrite(respond);
+    expectNotFoundResponseAndNoWrite(await call("agents.update", { agentId: "nonexistent" }));
   });
 
   it("returns not found when a concurrent delete wins the update race", async () => {
-    let findCallCount = 0;
-    mocks.findAgentEntryIndex.mockImplementation(() => {
-      findCallCount += 1;
-      return findCallCount >= 2 ? -1 : 0;
-    });
-
+    mocks.findAgentEntryIndex.mockReturnValueOnce(0).mockReturnValue(-1);
     const respond = await call("agents.update", { agentId: "test-agent", model: "gpt-5.5" });
-
     expectNotFoundResponseAndNoWrite(respond);
   });
 
@@ -765,9 +758,7 @@ describe("agents.update", () => {
       },
       { model: { primary: "openai/gpt-5.6-luna" } },
     );
-
     const respond = await call("agents.update", { agentId: "test-agent", model: null });
-
     expectRespondOk(respond, { ok: true, agentId: "test-agent" });
     const agent = expectDefined(
       getAgentList(mockCallArg(mocks.writeConfigFile)).find((entry) => entry.id === "test-agent"),

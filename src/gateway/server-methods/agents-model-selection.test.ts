@@ -8,11 +8,7 @@ import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js"
 
 const fixture = vi.hoisted(() => {
   const config: OpenClawConfig = {};
-  return {
-    config,
-    beforeWrite: () => {},
-    current: true,
-  };
+  return { config, beforeWrite: () => {}, current: true };
 });
 
 vi.mock("../../config/config.js", async (importOriginal) => ({
@@ -21,7 +17,8 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
     mutate: (draft: OpenClawConfig) => Promise<void>;
     writeOptions?: { assertConfigPathForWrite?: () => void };
   }) => {
-    const draft = structuredClone(fixture.config);
+    const before = fixture.config;
+    const draft = structuredClone(before);
     await params.mutate(draft);
     fixture.beforeWrite();
     params.writeOptions?.assertConfigPathForWrite?.();
@@ -29,7 +26,13 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
     if (params.writeOptions) {
       getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
     }
+    return { snapshot: { sourceConfig: before }, nextConfig: draft };
   },
+}));
+const billing = vi.hoisted(() => vi.fn((_params: unknown): string[] => []));
+// mock-isolation: Set the comparison result without reading provider metadata or auth stores.
+vi.mock("../../commands/doctor/shared/model-billing-route-migration.js", () => ({
+  collectModelBillingRouteMigrationWarnings: billing,
 }));
 // mock-isolation: Control catalog ownership without activating model runtimes.
 vi.mock("../../agents/model-runtime-choice.js", () => ({
@@ -66,10 +69,7 @@ it.each([false, true])(
       fixture.config = {};
     }
     expectRpcResult(await update(request), { ok: true, agentId: "main" });
-    const selection = {
-      model,
-      models: { [model]: { agentRuntime: { id: "acp-opencode" } } },
-    };
+    const selection = { model, models: { [model]: { agentRuntime: { id: "acp-opencode" } } } };
     expect(fixture.config).toEqual({
       ...(implicit ? { meta: { migrations: { modelPolicyAllowlist: true } } } : {}),
       agents: implicit ? { defaults: selection } : { defaults: {}, entries: { main: selection } },
@@ -83,4 +83,11 @@ it("rechecks catalog ownership at the final config write", async () => {
   };
   expectRpcError(await update(request), { message: "Replaced" });
   expect(fixture.config).toEqual(before);
+});
+it("returns the billing-route warnings of the committed write", async () => {
+  const before = fixture.config;
+  billing.mockReturnValueOnce(["Billing route changed"]);
+  const reply = { ok: true, agentId: "main", billingRouteWarnings: ["Billing route changed"] };
+  expectRpcResult(await update(request), reply);
+  expect(billing).toHaveBeenCalledWith(expect.objectContaining({ before, after: fixture.config }));
 });
