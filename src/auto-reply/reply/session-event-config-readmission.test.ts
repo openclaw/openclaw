@@ -50,6 +50,7 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import * as routedReplies from "./route-reply.js";
+import { prepareSessionEventDelivery } from "./session-event-delivery.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
@@ -122,6 +123,18 @@ it("executes a recovery event after its producer's plugin scope closes", async (
           target.agentId,
           target.sessionKey,
         );
+        using routed = vi
+          .spyOn(routedReplies, "routePreparedReply")
+          .mockImplementation(plugin.wrap(async () => ({ ok: true, delivered: true }) as const));
+        // A reply drains after its turn's scope closed, like a cron or wake turn's lease.
+        const reply = invocations.run(async () =>
+          (await prepareSessionEventDelivery({ channel: "telegram", to: "-100001" }, () => {}))({
+            cfg: config,
+            sessionKey: target.sessionKey,
+            payload: { text: "Process completed" },
+            replyKind: "final",
+          }),
+        );
         receipt = invocations.run(() =>
           enqueueSessionEventForHost("Resume required work", {
             ...target,
@@ -134,6 +147,8 @@ it("executes a recovery event after its producer's plugin scope closes", async (
         );
         invocations.release();
         expect(() => oldCallback()).toThrow("Plugin event-source consumer is closed");
+        await expect(reply).resolves.toMatchObject({ delivered: true });
+        expect(routed).toHaveBeenCalledOnce();
         // Publication before admission forces the rejection handler to re-admit the occurrence.
         setRuntimeConfigSnapshot({ ...config, tools: { deny: ["exec"] } });
         const outcome = await withinTest(receipt.settled, signal);
@@ -205,10 +220,10 @@ it.for([
         const defaults = expectDefined(config.agents?.defaults, "completion agent defaults");
         if (explicitScheduledModel || scheduledSubagent || gmail) {
           defaults.modelPolicy = {
-            allow:
-              scheduledProvider === "mock-other"
-                ? ["mock-openai/*", "mock-other/*"]
-                : ["mock-openai/*"],
+            allow: [
+              "mock-openai/*",
+              ...(scheduledProvider === "mock-other" ? ["mock-other/*"] : []),
+            ],
           };
           if (scheduledSubagent) {
             defaults.subagents = { model: "mock-openai/gpt-5.6-luna" };
@@ -388,19 +403,11 @@ it.for([
           const payload: Extract<CronStoredJob["payload"], { kind: "agentTurn" }> = {
             kind: "agentTurn",
             message: "Background exec completed",
+            ...(gmail ? { externalContentSource: "gmail" as const } : {}),
+            ...(locked ? { fallbacks: ["mock-openai/gpt-5.6-sol"] } : {}),
+            ...(explicitScheduledModel ? { model: `${scheduledProvider}/gpt-5.6-sol` } : {}),
+            ...(scenario === "scheduled-model-malformed" ? { model: "openai/" } : {}),
           };
-          if (gmail) {
-            payload.externalContentSource = "gmail";
-          }
-          if (locked) {
-            payload.fallbacks = ["mock-openai/gpt-5.6-sol"];
-          }
-          if (explicitScheduledModel) {
-            payload.model =
-              scenario === "scheduled-model-malformed"
-                ? "openai/"
-                : `${scheduledProvider}/gpt-5.6-sol`;
-          }
           completion = enqueueSessionEventForHost("Background exec completed", {
             ...scope,
             source: failure ? "cron" : "exec",
@@ -494,15 +501,8 @@ it.for([
             status: executes && (!failure || transport) ? "completed" : "failed",
             executionStarted: executes || locked,
           });
-          expect(prompts).toHaveLength(
-            failure
-              ? 1
-              : scenario === "scheduled-subagent-default"
-                ? 3
-                : executes || locked
-                  ? 2
-                  : 1,
-          );
+          const promptCount = failure || !(executes || locked) ? 1 : 2;
+          expect(prompts).toHaveLength(scenario === "scheduled-subagent-default" ? 3 : promptCount);
           if (failure) {
             expect(completedOutcome).toMatchObject({
               delivered: false,
@@ -539,8 +539,7 @@ it.for([
             expect(completedOutcome.error).toContain(
               "automation model override 'mock-openai/gpt-5.6-sol' rejected by agents.defaults.modelPolicy.allow",
             );
-          }
-          if (scenario === "scheduled-model-malformed") {
+          } else if (scenario === "scheduled-model-malformed") {
             expect(completedOutcome.error).toContain('Invalid model override "openai/"');
           }
           if (executes && !failure) {

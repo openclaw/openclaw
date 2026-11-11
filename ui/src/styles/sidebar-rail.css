@@ -636,7 +636,7 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
 
 /* Resize the content once; reveal the fixed-width navigation on the compositor. */
 .shell--navigation-rail:not(.shell--mobile-nav) {
-  transition-property: grid-template-rows;
+  transition: none;
 
   .shell-nav {
     width: var(--shell-nav-expanded-width);

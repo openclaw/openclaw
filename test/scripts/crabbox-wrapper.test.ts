@@ -216,7 +216,7 @@ async function main() {
     if (process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_UNKNOWN_PATH) topFiles.push({ path: "not-a-source-candidate.txt" });
     process.stdout.write(JSON.stringify({ candidate: { files: topFiles.length + Number(process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_COUNT_DELTA || "0") }, topFiles })); return;
   }
-  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.82.0"); return; }
+  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.83.0"); return; }
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
   if (args[0] === "warmup" && args[1] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeWarmupValueOptionHelp}`)}); return; }
   if (args[0] === "actions" && args[1] === "hydrate" && args[2] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeHydrateValueOptionHelp}`)}); return; }
@@ -325,7 +325,7 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         '  if [ -n "${OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG:-}" ]; then',
         `    printf '%s\\n' '["--version"]' >> "$OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG"`,
         "  fi",
-        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.82.0}"`,
+        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.83.0}"`,
         "  exit 0",
         "fi",
         'if [ "$#" -eq 2 ] && [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
@@ -378,7 +378,7 @@ function makeSlowHelpCrabbox(helpText: string, delayMs: number): string {
     String.raw`
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
-  console.log("crabbox 0.82.0");
+  console.log("crabbox 0.83.0");
 } else if (args[0] === "run" && args[1] === "--help") {
   setTimeout(() => { process.stderr.write(${JSON.stringify(runHelpText)}); process.exit(0); }, ${delayMs});
 }`,
@@ -1910,7 +1910,7 @@ describe("scripts/crabbox-wrapper", () => {
       const stateDir = path.join(root, "state");
       const platform = process.platform;
       const arch = process.arch === "x64" ? "amd64" : process.arch;
-      const managed = path.join(stateDir, "tools/crabbox/0.82.0", `${platform}-${arch}`, "crabbox");
+      const managed = path.join(stateDir, "tools/crabbox/0.83.0", `${platform}-${arch}`, "crabbox");
       mkdirSync(path.dirname(managed), { recursive: true });
       // Keep candidate and managed commands distinguishable at the executable boundary.
       const fake = path.join(makeFakeCrabbox(defaultProviderHelp), "crabbox-node");
@@ -1936,7 +1936,7 @@ describe("scripts/crabbox-wrapper", () => {
       };
       const result = runDefaultWrapper(runArgs(provider, "--", "true"), options);
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toContain(`version=0.82.0 provider=${provider}`);
+      expect(result.stderr).toContain(`version=0.83.0 provider=${provider}`);
       expect(readInvocations(candidateLog)).toEqual([["--version"]]);
       const calls = readInvocations(log);
       expect(calls[0]).toEqual(["--version"]);
@@ -2645,7 +2645,7 @@ describe("scripts/crabbox-wrapper", () => {
       const env = testHomeEnv(home);
       if (customState) {
         env.XDG_STATE_HOME = path.join(home, "selected state");
-        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.82.0";
+        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.83.0";
         const legacyKey = path.join(
           testCrabboxConfigDir(home),
           "testboxes",
@@ -2668,16 +2668,16 @@ describe("scripts/crabbox-wrapper", () => {
   );
 
   it.each([
-    { id: "tbx_default", createKey: true, state: "", version: "0.82.0", selectedKey: false },
-    { id: "tbx_selected", createKey: true, state: "state", version: "0.82.0", selectedKey: true },
-    { id: "blue-hermit", createKey: false, state: "", version: "0.82.0", selectedKey: false },
+    { id: "tbx_default", createKey: true, state: "", version: "0.83.0", selectedKey: false },
+    { id: "tbx_selected", createKey: true, state: "state", version: "0.83.0", selectedKey: true },
+    { id: "blue-hermit", createKey: false, state: "", version: "0.83.0", selectedKey: false },
     ...(process.platform === "win32"
       ? [
           {
             id: "tbx_namespaced",
             createKey: true,
             state: "namespaced",
-            version: "0.82.0",
+            version: "0.83.0",
             selectedKey: true,
           },
         ]
@@ -2736,14 +2736,14 @@ describe("scripts/crabbox-wrapper", () => {
       env: {
         ...testHomeEnv(home),
         XDG_STATE_HOME: stateRoot,
-        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.82.0",
+        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.83.0",
       },
     });
     expect(result).toMatchObject({ status: 2, stdout: "" });
     expect(result.stderr).toContain("XDG_STATE_HOME must be absolute");
   });
 
-  it.each([{ version: "0.82.0", stateDirectory: "state " }])(
+  it.each([{ version: "0.83.0", stateDirectory: "state " }])(
     "fails before reuse when a Blacksmith Testbox is claimed by another repo ($version, $stateDirectory)",
     ({ version, stateDirectory }) => {
       const home = invocationLogTempDirs.make("openclaw-crabbox-home-");
@@ -4603,6 +4603,7 @@ process.on("exit", () => {
     ["aws", false, "arbitrary"],
     ["boat", false, "arbitrary"],
     ["boat", false, "native-git-lifetime"],
+    ["boat", false, "unpublished"],
     ["aws", false, "unchanged"],
     ["blacksmith-testbox", true, "transport"],
     ["blacksmith-testbox", false, "transport"],
@@ -4647,7 +4648,9 @@ process.on("exit", () => {
         GIT_OPTIONAL_LOCKS: "0",
         OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO: capturedBundle,
         OPENCLAW_FAKE_CRABBOX_NATIVE_SYNC_CAPTURE:
-          provider === "blacksmith-testbox" ? path.join(root, "native-sync.json") : "",
+          provider === "blacksmith-testbox" || scenario === "unpublished"
+            ? path.join(root, "native-sync.json")
+            : "",
         OPENCLAW_FAKE_CRABBOX_PRIVACY_PATHS: JSON.stringify([
           "private-canary.txt",
           "protected-deleted.ignored",
@@ -5046,6 +5049,54 @@ require('node:module').syncBuiltinESMExports();`,
         expect(git(imported.receiver, ["rev-parse", "HEAD^"])).toBe(base);
         expect(git(producer, ["rev-parse", "origin/main"])).toBe(sharedBase);
         expect(git(producer, ["diff", "--name-only", sharedBase, "HEAD"])).toContain("mode.sh");
+        return;
+      }
+      if (scenario === "unpublished") {
+        writeFileSync(path.join(producer, "owner.txt"), "unpublished source\n");
+        chmodSync(path.join(producer, "mode.sh"), 0o755);
+        rmSync(path.join(producer, "deleted.txt"));
+        git(producer, ["add", "-A"]);
+        git(producer, ["commit", "-qm", "unpublished candidate"]);
+        const source = git(producer, ["rev-parse", "HEAD"]);
+        writeFileSync(path.join(producer, "owner.txt"), "dirty unpublished source\n");
+        expect(runCommand("git", ["cat-file", "-e", source], { cwd: origin }).status).not.toBe(0);
+        const payload = [
+          'const {execFileSync}=require("node:child_process");',
+          'const fs=require("node:fs");',
+          'const git=(args)=>execFileSync("git",args,{encoding:"utf8"}).trim();',
+          'console.log(JSON.stringify({head:git(["rev-parse","HEAD"]),parent:git(["rev-parse","HEAD^"]),owner:fs.readFileSync("owner.txt","utf8"),mode:fs.statSync("mode.sh").mode&0o777,deleted:fs.existsSync("deleted.txt")}));',
+        ].join("");
+        const index = readFileSync(path.join(producer, ".git", "index"));
+        const status = git(producer, ["status", "--porcelain=v1"]);
+        const sent = runSender("direct", [
+          "run",
+          "--provider",
+          provider,
+          "--",
+          "node",
+          "-e",
+          payload,
+        ]);
+        const transport = readJson(env.OPENCLAW_FAKE_CRABBOX_NATIVE_SYNC_CAPTURE);
+        expect(transport).toMatchObject({ base, source: base, head: base });
+        expect(transport.changed).not.toContain("unchanged.bin");
+        const imported = receive("unpublished", sent);
+        expect(imported.result.status, failureDetail(imported.result)).toBe(0);
+        const observed = JSON.parse(imported.result.stdout);
+        expect(observed).toMatchObject({
+          parent: base,
+          owner: "dirty unpublished source\n",
+          mode: 0o755,
+          deleted: false,
+        });
+        expect(observed.head).not.toBe(base);
+        expect(observed.head).not.toBe(source);
+        expect(imported.result.stderr).toContain(source);
+        expect(git(imported.receiver, ["rev-parse", "HEAD"])).toBe(base);
+        expect(git(producer, ["rev-parse", "HEAD"])).toBe(source);
+        expectFileText(producer, "owner.txt", "dirty unpublished source\n");
+        expect(readFileSync(path.join(producer, ".git", "index"))).toEqual(index);
+        expect(git(producer, ["status", "--porcelain=v1"])).toBe(status);
         return;
       }
       if (scenario === "native-git-lifetime") {

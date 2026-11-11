@@ -624,7 +624,9 @@ includes dashboard/operator sessions; existing `sessions_yield` rules still
 determine which completion they await. Startup
 does not send a resume input or run the model for that wait. A fresh continuation
 of the surviving child delivers its completion through the ordinary requester
-handoff.
+handoff. Each parked session has one bounded startup log line with its agent,
+session key, and `yield-waiting` reason. The restart summary's `parked` count
+describes these retained waits, independently of conversation environment cleanup.
 
 A requester yielded for children that restart stopped keeps the ordinary root
 recovery path. Its single resume input reconciles the stopped children's work;
