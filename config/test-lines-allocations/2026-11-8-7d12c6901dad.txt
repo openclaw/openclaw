@@ -1,0 +1,4 @@
+5
+# Source 7d12c6901dadf82ea60a12b503254709e0108838; extensions/discord/src/channel.ts currentMessageId and resolveReplyTransport: use existing normalizeDiscordSnowflake, drop synthetic reply references only, preserve destination/thread and valid native anchors.
+# Exact net LF growth of independently justified retained regressions against frozen LOCAL11.8 baseline; no removed assertions or scalar change.
+# One of six added LF is offset by row 167 removing one LF; total allowance equals aggregate net growth.
