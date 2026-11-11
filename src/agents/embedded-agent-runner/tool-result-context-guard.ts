@@ -84,6 +84,7 @@ function truncateToolResultToChars(
         ...retainedContent.filter((block) => !isText(block)),
         ...notice,
       ]);
+      // SAFETY: Filtered blocks retain the normalized content shape and original tool-result envelope.
       const replacement = { ...msg, content: retainedContent } as AgentMessage;
       const bounded = truncateToolResultMessage(
         replacement,

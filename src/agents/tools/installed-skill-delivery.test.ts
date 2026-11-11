@@ -108,8 +108,12 @@ for (const deferred of [false, true]) {
               timestamp: 1,
             },
           ]);
-          expect(fresh[0]).toHaveProperty("details.contentPolicy", "whole");
-          expect(JSON.stringify(fresh[0]?.content)).toContain(
+          const freshResult = fresh[0];
+          if (freshResult?.role !== "toolResult") {
+            throw new Error("Expected the fresh skill read to remain a tool result");
+          }
+          expect(freshResult).toHaveProperty("details.contentPolicy", "whole");
+          expect(JSON.stringify(freshResult.content)).toContain(
             "Skill instructions cannot be partially served:",
           );
           projected = truncateOversizedToolResultsInMessages(

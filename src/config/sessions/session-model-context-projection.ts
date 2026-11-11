@@ -98,10 +98,11 @@ export function projectModelContextEventSql(
     return /* kysely-allow-raw: Serialize once at the model payload boundary. */ sql<string>`(CASE WHEN ${omitCheckpoint} = 1
       THEN ${bounded} #- '{message,providerReplay}' ELSE ${bounded} END)::text`;
   }
+  const payload = sql.ref<string>("model_context_payload.event");
   const paths = MODEL_CONTEXT_PRIVATE_METADATA_KEYS.map((key) => `$.message.__openclaw.${key}`);
   const projected = jsonRemovePaths(
     db,
-    event,
+    payload,
     paths.map((path) => sql.val(path)),
   );
   const withoutDetails = jsonRemovePaths(db, projected, [sql.lit("$.message.details")]);
@@ -129,9 +130,11 @@ export function projectModelContextEventSql(
     : modelEvent;
   // The context owner classifies invalidated prefix checkpoints using the transport
   // contract. Other replay state must survive, including checkpoints after the cut.
-  return /* kysely-allow-raw: use owner-held validity without decoding compressed bodies to choose their projection. */ sql<string>`CASE WHEN NOT ${nativeJsonValid} THEN ${projectDeepModelContextSql(db, event, false, omitCheckpoint, toolResultOmission)}
-    WHEN ${omitCheckpoint} = 1
-    THEN ${jsonRemovePaths(db, boundedEvent, [sql.lit("$.message.providerReplay")])} ELSE ${boundedEvent} END`;
+  return /* kysely-allow-raw: Materialize only the selected native payload once; invalid/deep rows keep their existing projection owner. */ sql<string>`CASE WHEN NOT ${nativeJsonValid} THEN ${projectDeepModelContextSql(db, event, false, omitCheckpoint, toolResultOmission)}
+    ELSE (WITH model_context_payload AS MATERIALIZED (SELECT ${event} AS event)
+      SELECT CASE WHEN ${omitCheckpoint} = 1
+        THEN ${jsonRemovePaths(db, boundedEvent, [sql.lit("$.message.providerReplay")])} ELSE ${boundedEvent} END
+      FROM model_context_payload) END`;
 }
 
 function contentPropertySql(
