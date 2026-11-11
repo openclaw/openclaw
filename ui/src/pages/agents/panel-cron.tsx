@@ -83,28 +83,27 @@ function CronReadBoundary(props: {
 function CronValue(props: { read: AgentCronRead | null; ready: boolean; value: JSX.Element }) {
   return (
     <CronReadBoundary read={props.read}>
-      {(pending, message) =>
-        pending && !props.ready ? (
-          <span
-            class="skeleton settings-loading-skeleton__control"
-            role="status"
-            aria-busy="true"
-            aria-label={t("common.loading")}
-          />
-        ) : (
-          <SettingsValue
-            value={
-              props.ready ? (
-                props.value
-              ) : message ? (
-                <span title={message}>{t("common.failed")}</span>
-              ) : (
-                t("common.na")
-              )
-            }
-          />
-        )
-      }
+      {(pending, message) => (
+        <SettingsValue
+          value={
+            pending && !props.ready ? (
+              <span
+                class="skeleton skeleton-line"
+                style={{ display: "block", width: "72px" }}
+                role="status"
+                aria-busy="true"
+                aria-label={t("common.loading")}
+              />
+            ) : props.ready ? (
+              props.value
+            ) : message ? (
+              <span title={message}>{t("common.failed")}</span>
+            ) : (
+              t("common.na")
+            )
+          }
+        />
+      )}
     </CronReadBoundary>
   );
 }

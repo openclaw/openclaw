@@ -115,7 +115,7 @@ describe("Agent Cron native reads and actions", () => {
         ?.querySelector('.settings-group [aria-busy="true"]');
     expect(loading("Scheduler")).toBeTruthy();
     expect(loading("Agent automations")).toBeTruthy();
-    status.resolve({ enabled: false, jobs: 0, nextWakeAtMs: null });
+    status.resolve({ enabled: false, triggersEnabled: false, jobs: 0, nextWakeAtMs: null });
     await waitForSolid(() => expect(jobRow(container, "Enabled").textContent).toContain("No"));
     expect(loading("Scheduler")).toBeTruthy();
     expect(loading("Agent automations")).toBeTruthy();
