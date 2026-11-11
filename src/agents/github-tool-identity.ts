@@ -518,7 +518,7 @@ export async function prepareGitHubPublicationIdentity(
   return Object.freeze({
     ...prepared,
     ...(accessExpiresAtMs !== undefined ? { accessExpiresAtMs } : {}),
-    env: Object.freeze(withGitHubToken(env, token)),
+    env: Object.freeze({ ...withGitHubToken(env, token), GH_HOST: host }),
   });
 }
 

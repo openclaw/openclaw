@@ -110,7 +110,10 @@ export async function registerNative(
     }),
     registerAgentHarness: (harness) => registerAgentHarness(harness, { ownerPluginId: "acpx" }),
     registerService: (registered) => {
-      assert(registered.apiVersion !== 2, "Expected ACPX service API version 1");
+      assert(
+        registered.apiVersion !== 2 && registered.apiVersion !== 3,
+        "Expected ACPX service API version 1",
+      );
       service = registered;
     },
   });

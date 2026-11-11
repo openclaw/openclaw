@@ -38,9 +38,12 @@ import { formatCliCommand } from "../command-format.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 import {
   createCliStatusTextStyles,
+  formatGatewayCrashHistory,
   formatRuntimeStatus,
   projectDaemonServiceForJson,
   resolveDaemonInstallBlockMessage,
+  resolveDaemonServiceInstallGuidance,
+  resolveLaunchdInspectionWarnings,
   resolveRuntimeStatusColor,
   safeDaemonEnv,
 } from "./shared.js";
@@ -263,6 +266,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       `${label("Last shutdown:")} ${infoText(terminalText`${reason ?? "unknown"}`)} at ${new Date(completedAtMs).toISOString()}`,
     );
   }
+  for (const line of formatGatewayCrashHistory(status.gateway)) {
+    printWarning(line);
+  }
   if (status.gateway?.duelingScopesWarning) {
     printWarning(terminalText`${status.gateway.duelingScopesWarning}`);
   }
@@ -468,10 +474,8 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
 
-  if (service.foreignLaunchdInspectionError) {
-    printWarning(
-      terminalText`Could not inspect foreign launchd jobs: ${service.foreignLaunchdInspectionError}`,
-    );
+  for (const warning of resolveLaunchdInspectionWarnings(service)) {
+    printWarning(warning);
     spacer();
   }
   if (service.foreignLaunchdJobs?.length) {

@@ -18,11 +18,8 @@ export function installCronRepairTurn(
   let repairContext: RepairTurnContext | undefined;
   gatewayReplyMock.mockImplementationOnce((ctx, options, config) => {
     repairContext = ctx;
-    return getReplyFromConfig(
-      ctx,
-      options,
-      withFullRuntimeReplyConfig(config ?? getRuntimeConfig()),
-    );
+    const runtimeConfig = withFullRuntimeReplyConfig(config ?? getRuntimeConfig());
+    return getReplyFromConfig(ctx, options, runtimeConfig);
   });
   vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (params) => {
     expect(params.preparedRunAdmission, "ordinary reply admission").toBeDefined();

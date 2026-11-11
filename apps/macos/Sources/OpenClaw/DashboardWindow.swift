@@ -57,6 +57,16 @@ enum DashboardWindowAuth: Equatable {
     case nativeDevice(gatewayUrl: String, token: String?, password: String?, legacyCredentials: [String: String]? = nil)
     case browserIdentity(gatewayUrl: String)
 
+    /// Accepted startup credentials are socket-owned projections, not a new page owner.
+    func hasSameDocumentIdentity(as other: Self) -> Bool {
+        switch (self, other) {
+        case let (.nativeDevice(url, token, password, _), .nativeDevice(otherURL, otherToken, otherPassword, _)):
+            url == otherURL && token == otherToken && password == otherPassword
+        default:
+            self == other
+        }
+    }
+
     var gatewayUrl: String? {
         switch self {
         case .unauthenticated: nil

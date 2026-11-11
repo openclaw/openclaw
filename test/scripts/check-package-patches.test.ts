@@ -40,7 +40,7 @@ it("allows approved pnpm patches together", () => {
     ["@clawdbot/lobster@2026.10.1", "patches/@clawdbot__lobster@2026.10.1.patch"],
     ["apache-arrow@21.2.0", "patches/apache-arrow@21.2.0.patch"],
     ["@shinyoshiaki/binary-data@0.6.1", "patches/@shinyoshiaki__binary-data@0.6.1.patch"],
-    ["@openclaw/crabline@0.1.31", "patches/@openclaw__crabline@0.1.31.patch"],
+    ["@openclaw/crabline@0.2.0", "patches/@openclaw__crabline@0.2.0.patch"],
     ["playwright-core@1.64.1", "patches/playwright-core@1.64.1.patch"],
     ["minizlib@3.1.0", "patches/minizlib@3.1.0.patch"],
     ["tar@7.5.22", "patches/tar@7.5.22.patch"],
@@ -48,7 +48,7 @@ it("allows approved pnpm patches together", () => {
     ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
     ["baileys@7.0.0-rc14", "patches/baileys@7.0.0-rc14.patch"],
     ["vitest@5.0.5", "patches/vitest@5.0.5.patch"],
-    ["matrix-js-sdk@43.0.0", "patches/matrix-js-sdk@43.0.0.patch"],
+    ["matrix-js-sdk@44.0.0", "patches/matrix-js-sdk@44.0.0.patch"],
     ["@solidjs/web@2.0.0-rc.18", "patches/@solidjs__web@2.0.0-rc.18.patch"],
     ["@solidjs/signals@2.0.0-rc.18", "patches/@solidjs__signals@2.0.0-rc.18.patch"],
   ] as const;
@@ -68,7 +68,8 @@ it("allows approved pnpm patches together", () => {
 it.each([
   ["left-pad@1.3.0", "patches/left-pad@1.3.0.patch"],
   ["matrix-js-sdk@42.4.1", "patches/matrix-js-sdk@42.4.1.patch"],
-  ["matrix-js-sdk@43.0.0", "patches/matrix-js-sdk@43.0.0-other.patch"],
+  ["matrix-js-sdk@43.0.0", "patches/matrix-js-sdk@43.0.0.patch"],
+  ["matrix-js-sdk@44.0.0", "patches/matrix-js-sdk@44.0.0-other.patch"],
 ])("rejects unapproved workspace patch %s -> %s", (specifier, patchPath) => {
   const dir = makeRepo();
   writePatches(dir, "pnpm-workspace.yaml", [[specifier, patchPath]]);

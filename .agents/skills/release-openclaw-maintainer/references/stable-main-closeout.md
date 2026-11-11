@@ -12,7 +12,10 @@ performance, including any recorded [release-tooling policy](../../../../docs/re
 decisions. Closeout cannot grant a waiver to a failed FRV. Historical candidate-side
 skip-waiver receipt replay and repair remain unsupported. Completion requires both the closeout manifest and its matching checksum. If only the checksum is missing,
 replay an eligible strict-evidence closeout to regenerate identical bytes; do not manufacture
-new evidence. Invalid or mismatched assets remain blocking.
+new evidence. Invalid or mismatched required assets remain blocking. ClawHub
+publication and verification are independent: do not wait for them to open or
+complete the main closeout or retrospective PR. Record pending or failed
+ClawHub work and its owner/run/attempt as a separate follow-up.
 
 1. Start from fresh latest `main`. Use a same-repository PR targeting `main`,
    with branch `release/<version>-main-closeout` and exact title
@@ -125,9 +128,9 @@ new evidence. Invalid or mismatched assets remain blocking.
    replay preserves those fields byte-for-byte. Any other feed mismatch still
    fails. The later hotfix release (for example `2026.9.7`) verifies its own
    appcast at its own closeout; the withdrawn record is never rewritten.
-9. Finish with the [release retrospective](retrospective.md): once publication,
+9. Finish with the [release retrospective](retrospective.md): once core publication,
    platform assets, and this closeout are terminal, write the report and open
-   its `openclaw/maintainers` PR with the shared issue-ledger update. The stable
+   its `openclaw/tideclaw` PR with the shared issue-ledger update. The stable
    release is not done until that PR is open and its ledger check passes.
 
 ## Recover a failed publication parent

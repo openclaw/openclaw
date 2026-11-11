@@ -70,6 +70,7 @@ import type { NodeInvokeRequestPayload, SystemRunParams } from "./invoke-types.j
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
 import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
+import type { NodeWorkerMcpSession } from "./node-worker-mcp.js";
 import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
 import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
@@ -87,6 +88,7 @@ type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
   flushPluginCommandIo?: () => Promise<void>;
   workerBundleInstaller?: NodeWorkerBundleInstallerControl;
   workerSupervisor?: NodeWorkerSupervisorControl;
+  localMcp?: NodeWorkerMcpSession;
   workerWorkspace?: NodeWorkerWorkspaceRuntime;
   workerComputer?: NodeWorkerComputer;
 };
@@ -290,6 +292,7 @@ export async function handleInvoke(
       paramsJSON: frame.paramsJSON,
       bundleInstaller: runtime.workerBundleInstaller,
       supervisor: runtime.workerSupervisor,
+      localMcp: runtime.localMcp,
       workspace: runtime.workerWorkspace,
       gatewayUrl: runtime.gatewayUrl,
       gatewayTlsFingerprint: runtime.gatewayTlsFingerprint,

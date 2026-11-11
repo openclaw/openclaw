@@ -99,7 +99,7 @@ export async function readImageOriginalBlob(
   return await response.blob();
 }
 
-/** Surfaces without a projected transcript turn navigate the rendered message's images. */
+/** Surfaces without a projected transcript thread navigate the rendered message's images. */
 export function withMessageImageGallery(
   options: ImageRenderOptions | undefined,
   images: readonly ImageBlock[],

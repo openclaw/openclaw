@@ -22,6 +22,14 @@ manager and its bus must be available to the Gateway. Keep `Delegate=yes`,
 `DelegateSubgroup=gateway`, and the sandbox's resource limits enabled; switching
 the cgroup manager or clearing `INVOCATION_ID` does not repair this boundary.
 
+Dependency-template builders stop before their installed files become reusable.
+On native Linux with cgroup v2 and systemd, OpenClaw captures the builder's exact
+engine-reported cgroup at startup and checks kernel population after killing its
+immutable container ID. This avoids waiting for Podman's physical cleanup on the
+preparation path; registry housekeeping still owns removal and crash recovery.
+An unavailable cgroup capture uses the engine's wait and termination checks.
+An unreadable or still-populated captured cgroup blocks template publication.
+
 Rootless Podman defaults to `--userns=keep-id` for writable workspace mounts. A long-lived sandbox can reserve subordinate IDs and block unrelated `--userns=auto` workloads; remove it before starting those workloads. Set `sandbox.docker.user` to a nonzero numeric UID or UID:GID to control the container user. Rootless Podman rejects UID or GID 0 because Podman 4.x cannot remap namespace root while preserving workspace bind ownership; bake root-required setup into the image or use rootful Podman. Rootful Podman otherwise uses the workspace owner when available.
 
 ```json5
@@ -61,13 +69,16 @@ set, it refuses the ambiguous selection. Unset the unused selector or repair the
 client's `podman --version` command.
 
 Each sandbox records its engine URI and, for Podman Machine, its SSH identity.
-Preparation validates that target. Commands on the prepared sandbox reuse the
+The Gateway discovers the engine once per process, sharing concurrent discovery
+and retrying failed discovery. Preparation validates recorded targets against
+that captured endpoint. Commands on the prepared sandbox reuse the
 bound endpoint and full container ID without another discovery probe; native
 local execution explicitly selects `--remote=false`. If that engine or container
 disappears, the command reports Podman's error. Restore the original engine or
 prepare a new sandbox before retrying. Changing engine mode in `containers.conf`
 or replacing the Podman executable during a run is not supported; finish active
-runs before changing the engine.
+runs before changing the engine. Restart the Gateway after changing the Podman
+connection, engine mode, or executable so it discovers the new runtime.
 
 Earlier OpenClaw versions could pin `CONTAINER_HOST` even when the client selected
 `CONTAINER_CONNECTION`. After upgrading, those existing sandboxes can report
@@ -91,7 +102,7 @@ Retire the old sandbox through its recorded endpoint before switching:
    `openclaw sandbox recreate --session "<sessionKey>"`. Review the preview before
    confirming. This removes the selected container; mounted workspace files remain.
 5. Set the intended `CONTAINER_CONNECTION` and unset the unused `CONTAINER_HOST`
-   and `CONTAINER_SSHKEY`. Apply that environment to the Gateway as well. Check that the
+   and `CONTAINER_SSHKEY`. Apply that environment to the Gateway and restart it. Check that the
    sandbox image and workspace are available on the selected engine. The next use
    creates a new sandbox there; it does not transfer the old container's writable layer.
 

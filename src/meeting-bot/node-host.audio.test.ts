@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const childProcessMocks = vi.hoisted(() => ({
@@ -22,6 +21,7 @@ vi.mock("node:crypto", async (importOriginal) => ({
   randomUUID: cryptoMocks.randomUUID,
 }));
 
+import { forceFullGc } from "../test-utils/retention.js";
 import { createStdin, type TestStdin } from "./audio-backend.test-support.js";
 import { createMeetingNodeHost, type MeetingNodeHostOptions } from "./node-host.js";
 
@@ -331,7 +331,7 @@ describe("meeting node host audio output", () => {
     Buffer.from(churn);
     const control = new WeakRef({});
     await nextTurn();
-    queryObjects(WeakRef);
+    forceFullGc();
     try {
       expect(control.deref()).toBeUndefined();
       expect(references.filter((reference) => reference.deref() !== undefined)).toHaveLength(0);

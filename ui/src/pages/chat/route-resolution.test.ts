@@ -206,7 +206,8 @@ describe("gateway-backed session route resolution", () => {
       threadId: "thread-1",
     });
     const catalogRow = row({ key: catalogKey, boardFace: "dashboard" });
-    const { context } = contextFor({ ok: true, ...catalogRow, agentId: "roboclaw" });
+    const { context, request } = contextFor({ ok: true, ...catalogRow, agentId: "roboclaw" });
+    request.mockResolvedValueOnce(null);
     const target = sessionNavigationTarget({
       face: "chat",
       sessionKey: catalogKey,

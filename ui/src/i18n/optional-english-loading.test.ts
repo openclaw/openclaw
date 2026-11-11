@@ -27,10 +27,10 @@ it("loads inspector-only context copy with the panel while keeping the breakdown
   expect(manager.t("chat.sessionDetails.contextOpen")).toBe("View context");
   expect(manager.t("chat.sessionDetails.contextLoading")).toBe("Loading context breakdown…");
   expect(manager.t("chat.sessionDetails.contextError")).toBe(
-    "Couldn't load the context breakdown. Try refreshing.",
+    "Couldn’t load the context breakdown. Try again.",
   );
   expect(manager.t("chat.sessionDetails.contextOffline")).toBe(
-    "Connect to the Gateway to load the context breakdown.",
+    "Reconnect to load the context breakdown.",
   );
   const inspectorCopy = {
     contextAgentWorkspace: "Agent workspace",
@@ -133,7 +133,7 @@ it.each([
   ],
   [
     "chat.sessionSharing.noPeople",
-    "No paired people found.",
+    "No paired people yet.",
     () => import("../pages/chat/components/chat-session-sharing-mobile.tsx"),
   ],
   [
@@ -143,7 +143,7 @@ it.each([
   ],
   [
     "chat.subagentsPanel.empty",
-    "No subagents in this conversation.",
+    "No subagents yet.",
     () => import("../pages/chat/components/chat-subagents-panel.tsx"),
   ],
   [
@@ -153,7 +153,7 @@ it.each([
   ],
   [
     "chat.subagentsPanel.nativeTitle",
-    "Live native agents",
+    "Live subagents",
     () => import("../pages/chat/components/chat-subagents-native.tsx"),
   ],
   [
@@ -239,7 +239,7 @@ it.each([false, true])(
     expect(manager.t("chat.sessionHeader.continueInTerminal.title")).toBe("Continue in terminal");
     expect(manager.t("chat.sessionHeader.continueInTerminal.action")).toBe("Continue in terminal…");
     expect(manager.t("chat.sessionHeader.continueInTerminal.authNote")).toBe("Ohne Zugangsdaten.");
-    expect(manager.t("chat.subagentsPanel.nativeTitle")).toBe("Live native agents");
+    expect(manager.t("chat.subagentsPanel.nativeTitle")).toBe("Live subagents");
     expect(manager.t("chat.subagentsPanel.empty")).toBe("Keine Subagents.");
     expect(manager.t("chat.subagentsPanel.nativeStatus.running")).toBe("Läuft");
     expect(manager.t("chat.subagentsPanel.stop", { name: "Build" })).toBe("Stop Build");
@@ -304,9 +304,9 @@ it.each([false, true])(
     registerEnglishCatalog(ordered[1]!);
     registerAgentsHomeEnglish();
     registerTemplateCreatorEnglish();
-    expect(manager.t("templatesDraft.title")).toBe("Create Template");
+    expect(manager.t("templatesDraft.title")).toBe("Create template");
     expect(manager.t("templatesDraft.sendFailed")).toBe(
-      "The main chat did not accept the Create Template message.",
+      "Couldn’t start template creation. Try again.",
     );
     expect(manager.t("templatesDraft.reviewTitle")).toBe("Vorlage prüfen");
     expect(manager.t("agentsHome.pinnedAgents")).toBe("Angeheftete Agenten");
@@ -339,13 +339,13 @@ it("keeps sidebar and chat actions readable until the session management dialog 
   expect(manager.t("sessionsView.personalGroupEdit")).toBe("sessionsView.personalGroupEdit");
   expect(manager.t("sessionsView.archiveReasonManual")).toBe("Archived manually");
   expect(manager.t("sessionsView.stopCloudWorkerConfirm", { session: "Build" })).toBe(
-    'Stop the cloud worker for "Build"?',
+    "Stop this cloud device?",
   );
   expect(manager.t("sessionsView.goal")).toBe("Ziel");
   expect(en.sessionsView).toBe(sessionsView);
   expect(manager.t("profilePage.modelAccounts.loadMore")).toBe("Load more saved accounts");
   expect(manager.t("profilePage.modelAccounts.inventoryFailed")).toBe(
-    "Could not load saved accounts. Refresh to retry.",
+    "Couldn’t load saved accounts. Refresh to try again.",
   );
   expect(manager.t("profilePage.modelAccounts.connectAction")).toBe(
     "profilePage.modelAccounts.connectAction",
@@ -377,7 +377,7 @@ it("loads people-picker copy with session menu details before any sharing menu",
   await import("../components/session-menu-details-solid.tsx");
 
   expect(manager.t("sessionsView.searchPeople")).toBe("Personen suchen");
-  expect(manager.t("sessionsView.noPeopleMatch")).toBe("No matching people or agents");
+  expect(manager.t("sessionsView.noPeopleMatch")).toBe("No people or agents match your search.");
   expect(manager.t("chat.sessionSharing.copyPublicLink")).toBe(
     "chat.sessionSharing.copyPublicLink",
   );
@@ -389,7 +389,7 @@ it("loads workspace actions with the session menu before session management", as
   await import("../components/session-menu-solid.tsx");
 
   expect(manager.t("sessionsView.openPullRequest")).toBe("Open PR");
-  expect(manager.t("sessionsView.stopCloudWorker")).toBe("Stop cloud worker…");
+  expect(manager.t("sessionsView.stopCloudWorker")).toBe("Stop cloud device…");
   expect(manager.t("sessionsView.groupDefaultsTitle")).toBe("sessionsView.groupDefaultsTitle");
 });
 
@@ -423,7 +423,7 @@ it.each([false, true])(
     expect(manager.t("sessionsView.communication.send")).toBe("Send messages");
     expect(manager.t("sessionsView.personalGroupEdit")).toBe("Edit section");
     expect(manager.t("sessionsView.groupDefaultsTitle", { group: "Build" })).toBe(
-      'New session defaults for "Build"',
+      "New session defaults for “Build”",
     );
     expect(manager.getLocale()).toBe("de");
     expect(en.sessionsView).toBe(namespace);
@@ -454,13 +454,13 @@ it("keeps a cold roster metadata failure readable before its view catalog loads"
   const stop = store.subscribe(() => {});
   try {
     await store.refresh();
-    expect(store.snapshot.error).toBe("Could not load agents. Try again.");
+    expect(store.snapshot.error).toBe("Couldn’t load agents. Retry.");
     const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
     const { registerAgentsHomeEnglish } = await import("./locales/en-agents-home.ts");
     registerEnglishCatalog(registerAgentsHomeEnglish);
     expect(en.agentsHome).toBe(agentsHome);
     await store.refresh();
-    expect(store.snapshot.error).toBe("Could not load agents. Try again.");
+    expect(store.snapshot.error).toBe("Couldn’t load agents. Retry.");
   } finally {
     stop();
     sessions.dispose();
@@ -498,7 +498,7 @@ it("loads optional English copy at each view boundary while keeping shared label
   await manager.setLocale("de");
   for (const [key, copy, load] of [
     ["aboutPage.linkDocs", "Docs", () => import("../pages/about/view.tsx")],
-    ["dashboardsPage.live", "Live", () => import("../pages/dashboards/view.tsx")],
+    ["dashboardsPage.running", "Updating now", () => import("../pages/dashboards/view.tsx")],
     [
       "usage.providerUsage.balance",
       "Balance",
@@ -528,7 +528,7 @@ it("loads optional chat copy with its view while keeping admission errors synchr
   registerEnglishCatalog(registerChatSessionEnglish);
   await manager.setLocale("de");
   expect(manager.t("chat.composer.menu.offlineBlocked")).toBe(
-    "Reconnect to change tools for this chat.",
+    "Reconnect to change tools for this session.",
   );
   expect(manager.t("chat.workspaceFiles.showFiles")).toBe("Show session files");
   expect(manager.t("chat.workspaceFiles.search")).toBe("chat.workspaceFiles.search");

@@ -543,7 +543,7 @@ const manifestSchema = z
       )
       .optional()
       .default({}),
-    cronJobs: z.array(cronJobSchema).optional().default([]),
+    automations: z.array(cronJobSchema).optional().default([]),
   })
   .strict()
   .superRefine((manifest, ctx) => {
@@ -604,11 +604,11 @@ const manifestSchema = z
     }
 
     const cronIds = new Set<string>();
-    manifest.cronJobs.forEach((job, index) => {
+    manifest.automations.forEach((job, index) => {
       if (cronIds.has(job.id)) {
         ctx.addIssue({
           code: "custom",
-          path: ["cronJobs", index, "id"],
+          path: ["automations", index, "id"],
           message: `Cron job id ${JSON.stringify(job.id)} is declared more than once.`,
         });
       }
@@ -653,7 +653,14 @@ export function parseTemplateManifest(
 ):
   | { ok: true; manifest: TemplateManifest; diagnostics: TemplateDiagnostic[] }
   | { ok: false; diagnostics: TemplateDiagnostic[] } {
-  const parsed = manifestSchema.safeParse(value);
+  // Normalize published v1 packages once at ingestion. When both keys occur,
+  // keep cronJobs so strict validation rejects the ambiguous declaration.
+  let input = value;
+  if (isRecord(value) && Object.hasOwn(value, "cronJobs") && !Object.hasOwn(value, "automations")) {
+    const { cronJobs, ...manifest } = value;
+    input = { ...manifest, automations: cronJobs };
+  }
+  const parsed = manifestSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, diagnostics: diagnosticsFromZodError(parsed.error) };
   }

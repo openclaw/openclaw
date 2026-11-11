@@ -90,7 +90,7 @@ export function IdentityCrumbs(props: ChatPaneHeaderProps) {
   );
 }
 
-// Roster mode keeps the session crumbs off the agent pill: it is one settings target.
+// Roster mode keeps the avatar and name together as one settings target.
 export function AgentCrumb(
   props: ChatPaneHeaderProps & { agent: NonNullable<ChatPaneHeaderProps["agent"]> },
 ) {
@@ -105,9 +105,6 @@ export function AgentCrumb(
         <AgentIdentityAvatar agent={props.agent} />
       </span>
       <span class="chat-pane__agent-name">{props.agent.name}</span>
-      <span class="chat-pane__agent-settings" aria-hidden="true">
-        <Icon name="settings" />
-      </span>
     </button>
   );
 }
@@ -162,7 +159,12 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
   );
 }
 
-function SessionRenameInput(props: ChatPaneHeaderProps) {
+export function SessionRenameInput(
+  props: Pick<
+    ChatPaneHeaderProps,
+    "renameValue" | "renameDisabledReason" | "onRenameInput" | "onCommitRename" | "onCancelRename"
+  > & { class?: string; renameBusy?: boolean },
+) {
   let input!: HTMLInputElement;
   onSettled(() => {
     input.focus();
@@ -170,8 +172,10 @@ function SessionRenameInput(props: ChatPaneHeaderProps) {
   });
   return (
     <input
-      class="chat-pane__session-title-input"
+      class={["chat-pane__session-title-input", props.class]}
       value={props.renameValue}
+      readonly={props.renameBusy}
+      aria-busy={props.renameBusy ? "true" : undefined}
       aria-label={t("chat.sessionHeader.renameInputAria")}
       placeholder={t("chat.sessionHeader.renameInputPlaceholder")}
       onInput={(event) => props.onRenameInput(event.currentTarget.value)}

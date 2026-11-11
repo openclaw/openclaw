@@ -275,15 +275,11 @@ export function validateReviewArtifacts({ review, prMeta }) {
         "Invalid nit sweep in .local/review.json: nitSweep.status is has_nits but no NIT findings exist",
       );
     }
+    // Fresh templates omit the optional sweep; name both ways out for a partial one.
     requireType(
-      typeof nitSweep.summary === "string",
-      "Invalid nit sweep summary in .local/review.json: nitSweep.summary must be a string",
+      isNonEmptyString(nitSweep.summary),
+      'Invalid nit sweep summary in .local/review.json: nitSweep.summary must be a non-empty string describing the sweep result (for example "No nits."); remove nitSweep if no nit sweep was performed',
     );
-    if (typeof nitSweep.summary === "string" && !isNonEmptyString(nitSweep.summary)) {
-      add(
-        "Invalid nit sweep summary in .local/review.json: nitSweep.summary must be a non-empty string",
-      );
-    }
   }
 
   const issueValidation = issueValidationIsObject ? value.issueValidation : {};

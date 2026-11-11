@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -40,11 +40,14 @@ const preflight = {
 it("rejects a plugin declared by both the portable manifest and OpenClaw profile", async () => {
   const root = tempDirs.make("openclaw-templates-inspect-extension-");
   await mkdir(join(root, "profiles"));
-  await writeFixtureJson(join(root, "openclaw.template.json"), {
-    schemaVersion: 1,
-    agent: { id: "demo-agent" },
-    packages: [{ kind: "plugin", source: "clawhub", ref: "@owner/audit", version: "2.0.1" }],
-  });
+  await writeFile(
+    join(root, "CLAW.md"),
+    `---\n${JSON.stringify({
+      schemaVersion: 1,
+      agent: { id: "demo-agent" },
+      packages: [{ kind: "plugin", source: "clawhub", ref: "@owner/audit", version: "2.0.1" }],
+    })}\n---\n`,
+  );
   await writeFixtureJson(join(root, "profiles/openclaw.yml"), {
     schemaVersion: 1,
     agent: {},
@@ -63,7 +66,7 @@ it("rejects a plugin declared by both the portable manifest and OpenClaw profile
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => values.push(value));
   const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
   mocks.preflightTemplatePackage.mockResolvedValue(preflight);
-  await runTemplatesInspectCommand(join(root, "openclaw.template.json"), { json: true });
+  await runTemplatesInspectCommand(join(root, "CLAW.md"), { json: true });
   expect(values[0]).toMatchObject({
     valid: false,
     extensions: [
@@ -86,15 +89,18 @@ it.each(["agent", "diagnostic"] as const)(
     const root = tempDirs.make("templates-redaction-");
     const marker = "TEMPLATE_MARKER";
     const injected = `Agent\u001b]0;INJECTED_TITLE\u0007${marker}`;
-    await writeFixtureJson(join(root, "openclaw.template.json"), {
-      schemaVersion: 1,
-      agent: { id: "demo-agent", ...(kind === "agent" ? { name: injected } : {}) },
-      ...(kind === "diagnostic" ? { metadata: { [injected]: 1 } } : {}),
-    });
+    await writeFile(
+      join(root, "CLAW.md"),
+      `---\n${JSON.stringify({
+        schemaVersion: 1,
+        agent: { id: "demo-agent", ...(kind === "agent" ? { name: injected } : {}) },
+        ...(kind === "diagnostic" ? { metadata: { [injected]: 1 } } : {}),
+      })}\n---\n`,
+    );
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
-    await runTemplatesInspectCommand(join(root, "openclaw.template.json"), {});
+    await runTemplatesInspectCommand(join(root, "CLAW.md"), {});
     const output =
       kind === "agent"
         ? log.mock.calls.map(([line]) => String(line)).find((line) => line.startsWith("Agent: "))

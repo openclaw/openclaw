@@ -125,7 +125,7 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
         retentionSettled = true;
       }
     });
-    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
     const work = f
       .updateCommand({ yes: true, json: true, timeout: "60" })
       .catch((error: unknown) => {

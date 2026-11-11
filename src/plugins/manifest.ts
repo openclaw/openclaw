@@ -112,7 +112,8 @@ function parseManifestBackupResources(
     if (
       !isRecord(entry) ||
       Object.keys(entry).some(
-        (key) => !["disposition", "scope", "relativePath", "databaseFamily"].includes(key),
+        (key) =>
+          !["disposition", "scope", "relativePath", "databaseFamily", "profile"].includes(key),
       ) ||
       !("disposition" in entry) ||
       !("scope" in entry) ||
@@ -120,12 +121,18 @@ function parseManifestBackupResources(
     ) {
       return {
         ok: false,
-        error: `backupResources[${index}] requires disposition, scope, relativePath, and optional databaseFamily`,
+        error: `backupResources[${index}] requires disposition, scope, relativePath, and optional databaseFamily or profile`,
       };
     }
-    const { disposition, scope, relativePath, databaseFamily } = entry;
+    const { disposition, scope, relativePath, databaseFamily, profile } = entry;
     if (disposition !== "include" && disposition !== "regenerable") {
       return { ok: false, error: `backupResources[${index}].disposition is invalid` };
+    }
+    if (profile !== undefined && (profile !== "local-companion" || disposition !== "regenerable")) {
+      return {
+        ok: false,
+        error: `backupResources[${index}].profile requires a local-companion regenerable resource`,
+      };
     }
     if (scope !== "state" && scope !== "agent") {
       return { ok: false, error: `backupResources[${index}].scope is invalid` };
@@ -156,8 +163,12 @@ function parseManifestBackupResources(
       scope,
       relativePath,
       ...(databaseFamily !== undefined ? { databaseFamily } : {}),
+      ...(profile !== undefined ? { profile } : {}),
     };
-    resources.set(`${scope}\0${relativePath}\0${disposition}\0${databaseFamily ?? ""}`, resource);
+    resources.set(
+      `${scope}\0${relativePath}\0${disposition}\0${databaseFamily ?? ""}\0${profile ?? ""}`,
+      resource,
+    );
   }
   return {
     ok: true,

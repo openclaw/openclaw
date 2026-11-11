@@ -172,7 +172,7 @@ export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailPr
   const clipboard = createPullRequestCopy({
     url: () => props.pullRequest?.url,
     presented: () => props.hasSnapshot,
-    onCopied: () => showToast({ message: t("chat.pullRequests.linkCopied") }),
+    onCopied: () => showToast({ severity: "success", message: t("chat.pullRequests.linkCopied") }),
   });
   return (
     <div class="chat-pr-mobile">

@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMemo, createStore, For } from "solid-js";
 import { parseDurationMs } from "../../../../src/cli/parse-duration.js";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
@@ -132,9 +133,9 @@ export function CloudWorkerSnapshotPolicy() {
           }
         />
         {saveState().error ? (
-          <div class="callout warning" role="alert">
+          <InlineAlert tone="warning" role="alert">
             {saveState().error}
-          </div>
+          </InlineAlert>
         ) : null}
         {saveState().notice ? (
           <div class="callout" role="status">
