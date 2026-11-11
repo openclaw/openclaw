@@ -608,6 +608,122 @@ const summarizeWorkerAllocation = (
       "Samples are outside CPU/latency timing. Delta covers only workers sampled at both boundaries; new-worker values are lifetime totals. Exited or unavailable workers are unmeasured.",
   };
 };
+const startSerialWorkerProfiles = async () => {
+  const { sampleTrackedWorkerMemory } = await import("../../src/infra/worker-cpu.js");
+  const snapshot = sampleTrackedWorkerMemory({ refresh: false });
+  const identities = new Map(
+    [...snapshot.workerHeaps, ...snapshot.workerMemoryMissing].map((entry) => [
+      entry.threadId,
+      entry.script,
+    ]),
+  );
+  const existing = new Set(workers);
+  const selected = [...existing].filter(
+    (worker) => identities.get(worker.threadId) === "git-operation.worker.js",
+  );
+  assert(selected.length <= 16, "Allocation proof supports at most 16 existing Git workers");
+  const captures: {
+    worker: Worker;
+    threadId: number;
+    cpu: Awaited<ReturnType<Worker["startCpuProfile"]>>;
+    heap?: Awaited<ReturnType<Worker["startHeapProfile"]>>;
+    cpuBefore?: NodeJS.CpuUsage;
+  }[] = [];
+  const keepAlive = setInterval(() => {}, 1_000);
+  try {
+    for (const worker of selected) {
+      const capture = {
+        worker,
+        threadId: worker.threadId,
+        cpu: await worker.startCpuProfile({ sampleInterval: 1 }),
+      };
+      captures.push(capture);
+      captures.at(-1)!.heap = await worker.startHeapProfile({
+        sampleInterval: 32_768,
+        forceGC: false,
+        includeObjectsCollectedByMajorGC: true,
+        includeObjectsCollectedByMinorGC: true,
+      });
+      captures.at(-1)!.cpuBefore = await worker.cpuUsage().catch(() => undefined);
+    }
+  } catch (error) {
+    for (const capture of captures) {
+      await capture.heap?.stop().catch(() => {});
+      await capture.cpu.stop().catch(() => {});
+    }
+    throw error;
+  } finally {
+    clearInterval(keepAlive);
+  }
+  return async (phase: string, discard = false) => {
+    const stopKeepAlive = setInterval(() => {}, 1_000);
+    try {
+      const profiles = [];
+      for (const capture of captures) {
+        const errors: string[] = [];
+        const failed = (error: unknown) => {
+          errors.push(String(error));
+          return undefined;
+        };
+        const cpuAfter = await capture.worker.cpuUsage().catch(() => undefined);
+        const heap = await capture.heap!.stop().catch(failed);
+        const cpu = await capture.cpu.stop().catch(failed);
+        const exited = !workers.has(capture.worker);
+        const prefix = `${values.report}.${phase}.git-worker-${capture.threadId}`;
+        if (!discard && heap) {
+          fs.writeFileSync(path.join(output, `${prefix}.heapprofile`), heap);
+        }
+        if (!discard && cpu) {
+          fs.writeFileSync(path.join(output, `${prefix}.cpuprofile`), cpu);
+        }
+        const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
+          node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
+        const parsedCpu = cpu ? JSON.parse(cpu) : undefined;
+        profiles.push({
+          threadId: capture.threadId,
+          script: "git-operation.worker.js",
+          sourcePath: path.join(sourceRoot, "src/infra/git-operation.worker.ts"),
+          exited,
+          errors,
+          sampledAllocatedBytes: !exited && heap ? sum(JSON.parse(heap).head) : null,
+          workerCpuMs:
+            !exited && cpuAfter && capture.cpuBefore
+              ? (cpuAfter.user +
+                  cpuAfter.system -
+                  capture.cpuBefore.user -
+                  capture.cpuBefore.system) /
+                1000
+              : null,
+          cpuSamples: !exited && parsedCpu ? parsedCpu.samples?.length : null,
+          cpuProfileDurationMs:
+            !exited && parsedCpu ? (parsedCpu.endTime - parsedCpu.startTime) / 1000 : null,
+          heapProfile: !discard && heap ? `${prefix}.heapprofile` : null,
+          cpuProfile: !discard && cpu ? `${prefix}.cpuprofile` : null,
+        });
+      }
+      return {
+        profiles,
+        selectedBefore: captures.map((capture) => ({
+          threadId: capture.threadId,
+          script: identities.get(capture.threadId),
+        })),
+        unprofiledBefore: [...existing]
+          .filter((worker) => !selected.includes(worker))
+          .map((worker) => ({
+            threadId: worker.threadId,
+            script: identities.get(worker.threadId),
+          })),
+        newWorkerThreadIds: [...workers]
+          .filter((worker) => !existing.has(worker))
+          .map((worker) => worker.threadId),
+        accounting:
+          "Existing Git workers only, at most 16. CPU starts before heap sampling; heap stops before CPU. Profiles include owner and boundary/setup idle work, exclude correctness/reset. Worker CPU counters span the profiled window; CPU profile duration is elapsed coverage, not consumed CPU. New/exited workers and child processes are unmeasured; failed/exited samples are null. Process CPU remains the separately measured owner counter.",
+      };
+    } finally {
+      clearInterval(stopKeepAlive);
+    }
+  };
+};
 const collectRetainedMemory = async () => {
   assert(globalThis.gc, "Retention samples require --expose-gc");
   // Worker inspection promises do not retain the event loop after these pools unref their workers.
@@ -1795,6 +1911,8 @@ measurement: try {
         gitOperations[operation] = (gitOperations[operation] ?? 0) + 1;
       };
       gitDiagnostics.subscribe(observeGitOperation);
+      const stopWorkerProfiles =
+        values.instrument === "allocation" ? await startSerialWorkerProfiles() : undefined;
       const inspector = values.instrument === "allocation" ? new Session() : undefined;
       inspector?.connect();
       await inspector?.post("Profiler.enable");
@@ -1844,6 +1962,9 @@ measurement: try {
       ).catch(async (error: unknown) => {
         gitDiagnostics.unsubscribe(observeGitOperation);
         inspector?.disconnect();
+        if (stopWorkerProfiles) {
+          await stopWorkerProfiles(phase, true);
+        }
         if (contenderStarted) {
           await Promise.allSettled([contender]);
         }
@@ -1859,6 +1980,7 @@ measurement: try {
       const heapProfile = await inspector?.post("HeapProfiler.stopSampling");
       const cpuProfile = await inspector?.post("Profiler.stop");
       inspector?.disconnect();
+      const workerProfiles = stopWorkerProfiles ? await stopWorkerProfiles(phase) : undefined;
       if (cpuProfile) {
         fs.writeFileSync(
           path.join(output, `${values.report}.${phase}.cpuprofile`),
@@ -1899,6 +2021,7 @@ measurement: try {
         allocationAccounting:
           "Main isolate during owner call and measurement bookkeeping, including overlapping background work; excludes CPU-profiler setup/serialization, correctness reads and reset. Unavailable V8 total counters serialize as null. Worker counters are separate; child process allocation is unmeasured.",
         gitOperations,
+        workerProfiles,
         workerAllocation:
           workerAllocationBefore && workerAllocationAfter
             ? summarizeWorkerAllocation(

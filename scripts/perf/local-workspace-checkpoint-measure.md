@@ -173,8 +173,23 @@ Run a separate `--instrument allocation` pass per source for sampled allocation
 and a CPU profile saved beside the report as `<report>.cpuprofile`. Native allocation
 passes also sample worker heap counters outside the CPU/latency window and report
 matched-thread allocation deltas, worker starts/exits, and unavailable or unmatched
-samples. Exited workers are not silently counted as zero allocation. Do not compare
-instrumented timings against the plain timing arms. Report aggregate process and
+samples. Exited workers are not silently counted as zero allocation.
+
+Serial allocation passes also sample existing Git workers identified by the
+runtime's diagnostic script/thread metadata (at most 16). Each worker starts its
+CPU profiler before its heap sampler, then stops heap sampling before the CPU
+profiler. The sampler includes collected objects, uses a 32 KiB interval and does
+not force GC. Raw files include the phase and thread ID; reports retain script,
+source path, native worker CPU deltas, sampled allocation and CPU sample counts.
+Profile windows include owner work and boundary/setup idle work; they exclude
+correctness reads and reset. CPU profile duration is elapsed coverage, not CPU
+consumption. Workers created during a window and exited workers are unmeasured;
+missing/failed profile values are null. First-use work may therefore lack worker
+coverage; check the post-import reuse's captured Git worker and hash counters
+before making an allocation claim. This adds no profiler work or awaits to timing
+mode. Main and worker samples have different boundaries and must stay separate.
+
+Do not compare instrumented timings against the plain timing arms. Report aggregate process and
 main-thread CPU separately, and retain raw samples so phase overlap and outliers
 remain inspectable.
 
