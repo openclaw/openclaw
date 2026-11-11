@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { CronAddParams } from "../../../packages/gateway-protocol/src/index.js";
 import {
   bindCronManagementGrant,
   runWithCronCreatorAuthorityCapability,
@@ -231,7 +232,6 @@ describe("cron ownership access matrix", () => {
       try {
         const respond = await runWithCronCreatorAuthorityCapability(scope, () =>
           withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, () => {
-            // Add stays caller-scoped; management grants apply to explicit job operations.
             identity.cronManagementGrant = bindCronManagementGrant(scope.runId)!.mint(method);
             return callCron(context, method, params, { client });
           }),
@@ -244,7 +244,7 @@ describe("cron ownership access matrix", () => {
       }
     };
     const keys = ["knowledge:scribe:conversations", "knowledge:scribe:claim-consolidation"];
-    const spec = (key: string): CronJobCreate => ({
+    const spec = (key: string): CronAddParams => ({
       name: key,
       declarationKey: key,
       schedule: { kind: "every", everyMs: 3_600_000 },
@@ -301,7 +301,6 @@ describe("cron ownership access matrix", () => {
       six,
     );
     const owned = (await stored()).find((job) => job.owner?.agentId === "ops")!;
-    // Execution routing can change without transferring declaration ownership.
     await cron.update(owned.id, { agentId: "scout" });
     const retried = await manage("ops", "DEFAULT", "cron.add", { ...spec(owned.declarationKey!) });
     expectCronReply(
