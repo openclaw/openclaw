@@ -136,7 +136,7 @@ it.each([
         pluginDir,
         apiKey: "synthetic-fork-key",
         input: ["text", "image"],
-        tools: ["fork_probe", ...(api === "openai-responses" ? ["web_search"] : [])],
+        tools: ["fork_probe"],
         modelSettings: {
           agentRuntime: { id: "openclaw" },
           params: {
@@ -336,12 +336,11 @@ it.each([
         expect(replay.tool_choice).toEqual(
           api === "anthropic-messages" ? { type: "none" } : "none",
         );
-        if (api === "openai-responses") {
-          expect(original.tools).toEqual(expect.arrayContaining([{ type: "web_search" }]));
-        }
+        expect(JSON.stringify(original.tools)).not.toContain('"web_search"');
         expect(JSON.stringify(original.tools)).toContain("fork_probe");
         expect(replay.previous_response_id).toBeUndefined();
-        expect(replay.prompt_cache_key).toBeUndefined();
+        expect(replay.prompt_cache_key).toBe(original.prompt_cache_key);
+        expect(replay.reasoning).toEqual(original.reasoning);
         if (api !== "anthropic-messages") {
           expect(original.prompt_cache_key).toBeTruthy();
         } else {
@@ -388,7 +387,7 @@ it.each([
             ]);
             const whileRunning = await readTranscript();
             await expect(fork()).resolves.toEqual({ text: "Review answer" });
-            expect(payloads.at(-1)?.prompt_cache_key).toBeUndefined();
+            expect(payloads.at(-1)?.prompt_cache_key).toBe(original.prompt_cache_key);
             expect(JSON.stringify(payloads.at(-1))).toContain("This tool call is still running");
             expect(JSON.stringify(payloads.at(-1))).not.toContain("LIVE_TOOL_RESULT_1672");
             expect(await readTranscript()).toEqual(whileRunning);

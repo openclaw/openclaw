@@ -1,4 +1,5 @@
 import { isAnthropicOAuthApiKey } from "@openclaw/ai/internal/anthropic";
+import { resolveAgentReasoningOption } from "../../packages/agent-core/src/reasoning.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { AssistantMessageEvent, Message, Model } from "../llm/types.js";
@@ -79,11 +80,11 @@ function resolveSideQuestionStream(input: SideQuestionStreamInput) {
   if (params.toolCalls !== "deny") {
     return streamFn;
   }
-  // Anthropic serves a fork the parent's cached prefix only at the parent's thinking config, so
-  // resolve the level as the parent's turn does: session override, then agent/model defaults.
+  // Anthropic and OpenAI serve a fork the parent's cached prefix only at the parent's thinking
+  // config, so resolve the level as the parent's turn does: session override, then defaults.
   // Other APIs keep the session override until their cache behavior is measured.
   const thinkLevel =
-    runtimeModel.api === "anthropic-messages"
+    runtimeModel.api === "anthropic-messages" || runtimeModel.api === "openai-responses"
       ? resolveThinkingSelection({
           cfg: params.cfg,
           agentId: params.agentId,
@@ -127,14 +128,17 @@ function resolveSideQuestionStream(input: SideQuestionStreamInput) {
     runtimeModel,
     params.agentDir,
     undefined,
-    { auth },
+    // Hosted tools change the provider prefix; apply the parent's configured tool policy.
+    { auth, nativeWebSearchPolicyContext: { sessionKey: params.sessionKey } },
   );
   const preparedStream = agent.streamFn;
+  // The parent's agent loop derives its request reasoning from the level the same way.
+  const reasoning = resolveAgentReasoningOption(runtimeModel, mapThinkingLevel(thinkingLevel));
   return (
     model: Model,
     context: Parameters<typeof streamFn>[1],
     options: Parameters<typeof streamFn>[2],
-  ) => preparedStream(model, context, { reasoning: mapThinkingLevel(thinkingLevel), ...options });
+  ) => preparedStream(model, context, { reasoning, ...options });
 }
 
 export async function runBtwSessionFork(
@@ -146,7 +150,7 @@ export async function runBtwSessionFork(
   const { params, runtimeModel, apiKey, sessionId, workspaceDir, assertCurrent } = input;
   const delivery = params.sessionEntry.delivery;
   const externalDelivery = delivery?.kind === "external" ? delivery : undefined;
-  const context = await prepareEmbeddedSessionForkContext({
+  const { context, promptCacheKey } = await prepareEmbeddedSessionForkContext({
     target: {
       agentId: params.agentId,
       sessionId,
@@ -170,6 +174,7 @@ export async function runBtwSessionFork(
   return runEmbeddedSessionFork({
     context,
     streamFn: resolveSideQuestionStream(input),
+    options: { promptCacheKey },
     question: params.question,
     model: runtimeModel,
     apiKey,
