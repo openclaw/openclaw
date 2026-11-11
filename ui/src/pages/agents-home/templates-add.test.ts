@@ -496,7 +496,7 @@ describe("Template Add", () => {
     const { detail, request, navigate } = createDetail({ templatesEnabled: true });
     const original = request.getMockImplementation()!;
     request.mockImplementation(async (method, params, options) => {
-      const result = await original(method, params, options);
+      const result = (await original(method, params, options)) as Record<string, unknown>;
       const selected = (params as { automationChannel?: string }).automationChannel;
       return method === "templates.add.plan"
         ? { ...result, automationChannels: { options: ["discord", "telegram"], selected } }

@@ -276,8 +276,8 @@ export async function installTemplateCronJobsStateless(
   try {
     for (const action of actions) {
       currentAction = action;
-      // SAFETY: cronJob plan actions originate from validated manifest entries plus the
-      // operator's delivery-channel choice.
+      // Plan actions also carry the operator's reviewed delivery-channel choice.
+      // SAFETY: cronJob plan actions originate from validated TemplateCronJob manifest entries.
       const details = action.details as TemplatePlannedCronJob | undefined;
       if (!action.automation && !details?.id) {
         throw new TemplateCronInstallError(
