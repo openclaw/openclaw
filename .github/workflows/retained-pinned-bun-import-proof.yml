@@ -1,0 +1,101 @@
+name: Retained pinned Bun import proof
+
+# Dedicated source-only proof; stock Bun evidence stays in its separate workflow.
+on:
+  push:
+    branches: [diagnostic/release-2026.11.4-pinned-bun-imports-20261111]
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-bun-imports:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: 0f48a2cba06b806b61d136f19d9b8d0593552a75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 0f48a2cba06b806b61d136f19d9b8d0593552a75
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .harness
+          persist-credentials: false
+      - name: Bind pristine source and existing runtime pin
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git -C .harness rev-parse HEAD)" = "$GITHUB_SHA"
+          mkdir -p .artifacts/pinned-bun-imports
+          git rev-parse HEAD > .artifacts/pinned-bun-imports/source.txt
+          git -C .harness rev-parse HEAD > .artifacts/pinned-bun-imports/harness.txt
+          cmp scripts/lib/openclaw-bun.json .harness/scripts/lib/openclaw-bun.json
+          cp scripts/lib/openclaw-bun.json .artifacts/pinned-bun-imports/runtime-pin.json
+          sha256sum src/infra/update-retained-runtime-imports.ts src/infra/update-retained-runtime-imports.process.test.ts > .artifacts/pinned-bun-imports/source.sha256
+          sha256sum .harness/.github/actions/setup-test-bun/action.yml .harness/scripts/stage-openclaw-bun.sh .harness/scripts/lib/openclaw-bun.json > .artifacts/pinned-bun-imports/runtime-harness.sha256
+      - uses: ./.harness/.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          install-bun: "false"
+          semantic-checks: "true"
+          cache-mode: "off"
+      - name: Stage existing checksum-pinned Bun
+        id: stage
+        uses: ./.harness/.github/actions/setup-test-bun
+      - name: Verify exact fork executable
+        id: runtime
+        run: |
+          set -euo pipefail
+          node --version | tee .artifacts/pinned-bun-imports/node.txt
+          bun --version | tee .artifacts/pinned-bun-imports/bun-version.txt
+          bun --revision | tee .artifacts/pinned-bun-imports/bun-revision.txt
+          bun -p 'Bun.revision' | tee .artifacts/pinned-bun-imports/bun-commit.txt
+          command -v bun > .artifacts/pinned-bun-imports/bun-path.txt
+          sha256sum "$(command -v bun)" > .artifacts/pinned-bun-imports/bun-executable.sha256
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { createHash } from 'node:crypto';
+          import fs from 'node:fs';
+          const root = '.artifacts/pinned-bun-imports/';
+          const pin = JSON.parse(fs.readFileSync(root + 'runtime-pin.json', 'utf8'));
+          const text = (name) => fs.readFileSync(root + name, 'utf8').trim();
+          const executable = fs.realpathSync(text('bun-path.txt'));
+          const digest = createHash('sha256').update(fs.readFileSync(executable)).digest('hex');
+          assert.equal(text('bun-revision.txt'), pin.revision);
+          assert.equal(text('bun-commit.txt'), pin.commit);
+          assert.equal(digest, pin.artifacts['linux-x64'].executableSha256);
+          fs.writeFileSync(root + 'verified-runtime.json', JSON.stringify({
+            source: text('source.txt'), harness: text('harness.txt'),
+            tag: pin.tag, revision: pin.revision, commit: pin.commit,
+            executable, executableSha256: digest, verified: true,
+          }, null, 2) + '\n');
+          NODE
+      - name: Run unchanged retained-import regression on pinned Bun
+        id: regression
+        run: |
+          set -euo pipefail
+          sha256sum -c .artifacts/pinned-bun-imports/source.sha256
+          git diff --exit-code -- src/infra/update-retained-runtime-imports.ts src/infra/update-retained-runtime-imports.process.test.ts
+          node scripts/run-vitest.mjs src/infra/update-retained-runtime-imports.process.test.ts --maxWorkers=1 --reporter=verbose -t "^keeps bun late imports on the old generation through replacement and teardown$" 2>&1 | tee .artifacts/pinned-bun-imports/unchanged-pinned-bun.log
+      - name: Record outcomes and source integrity
+        if: ${{ always() }}
+        env:
+          STAGE: ${{ steps.stage.outcome }}
+          RUNTIME: ${{ steps.runtime.outcome }}
+          REGRESSION: ${{ steps.regression.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/pinned-bun-imports
+          printf 'stage=%s\nruntime=%s\nregression=%s\n' "$STAGE" "$RUNTIME" "$REGRESSION" > .artifacts/pinned-bun-imports/outcomes.txt
+          sha256sum -c .artifacts/pinned-bun-imports/source.sha256 | tee .artifacts/pinned-bun-imports/source-integrity.txt
+      - name: Upload distinct pinned-fork evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: retained-pinned-bun-imports-${{ github.run_attempt }}
+          path: .artifacts/pinned-bun-imports/
+          if-no-files-found: error
+          retention-days: 7
