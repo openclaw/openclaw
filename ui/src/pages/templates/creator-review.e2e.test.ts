@@ -443,7 +443,7 @@ it.skipIf(!chromiumAvailable).each([
             excluded: [],
           },
         });
-        await card.getByText("Pending security scans", { exact: true }).waitFor();
+        await card.getByText("Pending", { exact: true }).waitFor();
         await card.getByRole("link", { name: "View submission", exact: true }).waitFor();
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await page.getByRole("dialog", { name: "Review your Template" }).count()).toBe(0);
