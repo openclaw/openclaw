@@ -221,13 +221,19 @@ function producerFromManifest(manifest) {
   };
 }
 
-export function verifyReceiptRecoveryAuthority(repository, producer, completed = true) {
+export function verifyReceiptRecoveryAuthority(
+  repository,
+  producer,
+  completed = true,
+  runGh = runReleaseToolingGh,
+) {
   requireValue(producer.fullRef === "refs/heads/main", "recovery must execute trusted P on main");
   verifyReleaseToolingIdentity({
     repository,
     workflowRef: "main",
     workflowFullRef: producer.fullRef,
     workflowSha: producer.sha,
+    runGh,
   });
   const run = verifyReleaseWorkflowRun({
     repository,
@@ -239,13 +245,9 @@ export function verifyReceiptRecoveryAuthority(repository, producer, completed =
     workflowPath: RECEIPT_RECOVERY_WORKFLOW,
     workflowEvent: "workflow_dispatch",
     runStatePolicy: completed ? "success" : "active",
+    runGh,
   });
-  verifyReleaseQualificationOperators(
-    repository,
-    run.actor,
-    run.triggering_actor,
-    runReleaseToolingGh,
-  );
+  verifyReleaseQualificationOperators(repository, run.actor, run.triggering_actor, runGh);
   return run;
 }
 
@@ -618,7 +620,11 @@ export async function authenticateReceiptRecovery({
     "sealed payload inventory is unavailable",
   );
   const producer = producerFromManifest(manifest);
-  verifyReceiptRecoveryAuthority(request.repository, producer);
+  const revalidateRecoveryAuthority = () =>
+    client.verifyReceiptRecoveryAuthority
+      ? client.verifyReceiptRecoveryAuthority(producer)
+      : verifyReceiptRecoveryAuthority(request.repository, producer);
+  revalidateRecoveryAuthority();
   const workflow = client.getWorkflowSource(producer.sha, RECEIPT_RECOVERY_WORKFLOW);
   requireValue(
     /^ {2}FULL_RELEASE_RECEIPT_RECOVERY_CONTRACT: "1"$/mu.test(workflow),
@@ -771,7 +777,7 @@ export async function authenticateReceiptRecovery({
   }
   // The original qualification owner just refreshed its runs and admission.
   // Only synchronous binding checks intervene; recovery authority is separate.
-  verifyReceiptRecoveryAuthority(request.repository, producer);
+  revalidateRecoveryAuthority();
   const current = {
     artifact: {
       id: String(artifact.id),
