@@ -473,7 +473,7 @@ it("preserves capacity and cancellation contexts when draining receipts", async 
 
 const quiet = { script: "return { fire: false }" };
 
-it("keeps checks beyond three queued in due order with one run slot held back for them", async () => {
+it("keeps checks beyond three queued in due order while other runs start", async () => {
   await withOpenClawTestState({ label: "cron-condition-checks" }, async (fixture) => {
     const storeKey = fixture.statePath("cron", "jobs.json");
     const watch = (id: string, dueAtMs: number) =>
@@ -486,10 +486,17 @@ it("keeps checks beyond three queued in due order with one run slot held back fo
     ];
     const queue = await queueStore(storeKey, jobs, now);
     await queue.request(jobs.map((job) => scheduled(storeKey, job, job.state.nextRunAtMs!)));
-    const launch = async () => (await queue.drain([], 6)).launches.map(({ job }) => job.id);
-    const first = await queue.drain([], 6);
-    // long-c leaves the last slot free; early and late wait for one of the three checks.
-    expect(first.launches.map(({ job }) => job.id)).toEqual(["w1", "w2", "w3", "long-a", "long-b"]);
+    const launch = async () => (await queue.drain([], 7)).launches.map(({ job }) => job.id);
+    const first = await queue.drain([], 7);
+    // A run slot is free, but early and late wait for one of the three checks.
+    expect(first.launches.map(({ job }) => job.id)).toEqual([
+      "w1",
+      "w2",
+      "w3",
+      "long-a",
+      "long-b",
+      "long-c",
+    ]);
     expect(await launch()).toEqual([]);
     // A fired condition frees its check for the earliest waiter, which takes the free slot.
     const fired = first.launches[0]!.runReceipt;

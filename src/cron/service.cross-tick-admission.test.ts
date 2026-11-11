@@ -3,7 +3,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as cron from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as work from "../process/gateway-work-admission.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import * as clocks from "../test-utils/gateway-scheduler-clock.js";
+import { createTestCronOperatorSource } from "./execution-context.test-support.js";
 import { start, stop } from "./service/ops-lifecycle.js";
 import { waitForCronRunQueue } from "./service/run-queue.js";
 import { startCronScheduler } from "./service/scheduler-actor.js";
@@ -184,5 +186,57 @@ it("keeps a queued condition check pending through a graceful shutdown and resta
     });
   } finally {
     stop(second);
+  }
+});
+
+it("checks other watchers while in-conversation watchers wait for their busy conversation", async () => {
+  let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
+  const dueAtMs = nowMs + 1_000;
+  const conversation = "agent:main:busy-conversation";
+  const jobs = ["c1", "c2", "c3", "free"].map((id) =>
+    Object.assign(dueJob(id, nowMs, dueAtMs), {
+      schedule: { kind: "every" as const, everyMs: 300_000, anchorMs: dueAtMs },
+      trigger: { script: "return { fire: false }" },
+      ...(id === "free"
+        ? {}
+        : {
+            sessionTarget: `session:${conversation}`,
+            operatorSource: createTestCronOperatorSource(conversation),
+          }),
+    }),
+  );
+  const store = await seedJobs(jobs);
+  const turn = createReplyOperation({
+    sessionKey: conversation,
+    sessionId: "parent-session",
+    resetTriggered: false,
+    turnKind: "visible",
+  });
+  const evaluated: string[] = [];
+  const state = cron.createCronRegressionState({
+    storePath: store.storePath,
+    nowMs: () => nowMs,
+    cronConfig: { triggers: { enabled: true } },
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    evaluateCronTrigger: async ({ job }) => {
+      evaluated.push(job.id);
+      return { kind: "evaluated", fire: false };
+    },
+  });
+  const running = await captureCronSchedulerWakeForTest(() => start(state));
+  try {
+    nowMs = dueAtMs;
+    await running.wake(state);
+    await vi.waitFor(() => expect(evaluated).toEqual(["free"]));
+    // The three waiters stay queued: no running marker, so no run slot and no check.
+    const waiting = (await loadCronStore(store.storePath)).jobs.filter((job) => job.id !== "free");
+    expect(waiting.map((job) => job.state.runningAtMs)).toEqual([undefined, undefined, undefined]);
+
+    turn.complete();
+    await vi.waitFor(() => expect(evaluated.toSorted()).toEqual(["c1", "c2", "c3", "free"]));
+  } finally {
+    turn.complete();
+    await waitForCronRunQueue(state);
+    stop(state);
   }
 });

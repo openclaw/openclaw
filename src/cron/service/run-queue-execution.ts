@@ -7,7 +7,7 @@ import { clearCronJobActive } from "../active-jobs.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { cronEventPayload } from "../event-source.js";
 import { isPluginCommandCronJob } from "../plugin-command-schedule.js";
-import { resolveCronSessionTargetSessionKey } from "../session-target.js";
+import { resolveCronContinuationSessionKey } from "../session-target.js";
 import { cronSourceIdentity, ownsCronSource } from "../source-schedule.js";
 import type { CronQueuedRun } from "../store/run-queue.types.js";
 import { hasUnstartedCronAdmission } from "./admission-deferred.js";
@@ -84,9 +84,11 @@ export async function launchCronRun(
   cancel: (reason: string) => Promise<void>,
 ) {
   const { options } = pending;
-  const continuationSession =
-    entry.job.operatorSource && resolveCronSessionTargetSessionKey(entry.job.sessionTarget);
+  const continuationSession = resolveCronContinuationSessionKey(entry.job);
   if (continuationSession) {
+    // The queue parks a timed occurrence while its conversation is busy, so for those this
+    // normally returns at once. Requested and event runs, and a turn that starts between the
+    // drain and this launch, wait here with their slot held.
     await waitForSessionRunIdle(continuationSession, undefined, {
       signal: state.schedulerScope.signal,
     });

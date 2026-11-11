@@ -335,10 +335,8 @@ time first, and start as soon as a running check finishes or its condition fires
 A queued check is not deferred or retried later, holds no run slot, spends none of
 its time budget, and keeps its occurrence across a Gateway restart.
 
-A fired condition runs its payload in one of the scheduler's eight run slots. While
-any job has a condition, scheduled runs without one use at most seven, so they cannot
-fill every slot on their own. Fired payloads and runs you request yourself have no
-such limit: when eight runs are active, the next check waits for one of them to finish.
+A check and the payload of a fired condition use one of the scheduler's eight run
+slots. When eight runs are active, the next check waits for one of them to finish.
 
 Cold runtime preparation can continue after an evaluation times out, so a later
 tick can reuse it. Preparation is limited to two minutes, or the script payload's

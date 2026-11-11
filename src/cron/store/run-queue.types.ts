@@ -55,6 +55,8 @@ export type CronRunQueueOperations = {
       requests: CronRunRequestContext[];
       schedulingPaused?: boolean;
       preparingAgentIds?: string[];
+      /** Jobs continuing a conversation that is busy now; their timed occurrences stay queued. */
+      busyConversationJobIds?: string[];
       /**
        * The draining Gateway process. Private command schedules from another process, or a
        * drain without this identity, retire before spending an attempt.

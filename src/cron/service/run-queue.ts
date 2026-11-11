@@ -6,6 +6,7 @@ import {
   isGatewayRestartDraining,
   runWithGatewayDetachedWorkContinuation,
 } from "../../process/gateway-work-admission.js";
+import { waitForSessionRunIdle } from "../../sessions/session-controller.wait.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admission.js";
 import { waitForAgentDatabasePreparation } from "../../state/agent-database-preparation-context.js";
@@ -42,7 +43,11 @@ import {
   wakeCronRunQueues,
 } from "./run-queue-wake.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
-import { preparingCronAgentIds } from "./scheduler-config.js";
+import {
+  busyConversationCronJobIds,
+  busyCronConversation,
+  preparingCronAgentIds,
+} from "./scheduler-config.js";
 import {
   emit,
   isImmediateCronRunMode,
@@ -357,6 +362,7 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
             // occurrences that a draining Gateway can only refuse.
             schedulingPaused: state.schedulingPaused || isGatewayRestartDraining(),
             preparingAgentIds: preparingCronAgentIds(state.deps.env),
+            busyConversationJobIds: busyConversationCronJobIds(state),
             requests: getCronRunQueueRequests(state, { includePendingEvents: true }),
             hostProcessId: currentPluginCommandHostProcessId(),
             pluginCommandHosts: state.deps.resolvePluginCommandScheduleHosts?.(),
@@ -487,12 +493,23 @@ export async function launchCronRunQueueResult(
             const run = async () => {
               if (preparation) {
                 try {
+                  const signal = AbortSignal.any([
+                    state.schedulerScope.signal,
+                    preparation.controller.signal,
+                  ]);
+                  // Read the job the drain decided on, so the two cannot disagree and spin.
+                  const conversation = busyCronConversation(
+                    state.store?.jobs.find((job) => job.id === entry.job.id) ?? entry.job,
+                  );
+                  if (conversation) {
+                    // Parked until the conversation this run continues is idle; a conversation
+                    // that starts its next turn before the following drain parks it again.
+                    await waitForSessionRunIdle(conversation, undefined, { signal });
+                    signal.throwIfAborted();
+                  }
                   await waitForAgentDatabasePreparation(preparation.agentId, {
                     env: state.deps.env,
-                    signal: AbortSignal.any([
-                      state.schedulerScope.signal,
-                      preparation.controller.signal,
-                    ]),
+                    signal,
                   });
                 } catch (error) {
                   // Observation only rejects on lifecycle cancellation.

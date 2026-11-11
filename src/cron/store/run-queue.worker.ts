@@ -393,11 +393,6 @@ function drainCronQueueInDatabase(
     job.state.runningAtMs !== undefined &&
     job.state.conditionCheckReceiptId === job.state.runningReceiptId;
   let checkingCount = [...jobs.values()].filter(isCheckingCondition).length;
-  // Scheduled runs without a check leave the last slot free while any watcher exists, so they
-  // cannot fill every slot. Requested runs and fired watchers' payloads can still fill them all.
-  const conditionSlotReserved =
-    input.maxConcurrentRuns > 1 &&
-    [...jobs.values()].some((job) => job.trigger !== undefined && isJobEnabled(job));
   for (const receipt of queued) {
     const handle = receiptHandle(receipt);
     const job = jobs.get(receipt.jobId)!;
@@ -451,19 +446,20 @@ function drainCronQueueInDatabase(
     const checksCondition =
       job.trigger !== undefined &&
       (context.mode === "scheduled" || context.evaluateTrigger === true);
-    if (input.preparingAgentIds?.includes(agentId)) {
-      // Keep durable custody without spending capacity while the host awaits admission.
+    if (
+      input.preparingAgentIds?.includes(agentId) ||
+      (timed && input.busyConversationJobIds?.includes(job.id))
+    ) {
+      // Keep durable custody without spending capacity while the host awaits admission or an idle
+      // conversation. Only timed occurrences wait here for their conversation: startup recovers
+      // them from the queue, and an event's source needs its transfer acknowledged at once.
       result.preparing.push({ job, runReceipt: { ...handle, agentId } });
       continue;
     }
     if (
       (input.schedulingPaused && context.mode === "scheduled") ||
       activeCount >= Math.max(1, input.maxConcurrentRuns) ||
-      (checksCondition
-        ? checkingCount >= MAX_CONCURRENT_CONDITION_CHECKS
-        : conditionSlotReserved &&
-          context.mode === "scheduled" &&
-          activeCount >= input.maxConcurrentRuns - 1)
+      (checksCondition && checkingCount >= MAX_CONCURRENT_CONDITION_CHECKS)
     ) {
       continue;
     }
@@ -549,6 +545,7 @@ export function requestAndDrainCronRunsInWorker(
     | "maxConcurrentRuns"
     | "schedulingPaused"
     | "preparingAgentIds"
+    | "busyConversationJobIds"
     | "hostProcessId"
     | "pluginCommandHosts"
   >,
