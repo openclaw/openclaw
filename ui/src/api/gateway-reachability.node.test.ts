@@ -1,41 +1,26 @@
 /** @vitest-environment node */
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  getLatestWebSocket,
-  MockWebSocket,
-  stubWindowGlobals,
-  useNodeFakeTimers,
-  wsInstances,
-} from "./gateway-socket.test-support.ts";
-import { GatewayBrowserClient } from "./gateway.ts";
+import { useSocketHarness } from "./gateway-handshake.test-support.ts";
+import { getLatestWebSocket, wsInstances } from "./gateway-socket.test-support.ts";
 
 const gatewayUrl = "ws://127.0.0.1:18789";
-const clients: GatewayBrowserClient[] = [];
+const createClient = useSocketHarness();
+const fetchProbe = vi.fn<() => Promise<Response>>();
+const onClose = vi.fn();
 
 beforeEach(() => {
-  useNodeFakeTimers();
-  stubWindowGlobals();
-  wsInstances.length = 0;
-  vi.stubGlobal("WebSocket", MockWebSocket);
   vi.spyOn(Math, "random").mockReturnValue(0);
-});
-
-afterEach(() => {
-  for (const client of clients.splice(0)) {
-    client.stop();
-  }
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
+  fetchProbe.mockReset();
+  onClose.mockReset();
+  vi.stubGlobal("fetch", fetchProbe);
 });
 
 function connect(url = gatewayUrl) {
-  const onClose = vi.fn();
-  const client = new GatewayBrowserClient({ url, onClose });
-  clients.push(client);
+  const client = createClient({ url, onClose });
   client.start();
-  return { client, onClose, socket: getLatestWebSocket() };
+  return { client, socket: getLatestWebSocket() };
 }
 
 it.each([
@@ -44,13 +29,12 @@ it.each([
   { name: "unrelated HTTP server", body: { ok: true }, status: 200, busy: false },
   { name: "offline Gateway", body: null, status: 0, busy: false },
 ])("classifies a failed upgrade against a $name", async ({ body, status, busy }) => {
-  const fetchProbe = vi.fn(() =>
+  fetchProbe.mockImplementation(() =>
     status
       ? Promise.resolve(Response.json(body, { status }))
       : Promise.reject(new TypeError("offline")),
   );
-  vi.stubGlobal("fetch", fetchProbe);
-  const { onClose, socket } = connect();
+  const { socket } = connect();
   socket.emitClose(1006);
   await vi.advanceTimersByTimeAsync(0);
   expect(fetchProbe).toHaveBeenCalledExactlyOnceWith(
@@ -64,11 +48,7 @@ it.each([
 });
 
 it.each(["cross-origin", "opened"])("does not probe a %s transport", async (kind) => {
-  const fetchProbe = vi.fn();
-  vi.stubGlobal("fetch", fetchProbe);
-  const { socket, onClose } = connect(
-    kind === "cross-origin" ? "wss://gateway.example" : gatewayUrl,
-  );
+  const { socket } = connect(kind === "cross-origin" ? "wss://gateway.example" : gatewayUrl);
   if (kind === "opened") {
     socket.emitOpen();
   }
@@ -81,9 +61,8 @@ it.each(["cross-origin", "opened"])("does not probe a %s transport", async (kind
 
 it.each(["stop", "retry"])("discards a late liveness response after %s", async (action) => {
   const pending = createDeferred<Response>();
-  const fetchProbe = vi.fn(() => pending.promise);
-  vi.stubGlobal("fetch", fetchProbe);
-  const { client, socket, onClose } = connect();
+  fetchProbe.mockReturnValue(pending.promise);
+  const { client, socket } = connect();
   socket.emitClose(1006);
   if (action === "stop") {
     client.stop();
@@ -93,4 +72,27 @@ it.each(["stop", "retry"])("discards a late liveness response after %s", async (
   pending.resolve(Response.json({ ok: true, status: "live" }));
   await vi.advanceTimersByTimeAsync(0);
   expect(onClose).not.toHaveBeenCalled();
+});
+
+it("reports an opening timeout before retrying even when the HTTP probe cannot finish", async () => {
+  const pending = createDeferred<Response>();
+  fetchProbe.mockReturnValue(pending.promise);
+  const { socket } = connect();
+
+  await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
+  expect(socket.lastClose).not.toBeNull();
+  socket.emitClose(1006);
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(onClose).toHaveBeenCalledExactlyOnceWith({
+    code: 1006,
+    reason: "gateway websocket opening timed out after 30000ms",
+    error: undefined,
+    willRetry: true,
+  });
+  expect(fetchProbe).not.toHaveBeenCalled();
+
+  await vi.advanceTimersByTimeAsync(800);
+  expect(wsInstances).toHaveLength(2);
+  expect(onClose).toHaveBeenCalledOnce();
 });

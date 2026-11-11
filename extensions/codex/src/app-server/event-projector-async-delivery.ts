@@ -45,7 +45,7 @@ export class CodexAsyncDeliveryProjection {
   }
 
   async deliver(delivery: CodexAsyncDelivery): Promise<void> {
-    if (this.settledItemIds.has(delivery.itemId)) {
+    if (this.options.hasDeliveredFinalSourceReply?.() || this.settledItemIds.has(delivery.itemId)) {
       return;
     }
     const settlement = await this.options.onAsyncDelivery?.(delivery);

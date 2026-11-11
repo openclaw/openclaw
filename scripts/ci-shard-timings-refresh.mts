@@ -1,11 +1,13 @@
 #!/usr/bin/env -S node --import tsx
 import { readFileSync, writeFileSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs, stripVTControlCharacters } from "node:util";
 import { z } from "zod";
 import { decodeNodeTestGroups } from "./lib/ci-node-test-groups-codec.mts";
 import {
   ciTestTimingsSchema,
+  ciTimingRunnerProfile,
   isRuntimePlacementIncludePatterns,
 } from "./lib/ci-test-timings-schema.mts";
 import { execGhRead } from "./lib/plain-gh.mjs";
@@ -61,27 +63,39 @@ function timingKey(log: string): string {
     .parse(decodeNodeTestGroups([...descriptors][0]!));
   const group = groups[0]!;
   const observedKey = group.timing_key ?? group.shard_name;
+  const policy =
+    /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+OPENCLAW_CI_TEST_RUNTIME_POLICY: (bun-all|dual-all)\s*$/mu.exec(
+      stripVTControlCharacters(log),
+    )?.[1];
+  const prefix = policy ? `${policy}:` : "";
+  const spans = ["", "bun:", "bun-native:", "node-subset:"]
+    .map((runtime) => runtime + observedKey)
+    .filter((key) => log.includes(`[shard:${key}] begin`));
   if (
-    !log.includes(`[shard:${observedKey}] begin`) ||
-    !log.includes(`[shard:${observedKey}] end (exit 0)`)
+    spans.length === 0 ||
+    (policy === "dual-all" && !spans.includes(observedKey)) ||
+    spans.some((key) => !log.includes(`[shard:${key}] end (exit 0)`))
   ) {
     throw new Error("Hosted timing job lacks a successful matching shard span");
   }
   if (group.timing_key?.startsWith("release-full-")) {
-    return group.timing_key;
+    return prefix + group.timing_key;
   }
   const parentShardName = `release-full-${group.shard_name}`;
-  return isRuntimePlacementIncludePatterns(group.includePatterns)
-    ? createCompactSplitTimingGeneration({
-        configs: group.configs,
-        env: group.env,
-        parentShardName,
-        stripes: [group.includePatterns],
-      }).timingKeys[0]!
-    : parentShardName;
+  return (
+    prefix +
+    (isRuntimePlacementIncludePatterns(group.includePatterns)
+      ? createCompactSplitTimingGeneration({
+          configs: group.configs,
+          env: group.env,
+          parentShardName,
+          stripes: [group.includePatterns],
+        }).timingKeys[0]!
+      : parentShardName)
+  );
 }
 
-function main() {
+async function main() {
   const { values } = parseArgs({
     options: {
       run: { type: "string" },
@@ -100,24 +114,39 @@ function main() {
   )
     ? ["--allow-escape-sequences"]
     : [];
-  const api = (endpoint: string) =>
-    execGhRead(
-      [
-        "api",
-        `repos/openclaw/openclaw/${endpoint}`,
-        "-H",
-        "Cache-Control: max-age=0",
-        ...(endpoint.endsWith("/logs") ? logFlags : []),
-      ],
-      {
-        encoding: "utf8",
-        timeout: 120_000,
-        maxBuffer: 32 * 1024 * 1024,
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-  const readRun = () => runSchema.parse(JSON.parse(api(`actions/runs/${values.run}`)));
-  const run = readRun();
+  const api = async (endpoint: string) => {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return execGhRead(
+          [
+            "api",
+            `repos/openclaw/openclaw/${endpoint}`,
+            "-H",
+            "Cache-Control: max-age=0",
+            ...(endpoint.endsWith("/logs") ? logFlags : []),
+          ],
+          {
+            encoding: "utf8",
+            timeout: 120_000,
+            maxBuffer: 32 * 1024 * 1024,
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
+      } catch (error) {
+        if (
+          attempt >= 3 ||
+          !(error instanceof Error) ||
+          !/HTTP 50[234]|unexpected EOF/iu.test(error.message)
+        ) {
+          throw error;
+        }
+        console.error(`Transient GitHub read failure for ${endpoint}; retry ${attempt}/2`);
+        await delay(attempt * 1000);
+      }
+    }
+  };
+  const readRun = async () => runSchema.parse(JSON.parse(await api(`actions/runs/${values.run}`)));
+  const run = await readRun();
   if (String(run.id) !== values.run) {
     throw new Error("CI child run ID differs from the requested run");
   }
@@ -136,7 +165,8 @@ function main() {
         .object({ total_count: z.number().int().nonnegative(), jobs: z.array(jobSchema) })
         .parse(
           JSON.parse(
-            api(`actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100&page=${page}`),
+            // Smaller pages avoid GitHub 502s on large release job inventories.
+            await api(`actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=50&page=${page}`),
           ),
         );
       if (total !== undefined && total !== payload.total_count) {
@@ -159,13 +189,9 @@ function main() {
           job.conclusion !== "success" ||
           !job.steps.some((step) => step.name === "Run Node test shard") ||
           job.name.startsWith("checks-node-compact-") ||
-          !job.labels.includes("ubuntu-24.04") ||
-          job.labels.some(
-            (label) =>
-              label === "self-hosted" ||
-              label.startsWith("blacksmith-") ||
-              label.startsWith("runson"),
-          )
+          job.name.startsWith("checks-node-release-packed-") ||
+          job.name.startsWith("checks-node-worker-e2e") ||
+          ciTimingRunnerProfile(job.labels) !== "github"
         ) {
           continue;
         }
@@ -174,7 +200,8 @@ function main() {
         if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || end > Date.now()) {
           throw new Error(`Invalid wall clock for CI timing job ${job.id}`);
         }
-        const key = timingKey(api(`actions/jobs/${job.id}/logs`));
+        const log = await api(`actions/jobs/${job.id}/logs`);
+        const key = timingKey(log);
         measurements.set(
           key,
           Math.max(measurements.get(key) ?? 0, Math.ceil((end - start) / 1000)),
@@ -188,7 +215,7 @@ function main() {
       }
     }
   }
-  if (JSON.stringify(readRun()) !== JSON.stringify(run)) {
+  if (JSON.stringify(await readRun()) !== JSON.stringify(run)) {
     throw new Error("CI child attempt changed while collecting timings; no timings written");
   }
   if (measurements.size === 0) {
@@ -215,7 +242,7 @@ function main() {
 }
 
 try {
-  main();
+  await main();
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;

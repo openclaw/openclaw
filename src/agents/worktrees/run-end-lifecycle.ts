@@ -1,13 +1,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isNativeError } from "node:util/types";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
-import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
-import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
+import { runWithAsyncStore } from "../../shared/async-store.js";
+import { GatewayRetainedWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
+import { registerOpenClawStatePathAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import { createPreparedWorktreePathIndex } from "./gc-dependencies.js";
+import type { WorktreeWarmPoolRequest } from "./template-registry.js";
 
 type RunEndOperation = {
   context: OpenClawStateWorkerContext;
@@ -39,13 +43,18 @@ type MutationAuthority = { validating: boolean };
 const mutationAuthority = new AsyncLocalStorage<MutationAuthority>();
 
 function createLifetime({ admission }: OpenClawStateWorkerContext) {
-  let work = new AsyncWorkScope();
-  const scopes = new Set([work]);
-  let gateways = 0;
-  let closing = false;
+  let warmPoolListener: ((request: WorktreeWarmPoolRequest) => void) | undefined;
   let retired = false;
   let uncertain = false;
   const cleanupFailures = new Map<object, unknown>();
+  const work = new GatewayRetainedWorkScope(() => {
+    if (cleanupFailures.size > 0) {
+      throw new AggregateError(
+        [...cleanupFailures.values()],
+        "Managed worktree cleanup remains unsettled",
+      );
+    }
+  });
   const revisions = new Map<string, Map<WorktreeRegistryField, RegistryRevision>>();
   const selectRevisions = (changes: readonly WorktreeRegistryChange[]) => {
     const selected = new Set<RegistryRevision>();
@@ -66,25 +75,24 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
     }
     return [...selected];
   };
-  const drain = (scope: AsyncWorkScope) =>
-    AsyncWorkScope.runWhenAllIdle(
-      () => [scope],
-      async () => {
-        await scope.drain();
-        if (cleanupFailures.size > 0) {
-          throw new AggregateError(
-            [...cleanupFailures.values()],
-            "Managed worktree cleanup remains unsettled",
-          );
-        }
-        scopes.delete(scope);
-      },
-    );
   const owner = {
+    onWarmPoolNeeded(listener: (request: WorktreeWarmPoolRequest) => void) {
+      warmPoolListener = listener;
+      return () => {
+        if (warmPoolListener === listener) {
+          warmPoolListener = undefined;
+        }
+      };
+    },
+    requestWarmPool(request: WorktreeWarmPoolRequest) {
+      owner.assertRegistryAdmission();
+      warmPoolListener?.(request);
+    },
+    prepareSourcePaths: createPreparedWorktreePathIndex(),
     assertRegistryAdmission(settlement = false) {
       const operation = current.getStore();
       if (
-        closing &&
+        work.isClosing &&
         !settlement &&
         (!operation?.active ||
           operation.context.admission.coordinationKey !== admission.coordinationKey)
@@ -165,7 +173,7 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
           const validating = token.validating;
           token.validating = true;
           try {
-            mutationAuthority.run(token, assertCurrent);
+            runWithAsyncStore(mutationAuthority, token, assertCurrent);
           } finally {
             token.validating = validating;
           }
@@ -181,55 +189,20 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
         },
       };
     },
-    retainGateway() {
-      if (closing) {
-        work = new AsyncWorkScope();
-        scopes.add(work);
-        closing = false;
-      }
-      gateways += 1;
-      let released = false;
-      let pending: Promise<void> | undefined;
-      const beginClose = () => {
-        if (!released) {
-          released = true;
-          if (--gateways === 0) {
-            closing = true;
-            pending = drain(work);
-            void pending.catch(() => {});
-          }
-        }
-      };
-      return {
-        beginClose,
-        drain: () => {
-          beginClose();
-          return pending ?? Promise.resolve();
-        },
-      };
-    },
+    retainGateway: () => work.retainGateway(),
     run<T>(run: () => Promise<T>, acceptedParent = false): Promise<T> {
-      if (closing && !acceptedParent) {
+      if (work.isClosing && !acceptedParent) {
         return Promise.reject(new Error("Managed worktree run-end admission is closed"));
       }
       // Accepted persistence owns this scope, independently of scheduler cancellation.
-      return work.track(run);
+      return work.scope.track(run);
     },
   };
-  const unregister = registerOpenClawStateDatabaseAsyncResource({
-    async close(identity) {
-      if (
-        !identity ||
-        identity.key === admission.identity.key ||
-        identity.canonicalPath === admission.identity.canonicalPath
-      ) {
-        closing = true;
-        await Promise.all([...scopes].map(drain));
-        retired = true;
-        lifetimes.delete(admission.coordinationKey);
-        unregister();
-      }
-    },
+  const unregister = registerOpenClawStatePathAsyncResource(admission, async () => {
+    await work.beginDrainAll();
+    retired = true;
+    lifetimes.delete(admission.coordinationKey);
+    unregister();
   });
   return owner;
 }
@@ -240,6 +213,14 @@ export function captureWorktreeRegistryAuthority(
   changes: readonly WorktreeRegistryChange[],
 ): () => void {
   return lifetime(context).captureRegistry(changes);
+}
+
+export function prepareWorktreeSourcePaths(
+  context: OpenClawStateWorkerContext,
+  records: Parameters<ReturnType<typeof createPreparedWorktreePathIndex>>[0],
+) {
+  context.admission.assertCurrent();
+  return lifetime(context).prepareSourcePaths(records);
 }
 
 export function captureWorktreeRegistryMutation(
@@ -299,6 +280,18 @@ export function captureWorktreeRunEndContext(env: NodeJS.ProcessEnv): OpenClawSt
   };
 }
 
+/** Per-request service instances notify the maintenance owner of the same state database. */
+export function onWorktreeWarmPoolNeeded(
+  env: NodeJS.ProcessEnv,
+  listener: (request: WorktreeWarmPoolRequest) => void,
+): () => void {
+  return lifetime(captureWorktreeRunEndContext(env)).onWarmPoolNeeded(listener);
+}
+
+export function requestWorktreeWarmPool(env: NodeJS.ProcessEnv, request: WorktreeWarmPoolRequest) {
+  lifetime(captureWorktreeRunEndContext(env)).requestWarmPool(request);
+}
+
 export function withWorktreeRunEnd<T>(
   env: NodeJS.ProcessEnv,
   run: () => Promise<T>,
@@ -312,7 +305,7 @@ export function withWorktreeRunEnd<T>(
   const operation: RunEndOperation = { context, active: true };
   return lifetime(context).run(
     () =>
-      current.run(operation, async () => {
+      runWithAsyncStore(current, operation, async () => {
         try {
           return await run();
         } finally {
@@ -326,6 +319,7 @@ export function withWorktreeRunEnd<T>(
 export function retainWorktreeRunEndFailure(error: unknown): void {
   const operation = current.getStore();
   if (operation && hasSqliteWorkerOutcomeUnknown(error) && isNativeError(error)) {
+    materializeErrorStack(error);
     operation.uncertain ??= error;
   }
 }

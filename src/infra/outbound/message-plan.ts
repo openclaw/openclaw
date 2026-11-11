@@ -117,9 +117,8 @@ export function planOutboundTextMessageUnits(params: {
     }
   }
   // Units remain planner-owned until their common fan-out count is finalized.
-  const deliveryPartCount = units.length;
   for (const unit of units) {
-    unit.overrides.deliveryPartCount = deliveryPartCount;
+    unit.overrides.deliveryPartCount = units.length;
   }
   return units;
 }

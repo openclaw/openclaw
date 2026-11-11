@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as history from "../../config/sessions/session-transcript-worker-runtime.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -25,6 +26,7 @@ it("settles the fixture projection before releasing its session history database
     return close(root);
   });
   const fixture = withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const scope = { agentId: "main", sessionKey: "agent:main:fixture-read" };
     await upsertSessionEntryCore(scope, { sessionId: "fixture-read", updatedAt: 1 });
     const context = requestContext({});

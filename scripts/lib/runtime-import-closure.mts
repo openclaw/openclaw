@@ -4,18 +4,24 @@ import { join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { transformSync } from "esbuild";
 import { resolve as resolvePackageImport } from "import-meta-resolve";
-import * as ts from "typescript/unstable/ast";
-import { API } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import { serverFS } from "typescript/fs";
+import { API } from "typescript/sync";
 import { readNativeTypeScriptConfig } from "./native-typescript-config.mts";
 import { createNativeTypeScriptProject } from "./native-typescript.mts";
 import { visitModuleSpecifiers } from "./ts-guard-utils.mts";
 
 const sourceFilePattern = /\.[cm]?[jt]sx?$/;
+const isDeclaration = (file: string) => /\.d\.[cm]?ts$/.test(file);
 
 type ImportReference = {
   kind: string;
   specifier: string;
   resolutionMode?: "import" | "require";
+};
+type ResolvedImportReference = ImportReference & {
+  resolvedFileName: string | undefined;
+  isExternalLibraryImport: boolean;
 };
 type RuntimeImportGraphOptions = {
   includeDynamicImports?: boolean;
@@ -86,12 +92,20 @@ export function createRuntimeImportGraph(
   const root = resolve(rootPath);
   const configFileName = join(root, ".openclaw-runtime-imports.tsconfig.json");
   const roots = new Set(
-    inputs.filter((file) => sourceFilePattern.test(file)).map((file) => resolve(root, file)),
+    inputs
+      .filter((file) => sourceFilePattern.test(file) && (sourceImports || !isDeclaration(file)))
+      .map((file) => resolve(root, file)),
   );
   const configText = () =>
     JSON.stringify({
       extends: join(root, "tsconfig.json"),
-      compilerOptions: { allowJs: true, noLib: true, types: [] },
+      compilerOptions: {
+        allowJs: true,
+        noLib: true,
+        types: [],
+        // Source guards follow JSX files without choosing a renderer's emit mode.
+        ...(sourceImports ? { jsx: "preserve" } : {}),
+      },
       files: [...roots],
       include: [],
     });
@@ -123,31 +137,36 @@ export function createRuntimeImportGraph(
   });
   const parser = new API({ cwd: root });
   const references = new Map<string, ImportReference[]>();
-  const isDeclaration = (file: string) => /\.d\.[cm]?ts$/.test(file);
   let session;
   try {
     session = createNativeTypeScriptProject({
       cwd: root,
       configFileName,
       fs: {
+        directoryExists: serverFS.useOS,
+        getAccessibleEntries: serverFS.useOS,
+        realpath: serverFS.useOS,
+        stat: serverFS.useOS,
+        writeFile: serverFS.useOS,
+        removeFile: serverFS.useOS,
         fileExists: (file) =>
           resolve(file) === configFileName
             ? true
             : !sourceImports && isDeclaration(file)
               ? false
-              : undefined,
+              : serverFS.useOS,
         readFile(file) {
           if (resolve(file) === configFileName) {
             return configText();
           }
           if (isDeclaration(file)) {
-            return sourceImports ? undefined : null;
+            return sourceImports ? serverFS.useOS : undefined;
           }
           if (!/\.[cm]?[jt]sx?$/.test(file) || file.split(/[\\/]/).includes("node_modules")) {
-            return undefined;
+            return serverFS.useOS;
           }
           if (!existsSync(file)) {
-            return null;
+            return undefined;
           }
           const text = readFileSync(file, "utf8");
           // Source guards discard explicitly type-only bindings. Runtime capture follows
@@ -167,7 +186,8 @@ export function createRuntimeImportGraph(
                 target: "esnext",
                 tsconfigRaw: transformConfig,
               }).code;
-          const source = parser.createSourceFile(file, sourceText);
+          using retainedSource = parser.createSourceFile(file, sourceText);
+          const source = retainedSource.sourceFile;
           const selected: ImportReference[] = [];
           visitModuleSpecifiers(
             source,
@@ -206,14 +226,22 @@ export function createRuntimeImportGraph(
     throw error;
   }
   let { project, snapshot } = session;
+  const dependencies = new Map<string, readonly ResolvedImportReference[]>();
   const close = () => {
     session.close();
     parser.close();
   };
-  return {
-    compilerOptions: project.compilerOptions,
+  const graph = {
+    compilerOptions: project.parsedCommandLine.options,
     dependencies(file: string) {
       const absolute = resolve(root, file);
+      const cached = dependencies.get(absolute);
+      if (cached) {
+        return cached;
+      }
+      if (!sourceImports && isDeclaration(absolute)) {
+        return [];
+      }
       let source = project.program.getSourceFile(absolute);
       if (!source && sourceFilePattern.test(absolute) && !roots.has(absolute)) {
         // Exact runtime files and computed generator inputs can be outside the
@@ -230,17 +258,22 @@ export function createRuntimeImportGraph(
         snapshot.dispose();
         snapshot = updated;
         project = nextProject;
+        dependencies.clear();
         source = project.program.getSourceFile(absolute);
       }
       if (!source) {
         throw new Error(`Native TypeScript did not load runtime source ${absolute}`);
       }
       const selected = references.get(absolute) ?? [];
+      if (selected.length === 0) {
+        dependencies.set(absolute, []);
+        return [];
+      }
       const imports = source.statements.filter(ts.isImportDeclaration);
       const symbols = project.checker.getSymbolAtLocation(
         imports.map((node) => node.moduleSpecifier),
       );
-      return selected.map((reference, index) => {
+      const resolved = selected.map((reference, index) => {
         const declaration = symbols[index]?.declarations.find(
           (candidate) => candidate.kind === ts.SyntaxKind.SourceFile,
         );
@@ -253,10 +286,41 @@ export function createRuntimeImportGraph(
             : false,
         });
       });
+      dependencies.set(absolute, resolved);
+      return resolved;
+    },
+    collect(entries: readonly string[], { validatePackages = false } = {}): string[] {
+      const closure = new Set(entries.map((file) => file.split(sep).join("/")));
+      for (const file of closure) {
+        if (!/\.[cm]?[jt]s$/.test(file) || isDeclaration(file)) {
+          continue;
+        }
+        for (const { specifier, resolvedFileName, isExternalLibraryImport } of graph.dependencies(
+          file,
+        )) {
+          if (!resolvedFileName && specifier.startsWith(".")) {
+            throw new Error(`${file}: unresolved ${specifier}`);
+          }
+          if (resolvedFileName && !isExternalLibraryImport) {
+            closure.add(relative(root, resolvedFileName).split(sep).join("/"));
+          } else if (validatePackages) {
+            const packageName = specifier
+              .split("/")
+              .slice(0, specifier.startsWith("@") ? 2 : 1)
+              .join("/");
+            if (!existsSync(join(root, "node_modules", packageName, "package.json"))) {
+              throw new Error(`${file}: unpinned package ${specifier}`);
+            }
+            resolvePackageImport(specifier, pathToFileURL(resolve(root, file)).href);
+          }
+        }
+      }
+      return [...closure].toSorted();
     },
     close,
     [Symbol.dispose]: close,
   };
+  return graph;
 }
 
 export function collectRuntimeImportClosure(
@@ -268,38 +332,11 @@ export function collectRuntimeImportClosure(
   }: { includeDynamicImports?: boolean; validatePackages?: boolean } = {},
 ): string[] {
   const closure = new Set(inputs.map((file) => file.split(sep).join("/")));
-  const sourceInputs = inputs.filter((file) => /\.[cm]?[jt]s$/.test(file));
+  // Declaration artifacts remain in the inventory, but cannot execute imports.
+  const sourceInputs = inputs.filter((file) => /\.[cm]?[jt]s$/.test(file) && !isDeclaration(file));
   if (sourceInputs.length === 0) {
     return [...closure].toSorted();
   }
-  const graph = createRuntimeImportGraph(root, sourceInputs, { includeDynamicImports });
-  try {
-    for (const file of closure) {
-      if (!/\.[cm]?[jt]s$/.test(file)) {
-        continue;
-      }
-      for (const { specifier, resolvedFileName, isExternalLibraryImport } of graph.dependencies(
-        file,
-      )) {
-        if (!resolvedFileName && specifier.startsWith(".")) {
-          throw new Error(`${file}: unresolved ${specifier}`);
-        }
-        if (resolvedFileName && !isExternalLibraryImport) {
-          closure.add(relative(root, resolvedFileName).split(sep).join("/"));
-        } else if (validatePackages) {
-          const packageName = specifier
-            .split("/")
-            .slice(0, specifier.startsWith("@") ? 2 : 1)
-            .join("/");
-          if (!existsSync(join(root, "node_modules", packageName, "package.json"))) {
-            throw new Error(`${file}: unpinned package ${specifier}`);
-          }
-          resolvePackageImport(specifier, pathToFileURL(resolve(root, file)).href);
-        }
-      }
-    }
-    return [...closure].toSorted();
-  } finally {
-    graph.close();
-  }
+  using graph = createRuntimeImportGraph(root, sourceInputs, { includeDynamicImports });
+  return graph.collect(inputs, { validatePackages });
 }

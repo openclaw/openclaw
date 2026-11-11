@@ -1,4 +1,3 @@
-// Legacy context engine wraps pre-plugin context behavior behind the pluggable interface.
 import { delegateCompactionToRuntime } from "./delegate.js";
 import { CONTEXT_ENGINE_HOST_PARAMS } from "./registry-contract.js";
 import type { AssembleResult, ContextEngine, ContextEngineInfo } from "./types.js";
@@ -27,7 +26,6 @@ export class LegacyContextEngine implements ContextEngine {
   async assemble(params: Parameters<ContextEngine["assemble"]>[0]): Promise<AssembleResult> {
     // Pass-through: the existing sanitize -> validate -> limit -> repair pipeline
     // in attempt.ts handles context assembly for the legacy engine.
-    // We just return the messages as-is with a rough token estimate.
     return {
       messages: params.messages,
       estimatedTokens: 0, // Caller handles estimation

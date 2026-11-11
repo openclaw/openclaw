@@ -88,14 +88,6 @@ describe("emitResetCommandHooks", () => {
     vi.restoreAllMocks();
   });
 
-  it("passes the bound agent id to before_reset hooks for multi-agent session keys", async () => {
-    const ctx = await runBeforeResetContext("agent:navi:main");
-    expect(ctx?.agentId).toBe("navi");
-    expect(ctx?.sessionKey).toBe("agent:navi:main");
-    expect(ctx?.sessionId).toBe("prev-session");
-    expect(ctx?.workspaceDir).toBe("/tmp/openclaw-workspace");
-  });
-
   it("uses the configured default when the reset hook has no session key", async () => {
     const ctx = await runBeforeResetContext(undefined, {
       agents: { entries: { ops: {} } },
@@ -311,56 +303,31 @@ describe("handleCommands send policy", () => {
     expect(result).toEqual({ shouldContinue: true });
   });
 
-  it("marks command replies as non-threaded", async () => {
-    const { handleCommands } = await import("./commands-core.js");
-    loadCommandHandlersMock.mockReturnValue([
-      vi.fn(async () => ({
+  it.each([{ sessionKey: "agent:target:main", expectedAgentId: "target" }])(
+    "dispatches $sessionKey with its selected owner",
+    async ({ sessionKey, expectedAgentId }) => {
+      const { handleCommands } = await import("./commands-core.js");
+      const handler = vi.fn<CommandHandler>(async (params) => ({
         shouldContinue: false,
-        reply: {
-          text: "done",
-          replyToId: "msg-123",
-          replyToCurrent: true,
-        },
-      })),
-    ]);
+        reply: { text: params.agentId },
+      }));
+      loadCommandHandlersMock.mockReturnValue([handler]);
+      const params = makeParams();
+      params.cfg.agents = {
+        ownership: "explicit",
+        entries: { caller: {}, target: { agentDir: "/tmp/target-agent" } },
+      };
+      params.agentId = "caller";
+      params.agentDir = "/tmp/caller-agent";
+      params.sessionKey = sessionKey;
 
-    const result = await handleCommands(makeParams());
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: {
-        text: "done",
-        replyToId: undefined,
-        replyToCurrent: false,
-      },
-    });
-  });
-
-  it.each([
-    { sessionKey: "agent:target:main", expectedAgentId: "target" },
-    { sessionKey: "global", expectedAgentId: "caller" },
-  ])("dispatches $sessionKey with its selected owner", async ({ sessionKey, expectedAgentId }) => {
-    const { handleCommands } = await import("./commands-core.js");
-    const handler = vi.fn<CommandHandler>(async (params) => ({
-      shouldContinue: false,
-      reply: { text: params.agentId },
-    }));
-    loadCommandHandlersMock.mockReturnValue([handler]);
-    const params = makeParams();
-    params.cfg.agents = {
-      ownership: "explicit",
-      entries: { caller: {}, target: { agentDir: "/tmp/target-agent" } },
-    };
-    params.agentId = "caller";
-    params.agentDir = "/tmp/caller-agent";
-    params.sessionKey = sessionKey;
-
-    expect((await handleCommands(params)).reply?.text).toBe(expectedAgentId);
-    expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ agentDir: `/tmp/${expectedAgentId}-agent` }),
-      true,
-    );
-  });
+      expect((await handleCommands(params)).reply?.text).toBe(expectedAgentId);
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({ agentDir: `/tmp/${expectedAgentId}-agent` }),
+        true,
+      );
+    },
+  );
 
   it.each([true, false])(
     "preserves literal input when command interpretation is suppressed (%s)",

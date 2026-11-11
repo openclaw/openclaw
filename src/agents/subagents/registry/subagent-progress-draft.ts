@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ProgressContinuationDraft } from "../../../channels/progress-continuation.js";
 import { onAgentEventForRun, type AgentEventPayload } from "../../../infra/agent-events.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
@@ -86,7 +87,7 @@ function projectChild(entry: SubagentRunRecord): ProgressItem {
   return {
     itemId: taskId(entry),
     kind: "subagent",
-    title: (entry.label ?? entry.taskName ?? "Delegated work").slice(0, 120),
+    title: truncateUtf16Safe(entry.label ?? entry.taskName ?? "Delegated work", 120),
     phase: ended ? "end" : "update",
     status:
       outcome === "ok"

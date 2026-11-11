@@ -30,7 +30,7 @@ openclaw-chat-subagents-panel {
 .chat-subagents__item {
   margin-bottom: 4px;
   padding: 8px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--card);
 }
 
@@ -39,7 +39,6 @@ openclaw-chat-subagents-panel {
   background: var(--bg-hover);
 }
 
-.chat-processes__heading,
 .chat-subagents__item-heading {
   display: flex;
   align-items: center;
@@ -100,4 +99,16 @@ openclaw-chat-subagents-panel {
   font-size: var(--control-ui-text-xs);
   text-align: left;
   text-transform: uppercase;
+}
+
+.chat-processes__metadata,
+.chat-subagents__metadata {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 17px;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
 }

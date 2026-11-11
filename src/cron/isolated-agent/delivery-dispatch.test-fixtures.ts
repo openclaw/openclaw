@@ -15,6 +15,14 @@ export function makeResolvedDelivery(
     accountId: undefined,
     threadId: undefined,
     mode: "explicit",
+    sessionRoute: {
+      sessionKey: "agent:main:telegram:direct:123456",
+      baseSessionKey: "agent:main:telegram:direct:123456",
+      peer: { kind: "direct", id: "123456" },
+      chatType: "direct",
+      from: "telegram:123456",
+      to: "123456",
+    },
     ...overrides,
   };
 }
@@ -29,10 +37,9 @@ export function makeBaseParams(overrides: {
   runSessionKey?: string;
   resolvedDeliveryMode?: "explicit" | "implicit";
 }): DispatchCronDeliveryParams {
-  const resolvedDelivery = {
-    ...makeResolvedDelivery(),
+  const resolvedDelivery = makeResolvedDelivery({
     mode: overrides.resolvedDeliveryMode ?? "explicit",
-  } satisfies Extract<DeliveryTargetResolution, { ok: true }>;
+  });
   const delivery: CronDelivery = {
     mode: "announce",
     bestEffort: overrides.deliveryBestEffort,
@@ -40,7 +47,7 @@ export function makeBaseParams(overrides: {
   const runStartedAt = overrides.runStartedAt ?? Date.now();
   return {
     deliveryAttemptFence: null,
-    cfgWithAgentDefaults: {} as never,
+    cfgWithAgentDefaults: {},
     deps: {} as never,
     job: {
       id: "test-job",
@@ -79,7 +86,6 @@ export function makeBaseParams(overrides: {
       unverifiedMessageToolDelivery: false,
     },
     deliveryBestEffort: overrides.deliveryBestEffort ?? false,
-    deliveryPayloadHasStructuredContent: false,
     deliveryPayloads: overrides.synthesizedText ? [{ text: overrides.synthesizedText }] : [],
     synthesizedText: overrides.synthesizedText ?? "on it",
     summary: overrides.synthesizedText ?? "on it",

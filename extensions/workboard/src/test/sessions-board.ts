@@ -21,7 +21,7 @@ export async function startEmptySessionsBoardService(store: WorkboardStore) {
     gateway: {
       readSessionFacts: vi.fn().mockResolvedValue({ sessions: [] }),
       withSessionFacts: async (_selection, run) =>
-        run({ scope: "empty", revision: "empty", redactionRevision: "empty", sessions: [] }),
+        run({ scope: "empty", revision: "empty", sessions: [] }),
       subscribeSessionChanges: () => () => {},
     },
   });

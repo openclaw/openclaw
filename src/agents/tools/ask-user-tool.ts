@@ -341,7 +341,7 @@ function answeredResult(questions: readonly QuestionRequestQuestion[], answers: 
     const values = answers.answers[question.questionId] ?? [];
     return `${question.header}: ${values.length > 0 ? values.join(", ") : "(no answer)"}`;
   });
-  return textResult(`${lines.join("\n")}\n\n${JSON.stringify(payload, null, 2)}`, payload);
+  return textResult(`${lines.join("\n")}\n\n${JSON.stringify(payload)}`, payload);
 }
 
 function noAnswerResult(status: Exclude<QuestionWaitAnswerResult["status"], "answered">) {
@@ -350,7 +350,7 @@ function noAnswerResult(status: Exclude<QuestionWaitAnswerResult["status"], "ans
     status === "cancelled"
       ? "The question was cancelled; proceed with best judgment."
       : "No answer arrived; proceed with best judgment.";
-  return textResult(`${note}\n\n${JSON.stringify(payload, null, 2)}`, payload);
+  return textResult(`${note}\n\n${JSON.stringify(payload)}`, payload);
 }
 
 async function waitForPromptDelivery(
@@ -439,18 +439,6 @@ function createAskUserPromptDelivery(
     },
   };
   return { state, delivery };
-}
-
-function resetPendingAskUserQuestionsForTest(): void {
-  for (const questionId of askUserQuestions.keys()) {
-    releaseAskUserQuestion(questionId);
-  }
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.askUserToolTestApi")] = {
-    resetPendingAskUserQuestionsForTest,
-  };
 }
 
 /** Creates the main-session-only blocking ask_user tool. */
@@ -598,19 +586,8 @@ export function createAskUserTool(params: {
           signal ? { signal } : undefined,
         ).finally(prompt.close) as Promise<QuestionWaitAnswerResult>;
         state.claim.setAnswer(answerPromise);
-        // A refused registration-time claim releases prompt delivery, not the question.
-        let consumed: boolean;
-        do {
-          consumed = await Promise.race([
-            state.claim.waitForResolution(),
-            answerPromise.then(() => true),
-          ]);
-        } while (!consumed && state.claim.isResolving());
-        if (!consumed) {
-          // Registration-time answer claims must settle before a prompt can become visible.
-          delivery.markReady();
-        }
-        if (delivery.hasSubscriber && !consumed) {
+        delivery.markReady();
+        if (delivery.hasSubscriber) {
           const promptDeliveryPromise = delivery.waitForDelivery(signal);
           const first = await Promise.race([
             promptDeliveryPromise.then((result) => ({
@@ -636,7 +613,7 @@ export function createAskUserTool(params: {
               const details = { status: "delivery_failed" as const };
               return {
                 ...textResult(
-                  `The prompt became visible, but its controls failed to deliver. The question was cancelled; no retry/fallback should be sent.\n\n${JSON.stringify(details, null, 2)}`,
+                  `The prompt became visible, but its controls failed to deliver. The question was cancelled; no retry/fallback should be sent.\n\n${JSON.stringify(details)}`,
                   details,
                 ),
                 terminate: true,

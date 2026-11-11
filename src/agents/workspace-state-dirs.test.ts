@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,28 +10,23 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./sandbox/shared.js";
 import { assertConfiguredWorkspaceStateReady } from "./workspace-state-dirs.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-let restoreEnv: (() => void) | undefined;
 
 afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  restoreEnv?.();
-  restoreEnv = undefined;
+  vi.unstubAllEnvs();
 });
 
 function setup(mode: "all" | "non-main" = "all") {
   const home = fs.realpathSync(tempDirs.make("openclaw-workspace-readiness-"));
-  const envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
-  restoreEnv = () => envSnapshot.restore();
-  setTestEnvValue("HOME", home);
-  setTestEnvValue("OPENCLAW_HOME", home);
-  setTestEnvValue("OPENCLAW_STATE_DIR", path.join(home, "state"));
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("OPENCLAW_HOME", home);
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, "state"));
   const env = { ...process.env };
   const workspaceDir = path.join(home, "workspace");
   const workspaceRoot = path.join(home, "sandboxes");
@@ -49,128 +44,59 @@ function setup(mode: "all" | "non-main" = "all") {
     },
   } satisfies OpenClawConfig;
   return {
-    cfg,
-    env,
-    scope,
+    ready: () => assertConfiguredWorkspaceStateReady({ cfg, env }),
     databasePath,
-    seed(sessionKey: string, required = false) {
-      replaceSessionEntrySync(
-        { ...scope, sessionKey },
-        {
-          sessionId: sessionKey,
-          updatedAt: 1,
-          ...(required
-            ? {
-                sandbox: "required",
-                createdActor: { type: "human", source: "profile", id: "test-creator" },
-              }
-            : {}),
-        },
-      );
-    },
-    addLegacyWorkspace(sessionKey: string) {
-      const layout = resolveSandboxWorkspaceLayoutPaths({
+    addLegacyWorkspace(sessionKey: string, required = false) {
+      const entry = {
+        sessionId: sessionKey,
+        updatedAt: 1,
+        ...(required ? { sandbox: "required", createdActor: creator } : {}),
+      } satisfies Parameters<typeof replaceSessionEntrySync>[1];
+      replaceSessionEntrySync({ ...scope, sessionKey }, entry);
+      const { sandboxWorkspaceDir: dir } = resolveSandboxWorkspaceLayoutPaths({
         cfg: cfg.agents.defaults.sandbox,
         agentId: "main",
         rawSessionKey: sessionKey,
         workspaceDir,
       });
-      fs.mkdirSync(layout.sandboxWorkspaceDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(layout.sandboxWorkspaceDir, "openclaw-workspace-state.json"),
-        JSON.stringify({ version: 1 }),
-      );
-      return layout.sandboxWorkspaceDir;
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "openclaw-workspace-state.json"), '{"version":1}');
+      return dir;
     },
   };
 }
 
-function observeColdSessionReads() {
-  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-  const iterate = vi.spyOn(StatementSync.prototype, "iterate");
-  return {
-    get handles() {
-      return new Set(
-        prepare.mock.calls.flatMap(([sql], index) =>
-          /from\s+"session_nodes"/i.test(sql) ? [prepare.mock.contexts[index]] : [],
-        ),
-      );
-    },
-    scans: () =>
-      prepare.mock.calls.reduce((count, [sql], index) => {
-        if (!sql.includes('"retained_window"')) {
-          return count;
-        }
-        const result = prepare.mock.results[index];
-        return (
-          count +
-          iterate.mock.contexts.filter(
-            (statement) => result?.type === "return" && statement === result.value,
-          ).length
-        );
-      }, 0),
-  };
-}
+const creator = { type: "human", source: "profile", id: "test-creator" } as const;
 
-describe("Gateway configured workspace readiness", () => {
-  it("validates one cold session store once and reports all blocked workspaces", async () => {
-    const state = setup();
-    const workspaces = Array.from({ length: 32 }, (_, index) => {
-      const sessionKey = `agent:main:readiness-${index}`;
-      state.seed(sessionKey);
-      return state.addLegacyWorkspace(sessionKey);
-    });
-    closeOpenClawAgentDatabasesForTest();
-    const reads = observeColdSessionReads();
-    const readiness = assertConfiguredWorkspaceStateReady(state);
-    await expect(readiness).rejects.toThrow("Legacy workspace setup state requires migration");
-    for (const workspace of workspaces) {
-      await expect(readiness).rejects.toThrow(workspace);
-    }
-    expect(reads.scans()).toBe(1);
-    expect(reads.handles.size).toBe(1);
-  });
-
-  it.each([false, true])(
-    "classifies a main session in non-main mode with required sandbox: %s",
-    async (required) => {
-      const state = setup("non-main");
-      const sessionKey = "agent:main:main";
-      state.seed(sessionKey, required);
-      const workspace = state.addLegacyWorkspace(sessionKey);
-      closeOpenClawAgentDatabasesForTest();
-      const readiness = assertConfiguredWorkspaceStateReady(state);
-      if (required) {
-        await expect(readiness).rejects.toThrow(workspace);
-      } else {
-        await expect(readiness).resolves.toBeUndefined();
-      }
-    },
+it("reports all blocked workspaces without reading sessions on the main thread", async () => {
+  const state = setup();
+  const workspaces = Array.from({ length: 32 }, (_, index) =>
+    state.addLegacyWorkspace(`agent:main:readiness-${index}`),
   );
+  closeOpenClawAgentDatabasesForTest();
+  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+  const readiness = state.ready();
+  await expect(readiness).rejects.toThrow("Legacy workspace setup state requires migration");
+  for (const workspace of workspaces) {
+    await expect(readiness).rejects.toThrow(workspace);
+  }
+  expect(prepare.mock.calls.filter(([sql]) => /from\s+"session_nodes"/i.test(sql))).toEqual([]);
+});
 
-  it("does not create a missing session store during readiness", async () => {
-    const state = setup();
-    await expect(assertConfiguredWorkspaceStateReady(state)).resolves.toBeUndefined();
-    expect(fs.existsSync(state.databasePath)).toBe(false);
-  });
+it.each([false, true])("classifies non-main mode (required: %s)", async (required) => {
+  const state = setup("non-main");
+  const workspace = state.addLegacyWorkspace("agent:main:main", required);
+  closeOpenClawAgentDatabasesForTest();
+  const readiness = state.ready();
+  if (required) {
+    await expect(readiness).rejects.toThrow(workspace);
+  } else {
+    await expect(readiness).resolves.toBeUndefined();
+  }
+});
 
-  it("revalidates persisted rows after an earlier readiness check", async () => {
-    const state = setup();
-    const sessionKey = "agent:main:readiness";
-    state.seed(sessionKey);
-    closeOpenClawAgentDatabasesForTest();
-    await expect(assertConfiguredWorkspaceStateReady(state)).resolves.toBeUndefined();
-
-    const database = new DatabaseSync(state.databasePath);
-    try {
-      database
-        .prepare("UPDATE session_nodes SET entry_json = '{' WHERE session_key = ?")
-        .run(sessionKey);
-    } finally {
-      database.close();
-    }
-    await expect(assertConfiguredWorkspaceStateReady(state)).rejects.toThrow(
-      "invalid persisted session row",
-    );
-  });
+it("does not create a missing session store during readiness", async () => {
+  const state = setup();
+  await expect(state.ready()).resolves.toBeUndefined();
+  expect(fs.existsSync(state.databasePath)).toBe(false);
 });

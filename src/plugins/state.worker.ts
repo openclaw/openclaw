@@ -3,9 +3,14 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
   DeferredPluginMigrationConflictError,
   readDeferredPluginMigrationCompletions,
+  readDeferredPluginMigrations,
   recordDeferredPluginMigrationsInTransaction,
   type DeferredPluginMigrationRecordInput,
 } from "../infra/deferred-plugin-migrations.js";
+import {
+  PluginCohortRecoveryWriteBindingSchema,
+  type PluginCohortRecoveryWriteBinding,
+} from "../infra/update-plugin-cohort-schema.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
 import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
@@ -20,8 +25,13 @@ import { withPluginInstallRoots } from "./install-root-context.js";
 import {
   publishPluginSourceAdmissionInDatabase,
   refreshPersistedInstalledPluginIndexWithLeaseSync,
-  type PreparedInstalledPluginIndexRefresh,
+  restorePersistedInstalledPluginIndexInDatabase,
+  writePersistedInstalledPluginIndexToSqlite,
+  type InstalledPluginIndexWriteLease,
+  type InstalledPluginIndexWriteOperations,
 } from "./installed-plugin-index-store-write.js";
+import { mutatePluginSnapshotCandidatesInDatabase } from "./installed-plugin-snapshot-candidates.kernel.js";
+import { updateInstalledPluginSourceSnapshotsInDatabase } from "./installed-plugin-source-snapshot.worker.js";
 import {
   readHostedCatalogSnapshotInDatabase,
   writeHostedCatalogSnapshotInDatabase,
@@ -31,11 +41,61 @@ import type { HostedOfficialExternalPluginCatalogSnapshot } from "./official-ext
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
 
+function indexWriteLease(identity: OpenClawStateLeaseIdentity): InstalledPluginIndexWriteLease {
+  return {
+    assertOwnedInTransaction(db, stage = "transaction") {
+      assertOpenClawStateLeaseWorkerOwnedInTransaction(db, identity, "write", stage);
+    },
+  };
+}
+
 export const pluginRuntimeOperations = {
-  "plugins.metadata.index.refresh": (
-    input: { identity: OpenClawStateLeaseIdentity; prepared: PreparedInstalledPluginIndexRefresh },
+  "plugins.metadata.index.snapshotCandidates": (
+    input: InstalledPluginIndexWriteOperations["plugins.metadata.index.snapshotCandidates"]["input"],
     { open },
-  ) => {
+  ): InstalledPluginIndexWriteOperations["plugins.metadata.index.snapshotCandidates"]["output"] =>
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        indexWriteLease(input.identity).assertOwnedInTransaction(db);
+        return mutatePluginSnapshotCandidatesInDatabase(db, input);
+      },
+      { database: open() },
+    ),
+  "plugins.metadata.index.sourceSnapshots": (
+    input: InstalledPluginIndexWriteOperations["plugins.metadata.index.sourceSnapshots"]["input"],
+    { open },
+  ): InstalledPluginIndexWriteOperations["plugins.metadata.index.sourceSnapshots"]["output"] =>
+    updateInstalledPluginSourceSnapshotsInDatabase(
+      input.changes,
+      open(),
+      indexWriteLease(input.identity),
+    ),
+  "plugins.metadata.index.write": (
+    input: InstalledPluginIndexWriteOperations["plugins.metadata.index.write"]["input"],
+    { open },
+  ): InstalledPluginIndexWriteOperations["plugins.metadata.index.write"]["output"] =>
+    writePersistedInstalledPluginIndexToSqlite(
+      input.index,
+      { database: open() },
+      indexWriteLease(input.identity),
+      false,
+      input.pluginCohort,
+    ),
+  "plugins.metadata.index.restore": (
+    input: InstalledPluginIndexWriteOperations["plugins.metadata.index.restore"]["input"],
+    { open },
+  ): InstalledPluginIndexWriteOperations["plugins.metadata.index.restore"]["output"] =>
+    restorePersistedInstalledPluginIndexInDatabase(
+      input.index,
+      input.expectedRevision,
+      open(),
+      indexWriteLease(input.identity),
+      input.pluginCohort,
+    ),
+  "plugins.metadata.index.refresh": (
+    input: InstalledPluginIndexWriteOperations["plugins.metadata.index.refresh"]["input"],
+    { open },
+  ): InstalledPluginIndexWriteOperations["plugins.metadata.index.refresh"]["output"] => {
     const { installRoots, nowMs, candidates, discovery, ...prepared } = input.prepared;
     const restoreCandidates = (values: NonNullable<typeof candidates>) =>
       values.map(({ candidate, installOwner, ambiguous }) =>
@@ -55,12 +115,9 @@ export const pluginRuntimeOperations = {
           filePath: database.path,
           database,
           ...(nowMs !== undefined ? { now: () => new Date(nowMs) } : {}),
-          lease: {
-            assertOwnedInTransaction(db, stage = "transaction") {
-              assertOpenClawStateLeaseWorkerOwnedInTransaction(db, input.identity, "write", stage);
-            },
-          },
-        }).index;
+          lease: indexWriteLease(input.identity),
+          pluginCohort: input.pluginCohort,
+        });
       }),
     );
   },
@@ -85,6 +142,7 @@ export const pluginRuntimeOperations = {
       runOpenClawStateWriteTransaction(
         ({ db }) => writeHostedCatalogSnapshotInDatabase(db, input.snapshot, input.now),
         options,
+        input.snapshot.monotonic?.mode === "signed-feed" ? {} : { singleStatement: true },
       );
       return { ok: true as const };
     } catch (error) {
@@ -105,6 +163,7 @@ export const pluginRuntimeOperations = {
   "plugins.deferredMigrations.record": (
     input: Omit<DeferredPluginMigrationRecordInput, "env"> & {
       identity: OpenClawStateLeaseIdentity;
+      pluginCohort?: PluginCohortRecoveryWriteBinding;
     },
     { open, stateOptions },
   ) => {
@@ -113,7 +172,11 @@ export const pluginRuntimeOperations = {
       return runOpenClawStateWriteTransaction(
         ({ db }) => {
           assertOpenClawStateLeaseWorkerOwnedInTransaction(db, input.identity);
-          const transitions = recordDeferredPluginMigrationsInTransaction(db, input);
+          const transitions = recordDeferredPluginMigrationsInTransaction(
+            db,
+            input,
+            input.pluginCohort && PluginCohortRecoveryWriteBindingSchema.parse(input.pluginCohort),
+          );
           assertOpenClawStateLeaseWorkerOwnedInTransaction(db, input.identity, "write", "commit");
           return { kind: "recorded" as const, transitions };
         },
@@ -132,4 +195,17 @@ export const pluginRuntimeOperations = {
   },
   "plugins.deferredMigrations.completions.read": (_input: undefined, { stateOptions }) =>
     readDeferredPluginMigrationCompletions(stateOptions()),
+  // Published 2026.10.1 updaters read pending migrations through this worker
+  // after replacing their package. Without their retained runtime (observed on
+  // Windows), that worker runs this package's code.
+  // Current callers use the read worker. Remove when upgrades from 2026.10.1
+  // leave the supported update window.
+  "plugins.deferredMigrations.read": (
+    input: { artifactPreservingReadOnly: boolean },
+    { stateOptions },
+  ) =>
+    readDeferredPluginMigrations({
+      ...stateOptions(),
+      artifactPreservingReadOnly: input.artifactPreservingReadOnly,
+    }),
 } satisfies WorkerOperationHandlers;

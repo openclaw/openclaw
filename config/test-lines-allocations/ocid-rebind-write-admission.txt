@@ -1,0 +1,2 @@
+93
+# Real shared-state writer regressions: verified rebind queued at storage admission, then Labs disable or service stop; binding, authority and active keys remain unchanged and caller receives cancellation.

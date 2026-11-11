@@ -1,25 +1,6 @@
-import {
-  DEFAULT_ACCOUNT_ID,
-  hasConfiguredAccountValue,
-  mergeAccountConfig,
-} from "openclaw/plugin-sdk/account-core";
+import { DEFAULT_ACCOUNT_ID, mergeAccountConfig } from "openclaw/plugin-sdk/account-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { hasSlackAccountCredentials } from "./src/account-configured.js";
-
-type SlackAccount = NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>;
-
-function hasConfiguredSlackAccount(account: SlackAccount | undefined, env: NodeJS.ProcessEnv) {
-  const userIdentity = account?.postAs === "user";
-  return hasSlackAccountCredentials({
-    config: account ?? {},
-    identityTokenConfigured:
-      hasConfiguredAccountValue(userIdentity ? account?.userToken : account?.botToken) ||
-      hasConfiguredAccountValue(userIdentity ? env.SLACK_USER_TOKEN : env.SLACK_BOT_TOKEN),
-    appTokenConfigured:
-      hasConfiguredAccountValue(account?.appToken) ||
-      hasConfiguredAccountValue(env.SLACK_APP_TOKEN),
-  });
-}
+import { hasSlackAccountCredentialsFromConfig } from "./src/account-configured.js";
 
 /** Resolve Slack activation through its account owner's real transport credential contract. */
 export function hasConfiguredSlackChannelState(params: {
@@ -39,7 +20,7 @@ export function hasConfiguredSlackChannelState(params: {
           nestedObjectKeys: ["relay"],
         })
       : channel;
-    if (hasConfiguredSlackAccount(account, params.env ?? process.env)) {
+    if (hasSlackAccountCredentialsFromConfig(account, params.env ?? process.env)) {
       return true;
     }
   }
@@ -48,7 +29,7 @@ export function hasConfiguredSlackChannelState(params: {
       return false;
     }
     // Ambient credentials belong only to the default account, never a named tenant.
-    return hasConfiguredSlackAccount(
+    return hasSlackAccountCredentialsFromConfig(
       mergeAccountConfig({
         channelConfig: channel,
         accountConfig: account,

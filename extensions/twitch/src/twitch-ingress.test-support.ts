@@ -1,101 +1,61 @@
-// Twitch tests share isolated durable-ingress state and raw chat envelopes.
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
-import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterAll, beforeAll } from "vitest";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { createTwitchIngress } from "./twitch-ingress.js";
 import type { TwitchChatMessage } from "./types.js";
 
-type TwitchIngressTestQueue = NonNullable<Parameters<typeof createTwitchIngress>[0]["queue"]>;
-export type TwitchIngressTestPayload = Parameters<TwitchIngressTestQueue["enqueue"]>[1];
+type Queue = NonNullable<Parameters<typeof createTwitchIngress>[0]["queue"]>;
+export type TwitchIngressTestPayload = Parameters<Queue["enqueue"]>[1];
+type CreateIngress = (
+  options: Omit<Parameters<typeof createTwitchIngress>[0], "accountId" | "runtime">,
+) => ReturnType<typeof createTwitchIngress>;
 
-export function createTwitchIngressTestMessage(
-  params: Partial<TwitchChatMessage> = {},
-): TwitchChatMessage {
-  return {
-    id: params.id ?? "message-1",
-    username: params.username ?? "viewer",
-    userId: params.userId ?? "viewer-1",
-    displayName: params.displayName ?? "Viewer",
-    message: params.message ?? "hello bot",
-    channel: params.channel ?? "#TestChannel",
-    timestamp: params.timestamp ?? 1_721_300_000_000,
-    isMod: params.isMod ?? false,
-    isOwner: params.isOwner ?? false,
-    isVip: params.isVip ?? false,
-    isSub: params.isSub ?? false,
-    chatType: "group",
-  };
+export function createTwitchIngressTestMessage(id: string): TwitchChatMessage {
+  return { id, username: "viewer", message: "hello bot", channel: "#TestChannel" };
 }
 
-export function useTwitchIngressTestQueue() {
-  let state: OpenClawTestState | undefined;
-  let poisoned = false;
-  beforeAll(async () => {
-    state = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "openclaw-twitch-ingress-",
-    });
-  });
-  afterAll(async () => {
-    await state?.cleanup();
-  });
-
-  return async <T>(
-    fn: (queue: TwitchIngressTestQueue, createIngress: typeof createTwitchIngress) => Promise<T>,
-  ): Promise<T> => {
-    if (!state || poisoned) {
-      throw new Error(
-        "Twitch ingress fixture is unavailable after initialization or cleanup failure",
-      );
-    }
+export async function withTwitchIngressTestQueue<T>(
+  run: (queue: Queue, createIngress: CreateIngress) => Promise<T>,
+): Promise<T> {
+  // A fresh directory per callback removes shared tombstones and poisoned-fixture state.
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "twitch-ingress-" });
+  const ingresses: ReturnType<CreateIngress>[] = [];
+  let outcome: { ok: true; value: T } | { ok: false; error: unknown };
+  try {
     const queue = createChannelIngressQueueForTests<TwitchIngressTestPayload>({
       channelId: "twitch",
       accountId: "default",
       stateDir: state.stateDir,
     });
-    const purge = queue.purge?.bind(queue);
-    if (!purge) {
-      throw new Error("Twitch ingress test queue requires purge support");
-    }
-    const ingresses: ReturnType<typeof createTwitchIngress>[] = [];
-    const createIngress: typeof createTwitchIngress = (options) => {
-      const ingress = createTwitchIngress(options);
-      ingresses.push(ingress);
-      return ingress;
+    outcome = {
+      ok: true,
+      value: await run(queue, (options) => {
+        const ingress = createTwitchIngress({
+          accountId: "default",
+          runtime: { error: () => {} },
+          queue,
+          ...options,
+        });
+        ingresses.push(ingress);
+        return ingress;
+      }),
     };
-    let outcome: { ok: true; value: T } | { ok: false; error: unknown };
-    try {
-      outcome = { ok: true, value: await fn(queue, createIngress) };
-    } catch (error) {
-      outcome = { ok: false, error };
-    }
-    try {
-      // Purge cannot race a producer, including when a callback assertion throws before stop.
-      const stopped = await Promise.allSettled(
-        ingresses.map(async (ingress) => await ingress.stop()),
-      );
-      const failed = stopped.filter((result) => result.status === "rejected");
-      if (failed.length > 0) {
-        throw new AggregateError(
-          failed.map((result) => result.reason),
-          "Twitch ingress cleanup failed",
-        );
-      }
-      await purge();
-    } catch (error) {
-      poisoned = true;
-      if (!outcome.ok) {
-        throw new AggregateError(
-          [outcome.error, error],
-          "Twitch ingress callback and cleanup failed",
-          { cause: error },
-        );
-      }
-      throw error;
-    }
-    if (!outcome.ok) {
-      throw outcome.error;
-    }
-    return outcome.value;
-  };
+  } catch (error) {
+    outcome = { ok: false, error };
+  }
+  const stopped = await Promise.allSettled(ingresses.map((ingress) => ingress.stop()));
+  const failures = stopped
+    .filter((result) => result.status === "rejected")
+    .map((result) => result.reason);
+  if (failures.length) {
+    // Never remove a directory while a failed producer may still own it.
+    throw new AggregateError(
+      outcome.ok ? failures : [outcome.error, ...failures],
+      "Twitch ingress cleanup failed",
+    );
+  }
+  await state.cleanup();
+  if (!outcome.ok) {
+    throw outcome.error;
+  }
+  return outcome.value;
 }

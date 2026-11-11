@@ -3,9 +3,10 @@ import {
   generateOAuthState,
   parseOAuthCallbackInput,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { buildMSTeamsAuthUrl } from "./oauth.flow.js";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
+  MSTEAMS_OAUTH_REDIRECT_URI,
+  buildMSTeamsAuthEndpoint,
   type MSTeamsDelegatedOAuthContext,
   type MSTeamsDelegatedTokens,
 } from "./oauth.shared.js";
@@ -32,13 +33,17 @@ export async function loginMSTeamsDelegated(
 
   const { verifier, challenge } = generateHexPkceVerifierChallenge();
   const state = generateOAuthState();
-  const authUrl = buildMSTeamsAuthUrl({
-    tenantId: params.tenantId,
-    clientId: params.clientId,
-    challenge,
+  const query = new URLSearchParams({
+    client_id: params.clientId,
+    response_type: "code",
+    redirect_uri: MSTEAMS_OAUTH_REDIRECT_URI,
+    scope: MSTEAMS_DEFAULT_DELEGATED_SCOPES.join(" "),
+    code_challenge: challenge,
+    code_challenge_method: "S256",
     state,
-    scopes: MSTEAMS_DEFAULT_DELEGATED_SCOPES,
+    prompt: "consent",
   });
+  const authUrl = `${buildMSTeamsAuthEndpoint(params.tenantId)}?${query.toString()}`;
 
   ctx.progress.update("OAuth URL ready");
   ctx.log(`\nOpen this URL in your LOCAL browser:\n\n${authUrl}\n`);

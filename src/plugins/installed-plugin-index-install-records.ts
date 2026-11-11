@@ -49,6 +49,9 @@ export function extractPluginInstallRecordsFromInstalledPluginIndex(
       ...(record.clawhubTrustReasons
         ? { clawhubTrustReasons: [...record.clawhubTrustReasons] }
         : {}),
+      ...(record.contextEngineIdsByPlugin
+        ? { contextEngineIdsByPlugin: structuredClone(record.contextEngineIdsByPlugin) }
+        : {}),
       ...(record.acceptedSurface
         ? { acceptedSurface: structuredClone(record.acceptedSurface) }
         : {}),

@@ -1,12 +1,17 @@
 // Azure Speech voice list timeout integration proof.
 // A loopback server accepts the connection but never responds so this exercises
 // the real fetch abort path without depending on Azure latency.
+import { expectDefined } from "@openclaw/normalization-core";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listAzureSpeechVoices } from "./tts.js";
+import { buildAzureSpeechProvider } from "./speech-provider.js";
 
 describe("listAzureSpeechVoices timeout", () => {
   const originalFetch = globalThis.fetch;
+  const listVoices = expectDefined(
+    buildAzureSpeechProvider().listVoices,
+    "Azure voice-list provider",
+  );
 
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -21,10 +26,7 @@ describe("listAzureSpeechVoices timeout", () => {
       let requestCount = 0;
       let requestSignal: AbortSignal | undefined;
       const cleanupController = new AbortController();
-      let notifyRequest = () => {};
-      const requestReceived = new Promise<void>((resolve) => {
-        notifyRequest = resolve;
-      });
+      const { promise: requestReceived, resolve: notifyRequest } = Promise.withResolvers<void>();
       await withServer(
         (_request, _response) => {
           requestCount += 1;
@@ -46,7 +48,7 @@ describe("listAzureSpeechVoices timeout", () => {
           );
 
           vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-          const request = listAzureSpeechVoices({
+          const request = listVoices({
             apiKey: "not-a-real",
             baseUrl: "https://custom.example.com",
             ...options,

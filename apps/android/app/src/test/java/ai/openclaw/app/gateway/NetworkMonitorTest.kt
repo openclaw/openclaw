@@ -42,11 +42,10 @@ class NetworkMonitorTest {
   }
 
   @Test
-  fun coalescesOneAvailabilityEpisodeWithoutDebouncingOtherNetworks() {
+  fun capabilityChurnDoesNotWakeRetriesOrSuppressOtherNetworks() {
     var wakes = 0
     val monitor = registerMonitor { wakes += 1 }
     val wifi = ShadowNetwork.newInstance(1)
-    monitor.callback.onAvailable(wifi)
     monitor.callback.onAvailable(wifi)
     for (validated in listOf(false, true, false, true)) {
       monitor.callback.onCapabilitiesChanged(wifi, capabilities(NetworkCapabilities.TRANSPORT_WIFI, validated))

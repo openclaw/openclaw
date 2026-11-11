@@ -1,5 +1,7 @@
 import { normalizeModelPricingProvider } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { asSafeIntegerInRange } from "../../packages/normalization-core/src/number-coercion.js";
+import { omitUndefinedFields } from "../../packages/normalization-core/src/record-coerce.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   normalizeOptionalTrimmedStringList,
@@ -11,7 +13,6 @@ import {
   normalizeManifestObjectList,
   normalizeManifestStringRecord,
   normalizeNamedMetadataRecord,
-  omitUndefinedManifestFields,
   optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
 import type {
@@ -20,7 +21,6 @@ import type {
   PluginManifestModelIdPrefixRule,
   PluginManifestModelPricing,
   PluginManifestModelSupport,
-  PluginManifestProviderEndpoint,
   PluginManifestProviderRequest,
   PluginManifestSecretProviderIntegration,
 } from "./manifest-types.js";
@@ -131,37 +131,6 @@ export function normalizeManifestModelIdNormalization(
   return providers ? { providers } : undefined;
 }
 
-export function normalizeManifestProviderEndpoints(
-  value: unknown,
-): PluginManifestProviderEndpoint[] | undefined {
-  return normalizeManifestObjectList(value, (rawEndpoint) => {
-    const endpointClass = normalizeOptionalString(rawEndpoint.endpointClass);
-    if (!endpointClass) {
-      return undefined;
-    }
-    const hosts = normalizeOptionalTrimmedStringList(rawEndpoint.hosts)?.map((host) =>
-      host.toLowerCase(),
-    );
-    const hostSuffixes = normalizeOptionalTrimmedStringList(rawEndpoint.hostSuffixes)?.map((host) =>
-      host.toLowerCase(),
-    );
-    const baseUrls = normalizeOptionalTrimmedStringList(rawEndpoint.baseUrls);
-    if (!hosts && !hostSuffixes && !baseUrls) {
-      return undefined;
-    }
-    return omitUndefinedManifestFields({
-      endpointClass,
-      hosts,
-      hostSuffixes,
-      baseUrls,
-      googleVertexRegion: normalizeOptionalString(rawEndpoint.googleVertexRegion),
-      googleVertexRegionHostSuffix: normalizeOptionalString(
-        rawEndpoint.googleVertexRegionHostSuffix,
-      )?.toLowerCase(),
-    });
-  });
-}
-
 export function normalizeManifestProviderRequest(
   value: unknown,
   params: { ownedProviders: ReadonlySet<string> },
@@ -175,9 +144,7 @@ export function normalizeManifestProviderRequest(
 }
 
 function normalizeManifestPositiveInteger(value: unknown, max: number): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= max
-    ? value
-    : undefined;
+  return asSafeIntegerInRange(value, { min: 1, max });
 }
 
 export function normalizeManifestSecretProviderIntegrations(
@@ -203,7 +170,7 @@ export function normalizeManifestSecretProviderIntegrations(
     const passEnv = normalizeTrimmedStringList(rawIntegration.passEnv)
       .filter((entry) => ENV_SECRET_REF_ID_RE.test(entry))
       .slice(0, MAX_SECRET_PROVIDER_EXEC_PASS_ENV);
-    return omitUndefinedManifestFields<PluginManifestSecretProviderIntegration>({
+    return omitUndefinedFields<PluginManifestSecretProviderIntegration>({
       providerAlias: normalizeOptionalString(rawIntegration.providerAlias),
       displayName: normalizeOptionalString(rawIntegration.displayName),
       description: normalizeOptionalString(rawIntegration.description),

@@ -27,10 +27,6 @@ export type UserPreferenceCoauthorMutation = {
 };
 
 export type UserPreferenceWorkerOperations = {
-  "userPreferences.read": {
-    input: { profileId: string; keys?: readonly string[] };
-    output: CanonicalUserPreferences | undefined;
-  };
   "userPreferences.write": {
     input: { profileId: string; update: PreparedUserPreferenceUpdate };
     output: Result<{ profileId: string }, UserPreferenceError> | undefined;

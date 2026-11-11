@@ -154,7 +154,7 @@ Requirements and failure behavior:
 
 - The bot needs access to the guild and channel.
 - The bot needs the Discord Developer Portal **Server Members Intent**.
-- The access group fails closed when Discord returns `Missing Access`, the sender cannot be resolved as a guild member, or the channel belongs to another guild.
+- The access group grants no access when Discord returns `Missing Access`, the sender cannot be resolved as a guild member, or the channel belongs to another guild.
 
 More Discord-specific examples: [Discord access control](/channels/discord/access-control#access-control-and-routing)
 
@@ -181,7 +181,7 @@ The result reports referenced, matched, missing, unsupported, and failed groups.
 
 - Access groups are allowlist aliases, not roles. They do not create owners, approve pairing requests, or grant tool permissions by themselves.
 - `dmPolicy: "open"` still requires `"*"` in the effective DM allowlist. Referencing an access group is not the same as public access.
-- Missing group names fail closed. If `allowFrom` contains `accessGroup:operators` and `accessGroups.operators` is absent, that entry authorizes nobody.
+- Missing group names grant no access. If `allowFrom` contains `accessGroup:operators` and `accessGroups.operators` is absent, that entry authorizes nobody.
 - Keep channel ids stable. Prefer numeric/user ids over display names when the channel supports both.
 
 ## Troubleshooting

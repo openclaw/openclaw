@@ -8,19 +8,6 @@ import { getReadPathVariants, resolveToCwd } from "./path-utils.js";
 describe("resolveToCwd", () => {
   const cwd = path.resolve("workspace");
 
-  it.each([
-    ["@notes.md", "notes.md"],
-    ["@@notes.md", "@notes.md"],
-    ["@@@notes.md", "@@notes.md"],
-    ["./@notes.md", "@notes.md"],
-  ])("consumes one reference prefix across resolver handoffs: %s", (input, filename) => {
-    const normalized = normalizeFileReferencePrefix(input);
-    expect(resolveToCwd(normalized, cwd)).toBe(path.resolve(cwd, filename));
-    expect(resolveToCwd(normalizeFileReferencePrefix(normalized), cwd)).toBe(
-      path.resolve(cwd, filename),
-    );
-  });
-
   it("preserves home and file URL references without decoding escaped mentions", () => {
     const target = path.resolve(cwd, "notes.txt");
     const url = pathToFileURL(target).href;

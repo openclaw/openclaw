@@ -67,6 +67,7 @@ it("keeps GitHub login private while applying its mapped plugin binding on admis
     expect(authority?.signal).toBeInstanceOf(AbortSignal);
     expect(hasCurrentGatewayOperatorAccess(authority)).toBe(true);
     expect(authority?.gatewayAccessGrant).toEqual({ pluginId, grantId });
+    expect(authority?.requiredPolicyPlugin).toBe(pluginId);
     resumeGatewayOperatorAccessGrant(profile, config, { pluginId, grantId });
     const expected = {
       config,

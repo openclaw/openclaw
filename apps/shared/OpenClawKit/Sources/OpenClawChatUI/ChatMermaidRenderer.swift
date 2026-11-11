@@ -24,9 +24,9 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
         enum Phase { case loading, rendering, snapshot }
 
         let id = UUID()
+        let startedAt = ProcessInfo.processInfo.systemUptime
         let request: ChatMermaidRequest
         var completions: [UUID: Completion]
-        var generation = UUID()
         var phase = Phase.loading
 
         init(request: ChatMermaidRequest, token: UUID, completion: @escaping Completion) {
@@ -47,8 +47,10 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
     private var active: Job?
     private var timeout: Task<Void, Never>?
     private var webView: WKWebView?
-    private var generation = UUID()
     private var documentReady = false
+    #if DEBUG
+    private var traceDocumentID: UUID?
+    #endif
 
     override init() {
         super.init()
@@ -82,12 +84,15 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
             .first(where: { $0.request == request })
         {
             job.completions[token] = completion
+            self.trace("coalesced", job: job)
         } else {
             guard self.queued.count < Self.maximumQueued else {
                 completion(.failure(.busy))
                 return nil
             }
-            self.queued.append(Job(request: request, token: token, completion: completion))
+            let job = Job(request: request, token: token, completion: completion)
+            self.queued.append(job)
+            self.trace("queued", job: job)
             self.pump()
         }
         return token
@@ -97,11 +102,14 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
         self.queued.forEach { $0.completions.removeValue(forKey: token) }
         self.queued.removeAll { $0.completions.isEmpty }
         guard let active = self.active else { return }
-        active.completions.removeValue(forKey: token)
+        if active.completions.removeValue(forKey: token) != nil {
+            self.trace("subscriber-canceled", job: active)
+        }
         guard active.completions.isEmpty else { return }
-        // Retire the process document before the next job can reuse the owner.
-        // A canceled script cannot repaint or publish into the next request.
-        self.retireDocument()
+        self.trace("canceled", job: active)
+        // Loading has not injected request-specific JavaScript. Let the next job
+        // reuse initialization; retire running scripts so they cannot repaint it.
+        if active.phase != .loading { self.retireDocument() }
         self.finish(active, result: .failure(.unavailable))
     }
 
@@ -115,18 +123,20 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
         guard self.active == nil, !self.queued.isEmpty else { return }
         let job = self.queued.removeFirst()
         self.active = job
+        self.trace("started", job: job)
         do {
             try self.prepareDocument(width: job.request.width)
         } catch {
+            self.trace("prepare-failed", job: job, error: error)
             self.finish(job, result: .failure(.unavailable))
             return
         }
-        job.generation = self.generation
         // Native cancellation can replace WebKit even if synchronous diagram
         // layout prevents the JavaScript watchdog from running.
         self.timeout = Task { [weak self, weak job] in
             do { try await Task.sleep(for: .seconds(20)) } catch { return }
             guard let self, let job, self.active === job else { return }
+            self.trace("watchdog-expired", job: job)
             self.retireDocument()
             self.finish(job, result: .failure(.timedOut))
         }
@@ -140,9 +150,8 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        try configuration.setURLSchemeHandler(
-            ChatMermaidSchemeHandler(directory: directory),
-            forURLScheme: ChatMermaidResources.scheme)
+        let handler = try ChatMermaidSchemeHandler(directory: directory)
+        configuration.setURLSchemeHandler(handler, forURLScheme: ChatMermaidResources.scheme)
         configuration.userContentController.add(Bridge(owner: self), contentWorld: .page, name: Self.bridgeName)
         let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: width, height: 1), configuration: configuration)
         webView.navigationDelegate = self
@@ -152,9 +161,12 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
         webView.backgroundColor = .clear
         webView.scrollView.isScrollEnabled = false
         #endif
-        self.generation = UUID()
         self.documentReady = false
         self.webView = webView
+        #if DEBUG
+        self.traceDocumentID = handler.traceDocumentID
+        #endif
+        self.trace("document-created")
         webView.load(URLRequest(url: ChatMermaidResources.documentURL))
     }
 
@@ -164,21 +176,38 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
         else { return }
         self.layout(webView, size: CGSize(width: job.request.width, height: 1))
         job.phase = .rendering
+        self.trace("javascript-started", job: job)
+        #if DEBUG
+        // Return only an entry timestamp; keep the render promise's existing lifetime.
+        let functionBody = if ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode") {
+            "const enteredAtMs = Date.now(); void window.renderMermaid(job); return enteredAtMs;"
+        } else {
+            "void window.renderMermaid(job);"
+        }
+        #else
+        let functionBody = "void window.renderMermaid(job);"
+        #endif
         webView.callAsyncJavaScript(
-            "void window.renderMermaid(job);",
+            functionBody,
             arguments: ["job": job.request.arguments(id: job.id)],
             in: nil,
             in: .page)
         { [weak self, weak webView, weak job] result in
-            guard case .failure = result,
-                  let self, let webView, let job, self.isCurrent(job, webView: webView)
+            guard let self, let webView, let job, self.isCurrent(job, webView: webView)
             else { return }
-            self.retireDocument()
-            self.finish(job, result: .failure(.unavailable))
+            switch result {
+            case let .success(value):
+                self.trace("javascript-returned", job: job, javascriptEnteredAtMs: value as? Double)
+            case let .failure(error):
+                self.trace("javascript-failed", job: job, error: error)
+                self.retireDocument()
+                self.finish(job, result: .failure(.unavailable))
+            }
         }
     }
 
     private func receive(_ message: WKScriptMessage) {
+        if message.webView === self.webView { self.trace("bridge-received") }
         // WebKit exposes handlers to all frames. Accept results only from the
         // exact current top-level document; the opaque diagram frame has no authority.
         guard message.name == Self.bridgeName, message.world == .page,
@@ -187,14 +216,20 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
               let webView = self.webView, message.webView === webView,
               let job = self.active, job.phase == .rendering,
               self.isCurrent(job, webView: webView), let body = message.body as? String
-        else { return }
+        else {
+            if message.webView === self.webView { self.trace("bridge-context-rejected") }
+            return
+        }
         do {
             guard let response = try ChatMermaidResponse(body: body, expectedID: job.id, request: job.request) else {
+                self.trace("bridge-job-rejected", job: job)
                 return
             }
             job.phase = .snapshot
+            self.trace("bridge-succeeded", job: job)
             self.capture(response, for: job, webView: webView)
         } catch let error as ChatMermaidFailure {
+            self.trace("bridge-failed", job: job)
             self.finish(job, result: .failure(error))
         } catch {
             self.finish(job, result: .failure(.invalidResult))
@@ -203,11 +238,13 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
 
     private func capture(_ response: ChatMermaidResponse, for job: Job, webView: WKWebView) {
         self.layout(webView, size: response.size)
+        self.trace("snapshot-started", job: job)
         // Snapshot widths are points and WebKit multiplies them by its own
         // device scale. Read that producer fact instead of assuming UIScreen's scale.
         webView.evaluateJavaScript("window.devicePixelRatio") { [weak self, weak webView, weak job] value, error in
             guard let self, let webView, let job, self.isCurrent(job, webView: webView) else { return }
             guard error == nil, let scale = value as? Double, scale.isFinite, scale > 0 else {
+                self.trace("scale-failed", job: job, error: error)
                 self.retireDocument()
                 self.finish(job, result: .failure(.invalidResult))
                 return
@@ -216,9 +253,10 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
             configuration.rect = CGRect(origin: .zero, size: response.size)
             configuration.snapshotWidth = NSNumber(value: response.size.width * job.request.displayScale / scale)
             configuration.afterScreenUpdates = true
-            webView.takeSnapshot(with: configuration) { [weak self, weak webView, weak job] image, _ in
+            webView.takeSnapshot(with: configuration) { [weak self, weak webView, weak job] image, error in
                 guard let self, let webView, let job, self.isCurrent(job, webView: webView) else { return }
                 guard let image, let byteCount = self.bitmapByteCount(image) else {
+                    self.trace("snapshot-failed", job: job, error: error)
                     self.finish(job, result: .failure(.unavailable))
                     return
                 }
@@ -255,12 +293,31 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
     }
 
     private func isCurrent(_ job: Job, webView: WKWebView) -> Bool {
-        self.active === job && self.webView === webView &&
-            self.generation == job.generation && webView.url == ChatMermaidResources.documentURL
+        self.active === job && self.webView === webView && webView.url == ChatMermaidResources.documentURL
     }
 
     private func finish(_ job: Job, result: Result<ChatMermaidRenderedImage, ChatMermaidFailure>) {
         guard self.active === job else { return }
+        switch result {
+        case .success: self.trace("finished-success", job: job)
+        case let .failure(failure):
+            let reason: String = switch failure {
+            case .invalidRequest: "invalid-request"
+            case .busy: "busy"
+            case .unavailable: "unavailable"
+            case .timedOut: "timed-out"
+            case .invalidResult: "invalid-result"
+            case .tooLarge: "too-large"
+            case let .rendering(message, retryable):
+                switch message {
+                case "Mermaid renderer could not be loaded.": "frame-load-timed-out"
+                case "Mermaid diagram rendering timed out.": "frame-render-timed-out"
+                case "Diagram image timed out.": "image-decode-timed-out"
+                default: retryable ? "rendering-transient" : "rendering-invalid"
+                }
+            }
+            self.trace("finished-\(reason)", job: job)
+        }
         self.timeout?.cancel()
         self.timeout = nil
         self.active = nil
@@ -281,10 +338,12 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
     }
 
     private func retireDocument() {
-        self.generation = UUID()
         self.documentReady = false
         guard let webView = self.webView else { return }
         self.webView = nil
+        #if DEBUG
+        self.traceDocumentID = nil
+        #endif
         webView.navigationDelegate = nil
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: Self.bridgeName,
@@ -295,6 +354,7 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
         guard self.webView === webView, webView.url == ChatMermaidResources.documentURL else { return }
         self.documentReady = true
+        self.trace("document-finished")
         if let active = self.active { self.start(active) }
     }
 
@@ -307,18 +367,31 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
             action.request.url == ChatMermaidResources.documentURL && !self.documentReady
         let isOpaqueFrame = action.targetFrame?.isMainFrame == false &&
             action.request.url?.absoluteString == "about:srcdoc"
-        decisionHandler(self.webView === webView && (isMainDocument || isOpaqueFrame) ? .allow : .cancel)
+        let allowed = self.webView === webView && (isMainDocument || isOpaqueFrame)
+        if !allowed { self.trace("navigation-rejected") }
+        decisionHandler(allowed ? .allow : .cancel)
     }
 
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError _: any Error) {
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation _: WKNavigation!) {
+        if self.webView === webView { self.trace("document-started") }
+    }
+
+    func webView(_ webView: WKWebView, didCommit _: WKNavigation!) {
+        if self.webView === webView { self.trace("document-committed") }
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: any Error) {
+        if self.webView === webView { self.trace("provisional-navigation-failed", error: error) }
         self.documentFailed(webView)
     }
 
-    func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError _: any Error) {
+    func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: any Error) {
+        if self.webView === webView { self.trace("navigation-failed", error: error) }
         self.documentFailed(webView)
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        if self.webView === webView { self.trace("web-content-terminated") }
         self.documentFailed(webView)
     }
 
@@ -327,6 +400,40 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
         let active = self.active
         self.retireDocument()
         if let active { self.finish(active, result: .failure(.unavailable)) }
+    }
+
+    /// Temporary incident trace for Debug screenshot fixtures; never retain diagram content or error descriptions.
+    private func trace(
+        _ event: String,
+        job: Job? = nil,
+        error: (any Error)? = nil,
+        javascriptEnteredAtMs: Double? = nil)
+    {
+        #if DEBUG
+        guard ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode"),
+              let job = job ?? self.active
+        else { return }
+        var record: [String: Any] = [
+            "event": event, "job": job.id.uuidString,
+            "elapsedMs": Int((ProcessInfo.processInfo.systemUptime - job.startedAt) * 1000),
+            "phase": String(describing: job.phase), "width": job.request.width,
+            "displayScale": job.request.displayScale,
+            "queued": self.queued.count, "subscribers": job.completions.count,
+            "documentReady": self.documentReady,
+        ]
+        if let traceDocumentID { record["document"] = traceDocumentID.uuidString }
+        if let javascriptEnteredAtMs { record["javascriptEnteredAtMs"] = javascriptEnteredAtMs }
+        if let error = error as NSError? {
+            record["errorCode"] = error.code
+            switch error.domain {
+            case WKError.errorDomain: record["errorDomain"] = "webkit"
+            case NSURLErrorDomain: record["errorDomain"] = "url"
+            case NSCocoaErrorDomain: record["errorDomain"] = "cocoa"
+            default: record["errorDomain"] = "other"
+            }
+        }
+        ChatMermaidTrace.write(record)
+        #endif
     }
 
     @MainActor
