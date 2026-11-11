@@ -39,7 +39,11 @@ const signOutButton = (page: ParentNode) =>
   );
 const heroSignIn = (page: ParentNode) =>
   page.querySelector<HTMLButtonElement>(".plugin-catalog-detail__sign-in");
-async function setup(handlers: Record<string, () => unknown>, advertiseMcpLogin = true) {
+async function setup(
+  handlers: Record<string, () => unknown>,
+  advertiseMcpLogin = true,
+  path = "/settings/plugins/workboard",
+) {
   const fixture = pageFixture(handlers);
   const { client, gateway, emit } = fixture;
   if (advertiseMcpLogin) {
@@ -52,8 +56,8 @@ async function setup(handlers: Record<string, () => unknown>, advertiseMcpLogin 
     });
   }
   const result = createResult(createPlugin({ enabled: true, state: "enabled" }));
-  const route = fixture.route("/settings/plugins/workboard", result);
-  const mounted = await fixture.mount("/settings/plugins/workboard", result);
+  const route = fixture.route(path, result);
+  const mounted = await fixture.mount(path, result);
   await vi.dynamicImportSettled();
   await waitForSolid(() =>
     expect(mounted.page.querySelector(".plugin-capabilities")).not.toBeNull(),
@@ -228,3 +232,33 @@ it.each(["navigation", "reconnect"])(
     expect(window.open).toHaveBeenCalledTimes(1);
   },
 );
+
+it("resumes the originating chat once, only after plugin authentication is verified", async () => {
+  let saved = false;
+  const verified = createDeferred<PluginsInspectResult>();
+  const { page, calls, waitForCall } = await setup(
+    {
+      "plugins.inspect": () =>
+        saved ? verified.promise : inspectionWithAuth("requires-authorization"),
+      "mcp.authLogin": () => {
+        saved = true;
+        return { done: true, status: "done" };
+      },
+      "sessions.describe": () => ({ session: { sessionId: "original-conversation" } }),
+      "system-event": () => ({ ok: true }),
+    },
+    true,
+    "/settings/plugins/workboard?returnTo=agent%3Amain%3Arecovery",
+  );
+  accountButton(page)!.click();
+  await waitForCall("mcp.authLogin");
+  expect(calls("system-event")).toHaveLength(0);
+  verified.resolve(inspectionWithAuth("authorized"));
+  await waitForCall("system-event");
+  expect(calls("system-event")).toHaveLength(1);
+  expect(calls("system-event")[0]?.[1]).toMatchObject({
+    sessionKey: "agent:main:recovery",
+    expectedSessionId: "original-conversation",
+    wake: true,
+  });
+});

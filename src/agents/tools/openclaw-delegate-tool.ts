@@ -116,6 +116,7 @@ export function createOpenClawDelegateToolsForRun(
       "Delegate system setup or repair to a separate model turn. " +
       "Prefer your available tools for routine status and session/workspace checks. " +
       "Gateway restart, config, channels, plugins, agents, models/providers, API keys. " +
+      "Plugin account sign-in is human-owned, not delegated channel setup. In the Control UI, link its installed plugin page with ?returnTo=<URL-encoded current session key> under the current UI base path; verified Sign in resumes that chat. Outside the Control UI, give the manual Settings path without promising automatic resumption. " +
       "Supports multiple named custom/local model endpoints; provider IDs can be user-defined, while api selects the protocol. " +
       "Setup flows use masked entry, which keeps keys out of model context; if the user already gave a key or token in chat, pass it along and OpenClaw stores it without echoing it. " +
       (fullPermission

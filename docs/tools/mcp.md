@@ -228,3 +228,25 @@ To sign out of a plugin-declared server, open the plugin's page and select **Acc
 - [MCP CLI reference](/cli/mcp)
 - [Manage plugins](/plugins/manage-plugins)
 - [Tool policies](/tools)
+
+### Return to a task after plugin sign-in
+
+In the Control UI, a recovery link can open an installed plugin's settings with
+`?returnTo=<URL-encoded-session-key>` appended to
+`/settings/plugins/<pluginId>` under the Gateway's configured Control UI base path.
+The existing action reads **Sign in and continue task**. The human completes the
+normal administrator-owned browser sign-in; this does not enable delegated setup
+or add an approval prompt.
+
+After the wizard succeeds and the plugin's account is verified, OpenClaw admits
+one normal session event to the original chat and returns there. The agent sees
+the existing conversation and completed progress, not a replay of the original
+request. It must not repeat completed actions or revive a cancelled or replaced
+task. Normal session permissions still apply.
+
+Cancellation, failure, expiry, a disconnected or closed sign-in view, and an
+unverified account do not resume the task. If sign-in succeeds but the original
+session is unavailable or continuation is refused, the plugin keeps its saved
+authentication and explains that the task could not resume. Do not sign in again
+to retry the task. This page-owned handoff does not survive a browser or Gateway
+restart; the conversation and any saved authentication remain available.

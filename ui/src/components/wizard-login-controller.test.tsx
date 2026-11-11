@@ -178,6 +178,7 @@ it.each([
   ["mcp.authLogin", "failed cancellation", "cancelled"],
   ["models.authLogin", "failed status", "cancelled"],
   ["models.authLogin", "failed cancellation", "done"],
+  ["mcp.authLogin", "failed cancellation", "done"],
 ] as const)(
   "settles %s after %s with %s without poisoning a new sign-in",
   async (startMethod, ordering, terminal) => {
@@ -267,7 +268,10 @@ it.each([
         }
       }
       nextResult.resolve({ done: true, status: terminal });
-      await first;
+      const completion = await first;
+      if (terminal === "done") {
+        expect(completion?.cancellationRequested).toBe(true);
+      }
       flush();
       expect(nextRequests).toBe(2);
       if (terminal === "done") {

@@ -493,3 +493,25 @@ describe("set-heartbeats compatibility authority", () => {
     },
   );
 });
+
+it.each(["captured-session", "replaced-session"])(
+  "admits a continuation only for its captured conversation: %s",
+  async (expectedSessionId) => {
+    const request = createRequest({
+      text: "Authentication completed.",
+      sessionKey: "agent:main:main",
+      wake: true,
+      expectedSessionId,
+    });
+    await systemEvent(request.options);
+    const matches = expectedSessionId === "captured-session";
+    expect(mocks.enqueueEvent).toHaveBeenCalledTimes(matches ? 1 : 0);
+    expect(request.respond.mock.calls[0]?.[0]).toBe(matches);
+    if (!matches) {
+      expect(request.respond.mock.calls[0]?.[2]).toMatchObject({
+        message: "The original session changed. The task was not resumed.",
+      });
+      expect(request.publishPresence).not.toHaveBeenCalled();
+    }
+  },
+);

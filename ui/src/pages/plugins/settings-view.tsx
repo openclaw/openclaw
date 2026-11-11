@@ -87,6 +87,7 @@ export type DetailProps = SharedProps &
     promptBusy?: boolean;
     promptBlockedReason?: string | null;
     mcpLoginBusy?: boolean;
+    mcpResumeTask?: boolean;
     canMcpLogin?: boolean;
     onMcpLogin?: (serverName: string) => void;
     canMcpLogout?: boolean;
@@ -112,6 +113,7 @@ export type DetailProps = SharedProps &
 const CONNECTION_VERBS = { Account: ["connect", "signOut"], Credential: ["configure", "edit"] };
 function PluginConnectionAction(props: {
   kind: "Account" | "Credential";
+  signInLabel?: string;
   ready: boolean;
   name: string;
   disabled?: boolean;
@@ -132,10 +134,11 @@ function PluginConnectionAction(props: {
         type="button"
         class="btn btn--sm oc-action oc-action-secondary"
         aria-label={t(`pluginsPage.auth.${verb()}${props.kind}`, { name: props.name })}
+        aria-description={!props.ready ? props.signInLabel : undefined}
         disabled={props.disabled}
         onClick={() => props.onClick()}
       >
-        {t(`pluginsPage.auth.${verb()}`)}
+        {!props.ready && props.signInLabel ? props.signInLabel : t(`pluginsPage.auth.${verb()}`)}
       </button>
     </>
   );
@@ -417,6 +420,9 @@ function PluginOverview(props: DetailProps): JSX.Element {
                 trailing: (
                   <PluginConnectionAction
                     kind="Account"
+                    signInLabel={
+                      props.mcpResumeTask ? t("pluginsPage.auth.connectAndResume") : undefined
+                    }
                     name={server.serverName}
                     ready={server.state === "authorized"}
                     disabled={

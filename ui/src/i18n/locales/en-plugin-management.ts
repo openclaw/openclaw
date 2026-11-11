@@ -378,8 +378,12 @@ const enPluginManagement = {
       configure: "Configure",
       configureCredential: "Configure {name}",
       connect: "Sign in",
+      connectAndResume: "Sign in and continue task",
       requestFailed: "Sign-in did not finish. Try signing in again.",
       sessionExpired: "This sign-in session expired. Try signing in again.",
+      resumeUnverified: "The plugin account could not be verified. The task was not resumed.",
+      resumeFailed:
+        "Sign-in finished, but the task could not resume: {error} Return to the original chat to continue; do not sign in again.",
     },
     toggleNamed: "Enable or disable {name}",
     schemaUnavailable: "Plugin settings schema is unavailable.",

@@ -6,6 +6,8 @@ export const SystemEventParamsSchema = closedObject({
   text: Type.String(),
   idempotencyKey: Type.Optional(Type.String({ minLength: 1 })),
   sessionKey: Type.Optional(Type.String()),
+  /** A targeted continuation must not wake a reset/replaced conversation. */
+  expectedSessionId: Type.Optional(Type.String({ minLength: 1 })),
   wake: Type.Optional(Type.Boolean()),
   deviceId: Type.Optional(Type.String()),
   instanceId: Type.Optional(Type.String()),
