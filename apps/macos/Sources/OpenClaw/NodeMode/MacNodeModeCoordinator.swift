@@ -515,6 +515,12 @@ final class MacNodeModeCoordinator: NSObject {
                 self.logger.error("mac node gateway connect failed: \(error.localizedDescription, privacy: .public)")
                 let failure = Self.nodeGatewayConnectionFailure(error)
                 self.channelStatus.record(.unavailable(reason: failure.reason, diagnostic: failure.diagnostic))
+                if Self.nodeGatewayConnectionPausesRetry(error) {
+                    // Rejected credentials cannot succeed on retry; wait for a refresh (credential
+                    // change or the disconnect probe) instead of feeding the gateway's auth rate limit.
+                    guard await refreshIterator.next() != nil else { return }
+                    continue
+                }
                 try? await Task.sleep(nanoseconds: min(retryDelay, 10_000_000_000))
                 retryDelay = min(retryDelay * 2, 10_000_000_000)
             }
@@ -956,6 +962,12 @@ extension MacNodeModeCoordinator {
         else { return self.nodeHostWorkerFailure(error) }
         let reason = problem.actionLabel.map { "\(problem.statusText) — \($0)" } ?? problem.statusText
         return (reason, problem.message)
+    }
+
+    static func nodeGatewayConnectionPausesRetry(_ error: Error) -> Bool {
+        guard error is GatewayConnectAuthError, let problem = GatewayConnectionProblemMapper.map(error: error)
+        else { return false }
+        return problem.pauseReconnect && !problem.needsPairingApproval
     }
 
     private func handleNodeHostWorkerFailure(configurationGeneration: UInt64) {

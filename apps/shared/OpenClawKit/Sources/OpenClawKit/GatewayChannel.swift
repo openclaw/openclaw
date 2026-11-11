@@ -86,7 +86,7 @@ public actor GatewayChannelActor {
     private var deviceTokenRetryBudgetUsed = false
     private var receivedDeviceAuthRoles = Set<String>()
     private var persistedDeviceAuthRoles = Set<String>()
-    private var reconnectPausedForAuthFailure = false
+    private(set) var reconnectPausedForAuthFailure = false
     private let defaultRequestTimeoutMs: Double = 15000
     private let extraHeadersProvider: (@Sendable () async throws -> [String: String])?
     /// Fast state admission for clients that must inspect hello before their
@@ -692,6 +692,14 @@ public actor GatewayChannelActor {
                     gatewayID: options.deviceAuthGatewayID,
                     profile: options.deviceIdentityProfile,
                     observedToken: rejectedToken)
+            } else if var authError = error as? GatewayConnectAuthError,
+                      authError.detail == .authTokenMismatch, authError.canRetryWithDeviceToken,
+                      self.token?.trimmedNonEmpty != nil
+            {
+                // The gateway offers this retry to every client that sent no device token. Without a
+                // stored one for this route, resending the rejected token only trips the auth rate limit.
+                authError.canRetryWithDeviceToken = false
+                throw authError
             }
             throw error
         }

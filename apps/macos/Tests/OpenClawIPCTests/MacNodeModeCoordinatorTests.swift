@@ -194,6 +194,16 @@ struct MacNodeModeCoordinatorDeviceAuthTests {
         #expect(status.diagnostic == "The gateway received the connection request, "
             + "but this device must be approved first.")
     }
+
+    @Test @MainActor func `rejected credentials pause node connect retries but pairing approval keeps retrying`() {
+        func authError(_ detail: GatewayConnectAuthDetailCode) -> GatewayConnectAuthError {
+            GatewayConnectAuthError(message: "rejected", detailCode: detail.rawValue, canRetryWithDeviceToken: false)
+        }
+        #expect(MacNodeModeCoordinator.nodeGatewayConnectionPausesRetry(authError(.authTokenMismatch)))
+        #expect(MacNodeModeCoordinator.nodeGatewayConnectionPausesRetry(authError(.authRateLimited)))
+        #expect(!MacNodeModeCoordinator.nodeGatewayConnectionPausesRetry(authError(.pairingRequired)))
+        #expect(!MacNodeModeCoordinator.nodeGatewayConnectionPausesRetry(URLError(.cannotConnectToHost)))
+    }
 }
 
 @Suite(.testWaitLimit)
