@@ -36,10 +36,11 @@ const conflict = {
 };
 
 async function verifyRecoveryCommands(commands: { inspect: string; take: string }[]) {
-  for (const [shell, isolated] of [
-    ["bash", true],
-    ...(process.platform === "darwin" ? [["zsh", true] as const] : []),
-    ["bash", false],
+  for (const [shell, isolated, replaceKinds] of [
+    ["bash", true, false],
+    ["bash", true, true],
+    ...(process.platform === "darwin" ? [["zsh", true, true] as const] : []),
+    ["bash", false, true],
   ] as const) {
     const root = await mkdtemp(path.join(tmpdir(), "openclaw-conflict-commands-"));
     const git = (cwd: string, args: string[], input?: string) =>
@@ -103,6 +104,16 @@ async function verifyRecoveryCommands(commands: { inspect: string; take: string 
       await mkdir(path.join(workspace, "src"));
       await writeFile(path.join(workspace, conflict.paths[0]), "local\n");
       git(workspace, ["add", "--", conflict.paths[0]]);
+      if (replaceKinds) {
+        await rm(path.join(workspace, conflict.paths[0]));
+        await mkdir(path.join(workspace, conflict.paths[0]));
+        await writeFile(path.join(workspace, conflict.paths[0], "local.txt"), "local child\n");
+        await writeFile(path.join(workspace, "retained"), "local file\n");
+        git(workspace, ["add", "-A", "--", conflict.paths[0], "retained"]);
+        // The guidance asks users to move filesystem obstructions aside; the index still tracks them.
+        await rm(path.join(workspace, conflict.paths[0]), { recursive: true });
+        await rm(path.join(workspace, "retained"));
+      }
       for (const [index, command] of commands.entries()) {
         const execute = (text: string) =>
           execFileSync(shell, ["-c", text], { cwd: path.join(workspace, "src"), encoding: "utf8" });
@@ -111,7 +122,7 @@ async function verifyRecoveryCommands(commands: { inspect: string; take: string 
         } else {
           expect(execute(command.inspect)).toBe(contents[index]);
         }
-        execute(command.take);
+        expect.soft(() => execute(command.take), conflict.paths[index]).not.toThrow();
       }
       if (isolated) {
         await rm(storage, { recursive: true });
@@ -120,6 +131,9 @@ async function verifyRecoveryCommands(commands: { inspect: string; take: string 
       expect(await readlink(path.join(workspace, conflict.paths[1]))).toBe(contents[1]);
       expect(await readFile(path.join(workspace, "retained/new file.txt"), "utf8")).toBe(
         contents[2],
+      );
+      expect(git(workspace, ["ls-files", "-z", "--", conflict.paths[0], "retained"])).toBe(
+        `retained/new file.txt\0${conflict.paths[0]}\0`,
       );
       for (const [index, entry] of [
         ...conflict.paths.slice(0, 2),

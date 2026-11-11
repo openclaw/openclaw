@@ -68,7 +68,7 @@ function workspaceConflictGitCommands(
   // Promote every selected blob before staging it, including children of directory conflicts.
   return {
     inspect: `(${resolveResult} && ${resultGit} show ${stagedPath})`,
-    takeCloud: `(set -o pipefail; cd "$(git rev-parse --show-toplevel)" && ${resolveResult} && ${resultGit} cat-file -e ${stagedPath} && ${resultGit} ls-tree -rz --format='%(objectmode) %(objectname)%x09%(path)' ${stagedRef} -- ${literalPathspec} | while IFS= read -r -d '' item; do mode=\${item%% *}; item=\${item#* }; blob=\${item%%$'\\t'*}; file=\${item#*$'\\t'}; ${resultGit} cat-file blob "$blob" | git hash-object -w --stdin >/dev/null && git update-index --add --cacheinfo "$mode" "$blob" "$file" && git checkout-index -f -- "$file" || exit; done)`,
+    takeCloud: `(set -o pipefail; cd "$(git rev-parse --show-toplevel)" && ${resolveResult} && ${resultGit} cat-file -e ${stagedPath} && ${resultGit} ls-tree -rz --format='%(objectmode) %(objectname)%x09%(path)' ${stagedRef} -- ${literalPathspec} | while IFS= read -r -d '' item; do mode=\${item%% *}; item=\${item#* }; blob=\${item%%$'\\t'*}; file=\${item#*$'\\t'}; ${resultGit} cat-file blob "$blob" | git hash-object -w --stdin >/dev/null && git update-index --add --replace --cacheinfo "$mode" "$blob" "$file" && git checkout-index -f -- "$file" || exit; done)`,
   };
 }
 
