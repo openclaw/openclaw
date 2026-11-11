@@ -12,7 +12,7 @@ import { ToolInputError } from "./tools/common.js";
 
 export type InstalledSkill = CodeModeSkill & {
   /** Published content generation; projections preserve it, never read authority. */
-  catalogRevision?: { key: string; contentHash: string };
+  catalogRevision?: string;
   /** Prompt-listed instructions retain the shipped Code Mode whole-read contract. */
   promptListed?: boolean;
   assertCurrent?: () => void;
@@ -52,7 +52,9 @@ function getSearchView(skills: readonly InstalledSkill[]) {
   if (skills.some((skill) => !skill.catalogRevision)) {
     return undefined;
   }
-  const key = JSON.stringify(skills.map((skill) => skill.catalogRevision!.key));
+  const key = prepareTextLexicalDocument(
+    JSON.stringify(skills.map((skill) => [skill.catalogRevision, skill.name, skill.description])),
+  ).revision;
   let view = catalogViews.get(key);
   if (!view) {
     view = { key, bytes: 128 + key.length * 2, bodies: {} };
@@ -66,9 +68,10 @@ type SearchBody = {
   document: ReturnType<typeof prepareTextLexicalDocument>;
   truncated: boolean;
 };
-// Completed file revisions only; live path admission still happens on every read.
-const localBodies = new LruCache<{ body: SearchBody; bytes: number }>(MAX_BODY_SKILLS, {
-  maxBytes: MAX_INDEX_BODY_BYTES,
+// Completed content preparations only; file admission still happens on every read.
+const preparedBodies = new LruCache<{ body: SearchBody; bytes: number }>(MAX_BODY_SKILLS * 2, {
+  // One full UTF-16 body selection plus revision keys and a changing document must fit.
+  maxBytes: MAX_INDEX_BODY_BYTES * 3,
   sizeOf: (entry) => entry.bytes,
 });
 
@@ -154,22 +157,32 @@ async function readSearchBody(
 ): Promise<SearchBody | undefined> {
   const inline = skill.source.readContent;
   if (typeof inline === "string") {
+    const revision = skill.catalogRevision
+      ? `inline:${JSON.stringify([skill.catalogRevision, maxBytes])}`
+      : undefined;
+    const cached = revision && preparedBodies.get(revision);
+    if (cached) {
+      return cached.body;
+    }
     const prefix = inline.slice(0, maxBytes);
-    // Keep UTF-8 replacement semantics for malformed or byte-truncated text.
+    // Preserve UTF-8 replacement semantics and detach retained prefixes from larger bodies.
     const bytes =
-      prefix.isWellFormed() && Buffer.byteLength(prefix) <= maxBytes
+      !revision && prefix.isWellFormed() && Buffer.byteLength(prefix) <= maxBytes
         ? undefined
         : Buffer.from(prefix);
     const text = bytes ? bytes.subarray(0, maxBytes).toString("utf8") : prefix;
-    return {
-      document: skill.catalogRevision
-        ? {
-            text,
-            revision: `skill:${JSON.stringify([skill.catalogRevision.contentHash, maxBytes])}`,
-          }
-        : prepareTextLexicalDocument(text),
+    const body = {
+      // Bundle revisions include companions; only the searchable bytes own the index.
+      document: prepareTextLexicalDocument(text),
       truncated: prefix.length < inline.length || (bytes !== undefined && bytes.length > maxBytes),
     };
+    if (revision) {
+      preparedBodies.set(revision, {
+        body,
+        bytes: text.length * 2 + revision.length * 2 + 256,
+      });
+    }
+    return body;
   }
   if (skill.readSearchContent) {
     const content = await skill.readSearchContent(maxBytes, signal);
@@ -195,7 +208,7 @@ async function readSearchBody(
       stat.ctimeMs,
       maxBytes,
     ]);
-    const cached = localBodies.get(revision);
+    const cached = preparedBodies.get(revision);
     if (cached) {
       return cached.body;
     }
@@ -216,7 +229,7 @@ async function readSearchBody(
       ),
       truncated: total > maxBytes,
     };
-    localBodies.set(revision, {
+    preparedBodies.set(revision, {
       body,
       bytes: body.document.text.length * 2 + revision.length * 2 + 256,
     });

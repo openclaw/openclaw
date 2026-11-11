@@ -84,14 +84,10 @@ export function gitEnvironment(
         CYGWIN: withNoGlob(resolveEnvironmentValue(effectiveWindowsEnv, "CYGWIN", platform)),
       }
     : {};
-  return {
-    ...baseEnv,
-    ...windowsNoGlob,
-    ...appendGitConfig(gitMaintenanceEnvironment(), [
-      ["core.hooksPath", os.devNull],
-      ["core.fsmonitor", "false"],
-    ]),
-  };
+  return appendGitConfig(gitMaintenanceEnvironment({ ...baseEnv, ...windowsNoGlob }), [
+    ["core.hooksPath", os.devNull],
+    ["core.fsmonitor", "false"],
+  ]);
 }
 
 export async function runGit(

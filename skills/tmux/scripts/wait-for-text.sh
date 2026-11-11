@@ -81,5 +81,12 @@ while true; do
     exit 1
   fi
 
-  sleep "$interval"
+  # Sleep no longer than the time left, so the last probe happens at the deadline
+  # instead of up to a full interval past it. Sleep still rejects invalid intervals.
+  wait_interval="$interval"
+  if [[ "$interval" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]]; then
+    wait_interval=$(awk -v interval="$interval" -v remaining="$((deadline - now))" \
+      'BEGIN { print (interval + 0 > remaining ? remaining : interval) }')
+  fi
+  sleep "$wait_interval"
 done

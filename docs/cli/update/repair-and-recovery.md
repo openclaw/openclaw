@@ -121,6 +121,12 @@ stays stopped. If recovery is refused or fails, repair names the reason and
 `openclaw gateway start` as the manual next step after resolving it; a successful
 automatic restart does not emit that warning. Named data-risk refusals keep the
 Gateway stopped and retain their recovery guidance.
+If finalization succeeds but the service is absent or its ownership cannot be
+verified, repair completes with manual-start guidance instead of failing the
+completed maintenance. Interrupted handoff recovery checks the pending stop
+before recovery and again before starting the service, preserving a later
+operator stop. If post-core repair migrates state and then fails, the verified
+installed runtime records the terminal failure rather than the staged old writer.
 Normal Doctor exits do not require a separate process-settlement receipt. On
 Windows, recovery restores the suspended Scheduled Task before restarting the
 Gateway, while preserving the failed Doctor check IDs in the update report.
@@ -267,7 +273,7 @@ newer Doctor reports that limitation instead of treating current bytes as the
 pre-update state. If capture discovery cannot verify an older driver's history,
 Doctor warns and continues repairs under its existing maintenance and update
 ownership. Required migration backups still apply.
-Take a [verified backup](/install/updating#before-updating-create-a-verified-backup)
+Take a [verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
 before an upgrade when you need a complete recovery copy.
 
 #### Inspect migration preservation
@@ -1100,9 +1106,14 @@ retirement after it records success. A failed update that never reached repair o
 activation attempts the same retirement after its failure is recorded, including
 its own capture.
 
-Eligibility and identity checks are unchanged: the just-finished update's capture
+Once the update's Gateway health verification is recorded (service running, version
+match, readiness, settled channels, and no plugin errors), that update retires its
+own original-state capture and the Doctor migration originals it produced. Without that
+verification, for example after `--no-restart`, the just-finished update's capture
 stays until a **later successful update** supersedes it, unless that update failed
-before repair or activation. Unfinished runs, pending
+before repair or activation. To keep a downgrade path, create a
+[verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup) before
+updating. Identity checks are unchanged. Unfinished runs, pending
 recovery, unresolved failed or rolled-back captures, orphaned/unmanifested copies,
 and blocked artifacts remain. Standalone Doctor captures keep their existing
 newest-three/30-day policy, always retaining the newest sealed capture. Historical
@@ -1187,7 +1198,7 @@ reports `Stop the Gateway first (openclaw gateway stop)` before any removal.
 Cleanup permanently removes the selected rollback originals, including branches
 and metadata intentionally removed by a verified repair. Doctor restore cannot
 recreate them afterward. Preserve an independent backup containing them if you
-need that rollback path beyond a later successful update. Current SQLite history
+need that rollback path beyond a verified or later successful update. Current SQLite history
 stays in place.
 </Warning>
 
@@ -1263,6 +1274,9 @@ summary adds an `Update captures:` line with their total, candidate, and protect
 bytes. Cleanup attributes update captures through update history and standalone Doctor
 captures through their sealed manifests; it never reads the captured payload:
 
+- `candidate` / `verified-update-capture`: the capture of a successful update
+  whose Gateway health verification is recorded. That update retires it
+  automatically when it finishes.
 - `candidate` / `superseded-update-capture`: a sealed capture from a finished
   update, when a later update succeeded.
 - `candidate` / `unsealed-update-capture`: a capture that never sealed (the
@@ -1270,7 +1284,9 @@ captures through their sealed manifests; it never reads the captured payload:
   later update succeeded with recorded Gateway readiness verification. The
   incomplete copy may still contain useful pre-failure bytes until then.
 - `protected` / `awaiting-later-completed-update`: the capture of the latest
-  successful update, or of any update that finished after it.
+  successful update without recorded Gateway health verification, or of any
+  update that finished after it. Migration originals use the same reason until a
+  later update starts or a verified update finishes after their migration.
 - `protected` / `awaiting-later-verified-update`: an unsealed capture without
   a later successful update's recorded Gateway readiness verification.
 - `protected` / `unfinished-update-run` or `pending-update-recovery`: the update is
@@ -1337,6 +1353,6 @@ same parent-directory durability guarantee.
 Doctor restore reports intentionally disposed originals and pending cleanup
 explicitly. Neither update nor cleanup creates an automatic full-state backup;
 these recovery originals are **not a full pre-upgrade backup**. See
-[Before updating: create a verified backup](/install/updating#before-updating-create-a-verified-backup)
+[Before updating: create a verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
 for backup coverage and [Doctor recovery](/cli/doctor#session-sqlite-migration)
 for restoring retained originals.

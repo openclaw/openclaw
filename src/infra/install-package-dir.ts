@@ -25,6 +25,7 @@ import { retainMutationAuthority } from "./mutation-authority.js";
 import { resolveNpmCommand } from "./npm-command.js";
 import { movePackageRoot } from "./package-update-filesystem.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
+import { copyWindowsJunction } from "./windows-junction-copy.js";
 
 type InstallSourceHardlinks = "package-manager" | "reject";
 
@@ -525,6 +526,7 @@ export async function installPackageDir<
           // rewrites them toward the source tree, which makes valid vendored
           // package links look like install-root escapes during post-copy scans.
           verbatimSymlinks: true,
+          filter: copyWindowsJunction,
         }),
       );
     }

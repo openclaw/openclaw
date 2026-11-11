@@ -187,6 +187,10 @@ export function prepareMessageGroupFrame(
         : "other";
   const avatarPlacement = opts.avatarPlacement ?? "gutter";
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
+  const turnDurationMs =
+    normalizedRole === "assistant" && !group.isStreaming && group.runId && !forwardedSource
+      ? opts.turnDurations?.get(group.runId)
+      : undefined;
 
   const ownsRunFrame = opts.frameContent !== undefined;
   // Tool activity and live narration are blocks of the turn whose answer follows:
@@ -261,6 +265,11 @@ export function prepareMessageGroupFrame(
     who,
     avatarPlacement,
     meta,
+    turnDurationMs,
+    footerTimestamp:
+      normalizedRole === "user"
+        ? (preparedMessages.at(-1)?.source.normalizedMessage.timestamp ?? group.timestamp)
+        : group.timestamp,
     ownsRunFrame,
     isTurnBlock,
     preparedMessages,

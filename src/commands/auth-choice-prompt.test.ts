@@ -119,6 +119,7 @@ describe("promptAuthChoiceGrouped", () => {
       authChoiceGroup("meta", "Meta", [["meta-api-key", "Meta API key"]]),
       openAIGroup(),
       authChoiceGroup("anthropic", "Anthropic", [["apiKey", "Anthropic API key"]]),
+      authChoiceGroup("copilot", "Copilot", [["github-copilot", "GitHub Copilot"]]),
     ]);
     const { prompter, prompts } = scriptedPrompter([
       ["Model/auth provider", "__more"],
@@ -133,13 +134,14 @@ describe("promptAuthChoiceGrouped", () => {
         "openai",
         "openai-api-key",
         "apiKey",
+        "github-copilot",
         "minimax-global-oauth",
         "minimax-cn-api",
         "meta-api-key",
       ]),
     });
 
-    expect(optionValues(prompts[0])).toEqual(["openai", "anthropic", "__more", "skip"]);
+    expect(optionValues(prompts[0])).toEqual(["openai", "anthropic", "copilot", "__more", "skip"]);
     expect(optionValues(prompts[1])).toEqual(["meta", "minimax", "__back"]);
     expect(optionValues(prompts[2])).toEqual(["minimax-global-oauth", "minimax-cn-api", "__back"]);
     expect(result).toBe("minimax-cn-api");

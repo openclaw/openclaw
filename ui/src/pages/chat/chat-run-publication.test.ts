@@ -59,6 +59,26 @@ afterEach(() => {
 });
 
 describe("chat run publication", () => {
+  it("publishes the first answer without a frame wait and coalesces continuing text", () => {
+    const { frames } = captureAnimationFrames();
+    const { state } = createSessionEventState({ chatRunId: "run", chatStream: "" });
+    const observed: (string | null)[] = [];
+    onTestFinished(chatRunPresentation(state).subscribe(() => observed.push(state.chatStream)));
+
+    chatEvent(state, "run", "delta", "First answer");
+    expect(observed).toEqual(["First answer"]);
+
+    chatEvent(state, "run", "delta", "First answer continues");
+    chatEvent(state, "run", "delta", "First answer continues further");
+    expect(observed).toEqual(["First answer"]);
+    const callbacks = Array.from(frames.values());
+    frames.clear();
+    for (const callback of callbacks) {
+      callback(0);
+    }
+    expect(observed).toEqual(["First answer", "First answer continues further"]);
+  });
+
   it("publishes a pending run projection when an unrelated pane commit consumes its frame", () => {
     const { frames } = captureAnimationFrames();
     const awaitDomCommit = vi.fn(async () => true);

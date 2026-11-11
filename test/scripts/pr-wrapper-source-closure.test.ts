@@ -89,6 +89,7 @@ it("retains wrapper runtime dependencies and Darwin inputs inside excluded names
       /^scripts\/lib\/ci-.*\.(?:mts|mjs)$/u.test(file) ||
       file.startsWith("test/scripts/pr-ci-sweeper") ||
       file.startsWith("test/helpers/") ||
+      file.startsWith("src/test-utils/") ||
       /^test\/scripts\/pr-.*\.test\.ts$/u.test(file),
   );
   expect(excludedInputs.length).toBeGreaterThan(0);

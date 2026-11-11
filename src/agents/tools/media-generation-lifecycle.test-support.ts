@@ -107,7 +107,6 @@ export function defineMediaGenerationCancellationTests(
     };
     loadMedia: () => MockInstance<typeof loadWebMedia>;
     references: string[];
-    referenceSignal: "caller" | "composed";
   },
 ) {
   const { kind, tasks } = params;
@@ -163,11 +162,7 @@ export function defineMediaGenerationCancellationTests(
     expect(loadMedia).toHaveBeenCalledOnce();
     const loadOptions = loadMedia.mock.calls[0]?.[1];
     const signal = typeof loadOptions === "object" ? loadOptions.requestInit?.signal : undefined;
-    if (params.referenceSignal === "caller") {
-      expect(signal).toBe(f.controller.signal);
-    } else {
-      expect(signal).toMatchObject({ aborted: true, reason: f.abortReason });
-    }
+    expect(signal).toBe(f.controller.signal);
   });
 
   it(`keeps an accepted detached ${kind} task running after its requester aborts`, async () => {

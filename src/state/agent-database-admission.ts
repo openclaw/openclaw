@@ -6,6 +6,7 @@ import {
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
@@ -104,6 +105,7 @@ const preparation = new AsyncLocalStorage<{
   access: "read" | "write";
   active: boolean;
   assertCurrent: () => void;
+  signal?: AbortSignal;
   workers: AsyncDisposableStack;
 }>();
 
@@ -122,7 +124,8 @@ export function retainAgentDatabaseStartupWorker(
     return false;
   }
   scope.assertCurrent();
-  scope.workers.defer(close);
+  // Native owners retain closing generations; shutdown only stops this admission's wait.
+  scope.workers.defer(() => racePromiseWithAbortSignal(close(), scope.signal));
   return true;
 }
 
@@ -353,10 +356,21 @@ export function readAgentDatabaseReadAdmissionRefusal(
   agentId: string,
   options: AdmissionOptions = {},
 ): AgentDatabaseAdmissionRefusal | undefined {
-  const key = stateKey(options);
+  return readSelectedAgentDatabaseReadAdmissionRefusal(
+    stateKey(options),
+    normalizeAgentId(agentId),
+    agentId,
+  );
+}
+
+function readSelectedAgentDatabaseReadAdmissionRefusal(
+  key: string,
+  normalizedAgentId: string,
+  agentId: string,
+): AgentDatabaseAdmissionRefusal | undefined {
   const refusal = readSelectedAgentDatabaseAdmissionRefusal(
     key,
-    normalizeAgentId(agentId),
+    normalizedAgentId,
     agentId,
     "read",
   );
@@ -482,7 +496,7 @@ function readSelectedAgentDatabaseAdmissionRefusal(
 /** Preparation borrows only its own pending admission; public callers remain refused. */
 export async function preparePendingAgentDatabase(
   refusal: AgentDatabaseAdmissionRefusal,
-  options: AdmissionOptions & { assertCurrent: () => void },
+  options: AdmissionOptions & { assertCurrent: () => void; signal?: AbortSignal },
   run: () => Promise<void>,
 ): Promise<void> {
   await withPendingAgentDatabasePreparation(refusal, options, "write", run);
@@ -500,7 +514,7 @@ export async function preparePendingAgentDatabaseRead(
 
 async function withPendingAgentDatabasePreparation(
   refusal: AgentDatabaseAdmissionRefusal,
-  options: AdmissionOptions & { assertCurrent: () => void },
+  options: AdmissionOptions & { assertCurrent: () => void; signal?: AbortSignal },
   access: "read" | "write",
   run: () => Promise<void>,
 ): Promise<void> {
@@ -521,6 +535,7 @@ async function withPendingAgentDatabasePreparation(
     assertCurrent,
     access,
     active: true,
+    signal: options.signal,
     workers: new AsyncDisposableStack(),
   };
   try {
@@ -601,12 +616,15 @@ export function assertAgentDatabaseAdmitted(agentId: string, options: AdmissionO
 /** Capture only the selector; refusal decisions and the caller's preparation remain live. */
 export function captureAgentDatabaseAdmission(
   agentId: string,
-  options: AdmissionOptions = {},
+  options: AdmissionOptions & { access?: "read" | "write" } = {},
 ): () => void {
   const key = stateKey(options);
   const normalizedAgentId = normalizeAgentId(agentId);
+  const readOnly = options.access === "read";
   return () => {
-    const refusal = readSelectedAgentDatabaseAdmissionRefusal(key, normalizedAgentId, agentId);
+    const refusal = readOnly
+      ? readSelectedAgentDatabaseReadAdmissionRefusal(key, normalizedAgentId, agentId)
+      : readSelectedAgentDatabaseAdmissionRefusal(key, normalizedAgentId, agentId);
     if (refusal) {
       throw new AgentDatabaseAdmissionError(refusal);
     }

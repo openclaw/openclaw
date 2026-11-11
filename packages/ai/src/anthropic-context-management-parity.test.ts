@@ -177,10 +177,12 @@ it.each([
   }
 });
 
+// A switch keeps another model's thinking only when that model's blocks are not
+// prefix-bound; the API drops what the target cannot read (live wire evidence 2026-11-10).
 it.each([
   { source: "claude-haiku-5-5", target: "claude-haiku-5-5", preserve: true },
   { source: "claude-haiku-5-5", target: "claude-haiku-4-5", preserve: false },
-  { source: "claude-haiku-4-5", target: "claude-haiku-5-5", preserve: false },
+  { source: "claude-haiku-4-5", target: "claude-haiku-5-5", preserve: true },
   { source: "claude-haiku-5-5", target: "claude-fable-5-1", preserve: false },
   { source: "claude-haiku-5-5", target: "claude-sonnet-5-5", preserve: false },
   { source: "claude-opus-5-5", target: "claude-opus-5-5", preserve: true },
@@ -193,6 +195,10 @@ it.each([
   { source: "claude-mythos-5-1", target: "claude-sonnet-5-5", preserve: false },
   { source: "claude-sonnet-5-5", target: "claude-sonnet-5", preserve: false },
   { source: "claude-sonnet-5-5", target: "claude-fable-5-1", preserve: false },
+  { source: "claude-opus-5", target: "claude-fable-5-2", preserve: true },
+  { source: "claude-fable-5-2", target: "claude-opus-5-5", preserve: false },
+  { source: "claude-fable-5-2", target: "claude-zzz-9-9", preserve: false },
+  { source: "claude-zzz-9-9", target: "claude-zzz-9-9", preserve: true },
 ])("replays thinking from $source to $target", async ({ source, target, preserve }) => {
   const thinking = "  signed thinking\r\nwith exact whitespace  ";
   for await (const { payload } of capturePaths({
