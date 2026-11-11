@@ -158,7 +158,7 @@ describe("GitHub identity view", () => {
     expect(view.getByRole("alert").textContent).toContain("Synthetic GitHub status unavailable");
     expect(view.getByText("Couldn’t load account status. Try again.")).toBeTruthy();
     expect(view.queryByText("No verified account")).toBeNull();
-    expect(view.queryByText("System GitHub")).toBeNull();
+    expect(view.queryByText("Uses the shared agent account")).toBeNull();
     identity.showPatFallback();
     await identity.configure();
     flush();
@@ -185,7 +185,7 @@ describe("GitHub identity view", () => {
     ));
     const expectUnknown = () => {
       expect(view.queryByText("No verified account")).toBeNull();
-      expect(view.queryByText("System GitHub")).toBeNull();
+      expect(view.queryByText("Uses the shared agent account")).toBeNull();
     };
     flush();
     expectUnknown();
@@ -210,7 +210,7 @@ describe("GitHub identity view", () => {
     await vi.advanceTimersByTimeAsync(0);
     flush();
     expect(view.getByText("No verified account")).toBeTruthy();
-    expect(view.getByText("System GitHub")).toBeTruthy();
+    expect(view.getByText("Uses the shared agent account")).toBeTruthy();
     sync({ statusReadable: false, configurable: false, authorizable: false });
     flush();
     expectUnknown();

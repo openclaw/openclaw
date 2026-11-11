@@ -366,10 +366,10 @@ export class ShellGatewayOwner {
       return;
     }
     if (command.kind === "agent-github-settings") {
-      // Every agent's account is set in one place, beside the shared agent account.
-      if (commandParams.agentId?.trim()) {
-        context.navigate("profile", { hash: "#settings-profile-github-connections" });
-      }
+      // Rare reconnect request: keep the destination out of the boot bundle.
+      void import("../features/github-connections/open-github-accounts.ts").then((module) =>
+        module.openGitHubAccounts(context),
+      );
       return;
     }
     if (command.kind === "sidebar") {

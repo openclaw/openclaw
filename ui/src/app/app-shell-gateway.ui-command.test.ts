@@ -26,7 +26,7 @@ it("drops a deferred review handoff after its application context retires", asyn
   expect(openTemplateCreator).not.toHaveBeenCalled();
 });
 
-it("opens the current agent GitHub identity panel without exposing authorization data", () => {
+it("opens the current agent GitHub identity panel without exposing authorization data", async () => {
   const { context, owner } = createProfileAppearanceGateway(null);
   const navigate = vi.fn();
   Object.assign(context, { basePath: "", navigate });
@@ -40,6 +40,7 @@ it("opens the current agent GitHub identity panel without exposing authorization
     },
   });
 
+  await vi.dynamicImportSettled();
   expect(navigate).toHaveBeenCalledWith("profile", {
     hash: "#settings-profile-github-connections",
   });

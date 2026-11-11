@@ -40,8 +40,6 @@ const enGitHubConnections = {
     disconnectDescription:
       "Stops unfinished personal publication. Published work stays intact; revoke the app grant separately in GitHub settings.",
     adminManaged: "Managed by admins",
-    forMe: en.githubConnections.forMe,
-    forSystem: en.githubConnections.forSystem,
     personalSetupHint: "Only My GitHub changes. Agents keep their accounts.",
     systemSetupHint:
       "Agents without their own account switch to the new account for new replies, including their dashboard data and Publish PR. Agents with their own account keep it.",
