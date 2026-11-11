@@ -1,0 +1,4 @@
+# Strict UTF-8 decoding for local skill loading: exact 26-line regression growth
+# covering rejection of undecodable SKILL.md bytes with an invalid-skill
+# diagnostic while sibling workspace skills keep loading.
+26
