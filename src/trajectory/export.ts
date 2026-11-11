@@ -43,7 +43,11 @@ import {
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, safeTrajectorySessionFileName } from "./paths.js";
+import {
+  TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+  safeTrajectorySessionFileName,
+} from "./paths.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type {
   TrajectoryBundleManifest,
@@ -541,12 +545,21 @@ function redactTrajectoryExportObjectKeys(
   return next;
 }
 
+// Capture keeps every object that fits one event. The shared diagnostic
+// projector defaults to 64 objects, which drops later fields such as tool
+// catalogs and replaces them with "[Truncated]".
+const TRAJECTORY_EXPORT_MAX_NODES = TRAJECTORY_RUNTIME_EVENT_MAX_BYTES / 2;
+
+function sanitizeTrajectoryExportPayload(value: unknown): unknown {
+  return sanitizeDiagnosticPayload(value, { maxNodes: TRAJECTORY_EXPORT_MAX_NODES });
+}
+
 function redactTrajectoryExportValue(
   value: unknown,
   redaction: TrajectoryExportRedaction,
 ): unknown {
   const redactedValue = redactSecrets(
-    sanitizeDiagnosticPayload(redactLocalPathValues(value, redaction)),
+    sanitizeTrajectoryExportPayload(redactLocalPathValues(value, redaction)),
   );
   return redactTrajectoryExportObjectKeys(redactedValue, redaction);
 }
@@ -683,13 +696,13 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
       switch (entry.type) {
         case "message": {
           push(resolveMessageEventType(entry.message), {
-            message: sanitizeDiagnosticPayload(entry.message),
+            message: sanitizeTrajectoryExportPayload(entry.message),
           });
           for (const toolCall of extractAssistantToolCalls(entry.message)) {
             push("tool.call", {
               toolCallId: toolCall.id,
               name: toolCall.name,
-              arguments: sanitizeDiagnosticPayload(toolCall.arguments),
+              arguments: sanitizeTrajectoryExportPayload(toolCall.arguments),
               assistantEntryId: entry.id,
               blockIndex: toolCall.index,
             });
@@ -701,7 +714,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
             summary: entry.summary,
             firstKeptEntryId: entry.firstKeptEntryId,
             tokensBefore: entry.tokensBefore,
-            details: sanitizeDiagnosticPayload(entry.details),
+            details: sanitizeTrajectoryExportPayload(entry.details),
             fromHook: entry.fromHook ?? false,
           });
           break;
@@ -715,21 +728,21 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
           push("session.branch_summary", {
             fromId: entry.fromId,
             summary: entry.summary,
-            details: sanitizeDiagnosticPayload(entry.details),
+            details: sanitizeTrajectoryExportPayload(entry.details),
             fromHook: entry.fromHook ?? false,
           });
           break;
         case "custom":
           push("session.custom", {
             customType: entry.customType,
-            data: sanitizeDiagnosticPayload(entry.data),
+            data: sanitizeTrajectoryExportPayload(entry.data),
           });
           break;
         case "custom_message":
           push("session.custom_message", {
             customType: entry.customType,
-            content: sanitizeDiagnosticPayload(entry.content),
-            details: sanitizeDiagnosticPayload(entry.details),
+            content: sanitizeTrajectoryExportPayload(entry.content),
+            details: sanitizeTrajectoryExportPayload(entry.details),
             display: entry.display,
           });
           break;

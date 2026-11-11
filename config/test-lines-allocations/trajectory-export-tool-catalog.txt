@@ -1,0 +1,2 @@
+# Keep exported tool catalogs that exceed the shared 64-object diagnostic budget.
+31

@@ -1250,5 +1250,42 @@ describe("exportTrajectoryBundle", () => {
     expect(eventTypes(markerBundle.events)).toContain("context.compiled");
     expect(fs.existsSync(path.join(tmpDir, "trajectory", "session-1.jsonl"))).toBe(false);
   });
+
+  it("keeps tool catalogs that follow a long compiled message list", async () => {
+    const { tmpDir, sessionTarget, outputDir } = exportPaths();
+    await replaceTranscriptEvents(sessionTarget, simpleSessionEntries(tmpDir));
+    const secret = "sk-exported-session-secret";
+    const messages = Array.from({ length: 64 }, (_, index) => ({
+      role: "user",
+      content: `message-${index}`,
+    }));
+    const tools = Array.from({ length: 20 }, (_, index) => ({
+      name: `schema-tool-${index}`,
+      description: index === 19 ? `lookup ${secret}` : `lookup ${index}`,
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+      },
+    }));
+    appendSqliteTrajectoryRuntimeEvents(
+      sessionTarget,
+      runtimeSeries([["context.compiled", { messages, tools, providerVisibleTools: tools }]]),
+    );
+
+    await exportFrom(tmpDir, { sessionTarget });
+
+    const compiled = readEvents(outputDir).find((event) => event.type === "context.compiled");
+    const names = tools.map((tool) => ({ name: tool.name }));
+    expect(compiled?.data?.messages).toEqual(messages);
+    expect(compiled?.data?.tools).toMatchObject(names);
+    expect(compiled?.data?.providerVisibleTools).toMatchObject(names);
+    const exportedTools = JSON.parse(readText(outputDir, "tools.json")) as Array<{ name: string }>;
+    expect(exportedTools.map((tool) => tool.name)).toEqual(tools.map((tool) => tool.name));
+    const bundleText = fs
+      .readdirSync(outputDir)
+      .map((file) => fs.readFileSync(path.join(outputDir, file), "utf8"))
+      .join("\n");
+    expect(bundleText).not.toContain(secret);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
