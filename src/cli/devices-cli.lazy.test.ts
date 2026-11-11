@@ -8,6 +8,7 @@ describe("devices cli lazy runtime boundary", () => {
 
   afterEach(() => {
     vi.doUnmock("./devices-cli.runtime.js");
+    vi.doUnmock("./devices-cli-join.js");
     vi.resetModules();
   });
 
@@ -16,6 +17,12 @@ describe("devices cli lazy runtime boundary", () => {
     vi.doMock("./devices-cli.runtime.js", () => {
       runtimeLoaded();
       throw new Error("devices runtime loaded during help");
+    });
+    const joinLoaded = vi.fn();
+    // mock-isolation: Loading the real join module would defeat this cold-help import sentinel.
+    vi.doMock("./devices-cli-join.js", () => {
+      joinLoaded();
+      throw new Error("join runtime loaded during help");
     });
 
     const { registerDevicesCli } = await import("./devices-cli.js");
@@ -33,5 +40,6 @@ describe("devices cli lazy runtime boundary", () => {
       },
     );
     expect(runtimeLoaded).not.toHaveBeenCalled();
+    expect(joinLoaded).not.toHaveBeenCalled();
   });
 });

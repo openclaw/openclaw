@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveAgentDir } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -9,9 +10,25 @@ import {
   resolveActivePluginInstallRoots,
 } from "../../plugins/install-root-context.js";
 import { CONFIG_DIR, resolveConfigDir } from "../../utils.js";
-import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import type { Skill } from "./skill-contract.js";
+import { resolveSkillSource } from "./source.js";
 import { tryRealpath } from "./symlink-targets.js";
+
+// Same rule as the manifest `agentSkillsDir` field: one folder name.
+const AGENT_SKILLS_DIR_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
+
+/** One agent's folder for a plugin's learned skills (manifest `agentSkillsDir`). */
+export function resolveAgentSkillsRoot(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  dirName: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  if (!AGENT_SKILLS_DIR_NAME.test(params.dirName)) {
+    throw new Error(`Agent skills directory "${params.dirName}" must be one folder name.`);
+  }
+  return path.join(resolveAgentDir(params.config, params.agentId, params.env), params.dirName);
+}
 
 export function resolvePluginSkillsDir(): string {
   // Generated links follow the active state scope; managed skill reads keep their source root.
@@ -53,33 +70,30 @@ function resolveCompactHomePrefixes(): string[] {
 }
 
 /** Compact prompt-facing skill paths while preserving managed paths that `~` cannot reach. */
-export function compactPromptSkills(
-  skills: Skill[],
-  options: { config?: OpenClawConfig; agentId?: string } = {},
-): Skill[] {
+export function compactPromptSkills(skills: Skill[]): Skill[] {
   const prefixes = resolveCompactHomePrefixes();
   if (prefixes.length === 0) {
     return skills;
   }
-  const preservedRoots = resolvePreservedPromptSkillPathRoots(options);
+  const preservedRoots = resolvePreservedPromptSkillPathRoots();
   const tildeRoots = resolvePromptTildeRoots();
   return skills.map((skill) => ({
     ...skill,
-    filePath: shouldPreservePromptSkillPath(skill.filePath, preservedRoots, tildeRoots)
+    // Learned skills live under each agent's state folder, which `~` may not reach.
+    filePath: shouldPreservePromptSkillPath(
+      skill.filePath,
+      resolveSkillSource(skill) === "openclaw-workshop" ||
+        isInsideAny(preservedRoots, skill.filePath),
+      tildeRoots,
+    )
       ? skill.filePath
       : compactHomePath(skill.filePath, prefixes),
   }));
 }
 
-function resolvePreservedPromptSkillPathRoots(options: {
-  config?: OpenClawConfig;
-  agentId?: string;
-}): string[] {
+function resolvePreservedPromptSkillPathRoots(): string[] {
   const configDir = resolveConfigDir();
   const promptSkillDirs = [
-    ...(options.config && options.agentId
-      ? [resolveWorkshopSkillsDir(options.config, options.agentId)]
-      : []),
     path.resolve(configDir, "skills"),
     path.resolve(configDir, "plugin-skills"),
   ];
@@ -110,17 +124,17 @@ function isContainerStateHomeWherePromptTildeEscapes(home: string): boolean {
   );
 }
 
+function isInsideAny(roots: readonly string[], filePath: string): boolean {
+  const resolvedFilePath = path.resolve(filePath);
+  return roots.some((root) => isPathInside(root, resolvedFilePath));
+}
+
 function shouldPreservePromptSkillPath(
   filePath: string,
-  roots: readonly string[],
+  managed: boolean,
   tildeRoots: readonly string[],
 ): boolean {
-  const resolvedFilePath = path.resolve(filePath);
-  const isManagedPromptSkillPath = roots.some((root) => isPathInside(root, resolvedFilePath));
-  if (!isManagedPromptSkillPath) {
-    return false;
-  }
-  return !tildeRoots.some((root) => isPathInside(root, resolvedFilePath));
+  return managed && !isInsideAny(tildeRoots, filePath);
 }
 
 function compactHomePath(filePath: string, prefixes: readonly string[]): string {

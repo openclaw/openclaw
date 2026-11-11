@@ -183,10 +183,7 @@ export async function bindSpawnedAcpSession(params: {
           idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel(lifecycleScope),
           maxAgeMs: resolveThreadBindingMaxAgeMsForChannel(lifecycleScope),
           sessionCwd: resolveAcpSessionCwd(params.sessionMeta),
-          sessionDetails: resolveAcpThreadSessionDetailLines({
-            sessionKey: params.sessionKey,
-            meta: params.sessionMeta,
-          }),
+          sessionDetails: resolveAcpThreadSessionDetailLines(params.sessionMeta),
         }),
       },
     };

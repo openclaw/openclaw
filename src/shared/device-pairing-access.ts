@@ -16,14 +16,6 @@ export type PendingDeviceApprovalKind =
   | "scope-upgrade"
   | "re-approval";
 
-type PendingDeviceApprovalState = {
-  kind: PendingDeviceApprovalKind;
-  /** Access requested by the pending pairing attempt. */
-  requested: DevicePairingAccessSummary;
-  /** Existing active access, or null for a new pairing. */
-  approved: DevicePairingAccessSummary | null;
-};
-
 type PendingLike = {
   role?: string;
   roles?: string[];
@@ -90,7 +82,13 @@ function summarizeApprovedDeviceAccess(device: PairedLike): DevicePairingAccessS
 export function resolvePendingDeviceApprovalState(
   request: PendingLike,
   paired?: PairedLike,
-): PendingDeviceApprovalState {
+): {
+  kind: PendingDeviceApprovalKind;
+  /** Access requested by the pending pairing attempt. */
+  requested: DevicePairingAccessSummary;
+  /** Existing active access, or null for a new pairing. */
+  approved: DevicePairingAccessSummary | null;
+} {
   const requested = summarizePendingDeviceAccess(request);
   const approved = paired ? summarizeApprovedDeviceAccess(paired) : null;
   if (!approved) {

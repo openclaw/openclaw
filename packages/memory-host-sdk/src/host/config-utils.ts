@@ -33,10 +33,17 @@ export function normalizeConfiguredMemoryExtraPaths(
   for (const entry of extraPaths ?? []) {
     const configuredPath = (typeof entry === "string" ? entry : entry.path).trim();
     const pattern = typeof entry === "string" ? "" : entry.pattern?.trim() || "";
+    const evergreen = typeof entry === "string" ? false : entry.evergreen === true;
     if (configuredPath) {
       normalized.set(
         `${configuredPath}\0${pattern}`,
-        pattern ? { path: configuredPath, pattern } : configuredPath,
+        pattern || evergreen
+          ? {
+              path: configuredPath,
+              ...(pattern ? { pattern } : {}),
+              ...(evergreen ? { evergreen: true } : {}),
+            }
+          : configuredPath,
       );
     }
   }

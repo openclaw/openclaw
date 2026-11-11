@@ -146,7 +146,7 @@ function startThread(params, requestedId) {
   injectedItemsByThread.set(id, []);
   threadConfigurations.set(id, { params: structuredClone(params), response });
   loaded.add(id);
-  return { ...threadConfigurations.get(id).response, thread: thread(id) };
+  return response;
 }
 
 function resumeChangesConfiguration(params, configured) {
@@ -259,17 +259,16 @@ function completeTurn(socket, phase, threadId, turn, text, status = "completed")
   notify(socket, phase, "thread/status/changed", { threadId, status: { type: "idle" } });
 }
 
-function collabItem(socket, phase, threadId, turn, item, method) {
-  if (method === "item/completed") {
-    turn.items.push(item);
-  }
-  notify(socket, phase, method, { threadId, turnId: turn.id, item });
-}
-
 function runPhase(socket, phase, threadId, turn, input) {
   if (turn.status !== "inProgress") {
     return;
   }
+  const collabItem = (item, method = "item/completed") => {
+    if (method === "item/completed") {
+      turn.items.push(item);
+    }
+    notify(socket, phase, method, { threadId, turnId: turn.id, item });
+  };
   if (
     phase === "seed-assignments" &&
     threadId === parentId &&
@@ -287,23 +286,16 @@ function runPhase(socket, phase, threadId, turn, input) {
     ]) {
       const child = startThread({ cwd: thread(parentId).cwd }, id).thread;
       notify(socket, phase, "thread/started", { thread: child });
-      collabItem(
-        socket,
-        phase,
-        threadId,
-        turn,
-        {
-          id: `spawn-${id}`,
-          type: "collabAgentToolCall",
-          tool: "spawnAgent",
-          status: "completed",
-          senderThreadId: parentId,
-          receiverThreadIds: [id],
-          prompt: "Synthetic native upgrade assignment",
-          agentsStates: { [id]: { status: "running", message: null } },
-        },
-        "item/completed",
-      );
+      collabItem({
+        id: `spawn-${id}`,
+        type: "collabAgentToolCall",
+        tool: "spawnAgent",
+        status: "completed",
+        senderThreadId: parentId,
+        receiverThreadIds: [id],
+        prompt: "Synthetic native upgrade assignment",
+        agentsStates: { [id]: { status: "running", message: null } },
+      });
       const childTurn = startTurn(socket, phase, id, turnId);
       if (id === completeId) {
         completeTurn(socket, phase, id, childTurn, "NATIVE_UPGRADE_PENDING_RESULT");
@@ -332,19 +324,12 @@ function runPhase(socket, phase, threadId, turn, input) {
       agentsStates: {},
     };
     closeTurns.set(socket, { phase, threadId, turn });
-    collabItem(socket, phase, threadId, turn, item, "item/started");
-    collabItem(
-      socket,
-      phase,
-      threadId,
-      turn,
-      {
-        ...item,
-        status: "completed",
-        agentsStates: { [runningId]: { status: "running", message: null } },
-      },
-      "item/completed",
-    );
+    collabItem(item, "item/started");
+    collabItem({
+      ...item,
+      status: "completed",
+      agentsStates: { [runningId]: { status: "running", message: null } },
+    });
     return;
   }
   completeTurn(

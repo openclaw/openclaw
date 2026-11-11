@@ -55,6 +55,17 @@ const contextEngineSchema = z
     projection: contextEngineProjectionSchema.optional().catch(undefined),
   })
   .strict();
+const readOnlyToolsSchema = z
+  .record(
+    z.string(),
+    z
+      .object({
+        enabled: z.boolean(),
+        approval_mode: z.enum(["auto", "prompt", "writes", "approve"]).optional(),
+      })
+      .strict(),
+  )
+  .optional();
 const destructiveApprovalModeSchema = z.enum(["allow", "deny", "auto", "ask"]).optional();
 // Account-connected apps are admitted without a plugin package; both entry
 // shapes must round-trip or stored policy context silently drops on read.
@@ -64,6 +75,7 @@ const accountAppPolicyEntrySchema = z
     appName: z.string(),
     allowDestructiveActions: z.boolean(),
     allowOpenWorld: z.boolean().optional(),
+    readOnlyTools: readOnlyToolsSchema,
     destructiveApprovalMode: destructiveApprovalModeSchema.catch(undefined),
     mcpServerNames: z.array(z.string()),
   })
@@ -76,6 +88,7 @@ const pluginAppPolicyEntrySchema = z
     pluginName: z.string(),
     allowDestructiveActions: z.boolean(),
     allowOpenWorld: z.boolean().optional(),
+    readOnlyTools: readOnlyToolsSchema,
     destructiveApprovalMode: destructiveApprovalModeSchema.catch(undefined),
     mcpServerNames: z.array(z.string()),
   })
@@ -161,6 +174,8 @@ const threadBindingSchema = z
     ringZeroClientInstanceId: optionalStringSchema,
     /** Durable fact preventing a later unrestricted turn from widening this thread. */
     nativeToolPolicyRestricted: z.literal(true).optional().catch(undefined),
+    // Optional creation-policy attestation; legacy bindings remain readable.
+    restrictedThreadConfigFingerprint: optionalNonBlankStringSchema,
     nativeHookRelayGeneration: optionalNonBlankStringSchema,
     appServerRuntimeFingerprint: optionalStringSchema,
     pluginAppsFingerprint: optionalStringSchema,
@@ -169,6 +184,8 @@ const threadBindingSchema = z
     contextEngine: contextEngineSchema.optional().catch(undefined),
     environmentSelectionFingerprint: optionalStringSchema,
     conversationStartId: optionalStringSchema,
+    // Source lifecycle recorded at creation; cleanup may outlive the private session owner.
+    conversationIncognito: z.literal(true).optional(),
     conversationSourceTransferComplete: z.literal(true).optional().catch(undefined),
     historyCoveredThrough: optionalTimestampSchema,
     // Observed density of the last completed turn on this thread: prompt chars

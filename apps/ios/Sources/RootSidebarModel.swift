@@ -25,6 +25,22 @@ struct ChatSessionRosterSnapshot: Sendable {
         self.isComplete = isComplete
     }
 
+    /// User-facing notice for a partial roster (a later page failed or a scan bound was hit),
+    /// letting consumers keep the retained rows visible while offering a refresh path.
+    /// `nil` when the snapshot is complete or served from cache.
+    var incompleteLoadMessage: String? {
+        guard !self.isComplete, !self.isCached else { return nil }
+        if let totalCount = self.totalCount {
+            // Localization: arguments (20, 100) mean 20 displayed out of 100 total, with 80 still to load.
+            // Keep the displayed count first; rephrase the sentence instead of reversing argument roles.
+            return String(
+                format: String(localized: "Showing %lld sessions; %lld total. Refresh to load the rest."),
+                self.sessions.count,
+                totalCount)
+        }
+        return String(localized: "Some sessions could not be loaded. Refresh to try again.")
+    }
+
     @MainActor
     static func collect(
         fetchPage: @MainActor (Int) async throws -> OpenClawChatSessionsListResponse) async throws -> Self
@@ -139,19 +155,17 @@ extension NodeAppModel {
                 }
             }
 
-            if !archived {
-                // An interrupted page must not replace a more complete offline roster.
-                if snapshot.isComplete {
-                    await self.storeCachedChatSessions(
-                        snapshot.sessions,
-                        gatewayID: sourceGatewayID,
-                        agentID: sourceAgentID)
-                    if let sourceGatewayID,
-                       !GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID) ||
-                       self.chatDeliveryAgentId != sourceAgentID
-                    {
-                        throw CancellationError()
-                    }
+            // An interrupted page must not replace a more complete offline roster.
+            if !archived, snapshot.isComplete {
+                await self.storeCachedChatSessions(
+                    snapshot.sessions,
+                    gatewayID: sourceGatewayID,
+                    agentID: sourceAgentID)
+                if let sourceGatewayID,
+                   !GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID) ||
+                   self.chatDeliveryAgentId != sourceAgentID
+                {
+                    throw CancellationError()
                 }
             }
             return snapshot
@@ -178,14 +192,35 @@ final class RootSidebarModel {
         let isPartial: Bool
     }
 
-    struct SessionObserverDeclaration<Route: Equatable>: Equatable {
-        let route: Route
-        let visible: Bool
-        let generation: UInt64
+    private(set) var sessions: [OpenClawChatSessionEntry] = [] {
+        didSet {
+            self.resolvedSessionKeys = [:]
+            self.updateSnoozeWakeDeadline()
+        }
     }
 
-    private(set) var sessions: [OpenClawChatSessionEntry] = [] {
-        didSet { self.updateSnoozeWakeDeadline() }
+    /// The drawer asks for the selected and main keys once per row, and each answer scans the roster.
+    @ObservationIgnored private var resolvedSessionKeys: [[String?]: String] = [:]
+
+    func resolvedSessionKey(
+        current: String,
+        mainSessionKey: String,
+        activeAgentID: String?,
+        sessionRoutingContract: String?) -> String
+    {
+        let sessions = self.sessions
+        let inputs = [current, mainSessionKey, activeAgentID, sessionRoutingContract]
+        if let key = self.resolvedSessionKeys[inputs] { return key }
+        let key = ChatSessionSidebarModel.selectedSessionKey(
+            sessions: sessions,
+            currentSessionKey: current,
+            mainSessionKey: mainSessionKey,
+            activeAgentID: activeAgentID,
+            sessionRoutingContract: sessionRoutingContract)
+        // A disconnected roster can stay unchanged across many session switches.
+        if self.resolvedSessionKeys.count >= 32 { self.resolvedSessionKeys.removeAll(keepingCapacity: true) }
+        self.resolvedSessionKeys[inputs] = key
+        return key
     }
 
     private(set) var now: Date = .now
@@ -193,15 +228,24 @@ final class RootSidebarModel {
     private(set) var cronJobs: [CronJob] = []
     private(set) var isRefreshing = false
     private(set) var sessionErrorText: String?
-    private(set) var isSessionRosterComplete = true
+    private(set) var isSessionRosterComplete = false
     private var rosterGeneration = 0
-    private var dashboardGeneration = 0
     private var sessionObserverVisibility = false
-    private var sessionObserverGeneration: UInt64 = 0
-    private var sessionObserverDeclaration: SessionObserverDeclaration<GatewayNodeSessionRoute>?
-    private var sessionObserverSync: (id: UUID, task: Task<Void, Never>)?
+    private var sessionObserverSync: Task<Void, Never>?
     @ObservationIgnored private var snoozeWakeUpdatesActive = false
     @ObservationIgnored private var snoozeWakeTask: Task<Void, Never>?
+
+    @ObservationIgnored private let sessionRefreshCoordinator = OpenClawChatSessionRefreshCoordinator()
+    private var sessionChangesDuringLoad: [String: OpenClawChatSessionsChangedEvent] = [:]
+    @ObservationIgnored var sessionRefreshSleep: @MainActor (Duration) async throws -> Void = { delay in
+        try await Task.sleep(for: delay)
+    }
+
+    #if DEBUG
+    @ObservationIgnored var testRosterLoad: (@MainActor () async throws -> ChatSessionRosterSnapshot)?
+    #endif
+
+    isolated deinit { self.sessionRefreshCoordinator.cancel() }
 
     var failedCronJobCount: Int {
         self.cronJobs.count { Self.isFailedCronJob($0) }
@@ -214,25 +258,6 @@ final class RootSidebarModel {
         }
     }
 
-    func sections(
-        query: String,
-        currentSessionKey: String,
-        mainSessionKey: String,
-        activeAgentID: String?,
-        groups: [OpenClawChatSessionGroup],
-        sessionRoutingContract: String? = nil) -> [ChatSessionSidebarModel.Section]
-    {
-        Self.sections(
-            sessions: self.sessions,
-            query: query,
-            currentSessionKey: currentSessionKey,
-            mainSessionKey: mainSessionKey,
-            activeAgentID: activeAgentID,
-            groups: groups,
-            sessionRoutingContract: sessionRoutingContract,
-            now: self.now)
-    }
-
     static func sections(
         sessions: [OpenClawChatSessionEntry],
         query: String,
@@ -240,6 +265,7 @@ final class RootSidebarModel {
         mainSessionKey: String,
         activeAgentID: String?,
         groups: [OpenClawChatSessionGroup],
+        rosterIsComplete: Bool = false,
         sessionRoutingContract: String? = nil,
         now: Date = .now) -> [ChatSessionSidebarModel.Section]
     {
@@ -249,13 +275,18 @@ final class RootSidebarModel {
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             sessionRoutingContract: sessionRoutingContract)
-        let selectedIsSnoozed = sessions.contains {
-            $0.key == selectedSessionKey && $0.isSnoozed(at: now)
+        let selectedIsHidden = sessions.first { $0.key == selectedSessionKey }
+            .map { $0.isArchived || $0.isSnoozed(at: now) } ?? rosterIsComplete
+        // Resolve aliases before keeping the selected automation reachable.
+        let isSearching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let browsingSessions = sessions.filter {
+            !$0.isArchived && !$0.isSnoozed(at: now) && (isSearching || $0.key == selectedSessionKey ||
+                !OpenClawChatSessionListVisibility.isAutomationSession($0))
         }
         return ChatSessionSidebarModel.sections(
-            sessions: sessions.filter { !$0.isSnoozed(at: now) },
-            // The shared sidebar otherwise creates a placeholder for a missing selected row.
-            currentSessionKey: selectedIsSnoozed ? "" : currentSessionKey,
+            sessions: browsingSessions,
+            // Keep missing-selection placeholders only until the active roster is complete.
+            currentSessionKey: selectedIsHidden ? "" : currentSessionKey,
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             groups: groups,
@@ -290,13 +321,13 @@ final class RootSidebarModel {
 
     func refresh(appModel: NodeAppModel) async {
         self.rosterGeneration &+= 1
+        self.sessionChangesDuringLoad = [:]
         let rosterGeneration = self.rosterGeneration
-        self.dashboardGeneration &+= 1
-        let dashboardGeneration = self.dashboardGeneration
         self.isRefreshing = true
         defer {
             if rosterGeneration == self.rosterGeneration {
                 self.isRefreshing = false
+                self.sessionRefreshCoordinator.finishLoad()
             }
         }
 
@@ -307,17 +338,18 @@ final class RootSidebarModel {
         if rosterGeneration == self.rosterGeneration {
             switch loadedRoster {
             case let .success(loadedRoster):
-                self.applyRoster(loadedRoster)
+                self.applyRoster(loadedRoster, activeAgentID: appModel.chatDeliveryAgentId)
             case let .failure(message):
                 self.sessionErrorText = message
             case .cancelled:
                 return
             }
             self.isRefreshing = false
+            self.sessionRefreshCoordinator.finishLoad()
         }
 
         let loadedDashboard = await dashboard
-        guard !Task.isCancelled, dashboardGeneration == self.dashboardGeneration else { return }
+        guard !Task.isCancelled else { return }
         if let usage = loadedDashboard.usage {
             self.usage = usage
         }
@@ -328,11 +360,13 @@ final class RootSidebarModel {
 
     func refreshSessions(appModel: NodeAppModel) async {
         self.rosterGeneration &+= 1
+        self.sessionChangesDuringLoad = [:]
         let rosterGeneration = self.rosterGeneration
         self.isRefreshing = true
         defer {
             if rosterGeneration == self.rosterGeneration {
                 self.isRefreshing = false
+                self.sessionRefreshCoordinator.finishLoad()
             }
         }
 
@@ -340,7 +374,7 @@ final class RootSidebarModel {
         guard !Task.isCancelled, rosterGeneration == self.rosterGeneration else { return }
         switch loadedRoster {
         case let .success(roster):
-            self.applyRoster(roster)
+            self.applyRoster(roster, activeAgentID: appModel.chatDeliveryAgentId)
         case let .failure(message):
             self.sessionErrorText = message
         case .cancelled:
@@ -350,80 +384,38 @@ final class RootSidebarModel {
 
     func setSessionObserverVisibility(appModel: NodeAppModel, visible: Bool) async {
         self.sessionObserverVisibility = visible
-        let observerGeneration = self.sessionObserverGeneration
-        let previous = self.sessionObserverSync?.task
-        let syncID = UUID()
+        let previous = self.sessionObserverSync
         let task = Task { @MainActor [weak self, weak appModel] in
             await previous?.value
             guard let self,
                   let appModel,
-                  self.sessionObserverGeneration == observerGeneration,
                   self.sessionObserverVisibility == visible,
-                  let route = await appModel.operatorSession.currentRoute(),
-                  self.sessionObserverGeneration == observerGeneration,
-                  self.sessionObserverVisibility == visible
-            else {
-                self?.finishSessionObserverSync(id: syncID)
-                return
-            }
+                  let route = await appModel.operatorSession.currentRoute()
+            else { return }
 
-            if let declaration = self.sessionObserverDeclaration,
-               declaration.route == route,
-               declaration.visible == visible,
-               declaration.generation == observerGeneration
-            {
-                self.finishSessionObserverSync(id: syncID)
-                return
-            }
-
-            // The Gateway may apply a change before its reply times out. An old
-            // confirmation must never suppress the next recovery declaration.
-            self.sessionObserverDeclaration = nil
+            // Visibility is best effort: serialize sends and replay on every subscription,
+            // rather than caching ACKs that need their own reconnect lifecycle.
             let request = OpenClawChatGatewayRequests.setSessionObserverVisibility(
                 visible,
                 timeoutMs: 12000)
-            do {
-                _ = try await appModel.operatorSession.request(
-                    request,
-                    ifCurrentRoute: route)
-                if let declaration = Self.confirmedSessionObserverDeclaration(
-                    route: route,
-                    visible: visible,
-                    generation: observerGeneration,
-                    currentGeneration: self.sessionObserverGeneration,
-                    currentVisibility: self.sessionObserverVisibility)
-                {
-                    self.sessionObserverDeclaration = declaration
-                }
-            } catch {
-                // Reconnect replays visibility on its own physical operator route.
-            }
-            self.finishSessionObserverSync(id: syncID)
+            _ = try? await appModel.operatorSession.request(request, ifCurrentRoute: route)
         }
-        self.sessionObserverSync = (id: syncID, task: task)
+        self.sessionObserverSync = task
         await task.value
     }
 
-    static func confirmedSessionObserverDeclaration<Route: Equatable>(
-        route: Route,
-        visible: Bool,
-        generation: UInt64,
-        currentGeneration: UInt64,
-        currentVisibility: Bool) -> SessionObserverDeclaration<Route>?
-    {
-        guard generation == currentGeneration, visible == currentVisibility else { return nil }
-        return SessionObserverDeclaration(route: route, visible: visible, generation: generation)
-    }
-
-    private func finishSessionObserverSync(id: UUID) {
-        guard self.sessionObserverSync?.id == id else { return }
-        self.sessionObserverSync = nil
-    }
-
     func observeSessionEvents(appModel: NodeAppModel) async {
+        var subscription: GatewayServerEventSubscription?
+        defer {
+            subscription?.cancel()
+            self.sessionRefreshCoordinator.cancel()
+        }
         await Self.consumeSubscribedSessionEvents(
             makeStream: {
-                await appModel.operatorSession.subscribeServerEvents(bufferingNewest: 200)
+                subscription?.cancel()
+                let current = await Self.makeSessionEventSubscription(gateway: appModel.operatorSession)
+                subscription = current
+                return current.events
             },
             subscribe: {
                 let request = OpenClawChatGatewayRequests.subscribeSessions(timeoutMs: 12000)
@@ -431,13 +423,6 @@ final class RootSidebarModel {
             },
             onEvent: { [weak self] frame in
                 await self?.handleSessionEvent(frame, appModel: appModel) ?? false
-            },
-            invalidateObserverDeclaration: { [weak self] in
-                guard let self else { return }
-                // Subscription generations prevent a delayed old-socket ACK from
-                // satisfying the visibility replay queued for the new socket.
-                self.sessionObserverGeneration &+= 1
-                self.sessionObserverDeclaration = nil
             },
             observerVisibility: { [weak self] in
                 self?.sessionObserverVisibility ?? false
@@ -447,11 +432,21 @@ final class RootSidebarModel {
             })
     }
 
+    static func makeSessionEventSubscription(gateway: GatewayNodeSession) async -> GatewayServerEventSubscription {
+        // Filter on the Gateway actor, before unrelated chat payloads enter this
+        // MainActor consumer or displace a roster update in its bounded buffer.
+        await gateway.makeServerEventSubscription(bufferingNewest: 200, matching: { frame in
+            switch frame.event {
+            case "sessions.changed", "session.observer", "seqGap": true
+            default: false
+            }
+        })
+    }
+
     static func consumeSubscribedSessionEvents(
         makeStream: @MainActor () async -> AsyncStream<EventFrame>,
         subscribe: @MainActor () async throws -> Void,
         onEvent: @MainActor (EventFrame) async -> Bool,
-        invalidateObserverDeclaration: @MainActor () -> Void = {},
         observerVisibility: @MainActor () -> Bool = { false },
         declareObserverVisibility: @MainActor (Bool) async -> Void = { _ in },
         retryDelays: [Duration] = [
@@ -473,9 +468,6 @@ final class RootSidebarModel {
             let stream = await makeStream()
             do {
                 try await subscribe()
-                // Subscriptions are socket-owned; a successful replay invalidates
-                // an old visibility ACK even when the logical route is unchanged.
-                invalidateObserverDeclaration()
                 await declareObserverVisibility(observerVisibility())
                 failureCount = 0
 
@@ -516,11 +508,39 @@ final class RootSidebarModel {
         }
     }
 
-    private func handleSessionEvent(_ frame: EventFrame, appModel: NodeAppModel) async -> Bool {
-        guard let event = OpenClawChatGatewayPayloadCodec.event(from: frame) else { return false }
+    func handleSessionEvent(_ frame: EventFrame, appModel: NodeAppModel) async -> Bool {
+        guard let event = OpenClawChatGatewayPayloadCodec.event(from: frame) else {
+            if frame.event == "sessions.changed" {
+                self.scheduleSessionRefresh(appModel: appModel)
+            }
+            return false
+        }
         switch event {
-        case .sessionsChanged:
-            await self.refreshSessions(appModel: appModel)
+        case let .sessionsChanged(change):
+            if change.reason != "delete", let row = change.session,
+               row.key == change.sessionKey, row.sessionId != nil, row.kind != nil, !row.isArchived,
+               ChatSessionSidebarModel.isSessionInActiveAgentScope(
+                   key: row.key, agentID: row.agentId, activeAgentID: appModel.chatDeliveryAgentId),
+               let updated = ChatSessionSidebarModel.applying(
+                   sessionChange: change, to: self.sessions, activeAgentId: appModel.chatDeliveryAgentId)
+            {
+                self.sessions = updated
+                // Replay rows received after an in-flight roster took its snapshot.
+                if self.isRefreshing, let projected = updated.first(where: { $0.key == row.key }) {
+                    // Retain the cumulative projection, not just the latest partial event.
+                    self.sessionChangesDuringLoad[row.key] = .init(
+                        sessionKey: projected.key, agentId: projected.agentId, session: projected)
+                }
+                // Child lifecycle rows cannot clear omitted activity flags on ancestors.
+                if change.reason == "lifecycle" || change.reason == "subagent-status",
+                   (change.parentSessionKey ?? row.parentSessionKey) != nil
+                {
+                    self.scheduleSessionRefresh(appModel: appModel)
+                }
+            } else {
+                if let key = change.sessionKey { self.sessionChangesDuringLoad[key] = nil }
+                self.scheduleSessionRefresh(appModel: appModel)
+            }
         case let .sessionObserver(digest):
             self.sessions = ChatSessionSidebarModel.applying(
                 observerDigest: digest,
@@ -533,6 +553,22 @@ final class RootSidebarModel {
             return false
         }
         return false
+    }
+
+    private func scheduleSessionRefresh(appModel: NodeAppModel) {
+        self.sessionRefreshCoordinator.scheduleLoad(
+            isLoading: self.isRefreshing,
+            coalescing: true,
+            debounce: .milliseconds(200),
+            sleep: self.sessionRefreshSleep)
+        { [weak self, weak appModel] in
+            guard let self, let appModel else { return }
+            if self.isRefreshing {
+                self.scheduleSessionRefresh(appModel: appModel)
+                return
+            }
+            await self.refreshSessions(appModel: appModel)
+        }
     }
 
     func reportSessionError(_ error: any Error) {
@@ -550,23 +586,26 @@ final class RootSidebarModel {
                 sessions.contains { $0.totalTokensFresh == false })
     }
 
-    private func applyRoster(_ roster: ChatSessionRosterSnapshot) {
-        self.sessions = roster.sessions
+    func applyRoster(_ roster: ChatSessionRosterSnapshot, activeAgentID: String? = nil) {
+        var sessions = roster.sessions
+        for change in self.sessionChangesDuringLoad.values {
+            if let row = change.session, !sessions.contains(where: { $0.key == row.key }) {
+                sessions.append(row)
+            }
+            sessions = ChatSessionSidebarModel.applying(
+                sessionChange: change, to: sessions, activeAgentId: activeAgentID) ?? sessions
+        }
+        self.sessionChangesDuringLoad = [:]
+        let heldRows = Dictionary(self.sessions.map { ($0.key, $0) }, uniquingKeysWith: { _, latest in latest })
+        self.sessions = sessions.map { row in
+            guard row.sessionId != nil, row.kind != nil, let held = heldRows[row.key] else { return row }
+            return ChatSessionSidebarModel.applying(
+                sessionChange: .init(sessionKey: row.key, agentId: row.agentId ?? activeAgentID, session: row),
+                to: [held],
+                activeAgentId: activeAgentID)?.first ?? held
+        }
         self.isSessionRosterComplete = roster.isComplete
-        guard !roster.isComplete, !roster.isCached else {
-            self.sessionErrorText = nil
-            return
-        }
-        if let totalCount = roster.totalCount {
-            // Localization: arguments (20, 100) mean 20 displayed out of 100 total, with 80 still to load.
-            // Keep the displayed count first; rephrase the sentence instead of reversing argument roles.
-            self.sessionErrorText = String(
-                format: String(localized: "Showing %lld sessions; %lld total. Refresh to load the rest."),
-                roster.sessions.count,
-                totalCount)
-        } else {
-            self.sessionErrorText = String(localized: "Some sessions could not be loaded. Refresh to try again.")
-        }
+        self.sessionErrorText = roster.incompleteLoadMessage
     }
 
     private func loadRoster(
@@ -574,6 +613,9 @@ final class RootSidebarModel {
         allowCachedFallback: Bool = true) async -> RosterLoadResult
     {
         do {
+            #if DEBUG
+            if let testRosterLoad { return try await .success(testRosterLoad()) }
+            #endif
             return try await .success(appModel.loadChatSessionRoster(
                 limit: Self.sessionLimit,
                 allowCachedFallback: allowCachedFallback))

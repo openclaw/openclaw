@@ -1,7 +1,32 @@
+import type { ChannelDoctorConfigMutation } from "../channels/plugins/types.adapters.js";
+import {
+  createHistoricalWebhookPinMigration,
+  type HistoricalWebhookCompletion,
+} from "../commands/doctor/shared/legacy-webhook-pins.js";
+import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { PluginDoctorCompatibilityNormalizer } from "./doctor-contract-module.js";
+import type {
+  PluginDoctorCompatibilityNormalizer,
+  PluginDoctorHistoricalWebhookListener,
+  PluginDoctorProviderRename,
+} from "./doctor-contract-module.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
+
+export type PluginDoctorCompatibilityResult = {
+  config: OpenClawConfig;
+  changes: string[];
+  warnings?: string[];
+};
+
+export type PluginDoctorCompatibilityOptions = {
+  env?: NodeJS.ProcessEnv;
+  startup?: boolean;
+  historicalWebhookListeners?: boolean | "preserve-configured";
+  historicalWebhookCompletion?: HistoricalWebhookCompletion;
+  onInspectedPlugin?: (pluginId: string, hasConfigRepair: boolean) => void;
+};
 
 /** Selection and order belong to callers; every hook transforms a private candidate. */
 export function applyPluginDoctorCompatibilitySequence(
@@ -9,11 +34,9 @@ export function applyPluginDoctorCompatibilitySequence(
   entries: Iterable<{
     pluginId: string;
     normalizeCompatibilityConfig?: PluginDoctorCompatibilityNormalizer;
-    transform?: (
-      mutation: ReturnType<PluginDoctorCompatibilityNormalizer>,
-    ) => ReturnType<PluginDoctorCompatibilityNormalizer>;
+    transform?: (mutation: ChannelDoctorConfigMutation) => ChannelDoctorConfigMutation;
   }>,
-): { config: OpenClawConfig; changes: string[]; warnings?: string[] } {
+): PluginDoctorCompatibilityResult {
   let next = config;
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -43,4 +66,64 @@ export function applyPluginDoctorCompatibilitySequence(
     }
   }
   return { config: next, changes, ...(warnings.length ? { warnings } : {}) };
+}
+
+/** Apply resolved declarations without coupling the compatibility owner to registry loading. */
+export function applyResolvedPluginDoctorCompatibilityMigrations(
+  cfg: OpenClawConfig,
+  entries: readonly {
+    pluginId: string;
+    origin?: PluginOrigin;
+    rules: readonly LegacyConfigRule[];
+    providerRenames: readonly PluginDoctorProviderRename[];
+    normalizeCompatibilityConfig?: PluginDoctorCompatibilityNormalizer;
+    historicalWebhookListener?: PluginDoctorHistoricalWebhookListener;
+    historicalWebhookNormalizer?: PluginDoctorCompatibilityNormalizer;
+  }[],
+  params: PluginDoctorCompatibilityOptions & {
+    isDeferred: (pluginId: string) => boolean;
+  },
+): PluginDoctorCompatibilityResult {
+  const applyHistoricalWebhookPins = params.historicalWebhookListeners
+    ? createHistoricalWebhookPinMigration(
+        params.env,
+        params.historicalWebhookCompletion,
+        params.historicalWebhookListeners === "preserve-configured",
+      )
+    : undefined;
+  const initialized = applyHistoricalWebhookPins
+    ? applyHistoricalWebhookPins({ config: cfg, changes: [] }, undefined, params)
+    : { config: cfg, changes: [] };
+  const result = applyPluginDoctorCompatibilitySequence(
+    initialized.config,
+    entries.map((entry) => {
+      if (!params.isDeferred(entry.pluginId)) {
+        params.onInspectedPlugin?.(
+          entry.pluginId,
+          entry.rules.length > 0 ||
+            Boolean(entry.normalizeCompatibilityConfig) ||
+            entry.providerRenames.length > 0,
+        );
+      }
+      return {
+        pluginId: entry.pluginId,
+        normalizeCompatibilityConfig: entry.normalizeCompatibilityConfig,
+        transform: applyHistoricalWebhookPins
+          ? (mutation: ChannelDoctorConfigMutation) => {
+              if (entry.historicalWebhookNormalizer) {
+                mutation.historicalWebhookAccountIds = entry.historicalWebhookNormalizer({
+                  cfg: cloneConfigWithResolutionFacts(mutation.config),
+                }).historicalWebhookAccountIds;
+              }
+              return applyHistoricalWebhookPins(mutation, entry.historicalWebhookListener, {
+                ...params,
+                pluginId: entry.pluginId,
+                origin: entry.origin,
+              });
+            }
+          : undefined,
+      };
+    }),
+  );
+  return { ...result, changes: [...initialized.changes, ...result.changes] };
 }

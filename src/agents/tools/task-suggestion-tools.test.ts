@@ -1,16 +1,19 @@
 import { Value } from "typebox/value";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
+import * as gateway from "./gateway.js";
 import { createTaskSuggestionTools } from "./task-suggestion-tools.js";
 
+afterEach(() => vi.restoreAllMocks());
+
 function createTools(gatewayCall = vi.fn()) {
+  vi.spyOn(gateway, "callGatewayTool").mockImplementation(gatewayCall);
   return {
     gatewayCall,
     tools: createTaskSuggestionTools({
       sessionKey: "agent:main:main",
       agentId: "main",
       cwd: "/repo",
-      callGateway: gatewayCall as never,
     }),
   };
 }
@@ -41,7 +44,7 @@ describe("task suggestion tools", () => {
       },
     );
     expect(result?.content).toEqual([
-      { type: "text", text: JSON.stringify({ task_id: "task_123" }, null, 2) },
+      { type: "text", text: JSON.stringify({ task_id: "task_123" }) },
     ]);
     expect(suggestTask?.description).toContain(
       "Nothing is spawned or started: this only records a card.",

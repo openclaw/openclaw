@@ -10,7 +10,6 @@ export function resolveMatrixThreadSessionKeys(params: {
   baseSessionKey: string;
   threadId?: string | null;
   parentSessionKey?: string;
-  useSuffix?: boolean;
 }): { sessionKey: string; parentSessionKey?: string } {
   return resolveThreadSessionKeys({
     ...params,

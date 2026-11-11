@@ -1,18 +1,13 @@
+import { createTestEntrypoint } from "../infra/runtime-entrypoint.test-support.ts";
+
+const entrypoint = createTestEntrypoint(import.meta.url, "daemon");
+
 // Native fixtures share the invocation's compiled runtime and nested process entries.
 export const schtasksNativeEntrypoints = {
-  taskSupervisor: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "../cli/gateway-cli/task-supervisor",
-    distWorkerPath: "cli/gateway-cli/task-supervisor.js",
-  },
-  hostedStop: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "schtasks.hosted-stop.native-test-support",
-    distWorkerPath: "daemon/schtasks.hosted-stop.native-test-support.js",
-  },
-  startupFallback: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "schtasks-runtime",
-    distWorkerPath: "daemon/schtasks-runtime.js",
-  },
+  taskSupervisor: entrypoint(
+    "../cli/gateway-cli/task-supervisor",
+    "cli/gateway-cli/task-supervisor.js",
+  ),
+  hostedStop: entrypoint("schtasks.hosted-stop.native-test-support"),
+  startupFallback: entrypoint("schtasks-runtime"),
 } as const;

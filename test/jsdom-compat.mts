@@ -1,3 +1,4 @@
+import { types } from "node:util";
 import type { DOMWindow } from "jsdom";
 import type { Environment } from "vitest/runtime";
 
@@ -5,6 +6,45 @@ import type { Environment } from "vitest/runtime";
 const require = process.getBuiltinModule("module").createRequire(import.meta.url);
 const adapterInstalled = Symbol.for("openclaw.vitest.jsdom-adapter");
 export type JsdomCustomElementDefinition = { name: string };
+
+const VITEST_SPY_FRAME = /[\\/]node_modules[\\/]vitest[\\/]dist[\\/]chunks[\\/]spy\.[^\\/]+\.js:/u;
+
+function installNode24ByteViewAdapter(Bytes: typeof Uint8Array): void {
+  if (process.versions.bun || !process.versions.node.startsWith("24.")) {
+    return;
+  }
+  const prototype = Bytes.prototype;
+  if (Object.hasOwn(prototype, adapterInstalled)) {
+    return;
+  }
+  Object.defineProperty(prototype, adapterInstalled, { value: true });
+  for (const method of ["toBase64", "toHex"] as const) {
+    const nativeEncode = prototype[method];
+    if (typeof nativeEncode !== "function") {
+      continue;
+    }
+    // Node 24's experimental encoders ignore byteOffset. Keep native options
+    // and receiver checks, copying only offset views until that host is retired.
+    Object.defineProperty(prototype, method, {
+      value(this: unknown, ...args: unknown[]) {
+        const bytes = types.isUint8Array(this) && this.byteOffset !== 0 ? new Bytes(this) : this;
+        return Reflect.apply(nativeEncode, bytes, args);
+      },
+    });
+  }
+}
+
+// Conservative on an unreadable stack: retaining source resources can cost a stale generation;
+// dropping dependency resources would break every later file.
+export function isRepoOwnedRegistrationStack(stack: string | undefined): boolean {
+  const frames = (stack ?? "").split("\n").slice(2);
+  // A Vitest spy on registration forwards here, possibly through a fixture's mock
+  // implementation. Neither owns the registered resource; whoever called the spy does.
+  const spyFrame = frames.findIndex((frame) => VITEST_SPY_FRAME.test(frame));
+  const callerFrame =
+    frames.slice(spyFrame + 1).find((frame) => !VITEST_SPY_FRAME.test(frame)) ?? "";
+  return callerFrame.trim() !== "" && !/[\\/]node_modules[\\/]/u.test(callerFrame);
+}
 
 function bindings() {
   // The package entry initializes the mutually dependent generated interfaces.
@@ -101,10 +141,7 @@ export function installJsdomEnvironmentAdapter(environment: Environment): void {
     return;
   }
   Object.defineProperty(environment, adapterInstalled, { value: true });
-  // Bun also needs this repair for direct JSDOM consumers in Node-environment tests.
-  if (process.versions.bun) {
-    installJsdomWindowAdapter();
-  }
+  installNode24ByteViewAdapter(Uint8Array);
   const NativeBlob = globalThis.Blob;
   const NativeFile = globalThis.File;
   const NativeURL = globalThis.URL;
@@ -114,6 +151,7 @@ export function installJsdomEnvironmentAdapter(environment: Environment): void {
   const setupVM = environment.setupVM;
 
   function installWebApis(target: object, window: DOMWindow) {
+    installNode24ByteViewAdapter(window.Uint8Array);
     const { blob, formData } = bindings();
     const toNativeBlob = (value: Blob) =>
       // oxlint-disable-next-line eslint/no-underscore-dangle -- jsdom owns this implementation member name.
@@ -165,6 +203,7 @@ export function installJsdomEnvironmentAdapter(environment: Environment): void {
   }
 
   environment.setup = async (global, options) => {
+    // Node-environment workers register the adapter too; keep DOM bindings lazy.
     installJsdomWindowAdapter();
     const originals = new Map(
       ["URL", "Request"].map((key) => [key, Object.getOwnPropertyDescriptor(global, key)]),

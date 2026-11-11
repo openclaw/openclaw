@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { detectInlineEvalInSegments } from "./command-analysis/risks.js";
+import { isEnvAssignmentToken } from "./command-carriers.js";
 import { isInterpreterLikeSafeBin } from "./exec-safe-bin-runtime-policy.js";
 import {
   POSIX_PARSEABLE_SHELL_WRAPPERS,
@@ -14,6 +15,7 @@ import {
   unwrapKnownDispatchWrapperInvocation,
   unwrapKnownShellMultiplexerInvocation,
 } from "./exec-wrapper-resolution.js";
+import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import { parseInlineOptionToken } from "./inline-option-token.js";
 import {
   normalizePackageManagerExecToken,
@@ -21,6 +23,7 @@ import {
   PNPM_DLX_OPTIONS_WITH_VALUE,
   PNPM_FLAG_OPTIONS,
   PNPM_OPTIONS_WITH_VALUE,
+  resolveKnownPackageManagerExecInvocation,
   unwrapKnownPackageManagerExecInvocation,
 } from "./package-manager-exec-wrapper.js";
 import {
@@ -80,28 +83,26 @@ function unwrapArgvForMutableOperand(argv: string[]): {
   let baseIndex = 0;
   let opaqueMultiplexerSeen = false;
   while (true) {
+    let next: string[] | null;
     const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(current);
     if (dispatchUnwrap.kind === "unwrapped") {
-      baseIndex += current.length - dispatchUnwrap.argv.length;
-      current = dispatchUnwrap.argv;
-      continue;
-    }
-    const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(current);
-    if (shellMultiplexerUnwrap.kind === "unwrapped") {
-      if (OPAQUE_MUTABLE_SCRIPT_RUNNERS.has(shellMultiplexerUnwrap.wrapper)) {
-        opaqueMultiplexerSeen = true;
+      next = dispatchUnwrap.argv;
+    } else {
+      const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(current);
+      if (shellMultiplexerUnwrap.kind === "unwrapped") {
+        if (OPAQUE_MUTABLE_SCRIPT_RUNNERS.has(shellMultiplexerUnwrap.wrapper)) {
+          opaqueMultiplexerSeen = true;
+        }
+        next = shellMultiplexerUnwrap.argv;
+      } else {
+        next = unwrapKnownPackageManagerExecInvocation(current);
       }
-      baseIndex += current.length - shellMultiplexerUnwrap.argv.length;
-      current = shellMultiplexerUnwrap.argv;
-      continue;
     }
-    const packageManagerUnwrap = unwrapKnownPackageManagerExecInvocation(current);
-    if (packageManagerUnwrap) {
-      baseIndex += current.length - packageManagerUnwrap.length;
-      current = packageManagerUnwrap;
-      continue;
+    if (!next) {
+      return { argv: current, baseIndex, opaqueMultiplexerSeen };
     }
-    return { argv: current, baseIndex, opaqueMultiplexerSeen };
+    baseIndex += current.length - next.length;
+    current = next;
   }
 }
 
@@ -187,20 +188,14 @@ function resolveGenericInterpreterScriptOperandIndex(params: {
     if (!token) {
       continue;
     }
-    if (afterDoubleDash) {
-      if (resolvesToExistingFileSync(token, params.cwd)) {
-        hits.push(i);
-      }
-      continue;
-    }
-    if (token === "--") {
+    if (!afterDoubleDash && token === "--") {
       afterDoubleDash = true;
       continue;
     }
-    if (token === "-") {
+    if (!afterDoubleDash && token === "-") {
       return null;
     }
-    if (token.startsWith("-")) {
+    if (!afterDoubleDash && token.startsWith("-")) {
       const option = parseInlineOptionToken(token);
       const flag = option.name;
       const inlineValue = option.hasInlineValue ? option.inlineValue : undefined;
@@ -422,13 +417,61 @@ function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined)
   return genericIndex === null ? null : unwrapped.baseIndex + genericIndex;
 }
 
-function shellPayloadNeedsStableBinding(shellCommand: string, cwd: string | undefined): boolean {
-  if (/[;&|<>]/u.test(shellCommand)) {
+function shellPayloadNeedsStableBinding(
+  shellCommand: string,
+  cwd: string | undefined,
+  shellExecutable: string,
+): boolean {
+  // Only reconsider payloads the raw separator check previously rejected.
+  const needsLiteralCheck = /[;&|<>]/u.test(shellCommand);
+  // Node exec uses sh; other shell grammars retain their existing separator refusal.
+  if (needsLiteralCheck && shellExecutable !== "sh") {
     return true;
   }
-  const argv = splitShellArgs(shellCommand);
-  if (!argv || argv.length === 0) {
+  const globIndexes: number[] = [];
+  let argv = splitShellArgs(shellCommand, {
+    rejectShellSyntax: needsLiteralCheck,
+    onUnquotedGlob: (index) => globIndexes.push(index),
+  });
+  if (!argv) {
+    return needsLiteralCheck;
+  }
+  if (argv.length === 0) {
     return false;
+  }
+  if (needsLiteralCheck) {
+    const plan = resolveExecWrapperTrustPlan(argv);
+    const executableIndex = argv.length - plan.argv.length;
+    const firstToken = readTrimmedArgToken(plan.argv, 0);
+    if (
+      plan.policyBlocked ||
+      plan.shellWrapperExecutable ||
+      PACKAGE_MANAGER_EXECUTABLES.has(normalizePackageManagerExecToken(firstToken)) ||
+      resolveKnownPackageManagerExecInvocation(plan.argv).kind !== "not-package-manager" ||
+      globIndexes.some((index) => index <= executableIndex) ||
+      isEnvAssignmentToken(firstToken) ||
+      // Pathname expansion can synthesize builtin options such as -v.
+      (firstToken === "printf" &&
+        (plan.argv[1]?.startsWith("-v") || globIndexes.includes(executableIndex + 1))) ||
+      (["test", "["].includes(firstToken) &&
+        (plan.argv.includes("-v") || globIndexes.length > 0)) ||
+      [
+        "eval",
+        "trap",
+        "enable",
+        "let",
+        "declare",
+        "typeset",
+        "export",
+        "readonly",
+        "local",
+        "!",
+        "coproc",
+      ].includes(firstToken)
+    ) {
+      return true;
+    }
+    argv = plan.argv;
   }
   if (
     resolveMutableFileOperandIndex(argv, cwd) !== null ||
@@ -467,7 +510,11 @@ function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
     return true;
   }
   if (params.shellCommand !== null) {
-    return shellPayloadNeedsStableBinding(params.shellCommand, params.cwd);
+    return shellPayloadNeedsStableBinding(
+      params.shellCommand,
+      params.cwd,
+      normalizeExecutableToken(unwrapped.argv[0] ?? ""),
+    );
   }
   if (pnpmDlxInvocationNeedsFailClosedBinding(params.argv, params.cwd)) {
     return true;
@@ -559,12 +606,8 @@ export function resolveSystemRunMutableFileOperandTarget(params: {
     };
   }
   const unwrapped = unwrapArgvForMutableOperand(params.argv);
-  if (
-    hasPosixShellCodeLoadingOption(
-      unwrapped.argv,
-      normalizeExecutableToken(unwrapped.argv[0] ?? ""),
-    )
-  ) {
+  const executable = normalizeExecutableToken(unwrapped.argv[0] ?? "");
+  if (hasPosixShellCodeLoadingOption(unwrapped.argv, executable)) {
     return {
       ok: false,
       message: "SYSTEM_RUN_DENIED: approval cannot safely bind shell startup files",
@@ -573,7 +616,7 @@ export function resolveSystemRunMutableFileOperandTarget(params: {
   if (
     hasPosixShellStartupEnvironment({
       argv: params.argv,
-      executable: normalizeExecutableToken(unwrapped.argv[0] ?? ""),
+      executable,
       env: process.env,
     })
   ) {
@@ -585,7 +628,7 @@ export function resolveSystemRunMutableFileOperandTarget(params: {
   if (
     hasUnbindableRuntimeApprovalOption({
       argv: unwrapped.argv,
-      executable: normalizeExecutableToken(unwrapped.argv[0] ?? ""),
+      executable,
     })
   ) {
     return {

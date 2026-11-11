@@ -31,6 +31,7 @@ fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
+source "$ROOT_DIR/scripts/lib/mac-disk-image.sh"
 
 BUILD_DIR="$ROOT_DIR/dist"
 mkdir -p "$BUILD_DIR"
@@ -143,6 +144,11 @@ cleanup_dmg() {
   if [[ -n "$DMG_OUTPUT_TEMP" ]]; then
     rm -rf "$DMG_OUTPUT_TEMP" 2>/dev/null || true
   fi
+  # A failed attach can leave the RW image's devices attached without a mount.
+  if [[ -e "$DMG_RW_PATH" ]] && ! detach_disk_image "$DMG_RW_PATH"; then
+    echo "Error: Preserving DMG temp root because its RW image is still attached: $DMG_TEMP" >&2
+    exit 1
+  fi
   rm -rf "$DMG_TEMP" 2>/dev/null || true
 }
 trap cleanup_dmg EXIT
@@ -178,12 +184,35 @@ ln -s /Applications "$DMG_SOURCE/Applications"
 
 # Let -srcfolder account for filesystem overhead; du plus fixed slack can
 # underallocate bundles containing many small runtime files.
-hdiutil create \
-  -volname "$DMG_VOLUME_NAME" \
-  -srcfolder "$DMG_SOURCE" \
-  -ov \
-  -format UDRW \
-  "$DMG_RW_PATH"
+create_dmg_image() {
+  local attempt=1
+  local status=0
+  local stderr_path="$DMG_TEMP/create.stderr"
+  while true; do
+    if hdiutil create \
+      -volname "$DMG_VOLUME_NAME" \
+      -srcfolder "$DMG_SOURCE" \
+      -ov \
+      -format UDRW \
+      "$DMG_RW_PATH" 2>"$stderr_path"; then
+      cat "$stderr_path" >&2
+      rm -f "$stderr_path"
+      return 0
+    else
+      status=$?
+    fi
+    cat "$stderr_path" >&2
+    if [[ "$attempt" -ge 3 ]] || ! grep -Fq "Resource busy" "$stderr_path"; then
+      return "$status"
+    fi
+    echo "WARN: hdiutil create reported Resource busy; retrying ($attempt/2)" >&2
+    rm -f "$DMG_RW_PATH"
+    sleep "$attempt"
+    attempt=$((attempt + 1))
+  done
+}
+
+create_dmg_image
 
 DMG_ATTACH_OUTPUT="$(hdiutil attach "$DMG_RW_PATH" -mountpoint "$MOUNT_POINT" -nobrowse)"
 MOUNTED=1

@@ -33,12 +33,20 @@ struct GatewayOperatorFleetTests {
             try await self.waitUntil { fixture.activeConnectionCount == 1 }
             let originURL = try #require(URL(string: "https://gateway.example.test"))
             let origin = try CloudflareAccessOrigin(originURL)
+            let tokens = try CloudflareAccessTestTokens()
+            let baseApplication = try CloudflareAccessTestTokens.application()
+            let application = CloudflareAccessApplication(
+                origin: origin, issuer: baseApplication.issuer, audience: baseApplication.audience)
+            let session = try tokens.session(application: application)
+            let principal = try CloudflareAccessPrincipal.verified(from: session)
             let authorization = GatewayIngressAuthorization(
                 origin: origin,
+                principal: principal,
                 revision: 1,
                 registrationID: UUID(),
                 headers: { _ in [:] },
                 isCurrent: { false },
+                dashboardCookie: { _ in nil },
                 checkResponse: { _ in },
                 load: { request, operation in try await operation(request) })
             let managed = GatewayConnectConfig(
@@ -52,6 +60,8 @@ struct GatewayOperatorFleetTests {
                 ingressAuthorization: authorization)
             fleet.reconcile(desiredStableIDs: [ordinary.stableID, managed.stableID], configs: [ordinary, managed])
             try await self.waitUntil { fixture.activeConnectionCount == 2 }
+            // TCP acceptance can precede the WebSocket upgrade and Gateway connect frame.
+            try await self.waitUntil { fixture.capturedAuth(at: 1) != nil }
             // Retirement follows captured ownership after the old grant becomes invalid.
             await fleet.retire(origin: origin)
             try await self.waitUntil { fixture.activeConnectionCount == 1 }

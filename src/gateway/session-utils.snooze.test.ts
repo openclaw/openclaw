@@ -1,6 +1,10 @@
 // Session lists project snooze metadata for roots without changing server-side membership.
 import "./session-utils-provider.test-support.js";
-import { afterAll, beforeEach, describe, expect, test } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import {
@@ -12,12 +16,24 @@ const { resetSessionProviderArtifacts } = await import("./session-utils-provider
 
 describe("session list snooze projection", () => {
   beforeEach(resetSessionProviderArtifacts);
+  afterEach(clearRuntimeConfigSnapshot);
   afterAll(closeSessionSqliteDatabasesForTest);
 
-  test.each([["agent:main:dashboard:pinned", { parentSessionKey: "agent:main:main" }]])(
+  test.each([
+    ["agent:main:dashboard:pinned", { parentSessionKey: "agent:main:main" }],
+    [
+      "agent:main:dashboard:promoted",
+      {
+        parentSessionKey: "agent:main:dashboard:parent",
+        spawnedBy: "agent:main:dashboard:parent",
+        sidebarRoot: true,
+      },
+    ],
+  ] as const)(
     "session lists separate archived rows and sort pinned %s first",
     async (pinnedKey, lineage) => {
       const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+      setRuntimeConfigSnapshot(cfg);
       const store: Record<string, SessionEntry> = {
         recent: { sessionId: "recent", updatedAt: 30 },
         [pinnedKey]: {
@@ -39,6 +55,7 @@ describe("session list snooze projection", () => {
       const active = await listSessionFixture({ cfg, storePath: "", store, opts: {} });
       expect(active.sessions.map((session) => session.key)).toEqual([pinnedKey, "recent"]);
       expect(active.sessions[0]).toMatchObject({
+        ...lineage,
         pinned: true,
         pinnedAt: 40,
         snoozedUntil: 1_800_000_000_000,

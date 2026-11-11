@@ -12,6 +12,21 @@ export const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
   "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
 export const UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV =
   "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION";
+/**
+ * Set by an updater that runs optional Doctor inspections with `doctor --lint`
+ * after readiness. Only the report mode defers checks: older parents cannot
+ * consume the target's selector receipt, and older candidates reject this mode.
+ */
+export const UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV =
+  "OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS";
+export const UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE = "reported-checks";
+
+export function isUpdateDoctorInspectionReportMode(env: NodeJS.ProcessEnv): boolean {
+  return (
+    env[UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV] ===
+    UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE
+  );
+}
 
 /** Share the post-swap discovery context through planning and final publication. */
 export function resolvePostCoreConvergenceEnv(

@@ -1,8 +1,9 @@
+import assert from "node:assert/strict";
 import { expect, it, vi, type Mock } from "vitest";
 import {
-  getReplyPayloadMetadata,
-  isReplyPayloadSessionWriterDeliveryAuthorized,
-  setReplyPayloadMetadata,
+  getReplyPayloadMetadata as metadataOf,
+  isReplyPayloadSessionWriterDeliveryAuthorized as authorized,
+  setReplyPayloadMetadata as withMetadata,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
@@ -37,12 +38,30 @@ type PreparationFixture = {
 
 type ImageProjectionFixture = Pick<PreparationFixture, "setTestOutbound" | "hookMocks">;
 
+function prepare(
+  operation: "raw" | "structured",
+  params: Parameters<typeof prepareOutboundPayloadBatch>[0],
+) {
+  return operation === "structured"
+    ? prepareStructuredOutboundPayloadBatch(
+        params,
+        createStructuredOutboundPayloadPlan(params.payloads),
+      )
+    : prepareOutboundPayloadBatch(params);
+}
+
+function acceptedEntry(batch: Awaited<ReturnType<typeof prepareOutboundPayloadBatch>>) {
+  const [entry] = batch.entries;
+  assert(entry?.status === "accepted", "expected accepted payload");
+  return entry;
+}
+
 // Keep registration in deliver.test.ts so its hoisted queue/hooks and per-case registry reset apply.
 export function registerOutboundPreparationMetadataTests({
-  matrixChunkConfig,
-  matrixOutboundForTest,
-  setTestOutbound,
-  hookMocks,
+  matrixChunkConfig: cfg,
+  matrixOutboundForTest: outbound,
+  setTestOutbound: install,
+  hookMocks: { runner },
 }: PreparationFixture) {
   it.each(["raw", "structured"] as const)(
     "keeps %s preparation metadata semantics through channel and awaited hook transforms",
@@ -53,7 +72,7 @@ export function registerOutboundPreparationMetadataTests({
         lifecycleRevision: "revision-original",
         sessionId: "session-original",
       };
-      const sourcePayload = setReplyPayloadMetadata(
+      const sourcePayload = withMetadata(
         { text: "original", mediaUrl: "https://example.com/attachment.png" },
         {
           assistantMessageIndex: 4,
@@ -66,13 +85,11 @@ export function registerOutboundPreparationMetadataTests({
           },
         },
       );
-      expect(isReplyPayloadSessionWriterDeliveryAuthorized(sourcePayload, currentWriter)).toBe(
-        true,
-      );
-      setTestOutbound({
-        ...matrixOutboundForTest,
+      expect(authorized(sourcePayload, currentWriter)).toBe(true);
+      install({
+        ...outbound,
         normalizePayload: ({ payload }) =>
-          setReplyPayloadMetadata(
+          withMetadata(
             {
               ...payload,
               text: payload.channelData?.normalized ? payload.text : " ",
@@ -82,40 +99,27 @@ export function registerOutboundPreparationMetadataTests({
           ),
         normalizePayloadBatch: ({ payloads }) => payloads.map(({ payload }) => ({ ...payload })),
       });
-      hookMocks.runner.hasHooks.mockImplementation((name) => name === "message_sending");
-      hookMocks.runner.runMessageSending.mockImplementationOnce(async () => {
+      runner.hasHooks.mockImplementation((name) => name === "message_sending");
+      runner.runMessageSending.mockImplementationOnce(async () => {
         await Promise.resolve();
         currentWriter = { ...currentWriter, activeWriterRunId: "run-replacement" };
         return { content: "after modifier" };
       });
       const params = {
-        cfg: matrixChunkConfig,
+        cfg,
         channel: "matrix" as const,
         to: "!room:example",
         payloads: [sourcePayload],
         deps: { matrix: vi.fn() },
       };
-      const batch =
-        operation === "structured"
-          ? await prepareStructuredOutboundPayloadBatch(
-              params,
-              createStructuredOutboundPayloadPlan([sourcePayload]),
-            )
-          : await prepareOutboundPayloadBatch(params);
-      const [entry] = batch.entries;
-      expect(entry?.status).toBe("accepted");
-      if (!entry || entry.status !== "accepted") {
-        throw new Error("expected prepared payload");
-      }
+      const entry = acceptedEntry(await prepare(operation, params));
       expect(entry.payload.text).toBe("after modifier");
-      const metadata = getReplyPayloadMetadata(entry.payload);
+      const metadata = metadataOf(entry.payload);
       expect(metadata).toHaveProperty("assistantMessageIndex", undefined);
-      expect(getReplyPayloadMetadata(sourcePayload)?.assistantMessageIndex).toBe(4);
+      expect(metadataOf(sourcePayload)?.assistantMessageIndex).toBe(4);
       if (operation === "structured") {
         expect(metadata?.finalDeliveryCapture).toBe(capture);
-        expect(isReplyPayloadSessionWriterDeliveryAuthorized(entry.payload, currentWriter)).toBe(
-          false,
-        );
+        expect(authorized(entry.payload, currentWriter)).toBe(false);
       } else {
         expect(metadata?.finalDeliveryCapture).toBeUndefined();
         expect(metadata?.sessionWriterDeliveryAuthority).toBeUndefined();
@@ -125,161 +129,118 @@ export function registerOutboundPreparationMetadataTests({
 }
 
 export function registerOutboundImageProjectionTests({
-  setTestOutbound,
-  hookMocks,
+  setTestOutbound: install,
+  hookMocks: { runner: mocked },
 }: ImageProjectionFixture) {
-  function installRegisteredPayloadHooks(
+  async function imageFixture(
     hooks: Pick<PluginHookHandlerMap, "reply_payload_sending" | "message_sending">,
+    overrides: Partial<ChannelOutboundAdapter> = {},
   ) {
+    const { telegramOutbound } = await loadBundledPluginFacade<{
+      telegramOutbound: ChannelOutboundAdapter;
+    }>({ pluginId: "telegram", artifactBasename: "api.js" });
+    install({ ...telegramOutbound, ...overrides }, "telegram");
     const registry = createEmptyPluginRegistry();
     for (const hookName of ["reply_payload_sending", "message_sending"] as const) {
       addTestHook({ registry, pluginId: "image-presentation", hookName, handler: hooks[hookName] });
     }
     const runner = createHookRunner(registry);
-    hookMocks.runner.hasHooks.mockImplementation(
+    mocked.hasHooks.mockImplementation(
       (name) =>
         (name === "reply_payload_sending" || name === "message_sending") && runner.hasHooks(name),
     );
-    hookMocks.runner.runReplyPayloadSending.mockImplementation((event, context) =>
-      runner.runReplyPayloadSending(event, context),
-    );
-    hookMocks.runner.runMessageSending.mockImplementation((event, context) =>
-      runner.runMessageSending(event, context),
-    );
+    mocked.runReplyPayloadSending.mockImplementation(runner.runReplyPayloadSending.bind(runner));
+    mocked.runMessageSending.mockImplementation(runner.runMessageSending.bind(runner));
+    return (operation: "raw" | "structured", payloads: ReplyPayload[]) =>
+      prepare(operation, {
+        cfg: {},
+        channel: "telegram",
+        to: "12345",
+        payloads,
+        replyPayloadSendingHook: {
+          kind: "final",
+          channel: "telegram",
+          context: { channelId: "telegram", conversationId: "12345" },
+        },
+      });
   }
 
-  it.each([
-    { operation: "raw", extractMarkdownImages: true },
-    { operation: "structured", extractMarkdownImages: true },
-  ] as const)(
-    "projects hook-added channel images ($operation; enabled=$extractMarkdownImages)",
-    async ({ operation, extractMarkdownImages }) => {
-      const { telegramOutbound } = await loadBundledPluginFacade<{
-        telegramOutbound: ChannelOutboundAdapter;
-      }>({ pluginId: "telegram", artifactBasename: "api.js" });
-      setTestOutbound({ ...telegramOutbound, extractMarkdownImages }, "telegram");
+  it.each(["raw", "structured"] as const)(
+    "projects hook-added channel images (%s)",
+    async (operation) => {
       const explicitUrl = "https://example.com/explicit.png";
       const originalUrl = "https://example.com/original.png";
       const replyUrl = "https://example.com/reply.png";
       const messageUrl = "https://example.com/message.png";
       const literalText =
         "[[reply_to:literal]] [[audio_as_voice]]\nMEDIA:https://example.com/literal.png";
-      const replyText = `Reply![reply](${replyUrl}) caption.`;
       const messageText =
         `![leading](${messageUrl})    Keep  prose. Use \`a  b\`![message](${messageUrl}).  \r\n` +
         `Chart ![trailing](${messageUrl})  \r\nLeft ![adjacent](${messageUrl})caption.\r\n` +
         `  ![indented](${messageUrl})    Prefix.\r\n` +
         `Left![one](${messageUrl}) ![two](${messageUrl})right\r\n` +
         `Next\r\n${literalText}\r\nAfter  \r\n`;
-      const replyHook = vi.fn<PluginHookHandlerMap["reply_payload_sending"]>(
-        async ({ payload }) => ({ payload: { ...payload, text: replyText } }),
-      );
       const messageHook = vi.fn<PluginHookHandlerMap["message_sending"]>(async () => ({
         content: messageText,
       }));
-      installRegisteredPayloadHooks({
-        reply_payload_sending: replyHook,
-        message_sending: messageHook,
-      });
+      const project = await imageFixture(
+        {
+          reply_payload_sending: async ({ payload }) => ({
+            payload: { ...payload, text: `Reply![reply](${replyUrl}) caption.` },
+          }),
+          message_sending: messageHook,
+        },
+        { extractMarkdownImages: true },
+      );
+      const attachment = { url: explicitUrl, name: "explicit.png", mimeType: "image/png" };
       const payloads: ReplyPayload[] = [
         {
           text: `Original ![original](${originalUrl}) caption.`,
           mediaUrls: [explicitUrl],
-          attachments: [{ url: explicitUrl, name: "explicit.png", mimeType: "image/png" }],
+          attachments: [attachment],
           replyToId: "123",
         },
       ];
-      const params = {
-        cfg: {},
-        channel: "telegram" as const,
-        to: "12345",
-        payloads,
-        replyPayloadSendingHook: {
-          kind: "final" as const,
-          channel: "telegram",
-          context: { channelId: "telegram", conversationId: "12345" },
-        },
-      };
-      const batch =
-        operation === "structured"
-          ? await prepareStructuredOutboundPayloadBatch(
-              params,
-              createStructuredOutboundPayloadPlan(payloads),
-            )
-          : await prepareOutboundPayloadBatch(params);
-
-      const mediaBeforeMessage = extractMarkdownImages
-        ? [explicitUrl, originalUrl, replyUrl]
-        : [explicitUrl];
+      const batch = await project(operation, payloads);
+      const mediaBeforeMessage = [explicitUrl, originalUrl, replyUrl];
       expect(messageHook).toHaveBeenCalledWith(
         expect.objectContaining({
-          content: extractMarkdownImages ? "Reply caption." : replyText,
+          content: "Reply caption.",
           metadata: expect.objectContaining({ mediaUrls: mediaBeforeMessage }),
         }),
         expect.objectContaining({ channelId: "telegram", conversationId: "12345" }),
       );
-      const entry = batch.entries[0];
       expect(batch.entries).toHaveLength(1);
-      expect(entry?.status).toBe("accepted");
-      if (!entry || entry.status !== "accepted") {
-        throw new Error("expected accepted image payload");
-      }
-      const expectedMedia = extractMarkdownImages
-        ? [...mediaBeforeMessage, messageUrl]
-        : mediaBeforeMessage;
-      expect(entry.preparedMediaCount).toBe(expectedMedia.length);
+      const entry = acceptedEntry(batch);
+      const expectedMedia = [...mediaBeforeMessage, messageUrl];
       expect(entry.payload.mediaUrls ?? [entry.payload.mediaUrl]).toEqual(expectedMedia);
-      expect(entry.payload.text).toBe(
-        extractMarkdownImages
-          ? `Keep  prose. Use \`a  b\`.  \r\nChart  \r\nLeft caption.\r\n  Prefix.\r\nLeft right\r\nNext\r\n${literalText}\r\nAfter  \r\n`
-          : messageText,
-      );
-      expect(entry.payload.replyToId).toBe("123");
-      expect(entry.payload.audioAsVoice).toBeUndefined();
-      expect(entry.payload.attachments?.[0]).toEqual({
-        url: explicitUrl,
-        name: "explicit.png",
-        mimeType: "image/png",
+      expect(entry).toMatchObject({
+        preparedMediaCount: expectedMedia.length,
+        payload: {
+          text: `Keep  prose. Use \`a  b\`.  \r\nChart  \r\nLeft caption.\r\n  Prefix.\r\nLeft right\r\nNext\r\n${literalText}\r\nAfter  \r\n`,
+          replyToId: "123",
+        },
       });
+      expect(entry.payload.audioAsVoice).toBeUndefined();
+      expect(entry.payload.attachments?.[0]).toEqual(attachment);
     },
   );
 
   it.each(["reply_payload_sending", "message_sending"] as const)(
     "cancels hook-added channel images at %s",
     async (cancelHook) => {
-      const { telegramOutbound } = await loadBundledPluginFacade<{
-        telegramOutbound: ChannelOutboundAdapter;
-      }>({ pluginId: "telegram", artifactBasename: "api.js" });
-      setTestOutbound(telegramOutbound, "telegram");
       const imageUrl = "https://example.com/cancelled.png";
-      const replyHook = vi.fn<PluginHookHandlerMap["reply_payload_sending"]>(
-        async ({ payload }) => ({
-          payload: { ...payload, text: `Changed ![image](${imageUrl}) caption.` },
-          cancel: cancelHook === "reply_payload_sending",
-        }),
-      );
       const messageHook = vi.fn<PluginHookHandlerMap["message_sending"]>(async () => ({
         cancel: true,
       }));
-      installRegisteredPayloadHooks({
-        reply_payload_sending: replyHook,
+      const project = await imageFixture({
+        reply_payload_sending: async ({ payload }) => ({
+          payload: { ...payload, text: `Changed ![image](${imageUrl}) caption.` },
+          cancel: cancelHook === "reply_payload_sending",
+        }),
         message_sending: messageHook,
       });
-      const payloads = [{ text: "Original caption." }];
-      const batch = await prepareStructuredOutboundPayloadBatch(
-        {
-          cfg: {},
-          channel: "telegram",
-          to: "12345",
-          payloads,
-          replyPayloadSendingHook: {
-            kind: "final",
-            channel: "telegram",
-            context: { channelId: "telegram", conversationId: "12345" },
-          },
-        },
-        createStructuredOutboundPayloadPlan(payloads),
-      );
+      const batch = await project("structured", [{ text: "Original caption." }]);
 
       expect(batch.entries).toEqual([
         {

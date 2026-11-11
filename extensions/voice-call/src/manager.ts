@@ -49,7 +49,7 @@ export class CallManager {
   private activeCalls = new Map<CallId, CallRecord>();
   private providerCallIdMap = new Map<string, CallId>();
   private processedEventIds = new Set<string>();
-  private rejectedProviderCallIds = new Map<string, symbol>();
+  private rejectedProviderCallIds = new Set<string>();
   private provider: VoiceCallProvider | null = null;
   private storePath: string;
   private webhookUrl: string | null = null;
@@ -242,7 +242,7 @@ export class CallManager {
       return;
     }
     this.processedEventIds = persisted.processedEventIds;
-    this.rejectedProviderCallIds = new Map();
+    this.rejectedProviderCallIds = new Set();
 
     for (const call of persisted.interruptedDeliveries) {
       const metadata = { ...call.metadata };

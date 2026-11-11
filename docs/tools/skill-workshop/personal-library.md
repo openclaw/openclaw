@@ -12,9 +12,14 @@ read_when:
 On a shared Gateway, ask the agent normally: **Create a skill for me that
 summarizes a reviewed change list.** The authenticated requester owns the
 result, even when another person created or owns the session. No separate
-authoring mode or identity argument is required. A single administrator keeps
-the Workshop workflow by default; explicitly ask for a personal-library skill
-when that is the intended destination.
+authoring mode or identity argument is required.
+
+The agent authors personal skills with the `skill_library` tool, separate from
+the Workshop `skill_workshop` tool. Human turns with library authority get
+`skill_library`. On a shared Gateway, or for a non-administrator, that is the
+only skill-authoring tool. The administrator of a single-profile Gateway also
+keeps `skill_workshop` for learned skills, so explicitly ask for a
+personal-library skill when that is the intended destination. Tool policy controls `skill_library` like any `group:agents` tool.
 
 Personal create and update operations publish complete managed revisions after
 validation and scanning. The response identifies the skill and revision and

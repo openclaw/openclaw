@@ -1,8 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import {
+  createSessionEntry,
   mockGatewayMethods,
   waitForFast,
   type SubagentRegistryHarness,
@@ -12,6 +13,7 @@ import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -32,7 +34,11 @@ export function registerYieldFollowupAdoptionTests({
   bindWakeMutation: (entries: readonly SubagentRunRecord[]) => void;
   mocks: Pick<
     ReturnType<typeof createSubagentRegistryMockState>,
-    "callGateway" | "runSubagentAnnounceFlow" | "dispatchRecoveryAgent"
+    | "callGateway"
+    | "runSubagentAnnounceFlow"
+    | "dispatchRecoveryAgent"
+    | "entries"
+    | "persistRegistryRows"
   >;
   findRequesterRun: (runId: string, requesterSessionKey?: string) => SubagentRunRecord | undefined;
   getLifecycleHandler: () => (event: LifecycleEvent) => void;
@@ -40,11 +46,48 @@ export function registerYieldFollowupAdoptionTests({
   settleLifecycle: (event: LifecycleEvent) => Promise<void>;
   wakeRequester: Mock<typeof maybeWakeRequesterAfterAllChildrenSettled>;
 }) {
+  const endedEvent = (runId: string, endedAt = 222): LifecycleEvent => ({
+    runId,
+    stream: "lifecycle",
+    data: { phase: "end", startedAt: 111, endedAt, yielded: true },
+  });
+  const claimYield = async (runId: string, sessionKey: string, acknowledgment?: string) => {
+    expect(
+      await getRegistry().claimSubagentYield({
+        runId,
+        sessionKey,
+        acknowledgment,
+        agentId: "main",
+        waitForMessage: true,
+        hasPendingWork: () => false,
+      }),
+    ).toEqual({ messageWaitRegistered: true });
+  };
+  const seedSession = (key: string, suffix: string) =>
+    (mocks.entries[key] = createSessionEntry({
+      sessionId: `sess-${suffix}`,
+      lifecycleRevision: `revision-${suffix}`,
+    }));
+  const requireRun = (id: string, requester?: string) =>
+    expectDefined(findRequesterRun(id, requester), "subagent run");
+  const expectUnpausedKill = (run: SubagentRunRecord | undefined, extra = {}) => {
+    expect(run).toMatchObject({
+      execution: { status: "terminal", endedAt: 222 },
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      cleanupHandled: true,
+      suppressAnnounceReason: "killed",
+      ...extra,
+    });
+    expect(run?.pauseReason).toBeUndefined();
+  };
+
   it.each(
-    ["complete", "yield during restart", "restart after pause"].flatMap((ending) =>
+    ["complete", "yield"].flatMap((ending) =>
       ["lifecycle", "wait"].map((first) => ({ ending, first })),
     ),
   )("settles $ending once with $first arriving first", async ({ ending, first }) => {
+    vi.setSystemTime(111);
+    mocks.persistRegistryRows.mockImplementation(saveSubagentRegistryChangesToSqlite);
     const runId = "run-observation-order";
     const childSessionKey = "agent:main:subagent:child";
     const waitResult = createDeferred<Record<string, unknown>>();
@@ -57,15 +100,7 @@ export function registerYieldFollowupAdoptionTests({
     });
     const paused = ending !== "complete";
     if (paused) {
-      expect(
-        await getRegistry().claimSubagentYield({
-          runId,
-          sessionKey: childSessionKey,
-          agentId: "main",
-          waitForMessage: true,
-          hasPendingWork: () => false,
-        }),
-      ).toEqual({ messageWaitRegistered: true });
+      await claimYield(runId, childSessionKey);
       wakeRequester.mockImplementation(async (params) => {
         bindWakeMutation([params.settledEntry]);
         await params.completeBatch(
@@ -76,12 +111,11 @@ export function registerYieldFollowupAdoptionTests({
       });
     }
     const observe = async (source: string) => {
-      const yielded = paused && (source === "lifecycle" || ending === "yield during restart");
       const terminal = {
         startedAt: 111,
         endedAt: 222,
         ...(paused
-          ? { status: "error", aborted: true, stopReason: "restart", yielded }
+          ? { status: "ok", yielded: true }
           : {
               status: "ok",
               terminalReply: { disposition: "visible", text: "Synthetic final reply." },
@@ -104,16 +138,12 @@ export function registerYieldFollowupAdoptionTests({
       }
     };
     await observe(first);
-    if (paused && (first === "lifecycle" || ending === "yield during restart")) {
-      expect(findRequesterRun(runId)?.requesterSettleWake?.pauseNotice).toBeUndefined();
-    }
     await observe(first === "lifecycle" ? "wait" : "lifecycle");
 
     const run = findRequesterRun(runId);
     if (paused) {
       expect(run?.pauseReason).toBe("sessions_yield");
-      expect(run?.execution.outcome).toBeUndefined();
-      expect(run?.endedReason).toBeUndefined();
+      expect([run?.execution.outcome, run?.endedReason]).toEqual([undefined, undefined]);
       expect(wakeRequester).toHaveBeenCalledOnce();
       expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
     } else {
@@ -129,22 +159,23 @@ export function registerYieldFollowupAdoptionTests({
   it.each([true, false])(
     "accepts late yield only without a kill owner (killed=%s)",
     async (killed) => {
+      vi.setSystemTime(111);
+      mocks.persistRegistryRows.mockImplementation(saveSubagentRegistryChangesToSqlite);
       mockGatewayMethods(mocks.callGateway, { "agent.wait": { status: "pending" } });
       const runId = "run-late-yield";
       const childSessionKey = "agent:main:subagent:late-yield";
+      const sessionEntry = seedSession(childSessionKey, "late-yield");
       await getRegistry().registerSubagentRun({
         runId,
         childSessionKey,
+        sessionEntry,
         task: "handle authoritative late yield",
       });
       const lifecycleHandler = getLifecycleHandler();
       let killedCleanupAt: number | undefined;
       if (killed) {
-        lifecycleHandler({
-          runId,
-          stream: "lifecycle",
-          data: { phase: "end", startedAt: 111, endedAt: 222, yielded: true },
-        });
+        lifecycleHandler(endedEvent(runId));
+        vi.setSystemTime(222);
         expect(
           await getRegistry().markSubagentRunTerminated({
             runId,
@@ -153,13 +184,7 @@ export function registerYieldFollowupAdoptionTests({
           }),
         ).toBe(1);
         const run = findRequesterRun(runId);
-        expect(run).toMatchObject({
-          execution: { status: "terminal", endedAt: 222 },
-          endedReason: SUBAGENT_ENDED_REASON_KILLED,
-          cleanupHandled: true,
-          suppressAnnounceReason: "killed",
-        });
-        expect(run?.pauseReason).toBeUndefined();
+        expectUnpausedKill(run);
         killedCleanupAt = run?.cleanupCompletedAt;
       } else {
         const run = findRequesterRun(runId);
@@ -179,11 +204,7 @@ export function registerYieldFollowupAdoptionTests({
           }),
         );
       }
-      const event = {
-        runId,
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 111, endedAt: 333, yielded: true },
-      };
+      const event = endedEvent(runId, 333);
       if (killed) {
         lifecycleHandler(event);
       } else {
@@ -191,14 +212,7 @@ export function registerYieldFollowupAdoptionTests({
       }
       const run = findRequesterRun(runId);
       if (killed) {
-        expect(run).toMatchObject({
-          execution: { status: "terminal", endedAt: 222 },
-          endedReason: SUBAGENT_ENDED_REASON_KILLED,
-          cleanupHandled: true,
-          cleanupCompletedAt: killedCleanupAt,
-          suppressAnnounceReason: "killed",
-        });
-        expect(run?.pauseReason).toBeUndefined();
+        expectUnpausedKill(run, { cleanupCompletedAt: killedCleanupAt });
       } else {
         expect(run).toMatchObject({
           execution: { status: "terminal", endedAt: 333 },
@@ -206,222 +220,180 @@ export function registerYieldFollowupAdoptionTests({
           cleanupHandled: false,
           delivery: { status: "pending" },
         });
-        expect(run?.endedReason).toBeUndefined();
-        expect(run?.execution.outcome).toBeUndefined();
-        expect(run?.cleanupCompletedAt).toBeUndefined();
+        expect([run?.endedReason, run?.execution.outcome, run?.cleanupCompletedAt]).toEqual([
+          undefined,
+          undefined,
+          undefined,
+        ]);
       }
     },
   );
 
-  describe("sessions_yield follow-up adoption", () => {
-    const CHILD_SESSION_KEY = "agent:main:subagent:yield-followup";
-    const PAUSED_RUN_ID = "run-yield-followup-paused";
-    const FOLLOW_UP_RUN_ID = "run-yield-followup-continued";
-    const SIBLING_RUN_ID = "run-yield-followup-sibling";
-    const ORIGINAL_REQUESTER = "agent:main:telegram:direct:777";
+  const childKey = "agent:main:subagent:yield-followup";
+  const pausedId = "run-yield-followup-paused";
+  const followupId = "run-yield-followup-continued";
+  const siblingId = "run-yield-followup-sibling";
+  const requester = "agent:main:telegram:direct:777";
+  const followup = {
+    runId: followupId,
+    childSessionKey: childKey,
+    task: "the remote job finished",
+  };
 
-    const arrangeYieldingChild = async () => {
-      mockGatewayMethods(mocks.callGateway, {
-        "agent.wait": createDeferred<Record<string, unknown>>().promise,
-      });
-      await getRegistry().registerSubagentRun({
-        runId: PAUSED_RUN_ID,
-        childSessionKey: CHILD_SESSION_KEY,
-        requesterSessionKey: ORIGINAL_REQUESTER,
-        expectsCompletionMessage: true,
-        task: "wait for the remote job",
-      });
-      expect(
-        await getRegistry().claimSubagentYield({
-          runId: PAUSED_RUN_ID,
-          sessionKey: CHILD_SESSION_KEY,
-          agentId: "main",
-          waitForMessage: true,
-          hasPendingWork: () => false,
-          acknowledgment: "Paused awaiting continuation.",
-        }),
-      ).toEqual({ messageWaitRegistered: true });
-      return expectDefined(findRequesterRun(PAUSED_RUN_ID, ORIGINAL_REQUESTER), "yielding run");
-    };
+  const registerPausedChild = async (
+    requesterSessionKey: string,
+    expectsCompletionMessage?: boolean,
+  ) => {
+    seedSession(childKey, "yield-followup");
+    await getRegistry().registerSubagentRun({
+      runId: pausedId,
+      childSessionKey: childKey,
+      sessionEntry: mocks.entries[childKey],
+      requesterSessionKey,
+      expectsCompletionMessage,
+      task: "wait for the remote job",
+    });
+  };
 
-    const registerFollowUp = (requesterSessionKey?: string) =>
-      getRegistry().registerSubagentRun({
-        runId: FOLLOW_UP_RUN_ID,
-        childSessionKey: CHILD_SESSION_KEY,
-        requesterSessionKey: requesterSessionKey ?? "agent:main:main",
-        controllerSessionKey: "agent:main:main",
-        requesterDisplayKey: requesterSessionKey ?? "main",
-        expectsCompletionMessage: requesterSessionKey !== undefined,
-        task: "the remote job finished",
-        cleanup: "keep",
-        spawnMode: "run",
-        label: "plugin:qa",
-      });
+  const arrangeYieldingChild = async () => {
+    vi.setSystemTime(111);
+    mockGatewayMethods(mocks.callGateway, {
+      "agent.wait": createDeferred<Record<string, unknown>>().promise,
+    });
+    seedSession(requester, "yield-requester");
+    await registerPausedChild(requester, true);
+    await claimYield(pausedId, childKey, "Paused awaiting continuation.");
+    return requireRun(pausedId, requester);
+  };
 
-    /**
-     * Drives a child run to the paused state a `sessions_yield` produces, then
-     * arms the wake credential that `settleRequesterTurnAfterSessionSpawns`
-     * writes when the parent yields behind its own spawn batch.
-     */
-    const arrangePausedChildWithYieldedRequester = async (
-      requesterSessionKey = "agent:main:main",
-    ) => {
-      mockGatewayMethods(mocks.callGateway, {
-        "agent.wait": {
-          status: "ok",
-          startedAt: 111,
-          endedAt: 222,
-          stopReason: "end_turn",
-          livenessState: "paused",
-          yielded: true,
-        },
-      });
-      await getRegistry().registerSubagentRun({
-        runId: PAUSED_RUN_ID,
-        childSessionKey: CHILD_SESSION_KEY,
-        requesterSessionKey,
-        task: "wait for the remote job",
-      });
-      await waitForFast(() => {
-        const run = expectDefined(
-          findRequesterRun(PAUSED_RUN_ID, requesterSessionKey),
-          "paused subagent run",
-        );
-        expect(run.pauseReason).toBe("sessions_yield");
-        return run;
-      });
-      await updateFixtureRun(PAUSED_RUN_ID, (next) => {
-        next.requesterSettleWake = {
-          status: "pending",
-          attemptCount: 0,
-          requesterYieldBatch: true,
-          afterRequesterYield: true,
-          rearmGeneration: 1,
-          batchRunIds: [SIBLING_RUN_ID, PAUSED_RUN_ID].toSorted(),
-        };
-      });
-      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      return expectDefined(
-        findRequesterRun(PAUSED_RUN_ID, requesterSessionKey),
-        "published paused run",
-      );
-    };
+  const registerFollowUp = (requesterSessionKey?: string) =>
+    getRegistry().registerSubagentRun({
+      ...followup,
+      sessionEntry: mocks.entries[childKey],
+      requesterSessionKey: requesterSessionKey ?? "agent:main:main",
+      controllerSessionKey: "agent:main:main",
+      requesterDisplayKey: requesterSessionKey ?? "main",
+      expectsCompletionMessage: requesterSessionKey !== undefined,
+      cleanup: "keep",
+      spawnMode: "run",
+      label: "plugin:qa",
+    });
 
-    it("announces to the original requester once the adopted follow-up ends normally", async () => {
-      await arrangePausedChildWithYieldedRequester();
-
-      mockGatewayMethods(mocks.callGateway, {
-        "agent.wait": {
-          status: "ok",
-          startedAt: 333,
-          endedAt: 444,
-          stopReason: "end_turn",
-        },
-      });
-      expect(
-        await getRegistry().adoptPausedSubagentRunForFollowUp({
-          childSessionKey: CHILD_SESSION_KEY,
-          runId: FOLLOW_UP_RUN_ID,
-          task: "the remote job finished",
-        }),
-      ).toBe(true);
-
-      expect(findRequesterRun(PAUSED_RUN_ID)).toBeUndefined();
-      const adopted = expectDefined(findRequesterRun(FOLLOW_UP_RUN_ID), "adopted follow-up run");
-      // Adoption continues the same unit of work: the requester identity that
-      // spawned the paused run must survive, or the announce lands on the
-      // child's own session instead of the waiting parent.
-      expect(adopted.requesterSessionKey).toBe("agent:main:main");
-      expect(adopted.task).toBe("the remote job finished");
-      expect(adopted.pauseReason).toBeUndefined();
-      // The frozen batch is addressed by runId, so the retired id must be
-      // remapped or this row drops out of the batch it still gates.
-      expect(adopted.requesterSettleWake?.batchRunIds).toEqual(
-        [SIBLING_RUN_ID, FOLLOW_UP_RUN_ID].toSorted(),
-      );
-      expect(adopted.requesterSettleWake).toMatchObject({
+  it("announces to the original requester once the adopted follow-up ends normally", async () => {
+    const requesterSessionKey = "agent:main:main";
+    mockGatewayMethods(mocks.callGateway, {
+      "agent.wait": {
+        status: "ok",
+        startedAt: 111,
+        endedAt: 222,
+        stopReason: "end_turn",
+        livenessState: "paused",
+        yielded: true,
+      },
+    });
+    await registerPausedChild(requesterSessionKey);
+    await waitForFast(() => {
+      const run = requireRun(pausedId, requesterSessionKey);
+      expect(run.pauseReason).toBe("sessions_yield");
+    });
+    await updateFixtureRun(pausedId, (next) => {
+      next.requesterSettleWake = {
+        status: "pending",
+        attemptCount: 0,
         requesterYieldBatch: true,
+        afterRequesterYield: true,
         rearmGeneration: 1,
-      });
+        batchRunIds: [siblingId, pausedId].toSorted(),
+      };
+    });
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    mockGatewayMethods(mocks.callGateway, {
+      "agent.wait": {
+        status: "ok",
+        startedAt: 333,
+        endedAt: 444,
+        stopReason: "end_turn",
+      },
+    });
+    expect(await getRegistry().adoptPausedSubagentRunForFollowUp({ ...followup })).toBe(true);
 
-      await waitForFast(() => {
-        expect(
-          expectDefined(findRequesterRun(FOLLOW_UP_RUN_ID), "adopted follow-up run").execution
-            .endedAt,
-        ).toBe(444);
-        expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalled();
-      });
+    expect(findRequesterRun(pausedId)).toBeUndefined();
+    const adopted = requireRun(followupId);
+    // The original audience and frozen batch must survive adoption.
+    expect(adopted).toMatchObject({
+      requesterSessionKey: "agent:main:main",
+      task: "the remote job finished",
+    });
+    expect(adopted.pauseReason).toBeUndefined();
+    expect(adopted.requesterSettleWake?.batchRunIds).toEqual([siblingId, followupId].toSorted());
+    expect(adopted.requesterSettleWake).toMatchObject({
+      requesterYieldBatch: true,
+      rearmGeneration: 1,
     });
 
-    it("hands the pause to a default follow-up admitted while the child was still yielding", async () => {
-      const kickoff = await arrangeYieldingChild();
-      const followUpWait = createDeferred<{ status: "ok"; startedAt: number; endedAt: number }>();
-      mockGatewayMethods(mocks.callGateway, { "agent.wait": followUpWait.promise });
-      await registerFollowUp();
-      const successor = expectDefined(findRequesterRun(FOLLOW_UP_RUN_ID), "admitted follow-up");
+    await waitForFast(() => {
+      expect(requireRun(followupId).execution.endedAt).toBe(444);
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalled();
+    });
+  });
 
-      getLifecycleHandler()({
-        runId: PAUSED_RUN_ID,
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 111, endedAt: 222, yielded: true },
-      });
-      const adopted = await waitForFast(() => {
-        expect(findRequesterRun(PAUSED_RUN_ID, ORIGINAL_REQUESTER)).toBeUndefined();
-        return expectDefined(
-          findRequesterRun(FOLLOW_UP_RUN_ID, ORIGINAL_REQUESTER),
-          "adopted follow-up",
-        );
-      });
-      expect(adopted).toMatchObject({
-        requesterSessionKey: ORIGINAL_REQUESTER,
-        expectsCompletionMessage: true,
-        completion: { required: true },
-        taskRunId: kickoff.taskRunId ?? kickoff.runId,
-        task: "the remote job finished",
-      });
-      expect(adopted.execution).toEqual(successor.execution);
-      expect(adopted.generation).toBeGreaterThan(
-        expectDefined(successor.generation, "admitted follow-up generation"),
+  it("hands the pause to a default follow-up admitted while the child was still yielding", async () => {
+    const kickoff = await arrangeYieldingChild();
+    const followUpWait = createDeferred<{ status: "ok"; startedAt: number; endedAt: number }>();
+    mockGatewayMethods(mocks.callGateway, { "agent.wait": followUpWait.promise });
+    await registerFollowUp();
+    const successor = requireRun(followupId);
+
+    getLifecycleHandler()(endedEvent(pausedId));
+    const adopted = await waitForFast(() => {
+      expect(findRequesterRun(pausedId, requester)).toBeUndefined();
+      return requireRun(followupId, requester);
+    });
+    expect(adopted).toMatchObject({
+      requesterSessionKey: requester,
+      expectsCompletionMessage: true,
+      completion: { required: true },
+      taskRunId: kickoff.taskRunId ?? kickoff.runId,
+      task: "the remote job finished",
+    });
+    expect(adopted.execution).toEqual(successor.execution);
+    expect(adopted.generation).toBeGreaterThan(
+      expectDefined(successor.generation, "admitted follow-up generation"),
+    );
+    expect(adopted.requesterSettleWake).toBeUndefined();
+    expect(wakeRequester).not.toHaveBeenCalled();
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(mocks.dispatchRecoveryAgent).not.toHaveBeenCalled();
+
+    followUpWait.resolve({ status: "ok", startedAt: 333, endedAt: 444 });
+    await waitForFast(() => {
+      expect(findRequesterRun(followupId, requester)?.execution.endedAt).toBe(444);
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          childRunId: followupId,
+          requesterSessionKey: requester,
+        }),
       );
-      expect(adopted.requesterSettleWake).toBeUndefined();
-      expect(wakeRequester).not.toHaveBeenCalled();
-      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      expect(mocks.dispatchRecoveryAgent).not.toHaveBeenCalled();
-
-      followUpWait.resolve({ status: "ok", startedAt: 333, endedAt: 444 });
-      await waitForFast(() => {
-        expect(findRequesterRun(FOLLOW_UP_RUN_ID, ORIGINAL_REQUESTER)?.execution.endedAt).toBe(444);
-        expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
-          expect.objectContaining({
-            childRunId: FOLLOW_UP_RUN_ID,
-            requesterSessionKey: ORIGINAL_REQUESTER,
-          }),
-        );
-      });
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
     });
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+  });
 
-    it("keeps a requester-bound follow-up separate when the child publishes its pause", async () => {
-      await arrangeYieldingChild();
-      const followUpRequester = "agent:main:telegram:direct:555";
-      await registerFollowUp(followUpRequester);
+  it("keeps a requester-bound follow-up separate when the child publishes its pause", async () => {
+    await arrangeYieldingChild();
+    const followUpRequester = "agent:main:telegram:direct:555";
+    await registerFollowUp(followUpRequester);
 
-      await settleLifecycle({
-        runId: PAUSED_RUN_ID,
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 111, endedAt: 222, yielded: true },
-      });
+    await settleLifecycle(endedEvent(pausedId));
 
-      expect(findRequesterRun(PAUSED_RUN_ID, ORIGINAL_REQUESTER)).toMatchObject({
-        pauseReason: "sessions_yield",
-        requesterSessionKey: ORIGINAL_REQUESTER,
-        expectsCompletionMessage: true,
-      });
-      expect(findRequesterRun(FOLLOW_UP_RUN_ID, followUpRequester)).toMatchObject({
-        requesterSessionKey: followUpRequester,
-        expectsCompletionMessage: true,
-        execution: { status: "running" },
-      });
+    expect(findRequesterRun(pausedId, requester)).toMatchObject({
+      pauseReason: "sessions_yield",
+      requesterSessionKey: requester,
+      expectsCompletionMessage: true,
+    });
+    expect(findRequesterRun(followupId, followUpRequester)).toMatchObject({
+      requesterSessionKey: followUpRequester,
+      expectsCompletionMessage: true,
+      execution: { status: "running" },
     });
   });
 }

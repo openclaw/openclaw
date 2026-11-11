@@ -100,10 +100,32 @@ private func withLastGatewaySnapshot(_ body: () -> Void) async {
         #expect(ExecApprovalIdentifier.exact("") == nil)
         #expect(ExecApprovalIdentifier.key(".") == nil)
         #expect(ExecApprovalIdentifier.key("..") == nil)
+        #expect(ExecApprovalIdentifier.exact(".") == nil)
         #expect(ExecApprovalIdentifier.exact(" approval ") == " approval ")
+        #expect(ExecApprovalIdentifier.exact("\u{001C}approval") == "\u{001C}approval")
         #expect(ExecApprovalIdentifier.exact("\u{0085}approval") == "\u{0085}approval")
         #expect(GatewayStableIdentifier.exact(" gateway ") == " gateway ")
         #expect(GatewayStableIdentifier.exact("\u{0085}gateway") == "\u{0085}gateway")
+    }
+
+    @Test func `exact opaque identifier keys stay byte exact and dot safe`() throws {
+        let composedID = "approval-\u{00E9}"
+        let decomposedID = "approval-e\u{0301}"
+        let composedKey = ExactOpaqueIdentifierKey(composedID)
+        let decomposedKey = ExactOpaqueIdentifierKey(decomposedID)
+        #expect(composedID == decomposedID)
+        #expect(composedKey != decomposedKey)
+
+        var pending = [composedKey: composedID, decomposedKey: decomposedID]
+        pending.removeValue(forKey: composedKey)
+        let remainingID = try #require(pending[decomposedKey])
+        #expect(Array(remainingID.utf8) == Array(decomposedID.utf8))
+
+        let left = ExactOpaqueIdentifierKey("a.b").notificationComponent + "."
+            + ExactOpaqueIdentifierKey("c").notificationComponent
+        let right = ExactOpaqueIdentifierKey("a").notificationComponent + "."
+            + ExactOpaqueIdentifierKey("b.c").notificationComponent
+        #expect(left != right)
     }
 
     @Test func `custom headers round trip per gateway`() {
@@ -676,7 +698,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) async {
     }
 
     @Test @MainActor func `registry observers refresh only after successful mutations`() async {
-        await withLastGatewaySnapshot {
+        await withBootstrapSnapshots {
             applyKeychain([gatewayRegistryKeychainEntry: nil, lastGatewayKeychainEntry: nil])
             let notifications = OSAllocatedUnfairLock(initialState: 0)
             let observer = NotificationCenter.default.addObserver(
@@ -686,6 +708,9 @@ private func withLastGatewaySnapshot(_ body: () -> Void) async {
             defer { NotificationCenter.default.removeObserver(observer) }
 
             #expect(GatewaySettingsStore.saveGatewayRegistry(.empty))
+            #expect(notifications.withLock { $0 } == 1)
+            #expect(GatewaySettingsStore.saveGatewayRegistry(.empty))
+            _ = GatewaySettingsStore.currentInstanceID()
             #expect(notifications.withLock { $0 } == 1)
             #expect(!GatewaySettingsStore.setActiveGateway(stableID: "missing-gateway"))
             #expect(notifications.withLock { $0 } == 1)
@@ -833,6 +858,30 @@ private func withLastGatewaySnapshot(_ body: () -> Void) async {
             let composedOwner = "gateway-\u{00E9}"
             let decomposedOwner = "gateway-e\u{0301}"
             let nextLineOwner = "\u{0085}gateway"
+            var singleton = GatewaySettingsStore.GatewayRegistry.empty
+            singleton.entries = [.init(
+                stableID: composedOwner,
+                kind: .discovered,
+                name: "Gateway",
+                host: nil,
+                port: nil,
+                useTLS: true,
+                lastConnectedAtMs: nil)]
+            #expect(GatewaySettingsStore.saveGatewayRegistry(singleton))
+            let notifications = OSAllocatedUnfairLock(initialState: 0)
+            let observer = NotificationCenter.default.addObserver(
+                forName: GatewaySettingsStore.gatewayRegistryDidChange,
+                object: nil,
+                queue: nil) { _ in notifications.withLock { $0 += 1 } }
+            singleton.entries[0].stableID = decomposedOwner
+            #expect(GatewaySettingsStore.saveGatewayRegistry(singleton))
+            NotificationCenter.default.removeObserver(observer)
+            #expect(notifications.withLock { $0 } == 1)
+            let stored = GenericPasswordKeychainStore.loadString(
+                service: gatewayService,
+                account: "gateway-registry")
+            #expect(stored.map { Data($0.utf8).range(of: Data(decomposedOwner.utf8)) != nil } == true)
+            GatewaySettingsStore.clearGatewayRegistry()
             for owner in [composedOwner, decomposedOwner, nextLineOwner] {
                 #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
                     stableID: owner,

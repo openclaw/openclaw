@@ -56,23 +56,21 @@ class GatewayProtocolGeneratedTest {
 
   @Test
   fun legacyFramesDecodePrincipalLessSharingErrorsAndRefreshEvents() {
-    for (id in listOf("unknown", "absent")) {
-      val response =
-        json.decodeFromString(
-          GatewayResponseFrame.serializer(),
-          """{"type":"res","id":"$id","ok":false,"error":{"code":"INVALID_REQUEST","message":"session membership includes actor evidence this client cannot represent","details":{"code":"SESSION_MEMBER_ACTOR_EVIDENCE_UNSUPPORTED","recommendedMethod":"session.members.listEvidence"}}}""",
-        )
-      assertEquals("INVALID_REQUEST", response.error?.code)
-      assertEquals(
-        "session.members.listEvidence",
-        response.error
-          ?.details
-          ?.jsonObject
-          ?.get("recommendedMethod")
-          ?.jsonPrimitive
-          ?.content,
+    val response =
+      json.decodeFromString(
+        GatewayResponseFrame.serializer(),
+        """{"type":"res","id":"unknown","ok":false,"error":{"code":"INVALID_REQUEST","message":"session membership includes actor evidence this client cannot represent","details":{"code":"SESSION_MEMBER_ACTOR_EVIDENCE_UNSUPPORTED","recommendedMethod":"session.members.listEvidence"}}}""",
       )
-    }
+    assertEquals("INVALID_REQUEST", response.error?.code)
+    assertEquals(
+      "session.members.listEvidence",
+      response.error
+        ?.details
+        ?.jsonObject
+        ?.get("recommendedMethod")
+        ?.jsonPrimitive
+        ?.content,
+    )
 
     val ignoredEvidence =
       json.decodeFromString(

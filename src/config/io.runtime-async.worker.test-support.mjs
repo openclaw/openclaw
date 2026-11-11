@@ -21,7 +21,7 @@ try {
     "CONFIG_WORKER_STAGED=isolated\n",
   );
   const stagedEnv = { ...process.env };
-  loadDotEnv({ env: stagedEnv, quiet: true });
+  loadDotEnv({ env: stagedEnv });
   assert.equal(stagedEnv.CONFIG_WORKER_STAGED, "isolated");
   assert.equal(process.env.CONFIG_WORKER_STAGED, undefined);
 

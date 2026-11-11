@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import type { QaTestFileScenario } from "./scenario-catalog.js";
 import { readJsonFileIfExists } from "./test-file-scenario-script-evidence.js";
 
@@ -10,28 +11,6 @@ export function resolveNativeVitestReportPath(
   outputDir: string,
 ): string {
   return path.join(outputDir, `${scenario.id}.vitest-report.json`);
-}
-
-async function canonicalizeNativeTestFilePath(params: {
-  canonicalRepoRoot: string;
-  repoRoot: string;
-  testPath: string;
-}) {
-  const absoluteTestPath = path.resolve(params.repoRoot, params.testPath);
-  const canonicalTestPath = await fs.realpath(absoluteTestPath).catch(() => undefined);
-  if (canonicalTestPath) {
-    return canonicalTestPath;
-  }
-
-  const repoRelativePath = path.relative(params.repoRoot, absoluteTestPath);
-  if (
-    repoRelativePath !== ".." &&
-    !repoRelativePath.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(repoRelativePath)
-  ) {
-    return path.resolve(params.canonicalRepoRoot, repoRelativePath);
-  }
-  return absoluteTestPath;
 }
 
 export async function readNativeVitestExecutionFailure(params: {
@@ -75,11 +54,17 @@ export async function readNativeVitestExecutionFailure(params: {
         if (!result || typeof result.name !== "string") {
           return undefined;
         }
-        const reportedTestPath = await canonicalizeNativeTestFilePath({
-          canonicalRepoRoot,
-          repoRoot: params.repoRoot,
-          testPath: result.name,
-        });
+        const absoluteTestPath = path.resolve(params.repoRoot, result.name);
+        let reportedTestPath = await fs.realpath(absoluteTestPath).catch(() => undefined);
+        if (!reportedTestPath) {
+          const repoRelativePath = path.relative(params.repoRoot, absoluteTestPath);
+          reportedTestPath =
+            repoRelativePath !== ".." &&
+            !repoRelativePath.startsWith(`..${path.sep}`) &&
+            !path.isAbsolute(repoRelativePath)
+              ? path.resolve(canonicalRepoRoot, repoRelativePath)
+              : absoluteTestPath;
+        }
         return reportedTestPath === expectedTestPath ? result : undefined;
       }),
     )
@@ -107,8 +92,7 @@ export async function readNativeVitestExecutionFailure(params: {
         // Native JSON fullName uses spaces; v5 selection joins the title chain with >.
         return (
           typeof assertion.title === "string" &&
-          Array.isArray(assertion.ancestorTitles) &&
-          assertion.ancestorTitles.every((title) => typeof title === "string") &&
+          isStringArray(assertion.ancestorTitles) &&
           requestedTestName.test([...assertion.ancestorTitles, assertion.title].join(" > "))
         );
       })

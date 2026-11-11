@@ -9,6 +9,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import {
   SkillResourceDeliverySchema,
+  SKILL_RESOURCE_MAX_SKILLS,
   type SkillResourceDelivery,
 } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
 import {
@@ -21,7 +22,6 @@ import { acquireFileLock } from "../../infra/file-lock.js";
 import { removeTemporaryArtifacts } from "../../infra/temp-artifact-cleanup.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   copyExplicitSkillSelectionFileHost,
   resolveExplicitSkillSelectionFileHost,
@@ -36,7 +36,7 @@ import {
 } from "../library/bundle.js";
 import { readSkillLibrarySelectionManifests } from "../library/selection-read.js";
 import {
-  captureSkillLibrarySelection,
+  captureSkillLibraryPreparation,
   prepareSkillLibrarySelection,
 } from "../library/selection.js";
 import { loadSingleSkillDirectory } from "../loading/local-loader.js";
@@ -53,7 +53,6 @@ import { SkillLibraryError } from "../skill-library-error.js";
 import type { ExplicitSkillSelection, SkillSnapshot, SkillResourceSourceReader } from "../types.js";
 import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
 import { resolveSkillResourceCandidates } from "./resource-candidates.js";
-import { SkillResourceDeliveryLimitError } from "./resource-delivery-error.js";
 
 const log = createSubsystemLogger("skills/resources");
 
@@ -145,14 +144,19 @@ export async function prepareSkillResourceDelivery(
   assertCurrent();
   if (
     !inputSnapshot.resolvedSkills?.length &&
+    !inputSnapshot.discoverySkills?.length &&
     !inputSnapshot.librarySelections?.length &&
     !inputExplicitSelections.length
   ) {
     return undefined;
   }
+  const library = captureSkillLibraryPreparation(
+    inputSnapshot.librarySelections ?? [],
+    assertCurrent,
+  );
   const snapshot = {
     ...inputSnapshot,
-    librarySelections: captureSkillLibrarySelection(inputSnapshot.librarySelections ?? []),
+    librarySelections: library.librarySelections,
     skills: inputSnapshot.skills.map((skill) => ({ ...skill })),
     resolvedSkills: inputSnapshot.resolvedSkills?.map((skill) => ({ ...skill })),
     skillRoots: inputSnapshot.skillRoots && { ...inputSnapshot.skillRoots },
@@ -183,23 +187,15 @@ export async function prepareSkillResourceDelivery(
   };
   const skills: SkillResourceDelivery["skills"] = [];
   let total = 0;
-  const libraryContext = snapshot.librarySelections?.length
-    ? captureOpenClawStateWorkerContext()
-    : undefined;
-  const assertLibraryCurrent = () => {
-    assertCurrent();
-    libraryContext?.maintenanceScope?.assertAdmission();
-    libraryContext?.admission.assertCurrent();
-  };
-  const libraryOptions = { env: libraryContext?.environment };
-  const libraryEntries = libraryContext
+  const libraryOptions = { env: library.libraryContext?.environment };
+  const libraryEntries = library.libraryContext
     ? await prepareSkillLibrarySelection(
         snapshot.librarySelections ?? [],
         libraryOptions,
-        assertLibraryCurrent,
+        library.assertCurrent,
       )
     : [];
-  assertLibraryCurrent();
+  library.assertCurrent();
   const candidates = resolveSkillResourceCandidates(snapshot, libraryEntries)!;
   for (const selected of explicitSelections) {
     if (
@@ -232,7 +228,7 @@ export async function prepareSkillResourceDelivery(
     } catch (error) {
       throw contextualizeSkillResourceError({ name: selected.name, baseDir: skillDir }, error);
     }
-    assertLibraryCurrent();
+    library.assertCurrent();
     if (
       !loaded ||
       loaded.filePath !== selected.path ||
@@ -264,10 +260,24 @@ export async function prepareSkillResourceDelivery(
       }),
     ),
   ];
-  let manifests: Awaited<ReturnType<typeof readSkillLibrarySelectionManifests>>;
+  // Choose delivery slots before reading trees; discovery must not consume selected resources' budget.
+  const required: Skill[] = [];
+  const discovery: Skill[] = [];
   for (const skill of candidates) {
-    if (skill.filePath.startsWith("node://")) {
-      continue;
+    if (!skill.filePath.startsWith("node://")) {
+      const selected =
+        snapshot.resolvedSkills?.some((entry) => entry.filePath === skill.filePath) ||
+        explicitSelections.some((selection) => matchesExplicitSelection(skill, selection)) ||
+        pins.some((selection) => selection.name === skill.name);
+      (selected ? required : discovery).push(skill);
+    }
+  }
+  const deliveredCandidates = [...required, ...discovery];
+  const deliverySlots = Math.max(SKILL_RESOURCE_MAX_SKILLS, required.length);
+  let manifests: Awaited<ReturnType<typeof readSkillLibrarySelectionManifests>>;
+  for (const [index, skill] of deliveredCandidates.entries()) {
+    if (skills.length === deliverySlots) {
+      break;
     }
     const pin = snapshot.librarySelections?.find((selection) => selection.name === skill.name);
     const explicitlySelected = explicitSelections.some((selection) =>
@@ -276,17 +286,17 @@ export async function prepareSkillResourceDelivery(
     let files: SkillLibraryFile[] | null;
     try {
       if (pin) {
-        assertLibraryCurrent();
+        library.assertCurrent();
         if (!manifests) {
           manifests = await readSkillLibrarySelectionManifests(pins, libraryOptions);
-          assertLibraryCurrent();
+          library.assertCurrent();
         }
         const manifest = manifests?.[pins.indexOf(pin)];
         if (!manifest) {
           throw new SkillLibraryError("NOT_FOUND", "Selected skill revision is unavailable.");
         }
         files = await readSkillLibraryManifestTree(
-          skillLibraryRevisionDir(pin.skillId, pin.revision, libraryContext?.environment),
+          skillLibraryRevisionDir(pin.skillId, pin.revision, library.libraryContext?.environment),
           manifest.files_json,
           pin.revision,
         );
@@ -298,7 +308,7 @@ export async function prepareSkillResourceDelivery(
     } catch (error) {
       throw contextualizeSkillResourceError(skill, error);
     }
-    assertLibraryCurrent();
+    library.assertCurrent();
     if (files === null) {
       if (explicitlySelected) {
         throw contextualizeSkillResourceError(
@@ -314,10 +324,39 @@ export async function prepareSkillResourceDelivery(
     } catch (error) {
       throw contextualizeSkillResourceError(skill, error);
     }
-    total += bundle.files.reduce((sum, file) => sum + file.sizeBytes, 0);
-    if (total > SKILL_LIBRARY_MAX_BUNDLE_BYTES) {
-      throw new SkillResourceDeliveryLimitError();
+    let bundleBytes = bundle.files.reduce((sum, file) => sum + file.sizeBytes, 0);
+    // Reserve a bounded omission notice for every remaining skill, even if its instructions cannot fit.
+    const remaining =
+      SKILL_LIBRARY_MAX_BUNDLE_BYTES -
+      total -
+      Math.min(deliveredCandidates.length - index - 1, deliverySlots - skills.length - 1) * 1024;
+    if (bundleBytes > remaining) {
+      const instructions = bundle.files.find((file) => file.path === "SKILL.md")!;
+      const note =
+        "\n\n## Worker resource delivery\n\nSupporting files were omitted to keep this turn within the 8 MiB worker delivery limit. " +
+        "Do not run commands that depend on missing files. Continue with available tools; if a missing resource is needed, explain which one and ask for that resource or a narrower skill selection.\n";
+      const keepInstructions =
+        instructions.sizeBytes + Buffer.byteLength(note) <=
+        Math.min(remaining, SKILL_LIBRARY_MAX_FILE_BYTES);
+      const content = keepInstructions
+        ? instructions.bytes.toString("utf8") + note
+        : "# Skill unavailable in this worker turn\n\nThe complete instructions could not fit and were not delivered." +
+          note;
+      const largest = bundle.files.reduce((a, b) => (a.sizeBytes >= b.sizeBytes ? a : b));
+      log.warn("Skill resource delivery reduced to fit the worker limit.", {
+        skill: skill.name,
+        root: skill.baseDir,
+        bundleBytes,
+        remainingBytes: remaining,
+        omittedFiles: bundle.files.length - (keepInstructions ? 1 : 0),
+        largestFile: largest.path,
+        largestFileBytes: largest.sizeBytes,
+      });
+      files = [{ path: "SKILL.md", content, encoding: "utf8" }];
+      bundle = prepareSkillBundle(files);
+      bundleBytes = bundle.files[0]!.sizeBytes;
     }
+    total += bundleBytes;
     const sourcePath =
       resolveSkillFileHost(skill) === "workspace" &&
       candidates.some(
@@ -341,7 +380,10 @@ export async function prepareSkillResourceDelivery(
       files,
     });
   }
-  const delivery = { version: 1 as const, skills };
+  const delivery = {
+    version: 1 as const,
+    skills,
+  };
   if (!Value.Check(SkillResourceDeliverySchema, delivery)) {
     throw new Error("Selected skill catalog exceeds the worker resource contract.");
   }

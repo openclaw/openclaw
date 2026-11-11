@@ -20,24 +20,6 @@ const LEGACY_WEB_SEARCH_OWNERS = new Map<string, string>([
 const LEGACY_WEB_SEARCH_PROVIDER_IDS = [...LEGACY_WEB_SEARCH_OWNERS.keys()].toSorted(
   (left, right) => left.localeCompare(right),
 );
-const RETIRED_GROK_SEARCH_MODELS = new Set([
-  "grok-4-1-fast",
-  "grok-4-1-fast-reasoning",
-  "grok-4-fast",
-  "grok-4-fast-reasoning",
-  "grok-4-0709",
-]);
-const RETIRED_GROK_CODE_MODELS = new Set([
-  "grok-code-fast-1",
-  "grok-code-fast",
-  "grok-code-fast-1-0825",
-]);
-const RETIRED_X_SEARCH_MODELS = new Set([
-  "grok-4-1-fast-non-reasoning",
-  "grok-4-fast-non-reasoning",
-  "grok-3",
-]);
-
 type PluginMove = {
   pluginId: string;
   configKey: "webSearch" | "webFetch";
@@ -104,17 +86,6 @@ function applyPluginMove(root: JsonRecord, move: PluginMove, changes: string[]):
   return activated;
 }
 
-function resolveGrokModelTarget(model: unknown, xSearch: boolean): string | undefined {
-  if (typeof model !== "string") {
-    return undefined;
-  }
-  const normalized = model.trim().toLowerCase();
-  if ((xSearch ? RETIRED_X_SEARCH_MODELS : RETIRED_GROK_SEARCH_MODELS).has(normalized)) {
-    return "grok-4.3";
-  }
-  return RETIRED_GROK_CODE_MODELS.has(normalized) ? "grok-build-0.1" : undefined;
-}
-
 function searchMove(
   providerId: string,
   payload: JsonRecord,
@@ -177,15 +148,6 @@ export function migrateLegacyWebSearchConfig<T>(raw: T): { config: T; changes: s
     if (Object.keys(payload).length === 0) {
       continue;
     }
-    if (providerId === "grok") {
-      const modelTarget = resolveGrokModelTarget(payload.model, false);
-      if (modelTarget) {
-        changes.push(
-          `Updated tools.web.search.grok.model from ${JSON.stringify(payload.model)} to ${JSON.stringify(modelTarget)}.`,
-        );
-        payload.model = modelTarget;
-      }
-    }
     applyPluginMove(next, searchMove(providerId, payload), changes);
   }
   return { config: next, changes };
@@ -223,19 +185,13 @@ export function migrateLegacyWebFetchConfig<T>(raw: T): { config: T; changes: st
   return { config: next, changes };
 }
 
-/** Resolve a supported replacement for a retired legacy X search model. */
-export function resolveLegacyXSearchModelTarget(model: unknown): string | undefined {
-  return resolveGrokModelTarget(model, true);
-}
-
 export function migrateLegacyXSearchConfig<T>(raw: T): { config: T; changes: string[] } {
   const source = resolveWebSlot(raw, "x_search");
   if (!source) {
     return { config: raw, changes: [] };
   }
   const hasAuth = Object.hasOwn(source, "apiKey");
-  const modelTarget = resolveLegacyXSearchModelTarget(source.model);
-  if (!hasAuth && !modelTarget) {
+  if (!hasAuth) {
     return { config: raw, changes: [] };
   }
   // SAFETY: resolveWebSlot admitted a record root; cloning preserves its input shape.
@@ -243,37 +199,27 @@ export function migrateLegacyXSearchConfig<T>(raw: T): { config: T; changes: str
   const web = ensureRecord(ensureRecord(next, "tools"), "web");
   const retained = { ...source };
   const changes: string[] = [];
-  if (hasAuth) {
-    delete retained.apiKey;
-  }
-  if (modelTarget) {
-    changes.push(
-      `Updated tools.web.x_search.model from ${JSON.stringify(source.model)} to ${JSON.stringify(modelTarget)}.`,
-    );
-    retained.model = modelTarget;
-  }
+  delete retained.apiKey;
   const empty = Object.keys(retained).length === 0;
   if (empty) {
     delete web.x_search;
   } else {
     web.x_search = retained;
   }
-  if (hasAuth) {
-    const activated = applyPluginMove(
-      next,
-      {
-        pluginId: "xai",
-        configKey: "webSearch",
-        payload: { apiKey: source.apiKey },
-        legacyPath: "tools.web.x_search.apiKey",
-        targetPath: "plugins.entries.xai.config.webSearch.apiKey",
-        mergeMode: "own-api-key",
-      },
-      changes,
-    );
-    if (activated && empty) {
-      changes.push("Removed empty tools.web.x_search.");
-    }
+  const activated = applyPluginMove(
+    next,
+    {
+      pluginId: "xai",
+      configKey: "webSearch",
+      payload: { apiKey: source.apiKey },
+      legacyPath: "tools.web.x_search.apiKey",
+      targetPath: "plugins.entries.xai.config.webSearch.apiKey",
+      mergeMode: "own-api-key",
+    },
+    changes,
+  );
+  if (activated && empty) {
+    changes.push("Removed empty tools.web.x_search.");
   }
   return { config: next, changes };
 }

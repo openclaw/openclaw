@@ -9,8 +9,8 @@ import type {
   WorkboardWriteAuthority,
 } from "../persistence-types.js";
 import { workboardSqliteBackendEntrypoint } from "../sqlite-backend-entrypoint.test-support.js";
-import { createWorkboardSqliteStores } from "../sqlite-store.js";
 import { WorkboardStore } from "../store.js";
+import { createWorkboardSqliteStores } from "./database-config.js";
 
 const workerModuleUrl = resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint);
 
@@ -122,6 +122,6 @@ export function createWorkboardSqliteTestStore(options: WorkboardSqliteTestOptio
 }
 
 export function sqliteTestAuxStores(stores: WorkboardSqliteTestStores) {
-  const { boards, sessionsBoard, subscriptions, attachments, ready } = stores;
-  return { boards, sessionsBoard, subscriptions, attachments, ready };
+  const { boards, sessionsBoard, subscriptions, attachments, ready, readWriteToken } = stores;
+  return { boards, sessionsBoard, subscriptions, attachments, ready, readWriteToken };
 }

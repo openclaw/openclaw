@@ -1,4 +1,4 @@
-// Compile-time identity for the Control UI artifact.
+// Document-owned identity for the Control UI artifact.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeControlUiBuildInfo } from "./build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./build-info-types.ts";
@@ -6,8 +6,8 @@ import type { ControlUiBuildInfo } from "./build-info-types.ts";
 export type { ControlUiBuildInfo } from "./build-info-types.ts";
 
 declare global {
-  // Vite replaces this property with one object so the UI and service worker
-  // share the exact artifact identity without separate compile-time constants.
+  // The build document sets this before modules run; refreshable identity keeps
+  // immutable assets reusable while the UI and service worker name one release.
   var OPENCLAW_CONTROL_UI_BUILD_INFO: ControlUiBuildInfo | undefined;
 }
 

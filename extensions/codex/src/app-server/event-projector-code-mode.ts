@@ -1,4 +1,4 @@
-import { compileFunction } from "node:vm";
+import { parse } from "acorn";
 import { isJsonObject } from "./protocol.js";
 
 export type CodeModeNativeCall = {
@@ -77,8 +77,8 @@ export function readCodeModeNativeCall(source: unknown): CodeModeNativeCall | un
     return undefined;
   }
   try {
-    // Compile only: reject invalid bindings/syntax within the recognized grammar.
-    compileFunction(`"use strict"; return async () => {\n${source}\n};`);
+    // Parse only: reject invalid bindings/syntax within the recognized grammar.
+    parse(`"use strict"; (async () => {\n${source}\n});`, { ecmaVersion: "latest" });
     const input = readLiteral(match.literal ?? operand);
     const tool = match.tool ?? match.boundTool;
     if (

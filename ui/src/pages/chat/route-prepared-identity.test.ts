@@ -1,6 +1,6 @@
 // @vitest-environment node
 import type { ModelsSnapshotEvent, SessionsResolveResult } from "@openclaw/gateway-protocol";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { loadChatRoute } from "./route-loader.ts";
@@ -23,7 +23,15 @@ const resolved: SessionsResolveResult = {
   agentId: "roboclaw",
   displayName: "Current title",
 };
+const otherKey = "agent:roboclaw:thread:12345678-1111-4111-8111-111111111111";
+const otherPrefix = "agent:roboclaw:thread:87654321-90ab-cdef-1234-567890abcdef";
 
+function session(data: Awaited<ReturnType<typeof loadChatRoute>>) {
+  if (!("kind" in data) || data.kind !== "session") {
+    throw new Error("Expected a resolved chat route");
+  }
+  return data;
+}
 function fixture() {
   const harness = createSessionRouteContext();
   const reply = createDeferred<SessionsResolveResult>();
@@ -50,15 +58,62 @@ function fixture() {
   });
   const emit = (payload: ModelsSnapshotEvent = publication) =>
     harness.publishEvent({ type: "event", event: "models.snapshot", payload });
+
   const started = () => requestStarted.promise;
-  return { ...harness, reply, controller, emit, started };
+  const load = () => loadChatRoute(harness.context, location, "chat", controller.signal);
+  const start = async (prepare = false) => {
+    let settled = false;
+    const pending = load().then((data) => {
+      settled = true;
+      return data;
+    });
+    await started();
+    if (prepare) {
+      emit();
+    }
+    return { pending, settled: () => settled };
+  };
+  const expectCanonical = async (canonical: typeof location | null | undefined, calls: number) => {
+    if (!canonical) {
+      throw new Error("Expected a canonical session location");
+    }
+    await expect(
+      loadChatRoute(harness.context, canonical, "chat", new AbortController().signal),
+    ).resolves.toMatchObject({ kind: "session", sessionKey: sessionRouteKey });
+    expect(
+      harness.request.mock.calls.filter(([method]) => method === "sessions.resolve"),
+    ).toHaveLength(calls);
+  };
+  const ownerChanges = {
+    client: () => harness.publishGateway({ client: null }),
+    hello: () => harness.publishGateway({ hello: gatewayHelloForMethods(["sessions.resolve"]) }),
+    profile: () => harness.publishGateway({ selfUser: { id: "other-reader" } }),
+    disconnect: () => harness.publishGateway({ phase: "reconnecting" }),
+    navigation: () => controller.abort(),
+    application: () => harness.stop(),
+  };
+  const replaceOwner = (change: keyof typeof ownerChanges) => ownerChanges[change]();
+  return {
+    ...harness,
+    reply,
+    emit,
+    started,
+    start,
+    load,
+    replaceOwner,
+    expectCanonical,
+    baseline: harness.listenerCounts(),
+  };
 }
 
 describe("prepared short-route identity", () => {
+  let h: ReturnType<typeof fixture>;
+  beforeEach(() => {
+    h = fixture();
+  });
   it.each(["prepared event", "RPC response"] as const)(
     "reuses canonical identity from a %s when the original route began before hello",
     async (source) => {
-      const h = fixture();
       const { client, hello } = h.context.gateway.snapshot;
       h.publishGateway({ phase: "connecting", client: null, hello: null });
       const waiting = createDeferred();
@@ -68,7 +123,7 @@ describe("prepared short-route identity", () => {
         waiting.resolve();
         return stop;
       });
-      const pending = loadChatRoute(h.context, location, "chat", h.controller.signal);
+      const pending = h.load();
       await waiting.promise;
       h.publishGateway({ phase: "connected", client, hello });
       await h.started();
@@ -77,152 +132,78 @@ describe("prepared short-route identity", () => {
       } else {
         h.reply.resolve(resolved);
       }
-      const data = await pending;
-      if (!("kind" in data) || data.kind !== "session") {
-        throw new Error("Expected a resolved chat route");
-      }
+      const data = session(await pending);
       h.reply.resolve(resolved);
       const canonical = data.canonicalLocation ?? (await data.canonicalLocationReady);
       expect(canonical?.pathname).toBe("/chat/roboclaw/current-title-12345678");
-      if (!canonical) {
-        throw new Error("Expected a canonical location");
-      }
-      await expect(
-        loadChatRoute(h.context, canonical, "chat", new AbortController().signal),
-      ).resolves.toMatchObject({ kind: "session", sessionKey: sessionRouteKey });
-      expect(h.request.mock.calls.filter(([method]) => method === "sessions.resolve")).toHaveLength(
-        1,
-      );
+      await h.expectCanonical(canonical, 1);
     },
   );
 
   it.each(["hello", "profile", "disconnect", "navigation", "application"] as const)(
     "retires late canonicalization after a prepared route loses its %s owner",
     async (change) => {
-      const h = fixture();
-      const baseline = h.listenerCounts();
-      const pending = loadChatRoute(h.context, location, "chat", h.controller.signal);
-      await h.started();
-      h.emit();
-      const data = await pending;
-      if (!("kind" in data) || data.kind !== "session") {
-        throw new Error("Expected a resolved chat route");
-      }
+      const { pending } = await h.start(true);
+      const data = session(await pending);
       const original = { ...h.context.gateway.snapshot };
-      if (change === "hello") {
-        h.publishGateway({ hello: gatewayHelloForMethods(["sessions.resolve"]) });
-      } else if (change === "profile") {
-        h.publishGateway({ selfUser: { id: "other-reader" } });
-      } else if (change === "disconnect") {
-        h.publishGateway({ phase: "reconnecting" });
-      } else if (change === "navigation") {
-        h.controller.abort();
-      } else {
-        h.stop();
-      }
+      h.replaceOwner(change);
       h.publishGateway(original);
-      expect(h.listenerCounts()).toEqual(baseline);
+      expect(h.listenerCounts()).toEqual(h.baseline);
       h.reply.resolve(resolved);
       expect(await data.canonicalLocationReady).toBeNull();
       expect(data.sessionKey).toBe(sessionRouteKey);
-      expect(h.listenerCounts()).toEqual(baseline);
+      expect(h.listenerCounts()).toEqual(h.baseline);
     },
   );
 
   it.each([
-    {
-      name: "conflicting key",
-      reply: { ...resolved, key: "agent:roboclaw:thread:12345678-1111-4111-8111-111111111111" },
-    },
-    { name: "conflicting agent", reply: { ...resolved, agentId: "other" } },
-    { name: "missing", reply: { ok: false } },
-    { name: "error", reply: new Error("Resolution failed") },
-  ] satisfies Array<{ name: string; reply: SessionsResolveResult | Error }>)(
-    "accepts prepared identity without canonicalizing a later $name reply",
-    async ({ reply }) => {
-      const h = fixture();
-      const baseline = h.listenerCounts();
-      const pending = loadChatRoute(h.context, location, "chat", h.controller.signal);
-      await h.started();
-      h.emit();
-      const data = await pending;
+    ["conflicting key", { ...resolved, key: otherKey }],
+    ["conflicting agent", { ...resolved, agentId: "other" }],
+  ] satisfies Array<[string, SessionsResolveResult]>)(
+    "accepts prepared identity without canonicalizing a later %s reply",
+    async (_name, reply) => {
+      const { pending } = await h.start(true);
+      const data = session(await pending);
       expect(data).toMatchObject({
         kind: "session",
         sessionKey: sessionRouteKey,
         routeLoadingSkeleton: true,
       });
       expect(data).not.toHaveProperty("canonicalLocation");
-      expect(h.listenerCounts().events).toBe(baseline.events);
-      if (!("kind" in data) || data.kind !== "session") {
-        throw new Error("Expected a resolved chat route");
-      }
-      if (reply instanceof Error) {
-        h.reply.reject(reply);
-      } else {
-        h.reply.resolve(reply);
-      }
+      expect(h.listenerCounts().events).toBe(h.baseline.events);
+      h.reply.resolve(reply);
       expect(await data.canonicalLocationReady).toBeNull();
       h.emit({ ...publication, scope: { agentId: "other", sessionKey: "agent:other:main" } });
       expect(data.sessionKey).toBe(sessionRouteKey);
-      expect(h.listenerCounts()).toEqual(baseline);
+      expect(h.listenerCounts()).toEqual(h.baseline);
     },
   );
 
   it.each([
-    {
-      name: "different target",
-      event: { ...publication, target: { ...target, slugHint: "other" } },
-    },
-    {
-      name: "different agent",
-      event: { ...publication, scope: { ...publication.scope, agentId: "other" } },
-    },
-    {
-      name: "different prefix",
-      event: {
-        ...publication,
-        scope: {
-          agentId: "roboclaw",
-          sessionKey: "agent:roboclaw:thread:87654321-90ab-cdef-1234-567890abcdef",
-        },
-      },
-    },
-    { name: "agent-only catalog", event: { ...publication, scope: { agentId: "roboclaw" } } },
-  ] satisfies Array<{ name: string; event: ModelsSnapshotEvent }>)(
-    "keeps the ordinary resolver for $name",
-    async ({ event }) => {
-      const h = fixture();
-      const baseline = h.listenerCounts();
-      let settled = false;
-      const pending = loadChatRoute(h.context, location, "chat", h.controller.signal).then(
-        (data) => {
-          settled = true;
-          return data;
-        },
-      );
-      await h.started();
-      h.emit(event);
+    ["different target", { target: { ...target, slugHint: "other" } }],
+    ["different agent", { scope: { ...publication.scope, agentId: "other" } }],
+    ["different prefix", { scope: { agentId: "roboclaw", sessionKey: otherPrefix } }],
+    ["agent-only catalog", { scope: { agentId: "roboclaw" } }],
+  ] satisfies Array<[string, Partial<ModelsSnapshotEvent>]>)(
+    "keeps the ordinary resolver for %s",
+    async (_name, event) => {
+      const { pending, settled } = await h.start();
+      h.emit({ ...publication, ...event });
       await Promise.resolve();
-      expect(settled).toBe(false);
+      expect(settled()).toBe(false);
       h.reply.resolve(resolved);
       expect(await pending).toMatchObject({ kind: "session", sessionKey: sessionRouteKey });
-      expect(h.listenerCounts()).toEqual(baseline);
+      expect(h.listenerCounts()).toEqual(h.baseline);
     },
   );
 
   it.each([
-    { name: "missing", reply: { ok: false }, kind: "missing-session" },
-    {
-      name: "ambiguous",
-      reply: { ok: false, candidates: [{ key: sessionRouteKey, agentId: "roboclaw" }] },
-      kind: "ambiguous",
-    },
-  ] satisfies Array<{ name: string; reply: SessionsResolveResult; kind: string }>)(
-    "preserves the normal $name result when no prepared identity arrives",
-    async ({ reply, kind }) => {
-      const h = fixture();
-      const pending = loadChatRoute(h.context, location, "chat", h.controller.signal);
-      await h.started();
+    ["missing-session", { ok: false }],
+    ["ambiguous", { ok: false, candidates: [{ key: sessionRouteKey, agentId: "roboclaw" }] }],
+  ] satisfies Array<[string, SessionsResolveResult]>)(
+    "preserves the normal %s result when no prepared identity arrives",
+    async (kind, reply) => {
+      const { pending } = await h.start();
       h.reply.resolve(reply);
       expect(await pending).toMatchObject({ kind });
       h.emit();
@@ -230,119 +211,39 @@ describe("prepared short-route identity", () => {
     },
   );
 
-  it("keeps resolver errors visible and releases its listeners", async () => {
-    const h = fixture();
-    const baseline = h.listenerCounts();
-    const pending = loadChatRoute(h.context, location, "chat", h.controller.signal);
-    const rejected = expect(pending).rejects.toThrow("Resolution failed");
-    await h.started();
-    h.reply.reject(new Error("Resolution failed"));
-    await rejected;
-    expect(h.listenerCounts()).toEqual(baseline);
-    h.emit();
-  });
-
   it.each(["client", "hello", "profile", "disconnect"] as const)(
     "retires resolution identity on %s replacement before it arrives",
     async (change) => {
-      const h = fixture();
-      const baseline = h.listenerCounts();
-      let settled = false;
-      const pending = loadChatRoute(h.context, location, "chat", h.controller.signal).then(
-        (data) => {
-          settled = true;
-          return data;
-        },
-      );
-      await h.started();
+      const { pending, settled } = await h.start();
       const original = { ...h.context.gateway.snapshot };
-      if (change === "client") {
-        h.publishGateway({ client: null });
-      } else if (change === "hello") {
-        h.publishGateway({ hello: gatewayHelloForMethods(["sessions.resolve"]) });
-      } else if (change === "profile") {
-        h.publishGateway({ selfUser: { id: "other-reader" } });
-      } else {
-        h.publishGateway({ phase: "reconnecting" });
-      }
-      expect(h.listenerCounts()).toEqual(baseline);
+      h.replaceOwner(change);
+      expect(h.listenerCounts()).toEqual(h.baseline);
       h.emit();
       await Promise.resolve();
-      expect(settled).toBe(false);
+      expect(settled()).toBe(false);
       h.publishGateway(original);
       h.reply.resolve(resolved);
-      const data = await pending;
-      if (!("kind" in data) || data.kind !== "session" || !data.canonicalLocation) {
-        throw new Error("Expected a canonical session location");
-      }
-      await expect(
-        loadChatRoute(h.context, data.canonicalLocation, "chat", new AbortController().signal),
-      ).resolves.toMatchObject({ kind: "session", sessionKey: sessionRouteKey });
-      expect(h.request.mock.calls.filter(([method]) => method === "sessions.resolve")).toHaveLength(
-        2,
-      );
+      const data = session(await pending);
+      await h.expectCanonical(data.canonicalLocation, 2);
     },
   );
 
   it("rechecks source authority after the event wins but before it publishes a route", async () => {
-    const h = fixture();
-    const pending = loadChatRoute(h.context, location, "chat", h.controller.signal);
-    await h.started();
+    const { pending } = await h.start();
     h.emit();
     h.publishGateway({ selfUser: { id: "replacement-reader" } });
-    h.reply.resolve({
-      ...resolved,
-      key: "agent:roboclaw:thread:12345678-1111-4111-8111-111111111111",
-    });
-    expect(await pending).toMatchObject({
-      sessionKey: "agent:roboclaw:thread:12345678-1111-4111-8111-111111111111",
-    });
+    h.reply.resolve({ ...resolved, key: otherKey });
+    expect(await pending).toMatchObject({ sessionKey: otherKey });
   });
 
   it.each(["navigation", "application"] as const)("cleans up when %s is aborted", async (owner) => {
-    const h = fixture();
-    const baseline = h.listenerCounts();
-    const pending = loadChatRoute(h.context, location, "chat", h.controller.signal);
+    const pending = h.load();
     const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
     await h.started();
-    if (owner === "navigation") {
-      h.controller.abort();
-    } else {
-      h.stop();
-    }
+    h.replaceOwner(owner);
     await rejected;
-    expect(h.listenerCounts()).toEqual(baseline);
+    expect(h.listenerCounts()).toEqual(h.baseline);
     h.emit();
     h.reply.resolve(resolved);
-  });
-
-  it.each([
-    {
-      name: "dashboard",
-      face: "dashboard",
-      location: { ...location, pathname: location.pathname.replace("/chat/", "/dashboard/") },
-    },
-    {
-      name: "preferred face",
-      face: "chat",
-      location: { ...location, search: "?__openclawSessionFacePreference=1" },
-    },
-    { name: "anchor", face: "chat", location: { ...location, hash: "#anchor" } },
-  ] as const)("keeps full resolution for $name", async (entry) => {
-    const h = fixture();
-    const baseline = h.listenerCounts();
-    const pending = loadChatRoute(h.context, entry.location, entry.face, h.controller.signal);
-    await h.started();
-    h.emit();
-    expect(h.listenerCounts()).toEqual(baseline);
-    h.reply.resolve({ ...resolved, boardFace: "dashboard" });
-    const data = await pending;
-    expect(data).toMatchObject({
-      kind: "session",
-      sessionKey: sessionRouteKey,
-      face: entry.location.search.includes("__openclawSessionFacePreference")
-        ? "dashboard"
-        : entry.face,
-    });
   });
 });

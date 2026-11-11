@@ -9,6 +9,7 @@ import {
 import { isPathInside } from "./path-safety.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { getPluginLoadedEntry } from "./plugin-runtime-artifact-binding.js";
 import { resolvePluginRuntimeRecord } from "./runtime-context.js";
 
 /** Normalizes a bundled public artifact subpath and rejects traversal/absolute paths. */
@@ -74,24 +75,28 @@ export function resolveBundledPluginSourcePublicSurfacePath(params: {
 }
 
 /** Resolves a public surface artifact within one installed plugin root. */
-export function resolvePluginRootPublicSurfacePath(params: {
+export function resolvePluginRootPublicSurfaceLocation(params: {
   pluginRoot: string;
   artifactBasename: string;
   pluginId?: string;
   entrySource?: string;
-}): string | null {
+}): { modulePath: string; boundaryRoot: string } | null {
   const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
-  const pluginRoot = path.resolve(params.pluginRoot);
   const record = resolvePluginRuntimeRecord(params);
+  const selected = record && getPluginLoadedEntry(record);
+  const pluginRoot = path.resolve(selected?.rootDir ?? params.pluginRoot);
   const instance = record ? getPluginInstance(record) : undefined;
   const exists = (source: string) =>
     instance?.hasModuleSource(source) ?? pluginCacheExistsSync(source);
   const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
-  const entrySource = record?.source ?? params.entrySource;
+  const entrySource = selected?.source ?? record?.source ?? params.entrySource;
   const entryDir = entrySource
     ? path.resolve(
         pluginRoot,
-        path.relative(record?.rootDir ?? pluginRoot, path.dirname(path.resolve(entrySource))),
+        path.relative(
+          selected?.rootDir ?? record?.rootDir ?? pluginRoot,
+          path.dirname(path.resolve(entrySource)),
+        ),
       )
     : undefined;
   if (entryDir && !isPathInside(pluginRoot, entryDir)) {
@@ -126,7 +131,7 @@ export function resolvePluginRootPublicSurfacePath(params: {
       }
       checkedPaths.add(candidate);
       if (exists(candidate)) {
-        return candidate;
+        return { modulePath: candidate, boundaryRoot: pluginRoot };
       }
     }
   }
@@ -139,12 +144,12 @@ function resolvePublicSurfaceFromBundledDir(params: {
   dirName: string;
   artifactBasename: string;
 }): string | null {
-  const resolved = resolvePluginRootPublicSurfacePath({
+  const resolved = resolvePluginRootPublicSurfaceLocation({
     pluginRoot: path.resolve(params.bundledPluginsDir, params.dirName),
     artifactBasename: params.artifactBasename,
   });
   if (resolved !== null) {
-    return resolved;
+    return resolved.modulePath;
   }
   const normalizedBundledDir = path.resolve(params.bundledPluginsDir);
   const normalizedRootDir = path.resolve(params.rootDir);

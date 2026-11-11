@@ -1,0 +1,2 @@
+# Exec host requests over the macOS app read limit fail before sending, and the node host reports too-large as INVALID_REQUEST.
+13
