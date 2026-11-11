@@ -68,10 +68,17 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   access first; unset preserves ordinary routing. Shared workers inherit the
   caller group; PR/main CI and unrelated scheduled work remain outside it.
 - Check the nightly parent for the Code SHA before dispatching a fresh main validation; it seals per-child receipts that exact-target dispatches adopt when inputs match. The nightly runs this explicit trusted-main helper route (`--sha <main-sha> --workflow-sha <main-sha> --trusted-workflow-ref main`), so its parent runs on a `release-ci/<sha12>-<id>` branch, not `main`.
-- Every selected validation lane must pass; see
+- Every selected validation lane must satisfy the actually admitted decision policy; see
   [Publication requirements](#publication-requirements). Stable tags require stable/full
   evidence, soak, and blocking performance. Beta-profile evidence cannot qualify
-  stable. No lane or soak waiver bypasses these requirements. All-group
+  stable. Mandatory gates and soak remain required. Resolve decision ownership
+  from the actual route: admitted P supplies verifier state and summary scripts,
+  while Q declares frozen coverage; without admission, the workflow uses its own
+  decision scripts. Apply only an exact grant supported by admitted P and Q.
+  Preserve operator channel/contact restrictions and grants' version/job/attempt
+  scope. A terminal failed-job grant is not a not-run exemption; the latter needs
+  its own supported Q contract. Re-evaluation preserves original measurements,
+  not a fabricated new run. This guidance selects no P. All-group
   qualification requires all nine Linux/Windows/macOS Gateway install/upgrade
   combinations. Preserve first failures, identity, and complete evidence.
 - Native macOS, Windows, Linux, and Android publication is independent of
@@ -534,8 +541,9 @@ gh workflow run openclaw-performance.yml \
 - Compare available Kova, gateway startup, and CLI startup metrics with earlier
   release evidence or clawgrit reports before publish/closeout.
 - Record regressions in release evidence and investigate their product impact.
-  Stable/full qualification requires blocking performance. Every selected
-  performance child must succeed; failures cannot be waived.
+  Stable/full qualification requires blocking performance. Any terminal-failure
+  exception must match an exact grant supported by the actually admitted policy;
+  retain the failed report. A failed-job grant cannot authorize not-run coverage.
 - `npm-beta-v1` defers the performance child. Every selected child still needs
   terminal evidence and must prove artifact-only publication.
 
@@ -666,10 +674,12 @@ Mutation owners recheck live publication authority, selectors, and immutable byt
 Publish with `release_profile=from-validation` to consume the sealed profile.
 Stable publication requires stable/full evidence, soak, and blocking performance.
 Decide blocker or flake for every failed test. Rerun flakes on the same Release
-SHA at most twice and file a fix-in-parallel issue/PR on `main`. A selected job
-that remains red still blocks publication; never re-cut, change tooling, or
-start a new FRV solely to clear a flake. Skipped, cancelled, missing, and unknown
-coverage also blocks. No lane or soak waiver applies.
+SHA at most twice and file a fix-in-parallel issue/PR on `main`. An unwaived
+selected failure still blocks publication; never re-cut, change tooling, or
+start a new FRV solely to clear a flake. Evaluate only matching grants supported
+by the actual admitted P and Q coverage contract; the publisher cannot grant one.
+Skipped, cancelled, missing, and unknown required coverage still blocks. A failed-job
+grant cannot excuse not-run coverage. Mandatory gates and soak remain required.
 
 ### Publish children
 
@@ -911,7 +921,8 @@ Interpret state precisely:
   remained active.
 
 Read every selected lane's actual conclusion. `passed` requires every selected
-validation lane to succeed; omitted coverage is not run, never passed.
+validation lane to satisfy the admitted policy, retaining terminal evidence and
+raw granted failures; omitted coverage is not run, never passed.
 
 The `full-release-diagnostics-<run-id>-<attempt>` artifact is the terminal
 failure and timing manifest. Use it after an early blocker instead of
@@ -940,7 +951,7 @@ run-ID-cached bytes first.
    candidate, treat the failure as a blocker and backport or supersede; do not
    rerun it as inherited success. A signature repeated on another candidate is
    deterministic until a named mechanism and fix prove otherwise. Track a fix
-   for genuine flakes on `main`; every selected job must still pass before
+   for genuine flakes on `main`; every unwaived selected job must still pass before
    publication. Classify blockers further:
    - confirmed product/code failure: fix the release branch, freeze a new Code
      SHA, and invalidate product evidence

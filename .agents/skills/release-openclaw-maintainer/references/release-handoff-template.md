@@ -18,6 +18,8 @@ operator steering. Do not preserve superseded scope.
 - version decision: `<explicit version | approved resolved version>`
 - preparation/backport authority: `<instruction and approved set or selection scope>`
 - publication authority: `<held | beta management default | explicit approval; source and scope>`
+- channel/contact restrictions: `<none | exact operator restriction and affected operations>`
+- approved gate exceptions: `<none | pinned P policy grant, version/job/attempt scope; failed or not-run disposition>`
 - intake: `<open | frozen; pending approved changes or next-release queue>`
 - handoff: `<predecessor stopped writing; successor acknowledgement or pending>`
 - next checkpoint: `<candidate approval | publication | recovery | closeout>`
@@ -54,7 +56,7 @@ operator steering. Do not preserve superseded scope.
 ## Active evidence
 
 - Full Release Validation parent: `<run id / attempt / URL or none>`
-- qualification policy: `strict candidate-owned decision; every selected failure blocks, no P-only waiver recovery`
+- qualification policy: `<actual admitted P decision owner and Q coverage contract | workflow-owned fallback; exact supported grant or none>`
 - npm preflight: `<run id / URL or none>`
 - qualified npm/OCI descriptors: `<exact producer run/attempt and artifact identities>`
 - candidate acceptance: `<green untagged-SHA evidence | pending>`
@@ -125,9 +127,10 @@ reference for commands rather than redispatching the release parent.
   its evidence. An untouched test or passing replay alone does not prove a
   flake or a fix. A flake gets at most two recorded reruns on the same Release
   SHA and a fix-in-parallel issue or PR on `main`; never re-cut, change P, or
-  start another FRV solely to waive it. The branch's
-  [strict qualification policy](../SKILL.md#shared-release-boundaries) still
-  requires every selected lane to pass
+  start another FRV solely to waive it. Resolve any exact supported terminal-failure
+  grant through the [admitted policy and Q coverage](../SKILL.md#shared-release-boundaries),
+  preserving its version/job/attempt scope and raw evidence. A failed-job grant is
+  not a not-run exemption or a new measurement; all mandatory gates remain
 - regular changelog-only failure before tagging: change the selected release entry and only
   its permitted record/index paths, freeze a new Release SHA, and reuse green
   Code SHA evidence after `split-changelog-release-v1` delta proof
