@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { MessageChannel } from "node:worker_threads";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -16,6 +17,13 @@ import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import * as bundledStamp from "./bundled-catalog-stamp.js";
 import { resolveRemoteCatalogUrl } from "./remote-config.js";
+import {
+  getRemoteModelCatalogProviderOverlay as overlay,
+  prepareRemoteModelCatalogStartupSnapshot as prepareStartup,
+  publishRemoteModelCatalogSnapshot as publishSnapshot,
+  readRemoteModelCatalogUpdate as readUpdate,
+} from "./remote-overlay.js";
+import { setRemoteModelCatalogOverlaySourcesForTest as resetOverlay } from "./remote-overlay.test-support.js";
 import { refreshRemoteModelCatalog as refreshCatalog } from "./remote-refresh.js";
 import {
   markRemoteModelCatalogCheckedAsync as markChecked,
@@ -396,6 +404,49 @@ describe("remote model catalog store", () => {
       expect(state(key)).toEqual(latest);
       put(key, { ...latest, generated_at: 400 });
       expect(readCatalog(db)?.generated_at).toBe(300);
+    },
+  );
+
+  it.each([currentKey, previousKey])(
+    "serves an upgraded default install's v2 download from %s offline until v3 lands",
+    async (slot) => {
+      // 2026.11.3 stores its v2 download in `.v2`; 2026.11.5-beta.1 already uses `.v3`.
+      const v2Default = "https://catalog.openclaw.ai/models/v2/catalog.json";
+      expect(defaultUrl).toBe("https://catalog.openclaw.ai/models/v3/catalog.json");
+      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-upgrade-"));
+      vi.spyOn(bundledStamp, "bundledCatalogGeneratedAt").mockReturnValue(bundle.generatedAt - 1);
+      machineState.writeConfigMachineState(slot, {
+        ...storedCatalog(bundle, { source_url: v2Default }),
+        checked_at: 0,
+      });
+      resetOverlay();
+      try {
+        const offline = mockFetch(async () => {
+          throw new TypeError("fetch failed");
+        });
+        // Default state options: the overlay reads the same database the refresh writes.
+        const refresh = () => refreshCatalog({ config: {} });
+        await expect(refresh()).resolves.toMatchObject({ status: "error" });
+        expect(offline).toHaveBeenCalledWith(defaultUrl, expect.anything());
+        // The v2 bytes keep their own reader whichever slot holds them.
+        const previous = await prepareStartup();
+        expect(overlay({}, "anthropic")?.models).toEqual([{ id: "claude-test" }]);
+        mockDownload({
+          ...bundle,
+          schemaVersion: 3,
+          generatedAt: bundle.generatedAt + 1,
+          models: [{ ...bundle.models[0], id: "claude-v3", inference: { chat: true } }],
+        });
+        await expect(refresh()).resolves.toMatchObject({ status: "updated", models: 1 });
+        const next = expectDefined(await readUpdate({}), "v3 catalog");
+        expect(next.sourceUrl).toBe(defaultUrl);
+        expect(publishSnapshot(next, previous)).toBe(true);
+        expect(overlay({}, "anthropic")?.models).toEqual([
+          { id: "claude-v3", inference: { chat: true } },
+        ]);
+      } finally {
+        resetOverlay();
+      }
     },
   );
 });

@@ -540,8 +540,9 @@ it("preserves canonical task facts on v3 and keeps chat references chat-only", (
     id: "invalid",
     inference: { chat: false, decision: { protocol: "bad" } },
   };
+  // An unusable decision route is dropped; the row stays native-only.
   const salvaged = sanitizeV3({ ...bundle, models: [native, invalid, dual] }, warn);
-  expect(salvaged.models).toEqual([native, dual]);
+  expect(salvaged.models).toEqual([native, { ...invalid, inference: { chat: false } }, dual]);
   expect(warn).toHaveBeenCalledTimes(1);
   expect(() => parseV3({ ...bundle, models: [invalid] })).toThrow();
   expect(() => parseV3({ ...bundle, schemaVersion: 4 })).toThrow();
@@ -574,4 +575,77 @@ it("reads v3 fields added by newer publishers without dropping rows", () => {
   });
   expect(warn).not.toHaveBeenCalled();
   expect(newer.models[0]).toHaveProperty("futureRow");
+});
+
+it("degrades values from newer v3 publishers to the narrowest field", () => {
+  const priced = { ...knownPrice, input: 1, output: 2 };
+  const unknownPrice = { status: "unknown" };
+  const decision = { protocol: "fixture.decisions", input: ["text"] };
+  const row = (id: string, patch: Record<string, unknown> = {}) => ({
+    ...modelV2(id, "first", priced),
+    ...patch,
+  });
+  const upstream = { input: 1, output: 2, source: "native" };
+  const newer = {
+    ...validBundleV2,
+    schemaVersion: 3,
+    providers: {
+      first: { api: "future-api", defaultModel: null, recommendedModels: ["chat", "chat"] },
+      second: {},
+    },
+    models: [
+      row("chat"),
+      row("per-image", {
+        inference: { chat: false },
+        pricing: { ...knownPrice, unit: "image", perImage: 0.04 },
+      }),
+      row("future-status", { pricing: { status: "tiered" } }),
+      row("eur", { pricing: { ...priced, currency: "EUR" } }),
+      row("negative", { pricing: { ...priced, input: -1 } }),
+      row("retired", { status: "retired" }),
+      row("future-decision", {
+        inference: { chat: false, decision: { ...decision, input: ["audio"] } },
+      }),
+      row("nulls", { name: null, statusReason: null, pricing: { ...priced, source: null } }),
+      row("future-api", { api: "future-api" }),
+      row("windows", {
+        contextWindow: 1_000_000,
+        contextWindows: Array.from({ length: 17 }, (_, index) => ({
+          id: `w${index}`,
+          label: `W${index}`,
+          contextWindow: 1_000 * (index + 1),
+        })),
+        contextWindowDefault: "w0",
+      }),
+    ],
+    upstreamPricing: {
+      "vendor/kept": upstream,
+      "vendor/not-passthrough": { ...upstream, passthroughOnly: false },
+      "no-slash": upstream,
+    },
+    providerPricing: { "vendor/negative": { ...upstream, input: -1 } },
+  };
+  const warn = vi.fn();
+  const bundle = sanitizeV3(newer, warn);
+  expect(bundle.providers).toEqual({ first: { recommendedModels: ["chat"] }, second: {} });
+  expect(bundle.models).toEqual([
+    row("chat"),
+    row("per-image", { inference: { chat: false }, pricing: unknownPrice }),
+    row("future-status", { pricing: unknownPrice }),
+    row("eur", { pricing: unknownPrice }),
+    row("negative", { pricing: unknownPrice }),
+    // Deprecated rows stay selectable for configured refs but leave pickers and utility defaults.
+    row("retired", { status: "deprecated" }),
+    row("future-decision", { inference: { chat: false } }),
+    row("nulls"),
+    row("windows", { contextWindow: 1_000_000 }),
+  ]);
+  expect(bundle.upstreamPricing).toEqual({ "vendor/kept": upstream });
+  expect(bundle.providerPricing).toEqual({});
+  expect(warn).toHaveBeenCalledTimes(13);
+  warn.mockClear();
+  expect(sanitizeV3(bundle, warn)).toEqual(bundle);
+  expect(warn).not.toHaveBeenCalled();
+  // v1 and v2 parsing is frozen in released readers: the same envelope still rejects.
+  expect(() => sanitizeV2({ ...newer, schemaVersion: 2, models: [row("chat")] })).toThrow();
 });

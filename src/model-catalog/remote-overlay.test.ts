@@ -33,7 +33,7 @@ const bundle = {
   providers: { anthropic: { models: [{ id: "new" }] } },
   pricing: { "openai/gpt-external": { input: 2.5, output: 10 } },
 };
-const defaultUrl = "https://catalog.openclaw.ai/models/v2/catalog.json";
+const defaultUrl = "https://catalog.openclaw.ai/models/v3/catalog.json";
 const mirrorConfig = {
   models: { catalogRefresh: { url: "https://mirror.example.test/catalog.json" } },
 };
@@ -202,7 +202,7 @@ describe("remote model catalog overlay", () => {
     expectPrice({ input: 5, output: 20 });
   });
 
-  it("serves a released default install's v1 download until its v2 download is active", async () => {
+  it("serves a released default install's v1 download until its v3 download is active", async () => {
     const v1Default = "https://catalog.openclaw.ai/models/v1/catalog.json";
     stageBundle(bundle, v1Default);
     const previous = await prepareStartup();
@@ -214,7 +214,7 @@ describe("remote model catalog overlay", () => {
     expect(captureStartup()).toBe(previous);
     expect(read).toHaveBeenCalledOnce();
     stageBundle();
-    const next = expectDefined(await readUpdate({}), "v2 catalog");
+    const next = expectDefined(await readUpdate({}), "v3 catalog");
     expect(captureStartup()?.sourceUrl).toBe(v1Default);
     expect(publishSnapshot(next, previous)).toBe(true);
     expect(captureStartup()?.sourceUrl).toBe(defaultUrl);
