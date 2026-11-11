@@ -32,6 +32,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import * as agentExecution from "../state/openclaw-agent-execution.js";
 import * as writerAdmission from "../state/openclaw-agent-write-admission.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -212,9 +213,10 @@ it.each([
           }
         },
       );
-      const opening = withOpenClawAgentDatabaseAsync(
-        { agentId, path: databasePath },
-        () => undefined,
+      // Hold an actual verification admission; runtime lease revocation no longer scans.
+      const maintenance = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" });
+      const opening = maintenance.run(() =>
+        withOpenClawAgentDatabaseAsync({ agentId, path: databasePath }, () => undefined),
       );
       const opened = Promise.allSettled([opening]);
       const lock = refresh ? undefined : prepareLock(agentId, cachePath);
@@ -243,7 +245,11 @@ it.each([
       let drain: Promise<void> | undefined;
       let drained = false;
       try {
-        await nativeFinished.promise;
+        await awaitGateBeforeSettlement(
+          nativeFinished.promise,
+          opening,
+          "Native verification admission did not reach the usage-write gate",
+        );
         await setImmediate();
         expect(writeSettled).toBe(false);
         expect(readRows(agentId, databasePath)).toEqual([]);
@@ -279,6 +285,7 @@ it.each([
         await opened;
         await written;
         await drain;
+        await maintenance.close();
       }
     }).finally(() => process.chdir(originalCwd));
   },

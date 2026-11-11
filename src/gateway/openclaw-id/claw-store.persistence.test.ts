@@ -18,7 +18,7 @@ import { readStoredClaw, writeStoredClaw } from "./claw-store.js";
 import { fullClaw } from "./claw-store.test-support.js";
 import { stageGatewayKey } from "./gateway-key.js";
 import { linkedClaw, serviceFor } from "./openclaw-id.test-support.js";
-import { createKeyFile, ed25519PublicKeyHex } from "./tunnel-child/keyfile.js";
+import { ed25519PublicKeyHex, loadOrCreateEndpointKey } from "./tunnel-child/keyfile.js";
 import * as tunnelRuntime from "./tunnel-runtime.js";
 
 const it = stateTest("openclaw-id-claw-persistence");
@@ -133,7 +133,7 @@ for (const end of ["disable", "stop"] as const) {
     const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
     const directory = path.join(claw.stateDir, "openclaw-id");
     const endpointFile = path.join(directory, "endpoint.key");
-    const endpoint = createKeyFile(endpointFile);
+    const { key: endpoint } = loadOrCreateEndpointKey(endpointFile);
     const record = (await readStoredClaw())!;
     // Bootstrap a signed fixture whose two active key files match its binding.
     await writeStoredClaw({
@@ -157,7 +157,7 @@ for (const end of ["disable", "stop"] as const) {
       ["gateway.key", "endpoint.key"].map((file) => fs.readFileSync(path.join(directory, file)));
     const beforeKeys = activeKeys();
     const nextEndpoint = formatIrohEndpointKey(
-      Buffer.from(ed25519PublicKeyHex(createKeyFile(`${endpointFile}.next`)), "hex"),
+      Buffer.from(ed25519PublicKeyHex(loadOrCreateEndpointKey(`${endpointFile}.next`).key), "hex"),
     );
     vi.spyOn(tunnelRuntime, "stageEndpointKey").mockResolvedValue(nextEndpoint);
     const binding = await signStatement(
