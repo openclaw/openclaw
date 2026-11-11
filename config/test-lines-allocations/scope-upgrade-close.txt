@@ -1,0 +1,2 @@
+# Holds real restart persistence to prove queued scope observers stop before state release.
+25

@@ -1,0 +1,2 @@
+# Prior-schema seal reason, diagnostic read-only safety, and startup log transport.
+88
