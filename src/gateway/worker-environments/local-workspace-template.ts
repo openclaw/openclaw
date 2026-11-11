@@ -60,7 +60,7 @@ async function validateTemplate(
   directory: string,
   commit: string,
   guard: Pick<WorktreeAllocationGuard, "signal" | "commitGuard">,
-  mode: "validate" | "dependencies" | "source-only" = "validate",
+  mode: "dependencies" | "source-only",
 ) {
   return await withWorktreeGitConfig(
     directory,
@@ -123,9 +123,6 @@ async function validateTemplate(
             return false;
           }
           continue;
-        }
-        if (mode === "validate") {
-          return false;
         }
         guard.commitGuard();
         await fs.rm(target, { recursive: true, force: true });
@@ -271,11 +268,13 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
     const contained =
       result.installed && (await hasContainedVirtualStore(directory, identity.docker.workdir));
     templateGuard.commitGuard();
-    const valid = await validateTemplate(
-      directory,
-      params.baseCommit,
-      templateGuard,
-      contained ? "dependencies" : "source-only",
+    const valid = await timeWorktreePreparationPhase("templateValidateOutput", () =>
+      validateTemplate(
+        directory,
+        params.baseCommit,
+        templateGuard,
+        contained ? "dependencies" : "source-only",
+      ),
     );
     if (contained && valid) {
       log.info("sandbox dependency template prepared for the selected commit");
@@ -313,8 +312,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
         [{ path: params.templateRoot, bytes: WORKTREE_SETUP_HEADROOM_BYTES }],
         "sandbox dependency template",
       ),
-    validate: (existing, templateOptions) =>
-      validateTemplate(existing.path, existing.sourceCommit, templateOptions),
+    // Ready generations were validated after the builder stopped and have no writers.
     refresh: async (existing, preparing, templateOptions) => {
       previousGeneration = existing;
       // Retain exact commit identity: lifecycle scripts and local packages can consume
@@ -352,7 +350,9 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
       ) {
         return false;
       }
-      await backend.cloneTemplate(existing.path, preparing.path, templateOptions);
+      await timeWorktreePreparationPhase("templateClone", () =>
+        backend.cloneTemplate(existing.path, preparing.path, templateOptions),
+      );
       await prepare(preparing.path, templateOptions, existing.sourceCommit);
       await prepareManifest(preparing, templateOptions);
       return true;

@@ -70,6 +70,7 @@ const reviewed = {
           "Read the latest repository releases, cite their sources, and prepare a concise morning brief. Never publish without human review.",
         schedule: { cron: "0 9 * * 1-5", timezone: "America/Los_Angeles" },
         session: "isolated",
+        enabled: false,
       },
       label: "Morning brief",
       detail: "0 9 * * * — disabled when installed",

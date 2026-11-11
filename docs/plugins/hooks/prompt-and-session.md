@@ -75,6 +75,9 @@ On embedded, CLI, and harness runtime prompt-preparation paths (including
 ACPX, Agents API, Codex, and Copilot), ordering is: drain queued injections →
 `agent_turn_prepare` → ordinary
 `before_prompt_build` → finalized tool policy → authorized prompt enrichment.
+On CLI runtimes, authorized enrichment also runs after the native session
+reuse decision, transcript checks, and history selection, so it can report and
+respond to that decision on the same turn.
 
 For multiple registrations, the first defined provider/model/fallback override and
 `systemPrompt` win. Context additions concatenate in priority order, and tool
@@ -200,6 +203,53 @@ Treat `toolAuthority` as an ephemeral capability:
 
 The host revalidates authority after each awaited handler and discards stale
 enrichment. A retained `toolAuthority` object rejects use after dispatch.
+
+#### Session continuity
+
+In this phase, `event.continuity` reports what the runtime's session owner
+decided for this request:
+
+- `state`: `fresh` (no prior native session), `resumed` (the request continues
+  an existing session), or `invalidated` (a stored native session binding was
+  discarded for this turn, so the model starts a replacement session).
+- `invalidatedReason`: optional runtime reason when `state` is `invalidated`.
+  CLI runtimes use their session-reuse reasons, such as `prompt-tools`,
+  `system-prompt`, `auth-profile`, `auth-epoch`, `mcp`, `cwd`,
+  `missing-transcript`, and `orphaned-tool-use`.
+- `history`: `included` when the host placed prior conversation in this
+  request (replayed history or a resume handoff), `withheld` when it sent only
+  a notice that earlier messages exist without their contents, and `none`
+  otherwise.
+
+The field contains no transcript content and grants no authority; it does not
+allow replaying history across an account or authentication boundary. Use it to
+restore plugin-owned context only when a turn needs it, for example:
+
+```typescript
+api.on(
+  "before_prompt_build",
+  async (event) =>
+    event.continuity?.state === "invalidated"
+      ? { prependContext: await loadPluginSummary() }
+      : undefined,
+  { requiresToolAuthority: true },
+);
+```
+
+CLI runtimes report all three states. Codex reports `fresh` or `resumed` from
+its native thread binding and `invalidated` when that binding is discarded
+before the turn starts: rotated away by the token limit, or replaced by a new
+thread when resuming fails. The embedded runtime owns its transcript and has no
+native binding, so it reports `fresh` or `resumed`. Other runtimes omit the
+field; omission means unknown. The ordinary prompt-build phase never receives
+it, because its tool restrictions are inputs to the reuse decision.
+
+The phase runs on every attempt, including each model fallback candidate. Each
+run reports that attempt's own continuity and receives that attempt's model,
+context budget, and tool authority, so handlers repeat their own model- and
+authority-keyed checks. A handler that wants to avoid repeated work across
+fallback candidates owns that cache and keys it on every input that changes its
+answer.
 
 This option requires a host that implements the post-policy phase. Published
 plugins must set `package.json` `openclaw.compat.pluginApi` to a range beginning

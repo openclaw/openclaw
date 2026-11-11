@@ -78,13 +78,22 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
       return "";
     }
     if ("schedule" in item) {
-      return item.schedule + " · " + item.timezone;
+      return (
+        item.schedule +
+        " · " +
+        item.timezone +
+        " · " +
+        t(item.enabled ? "templatesCatalog.automationEnabled" : "templatesCatalog.automationPaused")
+      );
+    }
+    if ("source" in item && item.source === "bundled") {
+      return t("templatesCatalog.dependencyBundled");
+    }
+    if ("ref" in item) {
+      return t("templatesCatalog.dependencyClawHub", { version: item.version });
     }
     if ("kind" in item) {
-      return (
-        (item.kind === "plugin" ? t("tabs.plugin") : t("tabs.mcp")) +
-        (item.version ? " · " + item.version : "")
-      );
+      return t("tabs.mcp");
     }
     return "";
   };
@@ -211,13 +220,25 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                     <span>
                                       <strong>{item.name}</strong>
                                       <small>
-                                        {"excerpt" in item
-                                          ? item.excerpt
-                                          : "schedule" in item
-                                            ? item.schedule + " · " + item.timezone
-                                            : "version" in item
-                                              ? item.version
-                                              : ""}
+                                        {"source" in item && item.source === "bundled"
+                                          ? t("templatesCatalog.dependencyBundled")
+                                          : "ref" in item
+                                            ? t("templatesCatalog.dependencyClawHub", {
+                                                version: item.version,
+                                              })
+                                            : "excerpt" in item
+                                              ? item.excerpt
+                                              : "schedule" in item
+                                                ? item.schedule +
+                                                  " · " +
+                                                  item.timezone +
+                                                  " · " +
+                                                  t(
+                                                    item.enabled
+                                                      ? "templatesCatalog.automationEnabled"
+                                                      : "templatesCatalog.automationPaused",
+                                                  )
+                                                : ""}
                                       </small>
                                     </span>
                                     <Icon name="chevronRight" />

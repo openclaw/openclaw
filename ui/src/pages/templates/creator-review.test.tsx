@@ -16,6 +16,8 @@ import { templateCreatorFlow } from "./creator-flow.ts";
 import { TemplateCreatorInlineReview } from "./creator-inline-review.tsx";
 import { TemplateCreatorReview } from "./creator-review.tsx";
 
+const skillContent = "Read the release history and cite the source for each finding.";
+const pluginContent = "Connect to GitHub issues, pull requests, and checks.";
 const reviewed: TemplatesDraftsReviewResult = {
   revision: "a".repeat(64),
   reviewToken: "b".repeat(64),
@@ -61,6 +63,7 @@ const reviewed: TemplatesDraftsReviewResult = {
           "Read the latest repository releases, cite their sources, and prepare a concise morning brief. Never publish without human review.",
         schedule: { cron: "0 9 * * 1-5", timezone: "America/Los_Angeles" },
         session: "isolated",
+        enabled: true,
       },
       label: "Morning brief",
       detail: "0 9 * * *",
@@ -83,12 +86,12 @@ const target = {
   draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
   sessionKey: "agent:research:main",
 };
-async function fixture() {
+async function fixture(review = reviewed) {
   const request = vi.fn(
     async (method: string, _params?: Record<string, unknown>): Promise<unknown> => {
       if (method === "plugins.catalog.get") {
         return {
-          plugin: { catalog: { summary: "Connect to GitHub issues, pull requests, and checks." } },
+          plugin: { catalog: { summary: pluginContent } },
           detail: {
             origin: "clawhub",
             packageName: "@maker/github",
@@ -100,8 +103,7 @@ async function fixture() {
         return {
           card: {
             status: "available",
-            content:
-              "# Release notes\nRead the release history and cite the source for each finding.",
+            content: `# Release notes\n${skillContent}`,
           },
         };
       }
@@ -109,7 +111,7 @@ async function fixture() {
         return { revision: reviewed.revision, content: JSON.stringify({ scope: reviewed.scope }) };
       }
       if (method === "templates.drafts.review") {
-        return reviewed;
+        return review;
       }
       throw new Error("Unexpected " + method);
     },
@@ -139,32 +141,37 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each([
-  [
-    "Skills",
-    "Release notes",
-    "Read the release history and cite the source for each finding.",
-    "skills.detail",
-    { slug: "@maker/release-notes", version: "1.2.3" },
-  ],
-  [
-    "Plugins",
-    "GitHub",
-    "Connect to GitHub issues, pull requests, and checks.",
-    "plugins.catalog.get",
-    { id: "ch_QG1ha2VyL2dpdGh1Yg", version: "2.0.0" },
-  ],
-] as const)(
-  "reads the pinned %s package preview",
-  async (label, entry, content, method, params) => {
-    const { page, request } = await fixture();
-    fireEvent.click(page.getByRole("button", { name: new RegExp(label) }));
-    await waitForSolid(() => expect(page.getByRole("button", { name: entry })).toBeTruthy());
-    fireEvent.click(page.getByRole("button", { name: entry }));
+it.each(["skill", "plugin"] as const)("previews pinned and bundled %s", async (kind) => {
+  for (const bundled of [false, true]) {
+    const review = structuredClone(reviewed);
+    const item = review.items.find((entry) => entry.kind === kind)!;
+    const content = bundled
+      ? "Bundled with template"
+      : kind === "skill"
+        ? skillContent
+        : pluginContent;
+    if (bundled) {
+      item.requirement = { source: "bundled", path: "bundled" };
+      review.files.push({ path: "bundled/SKILL.md", content });
+    }
+    const { page, request } = await fixture(review);
+    fireEvent.click(
+      page.getByRole("button", { name: new RegExp(kind === "skill" ? "Skills" : "Plugins") }),
+    );
+    await waitForSolid(() => expect(page.getByRole("button", { name: item.label })).toBeTruthy());
+    fireEvent.click(page.getByRole("button", { name: item.label }));
     await waitForSolid(() => expect(page.getByText(content, { exact: true })).toBeTruthy());
-    expect(request).toHaveBeenCalledWith(method, params);
-  },
-);
+    const previews = request.mock.calls.filter(([method]) =>
+      ["skills.detail", "plugins.catalog.get"].includes(method),
+    );
+    const pinned =
+      kind === "skill"
+        ? ["skills.detail", { slug: "@maker/release-notes", version: "1.2.3" }]
+        : ["plugins.catalog.get", { id: "ch_QG1ha2VyL2dpdGh1Yg", version: "2.0.0" }];
+    expect(previews).toEqual(bundled ? [] : [pinned]);
+    page.unmount();
+  }
+});
 
 it("keeps the original card through a single explicit publication and pending receipt", async () => {
   const { page, request } = await fixture();
@@ -172,9 +179,9 @@ it("keeps the original card through a single explicit publication and pending re
   request.mockImplementation(async (method: string) =>
     method === "templates.drafts.publish" ? pending.promise : reviewed,
   );
-  expect(page.container.querySelector(".template-creator__header [role=status]")?.textContent).toBe(
-    "Unpublished",
-  );
+  const status = () =>
+    page.container.querySelector(".template-creator__header [role=status]")?.textContent;
+  expect(status()).toBe("Unpublished");
   const card = page.container.querySelector(".template-creator");
   const publish = page.getByRole("button", { name: "Publish" });
   fireEvent.click(publish);
@@ -188,9 +195,7 @@ it("keeps the original card through a single explicit publication and pending re
   expect(page.getByRole("link", { name: "View submission" }).classList.contains("primary")).toBe(
     true,
   );
-  expect(page.container.querySelector(".template-creator__header [role=status]")?.textContent).toBe(
-    "Pending",
-  );
+  expect(status()).toBe("Pending");
 });
 
 it.each(["none", "unconfirmed", "transport"])(
@@ -382,7 +387,5 @@ it("releases a removed review during publication while its owner records the eve
     pending.resolve(pendingPublication);
   }
   await waitForSolid(() => expect(flow.publication?.publicationStatus).toBe("pending"));
-  expect(
-    request.mock.calls.filter(([method]) => method === "templates.drafts.publish"),
-  ).toHaveLength(1);
+  expect(request.mock.calls.filter(([m]) => m === "templates.drafts.publish")).toHaveLength(1);
 });

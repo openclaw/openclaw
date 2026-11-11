@@ -555,7 +555,16 @@ export class TemplateCreatorFlow implements TemplateCreator {
     if (!target || !review?.items.includes(item) || !item.requirement) {
       return null;
     }
-    const { ref, version } = item.requirement;
+    const requirement = item.requirement;
+    if (requirement.source === "bundled") {
+      return {
+        content:
+          item.kind === "skill"
+            ? review.files.find((file) => file.path === `${requirement.path}/SKILL.md`)?.content
+            : undefined,
+      };
+    }
+    const { ref, version } = requirement;
     let preview: TemplatePackagePreview;
     if (item.kind === "skill") {
       const result = await target.client.request<{

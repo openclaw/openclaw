@@ -358,9 +358,10 @@ agent: { id: research-brief, description: Original agent description }
 workspace:
   bootstrapFiles: { AGENTS.md: { source: workspace/AGENTS.md } }
   files: [{ source: workspace/checklist.md, path: checklist.md }]
-packages:
-  - { kind: skill, source: clawhub, ref: "@maker/sources", version: 1.2.3 }
-  - { kind: plugin, source: clawhub, ref: "@maker/github", version: 2.0.0 }
+skills:
+  - { ref: "@maker/sources", version: 1.2.3 }
+plugins:
+  - { ref: "@maker/github", version: 2.0.0 }
 mcpServers: { research: { command: research-mcp } }
 automations:
   - id: weekly-recap
@@ -381,8 +382,8 @@ Research public sources.
       description: "Researches public sources for a new user.",
       excluded: [
         "file:workspace/checklist.md",
-        "package:skill:@maker/sources",
-        "package:plugin:@maker/github",
+        "package:skill:clawhub:@maker/sources",
+        "package:plugin:clawhub:@maker/github",
         "mcp:research",
         "cron:weekly-recap",
       ],
@@ -402,26 +403,23 @@ Research public sources.
       expect.objectContaining({ id: "file:workspace/AGENTS.md", included: true }),
       ...choices.excluded.map((id) => expect.objectContaining({ id, included: false })),
     ]);
-    expect(review.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "skill",
-          requirement: { source: "clawhub", ref: "@maker/sources", version: "1.2.3" },
-        }),
-        expect.objectContaining({
-          kind: "plugin",
-          requirement: { source: "clawhub", ref: "@maker/github", version: "2.0.0" },
-        }),
-        expect.objectContaining({
-          kind: "automation",
+    for (const [kind, details] of [
+      ["skill", { requirement: { source: "clawhub", ref: "@maker/sources", version: "1.2.3" } }],
+      ["plugin", { requirement: { source: "clawhub", ref: "@maker/github", version: "2.0.0" } }],
+      [
+        "automation",
+        {
           automation: {
             message: "Recap research.",
             schedule: { cron: "0 9 * * 1", timezone: "UTC" },
             session: "isolated",
+            enabled: true,
           },
-        }),
-      ]),
-    );
+        },
+      ],
+    ] as const) {
+      expect(review.items.find((item) => item.kind === kind)).toMatchObject(details);
+    }
     const template = review.files.find((file) => file.path === "CLAW.md")!.content;
     expect(template).toContain("description: Researches public sources for a new user.");
     expect(template).not.toMatch(

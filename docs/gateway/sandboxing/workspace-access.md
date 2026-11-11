@@ -331,6 +331,10 @@ Other checkouts pause until their files are stored in an immutable Git
 result. A snapshot that omits nested subvolumes is discarded and captured again
 under pause, preserving their contents. Command completion still waits for
 canonical acceptance, so a read after a completed command sees its saved changes.
+Acceptance preserves each workspace's file fingerprints for unchanged paths when
+the shared baseline advances. The next check still walks file metadata, but only
+changed or unverifiable identities need content hashing. Imported files acquire
+fresh fingerprints on that check; source filesystem identities are never copied.
 Later background writes remain in the private checkout for the next checkpoint.
 After acceptance and runtime resume, the workspace lease transfers the snapshot
 to a unique retired path for asynchronous cleanup. The next command can run while
@@ -369,6 +373,14 @@ preparation, and temporary-file cleanup run with the guest resumed. Imports paus
 again before confirming the target and applying changes; edits made during
 preparation cause a visible conflict and remain saved. Pending base refreshes
 retain their pause until both workspaces accept the transfer.
+
+GitHub PR preparation and base refresh download commit history and missing objects
+with the guest running. After those downloads finish, OpenClaw checks the guest's
+current Git state and reacquires the pause for the workspace transfer. If another
+operation changed the host HEAD or pending integration in between, preparation
+fails with a retry message and preserves the workspace. Immutable object downloads
+do not hold the guest frozen; capture, file application, and pending-transfer
+recovery still require consistency pauses.
 
 Each successful container pause records a `sandbox/quiescence` info log with a
 bounded reason (`checkpoint`, `preparation`, `publication`, `retirement`, `restore`,

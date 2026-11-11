@@ -71,11 +71,14 @@ export type TemplateDraftReviewItem = {
   label: string;
   detail: string;
   included: boolean;
-  requirement?: { source: "clawhub"; ref: string; version: string };
+  requirement?:
+    | { source: "clawhub"; ref: string; version: string }
+    | { source: "bundled"; path: string };
   automation?: {
     message: string;
     schedule: { cron: string; timezone: string };
     session: "main" | "isolated";
+    enabled: boolean;
   };
 };
 export type TemplatesDraftsReadResult = { content: string; revision: string };

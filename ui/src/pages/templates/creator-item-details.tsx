@@ -40,6 +40,28 @@ function Properties(props: { rows: Array<[string, string]> }) {
 
 function PackagePreview(props: { flow: TemplateCreator; item: TemplateDraftReviewItem }) {
   const preview = createMemo(() => props.flow.readPackagePreview(props.item));
+  const requirement = () => props.item.requirement!;
+  const documentTitle = () => {
+    const source = requirement();
+    return source.source === "bundled"
+      ? `${source.path}/SKILL.md`
+      : t("templatesDraft.skillDocument", source);
+  };
+  const properties = createMemo<Array<[string, string]>>(() => {
+    const source = requirement();
+    const rows: Array<[string, string]> =
+      source.source === "bundled"
+        ? [
+            [t("templatesDraft.package"), source.path],
+            [t("templatesDraft.source"), t("templatesDraft.bundled")],
+          ]
+        : [
+            [t("templatesDraft.package"), source.ref],
+            [t("templatesDraft.version"), source.version],
+            [t("templatesDraft.source"), "ClawHub"],
+          ];
+    return [...rows, [t("templatesDraft.installation"), t("templatesDraft.pluginInstallation")]];
+  });
   return (
     <>
       <Errored
@@ -70,12 +92,7 @@ function PackagePreview(props: { flow: TemplateCreator; item: TemplateDraftRevie
           </Show>
           <Show when={props.item.kind === "skill"}>
             <div class="template-creator__detail-group">
-              <h3>
-                {t("templatesDraft.skillDocument", {
-                  ref: props.item.requirement!.ref,
-                  version: props.item.requirement!.version,
-                })}
-              </h3>
+              <h3>{documentTitle()}</h3>
               <div class="template-creator__detail-panel">
                 <Show
                   when={preview()?.content}
@@ -91,14 +108,7 @@ function PackagePreview(props: { flow: TemplateCreator; item: TemplateDraftRevie
       <Show when={props.item.kind === "plugin"}>
         <div class="template-creator__detail-group">
           <h3>{t("templatesDraft.packageDetails")}</h3>
-          <Properties
-            rows={[
-              [t("templatesDraft.package"), props.item.requirement!.ref],
-              [t("templatesDraft.version"), props.item.requirement!.version],
-              [t("templatesDraft.source"), "ClawHub"],
-              [t("templatesDraft.installation"), t("templatesDraft.pluginInstallation")],
-            ]}
-          />
+          <Properties rows={properties()} />
         </div>
       </Show>
     </>
@@ -167,7 +177,10 @@ export function TemplateItemDetails(props: {
                 <p>
                   {t("templatesDraft." + automation().session + "Session") +
                     " · " +
-                    t("templatesDraft.pausedInstallation")}
+                    t(
+                      "templatesDraft." +
+                        (automation().enabled ? "enabledInstallation" : "pausedInstallation"),
+                    )}
                 </p>
                 <p class="template-creator__message">{automation().message}</p>
               </div>
