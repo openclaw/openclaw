@@ -1,0 +1,3 @@
+# Production plugin activation, registry-name picker/tab rendering, unknown-name fallbacks, and manifest SVG precedence/recovery (104 lines).
+# Icon-only refresh of the retained header Layout-menu projection (39 lines).
+143

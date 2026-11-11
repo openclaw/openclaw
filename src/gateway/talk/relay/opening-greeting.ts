@@ -1,6 +1,78 @@
 import type { RealtimeVoiceBridgeSession } from "../../../talk/session-runtime.js";
 import type { CreateTalkRealtimeRelaySessionParams, RelaySession } from "./state.js";
 
+/** Validates mutually exclusive initial greeting and recovery metadata on `talk.session.create`. */
+export function validateRelayOpeningCreateParams(
+  params: {
+    greeting?: string;
+    recovery?: { interruptedForMs: number };
+    voiceChangeId?: string;
+  },
+  mode: string,
+  transport: string,
+): string | null {
+  if (params.recovery !== undefined) {
+    if (mode !== "realtime" || transport !== "gateway-relay" || params.voiceChangeId) {
+      return "A recovery notice requires a new realtime relay session";
+    }
+    if (params.greeting !== undefined) {
+      return "A recovery notice cannot include an opening greeting";
+    }
+  }
+  if (
+    params.greeting !== undefined &&
+    (mode !== "realtime" || transport !== "gateway-relay" || params.voiceChangeId)
+  ) {
+    return "An opening greeting requires a new realtime relay session";
+  }
+  return null;
+}
+
+/** Retains deferred opening authority after `talk.session.create` releases request facts. */
+export function prepareRelayOpeningOptions(options: {
+  greeting?: string;
+  recovery?: { interruptedForMs: number };
+  receivedAt: number;
+  retainAuthority?: () => (() => void) | undefined;
+  hasCurrentClientAuthority?: () => boolean;
+  assertEnsuredTargetCurrent: () => void;
+}): Pick<
+  CreateTalkRealtimeRelaySessionParams,
+  "greeting" | "recovery" | "releaseGreetingAuthority" | "assertGreetingAllowed"
+> {
+  if (options.greeting === undefined && options.recovery === undefined) {
+    return {};
+  }
+  const retainedRelease = options.retainAuthority?.();
+  let released = false;
+  return {
+    ...(options.greeting !== undefined ? { greeting: options.greeting.trim() } : {}),
+    ...(options.recovery !== undefined
+      ? {
+          recovery: {
+            interruptedForMs: options.recovery.interruptedForMs,
+            receivedAt: options.receivedAt,
+          },
+        }
+      : {}),
+    releaseGreetingAuthority: retainedRelease
+      ? () => {
+          if (released) {
+            return;
+          }
+          released = true;
+          retainedRelease();
+        }
+      : undefined,
+    assertGreetingAllowed: () => {
+      if (options.hasCurrentClientAuthority?.() === false) {
+        throw new Error("Talk greeting connection is no longer authorized");
+      }
+      options.assertEnsuredTargetCurrent();
+    },
+  };
+}
+
 /** Owns the one-time initial or resumed opening after provider and accepted-client readiness. */
 export function createRelayOpeningGreeting(
   params: Pick<

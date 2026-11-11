@@ -906,7 +906,10 @@ describe("openSessionWorkspaceFile", () => {
         title: "result.png",
       });
     } else {
-      await expectUnavailable(state, `Failed to load ${file.path}`);
+      await expectUnavailable(
+        state,
+        `Couldn’t load ${file.path}. Check that the file still exists.`,
+      );
       if (kind === "unencoded text") {
         const diff = resolveSessionDiffSidebarContent(state);
         expect(diff?.kind).toBe("session-diff");
@@ -918,7 +921,7 @@ describe("openSessionWorkspaceFile", () => {
   });
 
   it("keeps an outside-session refusal open with its reason", async () => {
-    const message = "This file is outside Main Session's workspace, and you can't open it.";
+    const message = "This file is outside Main session’s workspace, so you can’t open it.";
     const error = new GatewayRequestError({
       code: "INVALID_REQUEST",
       message: "session file not found",

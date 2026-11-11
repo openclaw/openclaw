@@ -120,6 +120,14 @@ export function prepareBackgroundSessionCompletion(params: {
       ) ?? { id: agentId };
       const identity = context.agentIdentity.get(agentId);
       showToast({
+        severity:
+          result.status === "ok"
+            ? "success"
+            : result.status === "timeout"
+              ? "error"
+              : result.stopReason === "rpc"
+                ? undefined
+                : "error",
         placement: "top-right",
         avatar: {
           id: agentId,

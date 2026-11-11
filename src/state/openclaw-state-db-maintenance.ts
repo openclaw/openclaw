@@ -26,6 +26,7 @@ import { VERSION } from "../version.js";
 import {
   getStateRuntimeSchemaAdmission,
   getStateSchemaVersionAdmission,
+  adoptPeerPublishedStateSchemaVersion,
   publishStateSchemaVersionAdmission,
 } from "./openclaw-state-db-admission.js";
 import {
@@ -127,7 +128,7 @@ export function prepareStateDatabaseSchemaRepair(
   database: DatabaseSync,
   pathname: string,
   env: NodeJS.ProcessEnv,
-): () => string[] {
+): { needed: boolean; apply(): string[]; applyReadability(): string[] } {
   const danglingWorkshopIndex = hasDanglingSkillWorkshopCollectionReviewIndex(database);
   const assertWriteAllowed = () =>
     assertOpenClawStateWriteAllowed({
@@ -148,7 +149,7 @@ export function prepareStateDatabaseSchemaRepair(
   } else {
     admit();
   }
-  return () => {
+  const apply = () => {
     // Recheck ownership after BEGIN IMMEDIATE and before catalog mutation.
     if (danglingWorkshopIndex) {
       withSqliteWritableSchema(database, assertWriteAllowed);
@@ -159,31 +160,28 @@ export function prepareStateDatabaseSchemaRepair(
       ? ["Removed dangling legacy Skill Workshop review index"]
       : [];
   };
-}
-
-/** Commit recognized catalog readability before a private preservation reader inspects it. */
-export function repairStateDatabaseSchemaReadability(
-  database: DatabaseSync,
-  pathname: string,
-  env: NodeJS.ProcessEnv,
-): string[] {
-  const repair = prepareStateDatabaseSchemaRepair(database, pathname, env);
-  return runSqliteImmediateTransactionSync(
-    database,
-    () => {
-      const changes = repair();
-      if (changes.length > 0) {
-        assertOpenClawStateDatabaseOwner(database, { pathname });
-        assertSqliteTableIntegrity(database, pathname, "skill_workshop_collection_reviews");
-      }
-      return changes;
+  return {
+    needed: danglingWorkshopIndex,
+    apply,
+    applyReadability() {
+      return runSqliteImmediateTransactionSync(
+        database,
+        () => {
+          const changes = apply();
+          if (changes.length > 0) {
+            assertOpenClawStateDatabaseOwner(database, { pathname });
+            assertSqliteTableIntegrity(database, pathname, "skill_workshop_collection_reviews");
+          }
+          return changes;
+        },
+        {
+          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+          databaseLabel: pathname,
+          operationLabel: "state.schema.readability-repair",
+        },
+      );
     },
-    {
-      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-      databaseLabel: pathname,
-      operationLabel: "state.schema.readability-repair",
-    },
-  );
+  };
 }
 
 type OpenClawStateMigrationVersion = (typeof STATE_MIGRATION_VERSIONS)[number];
@@ -247,24 +245,15 @@ export function assertOpenClawStateDatabaseForMaintenance(
   }
 
   const metadata = assertOpenClawStateDatabaseOwner(database, options);
-  if (metadata?.schema_version !== userVersion) {
-    // A peer process (the Gateway's update-run watcher) may publish the deferred
-    // version after this connection admitted its floor; refuse only if the header disagrees.
-    if (
-      metadata?.schema_version === OPENCLAW_STATE_SCHEMA_VERSION &&
-      readSqliteUserVersion(database) === OPENCLAW_STATE_SCHEMA_VERSION
-    ) {
-      publishStateSchemaVersionAdmission(database, {
-        userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-        contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      });
-    } else {
-      const schemaVersion =
-        typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
-      throw new SqliteSchemaMismatchError(
-        `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; run openclaw doctor --fix before compacting it.`,
-      );
-    }
+  if (
+    metadata?.schema_version !== userVersion &&
+    !adoptPeerPublishedStateSchemaVersion(database, metadata)
+  ) {
+    const schemaVersion =
+      typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
+    throw new SqliteSchemaMismatchError(
+      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; run openclaw doctor --fix before compacting it.`,
+    );
   }
   assertSqliteSchemaContains(
     database,

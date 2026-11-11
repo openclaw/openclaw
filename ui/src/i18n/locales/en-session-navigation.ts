@@ -1,3 +1,4 @@
+import { mergeCatalog } from "../lib/merge-catalog.ts";
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
@@ -19,8 +20,9 @@ const enSessionNavigation = {
       openImportedSession: "Open imported session",
       openInTerminal: "Open in terminal",
       deleteSession: "Delete",
+      deleteSessionTitle: "Delete this external session?",
       deleteSessionConfirm:
-        "Delete this external session from OpenClaw? Make sure no other runner is using it. Beamed sessions are deleted permanently. Sessions kept by another tool, such as Codex, are archived there and may be restorable.",
+        "Make sure it isn’t in use elsewhere. Beamed sessions are deleted permanently. Sessions kept by another tool, such as Codex, are archived there and may be restorable.",
       terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     sessionSuggestions: {
@@ -33,11 +35,11 @@ const enSessionNavigation = {
       additionalMatches: "Search results remain. Use a longer id prefix.",
       notFoundTitle: "Session not found",
       notFoundExplanation: "The session may have been removed, or the link may be incorrect.",
-      bootDraftRecovery: "Copy any text below before opening another conversation.",
-      homeUnavailableTitle: "Start a conversation",
+      bootDraftRecovery: "Copy any text below before opening another session.",
+      homeUnavailableTitle: "Start a session",
       homeUnavailableBody:
-        "This Home is unavailable. Start a new conversation, or open one from Sessions.",
-      startConversation: "New conversation",
+        "This Home is unavailable. Start a new session, or open one from Sessions.",
+      startConversation: "New session",
       goToMain: "Go to main session",
       viewSessions: "View sessions",
       catalogShareUnavailable: "This shared session route is unavailable.",
@@ -47,10 +49,6 @@ const enSessionNavigation = {
 } satisfies TranslationMap;
 
 export const registerSessionNavigationEnglish = Object.assign(
-  () => {
-    Object.assign(en.chat.catalog, enSessionNavigation.chat.catalog);
-    Object.assign(en.chat.sessionSuggestions, enSessionNavigation.chat.sessionSuggestions);
-    Object.assign(en.chat.sessionRoute, enSessionNavigation.chat.sessionRoute);
-  },
+  () => mergeCatalog(en, enSessionNavigation),
   { catalog: enSessionNavigation },
 );

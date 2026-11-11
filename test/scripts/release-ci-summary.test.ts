@@ -556,6 +556,15 @@ describe("original publication admission reader", () => {
     };
     const client = {
       ...fixture.client,
+      verifyRetainedPublicationArtifacts() {
+        throw new Error("Publication admission fixture does not recover publication artifacts");
+      },
+      downloadArtifactArchive() {
+        throw new Error("Publication admission fixture does not download artifact archives");
+      },
+      getRunArtifacts() {
+        throw new Error("Publication admission fixture does not list run artifacts");
+      },
       validateChildReuse: async () => {
         throw new Error("publication admission fixture does not reuse children");
       },
@@ -3093,6 +3102,8 @@ describe("release CI summary child correlation", () => {
     expect(() => requiredChildKeysForRerunGroup("qa")).toThrow(
       "release validation manifest rerun group is invalid: qa",
     );
+    const qualified = requiredChildKeysForRerunGroup("qualified-package", {}, 3);
+    expect(qualified).toEqual(new Set(["releaseChecksCandidate"]));
     const focused = validateParentManifest(
       {
         ...rawManifest({ rerunGroup: "npm-telegram" }),

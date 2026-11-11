@@ -46,6 +46,7 @@ const preparedSectionsBySchema = new WeakMap<
   JsonSchema,
   {
     hints: ConfigUiHints;
+    openclawIdEnabled: boolean;
     sections: Map<
       string,
       { schema: JsonSchema; tiers: ReturnType<typeof splitConfigSchemaByTier> }
@@ -70,6 +71,7 @@ function visibleSectionSchema(routeId: string, sectionSchema: JsonSchema): JsonS
 
 export function findSettingsSearchBlocks(params: {
   query: string;
+  openclawIdEnabled?: boolean;
   schema: unknown;
   value: Record<string, unknown> | null;
   uiHints: ConfigUiHints;
@@ -133,8 +135,13 @@ export function findSettingsSearchBlocks(params: {
   let prepared = preparedSectionsBySchema.get(schema);
   // Schema responses replace both objects. Keep only the current hint revision;
   // draft values, query text, locale, and route visibility are evaluated below.
-  if (!prepared || prepared.hints !== params.uiHints) {
-    prepared = { hints: params.uiHints, sections: new Map() };
+  const openclawIdEnabled = params.openclawIdEnabled === true;
+  if (
+    !prepared ||
+    prepared.hints !== params.uiHints ||
+    prepared.openclawIdEnabled !== openclawIdEnabled
+  ) {
+    prepared = { hints: params.uiHints, openclawIdEnabled, sections: new Map() };
     preparedSectionsBySchema.set(schema, prepared);
   }
   const value = params.value ?? {};
@@ -156,6 +163,7 @@ export function findSettingsSearchBlocks(params: {
           ? setupVisibleSchema(rawSectionSchema)
           : visibleSectionSchema(routeId, rawSectionSchema),
         key,
+        openclawIdEnabled,
       );
       section = {
         schema: sectionSchema,

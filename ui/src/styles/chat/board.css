@@ -1,6 +1,7 @@
 .board-session-surface {
   position: relative;
   display: flex;
+  flex-direction: column;
   flex: 1 1 0;
   width: 100%;
   min-width: 0;
@@ -38,7 +39,7 @@
   min-height: 0;
   padding: 32px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   text-align: center;
 }
 
@@ -50,17 +51,16 @@
   overflow: hidden;
   padding: 4px 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-/* The picker floats over the existing canvas; it never reserves a rail or padding. */
+/* Host controls own their space; plugin and iframe content can use every canvas pixel. */
 .chat-dashboard-menu {
-  position: absolute;
-  z-index: 2;
-  top: 10px;
-  right: 12px;
+  align-self: flex-end;
+  flex: 0 0 auto;
+  margin: 6px 12px;
 }
 
 .chat-dashboard-menu__trigger {
@@ -122,8 +122,8 @@
   max-width: calc(100vw - 24px);
   padding: 8px;
   border-radius: var(--menu-radius-large);
-  font-size: 13px;
-  line-height: 18px;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .chat-dashboard-menu__panel .oc-menu-item {
@@ -183,8 +183,8 @@
 
 .chat-dashboard-menu__panel .session-menu__description {
   margin-top: 3px;
-  font-size: 12px;
-  line-height: 17px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(17px * var(--control-ui-text-scale));
 }
 
 .chat-dashboard-menu__panel [data-value="dashboard-default"] {
@@ -219,13 +219,6 @@
   color: var(--accent);
 }
 
-.chat-dashboard-menu__panel .board-widget__menu-heading {
-  padding: 3px 10px 6px;
-  font-size: 12px;
-  letter-spacing: normal;
-  text-transform: none;
-}
-
 .chat-dashboard-menu__sizes {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -248,7 +241,7 @@
 
 .chat-dashboard-menu__sizes .oc-menu-item__details {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
 }
 

@@ -217,14 +217,27 @@ internal class IncomingCallController(
     if (isCurrent(id)) showNotification()
   }
 
+  fun setLocalMuted(
+    id: String,
+    muted: Boolean,
+  ) {
+    if (!canControl(id)) return
+    if (platformMuted) {
+      if (!muted) _state.value = _state.value?.copy(detail = "Use Android call controls to turn off system mute")
+      return
+    }
+    if (localMuted == muted) return
+    localMuted = muted
+    updateMute()
+  }
+
   fun toggleMute(id: String) {
     if (!canControl(id)) return
     if (platformMuted) {
       _state.value = _state.value?.copy(detail = "Use Android call controls to turn off system mute")
       return
     }
-    localMuted = !localMuted
-    updateMute()
+    setLocalMuted(id, !localMuted)
   }
 
   fun platformMuteChanged(
@@ -581,6 +594,9 @@ internal class IncomingCallController(
     recoveryDeadlineJob?.cancel()
     recoveryDeadlineJob = null
     stopAudio(call.invite.callId)
+    localMuted = false
+    platformMuted = false
+    updateMute()
     val ended = transitionIncomingCall(call, status, detail)
     _state.value = ended
     completed[call.invite.callId] = ended

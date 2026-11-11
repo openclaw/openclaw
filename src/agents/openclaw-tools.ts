@@ -34,6 +34,7 @@ import {
   resolveImageToolFactoryAvailable,
   resolveOptionalMediaToolFactoryPlan,
 } from "./openclaw-tools.media-factory-plan.js";
+import { resolveWebSearchToolContext } from "./openclaw-tools.model-context.js";
 import { prepareOpenClawTools } from "./openclaw-tools.preparation.js";
 import {
   applyNodesToolWorkspaceGuard,
@@ -345,11 +346,10 @@ function* createOpenClawToolsSteps(
         })
       : null;
   options?.recordToolPrepStage?.("openclaw-tools:pdf-tool");
-  const webSearchAgentDir =
-    options?.agentDir ?? resolveAgentDir(resolvedConfig ?? {}, sessionAgentId);
+  const searchContext = resolveWebSearchToolContext(resolvedConfig ?? {}, sessionAgentId, options);
   let webSearchTool = createWebSearchTool({
     ...options,
-    agentDir: webSearchAgentDir,
+    ...searchContext,
     enabled: options?.webSearchEnabled,
     runtimeWebSearch: runtimeWebTools?.search,
     lateBindRuntimeConfig: true,
@@ -359,7 +359,7 @@ function* createOpenClawToolsSteps(
       preparedWebSearchConfigured ??
       hasConfiguredWebSearchProvider({
         config: availabilityConfig ?? resolvedConfig,
-        agentDir: webSearchAgentDir,
+        agentDir: searchContext.agentDir,
         authStore: options?.authProfileStore,
         runtimeWebSearch: runtimeWebTools?.search,
         ...(options?.authProfileStoreSource !== undefined

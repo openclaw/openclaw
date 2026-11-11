@@ -9,6 +9,7 @@ import { LoadingState } from "../components/solid/loading-state.tsx";
 import { isAgentDatabaseInspectionPendingError } from "../lib/gateway-availability.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
+import { finishBootFrame } from "./boot-composer.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { RouteElements, type RouteElementEvent } from "./route-elements.ts";
@@ -39,6 +40,7 @@ type RouteRenderBoundary = Pick<RouteErrorProps, "router" | "retryContext" | "ro
 };
 
 function RouteError(props: RouteErrorProps) {
+  onSettled(() => finishBootFrame());
   const staleChunk = () => isStaleChunkImportError(props.error);
   const handleRetry = (event: Event) => {
     if (!staleChunk()) {

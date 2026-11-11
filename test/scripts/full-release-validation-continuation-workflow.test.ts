@@ -37,7 +37,12 @@ it("runs release tooling only from the trusted revision without persisted creden
   expect(tooling.length).toBeGreaterThan(0);
   for (const entry of tooling) {
     const checkout = entry.with as Record<string, unknown>;
-    expect(checkout).toMatchObject({ ref: "${{ github.sha }}", "persist-credentials": false });
+    // The publisher tooling scan runs the admitted publisher P, FRV's other trusted revision.
+    const ref =
+      entry.name === "Checkout publisher tooling"
+        ? "${{ env.PUBLISHER_SHA }}"
+        : "${{ github.sha }}";
+    expect(checkout).toMatchObject({ ref, "persist-credentials": false });
     const sparseCheckout = checkout["sparse-checkout"];
     if (sparseCheckout !== undefined) {
       assert(typeof sparseCheckout === "string");
@@ -51,6 +56,25 @@ it("runs release tooling only from the trusted revision without persisted creden
     expect(checkout.path).not.toBe("workflow");
     expect(String(checkout["sparse-checkout"]).split(/\s+/u)).not.toContain("scripts");
   }
+});
+
+it("scans with publisher tooling while the plugin npm preflight child runs", () => {
+  const job = workflow.jobs.prepare_plugin_npm;
+  const names = job?.steps.map((entry) => entry.name) ?? [];
+  const from = names.indexOf("Dispatch exact plugin npm artifact preflight") + 1;
+  const scan = job?.steps.slice(
+    from,
+    names.indexOf("Resolve and seal exact plugin npm artifact descriptor"),
+  );
+  expect(scan?.map((entry) => entry.if)).toEqual(
+    Array(5).fill(
+      "env.PUBLISHER_SHA != '' && env.PUBLISHER_SHA != github.sha && env.PUBLICATION_ROUTE == 'normal'",
+    ),
+  );
+  expect(job?.env?.PUBLISHER_SHA).toContain(".qualificationAdmission.workflowSha");
+  expect(scan?.at(-1)?.run).toMatch(
+    /tsx \.release-tooling\/scripts\/plugin-npm-release-plan\.ts[\s\S]*tsx \.release-tooling\/scripts\/check-plugin-npm-security-scan\.mts \\\n\s+--tooling-root \.release-tooling/u,
+  );
 });
 
 describe("full release same-parent recovery workflow", () => {

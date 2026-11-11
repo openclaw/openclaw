@@ -804,7 +804,7 @@ suite.define(() => {
         await clear.waitFor({ state: "hidden" });
         await openChatPanels(page, "mobile");
         await companion
-          .getByText("Answers come from this session's transcript and its project files.", {
+          .getByText("Answers come from this session’s conversation and its project files.", {
             exact: true,
           })
           .waitFor();

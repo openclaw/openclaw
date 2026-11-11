@@ -43,19 +43,28 @@ function stripCompletedLongOrTildeFences(text: string): string {
  * link/image text, so it must not be used where the Markdown is rendered.
  */
 export function flattenMarkdownToPlainText(text: string): string {
-  const withoutCode = stripCompletedLongOrTildeFences(text)
+  const code: string[] = [];
+  const withoutFences = stripCompletedLongOrTildeFences(text)
     .replace(/```[\s\S]*?```/g, " ")
-    .replace(/```/g, " ")
-    .replace(/`([^`]*)`/g, "$1");
+    .replace(/```/g, " ");
+  // Code spans become `\0<index>\0` so block and emphasis stripping cannot rewrite them; other NULs are doubled.
+  const withoutCode = stripInlineLinks(withoutFences).replace(
+    /\0|`([^`]*)`/g,
+    (_match, literal: string | undefined) =>
+      literal === undefined ? "\0\0" : `\0${code.push(literal) - 1}\0`,
+  );
   // Quote markers may nest with horizontal whitespace, but must not consume another line.
-  let flattened = stripInlineLinks(withoutCode).replace(
+  let flattened = withoutCode.replace(
     /^[\t ]{0,3}(?:(?:>[\t ]*)+|(?:#{1,6}|[-+*]|\d+[.)])\s+)/gm,
     "",
   );
   for (const marker of ["*", "_", "~"] as const) {
     flattened = stripEmphasis(flattened, marker);
   }
-  return flattened.replace(/\s+/g, " ").trim();
+  return flattened
+    .replace(/\0(\d*)\0/g, (_match, index: string) => (index ? (code[Number(index)] ?? "") : "\0"))
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function stripEmphasis(text: string, marker: "*" | "_" | "~"): string {
@@ -200,8 +209,8 @@ function findDestinationEnd(
 
 /**
  * Maps each link label's `[` to its `]` and that `]` to the end of the `(destination "title")`
- * that follows it, skipping backslash-escaped characters. Brackets inside a destination or title
- * are not labels, so they never pair with a label bracket.
+ * that follows it, skipping backslash-escaped characters. Brackets inside a code span, destination
+ * or title are not labels, so they never pair with a label bracket.
  */
 function matchLinks(text: string): {
   labelEnds: Map<number, number>;
@@ -215,6 +224,8 @@ function matchLinks(text: string): {
     const char = text.charAt(index);
     if (char === "\\") {
       index += 1;
+    } else if (char === "`") {
+      index = Math.max(index, text.indexOf("`", index + 1));
     } else if (char === "[") {
       brackets.push(index);
     } else if (char === "]") {

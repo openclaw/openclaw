@@ -3,7 +3,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiErrorDetails } from "../../lib/format-error.ts";
 import { isAgentRuntimeRestrictionErrorDetails } from "../../lib/protocol-validators.generated/session-input.js";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
@@ -151,7 +151,8 @@ export async function completeInitialSessionTurn(
         if (canDispatch()) {
           showToast({
             severity: "error",
-            message: t("chat.nativeRuntimeRecovery.failed", { error: formatUiError(error) }),
+            message: t("chat.nativeRuntimeRecovery.failed", { error: "" }).trim(),
+            detail: formatUiErrorDetails(error),
           });
         }
       }

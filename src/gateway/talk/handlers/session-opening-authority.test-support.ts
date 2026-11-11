@@ -1,7 +1,7 @@
 import { expect, it, vi, type Mock } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
-import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-types.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-contexts.js";
 import { resolveSessionMutationAuthorizationAsync } from "../../session-sharing-authorization-async.js";
 import { makeRelayTransport } from "../relay/index.test-support.js";
 import { closeRelaySession, sendTalkRealtimeRelayAudio } from "../relay/operations.js";
@@ -33,6 +33,7 @@ export function registerRelayOpeningAuthorityTests(harness: {
         async () => browserSession,
         harness.tempDir(),
       );
+      Object.assign(fixture.client, { connect: { scopes: ["operator.talk"] } });
       setRuntimeConfigSnapshot(fixture.context.getRuntimeConfig());
       let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
       const speak = vi.fn();

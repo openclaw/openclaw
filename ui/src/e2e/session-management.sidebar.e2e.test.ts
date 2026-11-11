@@ -243,7 +243,7 @@ suite.define(() => {
       );
       await captureUiProof(suite, page, "child-session-menu.png");
       await openSessionMenuSubmenu(page, "Advanced");
-      await page.getByRole("menuitem", { name: "Fork conversation" }).waitFor();
+      await page.getByRole("menuitem", { name: "Fork session" }).waitFor();
       await page.getByRole("menuitem", { name: "Delete…" }).waitFor();
       await page.getByRole("menuitem", { name: "Icon & color", exact: true }).waitFor();
       await page.keyboard.press("Escape");

@@ -40,7 +40,7 @@ const {
     vi.fn<(providerId: string, cfg?: OpenClawConfig) => SpeechProviderPlugin | null | undefined>(),
   // Keep the real return union so individual cases can enable transcoding.
   transcodeAudioBufferMock: vi.fn<
-    () => ReturnType<typeof import("../media/audio-transcode.js").transcodeAudioBuffer>
+    typeof import("../media/audio-transcode.js").transcodeAudioBuffer
   >(async () => ({ ok: false, reason: "platform-unsupported" })),
 }));
 
@@ -203,16 +203,12 @@ export function createTtsConfig(prefsName: string, overrides: TtsConfig = {}): O
 
 export const requireRecord = createRequireRecord("record", "expected-label-record");
 
-export function requireFirstCallParam(calls: ReadonlyArray<readonly unknown[]>, label: string) {
-  const call = calls[0];
+export function requireFirstSynthesisRequest(label: string): SpeechSynthesisRequest {
+  const call = synthesizeMock.mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} call`);
   }
   return call[0];
-}
-
-export function requireFirstSynthesisRequest(label: string): Record<string, unknown> {
-  return requireRecord(requireFirstCallParam(synthesizeMock.mock.calls, label), label);
 }
 
 export function requireAttempt(attempts: unknown[] | undefined, index: number) {

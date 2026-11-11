@@ -356,7 +356,7 @@ it("leaves the avatar route before its admitted generation settles", async () =>
     );
     generateTab.click();
     const prompt = await waitForSolid(() =>
-      mounted.getByRole<HTMLTextAreaElement>("textbox", { name: "Describe your blobster..." }),
+      mounted.getByRole<HTMLTextAreaElement>("textbox", { name: "Describe your blobster…" }),
     );
     prompt.value = "A patient gardener";
     prompt.dispatchEvent(new Event("input", { bubbles: true }));

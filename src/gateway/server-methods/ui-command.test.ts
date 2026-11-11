@@ -155,6 +155,33 @@ describe("ui.command gateway method", () => {
     expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
   });
 
+  it("routes chat-created Template review only to its requester with the source conversation intact", async () => {
+    const requester = client("creator-tab", undefined, undefined, "creator");
+    const results = captureScreenRequests([
+      requester,
+      client("other-tab", undefined, undefined, "creator"),
+      client("bystander"),
+    ]);
+    const sessionKey = "agent:main:dashboard:template-request";
+    const draftId = "ec8f46b0-4ca3-4991-8a73-dfdcc8764087";
+    const screen = createGatewayToolCallerWrapper("main", {
+      agentSessionKey: sessionKey,
+      gatewayUiCommandTarget: { connId: requester.connId!, profileId: "creator" },
+    })(createScreenTool({ agentSessionKey: sessionKey, agentId: "main" }));
+    await screen.execute("review", { action: "template_review", draftId });
+    expect(results).toHaveLength(1);
+    expect(results[0]!.respond).toHaveBeenCalledWith(true, { ok: true });
+    expect(results[0]!.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+      "ui.command",
+      {
+        command: { kind: "template-review", draftId },
+        agentId: "main",
+        sessionKey,
+      },
+      new Set(["creator-tab"]),
+    );
+  });
+
   it("keeps the agent screen tool bound to its requesting browser across async execution", async () => {
     const requester = client("requester");
     const recipients = [requester, client("bystander")];

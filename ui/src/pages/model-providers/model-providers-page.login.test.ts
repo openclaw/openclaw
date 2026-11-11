@@ -281,7 +281,7 @@ describe("Models provider login", () => {
             { timeout: 3000 },
           );
           expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
-            "Example browser sign-in is connected",
+            "Example browser sign-in is ready",
           );
           expect(session?.getStatus()).toBe("done");
           expect(page.renderRoot.textContent).toContain(
@@ -397,7 +397,7 @@ describe("Models provider login", () => {
     expect(dismissal.defaultPrevented).toBe(true);
     cancel.resolve({ status: "running" });
     await waitForSolid(() =>
-      expect(page.renderRoot.textContent).toContain("Credentials are being saved."),
+      expect(page.renderRoot.textContent).toContain("Your account is being saved."),
     );
     expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
     expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(true);
@@ -411,7 +411,7 @@ describe("Models provider login", () => {
       expect(page.querySelector('[data-provider-id="example"]')).not.toBeNull(),
     );
     expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
-      "Example API key is connected",
+      "Example API key is ready",
     );
     expect(context.navigate).not.toHaveBeenCalled();
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
@@ -769,7 +769,7 @@ describe("Models provider login", () => {
     ).toBe(true);
     expect(profiles[0]?.textContent).toContain("External CLI account");
     expect(profiles[1]?.textContent).toContain("Saved browser account");
-    expect(profiles[1]?.textContent).toContain("Credentials configured");
+    expect(profiles[1]?.textContent).toContain("Account added");
     expect(profiles[1]?.textContent).toContain(
       "Access-token expiry alone does not mean you need to sign in again.",
     );

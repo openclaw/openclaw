@@ -240,9 +240,10 @@ vi.mock("./model-catalog.js", async () => ({
   buildPreparedModelCatalogSnapshot: mocks.buildPreparedModelCatalogSnapshot,
 }));
 
-vi.mock("./models-config.js", () => ({
-  ensureOpenClawModelsJson: mocks.ensureOpenClawModelsJson,
-  planOpenClawModelsJsonSource: mocks.planOpenClawModelsJsonSource,
+// mock-isolation: Static startup fixtures keep model planning and publication persistence unloaded.
+vi.mock("./models-config.core.js", () => ({
+  ensureOpenClawModelsJsonWithInput: mocks.ensureOpenClawModelsJson,
+  planOpenClawModelsJsonSourceWithInput: mocks.planOpenClawModelsJsonSource,
 }));
 
 vi.mock("./models-config.providers.implicit.js", () => ({

@@ -303,6 +303,20 @@ export async function startGatewaySidecars(params: {
     });
   }
 
+  // Native catalogs are advisory, so readiness does not wait; a turn arriving first joins this
+  // acquisition instead of starting its own.
+  scheduleSidecar({
+    name: "sidecars.native-model-catalog",
+    run: async (isStopped) => {
+      const { prewarmDefaultNativeModelCatalog } =
+        await import("../agents/prepared-model-catalog.js");
+      if (isStopped()) {
+        return;
+      }
+      await prewarmDefaultNativeModelCatalog(getModelRuntimeConfig());
+    },
+  });
+
   let restartSentinelWake: GatewayPostReadySidecarHandle | undefined;
   scheduleSidecar({
     name: "sidecars.restart-sentinel",

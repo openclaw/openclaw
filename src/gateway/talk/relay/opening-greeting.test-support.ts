@@ -1,5 +1,5 @@
 import { expect, it, onTestFinished, vi } from "vitest";
-import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-types.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-contexts.js";
 import { makeRelayTransport } from "./index.test-support.js";
 import {
   sendTalkRealtimeRelayAudio,

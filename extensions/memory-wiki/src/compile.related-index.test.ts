@@ -19,7 +19,7 @@ async function writePages(vault: Awaited<ReturnType<typeof createVault>>, pages:
     await vault.page(
       file,
       { pageType: id.slice(0, id.indexOf(".")), id, title, ...(sourceIds ? { sourceIds } : {}) },
-      `# ${title}\n\n${links.map((link) => `See [[${link}]].`).join("\n")}\n`,
+      `# ${title}\n\n${links.map((link) => `See [[${link}]].`).join("\n")}\n<!-- Literal backlink example: [[Lonely]] -->\nLiteral backlink example: \\[[Lonely]]\n`,
     );
   }
 }

@@ -24,7 +24,11 @@ describe("registered ClawRouter web search over HTTP", () => {
       path: "/search",
       method: "POST",
       body: { query: "synthetic query", max_results: 2 },
-      row: { content: "Fixture snippet" },
+      // Emoji straddle the 500-unit title and 4,000-unit snippet caps.
+      row: {
+        title: "Synthetic result".padEnd(499, ".") + "🥐",
+        content: "Fixture snippet".padEnd(3_999, ".") + "🥐",
+      },
       field: "snippet",
     },
     {
@@ -204,15 +208,11 @@ describe("registered ClawRouter web search over HTTP", () => {
         {
           url: "https://example.com/search",
           title: expect.stringContaining("Synthetic result"),
-          [entry.field]: expect.stringContaining("Fixture snippet"),
+          [entry.field]: expect.stringMatching(/EXTERNAL_UNTRUSTED_CONTENT[\s\S]*Fixture snippet/),
         },
       ],
     });
-    expect(result.results).toEqual([
-      expect.objectContaining({
-        [entry.field]: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
-      }),
-    ]);
+    expect(JSON.stringify(result)).not.toContain("\\ud83e");
     if (entry.id === "exa") {
       expect(result.results).toEqual([
         expect.objectContaining({

@@ -358,6 +358,80 @@ class IncomingCallOptInRuntimeTest {
       }
     }
 
+  @Test
+  fun chatTalkMicrophoneMuteControlsActiveIncomingCallAndHonorsPlatformMute() =
+    runTest {
+      Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+      try {
+        val f = createRelayFixture(this)
+        f.runtime.setTalkMicrophoneMuted(true)
+        assertTrue(f.runtime.talkMicrophoneMuted.value)
+        assertTrue(f.talk.isMicrophoneMuted.value)
+
+        val id = answerRelayCall(f)
+        assertFalse("Unmuted incoming call must clear ChatScreen mute state", f.runtime.talkMicrophoneMuted.value)
+        assertFalse(f.calls.muted.value)
+        assertTrue("Ordinary Talk mute preference remains separate", f.talk.isMicrophoneMuted.value)
+
+        f.runtime.setTalkMicrophoneMuted(true)
+        assertTrue(f.calls.muted.value)
+        assertTrue(f.runtime.talkMicrophoneMuted.value)
+
+        f.runtime.setTalkMicrophoneMuted(false)
+        assertFalse(f.calls.muted.value)
+        assertFalse(f.runtime.talkMicrophoneMuted.value)
+        assertTrue("Call unmute must not clear retained ordinary Talk mute", f.talk.isMicrophoneMuted.value)
+
+        f.calls.platformMuteChanged(id, true)
+        assertTrue(f.calls.muted.value)
+        assertTrue(f.runtime.talkMicrophoneMuted.value)
+
+        f.runtime.setTalkMicrophoneMuted(false)
+        assertTrue("System mute cannot be cleared from ChatScreen", f.calls.muted.value)
+        assertTrue(f.runtime.talkMicrophoneMuted.value)
+        assertEquals(
+          "Use Android call controls to turn off system mute",
+          f.calls.state.value
+            ?.detail,
+        )
+
+        f.calls.end(id)
+        assertFalse(f.calls.muted.value)
+        assertTrue("Ending the call restores ordinary Talk's retained mute state", f.runtime.talkMicrophoneMuted.value)
+
+        // Mute applied while Ringing or during outage recovery (incomingCallCaptureId == null) must reset on termination.
+        val ringingId = UUID.randomUUID().toString()
+        val ringingInvite =
+          buildJsonObject {
+            put("callId", ringingId)
+            put("sessionKey", "agent:assistant:ringing-mute-reset")
+            put("callerName", "Assistant")
+            put("topic", "Ringing mute reset")
+            put("expiresAtMs", System.currentTimeMillis() + 60_000)
+          }.toString()
+        assertTrue(f.commands.handleInvoke("talk.incoming", ringingInvite).ok)
+        f.calls.platformMuteChanged(ringingId, true)
+        assertTrue(f.calls.muted.value)
+        assertEquals(true, ReflectionHelpers.getField<Boolean>(f.talk, "incomingCallMuted"))
+        f.calls.decline(ringingId)
+        assertFalse(f.calls.muted.value)
+        assertEquals(false, ReflectionHelpers.getField<Boolean>(f.talk, "incomingCallMuted"))
+
+        val recoveryId = answerRelayCall(f)
+        f.calls.transportInterrupted()
+        assertEquals(null, ReflectionHelpers.getField<String?>(f.runtime, "incomingCallCaptureId"))
+        f.calls.toggleMute(recoveryId)
+        assertTrue(f.calls.muted.value)
+        assertEquals(true, ReflectionHelpers.getField<Boolean>(f.talk, "incomingCallMuted"))
+        f.calls.end(recoveryId)
+        assertFalse(f.calls.muted.value)
+        assertEquals(false, ReflectionHelpers.getField<Boolean>(f.talk, "incomingCallMuted"))
+        assertTrue(f.runtime.talkMicrophoneMuted.value)
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
   private data class RelayFixture(
     val runtime: NodeRuntime,
     val talk: TalkModeManager,
@@ -371,7 +445,8 @@ class IncomingCallOptInRuntimeTest {
     selectGateway(prefs, "synthetic-gateway")
     val runtime = createRuntime(prefs)
     val talk = ReflectionHelpers.getField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
-    val calls =
+    lateinit var calls: IncomingCallController
+    calls =
       IncomingCallController(
         context = app,
         scope = scope.backgroundScope,
@@ -379,15 +454,18 @@ class IncomingCallOptInRuntimeTest {
         gatewayId = { "synthetic-gateway" },
         captureAuthority = { { true } },
         isBusy = { false },
-        startAudio = { id, _, _, _, beforeCapture ->
-          beforeCapture()
+        startAudio = { id, sessionKey, _, _, beforeCapture ->
           ReflectionHelpers.setField(runtime, "incomingCallCaptureId", id)
+          talk.prepareIncomingCall(sessionKey)
+          talk.setIncomingCallMuted(calls.muted.value)
+          beforeCapture()
         },
         stopAudio = {
           ReflectionHelpers.setField(runtime, "incomingCallCaptureId", null)
           talk.stopAllCapture()
+          talk.prepareIncomingCall(null)
         },
-        setMuted = {},
+        setMuted = { muted -> talk.setIncomingCallMuted(muted) },
       )
     ReflectionHelpers.setField(runtime, "incomingCalls\$delegate", lazyOf(calls))
     runtime.setIncomingCallsEnabled(true)

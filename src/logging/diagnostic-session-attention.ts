@@ -1,4 +1,5 @@
 import type { DiagnosticSessionActiveWorkKind } from "../infra/diagnostic-events.js";
+import { formatAdmissionDiagnostics } from "../process/command-lane-diagnostics.js";
 import type { DiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
 
 export type SessionAttentionClassification =
@@ -143,6 +144,9 @@ export function formatSessionActivityLogFields(
   activity: DiagnosticSessionActivitySnapshot,
 ): string {
   const fields: string[] = [];
+  if (activity.admission) {
+    fields.push(formatAdmissionDiagnostics(activity.admission));
+  }
   if (activity.lastProgressReason) {
     fields.push(`lastProgress=${activity.lastProgressReason}`);
   }

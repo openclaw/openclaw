@@ -1,9 +1,9 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMemo, Errored, For, Loading } from "solid-js";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import { pluginConfigSchema, pluginEntryValue } from "../plugins/settings-model.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { sessionSourcePresentations } from "./session-source-presentation.ts";
@@ -106,7 +106,7 @@ export function SessionSources(
                     return (
                       <SettingsToggleRow
                         icon={
-                          <ProviderBrandIcon
+                          <ModelProviderIcon
                             provider={source().icon}
                             class="session-source__icon"
                           />

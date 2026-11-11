@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import {
   bindDockerPersistentTarget,
@@ -21,6 +22,32 @@ import {
   assertSandboxRegistryEntryCurrent,
   assertSandboxBrowserRegistryEntryCurrent,
 } from "./registry.js";
+
+const log = createSubsystemLogger("sandbox/quiescence");
+const pauseCounts = {
+  checkpoint: 0,
+  preparation: 0,
+  reconcile: 0,
+  publication: 0,
+  retirement: 0,
+  restore: 0,
+};
+export type LocalWorkspacePauseReason = keyof typeof pauseCounts;
+export type LocalWorkspacePausePhase =
+  | "pause"
+  | "operation"
+  | "recovery"
+  | "capture"
+  | "scan"
+  | "staging"
+  | "materialization"
+  | "preflight"
+  | "patch"
+  | "apply"
+  | "acceptance"
+  | "verification"
+  | "cleanup"
+  | "resume";
 
 /** Registered runtimes and retained stream children can write the exact private mount. */
 export async function readLocalWorkspaceRuntimes(
@@ -186,6 +213,7 @@ export function parseLocalWorkspacePausedRuntimes(
 /** Caller holds the projection lease through pause, reconciliation, and resume. */
 export async function quiesceLocalWorkspace(params: {
   workspaceDir: string;
+  reason?: LocalWorkspacePauseReason;
   env?: NodeJS.ProcessEnv;
   retained: LocalWorkspacePausedRuntime[];
   persist: (runtimes: LocalWorkspacePausedRuntime[]) => void | Promise<void>;
@@ -208,6 +236,12 @@ export async function quiesceLocalWorkspace(params: {
   params.assertCurrent();
   let paused = [...params.retained];
   let retired = false;
+  const phaseObservers = new Set<(phase: LocalWorkspacePausePhase) => void>();
+  const markPhase = (phase: LocalWorkspacePausePhase) => {
+    for (const observe of phaseObservers) {
+      observe(phase);
+    }
+  };
   const releases: Array<() => Promise<void>> = [];
   const retirements: Array<() => Promise<void>> = [];
   for (const { runtime, bridges } of selected) {
@@ -292,6 +326,17 @@ export async function quiesceLocalWorkspace(params: {
       phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.persist");
       await params.persist(paused);
     }
+    const reason = params.reason ?? "reconcile";
+    let startedAt = performance.now();
+    let phase: LocalWorkspacePausePhase = "pause";
+    let phaseStartedAt = startedAt;
+    const durations = new Map<LocalWorkspacePausePhase, number>();
+    const observePhase = (next: LocalWorkspacePausePhase) => {
+      const now = performance.now();
+      durations.set(phase, (durations.get(phase) ?? 0) + now - phaseStartedAt);
+      phase = next;
+      phaseStartedAt = now;
+    };
     if (isPaused !== "true") {
       // A retained receipt may outlive an unpause. Re-fence the live writer
       // before reconciliation rather than trusting stale pause metadata.
@@ -299,8 +344,14 @@ export async function quiesceLocalWorkspace(params: {
       phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.authority");
       await runtime.assertCurrent();
       phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.pause");
+      phaseStartedAt = startedAt = performance.now();
       await execContainer(engine, ["pause", id], { signal: AbortSignal.timeout(30_000) });
+      log.info(`Local workspace pause: reason=${reason} count=${++pauseCounts[reason]}`, {
+        engine: engine.id,
+        runtime: runtime.kind,
+      });
     }
+    phaseObservers.add(observePhase);
     releases.push(async () => {
       using resumePhases = observeDiagnosticsTimelinePhases(
         "attempt.setup.sandbox.workspace_selection.resume.engine_target",
@@ -317,12 +368,14 @@ export async function quiesceLocalWorkspace(params: {
         signal: AbortSignal.timeout(30_000),
       });
       params.assertCurrent();
+      let outcome = "already-running";
       if (observed.code !== 0) {
         if (!/no such (?:container|object)|does not exist/iu.test(observed.stderr)) {
           throw new Error(
             "Local workspace runtime resume inspection failed; exact paused owner retained",
           );
         }
+        outcome = "removed";
       } else if (observed.stdout.trim() === "true") {
         resumePhases.mark("attempt.setup.sandbox.workspace_selection.resume.authority");
         await runtime.assertCurrent();
@@ -337,8 +390,20 @@ export async function quiesceLocalWorkspace(params: {
         ) {
           throw new Error("Local workspace runtime resume failed; exact paused owner retained");
         }
+        outcome = result.code === 0 ? "resumed" : "removed";
       } else if (observed.stdout.trim() !== "false") {
         throw new Error("Invalid local workspace runtime resume inspection");
+      }
+      if (phaseObservers.delete(observePhase)) {
+        observePhase("resume");
+        const [dominantPhase, dominantPhaseMs] = [...durations].reduce((longest, measured) =>
+          measured[1] > longest[1] ? measured : longest,
+        );
+        // Recovered receipts have no timestamp; never present this owner's observation as the full pause.
+        log.info(
+          `Local workspace unpause: reason=${reason} durationMs=${Math.round(performance.now() - startedAt)} dominantPhase=${dominantPhase} dominantPhaseMs=${Math.round(dominantPhaseMs)} durationScope=${isPaused === "true" ? "observed" : "owner"} outcome=${outcome}`,
+          { engine: engine.id, runtime: runtime.kind },
+        );
       }
       params.assertCurrent();
       paused = paused.filter((held) => held.name !== containerName || held.id !== id);
@@ -346,7 +411,9 @@ export async function quiesceLocalWorkspace(params: {
       await params.persist(paused);
     });
   }
+  markPhase("operation");
   return {
+    markPhase,
     get retired() {
       return retired;
     },
@@ -372,9 +439,10 @@ export async function quiesceLocalWorkspace(params: {
       retired = true;
     },
     resume: async () => {
-      if (retired) {
+      if (retired || !paused.length) {
         return;
       }
+      markPhase("resume");
       params.assertCurrent();
       for (const release of releases.toReversed()) {
         await release();
@@ -382,6 +450,7 @@ export async function quiesceLocalWorkspace(params: {
       params.assertCurrent();
       if (paused.length) {
         await params.persist([]);
+        paused = [];
       }
     },
   };

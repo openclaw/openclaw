@@ -18,6 +18,7 @@ import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import type { ProjectionFixtureFacts } from "../ui/src/test-helpers/control-ui-projection-fixture-contract.ts";
 import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
@@ -879,10 +880,14 @@ try {
               },
             };
             // Keep the same readiness contract with a timeout scaled for intentional throttling.
-            const gateway = await installMockGateway(
+            const installGateway = workboardSource
+              ? installNativePluginMockGateway
+              : installMockGateway;
+            const gateway = await installGateway(
               page,
               { ...fixture, awaitInitialRoster: false },
               {
+                nativeAssetLatencyMs: assetLatencyMs,
                 requestHandlers: {
                   ...defaultRequestHandlers,
                   ...scenario.createRequestHandlers?.(defaultRequestHandlers),

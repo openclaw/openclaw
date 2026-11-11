@@ -327,6 +327,8 @@ function isSuccessfulRecentRun(run: WorkflowRun | undefined, nowMs: number) {
 function runGit(args: string[], { input }: { input?: string } = {}) {
   const result = spawnSync("git", args, {
     encoding: "utf8",
+    // Presence probes must not invoke Git's unnegotiated promisor fetch.
+    env: args[0] === "cat-file" ? { ...process.env, GIT_NO_LAZY_FETCH: "1" } : process.env,
     input,
     maxBuffer: GIT_MAX_BUFFER_BYTES,
     stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
@@ -383,7 +385,7 @@ function ensureCommitAvailable(sha: string, execGit: ExecGit) {
     return true;
   } catch {
     try {
-      execGit(["fetch", "origin", sha]);
+      execGit(["fetch", "--no-tags", "--no-write-fetch-head", "origin", sha]);
       execGit(["cat-file", "-e", `${sha}^{commit}`]);
       return true;
     } catch {

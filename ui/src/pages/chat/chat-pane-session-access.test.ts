@@ -291,7 +291,7 @@ describe("chat pane session access", () => {
         );
         expect((await waitForInputDialog()).value).toBe("Keep this group");
         expect(document.body.textContent).toContain(
-          outcome === "failed" ? "Assignment rejected" : "Gateway connection replaced",
+          outcome === "failed" ? "Assignment rejected" : "The connection changed",
         );
       } finally {
         await modal.cleanup();

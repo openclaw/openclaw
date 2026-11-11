@@ -12,7 +12,7 @@
   min-height: 32px;
   color: var(--text);
   font-size: calc(14px * var(--control-ui-text-scale));
-  line-height: 24px;
+  line-height: calc(24px * var(--control-ui-text-scale));
   text-decoration: none;
 }
 
