@@ -158,10 +158,13 @@ selection. See [Configuration](/automation/hooks/configuration#configuration).
 
 These commands are offline-only: they refuse while the Gateway owns state.
 While the Gateway is running, apply the same change with
-`openclaw config set hooks.internal.entries.<key>.enabled true` (or `false` to
-disable), using the hook's config key from `openclaw hooks info <name>`; the
-running Gateway hot-reloads the change without a restart. To run the toggle
-command itself, stop the Gateway first and rerun it.
+`openclaw config set hooks.internal.enabled true` (to turn on internal hooks)
+and then `openclaw config set hooks.internal.entries.<key>.enabled true` (or
+`false` to disable), using the hook's config key from
+`openclaw hooks info <name> --json` (its `hookKey` field). The running Gateway
+hot-reloads the change without a restart in the default hybrid reload mode;
+with reload mode `off`, restart the Gateway for the change to take effect. To
+run the toggle command itself, stop the Gateway first and rerun it.
 
 The running Gateway reloads the selection in `hybrid` mode. If a selected hook
 cannot load, it keeps the previous handlers. Inspect Gateway logs. Reload does
@@ -177,7 +180,11 @@ Writes `hooks.internal.entries.<hookKey>.enabled = false`. It does not remove th
 hook files or change the master switch. Missing/ambiguous and plugin-managed
 hooks are rejected. Missing runtime requirements do not prevent disabling.
 Like `enable`, this command is offline-only; while the Gateway is running, use
-`openclaw config set hooks.internal.entries.<key>.enabled false` instead.
+`openclaw config set hooks.internal.entries.<key>.enabled false` instead, with
+the hook's config key from `openclaw hooks info <name> --json` (its `hookKey`
+field). The running Gateway hot-reloads the change without a restart in the
+default hybrid reload mode; with reload mode `off`, restart the Gateway for the
+change to take effect.
 In `hybrid` mode, subsequent events use the updated selection. An event already
 running finishes with its original handlers.
 
