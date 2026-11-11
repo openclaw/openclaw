@@ -16,6 +16,8 @@ import {
   loadPreparedGatewayModelCatalogSnapshot,
   readPreparedGatewayModelCatalogOwnerSnapshot,
 } from "../gateway/server-model-catalog.js";
+import { createOwnedTestInstance } from "../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { AgentHarness } from "./harness/types.js";
@@ -27,6 +29,7 @@ import {
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import type { PreparedModelCatalogRefreshOptions } from "./prepared-model-runtime.types.js";
+import { createRuntimePluginWork } from "./runtime-plugin-work.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "native-demand" });
 const { mocks } = fixture;
@@ -344,6 +347,55 @@ it.each(["discovery failure", "superseded owner", "changed authorization"])(
     expect(loadNative).toHaveBeenCalledTimes(3);
   },
 );
+
+it("finishes a native acquisition after its starting scope closes (#196968)", async ({
+  signal,
+}) => {
+  const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
+  const native = nativeModel("custom", "native-model", "native-test");
+  const started = createDeferredCore();
+  const release = createDeferredCore();
+  // A real plugin instance, so the harness's catalog call resolves its invocation
+  // binding exactly as bundled harness code does (PluginInstance.run -> lookup).
+  const instance = createOwnedTestInstance("native-test-harness");
+  const registry = instance.owner!.registry!;
+  const work = createRuntimePluginWork("prepared-generation-lease");
+  const scope = new PluginInvocationScope(registry, [instance], {
+    work,
+    registryByInstance: new Map([[instance, registry]]),
+  });
+  const invokePlugin = instance.wrap(() => [native]);
+  const loadNative = vi.fn(async () => {
+    started.resolve();
+    await release.promise;
+    return invokePlugin();
+  });
+  installHarnesses({ id: "native-test", loadModelCatalog: loadNative });
+  mocks.runPreparedModelCatalogWorker.mockResolvedValue(snapshot([saved]));
+  const owner = await prepareOwner(config);
+  try {
+    // Start the acquisition under the starting scope, then close that scope while
+    // the native read is still running — the turn ending under the foreground wait.
+    const pending = scope.run(() =>
+      owner.loadNativeModelCatalog!({
+        provider: "custom",
+        modelId: "native-model",
+        runtime: "native-test",
+      }),
+    );
+    await withinTest(started.promise, signal);
+    scope.release();
+    release.resolve();
+    await withinTest(pending, signal);
+    expect(owner.readFullModelCatalog!()?.entries).toContainEqual(expect.objectContaining(native));
+    expect(owner.readFullModelCatalog!()?.refreshFailed).toBeUndefined();
+    expect(loadNative).toHaveBeenCalledOnce();
+  } finally {
+    release.resolve();
+    scope.release();
+    work.release();
+  }
+});
 
 it.each([
   { sharedProvider: false, runtime: "native-test" },
