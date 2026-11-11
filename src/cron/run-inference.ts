@@ -2,14 +2,12 @@ import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
 import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  type CronInferenceAccount,
   type CronInferenceBinding,
   describeCronInferenceBinding,
-  resolveCronInferenceAccount,
   resolveCronRuntimeSessionEntry,
 } from "./inference-binding.js";
 
-type CronRunInferenceRunParams = Pick<
+type CronPinnedRunParams = Pick<
   RunEmbeddedAgentInternalParams,
   | "authProfileId"
   | "authProfileBinding"
@@ -18,19 +16,32 @@ type CronRunInferenceRunParams = Pick<
   | "authProfileIdSource"
 >;
 
+/** Another provider selects live: the job's selected profile names the recorded account only. */
+type CronLiveRunParams = Pick<RunEmbeddedAgentInternalParams, "scheduledLiveProviderAuth"> & {
+  authProfileId: undefined;
+  authProfileIdSource: undefined;
+};
+
+/**
+ * A job records the account for its own provider only. Candidates on that provider run on
+ * exactly that account; candidates on any other provider (configured fallbacks) select their
+ * credentials live, the way an interactive run does.
+ */
 export type CronRunInference = {
-  /** Run params pinned to the recorded account of the candidate's provider. */
-  runParams: (provider: string) => CronRunInferenceRunParams;
-  /** The session entry candidates resolve their runtime from: the captured runtime, if any. */
+  runParams: (provider: string) => CronPinnedRunParams | CronLiveRunParams;
+  /** The session entry a candidate resolves its runtime from: the captured runtime, if any. */
   runtimeSessionEntry: <T extends { agentRuntimeOverride?: string; agentHarnessId?: string }>(
     entry: T,
     provider: string,
   ) => T | { agentRuntimeOverride: string };
-  /** The drift guard: one refusal for every embedded and CLI candidate. */
+  /** Refuses a candidate on the recorded provider that can't run on the recorded account. */
   assertCandidate: (provider: string, cliExecution: boolean, runtime?: string) => void;
+  /** Rechecks the recorded account before a candidate's credential or transport effects. */
+  assertCurrent: (provider: string) => void;
   /**
-   * A CLI candidate may run only when its backend forwards exactly the recorded account,
-   * selected explicitly; `resolve` is the same selector interactive CLI turns use.
+   * On the recorded provider, a CLI candidate runs only when its backend forwards exactly the
+   * recorded account; `resolve` is the selector interactive CLI turns use. Other providers use
+   * `live`, the interactive selection.
    */
   resolveCliAuthProfile: (
     provider: string,
@@ -38,152 +49,123 @@ export type CronRunInference = {
       authProfileId: string;
       authProfileIdSource: "user";
     }) => Promise<string | undefined>,
-  ) => Promise<string>;
+    live: () => Promise<string | undefined>,
+  ) => Promise<string | undefined>;
   dispose: () => void;
 };
 
+function jobLabel(job: { id: string; name?: string }) {
+  return job.name?.trim() ? `"${job.name.trim()}" (${job.id})` : job.id;
+}
+
 // Names the stored account, its captured runtime and the candidate that cannot use them.
 function incompatibleCandidateError(params: {
+  job: { id: string; name?: string };
   binding: CronInferenceBinding;
-  account: CronInferenceAccount | undefined;
   provider: string;
   runtime?: string;
   cliExecution: boolean;
   cause?: unknown;
 }): Error {
-  const { binding, account } = params;
-  const recorded = account ?? binding;
-  const reason = !account
-    ? `The selected model uses a different provider from this job's stored account, and no fallback account is recorded for provider ${params.provider}. `
-    : account.runtime && params.runtime && params.runtime !== account.runtime
-      ? `The account was captured for runtime ${account.runtime}, which this run can no longer use. `
+  const { binding } = params;
+  const reason =
+    binding.runtime && params.runtime && params.runtime !== binding.runtime
+      ? `That account was recorded for runtime ${binding.runtime}, which this run can no longer use.`
       : params.cliExecution
-        ? "The selected runtime uses a CLI login that cannot use this job's stored account. "
+        ? "The selected runtime signs in through its own CLI login and can't use that account."
         : "";
   return new Error(
-    `Automation candidate ${params.provider}${params.runtime ? ` on runtime ${params.runtime}` : ""} is incompatible with its recorded inference account and route (${describeCronInferenceBinding(recorded)}). ` +
-      reason +
-      "Select a model compatible with the recorded account, or explicitly select an account with " +
-      "openclaw automations edit <jobId> --model <provider/model>@<profileId>." +
-      (account
-        ? ""
-        : " For a fallback model, record its provider's account with openclaw doctor --fix or " +
-          "openclaw automations edit <jobId> --fallbacks <list>."),
+    `Automation ${jobLabel(params.job)} runs ${params.provider} on ${describeCronInferenceBinding(binding)}${params.runtime ? ` and can't run it on runtime ${params.runtime}` : ""}. ` +
+      (reason ? `${reason} ` : "") +
+      `To choose an account explicitly: openclaw automations edit ${params.job.id} --model <provider/model>@<profileId> (list accounts: openclaw models auth list).`,
     params.cause === undefined ? undefined : { cause: params.cause },
   );
 }
 
-type AccountAuthorization =
-  | { ok: true; authorization: Awaited<ReturnType<typeof acquireAuthorization>> }
-  | { ok: false; error: unknown };
-
-async function acquireAuthorization(params: {
-  binding: CronInferenceAccount;
-  cfg: OpenClawConfig;
-  agentDir: string;
-}) {
-  const { acquireCronInferenceAuthorization } = await import("./inference-binding.runtime.js");
-  return acquireCronInferenceAuthorization(params);
-}
-
-/** Both Cron execution paths keep each recorded account bound through turn settlement. */
+/** Both Cron execution paths keep the recorded account bound through turn settlement. */
 export async function prepareCronRunInference(params: {
+  job: { id: string; name?: string };
   binding?: CronInferenceBinding;
   cfg: OpenClawConfig;
   agentDir: string;
 }): Promise<CronRunInference | undefined> {
-  const { binding } = params;
+  const { binding, job } = params;
   if (!binding) {
     return undefined;
   }
-  // The primary account must be current before the run starts.
-  const primary = await acquireAuthorization({ ...params, binding });
-  const authorizations = new Map<string, AccountAuthorization>([
-    [binding.provider, { ok: true, authorization: primary }],
-  ]);
-  // A fallback account that was replaced or revoked refuses only its own candidates, at the
-  // point the chain reaches them; it never blocks the primary.
-  for (const account of binding.fallbackAccounts ?? []) {
-    try {
-      authorizations.set(account.provider, {
-        ok: true,
-        authorization: await acquireAuthorization({ ...params, binding: account }),
-      });
-    } catch (error) {
-      authorizations.set(account.provider, { ok: false, error });
-    }
+  const { acquireCronInferenceAuthorization } = await import("./inference-binding.runtime.js");
+  // A replaced or removed account refuses only the candidates on its provider, when the chain
+  // reaches them; configured fallbacks on other providers still run.
+  let authorization: Awaited<ReturnType<typeof acquireCronInferenceAuthorization>> | undefined;
+  let unavailable: unknown;
+  try {
+    authorization = await acquireCronInferenceAuthorization({
+      binding,
+      job,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+    });
+  } catch (error) {
+    unavailable = error;
   }
-  const disposeAll = () => {
-    for (const entry of authorizations.values()) {
-      if (entry.ok) {
-        entry.authorization.dispose();
-      }
+  const current = () => {
+    if (!authorization) {
+      throw unavailable;
     }
+    return authorization;
   };
-  const authorizationFor = (account: CronInferenceAccount) => {
-    const entry = authorizations.get(account.provider);
-    if (!entry) {
-      throw new Error("Automation inference account authorization is missing.");
-    }
-    if (!entry.ok) {
-      throw entry.error;
-    }
-    return entry.authorization;
+  const pinned: CronPinnedRunParams = {
+    authProfileId: binding.profileId,
+    authProfileBinding: {
+      profileId: binding.profileId,
+      authRequirement: binding.authRequirement,
+      assertCurrent: () => current().assertCurrent(),
+      revalidate: () => current().revalidate(),
+    },
+    allowAuthProfileFallback: false,
+    onSuccessfulAuthProfile: (profileId) => {
+      if (profileId !== binding.profileId) {
+        throw new Error("Automation inference account changed during execution.");
+      }
+    },
+    authProfileIdSource: binding.source,
+  };
+  const live: CronLiveRunParams = {
+    scheduledLiveProviderAuth: true,
+    authProfileId: undefined,
+    authProfileIdSource: undefined,
   };
   // The last admitted candidate's runtime, named when its CLI backend refuses the account.
   let candidateRuntime: string | undefined;
   return {
-    runParams(provider) {
-      // Unrecorded providers keep the primary's pin; assertCandidate refuses them first.
-      const account = resolveCronInferenceAccount(binding, provider) ?? binding;
-      const isPrimary = account === binding;
-      return {
-        authProfileId: account.profileId,
-        authProfileBinding: {
-          profileId: account.profileId,
-          authRequirement: account.authRequirement,
-          assertCurrent: () => authorizationFor(account).assertCurrent(),
-          revalidate: () => authorizationFor(account).revalidate(),
-        },
-        allowAuthProfileFallback: false,
-        onSuccessfulAuthProfile: (profileId) => {
-          if (profileId !== account.profileId) {
-            throw new Error("Automation inference account changed during execution.");
-          }
-        },
-        authProfileIdSource: isPrimary ? binding.source : "auto",
-      };
-    },
+    runParams: (provider) => (provider === binding.provider ? pinned : live),
     runtimeSessionEntry: (entry, provider) =>
-      resolveCronRuntimeSessionEntry(
-        resolveCronInferenceAccount(binding, provider) ?? binding,
-        entry,
-      ),
+      resolveCronRuntimeSessionEntry(binding, entry, provider),
     assertCandidate(provider, cliExecution, runtime) {
-      const account = resolveCronInferenceAccount(binding, provider);
+      if (provider !== binding.provider) {
+        return;
+      }
       // A binding without a captured runtime keeps the runtime its run derives.
-      if (!account || (account.runtime && runtime && runtime !== account.runtime)) {
-        throw incompatibleCandidateError({ binding, account, provider, runtime, cliExecution });
+      if (binding.runtime && runtime && runtime !== binding.runtime) {
+        throw incompatibleCandidateError({ job, binding, provider, runtime, cliExecution });
       }
       candidateRuntime = runtime ?? candidateRuntime;
       // CLI candidates finish this check in resolveCliAuthProfile, before the process starts.
-      authorizationFor(account).assertCurrent();
+      current().assertCurrent();
     },
-    async resolveCliAuthProfile(provider, resolve) {
-      const account = resolveCronInferenceAccount(binding, provider);
-      if (!account) {
-        throw incompatibleCandidateError({
-          binding,
-          account,
-          provider,
-          runtime: candidateRuntime,
-          cliExecution: true,
-        });
+    assertCurrent(provider) {
+      if (provider === binding.provider) {
+        current().assertCurrent();
+      }
+    },
+    async resolveCliAuthProfile(provider, resolve, liveSelection) {
+      if (provider !== binding.provider) {
+        return await liveSelection();
       }
       let profileId: string | undefined;
       try {
         profileId = await resolve({
-          authProfileId: account.profileId,
+          authProfileId: binding.profileId,
           authProfileIdSource: "user",
         });
       } catch (error) {
@@ -192,26 +174,26 @@ export async function prepareCronRunInference(params: {
           throw error;
         }
         throw incompatibleCandidateError({
+          job,
           binding,
-          account,
           provider,
           runtime: candidateRuntime,
           cliExecution: true,
           cause: error,
         });
       }
-      if (profileId !== account.profileId) {
+      if (profileId !== binding.profileId) {
         throw incompatibleCandidateError({
+          job,
           binding,
-          account,
           provider,
           runtime: candidateRuntime,
           cliExecution: true,
         });
       }
-      authorizationFor(account).assertCurrent();
+      current().assertCurrent();
       return profileId;
     },
-    dispose: disposeAll,
+    dispose: () => authorization?.dispose(),
   };
 }

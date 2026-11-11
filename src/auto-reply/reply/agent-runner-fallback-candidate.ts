@@ -110,6 +110,11 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   });
   const selection = resolveModelFallbackOptions(params.effectiveRun, params.runtimeConfig);
   // A scheduled run resolves candidates on the runtime its account was captured for.
+  // The recorded provider runs on its account; other providers select one live.
+  const scheduledAuthProfileId = (provider: string) => {
+    const scheduled = params.scheduledInference?.runParams(provider);
+    return scheduled && "authProfileId" in scheduled ? scheduled.authProfileId : undefined;
+  };
   const runtimeSessionEntry = (provider: string) => {
     const entry = params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry();
     return entry && params.scheduledInference
@@ -133,9 +138,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         provider,
         model,
         agentId: turn.followupRun.run.agentId,
-        authProfileId:
-          params.scheduledInference?.runParams(provider).authProfileId ??
-          selectedAuthProfile.authProfileId,
+        authProfileId: scheduledAuthProfileId(provider) ?? selectedAuthProfile.authProfileId,
         sessionRuntimeOverride,
         pinnedHarnessId: resolveSessionPinnedHarnessId(activeEntry),
       }),

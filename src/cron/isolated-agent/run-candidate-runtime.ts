@@ -1,25 +1,9 @@
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
-import {
-  resolveCronInferenceAccount,
-  resolveCronRuntimeSessionEntry,
-} from "../inference-binding.js";
+import { resolveCronRuntimeSessionEntry } from "../inference-binding.js";
 import { resolveCronCandidateExecution } from "./candidate-execution.js";
 import { isCliProvider } from "./run-execution.runtime.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { resolveEffectiveAgentRuntime } from "./run.runtime.js";
-
-// A captured runtime stands in for the override copied into the cron session entry; each
-// provider uses the runtime its own recorded account was captured for.
-function candidateRuntimeSessionEntry(
-  params: Pick<CronRunExecutionParams, "cronSession" | "job">,
-  provider: string,
-) {
-  const binding = params.job.inferenceBinding;
-  return resolveCronRuntimeSessionEntry(
-    binding && (resolveCronInferenceAccount(binding, provider) ?? binding),
-    params.cronSession.sessionEntry,
-  );
-}
 
 /** Resolves a candidate's runtime override from the job's captured runtime or its cron session. */
 export function createCronRuntimeOverrideResolver(
@@ -28,7 +12,11 @@ export function createCronRuntimeOverrideResolver(
   return (provider: string) =>
     resolveSessionRuntimeOverrideForProvider({
       provider,
-      entry: candidateRuntimeSessionEntry(params, provider),
+      entry: resolveCronRuntimeSessionEntry(
+        params.job.inferenceBinding,
+        params.cronSession.sessionEntry,
+        provider,
+      ),
       cfg: params.cfgWithAgentDefaults,
     });
 }
@@ -49,7 +37,12 @@ export function createCronCandidateExecutionResolver(
         model,
         sessionRuntimeOverride,
         sessionKey: params.runSessionKey,
-        sessionEntry: candidateRuntimeSessionEntry(params, provider),
+        // A captured runtime stands in for the override copied into the cron session entry.
+        sessionEntry: resolveCronRuntimeSessionEntry(
+          params.job.inferenceBinding,
+          params.cronSession.sessionEntry,
+          provider,
+        ),
       },
       { isCliProvider, resolveEffectiveAgentRuntime },
     );

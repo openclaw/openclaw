@@ -1,7 +1,7 @@
 /** Resolves model fallback chains for isolated cron runs and preflight. */
 import type { RunEntryModelResolve } from "../../agents/embedded-agent-runner/run-entry.types.js";
 import { resolveModelCandidateChain } from "../../agents/model-fallback-candidates.js";
-import type { ModelFallbackCandidate } from "../../agents/model-fallback.types.js";
+import type { ModelCandidate } from "../../agents/model-fallback.types.js";
 import type { ModelRef } from "../../agents/model-ref-shared.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -60,7 +60,7 @@ export async function prepareCronModelResolveInput(
 /** Resolves cron model fallbacks, giving explicit payload fallbacks precedence over subagent/default policy. */
 export function resolveCronFallbacksOverride(params: {
   cfg: OpenClawConfig;
-  job: Pick<CronJob, "payload">;
+  job: CronJob;
   agentId: string;
   selectedModel?: ModelRef;
   useSubagentFallbacks?: boolean;
@@ -113,14 +113,14 @@ export function resolveCronFallbacksOverride(params: {
 /** Builds the ordered model candidates used by cron preflight checks. */
 export function resolveCronPreflightCandidates(params: {
   cfg: OpenClawConfig;
-  job: Pick<CronJob, "payload">;
+  job: CronJob;
   agentId: string;
   provider: string;
   model: string;
   useSubagentFallbacks?: boolean;
   inheritDefaultFallbacksForAgentStringModel?: boolean;
   sessionModelOverrideSource?: "auto" | "user";
-}): ModelFallbackCandidate[] {
+}): ModelCandidate[] {
   const fallbacksOverride = resolveCronFallbacksOverride({
     ...params,
     selectedModel: { provider: params.provider, model: params.model },
@@ -137,9 +137,7 @@ export function resolveCronPreflightCandidates(params: {
 
 /** Selects the reachable candidate and retains only its remaining fallback chain. */
 export async function resolveCronPreflight(
-  params: Parameters<typeof resolveCronPreflightCandidates>[0] & {
-    job: Pick<CronJob, "id" | "payload">;
-  },
+  params: Parameters<typeof resolveCronPreflightCandidates>[0],
 ) {
   const modelPreflightRuntime = await cronModelPreflightRuntimeLoader.load();
   const preflightCandidates = resolveCronPreflightCandidates(params);

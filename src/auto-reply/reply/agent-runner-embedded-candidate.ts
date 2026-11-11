@@ -355,7 +355,10 @@ export async function runEmbeddedFallbackCandidate(
           : undefined,
       };
       embeddedRunParams.onSuccessfulAuthProfile = (profileId) => {
-        params.scheduledInference?.runParams(params.provider).onSuccessfulAuthProfile?.(profileId);
+        const scheduled = params.scheduledInference?.runParams(params.provider);
+        if (scheduled && "onSuccessfulAuthProfile" in scheduled) {
+          scheduled.onSuccessfulAuthProfile?.(profileId);
+        }
         maintenanceAuthProfile = {
           authProfileId: profileId,
           authProfileIdSource: profileId

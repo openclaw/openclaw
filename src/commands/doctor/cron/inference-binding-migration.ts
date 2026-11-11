@@ -31,16 +31,7 @@ import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
-import {
-  type CronInferenceBinding,
-  normalizeCronInferenceBinding,
-} from "../../../cron/inference-binding.js";
-import {
-  captureCronFallbackInferenceAccounts,
-  type CronExecutionSessionSelection,
-  listEligibleSharedCronAccounts,
-  resolveCronFallbackProviderModels,
-} from "../../../cron/inference-binding.runtime.js";
+import type { CronInferenceBinding } from "../../../cron/inference-binding.js";
 import {
   inspectCronInferenceAccount,
   prepareCronInferenceDiagnosticSession,
@@ -58,94 +49,6 @@ import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db
 import { isUserModelAuthProfileId } from "../../../state/user-model-account-id.js";
 import { inspectCronJobsForDoctor, repairCronInferenceBindingsForDoctor } from "./store-repair.js";
 
-/**
- * Record accounts for fallback providers the binding lacks, so a provider outage can still fail
- * over. Existing accounts are never replaced. For an already-bound job Doctor never chooses among
- * several eligible accounts; the owner names one with `--fallbacks <model>@<profileId>`. Lint only
- * names the missing providers. Returns undefined when nothing new is (or would be) recorded.
- */
-async function recordCronFallbackAccountsForDoctor(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  label: string;
-  jobId: string;
-  model?: string;
-  fallbacks?: string[];
-  isGmailHook: boolean;
-  /** The target session's model selection, which the run's primary also uses. */
-  executionSessionEntry?: CronExecutionSessionSelection;
-  binding: CronInferenceBinding;
-  shouldRepair: boolean;
-  /** Already-bound jobs: record only unambiguous fallback accounts (spec D2). */
-  requireUnambiguous: boolean;
-  warnings: string[];
-}): Promise<{ binding: CronInferenceBinding; providers: string[] } | undefined> {
-  const known = params.binding.fallbackAccounts ?? [];
-  const chainParams = {
-    cfg: params.cfg,
-    agentId: params.agentId,
-    primaryProvider: params.binding.provider,
-    model: params.model,
-    fallbacks: params.fallbacks,
-    isGmailHook: params.isGmailHook,
-    executionSessionEntry: params.executionSessionEntry,
-  };
-  const missing = (await resolveCronFallbackProviderModels(chainParams)).filter(
-    ({ provider }) => !known.some((account) => account.provider === provider),
-  );
-  if (missing.length === 0) {
-    return undefined;
-  }
-  if (!params.shouldRepair) {
-    // Lint says what --fix would do: candidates it can't fill name the accounts to choose from.
-    const fixable: string[] = [];
-    for (const candidate of missing) {
-      const eligible =
-        params.requireUnambiguous && !candidate.profileId
-          ? await listEligibleSharedCronAccounts(params.cfg, params.agentId, candidate.provider)
-          : [];
-      if (eligible.length > 1) {
-        params.warnings.push(
-          `Automation ${params.label}: fallback ${candidate.model} has no recorded inference account and is refused; several accounts are eligible (${eligible.join(", ")}). Choose one with openclaw automations edit ${params.jobId} --fallbacks ${candidate.model}@<profileId>.`,
-        );
-      } else {
-        fixable.push(candidate.provider);
-      }
-    }
-    return fixable.length > 0 ? { binding: params.binding, providers: fixable } : undefined;
-  }
-  const { accounts, unrecorded } = await captureCronFallbackInferenceAccounts({
-    ...chainParams,
-    recordedAccounts: known,
-    requireUnambiguous: params.requireUnambiguous,
-    authorizeProfile: async (profileId) => {
-      if (isUserModelAuthProfileId(profileId)) {
-        throw new Error(
-          "A personal inference account requires explicit adoption by its authorized owner",
-        );
-      }
-      return undefined;
-    },
-  });
-  for (const fallback of unrecorded) {
-    if (!known.some((account) => account.provider === fallback.provider)) {
-      params.warnings.push(
-        `Automation ${params.label}: fallback ${fallback.model} has no recorded inference account and is refused: ${fallback.reason.replace("<jobId>", params.jobId)}.`,
-      );
-    }
-  }
-  const added = accounts.filter(
-    (account) => !known.some((existing) => existing.provider === account.provider),
-  );
-  if (added.length === 0) {
-    return undefined;
-  }
-  return {
-    binding: { ...params.binding, fallbackAccounts: [...known, ...added] },
-    providers: added.map((account) => `${account.profileId} for ${account.provider}`),
-  };
-}
-
 /** Adopt a current, unambiguous account once; never reinterpret run telemetry as authority. */
 export async function maybeRepairCronInferenceBindings(params: {
   cfg: OpenClawConfig;
@@ -159,30 +62,6 @@ export async function maybeRepairCronInferenceBindings(params: {
   const descriptions: string[] = [];
   const capturedConfigs = new Map<OpenClawConfig, OpenClawConfig>();
   const inspectedAgents = new Set<string>();
-  // The job's diagnostic target session; the inspection owner retains one image for sessions,
-  // auth and catalogs across jobs.
-  const loadDiagnosticSession = async (
-    config: OpenClawConfig,
-    agentId: string,
-    job: Parameters<typeof prepareCronInferenceDiagnosticSession>[0]["job"],
-  ) => {
-    if (isArtifactPreservingStateRead("agent") && !inspectedAgents.has(agentId)) {
-      const sessionTarget = await prepareSqliteTargetFromSessionStorePath(
-        resolveSessionStorePathCore(config.session?.store, { agentId, env }),
-        { agentId, env },
-      );
-      for (const agentPath of new Set([
-        resolveAuthProfileDatabasePath(resolveAgentDir(config, agentId, env)),
-        sessionTarget.path,
-      ])) {
-        if (existsSync(agentPath)) {
-          await prepareArtifactPreservingSqliteRead(agentPath);
-        }
-      }
-      inspectedAgents.add(agentId);
-    }
-    return await prepareCronInferenceDiagnosticSession({ cfg: config, agentId, job });
-  };
   const captureConfig = (config: OpenClawConfig): OpenClawConfig => {
     let captured = capturedConfigs.get(config);
     if (!captured) {
@@ -202,64 +81,10 @@ export async function maybeRepairCronInferenceBindings(params: {
       if (
         !definition ||
         stored.invalidReason ||
+        definition.inferenceBinding !== undefined ||
         definition.runtimeAuthority !== undefined ||
         definition.runtimeAuthorityRecoveryRequired
       ) {
-        continue;
-      }
-      if (definition.inferenceBinding !== undefined) {
-        // Recorded jobs keep every recorded account; Doctor only adds missing fallback providers.
-        const label = `${normalizeOptionalString(definition.name) ?? stored.id} (${stored.id})`;
-        try {
-          const binding = normalizeCronInferenceBinding(definition.inferenceBinding);
-          const job = normalizeCronJobCreate(definition);
-          const agentId =
-            job &&
-            tryResolveCronJobEffectiveAgentId(job, tryResolveAmbientOwnerAgentId(params.cfg));
-          if (
-            !binding ||
-            !job ||
-            job.payload.kind !== "agentTurn" ||
-            job.sessionTarget === "main" ||
-            !agentId
-          ) {
-            continue;
-          }
-          const config = captureConfig(params.cfg);
-          // A session-target run selects its primary from the target session; so does its chain.
-          const session = await loadDiagnosticSession(config, agentId, { ...job, id: stored.id });
-          const recorded = await recordCronFallbackAccountsForDoctor({
-            cfg: config,
-            agentId,
-            label,
-            jobId: quoteCliArg(stored.id),
-            model: job.payload.model,
-            fallbacks: job.payload.fallbacks,
-            isGmailHook: job.payload.externalContentSource === "gmail",
-            executionSessionEntry: session.sessionEntry,
-            binding,
-            shouldRepair: params.shouldRepair,
-            requireUnambiguous: true,
-            warnings,
-          });
-          if (!recorded) {
-            continue;
-          }
-          if (!params.shouldRepair) {
-            warnings.push(
-              `Automation ${label}: fallbacks on ${recorded.providers.join(", ")} have no recorded inference account and are refused. Run openclaw doctor --fix to record them.`,
-            );
-            continue;
-          }
-          changes.push({ job: stored, binding: recorded.binding });
-          descriptions.push(
-            `Automation ${label}: retain fallback accounts ${recorded.providers.join(", ")}; the primary account is unchanged.`,
-          );
-        } catch (error) {
-          warnings.push(
-            `Automation ${label}: fallback inference accounts were not recorded: ${formatErrorMessage(error)}`,
-          );
-        }
         continue;
       }
       let modelRef: string | undefined;
@@ -284,7 +109,27 @@ export async function maybeRepairCronInferenceBindings(params: {
         // Resolve legacy ownership before capturing; matching provider loads share this generation.
         // Account selection and authorization still use each job's own agent and session.
         const config = captureConfig(params.cfg);
-        const session = await loadDiagnosticSession(config, agentId, { ...job, id: stored.id });
+        // The inspection owner retains one image for sessions, auth and catalogs across jobs.
+        if (isArtifactPreservingStateRead("agent") && !inspectedAgents.has(agentId)) {
+          const sessionTarget = await prepareSqliteTargetFromSessionStorePath(
+            resolveSessionStorePathCore(config.session?.store, { agentId, env }),
+            { agentId, env },
+          );
+          for (const agentPath of new Set([
+            resolveAuthProfileDatabasePath(resolveAgentDir(config, agentId, env)),
+            sessionTarget.path,
+          ])) {
+            if (existsSync(agentPath)) {
+              await prepareArtifactPreservingSqliteRead(agentPath);
+            }
+          }
+          inspectedAgents.add(agentId);
+        }
+        const session = await prepareCronInferenceDiagnosticSession({
+          cfg: config,
+          agentId,
+          job: { ...job, id: stored.id },
+        });
         if (session.initialSessionEntry?.modelSelectionLocked === true) {
           warnings.push(
             `Automation ${label}: its session is owned by a native runtime; no host inference account was adopted. Recover ownership through that runtime before changing this job.`,
@@ -555,33 +400,20 @@ export async function maybeRepairCronInferenceBindings(params: {
         });
         retained.push(authority);
         authority.assertCurrent();
-        const adopted: CronInferenceBinding = {
-          version: 1,
-          provider: selected.provider,
-          profileId: candidate.profileId,
-          authorizationId: authority.authorizationId,
-          authRequirement: candidate.authRequirement,
-          ...(runtime === "codex" ? { runtime } : {}),
-          source: explicitUserSelection
-            ? "user"
-            : (currentAuth.plan.forwardedAuthProfileSource ?? "auto"),
-        };
-        const withFallbacks = await recordCronFallbackAccountsForDoctor({
-          cfg: config,
-          agentId,
-          label,
-          jobId: quoteCliArg(stored.id),
-          model: job.payload.model,
-          fallbacks: job.payload.fallbacks,
-          isGmailHook: job.payload.externalContentSource === "gmail",
-          executionSessionEntry: session.sessionEntry,
-          binding: adopted,
-          shouldRepair: true,
-          // A legacy job adopts the accounts its next unbound run would have used (#173509).
-          requireUnambiguous: false,
-          warnings,
+        changes.push({
+          job: stored,
+          binding: {
+            version: 1,
+            provider: selected.provider,
+            profileId: candidate.profileId,
+            authorizationId: authority.authorizationId,
+            authRequirement: candidate.authRequirement,
+            ...(runtime === "codex" ? { runtime } : {}),
+            source: explicitUserSelection
+              ? "user"
+              : (currentAuth.plan.forwardedAuthProfileSource ?? "auto"),
+          },
         });
-        changes.push({ job: stored, binding: withFallbacks?.binding ?? adopted });
         descriptions.push(description);
       } catch (error) {
         const recovery = isInvalidCronSessionTargetIdError(error)

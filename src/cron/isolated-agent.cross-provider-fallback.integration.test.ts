@@ -7,11 +7,9 @@ import {
   setAuthProfileOrder,
 } from "../agents/auth-profiles/profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
-import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import "../agents/ai-transport-runtime-host.js";
 import {
@@ -26,39 +24,31 @@ import {
   loopbackProviderConfig,
   QUOTA_EXHAUSTED_BODY,
 } from "./cross-provider-fallback.test-support.js";
-import {
-  captureCronFallbackInferenceAccounts,
-  captureCronInferenceBinding,
-} from "./inference-binding.runtime.js";
+import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent/run.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import { loadCronJobsStore, saveCronJobsStore } from "./store.js";
 import type { CronStoredJob } from "./types.js";
 
-// Scheduled jobs bound to one provider account (#172590) must still fail over to another
-// provider's recorded account (#192009, #192463). Only provider HTTP is faked, on loopback.
-
-type PrimaryMode = "quota" | "ok";
+// A job's recorded account (#172590) governs only its own provider. Configured fallbacks on
+// other providers select credentials live, like an interactive run, so cross-provider failover
+// works again (#192009, #192463). Only provider HTTP is faked, on loopback.
 
 type Fixture = {
   state: OpenClawTestState;
   cfg: OpenClawConfig;
   hits: { primary: string[]; backup: string[] };
-  setPrimary: (mode: PrimaryMode) => void;
-  storePath: string;
+  setPrimary: (mode: "quota" | "ok") => void;
   run: (job: CronStoredJob) => ReturnType<typeof runCronIsolatedAgentTurn>;
   reload: (job: CronStoredJob) => Promise<CronStoredJob>;
 };
 
-function withFallbackFixture(
-  run: (fixture: Fixture) => Promise<void>,
-  options: { fallbacks?: string[] } = {},
-) {
+function withFallbackFixture(run: (fixture: Fixture) => Promise<void>) {
   return withOpenClawTestState(
     { label: "cron-cross-provider-fallback", env: { OPENAI_API_KEY: undefined } },
     async (state) => {
       installPrivateUpdateHandoffStore(state.root);
-      let primaryMode: PrimaryMode = "quota";
+      let primaryMode: "quota" | "ok" = "quota";
       const hits = { primary: [] as string[], backup: [] as string[] };
       const primary = await listenLoopbackProvider((req, res) => {
         req.resume();
@@ -92,10 +82,7 @@ function withFallbackFixture(
         agents: {
           entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
           defaults: {
-            model: {
-              primary: "openai/gpt-4.1",
-              fallbacks: options.fallbacks ?? ["backup/gpt-4.1"],
-            },
+            model: { primary: "openai/gpt-4.1", fallbacks: ["backup/gpt-4.1"] },
             models: {
               "openai/gpt-4.1": loopbackModelRuntime,
               "backup/gpt-4.1": loopbackModelRuntime,
@@ -125,7 +112,6 @@ function withFallbackFixture(
           state,
           cfg,
           hits,
-          storePath,
           setPrimary: (mode) => {
             primaryMode = mode;
           },
@@ -160,7 +146,20 @@ function withFallbackFixture(
   );
 }
 
-function storedJob(id: string, payload: Partial<CronStoredJob["payload"]> = {}): CronStoredJob {
+/** A job exactly as 2026.10.10 and 2026.11.2 store it: one recorded account, no fallback state. */
+async function boundJob(
+  cfg: OpenClawConfig,
+  id: string,
+  payload: Partial<CronStoredJob["payload"]> = { model: "openai/gpt-4.1@openai:primary" },
+): Promise<CronStoredJob> {
+  const binding = await captureCronInferenceBinding({
+    cfg,
+    agentId: "main",
+    model: "openai/gpt-4.1@openai:primary",
+  });
+  if (!binding) {
+    throw new Error("Expected a recorded primary account");
+  }
   return {
     id,
     name: id,
@@ -174,30 +173,8 @@ function storedJob(id: string, payload: Partial<CronStoredJob["payload"]> = {}):
     delivery: { mode: "none" },
     payload: { kind: "agentTurn", message: "Reply.", lightContext: true, ...payload },
     state: {},
+    inferenceBinding: binding,
   } as CronStoredJob;
-}
-
-async function boundJob(
-  cfg: OpenClawConfig,
-  id: string,
-  options: { recordFallbacks: boolean },
-): Promise<CronStoredJob> {
-  const model = "openai/gpt-4.1@openai:primary";
-  const binding = await captureCronInferenceBinding({ cfg, agentId: "main", model });
-  if (!binding) {
-    throw new Error("Expected a recorded primary account");
-  }
-  if (options.recordFallbacks) {
-    const { accounts, unrecorded } = await captureCronFallbackInferenceAccounts({
-      cfg,
-      agentId: "main",
-      primaryProvider: binding.provider,
-      model,
-    });
-    expect(unrecorded).toEqual([]);
-    binding.fallbackAccounts = accounts;
-  }
-  return { ...storedJob(id, { model }), inferenceBinding: binding };
 }
 
 beforeEach(bindSessionMcpRuntimeTestScheduler);
@@ -208,709 +185,84 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it("fails over to the fallback provider's recorded account when the primary is out of quota", async () => {
+it("fails over to another provider's live account when the primary is out of quota", async () => {
   await withFallbackFixture(async ({ cfg, hits, reload, run, state }) => {
-    const job = await reload(await boundJob(cfg, "xprov", { recordFallbacks: true }));
-    expect(job.inferenceBinding).toMatchObject({
-      provider: "openai",
-      profileId: "openai:primary",
-      source: "user",
-      fallbackAccounts: [
-        { provider: "backup", profileId: "backup:main", runtime: "openclaw", source: "auto" },
-      ],
-    });
-    // Interactive defaults move to another backup account; the job keeps the recorded one.
+    const job = await reload(await boundJob(cfg, "xprov"));
+    expect(job.inferenceBinding).toMatchObject({ provider: "openai", profileId: "openai:primary" });
+    const first = await run(job);
+    expect(first.status, first.error).toBe("ok");
+    expect(first.summary).toContain("served by backup provider");
+    // The fallback follows that provider's live account order, like an interactive run.
     await setAuthProfileOrder({
       agentDir: state.agentDir(),
       provider: "backup",
       order: ["backup:other", "backup:main"],
     });
-    await updateAuthProfileStoreWithLock({
-      agentDir: state.agentDir(),
-      updater(store) {
-        store.lastGood = { ...store.lastGood, backup: "backup:other" };
-        return true;
-      },
+    const second = await run(job);
+    expect(second.status, second.error).toBe("ok");
+    // The quota failure puts the primary account in cooldown, so the second run may skip it;
+    // it never sends another account's credential to the primary provider.
+    expect(hits.primary.every((auth) => auth === "Bearer key-primary")).toBe(true);
+    expect(hits.backup).toEqual(["Bearer key-backup", "Bearer key-backup-other"]);
+    // Nothing new is recorded; the binding is exactly what the job stored.
+    expect((await reload(job)).inferenceBinding).toEqual(job.inferenceBinding);
+  });
+});
+
+it.each(["replaced", "removed", "signed out"] as const)(
+  "still fails over when the recorded account was %s",
+  async (change) => {
+    await withFallbackFixture(async ({ cfg, hits, reload, run, setPrimary }) => {
+      const job = await reload(await boundJob(cfg, `primary-${change}`));
+      if (change === "replaced") {
+        await persistAuthProfileBatch({ profiles: [apiKeyProfile("openai:primary", "key-new")] });
+      } else {
+        expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: ["openai:primary"] })).toBe(
+          true,
+        );
+        if (change === "signed out") {
+          // `openclaw models auth logout` also drops the profile from config; the fallback must
+          // not inherit the gone account as its own selection.
+          delete cfg.auth!.profiles!["openai:primary"];
+          setRuntimeConfigSnapshot(cfg);
+        }
+      }
+      // A healthy primary would still be refused: the job never adopts a changed account.
+      setPrimary("ok");
+      const result = await run(job);
+      expect(result.status, result.error).toBe("ok");
+      expect(result.summary).toContain("served by backup provider");
+      expect(hits.primary).toEqual([]);
+      expect(hits.backup).toEqual(["Bearer key-backup"]);
     });
+  },
+);
+
+it("runs on the new default provider when a job without its own model follows the default", async () => {
+  await withFallbackFixture(async ({ cfg, hits, reload, run }) => {
+    const job = await reload(await boundJob(cfg, "default-moves", {}));
+    cfg.agents!.defaults!.model = { primary: "backup/gpt-4.1", fallbacks: [] };
+    setRuntimeConfigSnapshot(cfg);
     const result = await run(job);
     expect(result.status, result.error).toBe("ok");
     expect(result.summary).toContain("served by backup provider");
-    expect(hits.primary).toEqual(["Bearer key-primary"]);
+    expect(hits.primary).toEqual([]);
     expect(hits.backup).toEqual(["Bearer key-backup"]);
   });
 });
 
-it("keeps refusing a fallback provider without a recorded account (10.10 bindings)", async () => {
-  await withFallbackFixture(async ({ cfg, hits, reload, run }) => {
-    const job = await reload(await boundJob(cfg, "unrecorded", { recordFallbacks: false }));
-    expect(job.inferenceBinding?.fallbackAccounts).toBeUndefined();
-    const result = await run(job);
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("no fallback account is recorded for provider backup");
-    expect(result.error).toContain("openclaw doctor --fix");
-    expect(hits.primary).toEqual(["Bearer key-primary"]);
-    expect(hits.backup).toEqual([]);
-  });
-});
-
-it.each(["replaced", "removed"] as const)(
-  "refuses a %s fallback account only when the chain reaches it",
-  async (change) => {
-    await withFallbackFixture(async ({ cfg, hits, reload, run, setPrimary }) => {
-      const job = await reload(
-        await boundJob(cfg, `fallback-${change}`, { recordFallbacks: true }),
-      );
-      if (change === "replaced") {
-        await persistAuthProfileBatch({ profiles: [apiKeyProfile("backup:main", "key-rotated")] });
-      } else {
-        expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: ["backup:main"] })).toBe(
-          true,
-        );
-      }
-      // The primary still runs: a lost fallback account never blocks the job's own account.
-      setPrimary("ok");
-      const healthy = await run(job);
-      expect(healthy.status, healthy.error).toBe("ok");
-      expect(healthy.summary).toContain("served by primary provider");
-      // Once the primary fails, the lost fallback account is refused instead of replaced.
-      setPrimary("quota");
-      const failed = await run(job);
-      expect(failed.status).toBe("error");
-      expect(failed.error).toContain(
-        change === "replaced"
-          ? "account backup:main on runtime openclaw was replaced"
-          : "account backup:main on runtime openclaw was removed or signed out",
-      );
-      expect(hits.primary).toEqual(["Bearer key-primary", "Bearer key-primary"]);
-      expect(hits.backup).toEqual([]);
-    });
-  },
-);
-
-it("records only fallback providers from the job's own chain", async () => {
-  await withFallbackFixture(
-    async ({ cfg }) => {
-      const explicit = await captureCronFallbackInferenceAccounts({
-        cfg,
-        agentId: "main",
-        primaryProvider: "openai",
-        model: "openai/gpt-4.1@openai:primary",
-        fallbacks: [],
-      });
-      expect(explicit).toEqual({ accounts: [], unrecorded: [] });
-      const inherited = await captureCronFallbackInferenceAccounts({
-        cfg,
-        agentId: "main",
-        primaryProvider: "openai",
-      });
-      expect(inherited.accounts.map((account) => account.profileId)).toEqual(["backup:main"]);
-    },
-    { fallbacks: ["openai/gpt-4.1", "backup/gpt-4.1"] },
-  );
-});
-
-it("reports a fallback provider without a stored account instead of failing the capture", async () => {
-  await withFallbackFixture(async ({ cfg }) => {
-    expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: ["backup:main"] })).toBe(true);
-    expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: ["backup:other"] })).toBe(true);
-    clearRuntimeAuthProfileStoreSnapshots();
-    const captured = await captureCronFallbackInferenceAccounts({
-      cfg: {
-        ...cfg,
-        auth: { profiles: { "openai:primary": cfg.auth!.profiles!["openai:primary"]! } },
-      },
-      agentId: "main",
-      primaryProvider: "openai",
-    });
-    expect(captured.accounts).toEqual([]);
-    expect(captured.unrecorded).toEqual([
-      expect.objectContaining({ provider: "backup", model: "backup/gpt-4.1" }),
-    ]);
-  });
-});
-
-it("records fallback accounts through Gateway create/update and fails over after a restart", async () => {
-  await withFallbackFixture(async ({ cfg, hits, state, storePath }) => {
-    const { CronService } = await import("./service.js");
-    const { createNoopLogger } = await import("./service.test-harness.js");
-    const { createTestGatewayScheduler } = await import("../test-utils/gateway-scheduler-clock.js");
-    const { createDirectChatContext } =
-      await import("../gateway/server-chat.agent-events.test-helpers.js");
-    const { cronHandlers } = await import("../gateway/server-methods/cron.js");
-    const { closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js");
-    const { closeOpenClawStateDatabaseAsync } = await import("../state/openclaw-state-db.js");
-    const finished: Array<{ status?: string; error?: string; summary?: string }> = [];
-    const makeCron = () =>
-      new CronService({
-        scheduler: createTestGatewayScheduler(),
-        storePath,
-        cronEnabled: false,
-        defaultAgentId: "main",
-        log: createNoopLogger(),
-        enqueueSystemEvent() {},
-        onEvent(event) {
-          if (event.action === "finished") {
-            finished.push(event);
-          }
-        },
-        runIsolatedAgentJob: async (params) => {
-          await resetPreparedModelRuntimeSnapshotsForTest();
-          clearRuntimeAuthProfileStoreSnapshots();
-          return runCronIsolatedAgentTurn({
-            ...params,
-            cfg,
-            deps: {},
-            sessionKey: `cron:${params.job.id}`,
-          });
-        },
-      });
-    let cron = makeCron();
-    async function invoke(method: "cron.add" | "cron.update", params: Record<string, unknown>) {
-      const respond = vi.fn();
-      await cronHandlers[method]!({
-        req: { type: "req", id: `fallback-${method}`, method, params },
-        params,
-        respond,
-        context: createDirectChatContext({
-          cron,
-          cronStorePath: storePath,
-          getRuntimeConfig: () => cfg,
-        }),
-        client: null,
-        isWebchatConnect: () => false,
-      });
-      expect(respond).toHaveBeenCalledOnce();
-      expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(true);
-      return respond.mock.calls[0]?.[1] as Record<string, unknown>;
-    }
-    const readBinding = async () => (await loadCronJobsStore(storePath)).jobs[0]?.inferenceBinding;
-    try {
-      const created = await invoke("cron.add", {
-        name: "cross-provider",
-        enabled: false,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "now",
-        payload: {
-          kind: "agentTurn",
-          message: "Reply.",
-          model: "openai/gpt-4.1@openai:primary",
-          lightContext: true,
-          toolsAllow: [],
-        },
-        delivery: { mode: "none" },
-      });
-      // Public responses never expose private account metadata.
-      expect(JSON.stringify(created)).not.toContain("fallbackAccounts");
-      expect(JSON.stringify(created)).not.toContain("backup:main");
-      const id = String(created.id);
-      expect(await readBinding()).toMatchObject({
-        profileId: "openai:primary",
-        fallbackAccounts: [{ provider: "backup", profileId: "backup:main" }],
-      });
-      // Removing the job's fallbacks drops their accounts; restoring them records them again.
-      await invoke("cron.update", {
-        id,
-        patch: { payload: { kind: "agentTurn", fallbacks: [] } },
-      });
-      expect(await readBinding()).toMatchObject({ profileId: "openai:primary" });
-      expect((await readBinding())?.fallbackAccounts).toBeUndefined();
-      await invoke("cron.update", {
-        id,
-        patch: { payload: { kind: "agentTurn", fallbacks: ["backup/gpt-4.1"] } },
-      });
-      expect(await readBinding()).toMatchObject({
-        profileId: "openai:primary",
-        fallbackAccounts: [{ provider: "backup", profileId: "backup:main" }],
-      });
-      // Restart: close every database and rebuild the service from SQLite alone.
-      cron.stop();
-      await cron.waitForIdle();
-      clearRuntimeAuthProfileStoreSnapshots();
-      closeOpenClawAgentDatabasesForTest();
-      await closeOpenClawStateDatabaseAsync();
-      await setAuthProfileOrder({
-        agentDir: state.agentDir(),
-        provider: "backup",
-        order: ["backup:other", "backup:main"],
-      });
-      cron = makeCron();
-      await expect(cron.run(id, "force")).resolves.toEqual({ ok: true, ran: true });
-      expect(finished).toHaveLength(1);
-      expect(finished[0]?.status, finished[0]?.error).toBe("ok");
-      expect(hits.primary).toEqual(["Bearer key-primary"]);
-      expect(hits.backup).toEqual(["Bearer key-backup"]);
-    } finally {
-      cron.stop();
-      await cron.waitForIdle();
-    }
-  });
-});
-
-it.each([
-  ["unbound legacy job", "two eligible backup accounts"],
-  ["10.10 binding", "one eligible backup account"],
-] as const)(
-  "Doctor records fallback accounts for a %s (%s) and the job then fails over",
-  async (kind, _accounts) => {
-    await withFallbackFixture(async ({ cfg, hits, run, storePath }) => {
-      const { maybeRepairCronInferenceBindings } =
-        await import("../commands/doctor/cron/inference-binding-migration.js");
-      const { withDoctorConfigMaintenance } =
-        await import("../commands/doctor-config-flow.test-support.js");
-      if (kind === "10.10 binding") {
-        // Spec D2: Doctor fills a bound job's fallback only when exactly one account fits.
-        expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: ["backup:other"] })).toBe(
-          true,
-        );
-        clearRuntimeAuthProfileStoreSnapshots();
-      }
-      const job =
-        kind === "unbound legacy job"
-          ? storedJob("doctor-legacy")
-          : await boundJob(cfg, "doctor-bound", { recordFallbacks: false });
-      await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
-      const before = (await loadCronJobsStore(storePath)).jobs[0];
-
-      const lint = await maybeRepairCronInferenceBindings({ cfg, shouldRepair: false });
-      expect(lint.changes).toEqual([]);
-      expect(lint.warnings.join("\n")).toContain(
-        kind === "unbound legacy job"
-          ? "Run openclaw doctor --fix to record it"
-          : "fallbacks on backup",
-      );
-      expect((await loadCronJobsStore(storePath)).jobs[0]).toEqual(before);
-
-      const fixed = await withDoctorConfigMaintenance(() =>
-        maybeRepairCronInferenceBindings({ cfg, shouldRepair: true }),
-      );
-      expect(fixed.warnings).toEqual([]);
-      const [repaired] = (await loadCronJobsStore(storePath)).jobs;
-      expect(repaired?.inferenceBinding).toMatchObject({
-        provider: "openai",
-        profileId: "openai:primary",
-        fallbackAccounts: [{ provider: "backup", profileId: "backup:main", source: "auto" }],
-      });
-      if (kind !== "unbound legacy job") {
-        // The recorded primary account is never rewritten.
-        const { fallbackAccounts: _added, ...primary } = repaired!.inferenceBinding!;
-        expect(primary).toEqual(job.inferenceBinding);
-      }
-      // Idempotent: a second run has nothing left to record.
-      const again = await withDoctorConfigMaintenance(() =>
-        maybeRepairCronInferenceBindings({ cfg, shouldRepair: true }),
-      );
-      expect(again.changes).toEqual([]);
-      expect((await loadCronJobsStore(storePath)).jobs[0]).toEqual(repaired);
-
-      const result = await run(repaired!);
-      expect(result.status, result.error).toBe("ok");
-      expect(result.summary).toContain("served by backup provider");
-      expect(hits.backup).toEqual(["Bearer key-backup"]);
-    });
-  },
-);
-
-it("Doctor never chooses among several eligible fallback accounts for an already-bound job", async () => {
-  await withFallbackFixture(async ({ cfg, hits, run, state, storePath }) => {
-    const { maybeRepairCronInferenceBindings } =
-      await import("../commands/doctor/cron/inference-binding-migration.js");
-    const { withDoctorConfigMaintenance } =
-      await import("../commands/doctor-config-flow.test-support.js");
-    const job = await boundJob(cfg, "doctor-ambiguous", { recordFallbacks: false });
-    await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
-    // The order flipped after the job was bound; current order is not the owner's consent.
-    await setAuthProfileOrder({
-      agentDir: state.agentDir(),
-      provider: "backup",
-      order: ["backup:other", "backup:main"],
-    });
-    const lint = await maybeRepairCronInferenceBindings({ cfg, shouldRepair: false });
-    // Lint must not promise that --fix records an ambiguous fallback.
-    expect(lint.warnings.join("\n")).toContain(
-      "several accounts are eligible (backup:main, backup:other). Choose one with openclaw automations edit doctor-ambiguous --fallbacks backup/gpt-4.1@<profileId>",
-    );
-    expect(lint.warnings.join("\n")).not.toContain("Run openclaw doctor --fix to record them");
-    const fixed = await withDoctorConfigMaintenance(() =>
-      maybeRepairCronInferenceBindings({ cfg, shouldRepair: true }),
-    );
-    const warnings = fixed.warnings.join("\n");
-    expect(warnings).toContain("several accounts are eligible (backup:main, backup:other)");
-    expect(warnings).toContain(
-      "automations edit doctor-ambiguous --fallbacks backup/gpt-4.1@<profileId>",
-    );
-    const [unchanged] = (await loadCronJobsStore(storePath)).jobs;
-    expect(unchanged?.inferenceBinding).toEqual(job.inferenceBinding);
-    const result = await run(unchanged!);
-    expect(result.status).toBe("error");
-    expect(hits.backup).toEqual([]);
-  });
-});
-
-type GatewayCase = {
-  name: string;
-  configure?: (cfg: OpenClawConfig) => void;
-  payload: Record<string, unknown>;
-  /** A later cron.update patch, applied before the run. */
-  update?: Record<string, unknown>;
-  /** Config or credential changes between create and the update. */
-  beforeUpdate?: (cfg: OpenClawConfig) => void | Promise<void>;
-  /** null: no backup account may be recorded, and the run must send nothing to backup. */
-  expectAccount: { profileId: string; source: "user" | "auto" } | null;
-  expectKey: string | null;
-  /** The update recorded a new authorization for the same profile. */
-  expectReauthorized?: boolean;
-};
-
-const gatewayCases: GatewayCase[] = [
-  {
-    // backup:main is first in auth order; the owner's explicit choice must win.
-    name: "explicit fallback account",
-    payload: { fallbacks: ["backup/gpt-4.1@backup:other"] },
-    expectAccount: { profileId: "backup:other", source: "user" },
-    expectKey: "Bearer key-backup-other",
-  },
-  {
-    // Fallback candidates aren't subject to the primary's allowlist at run time.
-    name: "fallback outside the primary model allowlist",
-    configure: (cfg) => {
-      cfg.agents!.defaults!.modelPolicy = { allow: ["openai/gpt-4.1"] };
-    },
-    payload: {},
-    expectAccount: { profileId: "backup:main", source: "auto" },
-    expectKey: "Bearer key-backup",
-  },
-  {
-    // An alias resolves to the canonical candidate; its @profile must survive.
-    name: "explicit account on an aliased fallback",
-    configure: (cfg) => {
-      cfg.agents!.defaults!.models!["backup/gpt-4.1"] = {
-        ...cfg.agents!.defaults!.models!["backup/gpt-4.1"],
-        alias: "backup-fast",
-      };
-    },
-    payload: { fallbacks: ["backup-fast@backup:other"] },
-    expectAccount: { profileId: "backup:other", source: "user" },
-    expectKey: "Bearer key-backup-other",
-  },
-  {
-    // Payload fallbacks replace the default list; an @profile in the inactive default list is
-    // not the owner's choice for this job.
-    name: "account from the effective fallback list only",
-    configure: (cfg) => {
-      cfg.agents!.defaults!.model = {
-        primary: "openai/gpt-4.1",
-        fallbacks: ["backup/gpt-4.1@backup:other"],
-      };
-    },
-    payload: { fallbacks: ["backup/gpt-4.1"] },
-    expectAccount: { profileId: "backup:main", source: "auto" },
-    expectKey: "Bearer key-backup",
-  },
-  {
-    // A plain --model edit together with --fallbacks records the fallback account and keeps the
-    // primary account the job already recorded.
-    name: "fallback account from a plain model edit",
-    payload: { fallbacks: [] },
-    update: { model: "openai/gpt-4.1", fallbacks: ["backup/gpt-4.1@backup:other"] },
-    expectAccount: { profileId: "backup:other", source: "user" },
-    expectKey: "Bearer key-backup-other",
-  },
-  {
-    // A recorded fallback account survives a plain --model edit even when auth order now
-    // prefers another account; only an explicit @profile changes it.
-    name: "recorded fallback account across a plain model edit",
-    payload: {},
-    beforeUpdate: (cfg) => {
-      cfg.auth!.order = { backup: ["backup:other", "backup:main"] };
-    },
-    update: { model: "openai/gpt-4.1" },
-    expectAccount: { profileId: "backup:main", source: "auto" },
-    expectKey: "Bearer key-backup",
-  },
-  {
-    // Resubmitting the recorded profile after its credential was replaced reauthorizes it.
-    name: "reauthorized fallback account after a credential replacement",
-    payload: { fallbacks: ["backup/gpt-4.1@backup:main"] },
-    beforeUpdate: async () => {
-      await persistAuthProfileBatch({ profiles: [apiKeyProfile("backup:main", "key-rotated")] });
-    },
-    update: { fallbacks: ["backup/gpt-4.1@backup:main"] },
-    expectAccount: { profileId: "backup:main", source: "user" },
-    expectKey: "Bearer key-rotated",
-    expectReauthorized: true,
-  },
-  {
-    // An @profile that only appears in inherited config isn't this job's selection; a model-only
-    // edit keeps the recorded account.
-    name: "recorded fallback account when inherited config names another",
-    payload: {},
-    beforeUpdate: (cfg) => {
-      cfg.agents!.defaults!.model = {
-        primary: "openai/gpt-4.1",
-        fallbacks: ["backup/gpt-4.1@backup:other"],
-      };
-    },
-    update: { model: "openai/gpt-4.1" },
-    expectAccount: { profileId: "backup:main", source: "auto" },
-    expectKey: "Bearer key-backup",
-  },
-  {
-    // A model-only edit onto another provider never adopts an account for the new primary; the
-    // job keeps refusing it until the owner names one with `--model <model>@<profileId>`.
-    name: "no account for a requested primary on another provider",
-    payload: { fallbacks: [] },
-    update: { model: "backup/gpt-4.1" },
-    expectAccount: null,
-    expectKey: null,
-  },
-  {
-    // A fallback account recorded for that provider doesn't become the new primary's account.
-    name: "no account for a requested primary that was a recorded fallback",
-    payload: {},
-    update: { model: "backup/gpt-4.1", fallbacks: [] },
-    expectAccount: null,
-    expectKey: null,
-  },
-];
-
-it.each(gatewayCases)("Gateway records the $name and the run uses it", async (testCase) => {
-  await withFallbackFixture(async ({ cfg, hits, storePath }) => {
-    testCase.configure?.(cfg);
-    setRuntimeConfigSnapshot(cfg);
-    const { CronService } = await import("./service.js");
-    const { createNoopLogger } = await import("./service.test-harness.js");
-    const { createTestGatewayScheduler } = await import("../test-utils/gateway-scheduler-clock.js");
-    const { createDirectChatContext } =
-      await import("../gateway/server-chat.agent-events.test-helpers.js");
-    const { cronHandlers } = await import("../gateway/server-methods/cron.js");
-    const finished: Array<{ status?: string; error?: string }> = [];
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      storePath,
-      cronEnabled: false,
-      defaultAgentId: "main",
-      log: createNoopLogger(),
-      enqueueSystemEvent() {},
-      onEvent(event) {
-        if (event.action === "finished") {
-          finished.push(event);
-        }
-      },
-      runIsolatedAgentJob: async (params) => {
-        await resetPreparedModelRuntimeSnapshotsForTest();
-        clearRuntimeAuthProfileStoreSnapshots();
-        return runCronIsolatedAgentTurn({
-          ...params,
-          cfg,
-          deps: {},
-          sessionKey: `cron:${params.job.id}`,
-        });
-      },
-    });
-    async function invoke(method: "cron.add" | "cron.update", params: Record<string, unknown>) {
-      const respond = vi.fn();
-      await cronHandlers[method]!({
-        req: { type: "req", id: `fallback-${method}`, method, params },
-        params,
-        respond,
-        context: createDirectChatContext({
-          cron,
-          cronStorePath: storePath,
-          getRuntimeConfig: () => cfg,
-        }),
-        client: null,
-        isWebchatConnect: () => false,
-      });
-      expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(true);
-      return respond.mock.calls[0]?.[1] as { id?: unknown } | undefined;
-    }
-    try {
-      const created = await invoke("cron.add", {
-        name: testCase.name,
-        enabled: false,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "now",
-        payload: {
-          kind: "agentTurn",
-          message: "Reply.",
-          model: "openai/gpt-4.1@openai:primary",
-          lightContext: true,
-          toolsAllow: [],
-          ...testCase.payload,
-        },
-        delivery: { mode: "none" },
-      });
-      const id = String(created?.id);
-      const [before] = (await loadCronJobsStore(storePath)).jobs;
-      if (testCase.beforeUpdate) {
-        await testCase.beforeUpdate(cfg);
-        setRuntimeConfigSnapshot(cfg);
-      }
-      if (testCase.update) {
-        await invoke("cron.update", {
-          id,
-          patch: { payload: { kind: "agentTurn", ...testCase.update } },
-        });
-      }
-      const [stored] = (await loadCronJobsStore(storePath)).jobs;
-      if (testCase.expectAccount) {
-        expect(stored?.inferenceBinding?.fallbackAccounts).toMatchObject([
-          { provider: "backup", ...testCase.expectAccount },
-        ]);
-      } else {
-        expect(
-          stored?.inferenceBinding?.fallbackAccounts?.some((a) => a.provider === "backup"),
-        ).not.toBe(true);
-      }
-      // The primary account is never changed by fallback capture.
-      if (testCase.expectReauthorized !== undefined) {
-        expect(
-          stored!.inferenceBinding!.fallbackAccounts![0]!.authorizationId !==
-            before!.inferenceBinding!.fallbackAccounts![0]!.authorizationId,
-        ).toBe(testCase.expectReauthorized);
-      }
-      const { fallbackAccounts: _after, ...primaryAfter } = stored!.inferenceBinding!;
-      const { fallbackAccounts: _before, ...primaryBefore } = before!.inferenceBinding!;
-      expect(primaryAfter).toEqual(primaryBefore);
-      await expect(cron.run(id, "force")).resolves.toEqual({ ok: true, ran: true });
-      if (testCase.expectKey) {
-        expect(finished[0]?.status, finished[0]?.error).toBe("ok");
-        expect(hits.backup).toEqual([testCase.expectKey]);
-      } else {
-        expect(finished[0]?.status).toBe("error");
-        expect(finished[0]?.error).toContain("incompatible with its recorded inference account");
-        expect(hits.backup).toEqual([]);
-      }
-    } finally {
-      cron.stop();
-      await cron.waitForIdle();
-    }
-  });
-});
-
-it("Doctor ignores an unusable account when deciding a bound job's fallback is ambiguous", async () => {
-  await withFallbackFixture(async ({ cfg, hits, run, storePath }) => {
-    const { maybeRepairCronInferenceBindings } =
-      await import("../commands/doctor/cron/inference-binding-migration.js");
-    const { withDoctorConfigMaintenance } =
-      await import("../commands/doctor-config-flow.test-support.js");
-    // backup:other becomes an expired token: present for the provider, but unable to serve it.
+it("keeps the recorded provider on its recorded account", async () => {
+  await withFallbackFixture(async ({ cfg, hits, reload, run, setPrimary }) => {
+    const job = await reload(await boundJob(cfg, "primary-strict"));
     await persistAuthProfileBatch({
-      profiles: [
-        {
-          profileId: "backup:other",
-          credential: { type: "token", provider: "backup", token: "expired", expires: 1 },
-        },
-      ],
+      profiles: [apiKeyProfile("openai:other", "key-openai-other")],
     });
-    clearRuntimeAuthProfileStoreSnapshots();
-    const job = await boundJob(cfg, "doctor-expired", { recordFallbacks: false });
-    await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
-    const fixed = await withDoctorConfigMaintenance(() =>
-      maybeRepairCronInferenceBindings({ cfg, shouldRepair: true }),
-    );
-    expect(fixed.warnings.join("\n")).not.toContain("several accounts are eligible");
-    const [repaired] = (await loadCronJobsStore(storePath)).jobs;
-    expect(repaired?.inferenceBinding?.fallbackAccounts).toMatchObject([
-      { provider: "backup", profileId: "backup:main", source: "auto" },
-    ]);
-    const result = await run(repaired!);
+    cfg.auth!.profiles!["openai:other"] = { provider: "openai", mode: "api_key" };
+    cfg.auth!.order = { ...cfg.auth!.order, openai: ["openai:other", "openai:primary"] };
+    setRuntimeConfigSnapshot(cfg);
+    setPrimary("ok");
+    const result = await run(job);
     expect(result.status, result.error).toBe("ok");
-    expect(hits.backup).toEqual(["Bearer key-backup"]);
-  });
-});
-
-it("resolves a providerless fallback @profile against the configured default provider", async () => {
-  await withFallbackFixture(async ({ cfg }) => {
-    const { resolveCronFallbackProviderModels } = await import("./inference-binding.runtime.js");
-    // The configured default is openai, so `gpt-4.1` is openai/gpt-4.1 in the run's chain even
-    // though this job's primary is on backup.
-    await expect(
-      resolveCronFallbackProviderModels({
-        cfg,
-        agentId: "main",
-        primaryProvider: "backup",
-        model: "backup/gpt-4.1@backup:main",
-        fallbacks: ["gpt-4.1@openai:other"],
-      }),
-    ).resolves.toEqual([
-      { provider: "openai", model: "openai/gpt-4.1", profileId: "openai:other" },
-    ]);
-  });
-});
-
-it("records fallbacks from the session target's selection, as the run does", async () => {
-  await withFallbackFixture(async ({ cfg }) => {
-    // Subagent policy would apply only without a session selection.
-    cfg.agents!.defaults!.subagents = {
-      model: { primary: "third/gpt-4.1", fallbacks: ["fourth/gpt-4.1"] },
-    };
-    for (const provider of ["third", "fourth"]) {
-      cfg.models!.providers![provider] = cfg.models!.providers!.backup!;
-      cfg.agents!.defaults!.models![`${provider}/gpt-4.1`] = loopbackModelRuntime;
-    }
-    setRuntimeConfigSnapshot(cfg);
-    const { resolveCronFallbackProviderModels } = await import("./inference-binding.runtime.js");
-    await expect(
-      resolveCronFallbackProviderModels({
-        cfg,
-        agentId: "main",
-        primaryProvider: "openai",
-        executionSessionEntry: {
-          providerOverride: "openai",
-          modelOverride: "gpt-4.1",
-          modelOverrideSource: "auto",
-        },
-      }),
-    ).resolves.toEqual([{ provider: "backup", model: "backup/gpt-4.1" }]);
-  });
-});
-
-it("Doctor records a bound session-target job's fallbacks from its target session", async () => {
-  await withFallbackFixture(async ({ cfg, storePath }) => {
-    const { maybeRepairCronInferenceBindings } =
-      await import("../commands/doctor/cron/inference-binding-migration.js");
-    const { withDoctorConfigMaintenance } =
-      await import("../commands/doctor-config-flow.test-support.js");
-    // Subagent policy applies only without a session selection; the target session selects openai.
-    cfg.agents!.defaults!.subagents = {
-      model: { primary: "third/gpt-4.1", fallbacks: ["fourth/gpt-4.1"] },
-    };
-    for (const provider of ["third", "fourth"]) {
-      cfg.models!.providers![provider] = cfg.models!.providers!.backup!;
-      cfg.agents!.defaults!.models![`${provider}/gpt-4.1`] = loopbackModelRuntime;
-    }
-    setRuntimeConfigSnapshot(cfg);
-    // One shared backup account, so Doctor may record it for an already-bound job.
-    expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: ["backup:other"] })).toBe(true);
-    clearRuntimeAuthProfileStoreSnapshots();
-    const sessionKey = "agent:main:fallback-target";
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey },
-      {
-        sessionId: "fallback-conversation",
-        updatedAt: Date.now(),
-        sessionStartedAt: Date.now(),
-        providerOverride: "openai",
-        modelOverride: "gpt-4.1",
-        modelOverrideSource: "auto",
-      },
-    );
-    const bound = await boundJob(cfg, "doctor-session", { recordFallbacks: false });
-    const job: CronStoredJob = {
-      ...bound,
-      sessionTarget: `session:${sessionKey}`,
-      payload: { kind: "agentTurn", message: "Reply.", lightContext: true },
-    };
-    await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
-    await withDoctorConfigMaintenance(() =>
-      maybeRepairCronInferenceBindings({ cfg, shouldRepair: true }),
-    );
-    const [repaired] = (await loadCronJobsStore(storePath)).jobs;
-    expect(repaired?.inferenceBinding?.fallbackAccounts).toMatchObject([
-      { provider: "backup", profileId: "backup:main", source: "auto" },
-    ]);
+    expect(hits.primary).toEqual(["Bearer key-primary"]);
   });
 });

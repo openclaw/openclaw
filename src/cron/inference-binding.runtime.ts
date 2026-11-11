@@ -4,7 +4,6 @@ import {
   type AuthProfileAuthorization,
 } from "../agents/auth-profiles/authorization-contract.js";
 import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
-import { resolveAuthProfileOrderWithMetadata } from "../agents/auth-profiles/order.js";
 import { resolveSessionAuthSelection } from "../agents/auth-profiles/session-override.js";
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
 import {
@@ -19,27 +18,15 @@ import { isConfiguredKeyAuthSource } from "../agents/provider-model-auth-source-
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
-import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { workerInferencePlacement } from "../gateway/worker-environments/inference-placement.js";
-import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
-import {
-  type CronInferenceAccount,
-  type CronInferenceBinding,
-  describeCronInferenceBinding,
-} from "./inference-binding.js";
+import type { CronInferenceBinding } from "./inference-binding.js";
 import { resolveCronCandidateExecution } from "./isolated-agent/candidate-execution.js";
 import {
   resolveCronModelSelection,
   resolveCronModelSelectionOwner,
 } from "./isolated-agent/model-selection.js";
-
-/** The model selection a `session:` target contributes to execution. */
-export type CronExecutionSessionSelection = Pick<
-  SessionEntry,
-  "modelOverride" | "providerOverride" | "modelOverrideSource" | "modelProvider"
->;
 
 /** Capture a current owner; null means an explicit, validated native CLI account selection. */
 export async function captureCronInferenceBinding(params: {
@@ -48,7 +35,7 @@ export async function captureCronInferenceBinding(params: {
   model?: string;
   isGmailHook?: boolean;
   sessionEntry?: SessionEntry;
-  executionSessionEntry?: CronExecutionSessionSelection;
+  executionSessionEntry?: Pick<SessionEntry, "modelOverride" | "providerOverride">;
   /**
    * The entry the cron session takes its runtime override from: the target row of a
    * `session:` job, or what a `current` job carries from its creating conversation.
@@ -58,11 +45,6 @@ export async function captureCronInferenceBinding(params: {
   recordedRuntime?: string;
   authorizeProfile?: (profileId: string, inherited: boolean) => Promise<(() => void) | undefined>;
   retainAuthorization?: (authority: AuthProfileAuthorization) => void;
-  /**
-   * A fallback candidate the run's chain already resolved. It skips primary model selection, so
-   * the primary's model allowlist does not apply to it, as at run time.
-   */
-  fallbackCandidate?: { provider: string; model: string; profileId?: string };
 }): Promise<CronInferenceBinding | null | undefined> {
   const owner = await resolveCronModelSelectionOwner({
     cfg: params.cfg,
@@ -70,25 +52,18 @@ export async function captureCronInferenceBinding(params: {
     requiredAgentId: params.agentId,
   });
   const { config: cfg, agentId, agentDir, workspaceDir } = owner;
-  const model = params.fallbackCandidate
-    ? {
-        ok: true as const,
-        provider: params.fallbackCandidate.provider,
-        model: params.fallbackCandidate.model,
-        configuredProfileId: params.fallbackCandidate.profileId,
-      }
-    : await resolveCronModelSelection({
-        cfg,
-        owner,
-        agentConfigOverride: resolveAgentConfig(cfg, agentId),
-        agentId,
-        agentDir,
-        workspaceDir,
-        payloadModel: params.model,
-        // Only a persistent execution target supplies model overrides; creator auth stays separate.
-        sessionEntry: params.executionSessionEntry ?? {},
-        isGmailHook: params.isGmailHook === true,
-      });
+  const model = await resolveCronModelSelection({
+    cfg,
+    owner,
+    agentConfigOverride: resolveAgentConfig(cfg, agentId),
+    agentId,
+    agentDir,
+    workspaceDir,
+    payloadModel: params.model,
+    // Only a persistent execution target supplies model overrides; creator auth stays separate.
+    sessionEntry: params.executionSessionEntry ?? {},
+    isGmailHook: params.isGmailHook === true,
+  });
   if (!model.ok) {
     throw new Error(model.error);
   }
@@ -308,224 +283,18 @@ export async function captureCronInferenceBinding(params: {
   }
 }
 
-type CronFallbackChainParams = {
-  cfg: OpenClawConfig;
-  agentId: string;
-  primaryProvider: string;
-  /** The job's payload model and fallbacks; omitted fallbacks inherit the agent policy. */
-  model?: string;
-  fallbacks?: string[];
-  isGmailHook?: boolean;
-  /** A `session:` target's model selection, which execution also uses for the primary. */
-  executionSessionEntry?: CronExecutionSessionSelection;
-};
-
-/** A fallback candidate to record: its model ref and any account the owner named with `@profile`. */
-export type CronFallbackCandidate = { provider: string; model: string; profileId?: string };
-
-/** The first fallback model of each provider other than the primary's, in run order. */
-export async function resolveCronFallbackProviderModels(
-  params: CronFallbackChainParams,
-): Promise<CronFallbackCandidate[]> {
-  const owner = await resolveCronModelSelectionOwner({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    requiredAgentId: params.agentId,
-  });
-  const { config: cfg, agentId, agentDir, workspaceDir } = owner;
-  const primary = await resolveCronModelSelection({
-    cfg,
-    owner,
-    agentConfigOverride: resolveAgentConfig(cfg, agentId),
-    agentId,
-    agentDir,
-    workspaceDir,
-    payloadModel: params.model,
-    sessionEntry: params.executionSessionEntry ?? {},
-    isGmailHook: params.isGmailHook === true,
-  });
-  if (!primary.ok) {
-    return [];
-  }
-  // Same provenance run-prepare passes, so a user-pinned session model keeps its fallback rule.
-  const sessionModelOverrideSource =
-    primary.modelSource === "session"
-      ? (resolveSessionModelOverrideSource(params.executionSessionEntry) ?? undefined)
-      : undefined;
-  const { resolveCronPreflightCandidates } =
-    await import("./isolated-agent/run-fallback-policy.js");
-  // The same chain a run builds: payload fallbacks first, then subagent/agent/default policy.
-  // Each candidate carries the `@profile` its configured entry named.
-  const chain = resolveCronPreflightCandidates({
-    cfg: primary.cfgWithAgentDefaults,
-    job: {
-      payload: {
-        kind: "agentTurn" as const,
-        message: "",
-        ...(params.model ? { model: params.model } : {}),
-        ...(params.fallbacks ? { fallbacks: params.fallbacks } : {}),
-      },
-    },
-    agentId,
-    provider: primary.provider,
-    model: primary.model,
-    useSubagentFallbacks: primary.useSubagentFallbacks,
-    inheritDefaultFallbacksForAgentStringModel: primary.inheritDefaultFallbacksForAgentStringModel,
-    sessionModelOverrideSource,
-  });
-  // The requested primary is never a fallback: its provider runs only on the recorded primary
-  // account, so a model edit can't adopt an account for it without an explicit `@profile`.
-  const seen = new Set([params.primaryProvider, primary.provider]);
-  const models: CronFallbackCandidate[] = [];
-  for (const candidate of chain) {
-    if (candidate.routeOrigin !== "requested" && !seen.has(candidate.provider)) {
-      seen.add(candidate.provider);
-      const profileId = candidate.configuredAuthProfileId;
-      models.push({
-        provider: candidate.provider,
-        model: `${candidate.provider}/${candidate.model}`,
-        ...(profileId ? { profileId } : {}),
-      });
-    }
-  }
-  return models;
-}
-
-/** Shared (non-personal) stored accounts that can currently serve `provider`. */
-export async function listEligibleSharedCronAccounts(
-  cfg: OpenClawConfig,
-  agentId: string,
-  provider: string,
-): Promise<string[]> {
-  const owner = await resolveCronModelSelectionOwner({ cfg, agentId, requiredAgentId: agentId });
-  const store = await ensureAuthProfileStoreAsync(owner.agentDir, {
-    allowKeychainPrompt: false,
-    config: owner.config,
-  });
-  // The run's own eligibility rules: expired or unusable credentials don't count, while a
-  // temporary cooldown doesn't make an account ineligible (the order lists it last).
-  return resolveAuthProfileOrderWithMetadata({
-    cfg: owner.config,
-    store,
-    provider,
-    readinessMode: "read-only",
-    includePendingOAuthRefresh: true,
-  })
-    .profileIds.filter((profileId) => !isUserModelAuthProfileId(profileId))
-    .toSorted();
-}
-
-/** A fallback provider whose account could not be recorded; its candidates are refused. */
-export type CronUnrecordedFallbackAccount = { provider: string; model: string; reason: string };
-
-/**
- * Record one account per fallback provider other than the primary's, using the same capture
- * rules as the primary. A fallback that cannot be recorded never blocks the job: it is
- * reported and its candidates fail closed at run time.
- */
-export async function captureCronFallbackInferenceAccounts(
-  params: CronFallbackChainParams & {
-    runtimeSessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
-    /** Fallback accounts recorded before this edit keep their captured runtime. */
-    recordedAccounts?: CronInferenceAccount[];
-    /**
-     * This edit submitted the fallback list itself, so each `@profile` in it is a fresh explicit
-     * selection: a recorded account for that profile is reauthorized, not kept as-is.
-     */
-    fallbacksSubmitted?: boolean;
-    authorizeProfile?: (profileId: string, inherited: boolean) => Promise<(() => void) | undefined>;
-    /**
-     * Doctor on an already-bound job: without an explicit `@profile`, record a fallback only
-     * when exactly one shared stored account is eligible; never choose among several.
-     */
-    requireUnambiguous?: boolean;
-  },
-): Promise<{
-  accounts: CronInferenceAccount[];
-  unrecorded: CronUnrecordedFallbackAccount[];
-}> {
-  const accounts: CronInferenceAccount[] = [];
-  const unrecorded: CronUnrecordedFallbackAccount[] = [];
-  for (const {
-    provider,
-    model,
-    profileId: explicitProfileId,
-  } of await resolveCronFallbackProviderModels(params)) {
-    const recorded = params.recordedAccounts?.find((account) => account.provider === provider);
-    // An edit never re-resolves a recorded account: auth order, inherited config or a replaced
-    // credential must not silently move it. Only an `@profile` submitted in this edit's own
-    // fallback list adopts or reauthorizes one.
-    if (recorded && !(explicitProfileId !== undefined && params.fallbacksSubmitted === true)) {
-      accounts.push(recorded);
-      continue;
-    }
-    try {
-      let profileId = explicitProfileId;
-      if (!profileId && params.requireUnambiguous) {
-        const eligible = await listEligibleSharedCronAccounts(params.cfg, params.agentId, provider);
-        if (eligible.length !== 1) {
-          unrecorded.push({
-            provider,
-            model,
-            reason:
-              eligible.length === 0
-                ? "no shared stored account is available for this provider"
-                : `several accounts are eligible (${eligible.join(", ")}); choose one with openclaw automations edit <jobId> --fallbacks ${model}@<profileId>`,
-          });
-          continue;
-        }
-        profileId = eligible[0];
-      }
-      const captured = await captureCronInferenceBinding({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        fallbackCandidate: {
-          provider,
-          model: model.slice(provider.length + 1),
-          ...(profileId ? { profileId } : {}),
-        },
-        isGmailHook: params.isGmailHook,
-        runtimeSessionEntry: params.runtimeSessionEntry,
-        recordedRuntime: recorded?.runtime,
-        authorizeProfile: params.authorizeProfile,
-      });
-      if (!captured) {
-        unrecorded.push({
-          provider,
-          model,
-          reason:
-            captured === null
-              ? "it signs in through a native CLI login, not a stored account"
-              : "it has no stored account (environment or provider-config key)",
-        });
-        continue;
-      }
-      accounts.push({
-        provider: captured.provider,
-        profileId: captured.profileId,
-        authorizationId: captured.authorizationId,
-        authRequirement: captured.authRequirement,
-        ...(captured.runtime !== undefined ? { runtime: captured.runtime } : {}),
-        // Only an `@profile` the owner wrote is their explicit choice.
-        source: explicitProfileId ? "user" : "auto",
-      });
-    } catch (error) {
-      unrecorded.push({
-        provider,
-        model,
-        reason: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-  return { accounts, unrecorded };
-}
-
 /** Reacquire the same owner, including its live revocation and replacement checks. */
 export async function acquireCronInferenceAuthorization(params: {
-  binding: CronInferenceAccount;
+  binding: CronInferenceBinding;
   cfg: OpenClawConfig;
   agentDir: string;
+  /** Names the automation and its real id in the recovery command. */
+  job?: { id: string; name?: string };
 }) {
+  const label = params.job
+    ? `Automation ${params.job.name?.trim() ? `"${params.job.name.trim()}" (${params.job.id})` : params.job.id}`
+    : "This automation";
+  const jobId = params.job?.id ?? "<jobId>";
   let authority: AuthProfileAuthorization | undefined;
   try {
     authority = await captureAuthProfileAuthorization({
@@ -536,7 +305,7 @@ export async function acquireCronInferenceAuthorization(params: {
     });
     if (authority.authorizationId !== params.binding.authorizationId) {
       throw new Error(
-        `Automation inference ${describeCronInferenceBinding(params.binding)} was replaced. Explicitly select an authorized account again.`,
+        `${label} runs on account ${params.binding.profileId}, which was signed in again or replaced since the job recorded it. To keep using it: openclaw automations edit ${jobId} --model <provider/model>@${params.binding.profileId}.`,
       );
     }
     authority.assertCurrent();
@@ -550,7 +319,7 @@ export async function acquireCronInferenceAuthorization(params: {
       error.code === "MCP_AUTHORIZATION_RETIRED"
     ) {
       throw new Error(
-        `Automation inference ${describeCronInferenceBinding(params.binding)} was removed or signed out. Explicitly select an authorized account again.`,
+        `${label} runs on account ${params.binding.profileId}, which was removed or signed out. Sign in again, or choose another account: openclaw automations edit ${jobId} --model <provider/model>@<profileId> (list accounts: openclaw models auth list).`,
         { cause: error },
       );
     }

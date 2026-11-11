@@ -21,12 +21,6 @@ export type ModelFallbackRouteResolution = "raw" | "resolved";
 export type ModelFallbackCandidate = ModelCandidate & {
   routeOrigin: ModelFallbackRouteOrigin;
   routeResolution: ModelFallbackRouteResolution;
-  /**
-   * The account written on a configured fallback entry (`model@profile`). It is a record of the
-   * owner's choice, not an applied selection: only callers that record a per-candidate account,
-   * such as scheduled automations, consume it.
-   */
-  configuredAuthProfileId?: string;
 };
 
 export type FallbackAttempt = ModelCandidate & {

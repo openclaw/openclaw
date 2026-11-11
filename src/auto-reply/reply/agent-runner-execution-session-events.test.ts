@@ -297,6 +297,7 @@ describe("ordinary session event execution", () => {
         }),
         runtimeSessionEntry: (entry) => entry,
         assertCandidate,
+        assertCurrent: () => assertCurrent(),
         resolveCliAuthProfile: vi.fn(async () => "scheduled-profile"),
         dispose,
       });
@@ -371,6 +372,7 @@ describe("ordinary session event execution", () => {
       }),
       runtimeSessionEntry,
       assertCandidate,
+      assertCurrent: vi.fn(),
       resolveCliAuthProfile: vi.fn(async () => "scheduled-profile"),
       dispose: vi.fn(),
     });

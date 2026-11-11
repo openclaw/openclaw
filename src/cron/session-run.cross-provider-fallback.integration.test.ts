@@ -25,10 +25,7 @@ import {
   QUOTA_EXHAUSTED_BODY,
 } from "./cross-provider-fallback.test-support.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
-import {
-  captureCronFallbackInferenceAccounts,
-  captureCronInferenceBinding,
-} from "./inference-binding.runtime.js";
+import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import { runCronSessionTurn } from "./session-run.js";
 import type { CronStoredJob } from "./types.js";
@@ -55,8 +52,8 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it.each(["recorded", "unrecorded", "revoked"] as const)(
-  "a session-target job with a %s fallback account handles a primary quota failure",
+it.each(["live", "primary-revoked"] as const)(
+  "a session-target job fails over to another provider's live account (%s)",
   async (kind) => {
     await withOpenClawTestState(
       { label: "cron-session-cross-provider", env: { OPENAI_API_KEY: undefined } },
@@ -127,23 +124,12 @@ it.each(["recorded", "unrecorded", "revoked"] as const)(
           if (!binding) {
             throw new Error("Expected a recorded primary account");
           }
-          if (kind !== "unrecorded") {
-            binding.fallbackAccounts = (
-              await captureCronFallbackInferenceAccounts({
-                cfg,
-                agentId: "main",
-                primaryProvider: binding.provider,
-                model,
-              })
-            ).accounts;
-            expect(binding.fallbackAccounts).toMatchObject([{ profileId: "backup:main" }]);
+          if (kind === "primary-revoked") {
+            expect(
+              await removeAuthProfilesAcrossOwnerStores({ profileIds: ["openai:primary"] }),
+            ).toBe(true);
           }
-          if (kind === "revoked") {
-            expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: ["backup:main"] })).toBe(
-              true,
-            );
-          }
-          // Interactive defaults move to another backup account after the job was recorded.
+          // The fallback provider records no account, so it follows its live order.
           await setAuthProfileOrder({
             agentDir: state.agentDir(),
             provider: "backup",
@@ -173,16 +159,10 @@ it.each(["recorded", "unrecorded", "revoked"] as const)(
             abortSignal: new AbortController().signal,
             assertCurrent() {},
           });
-          expect(hits.primary).toEqual(["Bearer key-primary"]);
-          if (kind === "recorded") {
-            expect(result.status, result.error).toBe("ok");
-            expect(hits.backup).toEqual(["Bearer key-backup"]);
-          } else {
-            // The session path reports a generic failure; the refusal itself is the proof:
-            // the chain reached the backup candidate and sent it nothing.
-            expect(result).toMatchObject({ status: "error", provider: "backup" });
-            expect(hits.backup).toEqual([]);
-          }
+          // A removed recorded account refuses only its own candidate; it is never replaced.
+          expect(hits.primary).toEqual(kind === "live" ? ["Bearer key-primary"] : []);
+          expect(result.status, result.error).toBe("ok");
+          expect(hits.backup).toEqual(["Bearer key-backup-other"]);
         } finally {
           await resetPreparedModelRuntimeSnapshotsForTest();
           await primary.close();
