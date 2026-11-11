@@ -2,7 +2,7 @@
   "name": "@openclaw/huggingface-provider",
   "version": "2026.11.3",
   "private": true,
-  "description": "OpenClaw Hugging Face provider plugin",
+  "description": "OpenClaw Hugging Face inference and Hub tools plugin",
   "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

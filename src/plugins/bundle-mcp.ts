@@ -390,9 +390,28 @@ function loadBundleFileBackedMcpConfig(params: {
   };
 }
 
+function resolveMcpConfigEnablement(
+  server: BundleMcpServerConfig,
+  pluginConfig: unknown,
+): BundleMcpServerConfig {
+  if (!Object.hasOwn(server, "enabledByConfig")) {
+    return server;
+  }
+  const { enabledByConfig, ...transport } = server;
+  let value = pluginConfig;
+  if (!isStringArray(enabledByConfig) || enabledByConfig.length === 0) {
+    return { ...transport, enabled: false };
+  }
+  for (const key of enabledByConfig) {
+    value = key && isRecord(value) && Object.hasOwn(value, key) ? value[key] : undefined;
+  }
+  return { ...transport, enabled: value === true };
+}
+
 function loadRootRelativeMcpConfig(params: {
   rootDir: string;
   mcpServers: Record<string, BundleMcpServerConfig>;
+  pluginConfig?: unknown;
 }): { config: BundleMcpRuntimeConfig; diagnostics: string[] } {
   const rootDir = path.resolve(params.rootDir);
   const servers = normalizeImportedMcpServers(params.mcpServers);
@@ -401,7 +420,11 @@ function loadRootRelativeMcpConfig(params: {
       mcpServers: Object.fromEntries(
         Object.entries(servers).map(([serverName, server]) => [
           serverName,
-          absolutizeBundleMcpServer({ rootDir, baseDir: rootDir, server }),
+          absolutizeBundleMcpServer({
+            rootDir,
+            baseDir: rootDir,
+            server: resolveMcpConfigEnablement(server, params.pluginConfig),
+          }),
         ]),
       ),
       prepareDataDirsByServer: Object.fromEntries(
@@ -529,6 +552,7 @@ export function loadEnabledBundleMcpConfig(params: {
             loadRootRelativeMcpConfig({
               rootDir: record.rootDir,
               mcpServers: record.mcpServers,
+              pluginConfig: params.cfg?.plugins?.entries?.[record.id]?.config,
             }),
           )
         : undefined,
@@ -568,14 +592,25 @@ function withMcpPluginOwnership(
   pluginId: string,
   loaded: { config: BundleMcpRuntimeConfig; diagnostics: string[] },
 ) {
+  // A declared capability is not consent to activate it. Omit optional defaults
+  // before merging plugins so they cannot shadow another plugin's active server.
+  const mcpServers = Object.fromEntries(
+    Object.entries(loaded.config.mcpServers).filter(([, server]) => server.enabled !== false),
+  );
   // Merge provenance alongside the server map so a later declaration owns both.
   // Reconstructing ownership from inspection names would attribute shadowed servers twice.
   return {
     ...loaded,
     config: {
       ...loaded.config,
+      mcpServers,
+      prepareDataDirsByServer: Object.fromEntries(
+        Object.entries(loaded.config.prepareDataDirsByServer).filter(([name]) =>
+          Object.hasOwn(mcpServers, name),
+        ),
+      ),
       pluginIdsByServer: Object.fromEntries(
-        Object.keys(loaded.config.mcpServers).map((name) => [name, pluginId]),
+        Object.keys(mcpServers).map((name) => [name, pluginId]),
       ),
     },
   };
