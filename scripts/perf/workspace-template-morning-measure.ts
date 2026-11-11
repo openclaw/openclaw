@@ -82,7 +82,7 @@ const config: OpenClawConfig = {
       sandbox: {
         mode: "all",
         backend: "docker",
-        docker: { image: values.image, user: "0:0", network: "none" },
+        docker: { image: values.image, network: "none" },
       },
     },
   },
