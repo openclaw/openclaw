@@ -417,10 +417,10 @@ export function inputDraft(container: HTMLElement, value: string) {
   flush();
 }
 
-export function inputDraftAtEnd(container: HTMLElement, value: string) {
+export function inputDraftAtEnd(container: HTMLElement, value: string, caret = value.length) {
   const textarea = getComposerTextarea(container);
   textarea.value = value;
-  textarea.setSelectionRange(value.length, value.length);
+  textarea.setSelectionRange(caret, caret);
   textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
   flush();
 }

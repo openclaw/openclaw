@@ -79,6 +79,26 @@ function verifier(f: ReturnType<typeof candidatePublicationFixture>) {
   };
 }
 
+function publicationEvidenceOptions(f: ReturnType<typeof candidatePublicationFixture>) {
+  return {
+    run: f.parent,
+    manifest: f.manifest,
+    expectedRepository: f.repository,
+    expectedRunId: f.runId,
+    expectedRunAttempt: 1,
+    expectedTargetSha: f.q,
+    expectedReleaseTag: "v2026.8.28-beta.1",
+    expectedTrustedWorkflowFullRef: f.publisherFullRef,
+    expectedTrustedWorkflowSha: f.p,
+    expectedCoreNpmPublication: { npmDistTag: "beta" },
+    verifierSourceSha: f.p,
+    verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
+    isTrustedMainAncestor: () => {
+      throw new Error("Q must not require main ancestry");
+    },
+  };
+}
+
 function npmProducer(f: ReturnType<typeof candidatePublicationFixture>) {
   return verifyNpmPreflightProducer({
     manifest: f.npmManifest,
@@ -596,28 +616,41 @@ describe("candidate-owned publish consumer chain", () => {
   it("authenticates P admission, strict FRV, and both original artifact producers without Q ancestry", async () => {
     const f = candidatePublicationFixture();
     const before = JSON.stringify(f.manifest);
+    let manifestReads = 0;
+    let authorityRefreshes = 0;
     const qualified = await authenticateFullReleaseValidationEvidence(
       {
-        run: f.parent,
-        manifest: f.manifest,
-        expectedRepository: f.repository,
-        expectedRunId: f.runId,
-        expectedRunAttempt: 1,
-        expectedTargetSha: f.q,
-        expectedReleaseTag: "v2026.8.28-beta.1",
-        expectedTrustedWorkflowFullRef: f.publisherFullRef,
-        expectedTrustedWorkflowSha: f.p,
-        expectedCoreNpmPublication: { npmDistTag: "beta" },
-        verifierSourceSha: f.p,
-        verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
-        isTrustedMainAncestor: () => {
-          throw new Error("Q must not require main ancestry");
+        ...publicationEvidenceOptions(f),
+        npmPreflightLineage: {
+          qualificationSha: f.q,
+          producerRunId: f.runId,
+          producerRunAttempt: "1",
         },
       },
-      f.client,
+      {
+        ...f.client,
+        verifyRetainedPublicationArtifacts() {
+          throw new Error("Qualification fixture does not recover publication artifacts");
+        },
+        downloadArtifactArchive() {
+          throw new Error("Qualification fixture does not download artifact archives");
+        },
+        getRunArtifacts() {
+          throw new Error("Qualification fixture does not list run artifacts");
+        },
+        loadManifest: () => {
+          manifestReads += 1;
+          return f.client.loadManifest();
+        },
+        revalidateQualificationAdmissionAuthority: (authority) => {
+          authorityRefreshes += 1;
+          return f.client.revalidateQualificationAdmissionAuthority(authority);
+        },
+      },
     );
     expect(qualified.source).toBe("candidate-owned-admission-v1");
-    await expect(consumers(f).npm()).resolves.toEqual(f.npmQualified);
+    expect(manifestReads).toBe(1);
+    expect(authorityRefreshes).toBe(2);
     expect(npmProducer(f).provenance).toBe("immutable-manifest");
     const outputDir = join(tempDirs.make("candidate-npm-consumption-"), "qualified");
     await downloadFullReleaseNpmPreflight({
@@ -655,6 +688,63 @@ describe("candidate-owned publish consumer chain", () => {
     expect(JSON.stringify(f.manifest)).toBe(before);
     expect(f.admission.calls.some((call) => call.includes("compare/" + f.q))).toBe(false);
   });
+
+  it.each(["producer run", "producer attempt", "qualification", "revoked after wait"])(
+    "rejects %s in the single-authentication npm handoff",
+    async (failure) => {
+      const f = candidatePublicationFixture();
+      let manifestReads = 0;
+      let authorityRefreshes = 0;
+      const operation = authenticateFullReleaseValidationEvidence(
+        {
+          ...publicationEvidenceOptions(f),
+          npmPreflightLineage: {
+            qualificationSha: failure === "qualification" ? f.p : f.q,
+            producerRunId: failure === "producer run" ? "99999" : f.runId,
+            producerRunAttempt: failure === "producer attempt" ? "2" : "1",
+          },
+        },
+        {
+          ...f.client,
+          verifyRetainedPublicationArtifacts() {
+            throw new Error("Qualification fixture does not recover publication artifacts");
+          },
+          downloadArtifactArchive() {
+            throw new Error("Qualification fixture does not download artifact archives");
+          },
+          getRunArtifacts() {
+            throw new Error("Qualification fixture does not list run artifacts");
+          },
+          loadManifest: () => {
+            manifestReads += 1;
+            return f.client.loadManifest();
+          },
+          revalidateQualificationAdmissionAuthority: (authority) => {
+            authorityRefreshes += 1;
+            const result = f.client.revalidateQualificationAdmissionAuthority(authority);
+            if (failure === "revoked after wait" && authorityRefreshes === 1) {
+              // The import/consumer handoff yields after the initial refresh.
+              queueMicrotask(() => {
+                f.admission.authority.permission = "read";
+              });
+            }
+            return result;
+          },
+        },
+      );
+      await expect(operation).rejects.toThrow(
+        failure === "revoked after wait"
+          ? /qualification authority/
+          : failure === "qualification"
+            ? /source and qualification SHA differ/
+            : /Npm producer differs/,
+      );
+      expect(manifestReads).toBe(1);
+      if (failure === "revoked after wait") {
+        expect(authorityRefreshes).toBe(2);
+      }
+    },
+  );
 
   it.each([
     "P attempt",

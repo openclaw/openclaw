@@ -262,9 +262,8 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     if (preparation.status === "reconcile") {
       return await reconcileObservedPublication();
     }
-    const { target } = preparation;
-    const { pushRepository, repository, branch, baseBranch, pushOwner, githubHost } = target;
-    const { publishedPullRequest } = target;
+    const { pushRepository, repository, branch, baseBranch } = preparation.target;
+    const { pushOwner, githubHost, publishedPullRequest } = preparation.target;
     const remoteBaseSha = await readGitHubPublicationBaseSha(
       run,
       repository,
@@ -274,19 +273,19 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     );
     await step(() => assertSafeGitPublicationWorkspace(worktree.path, runCommand));
     identity = await refreshIdentity();
-    const baseTransportEnv = {
-      ...identity.env,
-      GIT_CONFIG_GLOBAL: gitNullConfigPath(),
-      GIT_CONFIG_SYSTEM: gitNullConfigPath(),
-    };
     await requireGitHubPublicationCommit(
       run,
       repository,
       remoteBaseSha,
       githubHost,
       worktree.path,
-      baseTransportEnv,
+      {
+        ...identity.env,
+        GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+        GIT_CONFIG_SYSTEM: gitNullConfigPath(),
+      },
       "GitHub publication workspace base could not be materialized.",
+      { baseBranch },
     );
     // Reflogs can expire or restart when a branch is recreated; commits own its history.
     const lineage = await run(["git", "merge-base", sourceHeadCommit, remoteBaseSha], {
@@ -385,6 +384,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         worktree.path,
         transportEnv,
         "GitHub publication remote branch could not be verified.",
+        { baseBranch },
       );
       const ancestry = await run(["git", "merge-base", "--is-ancestor", remoteHead, headCommit], {
         cwd: worktree.path,

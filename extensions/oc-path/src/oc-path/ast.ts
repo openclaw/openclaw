@@ -23,6 +23,8 @@ export interface AstItem {
   readonly text: string;
   readonly slug: string;
   readonly line: number;
+  /** First inline paragraph's source line; null when its token has no source map. */
+  readonly textLine: number | null;
   readonly kv?: { readonly key: string; readonly value: string };
 }
 

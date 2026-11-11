@@ -13,6 +13,7 @@ function parseArgs(argv: string[]) {
   let forceSkipClawHub: boolean | undefined;
   let normalRunId: string | undefined;
   let normalPublicationStaged = false;
+  let deferred = false;
   let bootstrapRunId: string | undefined;
   let bootstrapCompleted: boolean | undefined;
 
@@ -33,6 +34,9 @@ function parseArgs(argv: string[]) {
         break;
       case "--wait-for-clawhub":
         waitForClawHub = parseStrictBooleanArg(next(), "--wait-for-clawhub");
+        break;
+      case "--deferred":
+        deferred = parseStrictBooleanArg(next(), "--deferred");
         break;
       case "--force-skip-clawhub":
         forceSkipClawHub = parseStrictBooleanArg(next(), "--force-skip-clawhub");
@@ -73,6 +77,7 @@ function parseArgs(argv: string[]) {
     forceSkipClawHub,
     normalRunId,
     normalPublicationStaged,
+    deferred,
     bootstrapRunId,
     bootstrapCompleted,
   };
@@ -86,6 +91,22 @@ function buildOpenClawReleaseClawHubRuntimeState(args: ReturnType<typeof parseAr
   const repository = args.repository.trim();
   const normalRunId = args.normalRunId?.trim() || undefined;
   const bootstrapRunId = args.bootstrapRunId?.trim() || undefined;
+
+  if (args.deferred) {
+    if (args.waitForClawHub || normalRunId || bootstrapRunId || args.normalPublicationStaged) {
+      throw new Error(
+        "Deferred ClawHub publication cannot include dispatched or awaited children.",
+      );
+    }
+    return {
+      verifierArgs: ["--skip-clawhub"],
+      proofLines: {
+        normal:
+          "- plugin ClawHub publish: deferred to independent recovery; not published or verified by this run",
+        bootstrap: "- plugin ClawHub bootstrap: deferred; full release remains incomplete",
+      },
+    };
+  }
 
   const shouldIncludeNormalRun =
     !args.forceSkipClawHub && normalRunId !== undefined && args.waitForClawHub;

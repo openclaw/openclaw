@@ -1,6 +1,8 @@
 import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { UiCommand, UiCommandParams } from "../../../packages/gateway-protocol/src/index.js";
+import { TemplatesDraftsReadParamsSchema } from "../../../packages/gateway-protocol/src/schema/template-drafts.js";
 // The tool returns the Gateway result unchanged, so the wire schema remains the single owner.
 import { UiCommandResultSchema } from "../../../packages/gateway-protocol/src/schema/ui-command.js";
 import { requesterProfileSchema } from "../schema/typebox.js";
@@ -25,6 +27,7 @@ const BASE_ACTIONS = [
   "portal_show",
   "portal_hide",
   "navigate",
+  "template_review",
 ] as const;
 
 const GITHUB_IDENTITY_SETTINGS_ACTION = "github_identity_settings" as const;
@@ -38,6 +41,11 @@ function screenToolSchema(githubIdentitySettingsAvailable: boolean) {
         description: "Action",
       }),
       user: requesterProfileSchema(),
+      draftId: Type.Optional(
+        Type.String({
+          description: "Request-specific private Template draft ID for template_review",
+        }),
+      ),
       sessionKey: Type.Optional(Type.String({ description: "Session. Default: current" })),
       environmentId: Type.Optional(
         Type.String({ description: "Desktop source, or a pending portal's environment ID" }),
@@ -105,6 +113,19 @@ function commandForAction(
       sessionKey: resolveSessionKey(params, agentSessionKey),
     };
   }
+  if (action === "template_review") {
+    if (!opts.agentSessionKey?.trim() || !opts.agentId?.trim()) {
+      throw new ToolInputError("Template review requires the current agent and conversation");
+    }
+    if (resolveSessionKey(params, agentSessionKey) !== opts.agentSessionKey.trim()) {
+      throw new ToolInputError("Template review must stay in the current conversation");
+    }
+    const draftId = readToolStringParam(params, "draftId", { required: true });
+    if (!Value.Check(TemplatesDraftsReadParamsSchema, { agentId: opts.agentId, draftId })) {
+      throw new ToolInputError("Invalid Template draft id");
+    }
+    return { kind: "template-review", draftId };
+  }
   if (action === "github_identity_settings") {
     if (!opts.githubIdentitySettingsAvailable) {
       throw new ToolInputError("github_identity_settings is unavailable in this Control UI");
@@ -163,7 +184,7 @@ export function createScreenTool(opts: ScreenToolOptions = {}): AnyAgentTool {
   return {
     label: "Screen",
     name: "screen",
-    description: `Drive the requesting user's Control UI. desktop_show opens a native app's remote desktop using environmentId; portal_show opens a running web app's portal using portalId. Both default to the right chat sidebar. Panel show actions accept expanded:true to fill the conversation pane, or expanded:false to restore split view while retaining the selected panel and dock. desktop_hide/portal_hide hide the view without stopping the app. browser_show/browser_hide toggle the agent Browser panel; terminal_show/terminal_hide toggle Terminal; sidebar_show/sidebar_hide toggle the session list.${githubIdentitySettingsAvailable ? " github_identity_settings opens the current agent's GitHub identity settings so the operator can reconnect without exposing authorization data to the model." : ""} Also supports split_right/split_down, close_pane, focus, navigate. Optional sessionKey selects the conversation; default current. Only the selected person's requesting browser is changed; it must still be connected. This changes presentation only; it does not control application input. delivery=dispatched means only that the command was sent. portal_show returns the requesting browser’s presentation diagnosis: blocked/new-tab-required needs action; unverified is not a working-preview claim, including network-reachable. Inspect the actual app before claiming delivery.`,
+    description: `Drive the requesting user's Control UI. desktop_show opens a native app's remote desktop using environmentId; portal_show opens a running web app's portal using portalId. Both default to the right chat sidebar. Panel show actions accept expanded:true to fill the conversation pane, or expanded:false to restore split view while retaining the selected panel and dock. desktop_hide/portal_hide hide the view without stopping the app. browser_show/browser_hide toggle the agent Browser panel; terminal_show/terminal_hide toggle Terminal; sidebar_show/sidebar_hide toggle the session list.${githubIdentitySettingsAvailable ? " github_identity_settings opens the current agent's GitHub identity settings so the operator can reconnect without exposing authorization data to the model." : ""} template_review opens human review of a request-specific private Template draft in the current agent conversation using draftId; it does not publish or send another model turn. Also supports split_right/split_down, close_pane, focus, navigate. Optional sessionKey selects the conversation; default current. Only the selected person's requesting browser is changed; it must still be connected. This changes presentation only; it does not control application input. delivery=dispatched means only that the command was sent. portal_show returns the requesting browser’s presentation diagnosis: blocked/new-tab-required needs action; unverified is not a working-preview claim, including network-reachable. Inspect the actual app before claiming delivery.`,
     parameters: githubIdentitySettingsAvailable
       ? ScreenWithGithubIdentityParameters
       : ScreenParameters,
