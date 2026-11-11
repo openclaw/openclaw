@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   cleanup: vi.fn(),
   tail: vi.fn(),
   compact: vi.fn(),
+  reactions: vi.fn(),
   lifecycle: vi.fn(),
   exportTrajectory: vi.fn(),
   ownerLoaded: vi.fn(),
@@ -38,6 +39,11 @@ vi.mock("../../commands/sessions-tail.js", () => {
 vi.mock("../../commands/sessions-compact.js", () => {
   mocks.ownerLoaded();
   return { sessionsCompactCommand: mocks.compact };
+});
+// mock-isolation: Capture lazy loading without reading session state.
+vi.mock("../../commands/sessions-reactions.js", () => {
+  mocks.ownerLoaded();
+  return { sessionsReactionsCommand: mocks.reactions };
 });
 vi.mock("../../commands/sessions-lifecycle.js", async (importOriginal) => {
   mocks.ownerLoaded();
@@ -214,4 +220,32 @@ it("documents retained delete archives and local memory cleanup", () => {
   expect(help).toContain("openclaw memory forget --agent <agent-id> --session <id-or-key>");
   expect(help).toContain("on the Gateway host or container using its state and configuration");
   expect(help).toContain("including for global keys");
+});
+
+it.each([
+  [
+    `sessions --store /tmp/other.sqlite --all-agents --limit 25 --verbose reactions ${key}`,
+    "`sessions reactions` does not support the parent `sessions` options --store, --all-agents, --limit, --verbose; the gateway resolves the target store from <key> and --agent.",
+  ],
+  [`sessions reactions ${key} --timeout 0 --json`, timeoutError],
+] as const)("rejects %s before loading the reactions owner", async (args, message) => {
+  const execution = run(args);
+  await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
+  await expect(execution).rejects.toMatchObject({ message });
+  expectNoCalls(mocks.reactions, mocks.ownerLoaded, mocks.runtime.error, mocks.runtime.exit);
+});
+
+it("forwards reactions key with inherited scope and RPC options", async () => {
+  await run(
+    `sessions --agent work --json reactions ${key} --url ws://gateway.test --token test-token --password test-password --timeout 45000`,
+  );
+  expectOptions(mocks.reactions, {
+    key,
+    agent: "work",
+    url: "ws://gateway.test",
+    token: "test-token",
+    password: "test-password",
+    timeout: "45000",
+    json: true,
+  });
 });
