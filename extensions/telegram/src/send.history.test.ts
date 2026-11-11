@@ -133,6 +133,7 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
     async (explicitReply) => {
       const notification = providerMessage(-100123, "Build completed. What should run next?", {
         message_thread_id: 25,
+        from: { id: 7, is_bot: true, first_name: "OpenClaw" },
       });
       const clock = vi.spyOn(Date, "now").mockReturnValue(notification.date * 1000);
       const botInfo = { ...telegramBotInfoForTest, id: notification.from.id };
@@ -213,9 +214,14 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
           ...notification,
           chat: { id: -100123, type: "supergroup" as const },
           message_id: explicitReply ? notification.message_id : 25,
+          date: explicitReply ? notification.date : notification.date - 86_400,
           text: explicitReply ? notification.text : "Topic root",
+          ...(explicitReply
+            ? {}
+            : { forum_topic_created: { name: "Checks", icon_color: 0x6fb9f0 } }),
         },
       };
+      await runtime.recordMessageForReplyChain(current, { scope: "forum", id: 25 }, botInfo.id);
       const promptContext = await runtime.buildPromptContextForMessage(
         {
           message: current,
@@ -242,6 +248,7 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
         context?.ctxPayload.ChannelStructuredContext?.[0]?.sessionTranscriptPriorityMessageIds,
       ).toEqual(["902"]);
       expect(context?.ctxPayload.ReplyToId).toBe(explicitReply ? "902" : "25");
+      expect(context?.ctxPayload.WasMentioned).toBe(explicitReply);
       expect(
         context?.ctxPayload.InboundHistory?.filter((entry) => entry.messageId === "902"),
       ).toHaveLength(1);
