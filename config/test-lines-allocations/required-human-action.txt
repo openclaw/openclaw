@@ -1,2 +1,2 @@
-# Exact regression growth: required-action input and negative settlement coverage plus one suite-owned built Gateway/Control UI flow proving original progress, fresh verification, unresolved/cancelled outcomes and no duplicate effects. Shared scalar unchanged.
-476
+# Exact regression growth: required-action input and negative settlement coverage, one suite-owned built Gateway/Control UI flow, and protocol-consistent shared mock read capabilities. Shared scalar unchanged.
+481
