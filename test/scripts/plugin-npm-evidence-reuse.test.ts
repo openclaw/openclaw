@@ -126,7 +126,7 @@ function fixture(pageHeavy = false, sameSha = false) {
   const raw = (args: readonly string[]): unknown => {
     if (args[0] === "run") {
       calls.push("run view " + f.runId);
-      return JSON.stringify(f.client.getRunView(f.runId));
+      return f.client.getRunView(f.runId).then((view) => JSON.stringify(view));
     }
     const route = args[1]!.replace("repos/" + f.repository + "/", "");
     calls.push(route);
@@ -458,6 +458,9 @@ async function carrierFixture(prepare?: (source: ReturnType<typeof fixture>) => 
   const fetchImpl = async (input: string | URL | Request) => {
     const url = new URL(input instanceof Request ? input.url : input.toString());
     calls.push(url.pathname + url.search);
+    if (url.pathname === "/rate_limit") {
+      return Response.json({ resources: { core: { remaining: 5000, reset: 4070908800 } } });
+    }
     if (url.pathname.endsWith("/artifacts/900")) {
       return Response.json(metadata);
     }

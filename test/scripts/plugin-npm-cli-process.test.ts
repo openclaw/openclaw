@@ -1,9 +1,19 @@
 import { existsSync, readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNpmCliProcessFixture } from "./plugin-npm-cli-process.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("refuses fanout before writing its matrix when the current quota cannot cover the request ceilings", async () => {
+  const f = await createNpmCliProcessFixture(tempDirs.make("npm-cli-budget-"), "", 98);
+  const result = f.preview();
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("requires 51200 requests for 98 packages; 5000 remain");
+  expect(existsSync(result.output)).toBe(false);
+  expect(existsSync(f.previewManifest)).toBe(false);
+});
 
 // Distinct processes are essential: an in-memory client spy misses the retained
 // publication owner and cannot establish that the uploaded carrier is sufficient.
@@ -13,6 +23,17 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
   const success = (result: ReturnType<typeof f.preview>) => {
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
+    const accounting = result.stderr
+      .split("\n")
+      .filter((line) => line.startsWith('{"githubRequestAccounting"'))
+      .map((line) => JSON.parse(line).githubRequestAccounting)
+      .find((entry) => entry.scope === "prepared-npm-command");
+    expect(accounting?.used).toBe(
+      f
+        .records()
+        .filter((row) => row.kind === "request" && row.invocation === basename(result.directory))
+        .length,
+    );
   };
   success(f.preview());
   const carrier = f.sealCarrier();

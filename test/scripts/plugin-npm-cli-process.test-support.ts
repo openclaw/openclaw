@@ -43,7 +43,7 @@ type RequestRecord = {
 // Materialize external GitHub responses before starting any consumer. The
 // subprocess never imports fixture clients or receives an authenticated owner.
 // The recovery graph retains the original Q receipts under a distinct P seal.
-export async function createNpmCliProcessFixture(root: string, plugins = "") {
+export async function createNpmCliProcessFixture(root: string, plugins = "", packageCount = 2) {
   const f = candidatePublicationFixture();
   const responses: Record<string, ResponseBytes> = {};
   const json = (route: string, value: unknown) => {
@@ -56,6 +56,7 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
   const bytes = (route: string, value: Uint8Array) => {
     responses[route] = { encoding: "base64", data: Buffer.from(value).toString("base64") };
   };
+  json("/rate_limit", { resources: { core: { remaining: 5000, reset: 4_070_908_800 } } });
   const source = (path: string, sha: string, text: string) =>
     json("contents/" + path + "?ref=" + sha, {
       type: "file",
@@ -113,7 +114,11 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
     artifact: typeof producer;
   }> = [];
   const artifacts = new Map<number, ReturnType<typeof metadata>>();
-  for (const [index, extensionId] of ["alpha", "beta"].entries()) {
+  const extensionIds = Array.from(
+    { length: packageCount },
+    (_, index) => ["alpha", "beta"][index] ?? "plugin-" + index,
+  );
+  for (const [index, extensionId] of extensionIds.entries()) {
     const { packageDir, packageName } = writePublishablePluginFixture(root, {
       extensionId,
       version,
@@ -171,6 +176,9 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
       },
     });
   }
+  packages.sort((a, b) =>
+    a.packageName < b.packageName ? -1 : a.packageName > b.packageName ? 1 : 0,
+  );
   const request = {
     repository: f.source.repository,
     candidateSha: f.source.candidateSha,
@@ -293,7 +301,7 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
     permission: "write",
     user: f.admission.actor,
   });
-  json("run view " + f.runId, f.client.getRunView(f.runId));
+  json("run view " + f.runId, await f.client.getRunView(f.runId));
   for (const id of [f.runId, ...f.plan.children.map((child) => child.runId)]) {
     const run = await f.client.getRun(id);
     json("actions/runs/" + id, run);
