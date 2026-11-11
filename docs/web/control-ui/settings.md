@@ -176,7 +176,12 @@ times in milliseconds. It samples every ten seconds while the page is visible
 and summarizes the last 100 successful samples from the current connection.
 The sample count makes small sets visible; p95 and p99 become more useful as
 samples accumulate. Reconnecting, switching Gateways, or leaving the page resets
-the readings. Failed requests are excluded and shown as a retry notice.
+the readings. Transient failures are excluded and shown as a retry notice.
+Ping and host activity require `operator.read` and their advertised Gateway
+methods. When either diagnostic is unavailable or denied, it settles as unavailable
+instead of repeatedly requesting access or claiming to retry. The connection can
+remain healthy, and browser-local connection settings remain usable. A fresh
+connection or refreshed capabilities can make the diagnostics available again.
 
 The ping graph shows individual round trips. **Gateway activity** uses the same
 CPU, process memory, and event-loop delay graphs as the debug overlay, with up to
