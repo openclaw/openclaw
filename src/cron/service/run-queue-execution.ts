@@ -2,6 +2,7 @@ import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-terminatio
 import { waitForSessionRunIdle } from "../../sessions/session-controller.wait.js";
 import type { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { clearCronJobActive } from "../active-jobs.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { cronEventPayload } from "../event-source.js";
@@ -16,7 +17,9 @@ import { assertExecutionPolicy } from "./jobs-validation.js";
 import { clearManualCronJobActive, markManualCronJobActive } from "./ops-shared.js";
 import { createCronRunHandle } from "./run-history.js";
 import type { CronRunOptions as RunOptions } from "./run-queue-requests.js";
+import { wakeCronRunQueues } from "./run-queue-wake.js";
 import { createCronReceiptExecutionIdentity, markServiceCronJobActive } from "./run-receipts.js";
+import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import {
   emit,
   isImmediateCronRunMode,
@@ -44,6 +47,35 @@ export type CronLaunchContext = {
   activation: ReturnType<typeof createDeferredCore<void>>;
   receiptSettlement?: Promise<void>;
 };
+
+/** Best effort: if this write fails, the fired run counts as a check until it ends. */
+async function settleConditionCheck(
+  state: CronServiceState,
+  entry: CronQueuedRun,
+  context: OpenClawStateWorkerContext,
+): Promise<void> {
+  try {
+    const { job } = await runOpenClawStateWorkerOperation(context, (scope) =>
+      scope.execute({
+        type: "cron.settleConditionCheck",
+        input: {
+          storeKey: state.deps.storeKey,
+          jobId: entry.job.id,
+          receiptId: entry.runReceipt.receiptId,
+        },
+      }),
+    );
+    if (job) {
+      applyCronRuntimeRowsToState(state, [job]);
+      wakeCronRunQueues(state);
+    }
+  } catch (error) {
+    state.deps.log.warn(
+      { jobId: entry.job.id, err: String(error) },
+      "cron: fired condition still counted as a check",
+    );
+  }
+}
 
 export async function launchCronRun(
   state: CronServiceState,
@@ -177,6 +209,7 @@ export async function launchCronRun(
       streamBatch: options.streamBatch,
       streamScheduleKey: options.streamScheduleKey,
       streamSourceIdentity: options.streamSourceIdentity,
+      onConditionFired: () => settleConditionCheck(state, entry, pending.context),
       runReceipt: entry.runReceipt,
       runReceiptContext: pending.context,
       executionIdentity: createCronReceiptExecutionIdentity(

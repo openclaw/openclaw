@@ -2,7 +2,10 @@ import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
-import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import {
+  isGatewayRestartDraining,
+  runWithGatewayDetachedWorkContinuation,
+} from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admission.js";
 import { waitForAgentDatabasePreparation } from "../../state/agent-database-preparation-context.js";
@@ -18,7 +21,9 @@ import type {
   CronRunRequestContext,
   CronSkippedRequest,
 } from "../store/run-queue.types.js";
+import { parseCronScheduledRunId } from "../store/run-request-id.js";
 import type { CronJob } from "../types.js";
+import { CRON_ADMISSION_DEFERRED_RECEIPT_ERROR } from "./admission-deferred.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { locked } from "./locked.js";
 import { resolveCurrentDefaultAgentId } from "./ops-shared.js";
@@ -254,6 +259,21 @@ function publishSkipped(state: CronServiceState, skipped: CronSkippedRequest) {
   }
 }
 
+/**
+ * A timed occurrence already activated when the host stops or drains never started, so its
+ * receipt is released the way a deferred admission is: the next process requests the slot again.
+ */
+function cancelUnstartedLaunch(state: CronServiceState, receiptId: string, reason: string) {
+  const retained =
+    parseCronScheduledRunId(receiptId) !== undefined &&
+    (state.stopped || isGatewayRestartDraining());
+  return cancelCronRunRequests(
+    state,
+    [receiptId],
+    retained ? CRON_ADMISSION_DEFERRED_RECEIPT_ERROR : reason,
+  );
+}
+
 async function cancelCronRunRequests(
   state: CronServiceState,
   receiptIds: string[],
@@ -333,7 +353,9 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
             nowMs: state.deps.nowMs(),
             defaultAgentId: resolveCurrentDefaultAgentId(state),
             maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-            schedulingPaused: state.schedulingPaused,
+            // Worker ticks wait for open Gateway admission; this drain must not activate timed
+            // occurrences that a draining Gateway can only refuse.
+            schedulingPaused: state.schedulingPaused || isGatewayRestartDraining(),
             preparingAgentIds: preparingCronAgentIds(state.deps.env),
             requests: getCronRunQueueRequests(state, { includePendingEvents: true }),
             hostProcessId: currentPluginCommandHostProcessId(),
@@ -482,7 +504,7 @@ export async function launchCronRunQueueResult(
                 await state.op;
               } else {
                 await launchCronRun(state, entry, launch, (reason) =>
-                  cancelCronRunRequests(state, [entry.runReceipt.receiptId], reason),
+                  cancelUnstartedLaunch(state, entry.runReceipt.receiptId, reason),
                 );
                 if (launch.receiptSettlement) {
                   // Admission joins the receipt tail; queue shutdown retains its result boundary.
@@ -520,9 +542,9 @@ export async function launchCronRunQueueResult(
           );
           launch.completion.reject(error);
           if (!launch.started) {
-            await cancelCronRunRequests(
+            await cancelUnstartedLaunch(
               state,
-              [entry.runReceipt.receiptId],
+              entry.runReceipt.receiptId,
               normalizeCronRunErrorText(error),
             );
           }
@@ -559,9 +581,26 @@ export async function stopCronRunQueue(state: CronServiceState) {
   for (const pending of queued) {
     pending.preparation?.controller.abort();
   }
+  // A queued timed occurrence stays in the durable queue; startup recovery resumes it.
+  const timed = queued.filter(
+    ({ preparation, receipt }) =>
+      !preparation && parseCronScheduledRunId(receipt.receiptId) !== undefined,
+  );
+  for (const pending of timed) {
+    const job = state.store?.jobs.find((entry) => entry.id === pending.receipt.jobId);
+    if (job?.state.queuedAtMs !== pending.receipt.startedAtMs) {
+      // Its activation may already be committed; the launch in flight settles this context.
+      continue;
+    }
+    pending.completion.resolve({ ok: true, ran: false, reason: "stopped" });
+    pending.activation.resolve();
+    launchState(state).contexts.delete(pending.receipt.receiptId);
+  }
   await cancelCronRunRequests(
     state,
-    queued.filter((pending) => !pending.preparation).map(({ receipt }) => receipt.receiptId),
+    queued
+      .filter((pending) => !pending.preparation && !timed.includes(pending))
+      .map(({ receipt }) => receipt.receiptId),
     "cron service stopped",
   );
 }

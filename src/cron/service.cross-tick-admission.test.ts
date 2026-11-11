@@ -129,3 +129,60 @@ it("retires a suspended timer across a scheduler stop and restart", async () => 
     await retiredTimer;
   }
 });
+
+it("keeps a queued condition check pending through a graceful shutdown and restart", async () => {
+  let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
+  const dueAtMs = nowMs + 1_000;
+  const jobs = ["w1", "w2", "w3", "waiter"].map((id) =>
+    Object.assign(dueJob(id, nowMs, dueAtMs), {
+      schedule: { kind: "every" as const, everyMs: 300_000, anchorMs: dueAtMs },
+      trigger: { script: "return { fire: false }" },
+    }),
+  );
+  const store = await seedJobs(jobs);
+  const release = createDeferred();
+  const evaluated: string[] = [];
+  const boot = () =>
+    cron.createCronRegressionState({
+      storePath: store.storePath,
+      nowMs: () => nowMs,
+      cronConfig: { triggers: { enabled: true } },
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      evaluateCronTrigger: async ({ job }) => {
+        evaluated.push(job.id);
+        await release.promise;
+        return { kind: "evaluated", fire: false };
+      },
+    });
+  const waiter = async () =>
+    (await loadCronStore(store.storePath)).jobs.find((job) => job.id === "waiter")?.state;
+  const first = boot();
+  const running = await captureCronSchedulerWakeForTest(() => start(first));
+  nowMs = dueAtMs;
+  await running.wake(first);
+  await vi.waitFor(() => expect(evaluated).toEqual(["w1", "w2", "w3"]));
+
+  // Shutdown closes admission, then the active checks end and free their places.
+  work.markGatewayRestartDraining("stop (SIGTERM)");
+  release.resolve();
+  await waitForCronRunQueue(first);
+  stop(first);
+  await first.schedulerDrain;
+  expect(evaluated).toEqual(["w1", "w2", "w3"]);
+  expect(await waiter()).toMatchObject({ nextRunAtMs: dueAtMs, queuedAtMs: dueAtMs });
+
+  work.resetGatewayWorkAdmission();
+  const second = boot();
+  try {
+    // The fresh process resumes the same occurrence instead of moving to the next interval.
+    await start(second);
+    await vi.waitFor(() => expect(evaluated).toEqual(["w1", "w2", "w3", "waiter"]));
+    await waitForCronRunQueue(second);
+    expect(await waiter()).toMatchObject({
+      lastTriggerEvalAtMs: dueAtMs,
+      nextRunAtMs: dueAtMs + 300_000,
+    });
+  } finally {
+    stop(second);
+  }
+});

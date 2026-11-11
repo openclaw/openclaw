@@ -8,6 +8,8 @@ export type CronRunRequestContext = {
   mode: "scheduled" | "force" | "if-enabled" | "on-exit";
   onExitSchedule?: { kind: "on-exit"; command: string; cwd?: string };
   event?: CronEventAdmission;
+  /** Set when a manual or stream run still evaluates the job's condition before its payload. */
+  evaluateTrigger?: boolean;
 };
 
 export type CronQueuedRun = {
@@ -79,5 +81,10 @@ export type CronRunQueueOperations = {
       status?: "skipped" | "superseded";
     };
     output: { skipped: CronSkippedRequest[] };
+  };
+  /** A fired condition stops counting as a check while its payload runs. */
+  "cron.settleConditionCheck": {
+    input: { storeKey: string; jobId: string; receiptId: string };
+    output: { job?: CronStoredJob };
   };
 };
