@@ -1,0 +1,6 @@
+129
+# LOCAL 2026.11.8 row 44; source 737f4381fe5d89cdd43260a3a27933fb3a69d993.
+# Selected-runtime worker lease reacquisition: retain the source fixture adjustment (+1 LF) and real worker-boundary lease regression (+128 LF).
+# Reviewed private composition: ab17efd4e31f03028af4636626aefc6c49813cd1.
+# Exact net test LF including matching helper/support files; no scalar baseline or coverage reduction.
+# Apply only with this reviewed source composition; do not duplicate existing or folded credit.
