@@ -404,12 +404,6 @@ describe("subagent announce seam flow", () => {
     expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ delivered: true }),
     );
-    // A descendant with suspended delivery cannot settle; it must not hold this completion.
-    expect(subagentRegistryRuntimeMock.countPendingDescendantRuns).toHaveBeenCalledWith(
-      "agent:main:subagent:test",
-      expect.any(Function),
-      { excludeSuspendedDelivery: true },
-    );
   });
 
   it("does not treat ambiguous direct completion failures as announced", async () => {

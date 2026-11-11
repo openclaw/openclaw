@@ -265,16 +265,11 @@ async function runSubagentAnnounceFlowBound(
           ? 0
           : Math.max(
               0,
-              // A suspended descendant's delivery already ended; it cannot hold this completion.
-              await countPendingDescendantRuns(
-                params.childSessionKey,
-                () => {
-                  if (!childSessionEffectsAllowed()) {
-                    throw new Error("Subagent child-session effects are no longer current.");
-                  }
-                },
-                { excludeSuspendedDelivery: true },
-              ),
+              await countPendingDescendantRuns(params.childSessionKey, () => {
+                if (!childSessionEffectsAllowed()) {
+                  throw new Error("Subagent child-session effects are no longer current.");
+                }
+              }),
             );
       if (pendingChildDescendantRuns > 0) {
         shouldDeleteChildSession = false;

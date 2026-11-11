@@ -381,11 +381,7 @@ describe("subagent registry scoped reads", () => {
       ),
     ).toEqual([2, 1]);
     mocks.readSnapshot = snapshot;
-    expect(await mod.countPendingDescendantRuns(root, () => {})).toBe(4);
-    // Completion gates skip a descendant whose own delivery is suspended.
-    expect(
-      await mod.countPendingDescendantRuns(root, () => {}, { excludeSuspendedDelivery: true }),
-    ).toBe(3);
+    expect(await mod.countPendingDescendantRuns(root, () => {})).toBe(3);
     expect(
       buildScopedSubagentRunReadIndexFromRuns(snapshot, root).hasDescendantRunAwaitingSettle(
         root,

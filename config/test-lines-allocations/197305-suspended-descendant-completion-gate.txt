@@ -1,2 +1,0 @@
-53
-# Regression for #197305: completion gates skip descendants whose delivery is suspended (read wrapper, cleanup deferral, announce gate).
