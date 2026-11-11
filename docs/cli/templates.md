@@ -221,14 +221,18 @@ in the monitor's scratch. An `every: 0m` declaration stays disabled.
 The Add review shows each converted job with its interval and owner delivery;
 existing cron schedules and `none` or last-channel delivery keep their meaning.
 On a Gateway with more than one configured channel, the scheduler requires an
-explicit channel for an isolated automation that announces its result.
-Templates cannot name a channel, so the Gateway Add review blocks such a
-Template before Add creates the agent; its publisher must change that
-automation's delivery to `none` before it can be added there.
+explicit channel for an isolated automation that announces to the last channel.
+Templates cannot name a channel, so Add asks where those automation updates go:
+one of the configured channels, or no updates. The Control UI shows that choice
+before it adds the agent; Gateway clients pass it as `automationChannel` (a
+channel ID or `none`) to both `templates.add.plan` and `templates.add.apply`,
+and the review lists the offered channels in `automationChannels`. With one
+channel, Add keeps last-channel delivery without asking.
 Gateway review responses represent interval schedules as `{ everyMs }`, where
 `everyMs` is a positive integer, and
 owner delivery as `owner`, alongside the existing `{ cron, timezone }` schedules
-and `none` or `last-channel` delivery variants.
+and `none` or `last-channel` delivery variants. A chosen channel appears as
+`channel` delivery with its `channel` ID.
 
 Add creates a job disabled until its imported scratch is saved and verified.
 If scratch import conflicts with another edit, or its write cannot be confirmed,
@@ -313,7 +317,7 @@ to use the default unused ID.
 
 Gateway Add review responses describe schedules as either `{ cron, timezone }`
 or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery
-values are `none`, `last-channel`, or `owner`.
+values are `none`, `last-channel`, `channel` (with a `channel` ID), or `owner`.
 
 The CLI Add path requires exclusive offline state ownership; it refuses to run
 while a Gateway owns that state. Use the Control UI to Add through a running

@@ -50,6 +50,8 @@ class TemplatesCatalogModel {
   reviewing = false;
   consentWarning: string | null = null;
   reviewPlan: TemplateAddReviewPlan | null = null;
+  automationChannelOptions: readonly string[] | null = null;
+  private automationChannel: string | null = null;
   private riskAcknowledged = false;
   private preparedPlan: TemplateAddReviewPlan | null = null;
   gateway!: ReturnType<typeof useGatewayPage>;
@@ -81,6 +83,8 @@ class TemplatesCatalogModel {
     this.reviewing = false;
     this.consentWarning = null;
     this.reviewPlan = null;
+    this.automationChannelOptions = null;
+    this.automationChannel = null;
     this.preparedPlan = null;
     this.riskAcknowledged = false;
   }
@@ -197,6 +201,8 @@ class TemplatesCatalogModel {
     this.addError = null;
     this.consentWarning = null;
     this.reviewPlan = null;
+    this.automationChannelOptions = null;
+    this.automationChannel = null;
     this.preparedPlan = null;
     this.riskAcknowledged = false;
   }
@@ -264,7 +270,7 @@ class TemplatesCatalogModel {
     try {
       // Prepared Gateway review still owns risk and installation consent.
       const plan = prepare
-        ? await readTemplateAddReviewPlan(scope.client, source)
+        ? await readTemplateAddReviewPlan(scope.client, source, this.automationChannel ?? undefined)
         : (reviewPlan ?? this.preparedPlan);
       if (!plan) {
         return;
@@ -273,6 +279,13 @@ class TemplatesCatalogModel {
         return;
       }
       this.preparedPlan = plan;
+      // Templates cannot name a channel; on a multi-channel Gateway the operator picks
+      // one of the channels its scheduler accepts, and Add re-plans with that choice.
+      if (plan.automationChannels && !plan.automationChannels.selected) {
+        this.automationChannelOptions = plan.automationChannels.options;
+        this.showReview();
+        return;
+      }
       this.reviewPlan = plan;
       if (plan.riskAcknowledgementRequired && !this.riskAcknowledged) {
         this.consentWarning = plan.trustWarning ?? t("templatesCatalog.addFailed");
@@ -360,6 +373,7 @@ class TemplatesCatalogModel {
       canStartAdd: this.canAdd(),
       consentWarning: this.consentWarning,
       reviewPlan: this.reviewPlan,
+      automationChannelOptions: this.automationChannelOptions,
       canAdd: this.preparedPlan !== null && this.canAdd(),
       onOpenPreview: (kind, name) => void this.openPreview(kind, name),
       onBack: () => this.back(),
@@ -382,6 +396,15 @@ class TemplatesCatalogModel {
       onCancelReview: () => {
         this.reviewPlan = null;
         this.riskAcknowledged = false;
+      },
+      onChooseAutomationChannel: (channel) => {
+        this.automationChannel = channel;
+        this.automationChannelOptions = null;
+        return this.add(null, false, true);
+      },
+      onCancelAutomationChannel: () => {
+        this.automationChannelOptions = null;
+        this.automationChannel = null;
       },
     };
   }
@@ -475,6 +498,10 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
       onConfirm={() => mutate(view().onConfirm)}
       onConfirmConsent={() => mutate(view().onConfirmConsent)}
       onConfirmReview={() => mutate(view().onConfirmReview)}
+      onChooseAutomationChannel={(channel) => {
+        const choose = view().onChooseAutomationChannel;
+        mutate(() => choose(channel));
+      }}
     />
   );
   return (

@@ -7,6 +7,7 @@ import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import "../../lib/toast-host.tsx";
 // Register the toast renderer before per-test leak tracking.
 import "../../lib/toast-view.tsx";
+import { choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { takeCreatedComposer } from "../new-session/creation-composer-registry.ts";
 import {
@@ -472,6 +473,33 @@ describe("Template Add", () => {
       expect(applyParams).not.toHaveProperty("acknowledgeClawHubRisk");
     },
   );
+
+  it("asks where automation updates go before Add on a multi-channel Gateway", async () => {
+    const { detail, request, navigate } = createDetail({ templatesEnabled: true });
+    const original = request.getMockImplementation()!;
+    request.mockImplementation(async (method, params, options) => {
+      const result = await original(method, params, options);
+      const selected = (params as { automationChannel?: string }).automationChannel;
+      return method === "templates.add.plan"
+        ? { ...result, automationChannels: { options: ["discord", "telegram"], selected } }
+        : result;
+    });
+    const add = () => detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button");
+    const panel = () =>
+      detail.querySelector<HTMLElement>('[aria-label="Choose where automation updates go"]');
+    const sent = (method: string) => request.mock.calls.findLast(([name]) => name === method)?.[1];
+
+    await vi.waitFor(() => expect(add()?.disabled).toBe(false));
+    add()!.click();
+    await vi.waitFor(() => expect(panel()).not.toBeNull());
+    expect(sent("templates.add.apply")).toBeUndefined();
+
+    await choosePickerValue(panel()!.querySelector("openclaw-select-picker")!, "telegram");
+    panel()!.querySelector<HTMLButtonElement>(".btn.primary")!.click();
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("chat", expect.anything()));
+    expect(sent("templates.add.plan")).toHaveProperty("automationChannel", "telegram");
+    expect(sent("templates.add.apply")).toHaveProperty("automationChannel", "telegram");
+  });
 
   it("requires both consents for direct catalog Add when trust and plugin review are needed", async () => {
     const { find, request, navigate, addSelector } = createAddSurface("card", {

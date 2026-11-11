@@ -454,15 +454,16 @@ describe("Gateway Template Add plan", () => {
     expect(changed.planIntegrity).not.toBe(projected.planIntegrity);
   });
 
-  it("blocks last-channel automations the scheduler rejects on a multi-channel host", async () => {
+  it("asks where last-channel automations deliver on a multi-channel host", async () => {
     const source = await readGatewayPackageFixture("incident-response");
     const config = { agents: { entries: {} } };
-    const review = async (configuredChannels: string[]) =>
+    const review = async (configuredChannels: string[], automationChannel?: string) =>
       projectGatewayTemplateAddPlan(
         await buildGatewayTemplateAddPlan(source, {
           config,
           sourceMcpServers: {},
           configuredChannels,
+          ...(automationChannel ? { automationChannel } : {}),
           packagePreflight: async () => ({
             ok: false,
             code: "test_unavailable",
@@ -473,24 +474,44 @@ describe("Gateway Template Add plan", () => {
         trust,
         config,
       );
-    const blockedJobs = (plan: Awaited<ReturnType<typeof review>>) =>
-      plan.scheduledJobs?.jobs.filter((job) => job.blocked).map((job) => job.id);
+    type Review = Awaited<ReturnType<typeof review>>;
+    const channelBlockers = (plan: Review) =>
+      plan.blockers.map((blocker) => blocker.code).filter((code) => code.includes("_channel_"));
+    const heartbeat = (plan: Review) =>
+      plan.scheduledJobs?.jobs.find((job) => job.id === "heartbeat-summary");
 
-    const ambiguous = await review(["telegram", "discord"]);
-    expect(ambiguous.blockers).toContainEqual(
-      expect.objectContaining({
-        code: "automation_delivery_channel_ambiguous",
-        path: "$.automations[0].delivery",
-        message: expect.stringContaining("more than one configured channel"),
-      }),
-    );
-    // Owner delivery selects its own route, so only the last-channel job is blocked.
-    expect(blockedJobs(ambiguous)).toEqual(["heartbeat-summary"]);
+    const unchosen = await review(["telegram", "discord"]);
+    expect(channelBlockers(unchosen)).toEqual(["automation_channel_required"]);
+    expect(unchosen.automationChannels).toEqual({ options: ["discord", "telegram"] });
+    // Owner delivery selects its own route, so only the last-channel job waits for a choice.
+    expect(unchosen.scheduledJobs?.jobs.filter((job) => job.blocked).map((job) => job.id)).toEqual([
+      "heartbeat-summary",
+    ]);
 
-    const single = await review(["telegram"]);
-    expect(single.blockers.map((blocker) => blocker.code)).not.toContain(
-      "automation_delivery_channel_ambiguous",
+    const telegram = await review(["telegram", "discord"], "telegram");
+    expect(channelBlockers(telegram)).toEqual([]);
+    expect(telegram.automationChannels).toEqual({
+      options: ["discord", "telegram"],
+      selected: "telegram",
+    });
+    expect(heartbeat(telegram)).toMatchObject({
+      blocked: false,
+      proposed: { delivery: "channel", channel: "telegram" },
+    });
+    expect(telegram.planIntegrity).not.toBe(unchosen.planIntegrity);
+    expect(heartbeat(await review(["telegram", "discord"], "none"))?.proposed?.delivery).toBe(
+      "none",
     );
-    expect(blockedJobs(single)).toEqual([]);
+    expect(channelBlockers(await review(["telegram", "discord"], "slack"))).toEqual([
+      "automation_channel_invalid",
+    ]);
+
+    // One channel stays automatic; a choice that is not needed changes nothing.
+    const single = await review(["telegram"], "discord");
+    expect(single.automationChannels).toBeUndefined();
+    expect(heartbeat(single)).toMatchObject({
+      blocked: false,
+      proposed: { delivery: "last-channel" },
+    });
   });
 });

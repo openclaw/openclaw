@@ -28,8 +28,10 @@ import type { TemplateAddPlan, TemplateAddPlanAction, TemplateReadResult } from 
 const TEMPLATE_BLOCKER_MESSAGES: Partial<Record<string, string>> = {
   plugin_disabled:
     "This plugin is disabled. Enable it in Plugins; reinstall it there first if needed.",
-  automation_delivery_channel_ambiguous:
-    'This automation announces to the last channel, but this host has more than one configured channel and Templates cannot name one. The publisher must change its delivery to { "mode": "none" } before this Template can be added here.',
+  automation_channel_required:
+    "This host has more than one channel. Choose where this Template's automation updates go.",
+  automation_channel_invalid:
+    "The chosen automation channel is not configured on this host. Choose one of the listed channels, or none.",
 };
 
 type SkillArtifact = NonNullable<
@@ -370,6 +372,7 @@ export function projectTemplateAddPlan(
         : {}),
       ...(configuredAccess ? { configuredAccess } : {}),
       ...(scheduledJobs ? { scheduledJobs } : {}),
+      ...(plan.automationChannels ? { automationChannels: plan.automationChannels } : {}),
       readiness: {
         ready: plan.readiness.ready,
         requirements: plan.readiness.requirements.map((requirement) =>

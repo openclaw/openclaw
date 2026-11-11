@@ -15,7 +15,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { TEMPLATE_CRON_REF_SCHEMA_VERSION, type PersistedTemplateCronRef } from "./cron-records.js";
 import { digestTemplateBytes } from "./digest.js";
 import type { TemplateMutationStateOptions } from "./state-mutation-options.js";
-import type { TemplateAddPlan, TemplateCronJob } from "./types.js";
+import type { TemplateAddPlan, TemplateCronJob, TemplatePlannedCronJob } from "./types.js";
 import { readTemplateWorkspaceActionSource } from "./workspace.js";
 
 export type { PersistedTemplateCronRef } from "./cron-records.js";
@@ -271,8 +271,9 @@ export async function installTemplateCronJobsStateless(
   try {
     for (const action of actions) {
       currentAction = action;
-      // SAFETY: cronJob plan actions originate from validated TemplateCronJob manifest entries.
-      const details = action.details as TemplateCronJob | undefined;
+      // SAFETY: cronJob plan actions originate from validated manifest entries plus the
+      // operator's delivery-channel choice.
+      const details = action.details as TemplatePlannedCronJob | undefined;
       if (!action.automation && !details?.id) {
         throw new TemplateCronInstallError(
           "cron_plan_invalid",

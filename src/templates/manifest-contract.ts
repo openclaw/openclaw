@@ -38,6 +38,11 @@ export type TemplateCronJob = {
   delivery?: { mode: "none" | "announce"; channel?: "last" };
 };
 
+/** A declared automation as Add schedules it, after the operator's delivery-channel choice. */
+export type TemplatePlannedCronJob = Omit<TemplateCronJob, "delivery"> & {
+  delivery?: { mode: "none" | "announce"; channel?: string };
+};
+
 export const TEMPLATE_BOOTSTRAP_FILE_NAMES = [
   "AGENTS.md",
   "SOUL.md",

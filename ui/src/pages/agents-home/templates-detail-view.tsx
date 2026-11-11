@@ -1,5 +1,6 @@
-import { Errored, For, Loading, Show } from "solid-js";
+import { createSignal, Errored, For, Loading, Show } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
+import { ChannelPicker } from "../../components/solid/channel-picker.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
@@ -201,6 +202,58 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
   );
 }
 
+function AutomationChannelChoice(props: { view: TemplatesCatalogViewProps }) {
+  const [channel, setChannel] = createSignal<string | null>(null);
+  return (
+    <Show when={props.view.automationChannelOptions}>
+      {(options) => (
+        <section
+          class="templates-add-consent"
+          aria-label={t("templatesCatalog.automationChannelTitle")}
+        >
+          <h3>{t("templatesCatalog.automationChannelTitle")}</h3>
+          <p>{t("templatesCatalog.automationChannelDescription")}</p>
+          <ChannelPicker
+            label={t("templatesCatalog.automationChannelLabel")}
+            value={channel()}
+            options={[
+              ...options().map((value) => ({ value, label: value })),
+              {
+                value: "none",
+                label: t("templatesCatalog.automationChannelNone"),
+                kind: "neutral" as const,
+              },
+            ]}
+            onChange={setChannel}
+          />
+          <div class="templates-add-consent__actions">
+            <button
+              type="button"
+              class="btn"
+              onClick={() => props.view.onCancelAutomationChannel()}
+            >
+              {t("common.cancel")}
+            </button>
+            <button
+              type="button"
+              class="btn primary"
+              disabled={props.view.applying || !channel()}
+              onClick={() => {
+                const chosen = channel();
+                if (chosen) {
+                  void props.view.onChooseAutomationChannel(chosen);
+                }
+              }}
+            >
+              {t("templatesCatalog.add")}
+            </button>
+          </div>
+        </section>
+      )}
+    </Show>
+  );
+}
+
 function ReviewWarning(props: { view: TemplatesCatalogViewProps }) {
   return (
     <Show when={props.view.reviewPlan}>
@@ -278,7 +331,8 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
             Boolean(detail()) &&
             !view().applying &&
             !view().consentWarning &&
-            !view().reviewPlan;
+            !view().reviewPlan &&
+            !view().automationChannelOptions;
           return (
             <SettingsPage wide carapace>
               <PluginDetailShell
@@ -378,6 +432,7 @@ export function TemplateAddFeedback(props: { view: TemplatesCatalogViewProps }) 
           </button>
         </InlineAlert>
       </Show>
+      <AutomationChannelChoice view={props.view} />
       <Show when={!props.view.consentWarning}>
         <ReviewWarning view={props.view} />
       </Show>

@@ -83,6 +83,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           return listedMcp.mcpServers;
         },
         configuredChannels: await listSchedulerChannels(context.getRuntimeConfig()),
+        ...(params.automationChannel ? { automationChannel: params.automationChannel } : {}),
       });
       assertTemplatesLabsEnabled(context.getRuntimeConfig());
       respond(true, plan);
@@ -204,6 +205,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           return {
             config,
             configuredChannels,
+            ...(params.automationChannel ? { automationChannel: params.automationChannel } : {}),
             sourceMcpServers: async () => {
               const listedMcp = await listConfiguredMcpServers();
               assertCurrent();
