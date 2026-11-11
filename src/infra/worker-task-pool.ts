@@ -60,16 +60,13 @@ export class WorkerTaskPool<Input, Output> {
 }
 
 /**
- * Sqlite close for one pool. Owned pools already expose closeResources; class
- * instances use the module-private core map. Not a plugin SDK method.
+ * Sqlite close for one pool. Class instances and owned pools register their core
+ * in the module-private map. Not a plugin SDK method.
  */
 export function closeTaskPoolSqliteResources(
   pool: object,
   key?: string,
 ): Promise<void> | undefined {
-  if ("closeResources" in pool && typeof pool.closeResources === "function") {
-    return (pool.closeResources as (key?: string) => Promise<void>)(key);
-  }
   return sqliteCloseCores.get(pool)?.startCloseResources(key).result;
 }
 
@@ -84,7 +81,7 @@ export function createOwnedWorkerTaskPool<Input, Output>(
     undefined,
     ownerOptions,
   );
-  return {
+  const owned = {
     run: (input: WorkerTaskInput<Input>, taskOptions: WorkerTaskOptions<Input>) =>
       core.run(input, taskOptions),
     rotate: () => core.rotate(),
@@ -98,4 +95,6 @@ export function createOwnedWorkerTaskPool<Input, Output>(
     getSnapshot: () => core.getSnapshot(),
     close: (error?: Error) => core.close(error),
   };
+  sqliteCloseCores.set(owned, core);
+  return owned;
 }
