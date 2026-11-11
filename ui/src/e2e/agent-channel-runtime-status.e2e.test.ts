@@ -43,7 +43,6 @@ suite.define(() => {
   it("keeps an explicit stopped runtime in warning state when its API probe succeeds", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, {
-        featureMethods: [...defaultControlUiFeatureMethods, "channels.status"],
         assistantName: "Main agent",
         defaultAgentId: "main",
         featureMethods: [

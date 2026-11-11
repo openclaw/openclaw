@@ -53,7 +53,6 @@ suite.define(() => {
     async (ordering) => {
       await suite.withPage(pageOptions, async ({ page }) => {
         const gateway = await installMockGateway(page, {
-          featureMethods: [...defaultControlUiFeatureMethods, "agents.list", "models.list"],
           authMode: ordering === "route before hello" ? "token" : undefined,
           deferredMethods: ordering === "route before hello" ? ["connect"] : [],
           featureMethods: [...defaultControlUiFeatureMethods, "agents.list", "models.list"],
