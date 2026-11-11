@@ -66,6 +66,12 @@ function captureMemoryOwner(
   return captureSessionActorStorageOwner(scope, { assertCurrent, authorize: assertCurrent });
 }
 
+export type SessionEntrySnapshot = NonNullable<
+  ReturnType<
+    typeof import("../../../../src/config/sessions/session-accessor.sqlite-export-read.js").readTranscriptExportSnapshotReadOnlySync
+  >
+>;
+
 /** Capture the memory namespace once; reads never create a missing owner or session. */
 export function captureIncognitoMemoryReader(scope: SessionTranscriptReadScope) {
   const namespace = captureMemoryOwner(scope);
