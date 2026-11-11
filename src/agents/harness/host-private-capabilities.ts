@@ -47,7 +47,7 @@ const sharedGatewayOwnerSources = resolveGlobalSingleton(
   () => new WeakSet<object>(),
 );
 
-/** Only the Gateway authentication owner records a shared UI source. */
+/** Only the Gateway authentication owner records a shared browser source. */
 export function bindSharedGatewayOwnerRunAuthority(authority: AdmittedRunOperatorAuthority): void {
   if (authority.source) {
     sharedGatewayOwnerSources.add(authority.source);

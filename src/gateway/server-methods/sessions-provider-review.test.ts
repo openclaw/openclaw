@@ -116,17 +116,9 @@ afterEach(() => {
   }
 });
 
-it.each([
-  "openclaw-control-ui",
-  "openclaw-macos",
-  "openclaw-linux",
-  "openclaw-ios",
-  "openclaw-android",
-] as const)("hands literal input and host capability to chat admission from %s", async (id) => {
+it("hands literal input and host capability to chat admission", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const options = request();
-    options.client!.connect.client.id = id;
-    await coreGatewayHandlers["sessions.providerReview.continue"]!(options);
+    await coreGatewayHandlers["sessions.providerReview.continue"]!(request());
     expect(mocks.handoff).toHaveBeenCalledTimes(1);
     expect(mocks.releaseAuthorization).toHaveBeenCalledTimes(1);
     const [chatOptions, acknowledgment] = mocks.handoff.mock.calls[0]!;

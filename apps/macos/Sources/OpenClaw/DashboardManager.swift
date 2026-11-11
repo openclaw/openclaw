@@ -196,6 +196,9 @@ final class DashboardManager {
                     }
                 }
             }
+        }
+        // Window focus is local UI state, independent of automatic profile and Keychain access.
+        if observeGatewayChanges {
             self.gatewayRefreshObservers += [
                 NSWindow.didBecomeKeyNotification,
                 NSWindow.willCloseNotification,
@@ -328,7 +331,7 @@ final class DashboardManager {
             configuration = try await dashboardConfiguration(
                 endpoint: endpoint, mode: mode, target: .primary, token: authToken).configuration
         } catch {
-            guard self.endpointGeneration == generation, !(error is CancellationError) else { return }
+            guard self.endpointGeneration == generation else { return }
             for controller in currentControllers() {
                 controller.showFailure(
                     title: "Dashboard unavailable",

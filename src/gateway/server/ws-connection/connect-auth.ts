@@ -28,6 +28,10 @@ import {
   openclawIdPeerKeyOf,
 } from "../../openclaw-id/device-token-binding.js";
 import { withSerializedCredentialFallbackAttempt } from "../../rate-limit-attempt-serialization.js";
+import {
+  GATEWAY_DELEGATION_DENIED,
+  hasGatewayDelegationClaim,
+} from "../../trusted-proxy-delegation.js";
 import { formatForLog, formatPeerTextForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
@@ -50,7 +54,6 @@ import {
 import { resolveControlUiBuildMismatch } from "./control-ui-build-admission.js";
 import {
   resolvePairingLocality,
-  DEVICE_SIGNATURE_SKEW_MS,
   resolveDeviceSignaturePayloadVersion,
   resolveUnauthorizedHandshakeContext,
   shouldPreserveLocalCliSharedAuthScopes,
@@ -63,6 +66,8 @@ import type {
 } from "./message-handler-types.js";
 
 const unauthorizedHandshakeLogLimiter = new HandshakeAuthLogLimiter();
+const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
+
 export async function authenticateGatewayConnect(
   context: GatewayConnectPhaseContext,
 ): Promise<AuthenticatedGatewayConnect | undefined> {
@@ -231,6 +236,13 @@ async function authenticateGatewayConnectCore(
     });
     close(1008, truncateCloseReason(authMessage));
   };
+  if (
+    hasGatewayDelegationClaim(upgradeReq, resolvedAuth.trustedProxy?.userHeader) &&
+    (!authResult.delegation || role !== "operator")
+  ) {
+    rejectUnauthorized({ ok: false, reason: GATEWAY_DELEGATION_DENIED });
+    return undefined;
+  }
   const clearUnboundScopes = () => {
     if (scopes.length > 0) {
       scopes = [];
@@ -331,23 +343,12 @@ async function authenticateGatewayConnectCore(
     await rejectGatewayStartupConnect(context);
     return undefined;
   }
-  if (connectParams.personalIdentity && !device) {
-    markHandshakeFailure("personal-identity-device-required");
-    sendHandshakeErrorResponse(
-      ErrorCodes.INVALID_REQUEST,
-      "personal identity requires a signed device identity",
-      { details: { code: ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED } },
-    );
-    close(1008, "personal identity requires a signed device identity");
-    await settleRejectedSharedAuthFailure();
-    return undefined;
-  }
   if (!handleMissingDeviceIdentity()) {
     await settleRejectedSharedAuthFailure();
     return undefined;
   }
   let devicePublicKey: string | null = null;
-  let deviceAuthPayloadVersion: "v2" | "v3" | "v4" | null = null;
+  let deviceAuthPayloadVersion: "v2" | "v3" | null = null;
   if (device) {
     const rejectDeviceAuthInvalid = async (reason: string, message: string): Promise<undefined> => {
       emitGatewayAuthSecurityEvent({
@@ -615,6 +616,7 @@ async function authenticateGatewayConnectCore(
       authMethod,
       authModeOverride: resolvedAuth.modeSource === "override" ? resolvedAuth.mode : undefined,
       verifiedIdentity: authResult.user,
+      delegation: authResult.delegation,
       browserOrigin: context.browserOrigin,
     }),
     resolvedAuth,

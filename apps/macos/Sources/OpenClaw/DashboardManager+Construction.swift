@@ -244,7 +244,6 @@ extension DashboardManager {
                         allowTOFU: false,
                         storeKey: storeKey),
                     allowsTrustedPinReplacement: true),
-                enablesPrimaryPersonalIdentity: endpoint.enablesPrimaryPersonalIdentity,
                 routeAuthority: endpoint.routeAuthority,
                 deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
                 revision: endpoint.revision,
@@ -278,17 +277,12 @@ extension DashboardManager {
         }
         let name = target == .primary ? "OpenClaw"
             : self.gatewayEntries.first { $0.id == target.bridgeID }?.name ?? url.host ?? "Gateway"
-        let tlsParams: GatewayTLSParams? = if endpoint.enablesPrimaryPersonalIdentity {
-            try await self.connectionProvider(target).controlUiPersonalTLSParams(endpoint: endpoint)
-        } else {
-            identityURL == nil && browserSession == nil ? endpoint.tls?.params : nil
-        }
         // The public sign-in origin owns normal HTTPS trust; an SSH/native TLS
         // pin and its bearer credentials belong only to the device connection.
         return (WindowConfiguration(
             url: url,
             auth: auth,
-            tlsParams: tlsParams,
+            tlsParams: identityURL == nil && browserSession == nil ? endpoint.tls?.params : nil,
             mode: mode,
             displayName: name,
             browserSession: browserSession,

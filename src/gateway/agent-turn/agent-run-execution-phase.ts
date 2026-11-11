@@ -1,6 +1,5 @@
 import {
   GATEWAY_CLIENT_CAPS,
-  isNativeAppUiClient,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
@@ -374,8 +373,7 @@ async function executeAgentRun(
         const clientCaps = [...callerContext.GatewayClientCaps];
         const gatewayUiCommandTarget = captureGatewayUiCommandTarget(params.client);
         const supportsTaskSuggestions =
-          (isOperatorUiClient(params.client?.connect.client) ||
-            isNativeAppUiClient(params.client?.connect.client)) &&
+          isOperatorUiClient(params.client?.connect.client) &&
           params.client?.connect.scopes?.includes("operator.admin") === true &&
           hasGatewayClientCap(clientCaps, GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS);
         const gatewayContext = params.context.resolveGatewayContext?.();

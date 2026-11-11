@@ -99,7 +99,6 @@ describe("cron context replay fixtures", () => {
       const source = structuredClone(operatorSource);
       if (sourceIngress === "principal") {
         const {
-          automationAdmin: _automationAdmin,
           authPolicy: _auth,
           device: _device,
           sharedGeneration: _generation,

@@ -3,8 +3,8 @@ import { GatewayClientRequestError } from "../../../../packages/gateway-client/s
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
-  isNativeAppUiClient,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
+import { gatewayOperatorAccessError } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import type {
   ConnectParams,
   ErrorShape,
@@ -17,19 +17,14 @@ import {
   validateRequestFrame,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
-import { resolveAuthenticatedPairedDeviceIdentity } from "../../../infra/device-pairing-identity.js";
-import { loadPairedDevicePairingStoreRecordReadOnly } from "../../../infra/device-pairing-store-readonly.js";
 import {
   createChildDiagnosticTraceContext,
   parseDiagnosticTraceparent,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-import { readTailscaleWhoisIdentity } from "../../../infra/tailscale.js";
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
-import { prepareUserProfileRoleAuthority } from "../../../state/user-channel-identity-operations.js";
-import { resolveCanonicalTailscaleProfileId } from "../../../state/user-profile-reads.js";
 import {
   captureGatewayAuthPolicy,
   isGatewayAuthGrantCurrent,
@@ -43,12 +38,8 @@ import {
   isOpenClawIdTunnelPrincipalCurrent,
   recordOpenClawIdTunnelActivity,
 } from "../../openclaw-id/tunnel-principal.js";
-import {
-  GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
-  hasCurrentGatewayOperatorAccess,
-} from "../../operator-access-policy.js";
+import { hasCurrentGatewayOperatorAccess } from "../../operator-access-policy.js";
 import { onOperatorRolePolicyChanged } from "../../operator-role-policy.js";
-import { isGatewayPersonalIdentityBindingCurrent } from "../../personal-identity-binding.js";
 import { bindWebSocketRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestEntry } from "../../server-request-entry.js";
 import { SharedGatewaySessionGenerationState } from "../../server-shared-auth-generation.js";
@@ -162,7 +153,6 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
       return;
     }
-    const personalIdentityBinding = client.internal?.personalIdentityBinding;
     if (sendResponse === send && client.internal?.openclawIdPrincipal) {
       recordOpenClawIdTunnelActivity(client.internal.openclawIdPrincipal);
     }
@@ -199,10 +189,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       return false;
     };
     const reconnectDevice =
-      (client.internal?.authenticatedControlUi === true ||
-        (client.internal?.authenticatedOperator === true &&
-          isNativeAppUiClient(client.connect.client))) &&
-      client.isDeviceTokenAuth === true
+      client.internal?.authenticatedControlUi === true && client.isDeviceTokenAuth === true
         ? client.internal.operatorDeviceTokenIdentity
         : undefined;
     const reconnectProfile = client.authenticatedUserProfile?.profileId;
@@ -210,25 +197,21 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       context,
       { deviceId: client.connect.device?.id, role: client.connect.role },
       () => {
-        if (personalIdentityBinding && !personalIdentityBinding.isCurrent()) {
-          invalidateGatewayPolicyClient(client, {
-            reason: "personal-identity-binding-invalidated",
-            code: 4001,
-            message: "personal identity binding is no longer current",
-            close: () => close(4001, "personal identity binding is no longer current"),
-          });
-          return false;
-        }
         if (!hasCurrentIngress()) {
           return false;
         }
         if (!hasCurrentGatewayOperatorAccess(client.internal?.operatorAccessAuthority)) {
+          const denial = gatewayOperatorAccessError(
+            client.internal?.operatorAccessAuthority?.failureCause ?? "policy-check-failed",
+          );
+          setCloseCause("operator-access-closed", { accessCause: denial.details.accessCause });
           invalidateGatewayPolicyClient(client, {
             reason: "operator-access-closed",
             code: 4001,
-            message: GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
-            close: () => close(4001, GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE),
+            message: denial.message,
+            close: () => close(4001, denial.message),
           });
+          return false;
         }
         if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
           return false;
@@ -263,7 +246,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               sharedGeneration: client.usesSharedGatewayAuth
                 ? client.sharedGatewaySessionGeneration
                 : undefined,
-              authorityOwner: remoteIngress ?? personalIdentityBinding?.signal,
+              authorityOwner: remoteIngress,
               ...(reconnectDevice && reconnectProfile
                 ? {
                     reconnect: {
@@ -285,17 +268,12 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                 : {}),
             },
             isCurrent: () =>
-              (!personalIdentityBinding || personalIdentityBinding.isCurrent()) &&
               hasCurrentIngress() &&
               hasCurrentGatewayPolicyClientSource(client) &&
               isCommittedGrantCurrent(),
             subscribe: (onRevoked) => {
               // Retained source grants must remain reachable by profile/origin revocation after the RPC returns.
               const releaseSourceClient = clients.retainRequest(client);
-              personalIdentityBinding?.signal.addEventListener("abort", onRevoked, { once: true });
-              if (personalIdentityBinding && !personalIdentityBinding.isCurrent()) {
-                onRevoked();
-              }
               remoteIngress?.signal.addEventListener("abort", onRevoked, { once: true });
               if (remoteIngress?.signal.aborted) {
                 onRevoked();
@@ -318,7 +296,6 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                   )
                 : undefined;
               return () => {
-                personalIdentityBinding?.signal.removeEventListener("abort", onRevoked);
                 remoteIngress?.signal.removeEventListener("abort", onRevoked);
                 releaseClient();
                 releasePolicy();
@@ -351,66 +328,6 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       deviceCredentialMutationBarrier = barrier;
     }
     try {
-      if (personalIdentityBinding) {
-        const paired = await loadPairedDevicePairingStoreRecordReadOnly(
-          personalIdentityBinding.device.deviceId,
-        );
-        const device = paired
-          ? resolveAuthenticatedPairedDeviceIdentity(paired, {
-              role: "operator",
-              publicKey: client.connect.device?.publicKey ?? "",
-              scopes: client.connect.scopes ?? [],
-            })
-          : null;
-        const current = device
-          ? await isGatewayPersonalIdentityBindingCurrent({
-              gateway: clients,
-              bindingId: personalIdentityBinding.bindingId,
-              device,
-              gatewayId: personalIdentityBinding.gatewayId,
-              scopes: personalIdentityBinding.scopes,
-              isDeviceCurrent: async (identity) => {
-                const currentPairing = await loadPairedDevicePairingStoreRecordReadOnly(
-                  identity.deviceId,
-                );
-                const currentIdentity = currentPairing
-                  ? resolveAuthenticatedPairedDeviceIdentity(currentPairing, {
-                      role: "operator",
-                      publicKey: client.connect.device?.publicKey ?? "",
-                      scopes: client.connect.scopes ?? [],
-                    })
-                  : null;
-                return currentIdentity?.key === identity.key;
-              },
-              isProfileCurrent: async (profileId, tailscaleLogin) => {
-                const authority = await prepareUserProfileRoleAuthority(profileId);
-                return (
-                  authority?.profileId === profileId &&
-                  (await resolveCanonicalTailscaleProfileId(tailscaleLogin)) === profileId &&
-                  authority.isCurrent()
-                );
-              },
-              readCurrentTailscaleLogin: async (sourceClientIp) =>
-                (
-                  await readTailscaleWhoisIdentity(sourceClientIp, undefined, {
-                    cacheTtlMs: 0,
-                    errorTtlMs: 0,
-                  })
-                )?.login,
-            })
-          : false;
-        if (!current) {
-          const message = "personal identity binding is no longer current";
-          setCloseCause("personal-identity-binding-invalidated", { method: req.method });
-          invalidateGatewayPolicyClient(client, {
-            reason: "personal-identity-binding-invalidated",
-            code: 4001,
-            message,
-            close: () => close(4001, message),
-          });
-          return;
-        }
-      }
       const expectedProfileBinding =
         req.expectedProfileId === undefined
           ? undefined
@@ -556,17 +473,11 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             client.connect.client.mode === GATEWAY_CLIENT_MODES.CLI);
         const requestController = cancelOnDisconnect ? new AbortController() : undefined;
         const operatorAccessSignal = client.internal?.operatorAccessAuthority?.signal;
-        const ingressSignal = remoteIngress
+        const accessSignal = remoteIngress
           ? operatorAccessSignal
             ? AbortSignal.any([remoteIngress.signal, operatorAccessSignal])
             : remoteIngress.signal
           : operatorAccessSignal;
-        const accessSignal = personalIdentityBinding
-          ? AbortSignal.any([
-              personalIdentityBinding.signal,
-              ...(ingressSignal ? [ingressSignal] : []),
-            ])
-          : ingressSignal;
         const signal = requestController
           ? accessSignal
             ? AbortSignal.any([requestController.signal, accessSignal])

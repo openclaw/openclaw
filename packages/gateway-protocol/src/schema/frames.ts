@@ -82,26 +82,6 @@ export const ConnectParamsSchema = closedObject({
       nonce: NonEmptyString,
     }),
   ),
-  personalIdentity: Type.Optional(
-    Type.Union([
-      closedObject({
-        mode: Type.Literal("personal-identity"),
-        provider: Type.Literal("tailscale"),
-        phase: Type.Literal("bind"),
-        bindingId: Type.String({ minLength: 1, maxLength: 128 }),
-        issuedAtMs: Type.Integer({ minimum: 0 }),
-      }),
-      closedObject({
-        mode: Type.Literal("personal-identity"),
-        provider: Type.Literal("tailscale"),
-        phase: Type.Literal("use"),
-        bindingId: Type.String({ minLength: 1, maxLength: 128 }),
-        profileId: UserProfileIdSchema,
-        gatewayId: Type.String({ minLength: 1, maxLength: 128 }),
-        issuedAtMs: Type.Integer({ minimum: 0 }),
-      }),
-    ]),
-  ),
   auth: Type.Optional(
     closedObject({
       token: Type.Optional(Type.String()),
@@ -144,16 +124,6 @@ export const HelloOkSchema = closedObject({
   controlUiWidgetKinds: Type.Optional(Type.Array(ControlUiPluginWidgetKindSchema)),
   controlUiLinkReaders: Type.Optional(Type.Array(ControlUiLinkReaderDescriptorSchema)),
   pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
-  personalIdentityBinding: Type.Optional(
-    closedObject({
-      mode: Type.Literal("personal-identity"),
-      provider: Type.Literal("tailscale"),
-      bindingId: Type.String({ minLength: 1, maxLength: 128 }),
-      profileId: UserProfileIdSchema,
-      gatewayId: Type.String({ minLength: 1, maxLength: 128 }),
-      tlsFingerprint: Type.String({ pattern: "^[a-f0-9]{64}$" }),
-    }),
-  ),
   auth: closedObject({
     method: Type.Optional(
       stringLiteralUnion([

@@ -18,7 +18,10 @@ export type TemplateAddReviewPlan = TemplateLifecyclePlanResult;
 
 export type TemplateAddApplyResult = {
   agentId: string;
-  status: string;
+  status: "complete" | "partial";
+  agentRetained?: true;
+  initializationPending?: true;
+  sessionKey?: string;
   readiness: { ready: boolean; requirements?: Array<{ kind: string; owner: string }> };
   error?: { code: string; message: string };
 };
@@ -106,7 +109,7 @@ export async function readTemplateAddReviewPlan(
   source: TemplateCatalogSource,
 ): Promise<TemplateAddReviewPlan> {
   const plan = await client.request<TemplateLifecyclePlanResult>("templates.add.plan", { source });
-  if (plan.operation !== "add" || !plan.planIntegrity) {
+  if (plan.operation !== "add" || !plan.planIntegrity || !plan.target?.agentId) {
     throw new Error("ClawHub did not return a valid Add review.");
   }
   return plan;
@@ -118,34 +121,53 @@ export async function applyTemplateAdd(
   options: {
     acknowledgeClawHubRisk?: boolean;
     reviewPlan?: TemplateAddReviewPlan;
+    onSent?: (requestId: string) => void;
   } = {},
 ): Promise<TemplateAddApplyResult> {
   const plan = options.reviewPlan;
-  return await client.request<TemplateAddApplyResult>("templates.add.apply", {
-    source,
-    ...(options.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-    ...(plan
-      ? {
-          planIntegrity: plan.planIntegrity,
-          acknowledgeCapabilities: plan.pluginReviews
-            .filter((review) => review.ownerAction === "install")
-            .map((review): TemplatePluginAcknowledgement => ({
-              actionId: review.actionId,
-              pluginId: review.pluginId,
-              reviewToken: review.reviewToken,
-              capabilityGrants: review.capabilityGrants,
-              capabilityGrantsByPluginId: review.capabilityGrantsByPluginId,
-              acknowledgeRiskWarning: review.riskWarning ? true : undefined,
-            })),
-          acknowledgeSkillWarnings: plan.skillReviews.map(
-            (review): TemplateSkillAcknowledgement => ({
-              actionId: review.actionId,
-              ref: review.ref,
-              reviewToken: review.reviewToken,
-              acknowledgeRiskWarning: true,
-            }),
-          ),
-        }
-      : {}),
-  });
+  return await client.request<TemplateAddApplyResult>(
+    "templates.add.apply",
+    {
+      source,
+      ...(options.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
+      ...(plan
+        ? {
+            agentId: plan.target.agentId,
+            planIntegrity: plan.planIntegrity,
+            acknowledgeCapabilities: plan.pluginReviews
+              .filter((review) => review.ownerAction === "install")
+              .map((review): TemplatePluginAcknowledgement => ({
+                actionId: review.actionId,
+                pluginId: review.pluginId,
+                reviewToken: review.reviewToken,
+                capabilityGrants: review.capabilityGrants,
+                capabilityGrantsByPluginId: review.capabilityGrantsByPluginId,
+                acknowledgeRiskWarning: review.riskWarning ? true : undefined,
+              })),
+            acknowledgeSkillWarnings: plan.skillReviews.map(
+              (review): TemplateSkillAcknowledgement =>
+                "path" in review
+                  ? {
+                      actionId: review.actionId,
+                      source: "bundled",
+                      path: review.path,
+                      digest: review.digest,
+                      reviewToken: review.reviewToken,
+                      acknowledgeRiskWarning: true,
+                    }
+                  : {
+                      actionId: review.actionId,
+                      source: "clawhub",
+                      ref: review.ref,
+                      reviewToken: review.reviewToken,
+                      acknowledgeRiskWarning: true,
+                    },
+            ),
+          }
+        : {}),
+    },
+    {
+      onSent: options.onSent,
+    },
+  );
 }

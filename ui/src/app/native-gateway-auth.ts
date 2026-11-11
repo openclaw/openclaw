@@ -13,11 +13,6 @@ import { formatConnectionError, formatConnectionErrorSummary } from "../lib/conn
 import { listen } from "../lib/reactive/listener.ts";
 import { generateUUID } from "../lib/uuid.ts";
 
-export type NativeGatewayHelloExpectation = {
-  method: "tailscale";
-  recoveryScope: string;
-};
-
 export type NativeGatewayAuthorization = {
   client: ConnectParams["client"];
   scopes: string[];
@@ -27,9 +22,6 @@ export type NativeGatewayAuthorization = {
     | { password: string; token?: never; deviceToken?: never }
     | { deviceToken?: never; token?: never; password?: never };
   device: NonNullable<ConnectParams["device"]>;
-  expectedHelloAuth?: NativeGatewayHelloExpectation;
-  expectedGatewayId?: string;
-  personalIdentity?: ConnectParams["personalIdentity"];
 };
 
 export type NativeGatewayConnectAuth = (challenge: {
@@ -93,7 +85,6 @@ function readAuthorization(
   const result = isRecord(value) ? value : {};
   const client = isRecord(result.client) ? result.client : {};
   const device = isRecord(result.device) ? result.device : {};
-  const personal = result.personalIdentity;
   const id = normalizeGatewayClientId(typeof client.id === "string" ? client.id : undefined);
   const mode = normalizeGatewayClientMode(
     typeof client.mode === "string" ? client.mode : undefined,
@@ -112,44 +103,6 @@ function readAuthorization(
   ) {
     throw new Error(t("runtimeErrors.nativeAuthorization"));
   }
-  if (
-    personal !== undefined &&
-    (!isRecord(personal) ||
-      personal.mode !== "personal-identity" ||
-      personal.provider !== "tailscale" ||
-      personal.phase !== "use" ||
-      typeof personal.bindingId !== "string" ||
-      !personal.bindingId ||
-      personal.bindingId.length > 128 ||
-      typeof personal.profileId !== "string" ||
-      !personal.profileId ||
-      typeof personal.gatewayId !== "string" ||
-      !personal.gatewayId ||
-      personal.gatewayId.length > 128 ||
-      personal.issuedAtMs !== challenge.signedAt)
-  ) {
-    throw new Error("The app returned an invalid Gateway authorization. Reconnect in the app.");
-  }
-  const auth = readNativeCredential(result.auth);
-  const expectedGatewayId = result.expectedGatewayId;
-  if (
-    expectedGatewayId !== undefined &&
-    (typeof expectedGatewayId !== "string" || expectedGatewayId.trim().length === 0)
-  ) {
-    throw new Error(t("runtimeErrors.nativeAuthorization"));
-  }
-  let expectedHelloAuth: NativeGatewayHelloExpectation | undefined;
-  if (Object.keys(auth).length === 0) {
-    const recoveryScope = result.expectedRecoveryScope;
-    if (
-      result.requiredAuthMethod !== "tailscale" ||
-      typeof recoveryScope !== "string" ||
-      recoveryScope.trim().length === 0
-    ) {
-      throw new Error(t("runtimeErrors.nativeCredential"));
-    }
-    expectedHelloAuth = { method: "tailscale", recoveryScope };
-  }
   return {
     client: {
       id,
@@ -160,22 +113,7 @@ function readAuthorization(
       ...(typeof client.instanceId === "string" ? { instanceId: client.instanceId } : {}),
     },
     scopes: result.scopes,
-    auth,
-    ...(expectedHelloAuth ? { expectedHelloAuth } : {}),
-    ...(expectedGatewayId !== undefined ? { expectedGatewayId } : {}),
-    ...(isRecord(personal)
-      ? {
-          personalIdentity: {
-            mode: "personal-identity" as const,
-            provider: "tailscale" as const,
-            phase: "use" as const,
-            bindingId: personal.bindingId as string,
-            profileId: personal.profileId as string,
-            gatewayId: personal.gatewayId as string,
-            issuedAtMs: challenge.signedAt,
-          },
-        }
-      : {}),
+    auth: readNativeCredential(result.auth),
     device: {
       id: device.id,
       publicKey: device.publicKey,

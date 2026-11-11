@@ -32,7 +32,6 @@ import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-polic
 import { startNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { waitForNodeWorkerSupervisor } from "./node-registry-private.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
-import { closeGatewayPersonalIdentityBindings } from "./personal-identity-binding.js";
 import { measureGatewayCloseStep } from "./restart-trace.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
@@ -51,6 +50,7 @@ import { refreshGatewayHealthSnapshot } from "./server/health-state.js";
 import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 import { prepareTalkConnectionClose } from "./talk/session-registry.js";
 import { withAgentTerminalOpenAdmission } from "./terminal/open-admission.js";
+import { disposeGatewayDelegationCredentials } from "./trusted-proxy-delegation.js";
 
 type GatewayRuntimePreparation = Awaited<ReturnType<typeof prepareGatewayKernelState>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -414,10 +414,10 @@ export async function prepareGatewayLifecycle(params: {
     const notice = resolveGatewayShutdownNotice(options);
     markGatewaySuspendExiting();
     authRateLimiter.dispose();
+    disposeGatewayDelegationCredentials();
     browserAuthRateLimiter.dispose();
     talkClose.beginClose();
     void runtimeState.maintenance?.stopPeriodicTasks();
-    void mentionInbox.dispose();
     healthWork.beginClose();
     broadcast("shutdown", notice);
     connectionDependentSidecarStopOwner.beginClose();
@@ -522,17 +522,18 @@ export async function prepareGatewayLifecycle(params: {
   };
   const prepareClose = async (optsValue?: GatewayCloseOptions) => {
     exitAfterClose = optsValue?.exitAfterClose === true;
-    closeGatewayPersonalIdentityBindings(clients);
     // Fence admission now; database cleanup must wait for restart marker persistence.
     fenceSessionSuspensionWritesForGatewayShutdown();
     lifecycle.closePreludeStarted = true;
     // Close intake before cancellation; accepted persistence keeps its own drain.
     worktreeRunEnd.beginClose();
     sandboxRegistry.beginClose();
+    void mentionInbox.dispose();
     void stopModelAccountsForClose();
     void closeAuthProfileUsage(params.sdkResourceHost);
     requestEntryLifetime.beginClose();
-    runtime.scheduler.beginClose();
+    runtime.scheduler.fence();
+    runtime.resolvePluginGatewayContext()?.scopeUpgradeCoordinator?.beginClose();
     cronReconciliation.invalidate();
     const preparation = await shutdownRuntime.prepareGatewayClose(
       {
@@ -558,7 +559,9 @@ export async function prepareGatewayLifecycle(params: {
           await terminateLiveSubagentsForShutdown(runtime.resolvePluginGatewayContext);
         },
         cancelReceivedWork: (reason) => {
-          // Entry is fenced; retained principals still need their binding to settle.
+          // Restart markers and session stop classification precede authority retirement.
+          requestEntryLifetime.retire(reason);
+          runtime.scheduler.beginClose();
           runtime.connectionWork.beginClose(reason);
         },
         disposeAllCodeModeRuns: shutdownRuntime.disposeAllCodeModeRuns,

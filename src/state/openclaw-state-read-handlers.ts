@@ -415,7 +415,6 @@ export async function prepareOpenClawStateRead(
     command.type === "userProfiles.githubAttribution.resolve" ||
     command.type === "userProfiles.channelIdentity.list" ||
     command.type === "userProfiles.channelIdentity.resolve" ||
-    command.type === "userProfiles.tailscaleIdentity.resolve" ||
     command.type === "userProfiles.reconcile" ||
     command.type === "userProfiles.catalog" ||
     command.type === "userProfiles.avatar.inspect" ||

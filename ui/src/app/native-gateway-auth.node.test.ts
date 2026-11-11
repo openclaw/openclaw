@@ -8,7 +8,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { MockWebSocket, wsInstances } from "../api/gateway-socket.test-support.ts";
-import { i18n } from "../i18n/index.ts";
 import { makeUiSettings } from "../test-helpers/settings-node.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
@@ -77,7 +76,7 @@ class RecordingSocket extends MockWebSocket {
       this.connect.resolve(frame);
     }
   }
-  hello(id: string, deviceToken?: string, personalAuth = {}, gatewayId?: string) {
+  hello(id: string, deviceToken?: string) {
     this.emitMessage({
       type: "res",
       id,
@@ -85,13 +84,7 @@ class RecordingSocket extends MockWebSocket {
       payload: {
         type: "hello-ok",
         protocol: 3,
-        ...(gatewayId ? { server: { bootId: gatewayId } } : {}),
-        auth: {
-          role: "operator",
-          scopes,
-          ...(deviceToken ? { deviceToken } : {}),
-          ...personalAuth,
-        },
+        auth: { role: "operator", scopes, ...(deviceToken ? { deviceToken } : {}) },
       },
     });
   }
@@ -177,7 +170,7 @@ describe("native authenticated Control UI", () => {
     expect(wsInstances).toHaveLength(socketCount);
   }
 
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     vi.spyOn(Math, "random").mockReturnValue(0);
     wsInstances.length = 0;
@@ -208,7 +201,6 @@ describe("native authenticated Control UI", () => {
     });
     Object.assign(host, { top: host });
     vi.stubGlobal("window", host);
-    await i18n.setLocale("en");
   });
 
   afterEach(() => {
@@ -251,60 +243,6 @@ describe("native authenticated Control UI", () => {
     gateway!.connect({ gatewayUrl: target });
     return currentSocket(challenge.nonce, challenge.ts);
   }
-
-  it("forwards the challenge-bound personal identity from the native signer", async () => {
-    respondWith((challenge) => {
-      const response = nativeAuthorization(challenge);
-      return {
-        ...response,
-        result: {
-          ...response.result,
-          personalIdentity: {
-            mode: "personal-identity",
-            provider: "tailscale",
-            phase: "use",
-            bindingId: "binding-1",
-            profileId: "profile-1",
-            gatewayId: "gateway-1",
-            issuedAtMs: challenge.signedAt,
-          },
-        },
-      };
-    });
-    const socket = connect();
-    const frame = await socket.connect.promise;
-    expect(frame.params.personalIdentity).toEqual({
-      mode: "personal-identity",
-      provider: "tailscale",
-      phase: "use",
-      bindingId: "binding-1",
-      profileId: "profile-1",
-      gatewayId: "gateway-1",
-      issuedAtMs: signedAt,
-    });
-  });
-
-  it("rejects a personal identity with a different challenge timestamp", async () => {
-    respondWith((challenge) => {
-      const response = nativeAuthorization(challenge);
-      return {
-        ...response,
-        result: {
-          ...response.result,
-          personalIdentity: {
-            mode: "personal-identity",
-            provider: "tailscale",
-            phase: "use",
-            bindingId: "binding-1",
-            profileId: "profile-1",
-            gatewayId: "gateway-1",
-            issuedAtMs: challenge.signedAt - 1,
-          },
-        },
-      };
-    });
-    await expectRejected(connect());
-  });
 
   it.each(["before challenge", "after challenge"])(
     "uses the approved native identity on older WebViews when the port arrives %s",
@@ -424,16 +362,7 @@ describe("native authenticated Control UI", () => {
           OpenClawNativeGatewayAuth: {
             postMessage: async (challenge: Challenge) => {
               const reply = nativeAuthorization(challenge);
-              return {
-                ...reply,
-                result: {
-                  ...reply.result,
-                  auth: {},
-                  requiredAuthMethod: "tailscale",
-                  expectedRecoveryScope: "tailscale-person-a",
-                  expectedGatewayId: "gateway-boot-a",
-                },
-              };
+              return { ...reply, result: { ...reply.result, auth: {} } };
             },
           },
         },
@@ -447,12 +376,7 @@ describe("native authenticated Control UI", () => {
     expectNativeGrant(frame.params, {});
     expect(frame.params.device).toEqual({ ...nativeProof, nonce: "challenge-1", signedAt });
     expect(bridge.postMessage).not.toHaveBeenCalled();
-    socket.hello(
-      frame.id,
-      undefined,
-      { method: "tailscale", recoveryScope: "tailscale-person-a" },
-      "gateway-boot-a",
-    );
+    socket.hello(frame.id);
     await vi.advanceTimersByTimeAsync(0);
     expect(gateway!.snapshot.phase).toBe("connected");
     expectNoStoredCredentials(identityKey, authKey);
@@ -460,8 +384,6 @@ describe("native authenticated Control UI", () => {
 
   type Rejection =
     | { kind: "credential"; auth: unknown }
-    | { kind: "boot"; expectedGatewayId: unknown }
-    | { kind: "personal"; requiredAuthMethod?: unknown; expectedRecoveryScope?: unknown }
     | { kind: "target"; target: string }
     | { kind: "unavailable"; failure: "missing bridge" | "wrong challenge" | "subframe" }
     | { kind: "challenge"; challenge: { nonce: string; ts: number } };
@@ -473,15 +395,6 @@ describe("native authenticated Control UI", () => {
     { kind: "credential", auth: null },
     { kind: "credential", auth: [] },
     { kind: "credential", auth: "invalid" },
-    { kind: "boot", expectedGatewayId: "" },
-    { kind: "boot", expectedGatewayId: "  " },
-    { kind: "boot", expectedGatewayId: 1 },
-    { kind: "personal" },
-    { kind: "personal", requiredAuthMethod: "token", expectedRecoveryScope: "person-a" },
-    { kind: "personal", requiredAuthMethod: "tailscale" },
-    { kind: "personal", requiredAuthMethod: "tailscale", expectedRecoveryScope: "" },
-    { kind: "personal", requiredAuthMethod: "tailscale", expectedRecoveryScope: "  " },
-    { kind: "personal", requiredAuthMethod: "tailscale", expectedRecoveryScope: 1 },
     { kind: "target", target: "wss://other.example/work/" },
     { kind: "target", target: "wss://gateway.example/other/" },
     { kind: "target", target: "wss://gateway.example/work/?tenant=other" },
@@ -494,20 +407,7 @@ describe("native authenticated Control UI", () => {
     { kind: "challenge", challenge: { nonce: "\u001c", ts: signedAt } },
     { kind: "challenge", challenge: { nonce: "\u0085", ts: signedAt } },
   ])("rejects invalid native authorization without browser fallback: %j", async (scenario) => {
-    if (scenario.kind === "boot") {
-      respondWith((challenge) => {
-        const reply = nativeAuthorization(challenge);
-        return {
-          ...reply,
-          result: { ...reply.result, expectedGatewayId: scenario.expectedGatewayId },
-        };
-      });
-    } else if (scenario.kind === "personal") {
-      respondWith((challenge) => {
-        const reply = nativeAuthorization(challenge);
-        return { ...reply, result: { ...reply.result, ...scenario, auth: {} } };
-      });
-    } else if (scenario.kind === "credential") {
+    if (scenario.kind === "credential") {
       respondWith((challenge) => {
         const reply = nativeAuthorization(challenge);
         return { ...reply, result: { ...reply.result, auth: scenario.auth } };
@@ -528,14 +428,8 @@ describe("native authenticated Control UI", () => {
       scenario.kind === "challenge" ? "" : undefined,
       scenario.kind === "challenge" ? scenario.challenge : undefined,
     );
-    if (scenario.kind === "personal") {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(socket.sent).toEqual([]);
-    }
     await expectRejected(socket);
-    if (scenario.kind === "boot") {
-      expect(gateway!.snapshot.lastError).toContain("invalid Gateway authorization");
-    } else if (scenario.kind === "credential" || scenario.kind === "personal") {
+    if (scenario.kind === "credential") {
       expect(gateway!.snapshot.lastError).toContain("invalid Gateway credential");
     } else if (scenario.kind === "target") {
       expect(bridge.postMessage).not.toHaveBeenCalled();

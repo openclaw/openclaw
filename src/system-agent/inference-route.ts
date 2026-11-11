@@ -67,7 +67,7 @@ export type DefaultInferenceRouteProjection = {
   tools: OpenClawConfig["tools"];
 };
 
-export function projectSystemAgentExecutionConfig(
+function projectSystemAgentExecutionConfig(
   config: OpenClawConfig,
   routeAgentId: string,
   allowProspectiveAgent: boolean,

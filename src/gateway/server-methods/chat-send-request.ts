@@ -5,7 +5,6 @@ import type { Static } from "typebox";
 import type { ChatAppContextAttachment } from "../../../packages/gateway-protocol/src/chat-app-context.js";
 import {
   GATEWAY_CLIENT_CAPS,
-  isNativeAppUiClient,
   hasGatewayClientCap,
   type GatewayClientInfo,
 } from "../../../packages/gateway-protocol/src/client-info.js";
@@ -113,7 +112,7 @@ export function normalizeChatSendRequest(params: {
       : undefined;
   const clientInfo = client?.connect?.client;
   const supportsTaskSuggestions =
-    (isOperatorUiClient(clientInfo) || isNativeAppUiClient(clientInfo)) &&
+    isOperatorUiClient(clientInfo) &&
     params.client?.connect?.scopes?.includes("operator.admin") === true &&
     hasGatewayClientCap(params.client?.connect?.caps, GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS);
   const controlUiReconnectResume = resolveControlUiReconnectResumeParams(params.params, clientInfo);
@@ -269,7 +268,7 @@ export function normalizeChatSendRequest(params: {
     !rawMessage.startsWith("!");
   if (
     mentions.value &&
-    (!(isBrowserOperatorUiClient(clientInfo) || isNativeAppUiClient(clientInfo)) ||
+    (!isBrowserOperatorUiClient(clientInfo) ||
       !client?.authenticatedUserProfile ||
       client.internal?.syntheticClient ||
       client.internal?.senderAttribution ||
@@ -280,7 +279,7 @@ export function normalizeChatSendRequest(params: {
       !ordinaryChat)
   ) {
     return reject(
-      "Human mentions require a signed-in UI chat. Remove the selected mentions to use this mode.",
+      "Human mentions require a signed-in Control UI chat. Remove the selected mentions to use this mode.",
     );
   }
   if (p.appContext && !ordinaryChat) {

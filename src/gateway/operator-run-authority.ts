@@ -1,4 +1,3 @@
-import { isNativeAppUiClient } from "../../packages/gateway-protocol/src/client-info.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   assertAdmittedRunOperatorAuthority,
@@ -15,6 +14,7 @@ import { runtimeConfigPublication } from "../config/runtime-config-publication.j
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createOperatorAuthorityInactiveError } from "../infra/operator-authority-error.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -384,6 +384,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
     throw new Error("Gateway caller authority is no longer active.");
   }
   const releaseDevice = retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
+  const capturedAt = performance.now();
   const isSourceCurrent = readGatewayDeviceSourceAuthority(params.hasCurrentClientAuthority);
   const resolveGatewayContext = params.context.resolveGatewayContext;
   const gatewayContext = resolveGatewayContext?.();
@@ -467,17 +468,36 @@ export async function captureGatewayOperatorRunAuthority(input: {
     ),
     (assertSources) => {
       if (revoked || references === 0) {
-        throw new Error("operator execution authority is no longer active");
+        throw createOperatorAuthorityInactiveError(
+          references === 0 ? "closure-released" : "closure-revoked",
+          "before-sources",
+          capturedAt,
+        );
       }
-      if (isSourceCurrent?.() === false || !isGatewayCurrent()) {
-        throw new Error("operator source authority is no longer active");
+      if (isSourceCurrent?.() === false) {
+        throw createOperatorAuthorityInactiveError(
+          "source-invalidated",
+          "source-current",
+          capturedAt,
+        );
+      }
+      if (!isGatewayCurrent()) {
+        throw createOperatorAuthorityInactiveError(
+          "gateway-identity-retired",
+          "gateway-current",
+          capturedAt,
+        );
       }
       assertSources();
       if (openclawIdPrincipal && !isOpenClawIdTunnelPrincipalCurrent(openclawIdPrincipal)) {
         throw new Error("OpenClaw ID membership authority changed");
       }
       if (revoked || references === 0) {
-        throw new Error("operator execution authority is no longer active");
+        throw createOperatorAuthorityInactiveError(
+          references === 0 ? "closure-released" : "closure-revoked",
+          "after-sources",
+          capturedAt,
+        );
       }
     },
   );
@@ -522,7 +542,13 @@ export async function captureGatewayOperatorRunAuthority(input: {
     };
     subscriptions.push(
       onGatewayDeviceSourceRevoked(params.hasCurrentClientAuthority, () =>
-        revoke(new Error("operator source authority is no longer active")),
+        revoke(
+          createOperatorAuthorityInactiveError(
+            "source-invalidated",
+            "source-revocation",
+            capturedAt,
+          ),
+        ),
       ),
       onUserProfilesChanged(() => recheck(assertCapturedRoleCurrent)),
       openclawIdPrincipal
@@ -647,9 +673,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
       authenticatedOwner &&
       client.usesSharedGatewayAuth === true &&
       client.sharedGatewaySessionGeneration &&
-      (isBrowserOperatorUiClient(client.connect.client) ||
-        isWebchatClient(client.connect.client) ||
-        isNativeAppUiClient(client.connect.client))
+      (isBrowserOperatorUiClient(client.connect.client) || isWebchatClient(client.connect.client))
     ) {
       // The handshake owns the credential/generation checks, including device
       // reconnects bound to that shared credential. The profile name grants nothing.

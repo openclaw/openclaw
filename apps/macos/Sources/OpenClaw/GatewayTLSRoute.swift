@@ -25,9 +25,8 @@ struct GatewayTLSRoute: Equatable, Sendable {
         url: URL,
         connectionMode: AppState.ConnectionMode,
         configuredFingerprint: String?,
-        storeKey: String? = nil,
-        localServiceCertificateFingerprint: String? = nil
-    ) -> GatewayTLSRoute? {
+        storeKey: String? = nil) -> GatewayTLSRoute?
+    {
         guard url.scheme?.lowercased() == "wss" else { return nil }
         let storeKey = storeKey ?? self.storeKey(for: url)
         let stored = GatewayTLSStore.loadFingerprint(stableID: storeKey)
@@ -36,9 +35,7 @@ struct GatewayTLSRoute: Equatable, Sendable {
             connectionMode: connectionMode,
             configuredFingerprint: configuredFingerprint,
             storedFingerprint: stored,
-            storeKey: storeKey,
-            localServiceCertificateFingerprint: localServiceCertificateFingerprint
-        )
+            storeKey: storeKey)
     }
 
     static func resolve(
@@ -46,28 +43,21 @@ struct GatewayTLSRoute: Equatable, Sendable {
         connectionMode: AppState.ConnectionMode,
         configuredFingerprint: String?,
         storedFingerprint: String?,
-        storeKey: String? = nil,
-        localServiceCertificateFingerprint: String? = nil
-    ) -> GatewayTLSRoute? {
+        storeKey: String? = nil) -> GatewayTLSRoute?
+    {
         guard url.scheme?.lowercased() == "wss" else { return nil }
         let storeKey = storeKey ?? self.storeKey(for: url)
         let configured = connectionMode == .remote
             ? configuredFingerprint?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             : nil
-        let localServiceFingerprint = connectionMode == .local
-            ? localServiceCertificateFingerprint?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-            : nil
-        let expected = configured ?? storedFingerprint ?? localServiceFingerprint
+        let expected = configured ?? storedFingerprint
         return GatewayTLSRoute(
             params: GatewayTLSParams(
                 required: true,
                 expectedFingerprint: expected,
                 allowTOFU: expected == nil,
-                storeKey: storeKey
-            ),
-            allowsTrustedPinReplacement: configured == nil &&
-                (localServiceFingerprint == nil || storedFingerprint != nil)
-        )
+                storeKey: storeKey),
+            allowsTrustedPinReplacement: configured == nil)
     }
 
     static func storeKey(for url: URL) -> String {

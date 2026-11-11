@@ -331,6 +331,10 @@ Other checkouts pause until their files are stored in an immutable Git
 result. A snapshot that omits nested subvolumes is discarded and captured again
 under pause, preserving their contents. Command completion still waits for
 canonical acceptance, so a read after a completed command sees its saved changes.
+Acceptance preserves each workspace's file fingerprints for unchanged paths when
+the shared baseline advances. The next check still walks file metadata, but only
+changed or unverifiable identities need content hashing. Imported files acquire
+fresh fingerprints on that check; source filesystem identities are never copied.
 Later background writes remain in the private checkout for the next checkpoint.
 After acceptance and runtime resume, the workspace lease transfers the snapshot
 to a unique retired path for asynchronous cleanup. The next command can run while
@@ -342,7 +346,14 @@ Concurrent preparations of the same workspace and session
 generation share queued reconciliation. Once filesystem observation begins,
 later preparations require a fresh check so intervening edits remain visible.
 Completed preparation results are not cached. Each caller retains its own
-cancellation and authority checks. OpenClaw records pending results and
+cancellation and authority checks. Reuse waits for reconciliation before returning
+the workspace, so the next command sees imported host edits and unresolved
+conflicts cannot be bypassed. The `managed worktree preparation` log records
+exclusive `reuse.*` entries in `phaseDurationsMs` and `reuseDominantPhase`, covering
+both unchanged probes, capture preparation, and reconciliation phases. Custody
+waits remain in the existing `workspaceWait` field. These timings include work
+performed while guests run;
+they are not pause durations. OpenClaw records pending results and
 rollback journals in SQLite. Imports into the private checkout keep runtimes paused
 through settlement. New shell calls and command preparation wait for an active
 checkpoint to release the workspace before proceeding; background commands do not
@@ -356,10 +367,37 @@ the canonical file, and import the saved change into the private checkout under 
 same custody before resuming its runtimes. Capture,
 publication, and lifecycle operations retain their reconciliation lease and pause
 requirements.
+Ordinary reconciliation also uses the btrfs capture for guest exports. Once an
+immutable result owns the source bytes, staged-file materialization, Git patch
+preparation, and temporary-file cleanup run with the guest resumed. Imports pause
+again before confirming the target and applying changes; edits made during
+preparation cause a visible conflict and remain saved. Pending base refreshes
+retain their pause until both workspaces accept the transfer.
+
+GitHub PR preparation and base refresh download commit history and missing objects
+with the guest running. After those downloads finish, OpenClaw checks the guest's
+current Git state and reacquires the pause for the workspace transfer. If another
+operation changed the host HEAD or pending integration in between, preparation
+fails with a retry message and preserves the workspace. Immutable object downloads
+do not hold the guest frozen; capture, file application, and pending-transfer
+recovery still require consistency pauses.
+
 Each successful container pause records a `sandbox/quiescence` info log with a
 bounded reason (`checkpoint`, `preparation`, `publication`, `retirement`, `restore`,
 or `reconcile`) and that reason's process-lifetime counter. Already-paused runtimes
 and stopped containers do not increment it; counters restart with the Gateway.
+Release records `Local workspace unpause` with the same `reason`, elapsed
+`durationMs`, `dominantPhase`, and `dominantPhaseMs`. The bounded JSON field
+`phaseDurationsMs` lists every cumulative phase lasting at least one second;
+shorter phases are omitted. Resume inspection, generation validation, and unpause
+are separated as `resumeInspect`, `resumeAuthority`, and `unpause`. Engine-command
+times include broker admission, transport, and command completion, not just engine
+execution. All runtime targets are inspected before the first runtime is paused;
+each runtime's live authority is still checked immediately before pausing.
+`durationScope=observed` means recovery found an already-paused
+runtime and cannot measure the earlier owner's interval; `durationScope=owner`
+covers this owner's pause. `outcome` distinguishes a resumed, already-running, or
+removed runtime. Failed resumes retain custody and do not log a successful release.
 Captured workspace authority is checked again after
 filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner
@@ -425,7 +463,8 @@ Generated skill copies carry their own Git ignore rule, so ordinary Git discover
 omits them while tracked changes and other project files remain visible.
 The Gateway refreshes its own mirrored copies even when an earlier copy inherited
 read-only directory permissions; no manual permission repair is needed.
-Unchanged skill snapshots reuse their mirrored copies. When supporting files
+Unchanged skill snapshots reuse their mirrored copies. Docker and Podman retain
+this reuse after large bursts of different sandbox preparations. When supporting files
 change, the Gateway reconciles regular skill trees incrementally: changed files
 are replaced, removed files are pruned, and unchanged copies are retained.
 SSH and OpenShell shell execution relies on the remote host or OpenShell policy

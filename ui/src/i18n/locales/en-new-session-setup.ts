@@ -81,6 +81,7 @@ const enNewSessionSetup = {
     followUpReloadBlocked: runtime.followUpReloadBlocked,
     followUpsPaused: runtime.followUpsPaused,
     followUpsAdmissionFailed: runtime.followUpsAdmissionFailed,
+    retrySetup: runtime.retrySetup,
     createFailed: runtime.createFailed,
     checkoutCurrentNote: "Works in the selected folder on its current branch.",
     preferenceSaveUnconfirmed: runtime.preferenceSaveUnconfirmed,

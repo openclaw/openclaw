@@ -90,7 +90,6 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     authenticatedOperator?: true;
     /** Exact accepted/issued operator token; null attests a tokenless ingress. */
     operatorDeviceTokenIdentity?: Readonly<PairedDeviceTokenIdentity> | null;
-    personalIdentityBinding?: import("../personal-identity-binding.js").PersonalIdentityBindingAuthority;
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
     /** Device key W of a connection relayed by the OpenClaw ID tunnel child; never from wire params. */

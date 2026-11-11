@@ -28,15 +28,11 @@ export async function isSharedGatewayForCliLogin(config: OpenClawConfig): Promis
   }
 }
 
-export async function showModelsAuthScopeNote(
-  prompter: WizardPrompter,
-  agentId: string,
-  sharedCredentialOnly = false,
-) {
+export async function showModelsAuthScopeNote(prompter: WizardPrompter, agentId: string) {
   await prompter.note(
     [
-      sharedCredentialOnly ? "Scope: Shared / all inheriting agents" : "Scope: System / agent",
-      sharedCredentialOnly ? `Credential owner: ${agentId}` : `Agent: ${agentId}`,
+      "Scope: System / agent",
+      `Agent: ${agentId}`,
       "Location: the machine running OpenClaw",
       `For personal model accounts on a Gateway, run ${formatCliCommand("openclaw models accounts login --help")}.`,
     ].join("\n"),

@@ -57,11 +57,6 @@ is committed. Other people's automations remain read-only; global creation and
 administration still require `operator.admin`. Global scheduler status requires
 `operator.read`.
 
-Fresh authenticated admin chat turns from the Control UI or a native app UI can
-manage automations across conversations. Native UI identity alone is insufficient:
-the connection must hold `operator.admin`. The deployment-level
-`tools.gatewayPolicy.automations.scope: "caller"` restriction still takes precedence.
-
 The **Owner** field under **Agent** shows the human responsible for an automation.
 Its current human owner or an administrator can select another existing profile.
 Transferring ownership pauses the automation, cancels any active occurrence, and
@@ -200,6 +195,12 @@ Own-work methods, including message sending, ordinary session creation,
 recovery, and forks, accept `operator.sessions.write` where their parameters
 do not require administrator access. Session ownership, current authority,
 agent access, and runtime and sandbox requirements still apply.
+Before anyone has used an agent's main conversation, a session writer allowed
+to start sessions for that agent can open it, subscribe to it, and send its
+first turn, which makes them its creator. A subscription from a session-only
+reader or a writer whose role excludes that agent, or to another conversation
+that does not exist yet, still gets the same not-found answer as a hidden
+conversation.
 
 Session readers can read visible dashboards and receive their updates and focus
 commands. Session writers can arrange tabs and put widgets on their own
@@ -905,31 +906,17 @@ Identity-bearing modes, such as trusted proxy auth or private-ingress `none`,
 can still honor explicit declared scopes. Use separate Gateways for real trust
 boundary separation.
 
+## Recovering from inactive authority
+
+If a turn reports that operator source or execution authority is no longer active,
+reconnect to the Gateway, then send the message again. If reconnecting denies
+access, ask an administrator to restore your access. Starting a new conversation
+does not restore a revoked connection grant. Accepted work retains its original
+authority: reconnecting admits fresh requests but never reactivates old tools or
+callbacks.
+
 ## Related
 
 - [Trusted proxy auth](/gateway/trusted-proxy-auth) — how a trusted proxy supplies the operator identity these scopes attach to
 - [Gateway protocol](/gateway/protocol) — the methods these scopes authorize
 - [Cloud Workers](/gateway/cloud-workers) — worker dispatch, whose environment and session calls are authorized against these scopes
-
-### Automation administrator delegation across UI clients
-
-Browser and native UI administrator turns use the same automation delegation
-policy. Authenticated macOS, Linux, iOS, and Android UI administrators retain
-this delegation when their recorded operator source is restored for scheduled
-runs, repair notices, and continuations. Restoration still revalidates the
-original device, profile, scopes, and live authority. Timing-only edits cannot
-upgrade a job's standing delegation. Historical browser grants remain valid;
-historical native sources without recorded delegation are not upgraded.
-
-Authenticated interactive `gateway-client` connections in `ui` mode, including
-the Windows Companion, use the same administrator admission. Other modes of
-`gateway-client` do not receive this UI delegation.
-
-This does not make native clients browser clients, grant direct-local command
-execution, or equate distinct personal administrators. Authenticated shared-owner native UI
-turns use the same continuation rules as shared-owner browser turns. Native UI
-also retains signed-in requester identity, can acknowledge provider reviews and
-submit human mentions, and can use task suggestions when advertising the required
-capability. Device-backed native reconnects use the same exact-identity custody
-checks. Explicit caller-only automation
-policy and tool restrictions still apply.

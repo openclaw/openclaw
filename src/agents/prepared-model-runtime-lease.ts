@@ -4,7 +4,6 @@ import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metad
 import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
-import { projectSystemAgentExecutionConfig } from "../system-agent/inference-route.js";
 import {
   getPreparedSharedAuthStoreOwnership,
   prepareSharedAuthStoreOwnership,
@@ -26,6 +25,7 @@ import {
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
   resolveConfiguredOwner,
+  resolveInventoryInput,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeLease,
   type PreparedModelRuntimeOwner,
@@ -339,10 +339,7 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
       );
     }
 
-    // Gateway inventory belongs to the configured agent; the session cwd only controls execution.
-    const inventoryInput = context.getGatewayLifecycleActive()
-      ? { ...input, workspaceDir: configuredOwner?.input.workspaceDir }
-      : input;
+    const inventoryInput = resolveInventoryInput(input, configuredOwner);
     if (
       provenance === "run" &&
       context.getGatewayLifecycleActive() &&
@@ -433,24 +430,10 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
       }) ===
         ownerKey({
           ...inventoryInput,
-          readOnly: configuredOwner.input.readOnly,
-          // Inventory may come from a more capable owner; execution keeps the narrower input.
-          allowGatewaySubagentBinding:
-            input.readOnly && !input.allowGatewaySubagentBinding
-              ? configuredOwner.input.allowGatewaySubagentBinding
-              : inventoryInput.allowGatewaySubagentBinding,
           loadRuntimePlugins: false,
           runtimePluginPurpose: undefined,
           runtimePluginSelections: undefined,
-        }) &&
-      (!input.readOnly ||
-        preparedModelRuntimeConfigsMatch(configuredOwner.input.config, inventoryInput.config) ||
-        (input.runtimePluginPurpose === "isolated-completion" &&
-          input.agentId !== undefined &&
-          preparedModelRuntimeConfigsMatch(
-            projectSystemAgentExecutionConfig(configuredOwner.input.config, input.agentId, false),
-            inventoryInput.config,
-          )))
+        })
         ? configuredOwner
         : owner;
     snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);

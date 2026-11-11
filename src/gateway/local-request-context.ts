@@ -30,7 +30,6 @@ import {
   readPreparedGatewayModelCatalogBatch,
   readPreparedGatewayModelCatalogOwnerSnapshot,
 } from "./server-model-catalog.js";
-import { GatewayClientRegistry } from "./server/client-registry.js";
 import { resolveSessionRequestTargets } from "./session-request-targets.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -106,7 +105,6 @@ async function createLocalGatewayRequestContext(
   });
   const context: GatewayRequestContext = {
     localEmbedded: true,
-    clients: new GatewayClientRegistry(),
     trackExecution: trackAsyncWork,
     deps: params.deps,
     configRevisionProjector: await loadGatewayConfigRevisionProjector({ env: process.env }),

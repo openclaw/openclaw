@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -11,8 +11,11 @@ import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.t
 import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
 import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
 import { prepareSandboxCheckpointFixture } from "./local-workspace-incremental.test-support.js";
+import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+
+let checkpointLog: Mock<(message: string) => void>;
 
 const writeText = (directory: string, relative: string, data: string) =>
   fs.writeFile(path.join(directory, relative), data);
@@ -21,11 +24,112 @@ const expectText = async (directory: string, relative: string, expected: string)
 const expectMissing = async (directory: string, relative: string) =>
   expect(fs.stat(path.join(directory, relative))).rejects.toMatchObject({ code: "ENOENT" });
 
+async function proveReconcilePauseWindow(owner: LocalWorkspaceOwner) {
+  const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+  const registry = await import("../../agents/sandbox/registry.js");
+  const engine = await import("../../agents/sandbox/container-engine.js");
+  const worker = await import("./workspace-manifest-worker.js");
+  const recovery = await import("./workspace-reconcile-recovery.js");
+  const reconciliation = await import("./workspace-reconcile.js");
+  const core = await import("./workspace-reconcile-core.js");
+  let measuredPhase: string | undefined;
+  const reconcile = reconciliation.applyStagedWorkerWorkspace;
+  vi.spyOn(reconciliation, "applyStagedWorkerWorkspace").mockImplementation((params) =>
+    reconcile({
+      ...params,
+      onPhase: (phase) => {
+        measuredPhase = phase;
+        params.onPhase?.(phase);
+      },
+    }),
+  );
+  const preflight = core.preflightWorkspaceApply;
+  vi.spyOn(core, "preflightWorkspaceApply").mockImplementation((params) => {
+    expect(measuredPhase, "Every preflight must have truthful pause attribution").toBe("preflight");
+    return preflight(params);
+  });
+  vi.stubEnv("DOCKER_HOST", "unix:///synthetic/reconcile-docker.sock");
+  vi.stubEnv("DOCKER_CONTEXT", undefined);
+  let paused = false;
+  vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
+    if (args[0] === "pause") {
+      paused = true;
+    }
+    if (args[0] === "unpause") {
+      paused = false;
+    }
+    return {
+      code: 0,
+      stderr: "",
+      stdout:
+        args[0] === "inspect"
+          ? args.includes("{{.State.Paused}}")
+            ? String(paused)
+            : `${"a".repeat(64)} true ${paused}`
+          : "",
+    };
+  });
+  await registry.updateRegistry({
+    containerName: "reconcile-fixture",
+    backendId: "docker",
+    sessionKey: owner.sessionKey,
+    workspaceDir: projection,
+    createdAtMs: 1,
+    lastUsedAtMs: 1,
+    image: "fixture",
+  });
+  const patch = worker.prepareWorkspacePatch;
+  const capture = worker.captureWorkspaceManifest;
+  let targetCaptures = 0;
+  vi.spyOn(worker, "captureWorkspaceManifest").mockImplementation(async (params) => {
+    if (params.root === projection) {
+      targetCaptures++;
+    }
+    return capture(params);
+  });
+  let concurrentEdit = false;
+  vi.spyOn(worker, "prepareWorkspacePatch").mockImplementation(async (params) => {
+    expect(paused, "Git patch preparation must not freeze the guest").toBe(false);
+    const result = await patch(params);
+    if (concurrentEdit) {
+      await writeText(projection, "source.txt", "guest edit\n");
+    }
+    return result;
+  });
+  const apply = recovery.applyWorkspacePatch;
+  vi.spyOn(recovery, "applyWorkspacePatch").mockImplementation(async (params) => {
+    expect(paused, "Guest filesystem mutation needs the pause").toBe(true);
+    return apply(params);
+  });
+  await writeText(owner.worktree.path, "source.txt", "host edit\n");
+  await withLocalWorkspaceProjection(owner, (state) => state.synchronize("projection"));
+  await expectText(projection, "source.txt", "host edit\n");
+  expect(targetCaptures, "The frozen target needs only one complete inventory capture").toBe(1);
+  expect(paused).toBe(false);
+  concurrentEdit = true;
+  await writeText(owner.worktree.path, "source.txt", "next host edit\n");
+  await expect(
+    withLocalWorkspaceProjection(owner, (state) => state.synchronize("projection")),
+  ).rejects.toThrow("changed while cloud reconciliation was being prepared");
+  await expectText(projection, "source.txt", "guest edit\n");
+  expect((await readLocalWorkspaceProjection(owner.worktree.id))?.journal_json).toBeNull();
+  expect(paused).toBe(false);
+  concurrentEdit = false;
+  await writeText(projection, "source.txt", "host edit\n");
+  await withLocalWorkspaceProjection(owner, (state) => state.settle());
+}
+
 async function proveUnchangedSandboxCommandCheckpoints(
   owner: LocalWorkspaceOwner,
   resumeAfterCapture = false,
   failAcceptance = false,
-  atomicCapture: boolean | "nested" | "small" = false,
+  atomicCapture:
+    | boolean
+    | "nested"
+    | "small"
+    | "non-subvolume"
+    | "btrfs-unavailable"
+    | "clone-unavailable" = false,
   deferredCleanup?: { signal: AbortSignal; failRemoval?: boolean },
 ) {
   const { bindLocalSandboxWorkspace } = await import("../../agents/sandbox/local-workspace.js");
@@ -81,6 +185,15 @@ async function proveUnchangedSandboxCommandCheckpoints(
   vi.stubEnv("DOCKER_CONTEXT", undefined);
   let paused = false;
   let pauses = 0;
+  const messages: string[] = [];
+  checkpointLog.mockImplementation((message) => {
+    if (!message.startsWith("Local workspace checkpoint capture:")) {
+      return;
+    }
+    expect(paused, "Successful and interrupted-acceptance diagnostics follow resume").toBe(false);
+    messages.push(message);
+  });
+  const takesSnapshot = atomicCapture === true || atomicCapture === "nested";
   if (atomicCapture) {
     const { nativeWorktreeFilesystem } =
       await import("../../agents/worktrees/filesystem-native.js");
@@ -88,11 +201,13 @@ async function proveUnchangedSandboxCommandCheckpoints(
     vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
       const stats = await lstat(...args);
       if (args[0] === projection.workspaceDir) {
-        Reflect.set(stats, "ino", 256n);
+        Reflect.set(stats, "ino", atomicCapture === "non-subvolume" ? 257n : 256n);
       }
       return stats;
     });
-    vi.spyOn(nativeWorktreeFilesystem, "probe").mockResolvedValue("btrfs");
+    vi.spyOn(nativeWorktreeFilesystem, "probe").mockResolvedValue(
+      atomicCapture === "btrfs-unavailable" ? undefined : "btrfs",
+    );
     vi.spyOn(nativeWorktreeFilesystem, "copy").mockImplementation(async (source, destination) => {
       expect(atomicCapture, "Fast small workspaces must avoid snapshot creation").not.toBe("small");
       expect(paused).toBe(true);
@@ -100,6 +215,9 @@ async function proveUnchangedSandboxCommandCheckpoints(
         expect(await retiredCaptures(), "A previous retired capture still owns disk space").toEqual(
           [],
         );
+      }
+      if (atomicCapture === "clone-unavailable") {
+        throw Object.assign(new Error("Clone unavailable"), { code: "CLONE_UNAVAILABLE" });
       }
       captures++;
       await fs.cp(source, destination, { recursive: true });
@@ -173,7 +291,7 @@ async function proveUnchangedSandboxCommandCheckpoints(
       pauses++;
     } else if (args[0] === "unpause") {
       paused = false;
-      if (atomicCapture && atomicCapture !== "small" && pauses === 1) {
+      if (takesSnapshot && pauses === 1) {
         await writeText(projection.workspaceDir, "source.txt", "later background edit\n");
       }
     }
@@ -254,6 +372,7 @@ async function proveUnchangedSandboxCommandCheckpoints(
         if (failAcceptance) {
           await expect(finalized).rejects.toThrow("indeterminate");
           expect(paused).toBe(false);
+          expect(messages.at(-1)).toContain("accepted=false");
           expect(await readLocalWorkspaceProjection(owner.worktree.id)).toMatchObject({
             pending_target: "canonical",
             journal_json: expect.any(String),
@@ -323,6 +442,40 @@ async function proveUnchangedSandboxCommandCheckpoints(
         return;
       }
       await finalized;
+      if (command === 3) {
+        const reason =
+          atomicCapture === true
+            ? "btrfs"
+            : atomicCapture === "nested"
+              ? "nested-incomplete"
+              : !atomicCapture || atomicCapture === "small"
+                ? "adaptive-direct"
+                : atomicCapture;
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toContain(`worktree=${owner.worktree.id}`);
+        if (atomicCapture) {
+          expect(messages[0]).toContain(
+            `path=${atomicCapture === true ? "snapshot" : "paused"} reason=${reason}`,
+          );
+        }
+        expect(messages[0]).toContain(
+          `attemptedSnapshot=${takesSnapshot || atomicCapture === "clone-unavailable"}`,
+        );
+        expect(messages[0]).toMatch(
+          /preCopyMs=(?:[0-9]+\.[0-9]|-) copyMs=(?:[0-9]+\.[0-9]|-) postCopyBeforeResumeMs=(?:[0-9]+\.[0-9]|-) resumeMs=[0-9]+\.[0-9] accepted=true$/u,
+        );
+        if (takesSnapshot || atomicCapture === "clone-unavailable") {
+          expect(messages[0]).toMatch(/preCopyMs=[0-9]+\.[0-9] copyMs=[0-9]+\.[0-9]/u);
+        } else {
+          expect(messages[0]).toContain("preCopyMs=- copyMs=- postCopyBeforeResumeMs=-");
+        }
+        if (takesSnapshot) {
+          expect(messages[0]).toMatch(/postCopyBeforeResumeMs=[0-9]+\.[0-9]/u);
+        }
+        if (atomicCapture === "clone-unavailable") {
+          expect(messages[0]).toContain("cloneError=CLONE_UNAVAILABLE");
+        }
+      }
       expect(paused).toBe(false);
       await expectText(owner.worktree.path, "host.txt", "independent host edit\n");
       await expectMissing(projection.workspaceDir, "host.txt");
@@ -347,11 +500,18 @@ async function proveUnchangedSandboxCommandCheckpoints(
   } finally {
     accept.resolve();
     releaseRemoval.resolve();
+    checkpointLog.mockImplementation(() => {});
     await registry.removeRegistryEntry(containerName);
   }
 }
 
-export function registerSandboxCheckpointTests(owner: () => LocalWorkspaceOwner) {
+export function registerSandboxCheckpointTests(
+  owner: () => LocalWorkspaceOwner,
+  logObserver: typeof checkpointLog,
+) {
+  checkpointLog = logObserver;
+  it("keeps the guest running during reconcile patch preparation and fences concurrent edits", () =>
+    proveReconcilePauseWindow(owner()));
   it("keeps unchanged commands running while checkpointing edits and deletions", () =>
     proveUnchangedSandboxCommandCheckpoints(owner()));
 
@@ -371,7 +531,15 @@ export function registerSandboxCheckpointTests(owner: () => LocalWorkspaceOwner)
   it.for([false, true])(
     "overlaps retired capture cleanup with the next command while bounding capture admission (cleanup failure: %s)",
     (failRemoval, { signal }) =>
-      proveUnchangedSandboxCommandCheckpoints(owner(), true, false, true, { signal, failRemoval }),
+      proveUnchangedSandboxCommandCheckpoints(owner(), true, false, true, {
+        signal,
+        failRemoval,
+      }),
+  );
+
+  it.each(["non-subvolume", "btrfs-unavailable", "clone-unavailable"] as const)(
+    "reports why snapshot capture falls back to paused capture: %s",
+    (reason) => proveUnchangedSandboxCommandCheckpoints(owner(), false, false, reason),
   );
 
   it("keeps fast small workspaces on paused capture even when btrfs snapshots are available", () =>

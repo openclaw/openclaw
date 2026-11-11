@@ -1,3 +1,0 @@
-# Regression for #196817 through the real Gateway startup publication, including five mismatched scopes/configurations.
-# The 119-line regression needs 111 additional lines of credit after the retained integration's 8-line surplus.
-111

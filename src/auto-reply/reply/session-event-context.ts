@@ -215,7 +215,7 @@ export function buildSessionEventContext(params: {
       skillLibrarySelections: automation.job.skillLibrarySelections,
     };
   }
-  const operatorAuthority = automation?.automationAdmin
+  const operatorAuthority = automation?.controlUiAdmin
     ? automation.operatorAuthority
     : options.source === "plugin" ||
         options.source === "tool_handoff" ||
@@ -227,7 +227,7 @@ export function buildSessionEventContext(params: {
   const requesterOwnerCheck = readSessionEventTargetRequesterOwner(target)?.assertCurrent;
   if (
     operatorAuthority &&
-    (automation?.automationAdmin ||
+    (automation?.controlUiAdmin ||
       (options.source === "restart"
         ? operatorAuthority.scopes.includes("operator.admin")
         : readSessionEventTargetOwnerContinuation(target)))

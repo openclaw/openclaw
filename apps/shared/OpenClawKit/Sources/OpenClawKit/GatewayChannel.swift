@@ -9,11 +9,6 @@ import Synchronization
 private typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
 
 public actor GatewayChannelActor {
-    static func matchesExpectedGateway(server: [String: AnyCodable], expectedGatewayId: String?) -> Bool {
-        guard let expectedGatewayId else { return true }
-        return server["bootId"]?.stringValue == expectedGatewayId
-    }
-
     nonisolated static func resolveRequestTimeoutMs(_ timeoutMs: Double?, defaultMs: Double) -> Double? {
         timeoutMs == 0 ? nil : (timeoutMs ?? defaultMs)
     }
@@ -100,7 +95,9 @@ public actor GatewayChannelActor {
     private let pushHandler: (@Sendable (GatewayPush, UInt64) async -> Void)?
     private var connectOptions: GatewayConnectOptions?
     private let disconnectHandler: (@Sendable (String, UInt64) async -> Void)?
-    private let reconnectFailureHandler: (@Sendable (Error) async -> Void)?
+    /// Automatic reconnects have no caller to repair TLS trust. The owner may
+    /// repair and replace this channel, never retry on it.
+    private let reconnectTLSFailureHandler: (@Sendable (GatewayTLSValidationError) async -> Void)?
 
     public init(
         url: URL,
@@ -114,7 +111,7 @@ public actor GatewayChannelActor {
         connectOptions: GatewayConnectOptions? = nil,
         disconnectHandler: (@Sendable (String, UInt64) async -> Void)? = nil,
         extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
-        reconnectFailureHandler: (@Sendable (Error) async -> Void)? = nil)
+        reconnectTLSFailureHandler: (@Sendable (GatewayTLSValidationError) async -> Void)? = nil)
     {
         self.init(
             url: url,
@@ -128,7 +125,7 @@ public actor GatewayChannelActor {
             connectOptions: connectOptions,
             disconnectHandler: disconnectHandler,
             extraHeadersProvider: extraHeadersProvider,
-            reconnectFailureHandler: reconnectFailureHandler,
+            reconnectTLSFailureHandler: reconnectTLSFailureHandler,
             networkPathUpdates: GatewayNetworkPathMonitor.systemUpdates)
     }
 
@@ -144,7 +141,7 @@ public actor GatewayChannelActor {
         connectOptions: GatewayConnectOptions? = nil,
         disconnectHandler: (@Sendable (String, UInt64) async -> Void)? = nil,
         extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
-        reconnectFailureHandler: (@Sendable (Error) async -> Void)? = nil,
+        reconnectTLSFailureHandler: (@Sendable (GatewayTLSValidationError) async -> Void)? = nil,
         networkPathUpdates: (@Sendable () -> AsyncStream<GatewayNetworkPath>)?)
     {
         self.networkPathUpdates = networkPathUpdates
@@ -159,7 +156,7 @@ public actor GatewayChannelActor {
         self.pushHandler = pushHandler
         self.connectOptions = connectOptions
         self.disconnectHandler = disconnectHandler
-        self.reconnectFailureHandler = reconnectFailureHandler
+        self.reconnectTLSFailureHandler = reconnectTLSFailureHandler
         Task { [weak self] in
             await self?.startNetworkPathObservation()
         }
@@ -594,6 +591,7 @@ public actor GatewayChannelActor {
             "role": ProtoAnyCodable(role),
             "scopes": ProtoAnyCodable(scopes),
         ]
+        options.applyOptionalConnectParams(to: &params)
         self.applyConnectAuth(
             selectedAuth,
             deviceId: identity?.deviceId,
@@ -604,10 +602,6 @@ public actor GatewayChannelActor {
         let signedAtMs = connectChallenge.issuedAtMs
         let connectNonce = connectChallenge.nonce
         try self.requireCurrentConnection(connectionGeneration)
-        let signedPersonalIdentity = options.personalIdentity?.signed(at: signedAtMs)
-        options.applyOptionalConnectParams(
-            to: &params,
-            signedPersonalIdentity: signedPersonalIdentity)
         if let identity {
             let deviceAuthFields = GatewayDeviceAuthPayload.Fields(
                 deviceId: identity.deviceId,
@@ -616,10 +610,7 @@ public actor GatewayChannelActor {
                 scopes: scopes,
                 signedAtMs: signedAtMs,
                 token: selectedAuth.signatureToken,
-                nonce: connectNonce,
-                personalIdentity: signedPersonalIdentity,
-                platform: platform,
-                deviceFamily: InstanceIdentity.deviceFamily)
+                nonce: connectNonce)
             let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(fields: deviceAuthFields)
             if let device = GatewayDeviceAuthPayload.signedDeviceDictionary(
                 payload: payload,
@@ -987,9 +978,6 @@ extension GatewayChannelActor {
         }
         let payloadData = try self.encoder.encode(payload)
         let ok = try decoder.decode(HelloOk.self, from: payloadData)
-        if !Self.matchesExpectedGateway(server: ok.server, expectedGatewayId: options.expectedGatewayId) {
-            throw Self.failure(1, "connected Gateway did not match the authenticated identity binding")
-        }
         if let tick = ok.policy["tickIntervalMs"]?.doubleValue {
             self.tickIntervalMs = tick
         }
@@ -1313,7 +1301,9 @@ extension GatewayChannelActor {
         }
         let wrapped = self.wrap(error, context: context)
         self.logger.error("\(context, privacy: .public) failed \(wrapped.localizedDescription, privacy: .public)")
-        await self.reconnectFailureHandler?(wrapped)
+        if let tlsError = wrapped as? GatewayTLSValidationError {
+            await self.reconnectTLSFailureHandler?(tlsError)
+        }
         return false
     }
 

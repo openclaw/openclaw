@@ -69,7 +69,6 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
   })),
   createPreparedModelCatalogWorker:
     vi.fn<typeof import("./prepared-model-catalog-worker.js").createPreparedModelCatalogWorker>(),
-  publishedRuntimeModels: new Map<string, import("../llm/types.js").Model[]>(),
   configuredAgentIds: [] as string[],
   configuredAgentIdsError: undefined as Error | undefined,
   configuredAgentDirs: new Map<string, string>(),
@@ -149,7 +148,7 @@ vi.mock("./prepared-model-catalog-worker.js", async (importOriginal) => ({
         );
         return {
           modelCatalog: catalog,
-          runtimeModels: preparedModelRuntimeMocks.publishedRuntimeModels,
+          runtimeModels: new Map(),
           providerExpiries: new Map(),
           configuredRuntimeModels: factoryArgs[0].agentFacts.configuredRuntimeModels,
         };
@@ -495,7 +494,6 @@ export async function resetPreparedModelRuntimeHarness(state: OpenClawTestState)
     .mockReset()
     .mockResolvedValue({ entries: [], routeVariants: [] });
   preparedModelRuntimeMocks.createPreparedModelCatalogWorker.mockClear();
-  preparedModelRuntimeMocks.publishedRuntimeModels = new Map();
   preparedModelRuntimeMocks.discoverAuthStorage
     .mockReset()
     .mockImplementation(() => preparedModelRuntimeMocks.authStorage);
