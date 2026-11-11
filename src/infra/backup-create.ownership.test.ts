@@ -367,3 +367,86 @@ describe.skipIf(process.platform === "win32")("backup SQLite symbolic link loops
     ),
   );
 });
+
+describe("backup Doctor migration originals", () => {
+  it(
+    "keeps retained originals by default and omits only Doctor-named groups on request",
+    backupCase({ layout: "home", prefix: "backup-migration-originals-" })(async (state) => {
+      await state.writeConfig({ agents: { defaults: { workspace: state.home } } });
+      const agentPath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+      openOpenClawAgentDatabase({ agentId: "main", path: agentPath, env: state.env });
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabase();
+      const statePath = resolveOpenClawStateSqlitePath(state.env);
+      const id = "0b6f3c1e-8f2a-4c1d-9e3b-5a7d2c4f6e81";
+      const originals = [
+        `${agentPath}.pre-startup-migration-${id}.bak`,
+        `${agentPath}.pre-startup-migration-${id}.scoped.bak`,
+        `${statePath}.pre-startup-migration-${id}.bak`,
+      ];
+      // Similar names Doctor never writes stay ordinary agent files.
+      const neighbors = [
+        `${agentPath}.pre-startup-migration-notes.bak`,
+        path.join(state.agentDir(), "operator.bak"),
+      ];
+      for (const file of [...originals, ...neighbors]) {
+        await fs.writeFile(file, "synthetic original");
+      }
+      const archived = async (archivePath: string, file: string) =>
+        (await listArchiveEntries(archivePath)).some((entry) =>
+          entry.endsWith(`/${path.basename(file)}`),
+        );
+
+      const full = await createVerifiedBackup(state);
+      expect(full.verified).toBe(true);
+      for (const file of [...originals, ...neighbors]) {
+        expect(await archived(full.archivePath, file)).toBe(true);
+      }
+
+      const lean = await createVerifiedBackup(state, {
+        output: state.path("lean.tar.gz"),
+        excludeMigrationBackups: true,
+      });
+      for (const file of originals) {
+        expect(await archived(lean.archivePath, file)).toBe(false);
+      }
+      expect(lean).toMatchObject({ excludeMigrationBackups: true, verified: true });
+      for (const file of originals) {
+        expect(lean.skipped).toContainEqual(
+          expect.objectContaining({
+            kind: "migration backup",
+            sourcePath: file,
+            reason: "excluded",
+          }),
+        );
+        expect(await fs.readFile(file, "utf8")).toBe("synthetic original");
+      }
+      for (const file of neighbors) {
+        expect(await archived(lean.archivePath, file)).toBe(true);
+      }
+      await expect(restoreBackup(state, lean)).resolves.toMatchObject({ ok: true });
+      const restoredAgent = path.join(
+        state.path("restored"),
+        buildBackupArchivePath(lean.archiveRoot, agentPath),
+      );
+      expectDatabaseRows(restoredAgent, "SELECT agent_id FROM schema_meta", [{ agent_id: "main" }]);
+      const manifest = JSON.parse(
+        await fs.readFile(
+          path.join(state.path("restored"), lean.archiveRoot, "manifest.json"),
+          "utf8",
+        ),
+      );
+      expect(manifest.skipped).toEqual(
+        expect.arrayContaining(
+          originals.map((file) =>
+            expect.objectContaining({
+              kind: "migration backup",
+              sourcePath: file,
+              reason: "excluded",
+            }),
+          ),
+        ),
+      );
+    }),
+  );
+});

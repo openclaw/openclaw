@@ -479,6 +479,15 @@ export function readSessionSqliteMigrationManifest(
   }
 }
 
+/** Doctor's full or scoped pre-migration original of `databasePath`, by its exact producer name. */
+export function isDoctorMigrationBackupPath(databasePath: string, candidatePath: string): boolean {
+  const prefix = `${databasePath}.pre-startup-migration-`;
+  return (
+    candidatePath.startsWith(prefix) &&
+    /^[a-f0-9-]{36}(?:\.scoped)?\.bak$/.test(candidatePath.slice(prefix.length))
+  );
+}
+
 function isRestoreMoveWithinTarget(
   move: SessionSqliteMigrationMove,
   target: Pick<SessionSqliteMigrationTargetInput, "storePath">,
@@ -490,13 +499,7 @@ function isRestoreMoveWithinTarget(
   }
   const storePath = path.resolve(target.storePath);
   if (move.kind === "database-backup") {
-    return (
-      sourcePath === storePath &&
-      archivePath.startsWith(`${sourcePath}.pre-startup-migration-`) &&
-      /^[a-f0-9-]{36}(?:\.scoped)?\.bak$/.test(
-        archivePath.slice(`${sourcePath}.pre-startup-migration-`.length),
-      )
-    );
+    return sourcePath === storePath && isDoctorMigrationBackupPath(sourcePath, archivePath);
   }
   const sessionsDir = path.dirname(storePath);
   const archiveDir = path.join(path.dirname(sessionsDir), "session-sqlite-import-archive");
