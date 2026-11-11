@@ -1,4 +1,8 @@
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import {
+  readDaemonRuntimePin,
+  withDaemonRuntimePinMigration,
+} from "../../daemon/runtime-pin-state.js";
 import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -65,6 +69,18 @@ export async function prepareUpdateRestart(
         preManagedServiceStop: params.preManagedServiceStop,
         allowInstallRootChange: true,
       });
+      const original = params.originalManagedServiceRuntime;
+      if (original && !original.definition.runtimePin) {
+        // Doctor may have completed the legacy handoff since pre-update capture.
+        // Capture that intent before the existing native rebind owner verifies it.
+        original.definition.runtimePin = await withDaemonRuntimePinMigration(serviceState.env, () =>
+          readDaemonRuntimePin(
+            { kind: "gateway", env: serviceState.env },
+            original.definition.command,
+          ),
+        );
+        params.assertCurrent();
+      }
       gatewayServiceEnv = serviceState.env;
       serviceManagerUid ??= serviceState.runtime?.systemd?.managerUid;
       const useInstalledState =
@@ -128,14 +144,13 @@ export async function prepareUpdateRestart(
         gatewayServiceEnv = serviceStateReadEnv;
         serviceMutationAllowed = false;
         serviceMutationSkipMessage = `SERVICE-DEFINITION: ${refusal.message} The updated installation is kept; after resolving the service hold, run \`${formatCliCommand("openclaw gateway start", serviceStateReadEnv)}\`. Gateway readiness remains unverified.`;
+      } else if (params.preManagedServiceStop?.stopped) {
+        const message =
+          err instanceof GatewayServiceUpdateOwnershipError
+            ? formatErrorMessage(err)
+            : "Stopped gateway service could not be revalidated; inspect it before restarting manually.";
+        throw new GatewayServiceUpdateOwnershipError(message, err);
       } else {
-        if (params.preManagedServiceStop?.stopped) {
-          const message =
-            err instanceof GatewayServiceUpdateOwnershipError
-              ? formatErrorMessage(err)
-              : "Stopped gateway service could not be revalidated; inspect it before restarting manually.";
-          throw new GatewayServiceUpdateOwnershipError(message, err);
-        }
         serviceMutationAllowed = false;
         serviceMutationSkipMessage =
           "Code update completed; gateway service management skipped because its current ownership could not be inspected. " +

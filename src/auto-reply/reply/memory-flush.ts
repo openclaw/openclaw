@@ -7,32 +7,25 @@ import { resolveModelExtraParamSources } from "../../agents/model-extra-params.j
 import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
-import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
 } from "../../config/model-provider-config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { TranscriptTokenEstimate } from "./agent-runner-memory-transcript-context.js";
 
-export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | undefined {
-  const parsed = parseNonNegativeByteSize(
-    cfg?.agents?.defaults?.compaction?.maxActiveTranscriptBytes,
-  );
-  return typeof parsed === "number" && parsed > 0 ? parsed : undefined;
-}
+export { resolveCompactionThreshold } from "../../../packages/agent-core/src/harness/compaction/compaction-threshold.js";
 
-export function resolveEffectivePromptTokens(
-  basePromptTokens?: number,
-  lastOutputTokens?: number,
-  promptTokenEstimate?: number,
+export function resolveProjectedPromptTokens(
+  persistedPromptTokens: number | undefined,
+  promptTokenEstimate: number | undefined,
+  transcript: TranscriptTokenEstimate | undefined,
 ): number {
-  const base = Math.max(0, basePromptTokens ?? 0);
-  const output = Math.max(0, lastOutputTokens ?? 0);
-  const estimate = Math.max(0, promptTokenEstimate ?? 0);
-  // Flush gating projects the next input context by adding the previous
-  // completion and the current user prompt estimate.
-  return base + output + estimate;
+  const contextTokens = persistedPromptTokens ?? transcript?.contextTokens;
+  return contextTokens === undefined
+    ? 0
+    : Math.max(0, contextTokens) + Math.max(0, promptTokenEstimate ?? 0);
 }
 
 export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
@@ -41,18 +34,7 @@ export function estimatePromptTokensForMemoryFlush(prompt?: string): number | un
     return undefined;
   }
   const message: AgentMessage = { role: "user", content: trimmed, timestamp: Date.now() };
-  const tokens = asPositiveFiniteNumber(estimateMessagesTokens([message]));
-  return tokens === undefined ? undefined : Math.ceil(tokens);
-}
-
-export function resolveCompactionThreshold(params: {
-  contextWindowTokens: number;
-  reserveTokensFloor: number;
-  minimumThresholdTokens?: number;
-}): number {
-  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
-  const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
-  return Math.max(0, contextWindow - reserveTokens, Math.floor(params.minimumThresholdTokens ?? 0));
+  return Math.ceil(estimateMessagesTokens([message]));
 }
 
 export function resolveResponsesServerCompactionThreshold(params: {
@@ -82,53 +64,36 @@ export function resolveResponsesServerCompactionThreshold(params: {
     modelId,
   });
   const extraParams = { ...defaultParams, ...modelParams };
+  const compactionModel = {
+    provider,
+    api: configuredModel?.api ?? providerConfig?.api,
+    baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
+    contextWindow: configuredModel?.contextWindow ?? params.contextWindowTokens,
+  };
   if (normalizedProvider === "anthropic") {
+    // The default Anthropic trigger sits below the local threshold, so only an explicit opt-in
+    // (which may target any Claude model or a raised trigger) needs local compaction held back.
+    if (extraParams.anthropicServerCompaction !== true) {
+      return undefined;
+    }
     return resolveAnthropicServerCompactionPlan(
-      {
-        provider,
-        api: configuredModel?.api ?? providerConfig?.api ?? "anthropic-messages",
-        baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
-        contextWindow: configuredModel?.contextWindow ?? params.contextWindowTokens,
-      },
+      { ...compactionModel, api: compactionModel.api ?? "anthropic-messages" },
       extraParams,
     ).threshold;
   }
-  const defaultOpenAIBaseUrl =
-    normalizedProvider === "openai" ? "https://api.openai.com/v1" : undefined;
   return resolveOpenAIResponsesServerCompactionPlan(
     {
-      provider,
+      ...compactionModel,
       api:
-        configuredModel?.api ??
-        providerConfig?.api ??
-        (normalizedProvider === "openai" ? "openai-responses" : undefined),
-      baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl ?? defaultOpenAIBaseUrl,
+        compactionModel.api ?? (normalizedProvider === "openai" ? "openai-responses" : undefined),
+      baseUrl:
+        compactionModel.baseUrl ??
+        (normalizedProvider === "openai" ? "https://api.openai.com/v1" : undefined),
       compat: configuredModel?.compat,
       contextTokens: configuredModel?.contextTokens ?? params.contextWindowTokens,
-      contextWindow: configuredModel?.contextWindow ?? params.contextWindowTokens,
     },
     extraParams,
   ).threshold;
-}
-
-export function shouldRunMemoryFlush(params: {
-  entry?: Pick<
-    SessionEntry,
-    "totalTokens" | "totalTokensFresh" | "totalTokensVersion" | "compactionCount" | "memoryFlush"
-  >;
-  /**
-   * Optional token count override for flush gating. When provided, this value is
-   * treated as a fresh context snapshot and used instead of the cached
-   * SessionEntry.totalTokens (which may be stale/unknown).
-   */
-  tokenCount?: number;
-  threshold: number;
-}): boolean {
-  return Boolean(
-    shouldRunPreflightCompaction(params) &&
-    params.entry &&
-    !hasAlreadyFlushedForCurrentCompaction(params.entry),
-  );
 }
 
 export function shouldRunPreflightCompaction(params: {
@@ -149,23 +114,13 @@ export function shouldRunPreflightCompaction(params: {
     projectedTokens === undefined
       ? resolveFreshSessionTotalTokens(params.entry)
       : Math.floor(projectedTokens);
-  return (
-    typeof totalTokens === "number" &&
-    totalTokens > 0 &&
-    params.threshold > 0 &&
-    totalTokens >= params.threshold
-  );
+  return totalTokens !== undefined && params.threshold > 0 && totalTokens >= params.threshold;
 }
 
-/**
- * Returns true when a memory flush has already been performed for the current
- * compaction cycle. This prevents repeated flush runs within the same cycle —
- * important for both the token-based and transcript-size–based trigger paths.
- */
+/** One flush per compaction cycle, regardless of token or transcript-size trigger. */
 export function hasAlreadyFlushedForCurrentCompaction(
   entry: Pick<SessionEntry, "compactionCount" | "memoryFlush">,
 ): boolean {
   const compactionCount = entry.compactionCount ?? 0;
-  const lastFlushAt = entry.memoryFlush?.compactionCount;
-  return typeof lastFlushAt === "number" && lastFlushAt === compactionCount;
+  return entry.memoryFlush?.compactionCount === compactionCount;
 }

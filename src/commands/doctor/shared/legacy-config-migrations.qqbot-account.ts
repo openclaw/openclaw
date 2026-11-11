@@ -1,4 +1,3 @@
-// Account and credential migrations for the Tencent QQBot 2.0 cutover.
 import { getRecord } from "../../../config/legacy.shared.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 
@@ -139,21 +138,17 @@ function allocateFileProviderAlias(params: {
   filePath: string;
   aliasSuffix?: string;
 }): string | undefined {
-  let secrets = getRecord(params.raw.secrets);
-  if (!secrets) {
-    if (params.raw.secrets !== undefined) {
-      return undefined;
+  let providers = params.raw;
+  for (const key of ["secrets", "providers"]) {
+    let child = getRecord(providers[key]);
+    if (!child) {
+      if (providers[key] !== undefined) {
+        return undefined;
+      }
+      child = {};
+      providers[key] = child;
     }
-    secrets = {};
-    params.raw.secrets = secrets;
-  }
-  let providers = getRecord(secrets.providers);
-  if (!providers) {
-    if (secrets.providers !== undefined) {
-      return undefined;
-    }
-    providers = {};
-    secrets.providers = providers;
+    providers = child;
   }
   const suffix = params.aliasSuffix ? `-${normalizeProviderAliasSegment(params.aliasSuffix)}` : "";
   const base = `qqbot${suffix}-client-secret`.slice(0, 60).replace(/-+$/g, "");

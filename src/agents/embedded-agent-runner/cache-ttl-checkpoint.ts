@@ -2,8 +2,13 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import type { ToolResultMessage } from "../../llm/types.js";
 
+export type ToolResultPromptProjection = {
+  content: ToolResultMessage["content"];
+  cacheTtl?: "soft" | "hard";
+};
+
 export type CacheTtlProjectionInput = {
-  replacements: Map<string, { content: ToolResultMessage["content"]; cacheTtl?: "soft" | "hard" }>;
+  replacements: Map<string, ToolResultPromptProjection>;
   frozen: Set<string>;
   ambiguousBaseKeys: Set<string>;
   sourceHashByKey: Map<string, string>;
@@ -131,23 +136,18 @@ export function readCacheTtlCheckpoint(
       continue;
     }
     const data = entry.data;
-    if (isRecord(data) && "cacheTtlDelta" in data) {
-      const delta = deltaSchema.safeParse(data);
-      if (delta.success) {
-        deltas.push(delta.data);
-      } else {
+    const isDelta = isRecord(data) && "cacheTtlDelta" in data;
+    const parsed = isDelta ? deltaSchema.safeParse(data) : snapshotSchema.safeParse(data);
+    if (!parsed.success) {
+      if (isDelta || !isCacheTtlTouch(data)) {
         // A damaged patch also invalidates later patches that depended on it.
         deltas.length = 0;
         damaged = true;
       }
       continue;
     }
-    const parsed = snapshotSchema.safeParse(data);
-    if (!parsed.success) {
-      if (!isCacheTtlTouch(data)) {
-        deltas.length = 0;
-        damaged = true;
-      }
+    if ("cacheTtlDelta" in parsed.data) {
+      deltas.push(parsed.data);
       continue;
     }
     if (!deltas.length) {
@@ -191,7 +191,7 @@ export function serializeCacheTtlToolResultProjections(state: CacheTtlProjection
     }
   }
   return {
-    prunedToolResults: [...marks].map(([key, mark]) => Object.assign({ key }, mark)),
+    prunedToolResults: Array.from(marks, ([key, mark]) => Object.assign({ key }, mark)),
     ambiguousToolResultBaseKeys: [...state.ambiguousBaseKeys],
     frozenToolResults: [...state.sourceHashByKey].flatMap(([key, sourceHash]) => {
       if (!state.frozen.has(key)) {

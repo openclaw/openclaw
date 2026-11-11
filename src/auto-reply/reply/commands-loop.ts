@@ -30,7 +30,10 @@ const LOOP_FINAL_REPLY_ONLY =
   "Reply with your normal final message only; do not use the message tool.";
 
 function buildLoopWorkOrder(prompt: string, sessionKey: string, everyMs?: number): string {
-  const shortName = truncateUtf16Safe(prompt.trim(), LOOP_NAME_MAX_LENGTH).trimEnd();
+  const shortName = truncateUtf16Safe(
+    prompt.replace(/\s+/gu, " ").trim(),
+    LOOP_NAME_MAX_LENGTH,
+  ).trimEnd();
   const jobName = `${loopNamePrefix(sessionKey)} ${shortName}`;
   const selfPaced = everyMs === undefined;
   const lines = [
@@ -91,19 +94,15 @@ export const handleLoopCommand: CommandHandler = defineAuthorizedTextCommand(
     } catch {
       everyMs = undefined;
     }
-    if (everyMs !== undefined) {
-      if (everyMs < LOOP_MIN_INTERVAL_MS) {
-        return directReply(`${LOOP_USAGE} Minimum interval 30s.`);
-      }
-      const prompt = spec.slice(firstToken.length).trim();
-      if (!prompt) {
-        return directReply(LOOP_USAGE);
-      }
-      applyCommandTextToParams(params, buildLoopWorkOrder(prompt, params.sessionKey, everyMs));
-      return { shouldContinue: true };
+    if (everyMs !== undefined && everyMs < LOOP_MIN_INTERVAL_MS) {
+      return directReply(`${LOOP_USAGE} Minimum interval 30s.`);
+    }
+    const prompt = everyMs === undefined ? spec : spec.slice(firstToken.length).trim();
+    if (!prompt) {
+      return directReply(LOOP_USAGE);
     }
 
-    applyCommandTextToParams(params, buildLoopWorkOrder(spec, params.sessionKey));
+    applyCommandTextToParams(params, buildLoopWorkOrder(prompt, params.sessionKey, everyMs));
     return { shouldContinue: true };
   },
 );

@@ -1,16 +1,17 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
-import { requiresClaudeMandatoryAdaptiveThinking } from "openclaw/plugin-sdk/claude-model-runtime";
 import type {
   CliBackendConfig,
-  CliBackendNormalizeConfigContext,
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
-import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import {
+  applyExecPolicyLayer,
+  resolveExecModePolicy,
+} from "openclaw/plugin-sdk/exec-approvals-runtime";
 import {
   normalizeOptionalLowercaseString,
   normalizeSortedUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
+import { CLAUDE_CLI_BACKEND_ID, OPENCLAW_MCP_TOOL_PREFIX } from "./cli-constants.js";
 
 const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
@@ -22,6 +23,7 @@ const CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_ARG =
 const CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_MINIMUM_VERSION = "2.1.98";
 const CLAUDE_SETTINGS_ARG = "--settings";
 const CLAUDE_EFFORT_ARG = "--effort";
+const CLAUDE_FAST_MODE_ARG = "--fast-mode";
 const CLAUDE_BARE_ARG = "--bare";
 const CLAUDE_SAFE_MODE_ARG = "--safe-mode";
 const CLAUDE_DISABLE_SLASH_COMMANDS_ARG = "--disable-slash-commands";
@@ -34,7 +36,6 @@ const CLAUDE_NO_SESSION_PERSISTENCE_ARG = "--no-session-persistence";
 const CLAUDE_MAX_TURNS_ARG = "--max-turns";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
 const CLAUDE_DENY_MCP_TOOLS_VALUE = "mcp__*";
-const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
 const CLAUDE_RESTRICTED_SETTINGS =
   '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
 
@@ -62,18 +63,15 @@ export function resolveClaudeCliAutoCompactEnv(
  * Map OpenClaw's fixed thinking levels to Claude Code's per-process budget.
  *
  * Claude Code 2.x reads MAX_THINKING_TOKENS for print-mode runs and a positive
- * integer requests that fixed token budget. Mandatory-adaptive models ignore
- * that projection, so they retain adaptive thinking and use --effort instead.
+ * integer requests that fixed token budget. Claude Code owns the per-model
+ * answer: models without budget or disabled thinking keep adaptive thinking
+ * and take --effort, so the projection does not depend on the model id.
  * These fixed budgets match OpenClaw's canonical provider defaults in
  * packages/ai/src/providers/simple-options.ts.
  */
 export function resolveClaudeCliThinkingEnv(
   thinkingLevel: CliBackendResolveExecutionArgsContext["thinkingLevel"],
-  modelId?: string,
 ): Record<string, string> | undefined {
-  if (requiresClaudeMandatoryAdaptiveThinking({ id: modelId })) {
-    return undefined;
-  }
   switch (thinkingLevel) {
     case "off":
       return { MAX_THINKING_TOKENS: "0" };
@@ -123,28 +121,20 @@ export function supportsClaudeDynamicSystemPromptSections(
   return true;
 }
 
-function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): boolean {
-  const agentExec = context?.agentId
+function isOpenClawRequestedYolo(context: CliBackendResolveExecutionArgsContext): boolean {
+  const agentExec = context.agentId
     ? resolveAgentConfig(context.config ?? {}, context.agentId)?.tools?.exec
     : undefined;
-  const exec = agentExec ?? context?.config?.tools?.exec;
-  return (
-    resolveExecModePolicy({
-      mode: exec?.mode,
-      security: exec?.security ?? "full",
-      ask: exec?.ask ?? "off",
-    }).mode === "full"
+  const exec = applyExecPolicyLayer(
+    applyExecPolicyLayer({ security: "full", ask: "off" } as const, context.config?.tools?.exec),
+    agentExec,
   );
+  return resolveExecModePolicy(exec).mode === "full";
 }
 
 /** Keep filesystem settings user-scoped and normalize native permission flags together. */
-function normalizeClaudeBackendArgs(
-  args?: string[],
-  permissionMode?: string,
-): string[] | undefined {
-  if (!args) {
-    return permissionMode ? [CLAUDE_PERMISSION_MODE_ARG, permissionMode] : args;
-  }
+function normalizeClaudeBackendArgs(context: CliBackendResolveExecutionArgsContext): string[] {
+  const args = context.baseArgs;
   const normalized: string[] = [];
   let hasPermissionMode = false;
   let hasSettingSources = false;
@@ -189,8 +179,13 @@ function normalizeClaudeBackendArgs(
   if (!hasSettingSources) {
     normalized.push(CLAUDE_SETTING_SOURCES_ARG, CLAUDE_SAFE_SETTING_SOURCES);
   }
-  if (permissionMode && !hasPermissionMode) {
-    normalized.push(CLAUDE_PERMISSION_MODE_ARG, permissionMode);
+  // Root cannot compact in bypass mode; explicit permission modes still take precedence.
+  if (
+    !hasPermissionMode &&
+    context.controlOperation !== "compact" &&
+    isOpenClawRequestedYolo(context)
+  ) {
+    normalized.push(CLAUDE_PERMISSION_MODE_ARG, "bypassPermissions");
   }
   return normalized;
 }
@@ -198,14 +193,9 @@ function normalizeClaudeBackendArgs(
 function applyClaudeCliEffortArgs(
   args: readonly string[],
   thinkingLevel?: string | null,
-  modelId?: string,
 ): string[] {
   const level = normalizeOptionalLowercaseString(thinkingLevel);
   switch (level) {
-    case "off":
-      return requiresClaudeMandatoryAdaptiveThinking({ id: modelId })
-        ? [...stripClaudeEffortArgs(args), CLAUDE_EFFORT_ARG, "low"]
-        : [...args];
     case "minimal":
     case "low":
       return [...stripClaudeEffortArgs(args), CLAUDE_EFFORT_ARG, "low"];
@@ -220,6 +210,15 @@ function applyClaudeCliEffortArgs(
     default:
       return [...args];
   }
+}
+
+// Claude Code owns fast mode: it ignores the flag for models without it and resends
+// a refused fast request (for example, no usage credits) at standard speed.
+function applyClaudeCliFastModeArgs(
+  args: readonly string[],
+  context: Pick<CliBackendResolveExecutionArgsContext, "fastMode">,
+): string[] {
+  return context.fastMode === true ? [...args, CLAUDE_FAST_MODE_ARG, "on"] : [...args];
 }
 
 function stripClaudeEffortArgs(args: readonly string[]): string[] {
@@ -415,7 +414,7 @@ function resolveClaudeCliRestrictedExecutionArgs(
     CLAUDE_NO_CHROME_ARG,
     CLAUDE_STRICT_MCP_CONFIG_ARG,
     CLAUDE_TOOLS_ARG,
-    availability.native.join(","),
+    [...availability.native, ...(availability.discovery ?? [])].join(","),
   );
   if (availability.openClaw.length > 0) {
     normalized.push(
@@ -437,19 +436,23 @@ export function resolveClaudeCliExecutionArgs(
   context: CliBackendResolveExecutionArgsContext,
   options: { excludeDynamicSystemPromptSections?: boolean } = {},
 ): string[] {
+  const normalizedArgs = normalizeClaudeBackendArgs(context);
   const baseArgs = context.hostOwnedTools?.includes("exec")
     ? [
-        ...stripClaudeArgs(context.baseArgs, {
+        ...stripClaudeArgs(normalizedArgs, {
           variadicValue: new Set([CLAUDE_DISALLOWED_TOOLS_ARG, "--disallowed-tools"]),
         }),
         CLAUDE_DISALLOWED_TOOLS_ARG,
-        [...new Set([...readClaudeToolDenials(context.baseArgs), "Bash"])].join(","),
+        [...new Set([...readClaudeToolDenials(normalizedArgs), "Bash"])].join(","),
       ]
-    : context.baseArgs;
+    : normalizedArgs;
   const executionArgs =
     context.executionMode === "side-question"
       ? resolveClaudeCliSideQuestionExecutionArgs(baseArgs)
-      : applyClaudeCliEffortArgs(baseArgs, context.thinkingLevel, context.modelId);
+      : applyClaudeCliFastModeArgs(
+          applyClaudeCliEffortArgs(baseArgs, context.thinkingLevel),
+          context,
+        );
   const resolvedArgs = context.toolAvailability
     ? resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability)
     : executionArgs;
@@ -458,17 +461,11 @@ export function resolveClaudeCliExecutionArgs(
     : resolvedArgs;
 }
 
-export function normalizeClaudeBackendConfig(
-  config: CliBackendConfig,
-  context?: CliBackendNormalizeConfigContext,
-): CliBackendConfig {
+export function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
   const output = config.output ?? "jsonl";
   const input = config.input ?? "stdin";
-  const permissionMode = isOpenClawRequestedYolo(context) ? "bypassPermissions" : undefined;
   return {
     ...config,
-    args: normalizeClaudeBackendArgs(config.args, permissionMode),
-    resumeArgs: normalizeClaudeBackendArgs(config.resumeArgs, permissionMode),
     output,
     liveSession:
       config.liveSession ?? (output === "jsonl" && input === "stdin" ? "claude-stdio" : undefined),

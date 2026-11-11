@@ -17,7 +17,7 @@ function* legacyOffsets(context: PluginDoctorStateMigrationContext) {
   let after: string | undefined;
   while (true) {
     const rows = read(offsetNamespace, { prefix: "", after, limit: 512 });
-    yield rows.flatMap((entry) => {
+    const legacy = rows.flatMap((entry) => {
       const value = asObjectRecord(entry.value);
       if (!value || (value.version !== 1 && value.version !== 2)) {
         return [];
@@ -44,12 +44,19 @@ function* legacyOffsets(context: PluginDoctorStateMigrationContext) {
         },
       ];
     });
+    if (legacy.length) {
+      yield legacy;
+    }
     const last = rows.at(-1);
     if (rows.length < 512 || !last) {
       return;
     }
     after = last.key;
   }
+}
+
+async function loadTelegramIngressSpoolMigration() {
+  return (await import("./src/telegram-ingress-spool-migration.js")).telegramIngressSpoolMigration;
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
@@ -59,20 +66,14 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     phase: "after-session-repair",
     collectBackupResources: () => [],
     detectLegacyState({ context }) {
-      for (const rows of legacyOffsets(context)) {
-        if (rows.length) {
-          return { preview: ["Normalize Telegram SQLite update offsets before account startup."] };
-        }
-      }
-      return null;
+      return legacyOffsets(context).next().done
+        ? null
+        : { preview: ["Normalize Telegram SQLite update offsets before account startup."] };
     },
     async migrateLegacyState({ context }) {
       const result: { changes: string[]; warnings: string[] } = { changes: [], warnings: [] };
       const batches = [...legacyOffsets(context)];
       for (const rows of batches) {
-        if (!rows.length) {
-          continue;
-        }
         if (!context.repairPluginStateEntries) {
           throw new Error("Update OpenClaw to repair Telegram SQLite offsets.");
         }
@@ -89,20 +90,11 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "telegram-json-ingress-spool",
     label: "Telegram JSON ingress spool",
-    async collectBackupResources(params) {
-      const { telegramIngressSpoolMigration } =
-        await import("./src/telegram-ingress-spool-migration.js");
-      return telegramIngressSpoolMigration.collectBackupResources(params);
-    },
-    async detectLegacyState(params) {
-      const { telegramIngressSpoolMigration } =
-        await import("./src/telegram-ingress-spool-migration.js");
-      return telegramIngressSpoolMigration.detectLegacyState(params);
-    },
-    async migrateLegacyState(params) {
-      const { telegramIngressSpoolMigration } =
-        await import("./src/telegram-ingress-spool-migration.js");
-      return telegramIngressSpoolMigration.migrateLegacyState(params);
-    },
+    collectBackupResources: async (params) =>
+      (await loadTelegramIngressSpoolMigration()).collectBackupResources(params),
+    detectLegacyState: async (params) =>
+      (await loadTelegramIngressSpoolMigration()).detectLegacyState(params),
+    migrateLegacyState: async (params) =>
+      (await loadTelegramIngressSpoolMigration()).migrateLegacyState(params),
   },
 ];

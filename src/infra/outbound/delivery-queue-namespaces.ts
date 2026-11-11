@@ -17,14 +17,11 @@ export function outboundDeliveryQueueName(entry: {
   sessionGeneration?: SessionDeliveryGeneration;
   deliveryCompletion?: { kind: string; commandOwnerReference?: unknown };
 }): (typeof OUTBOUND_EXECUTABLE_QUEUE_NAMES)[number] {
-  if (
-    entry.deliveryCompletion?.kind === "pending-final" &&
+  return entry.deliveryCompletion?.kind === "pending-final" &&
     entry.deliveryCompletion.commandOwnerReference !== undefined
-  ) {
-    return COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME;
-  }
-  return entry.sessionGeneration === undefined
-    ? OUTBOUND_DELIVERY_QUEUE_NAME
-    : SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME;
+    ? COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME
+    : entry.sessionGeneration === undefined
+      ? OUTBOUND_DELIVERY_QUEUE_NAME
+      : SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME;
 }
 export const DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME = "outbound-media-staging";

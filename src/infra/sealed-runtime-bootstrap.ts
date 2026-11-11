@@ -1,5 +1,5 @@
 import { configureFsSafeNative } from "@openclaw/fs-safe/config";
-import { resolveSecureTempRoot } from "@openclaw/fs-safe/temp";
+import { resolveSecureTempRoot } from "@openclaw/fs-safe/secure-temp-root";
 import * as json5 from "json5";
 import { registerSealedRuntime } from "./sealed-runtime-registry.js";
 

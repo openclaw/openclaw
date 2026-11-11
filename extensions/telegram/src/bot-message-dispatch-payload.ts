@@ -54,10 +54,7 @@ export function normalizeDeliveryPayload(
     delete payloadForPlan.isReasoning;
   }
   const normalized = projectPayloadForDelivery(turn, payloadForPlan);
-  if (!normalized) {
-    return undefined;
-  }
-  return normalizePreparedDeliveryPayload(turn, normalized);
+  return normalized ? normalizePreparedDeliveryPayload(turn, normalized) : undefined;
 }
 
 export function normalizePreparedDeliveryPayload(turn: Turn, payload: ReplyPayload): ReplyPayload {

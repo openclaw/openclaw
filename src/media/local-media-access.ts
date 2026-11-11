@@ -1,15 +1,19 @@
 import type { ReadOptions, ReadOptionsWithBuffer, ReadPosition } from "node:fs";
-import fs, { type FileReadResult } from "node:fs/promises";
+import type { FileReadResult } from "node:fs/promises";
 import path from "node:path";
 import { assertNoWindowsNetworkPath, readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { resolveInboundPathRoot } from "@openclaw/media-core/inbound-path-policy";
 import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
+import {
+  canonicalizeContainmentRoot,
+  canonicalizeForContainment,
+} from "../infra/path-containment.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { captureChannelReadScope } from "../shared/channel-read-authority.js";
+import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
 
-/** Machine-readable reasons local media path validation can fail. */
 export type LocalMediaAccessErrorCode =
   | "path-not-allowed"
   | "invalid-root"
@@ -21,7 +25,6 @@ export type LocalMediaAccessErrorCode =
   | "invalid-path"
   | "not-file";
 
-/** Error raised when a local media path escapes the configured allowlist. */
 export class LocalMediaAccessError extends Error {
   code: LocalMediaAccessErrorCode;
 
@@ -46,17 +49,31 @@ export { getDefaultMediaLocalRoots as getDefaultLocalRootsCore };
 
 type LocalMediaBoundaryOptions = {
   inboundRoots?: readonly string[];
-  resolvedRoots?: readonly string[];
   resolveRoots?: () => Promise<readonly string[]>;
 };
 
-async function resolveCanonicalBoundaryPath(root: string): Promise<string> {
-  const resolved = path.resolve(root);
-  try {
-    return await fs.realpath(resolved);
-  } catch {
-    return resolved;
-  }
+// Roots, inbound anchors, and requested media paths share one canonical spelling owner
+// (src/infra/path-containment.ts), so a missing descendant of a symlinked state dir compares in
+// the same spelling as its root (#194406).
+const resolveCanonicalBoundaryPath = canonicalizeContainmentRoot;
+
+/** Reports absence only for paths that already passed containment, so it reveals nothing outside. */
+export function localMediaNotFoundError(mediaPath: string, cause: unknown): LocalMediaAccessError {
+  return new LocalMediaAccessError(
+    "not-found",
+    `Local media file not found: ${mediaPath}. The path is in an allowed folder, but the file ` +
+      "or one of its parent folders does not exist; check the path or create the file.",
+    { cause },
+  );
+}
+
+function pathNotAllowedError(mediaPath: string): LocalMediaAccessError {
+  // Same text whether or not the target exists, so denials never reveal outside files.
+  return new LocalMediaAccessError(
+    "path-not-allowed",
+    `Local media path is not under an allowed directory: ${mediaPath}. ` +
+      "Use a file inside the agent workspace or another allowed media folder.",
+  );
 }
 
 /** Resolves an allowlist once for callers that validate several media paths. */
@@ -78,23 +95,39 @@ export async function resolveLocalMediaRoots(
   );
 }
 
-async function resolveLocalMediaPathForContainment(mediaPath: string): Promise<string> {
-  try {
-    return await fs.realpath(mediaPath);
-  } catch {
-    // Missing files (for example, staged outbound media supplied by host-read
-    // callbacks) still need symlink-aware parent containment.
-    try {
-      return path.join(await fs.realpath(path.dirname(mediaPath)), path.basename(mediaPath));
-    } catch {
-      return path.resolve(mediaPath);
-    }
-  }
+/**
+ * Missing files (for example, staged outbound media supplied by host-read callbacks) still need
+ * symlink-aware containment in the roots' spelling; the reader reports existence later, and only
+ * for paths that passed containment. Dangling links are judged by the location they name.
+ */
+async function resolveLocalMediaPathForContainment(
+  mediaPath: string,
+): Promise<{ path: string; danglingLink?: string } | undefined> {
+  const resolved = await canonicalizeForContainment(mediaPath);
+  // A ".." after a missing folder, or an unreadable or looping link, has no canonical target.
+  return resolved.kind === "resolved"
+    ? {
+        path: resolved.path,
+        ...(resolved.danglingLink ? { danglingLink: resolved.danglingLink } : {}),
+      }
+    : undefined;
+}
+
+function brokenLinkError(mediaPath: string, link: string, cause: unknown): LocalMediaAccessError {
+  // Only reached when the link's target lies inside an allowed root, so naming it is safe.
+  return new LocalMediaAccessError(
+    "not-found",
+    `Local media file not found: ${mediaPath}. ${link} is a symbolic link to a target that does ` +
+      "not exist; fix the link or use the file's real path.",
+    { cause },
+  );
 }
 
 type ResolvedLocalMediaBoundary = {
   rejectHardlinks: boolean;
   roots: readonly string[] | "any";
+  /** In-root dangling link on the path; a not-found open names it instead of the bare path. */
+  danglingLink?: string;
 };
 
 type ManagedReferenceErrorPolicy = "ignore" | "reject";
@@ -139,13 +172,12 @@ async function resolveLocalMediaBoundary(
     // Channel inbound roots may contain whole-segment wildcards. Freeze the
     // matched root under the stable pre-wildcard anchor so an alias cannot
     // promote an outside directory into the authorized boundary.
-    const resolvedAnchor = await resolveCanonicalBoundaryPath(matchedInboundRoot.anchorRoot);
-    const resolvedRoot = await resolveCanonicalBoundaryPath(matchedInboundRoot.matchedRoot);
+    const [resolvedAnchor, resolvedRoot] = await settleCurrentReadPreparations([
+      resolveCanonicalBoundaryPath(matchedInboundRoot.anchorRoot),
+      resolveCanonicalBoundaryPath(matchedInboundRoot.matchedRoot),
+    ] as const);
     if (!isPathInside(resolvedAnchor, resolvedRoot)) {
-      throw new LocalMediaAccessError(
-        "path-not-allowed",
-        `Local media path is not under an allowed directory: ${mediaPath}`,
-      );
+      throw pathNotAllowedError(mediaPath);
     }
     return {
       rejectHardlinks: true,
@@ -153,11 +185,14 @@ async function resolveLocalMediaBoundary(
     };
   }
   const roots = localRoots ?? getDefaultMediaLocalRoots();
-  const resolved = await resolveLocalMediaPathForContainment(mediaPath);
-  const resolvedRoots =
-    options?.resolvedRoots ??
-    (await options?.resolveRoots?.()) ??
-    (await resolveLocalMediaRoots(roots));
+  const [containment, resolvedRoots] = await settleCurrentReadPreparations([
+    resolveLocalMediaPathForContainment(mediaPath),
+    options?.resolveRoots?.() ?? resolveLocalMediaRoots(roots),
+  ] as const);
+  if (!containment) {
+    throw pathNotAllowedError(mediaPath);
+  }
+  const resolved = containment.path;
   const workspaceRootIndex = roots.findIndex((root) => path.basename(root) === "workspace");
   const workspaceRoot = roots[workspaceRootIndex];
   if (workspaceRoot) {
@@ -173,10 +208,7 @@ async function resolveLocalMediaBoundary(
           (root) => isPathInside(agentWorkspace, root) && isPathInside(root, resolved),
         );
       if (!hasScopedWorkspaceRoot) {
-        throw new LocalMediaAccessError(
-          "path-not-allowed",
-          `Local media path is not under an allowed directory: ${mediaPath}`,
-        );
+        throw pathNotAllowedError(mediaPath);
       }
     }
   }
@@ -189,14 +221,15 @@ async function resolveLocalMediaBoundary(
       );
     }
     if (isPathInside(resolvedRoot, resolved)) {
-      return { rejectHardlinks: false, roots: resolvedRoots };
+      return {
+        rejectHardlinks: false,
+        roots: resolvedRoots,
+        ...(containment.danglingLink ? { danglingLink: containment.danglingLink } : {}),
+      };
     }
   }
 
-  throw new LocalMediaAccessError(
-    "path-not-allowed",
-    `Local media path is not under an allowed directory: ${mediaPath}`,
-  );
+  throw pathNotAllowedError(mediaPath);
 }
 
 /** Verifies that a local media path is managed inbound media or lives under allowed roots. */
@@ -220,12 +253,17 @@ export async function openLocalMediaFile(
 ) {
   const readScope = captureChannelReadScope();
   readScope?.assertCurrent();
-  const boundary = await resolveLocalMediaBoundary(mediaPath, localRoots, "reject", options);
-  const excludedRoots = options.excludedRoots?.length
-    ? await resolveLocalMediaRoots(options.excludedRoots)
-    : [];
+  const [boundary, excludedRoots] = await settleCurrentReadPreparations([
+    resolveLocalMediaBoundary(mediaPath, localRoots, "reject", options),
+    options.excludedRoots?.length ? resolveLocalMediaRoots(options.excludedRoots) : [],
+  ] as const);
   readScope?.assertCurrent();
-  const opened = await openLocalFileSafely({ filePath: mediaPath });
+  const opened = await openLocalFileSafely({ filePath: mediaPath }).catch((error: unknown) => {
+    if (boundary.danglingLink && error instanceof FsSafeError && error.code === "not-found") {
+      throw brokenLinkError(mediaPath, boundary.danglingLink, error);
+    }
+    throw error;
+  });
   try {
     if (excludedRoots.some((root) => isPathInside(root, opened.realPath))) {
       throw new LocalMediaAccessError(
@@ -237,10 +275,7 @@ export async function openLocalMediaFile(
       boundary.roots !== "any" &&
       !boundary.roots.some((resolvedRoot) => isPathInside(resolvedRoot, opened.realPath))
     ) {
-      throw new LocalMediaAccessError(
-        "path-not-allowed",
-        `Local media path is not under an allowed directory: ${mediaPath}`,
-      );
+      throw pathNotAllowedError(mediaPath);
     }
     if (boundary.rejectHardlinks && opened.stat.nlink > 1) {
       throw new FsSafeError("hardlink", "hardlinked path not allowed");

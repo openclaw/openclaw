@@ -1,5 +1,3 @@
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-
 export const TELEGRAM_COMMAND_NAME_PATTERN = /^[a-z0-9_]{1,32}$/;
 
 export type TelegramCustomCommandInput = {
@@ -14,8 +12,7 @@ export type TelegramCustomCommandIssue = {
 };
 
 export function normalizeTelegramCommandName(value: string): string {
-  const withoutSlash = value.trim().replace(/^\//, "");
-  return (normalizeOptionalLowercaseString(withoutSlash) ?? "").replace(/-/g, "_");
+  return value.trim().replace(/^\//, "").trim().toLowerCase().replace(/-/g, "_");
 }
 
 export function normalizeTelegramCommandDescription(value: string): string {
@@ -32,7 +29,6 @@ export function resolveTelegramCustomCommands(params: {
   issues: TelegramCustomCommandIssue[];
 } {
   const entries = Array.isArray(params.commands) ? params.commands : [];
-  const reserved = params.reservedCommands ?? new Set<string>();
   const checkReserved = params.checkReserved !== false;
   const checkDuplicates = params.checkDuplicates !== false;
   const seen = new Set<string>();
@@ -46,7 +42,7 @@ export function resolveTelegramCustomCommands(params: {
       ? "Telegram custom command is missing a command name."
       : !TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)
         ? `Telegram custom command "/${normalized}" is invalid (use a-z, 0-9, underscore; max 32 chars).`
-        : checkReserved && reserved.has(normalized)
+        : checkReserved && params.reservedCommands?.has(normalized)
           ? `Telegram custom command "/${normalized}" conflicts with a native command.`
           : checkDuplicates && seen.has(normalized)
             ? `Telegram custom command "/${normalized}" is duplicated.`

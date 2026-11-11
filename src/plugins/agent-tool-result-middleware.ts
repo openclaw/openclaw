@@ -1,6 +1,5 @@
 // Applies plugin middleware to agent tool results at runtime boundaries.
 import type {
-  AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
   AgentToolResultMiddlewareRuntime,
   AgentToolResultMiddlewareScope,
@@ -9,7 +8,6 @@ import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-typ
 import { getActivePluginRegistry } from "./runtime.js";
 import {
   createPluginToolMatcherScope,
-  normalizePluginToolMatcher,
   pluginToolMatcherCoversTool,
   type PluginToolMatcherScope,
 } from "./tool-hook-matcher.js";
@@ -74,20 +72,17 @@ export function appendAgentToolResultMiddlewareScope(
   registration: PluginAgentToolResultMiddlewareRegistration,
   scope: AgentToolResultMiddlewareScope,
 ): void {
-  const normalizedMatcher = normalizePluginToolMatcher(scope.matcher);
-  const normalizedScope: AgentToolResultMiddlewareScope = {
-    runtimes: [...scope.runtimes],
-    ...(normalizedMatcher ? { matcher: normalizedMatcher } : {}),
-  };
   const scopes = readAgentToolResultMiddlewareScopes(registration);
-  if (!scopes.some((existing) => sameMiddlewareScope(existing, normalizedScope))) {
-    registration.scopes = [...scopes, normalizedScope];
+  if (!scopes.some((existing) => sameMiddlewareScope(existing, scope))) {
+    registration.scopes = [...scopes, scope];
   } else if (!registration.scopes) {
     registration.scopes = scopes;
   }
-  registration.runtimes = normalizeAgentToolResultMiddlewareRuntimeIds(
-    readAgentToolResultMiddlewareScopes(registration).flatMap((entry) => entry.runtimes),
-  );
+  registration.runtimes = [
+    ...new Set(
+      readAgentToolResultMiddlewareScopes(registration).flatMap((entry) => entry.runtimes),
+    ),
+  ];
 }
 
 export function agentToolResultMiddlewareRegistrationCoversTool(
@@ -113,12 +108,12 @@ export function getAgentToolResultMiddlewareMatcherScope(
   return createPluginToolMatcherScope(matchers);
 }
 
-export function listAgentToolResultMiddlewares(
+export function listAgentToolResultMiddlewareRegistrations(
   runtime: AgentToolResultMiddlewareRuntime,
-): AgentToolResultMiddleware[] {
+): PluginAgentToolResultMiddlewareRegistration[] {
   return (
-    getActivePluginRegistry()
-      ?.agentToolResultMiddlewares?.filter((entry) => entry.runtimes.includes(runtime))
-      .map((entry) => entry.handler) ?? []
+    getActivePluginRegistry()?.agentToolResultMiddlewares?.filter((entry) =>
+      entry.runtimes.includes(runtime),
+    ) ?? []
   );
 }

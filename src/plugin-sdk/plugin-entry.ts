@@ -21,6 +21,10 @@ export type {
 } from "../plugins/capability-catalog-context.types.js";
 export type { PluginCapabilityCatalog } from "../plugins/capability-catalog.types.js";
 export type { OpenClawConfig } from "../config/types.openclaw.js";
+export type {
+  SuggestedWorkerProfile,
+  WorkerProfileSuggestionDiscovery,
+} from "../plugins/worker-profile-suggestion.types.js";
 
 export type {
   AgentHarness,
@@ -55,6 +59,10 @@ export type {
   OpenClawPluginServiceContext,
   OpenClawPluginServiceContextV2,
   OpenClawPluginServiceV2,
+  OpenClawPluginServiceV3,
+  OpenClawPluginServiceContextV3,
+  PluginServiceSessionWorkV1,
+  PluginServiceSessionWorkContextV1,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
   PluginAgentEventEmitParams,
@@ -121,6 +129,8 @@ export type {
   ProviderPrepareDynamicModelContext,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareRuntimeAuthContext,
+  ProviderPrepareRuntimeAuthContextV2,
+  ProviderRuntimeAuthModel,
   ProviderPreparedRuntimeAuth,
   ProviderReconcileLocalServiceContext,
   ProviderReasoningOutputMode,
@@ -155,6 +165,10 @@ export type {
   WorkerDesktopEndpoint,
   WorkerLease,
   WorkerLeaseStatus,
+  WorkerResourceReceipt,
+  WorkerRetentionObservation,
+  WorkerRetentionOperation,
+  WorkerRetentionPolicy,
   WorkerMachineOption,
   WorkerProfile,
   WorkerProvider,
@@ -189,16 +203,8 @@ export type {
   PluginHookMessageReceivedEvent,
   PluginHookProviderUpdate,
   PluginHookSkillArtifact,
-  PluginHookSkillBundleFile,
-  PluginHookSkillBundleSnapshot,
   PluginHookSkillChangedEvent,
   PluginHookSkillContext,
-  PluginHookSkillEvaluationFinding,
-  PluginHookSkillProposalChangedEvent,
-  PluginHookSkillProposalEvaluateEvent,
-  PluginHookSkillProposalEvaluateResult,
-  PluginHookSkillProposalEvaluationOutcome,
-  PluginHookSkillProposalKind,
 } from "../plugins/hook-types.js";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type {
@@ -271,3 +277,18 @@ export function definePluginEntry({
     register,
   };
 }
+
+export type {
+  PluginHookBeforeChannelIngressContext,
+  PluginHookBeforeChannelIngressEvent,
+  PluginHookBeforeChannelIngressResult,
+} from "../plugins/hook-message.types.js";
+
+export type {
+  RepositoryIntegration,
+  RepositoryActor,
+  RepositoryOperation,
+  RepositoryCredentialScope,
+  RepositoryConnectionIdentity,
+  RepositoryAdmission,
+} from "../plugins/repository-integration.types.js";

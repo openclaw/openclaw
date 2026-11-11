@@ -1,5 +1,3 @@
-// Gateway known-weak credential guard.
-// Rejects active shared-secret placeholders before the gateway starts.
 import { isRedactedSecretValue } from "../config/redact-sentinel.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 

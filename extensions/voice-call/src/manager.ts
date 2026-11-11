@@ -49,7 +49,7 @@ export class CallManager {
   private activeCalls = new Map<CallId, CallRecord>();
   private providerCallIdMap = new Map<string, CallId>();
   private processedEventIds = new Set<string>();
-  private rejectedProviderCallIds = new Map<string, symbol>();
+  private rejectedProviderCallIds = new Set<string>();
   private provider: VoiceCallProvider | null = null;
   private storePath: string;
   private webhookUrl: string | null = null;
@@ -242,7 +242,7 @@ export class CallManager {
       return;
     }
     this.processedEventIds = persisted.processedEventIds;
-    this.rejectedProviderCallIds = new Map();
+    this.rejectedProviderCallIds = new Set();
 
     for (const call of persisted.interruptedDeliveries) {
       const metadata = { ...call.metadata };
@@ -255,6 +255,7 @@ export class CallManager {
           status.status === "pending"
         ) {
           metadata[key] = {
+            ...status,
             status: "failed",
             error: "interrupted by restart",
             at: Date.now(),
@@ -273,26 +274,14 @@ export class CallManager {
       return;
     }
     const timers: Array<{ callId: CallId; deadline: number }> = [];
-    let skippedAlreadyElapsedTimers = 0;
     for (const [callId, call] of verified) {
       const maxDurationAnchor =
         call.answeredAt ??
         (call.state === "speaking" || call.state === "listening" ? call.startedAt : undefined);
       if (maxDurationAnchor !== undefined && !TerminalStates.has(call.state)) {
-        const elapsed = Date.now() - maxDurationAnchor;
         const maxDurationMs = resolveVoiceCallSecondsTimerDelayMs(
           resolveCallMaxDurationSeconds(call, this.config.maxDurationSeconds),
         );
-        if (elapsed >= maxDurationMs) {
-          markRestoredCallSkipped(call, "timeout");
-          await persistCallRecord(this.storePath, call, this.stateRuntime);
-          if (!this.closing) {
-            this.publishCallUpdate(call);
-          }
-          verified.delete(callId);
-          skippedAlreadyElapsedTimers += 1;
-          continue;
-        }
         if (call.answeredAt === undefined) {
           // Twilio streams can restore directly in speaking/listening without an
           // answered webhook; anchoring at startedAt preserves bounded duration.
@@ -321,11 +310,6 @@ export class CallManager {
         onTimeout: (id) => this.endCall(id, { reason: "timeout" }),
       });
       console.log(`[voice-call] Restarted max-duration timer for restored call ${callId}`);
-    }
-    if (skippedAlreadyElapsedTimers > 0) {
-      console.log(
-        `[voice-call] Skipped ${skippedAlreadyElapsedTimers} restored call(s) whose max-duration timer already elapsed`,
-      );
     }
 
     if (verified.size > 0) {
@@ -378,7 +362,7 @@ export class CallManager {
         const maxAgeMs = resolveVoiceCallSecondsTimerDelayMs(
           resolveCallMaxDurationSeconds(call, this.config.maxDurationSeconds),
         );
-        if (now - call.startedAt > maxAgeMs) {
+        if (now - (call.answeredAt ?? call.startedAt) > maxAgeMs) {
           skippedOlderThanMaxDuration += 1;
           markRestoredCallSkipped(call, "timeout");
           await persistCallRecord(this.storePath, call, this.stateRuntime);

@@ -1,4 +1,3 @@
-// Elevenlabs plugin module implements shared behavior.
 export const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 
 export function isValidElevenLabsVoiceId(voiceId: string): boolean {

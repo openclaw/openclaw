@@ -7,6 +7,7 @@
     "onStartup": false
   },
   "enabledByDefault": true,
+  "contracts": { "decisionProviders": ["baseten"] },
   "providers": [
     "baseten"
   ],
@@ -31,6 +32,117 @@
         "defaultModel": "deepseek-ai/DeepSeek-V4.1-Flash",
         "models": [
           {
+            "id": "decision-models/baseten-elephant-9b-latest",
+            "name": "elephant-1 (9B)",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "baseten-systemone",
+                "input": [
+                  "text"
+                ],
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                },
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2
+                  }
+                },
+                "confidence": "provider-specific"
+              }
+            }
+          },
+          {
+            "id": "decision-models/baseten-mammoth-27b-latest",
+            "name": "mammoth-1 (27B)",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "baseten-systemone",
+                "input": [
+                  "text"
+                ],
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                },
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2
+                  }
+                },
+                "confidence": "provider-specific"
+              }
+            }
+          },
+          {
+            "id": "decision-models/baseten-joey-2b-latest",
+            "name": "joey-1 (2B)",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "baseten-systemone",
+                "input": [
+                  "text"
+                ],
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                },
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "confidence": "provider-specific",
+                "limits": {
+                  "maxInputTokens": 16384,
+                  "inputTokenScope": "encoded-question"
+                }
+              }
+            }
+          },
+          {
             "id": "deepseek-ai/DeepSeek-V4.1-Flash",
             "name": "DeepSeek V4.1 Flash",
             "reasoning": true,
@@ -46,7 +158,8 @@
             "compat": {
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": ["none", "low", "high", "max"],
-              "reasoningEffortMap": { "off": "none", "none": "none", "adaptive": "max" }
+              "reasoningEffortMap": { "off": "none", "none": "none", "adaptive": "max" },
+              "codeMode": "capable"
             }
           },
           {

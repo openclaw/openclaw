@@ -122,29 +122,25 @@ export async function discardUnattestedCodexPluginThread(params: {
   threadId: string;
   ephemeral: boolean;
 }): Promise<boolean> {
-  if (params.ephemeral) {
-    return await unsubscribeCodexThreadBestEffort(params.client, {
-      threadId: params.threadId,
-      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-    });
+  const { ephemeral } = params;
+  if (!ephemeral) {
+    try {
+      await params.client.request(
+        "thread/delete",
+        { threadId: params.threadId },
+        { timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS },
+      );
+      return true;
+    } catch (error) {
+      embeddedAgentLog.debug("codex plugin app attestation thread deletion failed", {
+        threadId: params.threadId,
+        error,
+      });
+    }
   }
-
-  try {
-    await params.client.request(
-      "thread/delete",
-      { threadId: params.threadId },
-      { timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS },
-    );
-    return true;
-  } catch (error) {
-    embeddedAgentLog.debug("codex plugin app attestation thread deletion failed", {
-      threadId: params.threadId,
-      error,
-    });
-    await unsubscribeCodexThreadBestEffort(params.client, {
-      threadId: params.threadId,
-      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-    });
-    return false;
-  }
+  const unsubscribed = await unsubscribeCodexThreadBestEffort(params.client, {
+    threadId: params.threadId,
+    timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+  });
+  return ephemeral && unsubscribed;
 }

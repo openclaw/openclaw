@@ -5,18 +5,15 @@
  */
 export const AUTOMATIONS_TOOL_NAME = "automations";
 
+/** Scheduler status exposes global metadata; caller-scoped inspection reads only caller-visible records. */
+export const CRON_SCOPED_READ_ACTIONS: readonly string[] = ["list", "get", "runs"];
+
 /**
  * "cron" is a permanently accepted alias for the scheduler tool in persisted
  * allow/deny config, old transcripts, and inbound calls (owner decision,
  * RFC 0026; same contract as bash -> exec). Not migration debt: no doctor
  * rewrite, no removal window.
  */
-const LEGACY_AUTOMATIONS_TOOL_NAMES = ["cron"] as const;
-
-/** True when a tool name refers to the scheduler tool, including legacy names. */
 export function isAutomationsToolName(name: string): boolean {
-  return (
-    name === AUTOMATIONS_TOOL_NAME ||
-    (LEGACY_AUTOMATIONS_TOOL_NAMES as readonly string[]).includes(name)
-  );
+  return name === AUTOMATIONS_TOOL_NAME || name === "cron";
 }

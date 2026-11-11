@@ -9,12 +9,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
 import type { SupportedGatewaySecretInputPath } from "./secret-input-paths.js";
 
-/** Precomputed Gateway credential surfaces used by startup, secret resolution, and clients. */
 export type GatewayCredentialPlan = ReturnType<typeof createGatewayCredentialPlan>;
 
-type GatewaySecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
-
-/** Normalize optional Gateway credential strings to nonempty values. */
 export const trimToUndefined = normalizeOptionalString;
 
 /**
@@ -32,11 +28,10 @@ export function trimCredentialToUndefined(value: unknown): string | undefined {
   return trimmed;
 }
 
-/** Build the shared credential plan for Gateway startup, local auth, and remote client auth. */
 export function createGatewayCredentialPlan(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  defaults?: GatewaySecretDefaults;
+  defaults?: NonNullable<OpenClawConfig["secrets"]>["defaults"];
 }) {
   const env = params.env ?? process.env;
   const gateway = params.config.gateway;
@@ -86,6 +81,12 @@ export function createGatewayCredentialPlan(params: {
   // token refs do not get resolved for auth modes that cannot consume them.
   const localTokenCanWin =
     authMode !== "password" && authMode !== "none" && authMode !== "trusted-proxy";
+  // Remote client credentials must not deactivate a local ingress password ref.
+  // Startup also resolves auth without a remote-client credential fallback.
+  const localPasswordCanWin =
+    authMode === "password" ||
+    authMode === "trusted-proxy" ||
+    (authMode !== "token" && authMode !== "none" && !(envToken || localToken.configured));
   const tokenCanWin = Boolean(envToken || localToken.configured || remoteToken.configured);
   const passwordCanWin =
     authMode === "password" ||
@@ -119,7 +120,7 @@ export function createGatewayCredentialPlan(params: {
     remoteToken,
     remotePassword,
     localTokenCanWin,
-    localPasswordCanWin: passwordCanWin,
+    localPasswordCanWin,
     localTokenSurfaceActive,
     tokenCanWin,
     passwordCanWin,

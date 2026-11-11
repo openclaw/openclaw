@@ -334,9 +334,9 @@ surfaces:
           - name: Plugin web routes
             coverageIds: [gateway.plugin-web-routes]
             description: Canvas and other plugin HTTP surfaces served by the Gateway.
-          - name: Canvas and A2UI routes
-            coverageIds: [gateway.canvas-and-a2ui-routes]
-            description: Hosted widget documents, A2UI renderer assets, and browser-hosted plugin routes under the Gateway HTTP server.
+          - name: Canvas routes
+            coverageIds: [gateway.canvas-routes]
+            description: Hosted widget documents and browser-hosted plugin routes under the Gateway HTTP server.
         docs:
           - docs/gateway/index.md
           - docs/concepts/architecture.md
@@ -347,7 +347,7 @@ surfaces:
           - control ui gateway
           - webchat gateway
           - plugin http route gateway
-          - canvas a2ui gateway
+          - canvas gateway
         category_note: hosted-web-surface.md
         human_lts_override: true
       - name: Gateway RPC APIs and Events
@@ -639,7 +639,7 @@ surfaces:
             description: Deterministic account and conversation routing plus assignable human or agent session ownership.
           - name: Shared and tenant trust boundaries
             coverageIds: [gateway.shared-and-tenant-trust-boundaries]
-            description: One explicit trust domain for shared collaboration and separate Gateway cells for tenant isolation.
+            description: One explicit trust domain for shared collaboration and separate Gateways for tenant isolation.
           - name: Identity and decision receipts
             coverageIds: [gateway.identity-and-decision-receipts]
             description: Opt-in metadata-only inspection that distinguishes attribution, enforcement, unknown evidence, and delivery outcomes.
@@ -648,7 +648,7 @@ surfaces:
           - docs/gateway/security/index.md
           - docs/concepts/multi-user.md
           - docs/concepts/agent-bindings.md
-          - docs/gateway/multi-tenant-hosting.md
+          - docs/gateway/security/trust-model.md
           - docs/gateway/audit.md
         search_anchors:
           - "gateway runtime and websocket protocol gateway runtime websocket feature matrix: roles, scopes, and operator policy"
@@ -1114,9 +1114,9 @@ surfaces:
       - name: Canvas plugin
         id: canvas-plugin
         features:
-          - name: Hosted widget and A2UI surfaces
-            coverageIds: [plugins.hosted-canvas-and-a2ui-surfaces]
-            description: Canvas plugin registers authenticated A2UI renderer assets and presents core-hosted widget documents on macOS panels.
+          - name: Hosted widget surfaces
+            coverageIds: [plugins.hosted-canvas-surfaces]
+            description: Canvas plugin presents core-hosted widget documents on macOS panels.
           - name: Agent canvas tool
             coverageIds: [plugins.agent-canvas-tool]
             description: Canvas plugin registers the agent-facing `canvas` tool for present, hide, and navigate panel control.
@@ -1135,7 +1135,6 @@ surfaces:
         search_anchors:
           - Canvas plugin
           - hosted canvas documents
-          - A2UI
           - canvas tool
           - canvas node commands
         category_note: canvas-plugin.md
@@ -5466,7 +5465,7 @@ surfaces:
         search_anchors:
           - macos companion app widget panel
           - hosted widget document panel
-        category_note: canvas-a2ui.md
+        category_note: widget-panel.md
         human_lts_override: false
       - name: Local Setup
         id: local-setup
@@ -7255,11 +7254,11 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: containers
-    name: Fleet, containers, and cloud execution
+    name: Containers and cloud execution
     family: platform-app
     level: beta
     level_code: M3
-    rationale: OpenClaw supports local container hosting, isolated fleet cells, and cloud-worker execution. The main workflows exist, but fleet and cloud lifecycle, recovery, placement, and image guarantees remain less mature than the local Docker and Podman path.
+    rationale: OpenClaw supports local container hosting and cloud-worker execution. The main workflows exist, but cloud lifecycle, recovery, placement, and image guarantees remain less mature than the local Docker and Podman path.
     completeness_instructions: references/completeness/docker-podman-hosting.md
     categories:
       - name: Container Setup
@@ -7283,16 +7282,12 @@ surfaces:
           - name: Rootless Podman image setup
             coverageIds: [containers.rootless-podman-image-setup]
             description: Rootless Podman image setup, launch, setup/onboarding, host CLI routing, Quadlet autostart, and owner/permission checks
-          - name: Isolated fleet cell setup
-            coverageIds: [containers.isolated-fleet-cell-setup]
-            description: Creation of tenant-scoped fleet cells with their own Gateway, state, credentials, channel accounts, container, and loopback host port.
           - name: Cloud worker profiles and runtime bootstrap
             coverageIds: [containers.cloud-worker-profiles-and-runtime-bootstrap]
             description: Cloud worker profile configuration, machine prerequisites, verified runtime and worker bundle installation, and fail-closed enrollment.
         docs:
           - docs/install/docker.md
           - docs/install/podman.md
-          - docs/cli/fleet.md
           - docs/gateway/cloud-workers.md
           - docs/gateway/cloud-workers/setup-and-bundle-installation.md
         search_anchors:
@@ -7300,7 +7295,6 @@ surfaces:
           - docker install, compose, and first-run setup
           - docker / podman hosting podman rootless, quadlet, and host cli
           - podman rootless, quadlet, and host cli
-          - isolated fleet cell setup
           - cloud worker profiles and runtime bootstrap
         category_note: docker-install-compose-and-first-run-setup.md
         human_lts_override: false
@@ -7340,9 +7334,6 @@ surfaces:
           - name: Operator-facing update
             coverageIds: [containers.operator-facing-update]
             description: Operator-facing update, backup, persistence, low-memory, and troubleshooting guidance
-          - name: Fleet cell lifecycle and diagnostics
-            coverageIds: [containers.fleet-cell-lifecycle-and-diagnostics]
-            description: List, status, logs, start, stop, restart, upgrade, doctor, backup, restore, and removal workflows for isolated cells.
           - name: Cloud session lifecycle and recovery
             coverageIds: [containers.cloud-session-lifecycle-and-recovery]
             description: Dispatch, status, sleep, wake, teardown, replay, recovery, and replacement behavior for cloud-backed sessions.
@@ -7352,7 +7343,6 @@ surfaces:
           - docs/install/docker.md
           - docs/install/hetzner.md
           - docs/install/hostinger.md
-          - docs/cli/fleet.md
           - docs/cli/worker.md
           - docs/gateway/cloud-sessions.md
           - docs/gateway/cloud-workers/session-lifecycle.md
@@ -7365,7 +7355,6 @@ surfaces:
           - networking, control ui, health, and observability
           - docker / podman hosting provider-hosted vps and operator runbooks
           - provider-hosted vps and operator runbooks
-          - fleet cell lifecycle and diagnostics
           - cloud session lifecycle and recovery
         category_note: runtime-configuration-state-volumes-and-secrets.md
         human_lts_override: false
@@ -9620,9 +9609,95 @@ surfaces:
       - name: Access and Identity
         id: access-and-identity
         features:
-          - name: Access and Identity
-            coverageIds: [regional-channels.access-and-identity]
-            description: Evidence scope for Access and Identity.
+          - name: Feishu/Lark bot WebSocket
+            coverageIds: [regional-channels.feishu-bot-websocket]
+            description: >-
+              Feishu/Lark bot SDK WebSocket discovery, authentication, reconnect, and cancellation,
+              attributed to the actual realm and account. Webhook proof does not qualify this transport,
+              and Feishu proof does not automatically qualify Lark. Bind this claim's scenario
+              occurrence, assertion, cell, package/source/runtime, account/protocol, and proof class.
+              Fixture, local-protocol, packaged, and live evidence stay distinct; missing attribution
+              remains UNKNOWN/unscored.
+          - name: Feishu/Lark bot signed webhook
+            coverageIds: [regional-channels.feishu-bot-signed-webhook]
+            description: >-
+              Feishu/Lark bot signed/encrypted webhook admission for the actual realm and account,
+              separate from SDK WebSocket discovery and lifecycle. Feishu proof does not automatically
+              qualify Lark. Bind this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: Consumer WeChat/Weixin account pairing
+            coverageIds: [regional-channels.wechat-consumer-account-pairing]
+            description: >-
+              Consumer WeChat/Weixin account pairing, scanner and secondary-sender behavior,
+              revocation, and account isolation under the existing consumer-channel owner. Bind the
+              actual package and host rather than inferring support from another WeChat account type.
+              Bind this claim's scenario occurrence, assertion, cell, package/source/runtime,
+              account/protocol, and proof class. Fixture, local-protocol, packaged, and live evidence
+              stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: WeCom AI bot WebSocket
+            coverageIds: [regional-channels.wecom-ai-bot-websocket]
+            description: >-
+              WeCom AI bot WebSocket ingress with actual selected-mode and account evidence;
+              bot credentials take precedence over webhook configuration in the accepted contract.
+              JSON bot webhooks and enterprise-app XML webhooks are separate claims. Bind native
+              account/message/stream identity and this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: WeCom AI bot JSON webhook
+            coverageIds: [regional-channels.wecom-ai-bot-json-webhook]
+            description: >-
+              WeCom AI bot JSON webhook ingress with actual selected-mode and account evidence;
+              configured webhook values alone do not establish selection when bot credentials take
+              precedence. WebSocket bot and enterprise-app XML ingress stay separate. Bind native
+              account/message/stream identity and this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: WeCom enterprise-app XML webhook
+            coverageIds: [regional-channels.wecom-enterprise-app-xml-webhook]
+            description: >-
+              WeCom enterprise-app XML webhook admission for its actual account and selected mode,
+              independently of AI bot WebSocket or JSON webhook ingress. Preserve native account and
+              message identity. Bind this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: QQ bot WebSocket
+            coverageIds: [regional-channels.qq-bot-websocket]
+            description: >-
+              Official QQ bot WebSocket authentication and resume with separately attributed C2C and
+              group account cells. QR provisioning creates bot credentials, not consumer identity;
+              Ed25519 webhook evidence and guild behavior do not qualify this claim. Bind native
+              message identity and this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: QQ bot Ed25519 webhook
+            coverageIds: [regional-channels.qq-bot-ed25519-webhook]
+            description: >-
+              Official QQ bot Ed25519 webhook admission with separately attributed C2C and group
+              account cells. QR provisioning is bot-credential setup, not consumer identity;
+              WebSocket authentication/resume and guild behavior do not qualify this claim. Bind
+              native message identity and this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: Yuanbao bot proprietary Protobuf WebSocket
+            coverageIds: [regional-channels.yuanbao-bot-protobuf-websocket]
+            description: >-
+              Yuanbao bot proprietary Protobuf WebSocket and signed-token route with C2C/group and
+              native message identity bound explicitly. Push ACK or response code=0 does not establish
+              durable adoption or recipient delivery. Old-catalog/latest-package or host-floor
+              mismatch remains UNKNOWN. Bind this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: DingTalk enterprise Stream candidate
+            coverageIds: [regional-channels.dingtalk-enterprise-stream-candidate]
+            description: >-
+              Noncatalog DingTalk enterprise Stream candidate, not an installation or support
+              commitment. Bind enterprise bot, DM, and group separately from optional user
+              authorization. Stream ACK, business message ID, adoption, and reply receipt are
+              distinct; owner/package/source acceptance is required. Bind this claim's scenario
+              occurrence, assertion, cell, package/source/runtime, account/protocol, and proof class.
+              Fixture, local-protocol, packaged, and live evidence stay distinct; missing attribution
+              remains UNKNOWN/unscored.
         docs: []
         search_anchors:
           - feishu, qq bot, wechat, yuanbao, zalo, zalo personal, regional channels access and identity
@@ -9632,9 +9707,96 @@ surfaces:
       - name: Conversation Routing and Delivery
         id: conversation-routing-and-delivery
         features:
-          - name: Conversation Routing and Delivery
-            coverageIds: [regional-channels.conversation-routing-and-delivery]
-            description: Evidence scope for Conversation Routing and Delivery.
+          - name: Feishu/Lark bot native reply
+            coverageIds: [regional-channels.feishu-bot-native-reply]
+            description: >-
+              Join actual Feishu/Lark bot ingress through Gateway to an accepted native reply for the
+              named realm, account, and ingress protocol. Feishu does not automatically qualify Lark;
+              transport admission alone does not prove a reply. Bind this claim's scenario occurrence,
+              assertion, cell, package/source/runtime, account/protocol, and proof class. Fixture,
+              local-protocol, packaged, and live evidence stay distinct; missing attribution remains
+              UNKNOWN/unscored.
+          - name: Consumer WeChat/Weixin iLink custody
+            coverageIds: [regional-channels.wechat-consumer-ilink-custody]
+            description: >-
+              Consumer WeChat/Weixin iLink poll/send custody distinguishes cursor advancement,
+              adoption, conversation context, and send acceptance under the existing owner. No
+              inferred group, thread, or exactly-once guarantee. Bind the actual package/host and this
+              claim's scenario occurrence, assertion, cell, package/source/runtime, account/protocol,
+              and proof class. Fixture, local-protocol, packaged, and live evidence stay distinct;
+              missing attribution remains UNKNOWN/unscored.
+          - name: WeCom AI bot reply
+            coverageIds: [regional-channels.wecom-ai-bot-reply]
+            description: >-
+              WeCom AI bot ingress through Gateway to an accepted bot reply, preserving native
+              account/message/stream identity and actual selected WebSocket or JSON mode. App reply
+              and bot-to-app fallback egress are separate claims; API acceptance is not recipient
+              observation. Bind this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: WeCom enterprise-app reply
+            coverageIds: [regional-channels.wecom-enterprise-app-reply]
+            description: >-
+              WeCom enterprise-app ingress through Gateway to its accepted app reply, with native
+              account/message identity and actual XML-ingress/app-egress binding. Agent API acceptance
+              is not recipient observation; bot replies do not qualify app delivery. Bind this claim's
+              scenario occurrence, assertion, cell, package/source/runtime, account/protocol, and proof
+              class. Fixture, local-protocol, packaged, and live evidence stay distinct; missing
+              attribution remains UNKNOWN/unscored.
+          - name: WeCom bot-to-app fallback
+            coverageIds: [regional-channels.wecom-bot-to-app-fallback]
+            description: >-
+              WeCom AI bot ingress and enterprise-app fallback egress are independently attributed,
+              preserving the actual selected modes and native account/message/stream identity.
+              Ordinary bot or app replies do not qualify this transition, and Agent API acceptance is
+              not recipient observation. Bind this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: QQ bot native reply
+            coverageIds: [regional-channels.qq-bot-native-reply]
+            description: >-
+              Official QQ bot ingress through Gateway to accepted native sends, with message identity
+              and separately attributed C2C/group account and WebSocket/Ed25519-webhook cells. No
+              consumer-account or guild qualification. Bind this claim's scenario occurrence,
+              assertion, cell, package/source/runtime, account/protocol, and proof class. Fixture,
+              local-protocol, packaged, and live evidence stay distinct; missing attribution remains
+              UNKNOWN/unscored.
+          - name: QQ bot native actions
+            coverageIds: [regional-channels.qq-bot-native-actions]
+            description: >-
+              Official QQ bot native interactions preserve message/interaction identity, actor, and
+              stale-action rejection for separately attributed C2C/group accounts and actual
+              WebSocket/Ed25519-webhook transport. No consumer-account or guild qualification. Bind
+              this claim's scenario occurrence, assertion, cell, package/source/runtime,
+              account/protocol, and proof class. Fixture, local-protocol, packaged, and live evidence
+              stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: Yuanbao bot native reply
+            coverageIds: [regional-channels.yuanbao-bot-native-reply]
+            description: >-
+              Yuanbao bot C2C/group ingress through Gateway to accepted native replies, binding the
+              signed-token route and native message identity. Push ACK or response code=0 is not
+              durable adoption or recipient delivery; quote and recall stay distinct, with no thread
+              claim. Old-catalog/latest-package or host-floor mismatch remains UNKNOWN. Bind this
+              claim's scenario occurrence, assertion, cell, package/source/runtime, account/protocol,
+              and proof class. Fixture, local-protocol, packaged, and live evidence stay distinct;
+              missing attribution remains UNKNOWN/unscored.
+          - name: Zalo Bot native reply
+            coverageIds: [regional-channels.zalo-bot-native-reply]
+            description: >-
+              Zalo Bot API account/protocol ingress through Gateway to an accepted native reply,
+              independently of Zalo Personal or other channels. Unbound package/runtime remains
+              UNKNOWN. Bind this claim's scenario occurrence, assertion, cell, package/source/runtime,
+              account/protocol, and proof class. Fixture, local-protocol, packaged, and live evidence
+              stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: Zalo Personal completed reply
+            coverageIds: [regional-channels.zalo-personal-completed-reply]
+            description: >-
+              Zalo Personal account delivery binds the native ordinary-message receipt. Completed-reply
+              block streaming, when enabled, implies neither token streaming nor default enablement;
+              existing experimental/unofficial judgments remain. Zalo Bot proof gives no credit here.
+              Bind this claim's scenario occurrence, assertion, cell, package/source/runtime,
+              account/protocol, and proof class. Fixture, local-protocol, packaged, and live evidence
+              stay distinct; missing attribution remains UNKNOWN/unscored.
         docs: []
         search_anchors:
           - feishu, qq bot, wechat, yuanbao, zalo, zalo personal, regional channels conversation routing and delivery
@@ -9644,9 +9806,59 @@ surfaces:
       - name: Media and Rich Content
         id: media-and-rich-content
         features:
-          - name: Media and Rich Content
-            coverageIds: [regional-channels.media-and-rich-content]
-            description: Evidence scope for Media and Rich Content.
+          - name: Feishu/Lark bot media bytes
+            coverageIds: [regional-channels.feishu-bot-media-bytes]
+            description: >-
+              Feishu/Lark bot media requires account-bound byte equality and actual realm/transport
+              attribution; Feishu proof does not automatically qualify Lark. Static cards and CardKit
+              streaming stay separate from media bytes. Bind this claim's scenario occurrence,
+              assertion, cell, package/source/runtime, account/protocol, and proof class. Fixture,
+              local-protocol, packaged, and live evidence stay distinct; missing attribution remains
+              UNKNOWN/unscored.
+          - name: Feishu/Lark bot CardKit streaming
+            coverageIds: [regional-channels.feishu-bot-cardkit-streaming]
+            description: >-
+              Feishu/Lark bot CardKit streaming requires its own native streaming evidence for the
+              actual realm and account; static-card success is not streaming proof and Feishu does
+              not automatically qualify Lark. Bind this claim's scenario occurrence, assertion, cell,
+              package/source/runtime, account/protocol, and proof class. Fixture, local-protocol,
+              packaged, and live evidence stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: Consumer WeChat/Weixin encrypted media
+            coverageIds: [regional-channels.wechat-consumer-encrypted-media]
+            description: >-
+              Consumer WeChat/Weixin encrypted media requires actual package/host binding and
+              account-bound byte, expiry, and abort evidence under the existing consumer-channel
+              owner. No inferred group or thread support. Bind this claim's scenario occurrence,
+              assertion, cell, package/source/runtime, account/protocol, and proof class. Fixture,
+              local-protocol, packaged, and live evidence stay distinct; missing attribution remains
+              UNKNOWN/unscored.
+          - name: WeCom mode-bound media
+            coverageIds: [regional-channels.wecom-mode-bound-media]
+            description: >-
+              WeCom media bytes name the actual AI bot or enterprise-app mode, ingress, and egress,
+              including independently attributed bot-to-app fallback when used. Preserve native
+              account/message/stream identity; Agent API acceptance is not recipient observation.
+              Bind this claim's scenario occurrence, assertion, cell, package/source/runtime,
+              account/protocol, and proof class. Fixture, local-protocol, packaged, and live evidence
+              stay distinct; missing attribution remains UNKNOWN/unscored.
+          - name: QQ bot media bytes
+            coverageIds: [regional-channels.qq-bot-media-bytes]
+            description: >-
+              Official QQ bot media requires native byte equality and message identity for separately
+              attributed C2C/group account and WebSocket/Ed25519-webhook cells. QR provisioning does
+              not establish consumer identity, and this row gives no guild qualification. Bind this
+              claim's scenario occurrence, assertion, cell, package/source/runtime, account/protocol,
+              and proof class. Fixture, local-protocol, packaged, and live evidence stay distinct;
+              missing attribution remains UNKNOWN/unscored.
+          - name: Yuanbao bot media bytes
+            coverageIds: [regional-channels.yuanbao-bot-media-bytes]
+            description: >-
+              Yuanbao bot media requires actual byte evidence for the C2C/group account, signed-token
+              route, and native message identity; push ACK or code=0 is not durable adoption or
+              recipient delivery. Old-catalog/latest-package or host-floor mismatch remains UNKNOWN.
+              Bind this claim's scenario occurrence, assertion, cell, package/source/runtime,
+              account/protocol, and proof class. Fixture, local-protocol, packaged, and live evidence
+              stay distinct; missing attribution remains UNKNOWN/unscored.
         docs: []
         search_anchors:
           - feishu, qq bot, wechat, yuanbao, zalo, zalo personal, regional channels media and rich content
@@ -10808,26 +11020,22 @@ surfaces:
         features:
           - name: Embedding provider selection
             coverageIds: [local-models.embedding-provider-selection]
-            description: Covers Embedding provider selection across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, local `memoryFlush` model overrides, and related local embeddings and memory behavior.
+            description: Covers Embedding provider selection across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, and related local embeddings and memory behavior.
           - name: Memory search readiness
             coverageIds: [local-models.memory-search-readiness]
-            description: Covers Memory search readiness across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, local `memoryFlush` model overrides, and related local embeddings and memory behavior.
-          - name: memoryFlush model override
-            coverageIds: [local-models.memoryflush-model-override]
-            description: Covers memoryFlush model override across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, local `memoryFlush` model overrides, and related local embeddings and memory behavior.
+            description: Covers Memory search readiness across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, and related local embeddings and memory behavior.
           - name: Fallback lexical search
             coverageIds: [local-models.fallback-lexical-search]
-            description: Covers Fallback lexical search across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, local `memoryFlush` model overrides, and related local embeddings and memory behavior.
+            description: Covers Fallback lexical search across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, and related local embeddings and memory behavior.
           - name: Provider mismatch guidance
             coverageIds: [local-models.provider-mismatch-guidance]
-            description: Covers Provider mismatch guidance across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, local `memoryFlush` model overrides, and related local embeddings and memory behavior.
+            description: Covers Provider mismatch guidance across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, and related local embeddings and memory behavior.
         docs:
           - docs/concepts/memory.md
           - docs/gateway/doctor.md
         search_anchors:
           - Embedding provider selection
           - Memory search readiness
-          - memoryFlush model override
           - Fallback lexical search
           - Provider mismatch guidance
         category_note: local-embeddings-and-memory-provider-usage.md

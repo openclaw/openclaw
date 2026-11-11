@@ -27,10 +27,9 @@ export function readCodexNativeSubagentRunId(
 }
 
 export function readNativeSubagentThreadIds(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "");
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+    : [];
 }
 
 export function readThreadParentThreadId(
@@ -52,4 +51,19 @@ export function readThreadSpawnSource(
 
 export function normalizeIdentifier(value: string | undefined): string | undefined {
   return value?.replace(/[^a-z0-9]/giu, "").toLowerCase();
+}
+
+/** A follow-up belongs after the recorded terminal predecessor in native history. */
+export function findCodexNativeSuccessorTurn<T extends Record<string, unknown>>(
+  turns: readonly T[],
+  predecessorId: string | undefined,
+  targetId: string | undefined,
+): T | undefined {
+  const predecessor = turns.findIndex((turn) => readString(turn, "id") === predecessorId);
+  const target = turns.findIndex((turn) => readString(turn, "id") === targetId);
+  return predecessor >= 0 &&
+    target > predecessor &&
+    ["completed", "failed"].includes(readString(turns[predecessor], "status") ?? "")
+    ? turns[target]
+    : undefined;
 }

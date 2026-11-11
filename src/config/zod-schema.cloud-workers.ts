@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { workerWorkspaceDurabilitySchema } from "../plugins/worker-retention.js";
 import { normalizeCloudRepo } from "./cloud-worker-project-profiles.js";
 import { validateProviderSettings } from "./provider-settings.js";
 import { projectConfigFieldMetadata } from "./schema.field-metadata.js";
@@ -21,6 +22,10 @@ const CloudWorkerProfileSchema = z
     install: z.enum(["bundle", "npm"]).optional().default("bundle").register(configUiMetadata, {
       label: "Cloud Worker Install Method",
       help: 'Worker installation method: "bundle" (default) transfers the gateway\'s content-hashed installed build and supports released, development, and unreleased versions; "npm" installs the exact gateway version and is available only when that version is released.',
+    }),
+    workspaceDurability: workerWorkspaceDurabilitySchema.optional().register(configUiMetadata, {
+      label: "Repository Workspace Durability",
+      help: "Mirrored by default. Retained-disk repositories require an exact-resource managed-node provider and an explicit finite compute window in seconds. The original disk remains authoritative between turns; Move to Gateway exports and retires it.",
     }),
     suspendAfter: z
       .string()
@@ -70,6 +75,10 @@ const CloudWorkerProjectProfileSchema = CloudWorkerProfileIdSchema.register(conf
 
 export const CloudWorkersConfigSchema = z
   .strictObject({
+    requiredProfile: CloudWorkerProfileIdSchema.optional().register(configUiMetadata, {
+      label: "Required Worker Profile",
+      help: "Require every session to execute on this worker profile. Sessions are placed automatically and cannot fall back to Gateway execution. Unavailable workers block turns, not Gateway startup.",
+    }),
     desktop: z.boolean().optional().register(configUiMetadata, {
       label: "Cloud Worker Desktop (Labs)",
       help: "Enables the experimental worker.desktop.observe surface and Control UI Desktop panel for desktop-capable cloud worker environments.",

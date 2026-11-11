@@ -108,24 +108,12 @@ enum WideAreaGatewayDiscovery {
     }
 
     private static func readTailscaleStatus() async -> String? {
-        let candidates = [
-            "/usr/local/bin/tailscale",
-            "/opt/homebrew/bin/tailscale",
-            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-            "tailscale",
-        ]
-
-        for candidate in candidates {
-            if let result = await BoundedCommand.run(
+        await BoundedCommand.tailscaleStatus { candidate in
+            await BoundedCommand.run(
                 path: candidate,
                 arguments: ["status", "--json"],
                 timeout: 0.7)
-            {
-                return result
-            }
         }
-
-        return nil
     }
 
     private static func parseSrv(_ stdout: String) -> (String, Int)? {

@@ -17,21 +17,11 @@ run_plugins_clawhub_scenario() {
       echo "$server_pid" >"$server_pid_file"
       openclaw_plugins_register_fixture_pid_file "$server_pid_file"
 
-      for _ in $(seq 1 100); do
-        if [[ -s "$server_port_file" ]]; then
-          export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$server_port_file")"
-          return 0
-        fi
-        if ! kill -0 "$server_pid" 2>/dev/null; then
-          openclaw_plugins_print_fixture_log "$server_log"
-          return 1
-        fi
-        sleep 0.1
-      done
-
-      openclaw_plugins_print_fixture_log "$server_log"
-      echo "Timed out waiting for ClawHub fixture server." >&2
-      return 1
+      openclaw_plugins_wait_fixture_port "$server_pid" "$server_port_file" "$server_log" "ClawHub fixture server"
+      local readiness_status=$?
+      [ "$readiness_status" -eq 0 ] || return "$readiness_status"
+      export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$server_port_file")"
+      return 0
     }
 
     local clawhub_default_plugin_spec="clawhub:@openclaw/plugin-e2e-fixture"
@@ -49,11 +39,7 @@ run_plugins_clawhub_scenario() {
       fi
       unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
       clawhub_fixture_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-clawhub-fixture.XXXXXX")"
-      local fixture_status=0
-      start_clawhub_fixture_server "$clawhub_fixture_dir" || fixture_status="$?"
-      if [[ "$fixture_status" -ne 0 ]]; then
-        return "$fixture_status"
-      fi
+      start_clawhub_fixture_server "$clawhub_fixture_dir" || return "$?"
     fi
 
     CLAWHUB_PLUGIN_SPEC="${OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC:-$clawhub_default_plugin_spec}"

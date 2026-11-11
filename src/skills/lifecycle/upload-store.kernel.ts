@@ -22,33 +22,14 @@ import {
   deleteSkillUploadState,
   hasLiveSkillUploadInstallLease,
   requireUploadMetadata,
+  requireUploadMetadataInDatabase,
   selectSkillUploadMetadata,
   SKILL_UPLOAD_LEASE_SCOPE,
   type SkillUploadDatabase,
-  type SkillUploadMetadataRow,
 } from "./upload-store.sqlite.js";
 
 type Options = OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase };
 const MAX_ACTIVE_SKILL_UPLOADS = 32;
-
-function matchesBegin(
-  row: SkillUploadMetadataRow,
-  params: {
-    kind: "skill-archive";
-    slug: string;
-    force: boolean;
-    sizeBytes: number;
-    sha256?: string;
-  },
-): boolean {
-  return (
-    row.kind === params.kind &&
-    row.slug === params.slug &&
-    row.force === (params.force ? 1 : 0) &&
-    row.size_bytes === params.sizeBytes &&
-    (row.sha256 ?? undefined) === params.sha256
-  );
-}
 
 export function beginSkillUploadInDatabase(
   params: {
@@ -78,7 +59,13 @@ export function beginSkillUploadInDatabase(
         selectSkillUploadMetadata(kysely).where("idempotency_key_hash", "=", keyHash),
       );
       if (existing) {
-        if (!matchesBegin(existing, { kind: params.kind, slug, force, sizeBytes, sha256 })) {
+        if (
+          existing.kind !== params.kind ||
+          existing.slug !== slug ||
+          existing.force !== (force ? 1 : 0) ||
+          existing.size_bytes !== sizeBytes ||
+          (existing.sha256 ?? undefined) !== sha256
+        ) {
           throw new SkillUploadRequestError("idempotencyKey conflicts with a different upload");
         }
         if (isFutureDateTimestampMs(existing.expires_at, { nowMs: createdAt })) {
@@ -148,13 +135,7 @@ export function appendSkillUploadChunkInDatabase(
   return runOpenClawStateWriteTransaction(({ db }) => {
     admit?.("transaction");
     const kysely = getNodeSqliteKysely<SkillUploadDatabase>(db);
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      selectSkillUploadMetadata(kysely).where("upload_id", "=", uploadId),
-    );
-    if (!row) {
-      throw new SkillUploadRequestError(`upload not found: ${uploadId}`);
-    }
+    const row = requireUploadMetadataInDatabase(db, kysely, uploadId);
     if (!isFutureDateTimestampMs(row.expires_at)) {
       throw new SkillUploadRequestError("upload has expired");
     }

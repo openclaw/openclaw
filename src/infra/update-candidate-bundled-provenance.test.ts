@@ -58,6 +58,9 @@ it.each([
   { kind: "candidate bundled root escapes package", bundled: false },
   { kind: "missing candidate ID", bundled: false },
   { kind: "mismatched candidate ID", bundled: false },
+  { kind: "missing source selection", bundled: false },
+  { kind: "source package mismatch", bundled: false },
+  { kind: "bundled plugins disabled", bundled: false },
 ])("preserves candidate plugin provenance: $kind", async ({ kind, bundled }) => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "candidate-provenance-")));
   const sourceState = path.join(root, "source-state");
@@ -197,11 +200,16 @@ it.each([
     const rehearsal = await prepareUpdateCandidateRehearsal({
       config,
       candidateRoot: candidateHost,
+      sourceBundledPlugins: {
+        packageRoot: kind === "source package mismatch" ? candidateHost : liveHost,
+        directory: kind === "missing source selection" ? undefined : sourceBundled,
+      },
       stateDir: sourceState,
       env: {
         ...process.env,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: sourceBundled,
-        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: kind === "bundled plugins disabled" ? "1" : undefined,
       },
     });
     cleanupRehearsal = rehearsal.cleanup;
@@ -223,6 +231,7 @@ it.each([
     );
     if (bundled) {
       expect(selectedEntry).toBe(path.join(candidatePlugin, "index.js"));
+      expect(rehearsal.snapshotCapacity.pluginBytes).toBe(0);
     } else {
       expect(selectedEntry.startsWith(rehearsal.stateDir + path.sep)).toBe(true);
     }
@@ -366,10 +375,11 @@ it.each([false, true])(
         config,
         stateDir,
         candidateRoot: candidateHost,
+        sourceBundledPlugins: { packageRoot: sourceHost, directory: path.dirname(sourcePlugin) },
         env: {
           ...process.env,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: path.dirname(sourcePlugin),
-          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: undefined,
         },
       });
       cleanup = rehearsal.cleanup;

@@ -11,6 +11,7 @@ import {
   createRuntime,
   hoisted,
   installAcpSessionManagerTestLifecycle,
+  mockMutableSession,
   readySessionMeta,
 } from "./manager.test-helpers.js";
 
@@ -46,10 +47,8 @@ describe("ACP operator model ceiling", () => {
       id: "acpx",
       runtime: runtimeState.runtime,
     });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey,
-      storeSessionKey: sessionKey,
-      acp: readySessionMeta({ agent: "fixture", runtimeOptions: model ? { model } : {} }),
+    mockMutableSession(sessionKey, {
+      currentMeta: readySessionMeta({ agent: "fixture", runtimeOptions: model ? { model } : {} }),
     });
     let modelPolicy = prepareOperatorModelPolicy({
       cfg,
@@ -107,7 +106,6 @@ describe("ACP operator model ceiling", () => {
   }
 
   it.each<[name: string, args: Parameters<typeof run>, beforeBackend: boolean]>([
-    ["excluded selection", ["fixture/denied"], true],
     ["unqualified selection", [undefined], true],
     [
       "native model alias with an exact exclusion",

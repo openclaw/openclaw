@@ -10,16 +10,13 @@ export function splitBrowserDraft(draft: string): { directory: string; prefix: s
   }
   const rootLength = /^[A-Za-z]:[\\/]/u.test(draft) ? 3 : 1;
   const trailingSeparator = draft.search(/[\\/]+$/u);
-  if (trailingSeparator >= 0) {
-    return {
-      directory: draft.slice(0, Math.max(rootLength, trailingSeparator)),
-      prefix: "",
-    };
-  }
-  const separator = Math.max(draft.lastIndexOf("/"), draft.lastIndexOf("\\"));
+  const separator =
+    trailingSeparator >= 0
+      ? trailingSeparator
+      : Math.max(draft.lastIndexOf("/"), draft.lastIndexOf("\\"));
   return {
     directory: draft.slice(0, Math.max(rootLength, separator)),
-    prefix: draft.slice(separator + 1),
+    prefix: trailingSeparator >= 0 ? "" : draft.slice(separator + 1),
   };
 }
 
@@ -27,7 +24,8 @@ function filterBrowserEntries(entries: readonly FsDirEntry[], prefix: string): F
   if (!prefix) {
     return [...entries];
   }
-  const query = prefix.toLowerCase();
+  // macOS stores many names in NFD; NFC comparison keeps typed precomposed queries matching.
+  const query = prefix.toLowerCase().normalize("NFC");
   // Case-sensitive filesystems can hold `App` and `app`; the typed spelling must win first.
   const spelled: FsDirEntry[] = [];
   const exact: FsDirEntry[] = [];
@@ -38,7 +36,7 @@ function filterBrowserEntries(entries: readonly FsDirEntry[], prefix: string): F
     if (entry.hidden && !prefix.startsWith(".")) {
       continue;
     }
-    const name = entry.name.toLowerCase();
+    const name = entry.name.toLowerCase().normalize("NFC");
     if (entry.name === prefix) {
       spelled.push(entry);
     } else if (name === query) {

@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -34,7 +34,7 @@ const stages = [
 ] as const;
 type Stage = (typeof stages)[number]["prefix"];
 let options: { env: { OPENCLAW_STATE_DIR: string } };
-let db: DatabaseSync;
+let db: EngineConnection;
 
 function inspect(decisionCursor: string, executionId = "execution-local") {
   return inspectExecutionIdentityRun(
@@ -117,8 +117,8 @@ beforeAll(async () => {
       ).toBe("inserted");
       db.prepare(`INSERT INTO cron_run_receipts (
         receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
-        status, owner_pid, started_at_ms, finished_at_ms
-      ) VALUES (?, 'default', ?, 'revision-1', 'main', ?, 'ok', 1, ?, ?)`).run(
+        status, owner_pid, started_at_ms, finished_at_ms, cursor_id
+      ) VALUES (?, 'default', ?, 'revision-1', 'main', ?, 'ok', 1, ?, ?, (SELECT COALESCE(MAX(cursor_id), 0) + 1 FROM cron_run_receipts))`).run(
         `cron-${id}`,
         `job-${id}`,
         context.runId,

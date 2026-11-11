@@ -44,119 +44,117 @@ function workerSshStderrTail(stderr: string): string | undefined {
 }
 
 /** Production runner that treats the post-forward marker as connection readiness. */
-export function createWorkerSshRunner(): WorkerSshRunner {
-  return {
-    run: runCommandWithTimeout,
-    start(argv, options) {
-      const [command, ...args] = argv;
-      if (!command) {
-        throw new Error("Worker SSH runner requires a command");
+export const workerSshRunner: WorkerSshRunner = {
+  run: runCommandWithTimeout,
+  start(argv, options) {
+    const [command, ...args] = argv;
+    if (!command) {
+      throw new Error("Worker SSH runner requires a command");
+    }
+    const child = spawn(command, args, {
+      env: options.baseEnv,
+      signal: options.signal,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const releaseOutput = releaseChildProcessOutputAfterExit(child);
+    let exitedSettled = false;
+    let readySettled = false;
+    let childExited = false;
+    const readiness = createDeferredCore();
+    const exit = createDeferredCore<WorkerSshProcessExit>();
+    const ready = readiness.promise;
+    const exited = exit.promise;
+    // Readiness can reject after its awaiter timed out and moved on (stop()/late close);
+    // observe it here so lifecycle settles never become unhandled rejections.
+    void ready.catch(() => {});
+    let stdout = "";
+    let stderr = "";
+    const settleReadyError = () => {
+      if (readySettled) {
+        return;
       }
-      const child = spawn(command, args, {
-        env: options.baseEnv,
-        signal: options.signal,
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true,
-      });
-      const releaseOutput = releaseChildProcessOutputAfterExit(child);
-      let exitedSettled = false;
-      let readySettled = false;
-      let childExited = false;
-      const readiness = createDeferredCore();
-      const exit = createDeferredCore<WorkerSshProcessExit>();
-      const ready = readiness.promise;
-      const exited = exit.promise;
-      // Readiness can reject after its awaiter timed out and moved on (stop()/late close);
-      // observe it here so lifecycle settles never become unhandled rejections.
-      void ready.catch(() => {});
-      let stdout = "";
-      let stderr = "";
-      const settleReadyError = () => {
-        if (readySettled) {
-          return;
-        }
+      readySettled = true;
+      readiness.reject(workerSshProcessError(stderr));
+    };
+    const settleExited = (result: WorkerSshProcessExit) => {
+      if (exitedSettled) {
+        return;
+      }
+      exitedSettled = true;
+      releaseOutput();
+      const stderrTail = workerSshStderrTail(stderr);
+      exit.resolve({ ...result, ...(stderrTail ? { stderrTail } : {}) });
+    };
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("error", () => {});
+    child.stdout.on("data", (chunk: string) => {
+      if (readySettled || childExited) {
+        return;
+      }
+      stdout = sliceUtf16Safe(`${stdout}${chunk}`, -STDERR_LIMIT);
+      if (stdout.split(/\r?\n/u).includes(WORKER_TUNNEL_READY_MARKER)) {
         readySettled = true;
-        readiness.reject(workerSshProcessError(stderr));
-      };
-      const settleExited = (result: WorkerSshProcessExit) => {
-        if (exitedSettled) {
-          return;
-        }
-        exitedSettled = true;
-        releaseOutput();
-        const stderrTail = workerSshStderrTail(stderr);
-        exit.resolve({ ...result, ...(stderrTail ? { stderrTail } : {}) });
-      };
-      child.stdout.setEncoding("utf8");
-      child.stdout.on("error", () => {});
-      child.stdout.on("data", (chunk: string) => {
-        if (readySettled || childExited) {
-          return;
-        }
-        stdout = sliceUtf16Safe(`${stdout}${chunk}`, -STDERR_LIMIT);
-        if (stdout.split(/\r?\n/u).includes(WORKER_TUNNEL_READY_MARKER)) {
-          readySettled = true;
-          readiness.resolve();
-        }
-      });
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("error", () => {});
-      child.stderr.on("data", (chunk: string) => {
-        stderr = sliceUtf16Safe(`${stderr}${chunk}`, -STDERR_LIMIT);
-      });
-      child.once("error", () => {
-        settleReadyError();
-        // "error" also fires for abort/kill-delivery failures on a live child; only a child
-        // that never spawned (no pid) gets a synthesized exit, otherwise close/stop() settle it.
-        // The no-pid case is terminal: settle exit so stop() never signals an unspawned child.
-        if (child.pid === undefined) {
-          settleExited({ code: null, signal: null });
-        }
-      });
-      // Fence readiness at real exit, but retain diagnostics until stdio closes.
-      // The shared output owner bounds draining if descendants retain the pipes.
-      child.once("exit", () => {
-        childExited = true;
-        child.stdin.destroy();
-      });
-      child.once("close", (code, signal) => {
-        settleReadyError();
-        settleExited({ code, signal });
-      });
-      child.stdin.on("error", () => {});
-      child.stdin.end(options.input);
+        readiness.resolve();
+      }
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("error", () => {});
+    child.stderr.on("data", (chunk: string) => {
+      stderr = sliceUtf16Safe(`${stderr}${chunk}`, -STDERR_LIMIT);
+    });
+    child.once("error", () => {
+      settleReadyError();
+      // "error" also fires for abort/kill-delivery failures on a live child; only a child
+      // that never spawned (no pid) gets a synthesized exit, otherwise close/stop() settle it.
+      // The no-pid case is terminal: settle exit so stop() never signals an unspawned child.
+      if (child.pid === undefined) {
+        settleExited({ code: null, signal: null });
+      }
+    });
+    // Fence readiness at real exit, but retain diagnostics until stdio closes.
+    // The shared output owner bounds draining if descendants retain the pipes.
+    child.once("exit", () => {
+      childExited = true;
+      child.stdin.destroy();
+    });
+    child.once("close", (code, signal) => {
+      settleReadyError();
+      settleExited({ code, signal });
+    });
+    child.stdin.on("error", () => {});
+    child.stdin.end(options.input);
 
-      let stopPromise: Promise<void> | undefined;
-      return {
-        ready,
-        exited,
-        stop() {
-          return (stopPromise ??= (async () => {
-            if (exitedSettled) {
-              return;
+    let stopPromise: Promise<void> | undefined;
+    return {
+      ready,
+      exited,
+      stop() {
+        return (stopPromise ??= (async () => {
+          if (exitedSettled) {
+            return;
+          }
+          child.kill("SIGTERM");
+          await settlesWithin(exited, STOP_GRACE_MS);
+          if (!exitedSettled) {
+            // A false return can also mean the child died a moment ago with its "exit"
+            // event still queued; always take the bounded wait before judging.
+            const killDelivered = child.kill("SIGKILL");
+            if (!(await settlesWithin(exited, STOP_KILL_WAIT_MS))) {
+              // Neither delivered SIGKILL nor failed delivery proves termination without
+              // an exit event; fail the stop so the owner keeps tracking the live child.
+              throw workerSshProcessError(
+                killDelivered
+                  ? "SSH child did not exit after SIGKILL; it may still be running"
+                  : "SIGKILL delivery failed; SSH child may still be running",
+              );
             }
-            child.kill("SIGTERM");
-            await settlesWithin(exited, STOP_GRACE_MS);
-            if (!exitedSettled) {
-              // A false return can also mean the child died a moment ago with its "exit"
-              // event still queued; always take the bounded wait before judging.
-              const killDelivered = child.kill("SIGKILL");
-              if (!(await settlesWithin(exited, STOP_KILL_WAIT_MS))) {
-                // Neither delivered SIGKILL nor failed delivery proves termination without
-                // an exit event; fail the stop so the owner keeps tracking the live child.
-                throw workerSshProcessError(
-                  killDelivered
-                    ? "SSH child did not exit after SIGKILL; it may still be running"
-                    : "SIGKILL delivery failed; SSH child may still be running",
-                );
-              }
-            }
-          })().catch((error: unknown) => {
-            stopPromise = undefined;
-            throw error;
-          }));
-        },
-      };
-    },
-  };
-}
+          }
+        })().catch((error: unknown) => {
+          stopPromise = undefined;
+          throw error;
+        }));
+      },
+    };
+  },
+};

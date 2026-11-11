@@ -3,6 +3,7 @@
 export {
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,

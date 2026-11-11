@@ -80,14 +80,8 @@ function resolveGroundedFileLimit(
 
 export async function previewRemHarness(params: PreviewRemHarnessOptions) {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const remConfig = resolveMemoryRemDreamingConfig({
-    pluginConfig: params.pluginConfig,
-    cfg: params.cfg,
-  });
-  const deepConfig = resolveMemoryDeepDreamingConfig({
-    pluginConfig: params.pluginConfig,
-    cfg: params.cfg,
-  });
+  const remConfig = resolveMemoryRemDreamingConfig(params);
+  const deepConfig = resolveMemoryDeepDreamingConfig(params);
   const allRecallEntries = await readShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
     nowMs,

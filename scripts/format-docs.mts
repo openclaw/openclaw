@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Formats docs Markdown/MDX using the repository formatter.
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";

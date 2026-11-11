@@ -2,8 +2,8 @@ package ai.openclaw.app.wear
 
 import ai.openclaw.app.chat.ChatSwarmDotStatus
 import ai.openclaw.app.chat.ChatSwarmGroup
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -55,21 +55,19 @@ internal fun projectWearAgentPulse(
             put("failed", swarmGroups.sumOf(ChatSwarmGroup::failed))
             put(
               "phases",
-              buildJsonArray {
+              JsonArray(
                 phaseBuckets
                   .dropLastWhile { phase -> !phase.hasData() }
-                  .forEach { phase ->
-                    add(
-                      buildJsonObject {
-                        put("queued", phase.queued)
-                        put("running", phase.running)
-                        put("done", phase.done)
-                        put("failed", phase.failed)
-                        put("hidden", phase.hidden)
-                      },
-                    )
-                  }
-              },
+                  .map { phase ->
+                    buildJsonObject {
+                      put("queued", phase.queued)
+                      put("running", phase.running)
+                      put("done", phase.done)
+                      put("failed", phase.failed)
+                      put("hidden", phase.hidden)
+                    }
+                  },
+              ),
             )
             put("morePhases", morePhases)
           }
@@ -79,24 +77,15 @@ internal fun projectWearAgentPulse(
     put(
       "approvals",
       buildJsonObject {
-        when {
-          !gatewayConnected -> {
-            put("state", "unavailable")
+        val state =
+          when {
+            !gatewayConnected -> "unavailable"
+            approvalsRefreshing -> "refreshing"
+            !approvalsAvailable -> "unavailable"
+            else -> "ready"
           }
-
-          approvalsRefreshing -> {
-            put("state", "refreshing")
-          }
-
-          !approvalsAvailable -> {
-            put("state", "unavailable")
-          }
-
-          else -> {
-            put("state", "ready")
-            put("pending", pendingApprovalCount.coerceAtLeast(0))
-          }
-        }
+        put("state", state)
+        if (state == "ready") put("pending", pendingApprovalCount.coerceAtLeast(0))
       },
     )
   }

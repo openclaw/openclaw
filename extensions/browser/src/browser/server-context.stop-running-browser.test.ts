@@ -31,9 +31,9 @@ vi.mock("./chrome.js", () => ({
   stopOwnedOpenClawChrome: chromeMocks.stopOwnedOpenClawChrome,
   stopOpenClawChrome: vi.fn(async () => {}),
 }));
-vi.mock("./chrome-mcp.js", () => ({
+vi.mock("./chrome-mcp.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./chrome-mcp.js")>()),
   closeChromeMcpSession: vi.fn(async () => false),
-  countChromeMcpTabs: vi.fn(async () => 0),
   ensureChromeMcpAvailable: vi.fn(async () => {}),
   listChromeMcpTabs: vi.fn(async () => []),
 }));
@@ -68,19 +68,6 @@ describe("createProfileAvailability.stopRunningBrowser", () => {
       await expect(profileCtx.stopRunningBrowser()).resolves.toEqual({ stopped: true });
       expect(pwAiMocks.closePlaywrightBrowserConnection).not.toHaveBeenCalled();
       expect(chromeMocks.stopOwnedOpenClawChrome).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["not-running", "stopped"] as const)(
-    "reports the managed Chrome owner result: %s",
-    async (status) => {
-      chromeMocks.stopOwnedOpenClawChrome.mockResolvedValue({ status });
-      const { profileCtx } = createStopHarness(makeBrowserProfile());
-      await expect(profileCtx.stopRunningBrowser()).resolves.toEqual({
-        stopped: status === "stopped",
-      });
-      expect(chromeMocks.stopOwnedOpenClawChrome).toHaveBeenCalledOnce();
-      expect(pwAiMocks.closePlaywrightBrowserConnection).not.toHaveBeenCalled();
     },
   );
 

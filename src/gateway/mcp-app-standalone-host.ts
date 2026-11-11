@@ -1,4 +1,4 @@
-// Serialized into the standalone shell; keep runtime dependencies inside this function.
+// Bundled into the standalone browser script; keep its module closure self-contained.
 export function runStandaloneMcpAppHost(config: {
   protocolVersion: string;
   viewPath: string;

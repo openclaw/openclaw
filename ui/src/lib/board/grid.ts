@@ -1,4 +1,5 @@
-export const BOARD_GRID_COLUMNS = 12;
+import { BOARD_GRID_COLUMNS } from "./grid-constants.ts";
+
 export const BOARD_GRID_ROW_HEIGHT = 56;
 export const BOARD_GRID_GAP = 12;
 export const BOARD_DOCUMENT_AUTO_MAX_ROWS = 240;
@@ -50,31 +51,25 @@ function canonicalItems(
     .map(withOrder);
 }
 
-function fits(occupied: readonly boolean[][], x: number, y: number, w: number, h: number): boolean {
+function fits(occupied: readonly number[], x: number, y: number, w: number, h: number): boolean {
+  // The fixed 12-column grid fits in one occupancy mask per row.
+  const columns = ((1 << w) - 1) << x;
   for (let row = y; row < y + h; row += 1) {
-    for (let column = x; column < x + w; column += 1) {
-      if (occupied[row]?.[column]) {
-        return false;
-      }
+    if ((occupied[row] ?? 0) & columns) {
+      return false;
     }
   }
   return true;
 }
 
-function occupy(occupied: boolean[][], rect: BoardGridRect): void {
-  for (let row = rect.y; row < rect.y + rect.h; row += 1) {
-    const cells = occupied[row] ?? Array.from({ length: BOARD_GRID_COLUMNS }, () => false);
-    occupied[row] = cells;
-    for (let column = rect.x; column < rect.x + rect.w; column += 1) {
-      cells[column] = true;
-    }
-  }
-}
-
-function firstFit(occupied: readonly boolean[][], item: BoardGridItem): BoardGridRect {
+function placeFirstFit(occupied: number[], item: BoardGridItem): BoardGridRect {
   for (let y = 0; ; y += 1) {
     for (let x = 0; x <= BOARD_GRID_COLUMNS - item.w; x += 1) {
       if (fits(occupied, x, y, item.w, item.h)) {
+        const columns = ((1 << item.w) - 1) << x;
+        for (let row = y; row < y + item.h; row += 1) {
+          occupied[row] = (occupied[row] ?? 0) | columns;
+        }
         return { name: item.name, x, y, w: item.w, h: item.h };
       }
     }
@@ -93,14 +88,17 @@ export function layout(
 }
 
 function layoutCanonicalItems(items: readonly BoardGridItem[]): BoardGridRect[] {
-  const occupied: boolean[][] = [];
-  const rects: BoardGridRect[] = [];
-  for (const item of items) {
-    const placed = firstFit(occupied, item);
-    occupy(occupied, placed);
-    rects.push(placed);
+  if (items.every((item) => item.w === BOARD_GRID_COLUMNS)) {
+    // Full-width widgets leave no gaps for later widgets to fill.
+    let y = 0;
+    return items.map((item) => {
+      const rect = { name: item.name, x: 0, y, w: item.w, h: item.h };
+      y += item.h;
+      return rect;
+    });
   }
-  return rects;
+  const occupied: number[] = [];
+  return items.map((item) => placeFirstFit(occupied, item));
 }
 
 function contains(rect: BoardGridRect, cell: BoardGridCell): boolean {
@@ -190,11 +188,6 @@ export function nudge(
   return canonical.map(withOrder);
 }
 
-/** CSS grid lines are one-based; engine cells are zero-based. */
-export function toCssPlacement(rect: BoardGridRect): string {
-  return `grid-column: ${rect.x + 1} / span ${rect.w}; grid-row: ${rect.y + 1} / span ${rect.h};`;
-}
-
 // Keep this numeric inset aligned with the app-level --widget-frame-inset token.
 const BOARD_WIDGET_FRAME_INSET = 12;
 // board.css keeps a 1px border even when frameless. Reserve both edges so
@@ -241,10 +234,6 @@ function autoBoardWidgetHeightPx(
   );
 }
 
-function boardRowSpanPx(rows: number): number {
-  return rows * BOARD_GRID_ROW_HEIGHT + (rows - 1) * BOARD_GRID_GAP;
-}
-
 export function effectiveBoardWidgetRows(
   widget: BoardWidgetSizingInput,
   contentHeightPx: number | undefined,
@@ -280,10 +269,8 @@ export function exactBoardWidgetHeightPx(
   }
   // Never exceed the quantized cell. The normal editable board retains its row
   // cap; shell-free documents can raise it so the document owns vertical scroll.
-  return Math.min(
-    requiredHeight,
-    boardRowSpanPx(effectiveBoardWidgetRows(widget, contentHeightPx, chromeRowPx, maxAutoRows)),
-  );
+  const rows = effectiveBoardWidgetRows(widget, contentHeightPx, chromeRowPx, maxAutoRows);
+  return Math.min(requiredHeight, rows * BOARD_GRID_ROW_HEIGHT + (rows - 1) * BOARD_GRID_GAP);
 }
 
 /** Structural sizing inputs so pure grid math stays free of view-type imports. */
@@ -296,7 +283,7 @@ type BoardWidgetSizingInput = {
 
 export function boardWidgetGridItems(
   widgets: readonly (BoardWidgetSizingInput & { name: string; sizeW: number; position: number })[],
-  contentHeights: ReadonlyMap<string, number>,
+  contentHeights: Pick<ReadonlyMap<string, number>, "get">,
   fitAutoContent = false,
   pageWidgetName = "",
 ): BoardGridItem[] {

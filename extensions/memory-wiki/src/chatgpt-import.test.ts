@@ -1,9 +1,7 @@
-// Memory Wiki tests cover crash-safe ChatGPT rollback behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -22,16 +20,9 @@ import {
 } from "./import-runs-state.js";
 import { WIKI_RELATED_END_MARKER, WIKI_RELATED_START_MARKER } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
-import { createMemoryWikiTestHarness } from "./test-helpers.js";
+import { createMemoryWikiTestHarness, observeKeyedQueueEnqueue } from "./test-helpers.js";
 
-const compileControl = vi.hoisted(
-  () =>
-    ({
-      calls: 0,
-    }) as {
-      calls: number;
-    },
-);
+const compileControl = vi.hoisted(() => ({ calls: 0 }));
 
 const rootControl = vi.hoisted(() => ({
   afterMove: undefined as RootMoveHooks["afterMove"],
@@ -49,8 +40,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
         beforeMove: rootControl.moves,
         afterMove: (from, to) => rootControl.afterMove?.(from, to),
       });
-      const list = vi.spyOn(vault, "list");
-      rootControl.lists.push({ rootDir: vault.rootDir, calls: list.mock.calls });
+      rootControl.lists.push({ rootDir: vault.rootDir, calls: vi.spyOn(vault, "list").mock.calls });
       return vault;
     },
   };
@@ -60,71 +50,120 @@ vi.mock("./compile.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./compile.js")>();
   return {
     ...actual,
-    compileMemoryWikiVault: async (
-      ...args: Parameters<typeof actual.compileMemoryWikiVault>
-    ): ReturnType<typeof actual.compileMemoryWikiVault> => {
-      compileControl.calls += 1;
-      return await actual.compileMemoryWikiVault(...args);
+    compileMemoryWikiVault: (...args: Parameters<typeof actual.compileMemoryWikiVault>) => {
+      compileControl.calls++;
+      return actual.compileMemoryWikiVault(...args);
     },
   };
 });
 
 const { configureCompiledCacheStore, createTempDir, createVault } = createMemoryWikiTestHarness();
+const imported = "# Imported\n";
+const finalized = {
+  rollbackStartedAt: expect.any(String),
+  rollbackTargetsFinalizedAt: expect.any(String),
+  rolledBackAt: expect.any(String),
+};
 
 function configureDurableImportRunStore(
   stateDir: string,
-  hooks?: {
-    beforeWrite?: (record: ChatGptImportRunRecord) => Promise<void>;
-    afterWrite?: (record: ChatGptImportRunRecord) => Promise<void>;
-  },
+  afterWrite?: (record: ChatGptImportRunRecord) => Promise<void>,
 ): void {
   const env = { ...process.env, HOME: stateDir, OPENCLAW_STATE_DIR: stateDir };
   const store = createMemoryWikiImportRunStateStore(<T>(options: OpenKeyedStoreOptions) =>
     createPluginStateKeyedStoreForTests<T>("memory-wiki", { ...options, env }),
   );
   configureMemoryWikiImportRunStateStore(
-    hooks
+    afterWrite
       ? {
           ...store,
           async write(vaultRoot, record) {
-            await hooks.beforeWrite?.(record);
             await store.write(vaultRoot, record);
-            await hooks.afterWrite?.(record);
+            await afterWrite(record);
           },
         }
       : store,
   );
 }
 
-async function seedCreatedRollback(params: {
-  vaultRoot: string;
-  runId: string;
-  relativePath: string;
-  contentHash?: string;
-}): Promise<void> {
-  await getMemoryWikiImportRunStateStore().write(params.vaultRoot, {
-    version: 1,
-    runId: params.runId,
-    importType: "chatgpt",
-    exportPath: "/tmp/chatgpt",
-    sourcePath: "/tmp/chatgpt/conversations.json",
-    appliedAt: "2026-04-10T10:00:00.000Z",
-    conversationCount: 1,
-    createdCount: 1,
-    updatedCount: 0,
-    skippedCount: 0,
-    createdPaths: [
-      {
-        path: params.relativePath,
-        ...(params.contentHash ? { contentHash: params.contentHash } : {}),
-      },
-    ],
-    updatedPaths: [],
-  });
+async function createRollbackVault(initialize = true) {
+  const runId = "chatgpt-rollback";
+  const stateDir = await createTempDir("memory-wiki-chatgpt-state-");
+  const vault = await createVault({ initialize });
+  configureDurableImportRunStore(stateDir);
+  const relativePath = "sources/target.md";
+  const targetPath = path.join(vault.rootDir, relativePath);
+  const runDir = path.join(vault.rootDir, ".openclaw-wiki", "import-runs", runId);
+  async function seed({
+    createdPaths = [],
+    updatedPaths = [],
+  }: Partial<Pick<ChatGptImportRunRecord, "createdPaths" | "updatedPaths">>): Promise<void> {
+    await getMemoryWikiImportRunStateStore().write(vault.rootDir, {
+      version: 1,
+      runId,
+      importType: "chatgpt",
+      exportPath: "/tmp/chatgpt",
+      sourcePath: "/tmp/chatgpt/conversations.json",
+      appliedAt: "2026-04-10T10:00:00.000Z",
+      conversationCount: createdPaths.length + updatedPaths.length,
+      createdCount: createdPaths.length,
+      updatedCount: updatedPaths.length,
+      skippedCount: 0,
+      createdPaths,
+      updatedPaths,
+    });
+  }
+
+  return {
+    stateDir,
+    ...vault,
+    relativePath,
+    targetPath,
+    runDir,
+    seed,
+    rollback: () => rollbackChatGptImportRun({ config: vault.config, runId }),
+    readRun: () => getMemoryWikiImportRunStateStore().read(vault.rootDir, runId),
+    readRecovery: (recoveryPath: string) =>
+      fs.readFile(path.join(vault.rootDir, recoveryPath), "utf8"),
+    reopen: () => {
+      resetPluginStateStoreForTests();
+      configureDurableImportRunStore(stateDir);
+    },
+    seedCreated: (contentHash = hash(imported)) =>
+      seed({ createdPaths: [{ path: relativePath, contentHash }] }),
+    seedUpdated: async (snapshot: string, content = imported) => {
+      const snapshotRelativePath = "snapshots/target.md";
+      const snapshotPath = path.join(runDir, snapshotRelativePath);
+      await fs.mkdir(path.dirname(snapshotPath), { recursive: true });
+      await fs.writeFile(snapshotPath, snapshot, "utf8");
+      await fs.writeFile(targetPath, content, "utf8");
+      await seed({
+        updatedPaths: [
+          { path: relativePath, snapshotPath: snapshotRelativePath, contentHash: hash(imported) },
+        ],
+      });
+    },
+  };
 }
 
-function renderCompiledRelatedPage(base: string, suffix = ""): string {
-  return `${base.trimEnd()}\n\n## Related\n${WIKI_RELATED_START_MARKER}\n- No related pages yet.\n${WIKI_RELATED_END_MARKER}\n${suffix}`;
+async function expectText(file: string, expected: string) {
+  await expect(fs.readFile(file, "utf8")).resolves.toBe(expected);
+}
+
+function beforeNextMove(effect: () => Promise<void>) {
+  const swap = vi.fn(effect);
+  __setFsSafeTestHooksForTest({
+    beforeRootFallbackMutation: async (operation) => {
+      if (operation === "move" && swap.mock.calls.length === 0) {
+        await swap();
+      }
+    },
+  });
+  return swap;
+}
+
+function hash(content: string) {
+  return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
 afterEach(() => {
@@ -139,153 +178,52 @@ afterEach(() => {
 });
 
 describe("ChatGPT import rollback recovery", () => {
-  it("returns a completed rollback without initializing or mutating the vault", async () => {
-    const stateDir = await createTempDir("memory-wiki-chatgpt-complete-state-");
-    const { rootDir, config } = await createVault();
-    configureDurableImportRunStore(stateDir);
-    await getMemoryWikiImportRunStateStore().write(rootDir, {
-      version: 1,
-      runId: "chatgpt-complete",
-      importType: "chatgpt",
-      exportPath: "/tmp/chatgpt",
-      sourcePath: "/tmp/chatgpt/conversations.json",
-      appliedAt: "2026-04-10T10:00:00.000Z",
-      conversationCount: 0,
-      createdCount: 0,
-      updatedCount: 0,
-      skippedCount: 0,
-      createdPaths: [],
-      updatedPaths: [],
-      rollbackStartedAt: "2026-04-10T10:01:00.000Z",
-      rollbackTargetsFinalizedAt: "2026-04-10T10:02:00.000Z",
-      rolledBackAt: "2026-04-10T10:03:00.000Z",
-    });
-
-    await expect(
-      rollbackChatGptImportRun({ config, runId: "chatgpt-complete" }),
-    ).resolves.toMatchObject({
-      alreadyRolledBack: true,
-    });
-    await expect(fs.stat(path.join(rootDir, ".openclaw-wiki"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    expect(compileControl.calls).toBe(0);
-  });
-
-  it("persists the moving phase before vault initialization", async () => {
-    const stateDir = await createTempDir("memory-wiki-chatgpt-started-state-");
-    const { rootDir, config } = await createVault();
-    configureDurableImportRunStore(stateDir);
-    await seedCreatedRollback({
-      vaultRoot: rootDir,
-      runId: "chatgpt-started",
-      relativePath: "sources/missing.md",
-      contentHash: "missing",
-    });
-
-    const realMkdir = fs.mkdir;
-    let checkedBeforeFirstVaultWrite = false;
-    vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
-      const targetPath = path.resolve(String(args[0]));
-      if (
-        !checkedBeforeFirstVaultWrite &&
-        (targetPath === path.resolve(rootDir) ||
-          targetPath.startsWith(`${path.resolve(rootDir)}${path.sep}`))
-      ) {
-        checkedBeforeFirstVaultWrite = true;
-        await expect(
-          getMemoryWikiImportRunStateStore().read(rootDir, "chatgpt-started"),
-        ).resolves.toMatchObject({
-          rollbackStartedAt: expect.any(String),
-        });
-      }
-      return await Reflect.apply(realMkdir, fs, args);
-    });
-
-    await expect(
-      rollbackChatGptImportRun({ config, runId: "chatgpt-started" }),
-    ).resolves.toMatchObject({
-      alreadyRolledBack: false,
-    });
-    expect(checkedBeforeFirstVaultWrite).toBe(true);
-  });
-
   it("reconciles a crash after rename across a real SQLite reopen", async () => {
-    const stateDir = await createTempDir("memory-wiki-chatgpt-state-");
-    const { rootDir, config } = await createVault({ initialize: true });
-    configureDurableImportRunStore(stateDir);
-    const relativePath = "sources/retry.md";
-    const targetPath = path.join(rootDir, relativePath);
-    const imported = "# Imported\n";
+    const run = await createRollbackVault();
+    const { targetPath, relativePath } = run;
     const edited = "# Edited after import\n";
+    const recreated = "# Recreated before fence\n";
     await fs.writeFile(targetPath, edited, "utf8");
-    await seedCreatedRollback({
-      vaultRoot: rootDir,
-      runId: "chatgpt-crash-retry",
-      relativePath,
-      contentHash: createHash("sha256").update(imported, "utf8").digest("hex"),
-    });
+    await run.seedCreated();
 
     rootControl.afterMove = async (from, to) => {
       expect(from).toBe(targetPath);
       expect(path.basename(to)).toBe("content");
       rootControl.afterMove = undefined;
-      await expect(
-        getMemoryWikiImportRunStateStore().read(rootDir, "chatgpt-crash-retry"),
-      ).resolves.toMatchObject({
-        rollbackStartedAt: expect.any(String),
-      });
-      await fs.writeFile(from, "# Recreated before fence\n", "utf8");
+      await expect(run.readRun()).resolves.toMatchObject({ rollbackStartedAt: expect.any(String) });
+      await fs.writeFile(from, recreated, "utf8");
       throw new Error("simulated process crash after rename");
     };
-    await expect(
-      rollbackChatGptImportRun({ config, runId: "chatgpt-crash-retry" }),
-    ).rejects.toThrow("simulated process crash");
-    rootControl.afterMove = undefined;
-    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("# Recreated before fence\n");
-    await expect(fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).resolves.toBeDefined();
-
-    resetPluginStateStoreForTests();
-    configureDurableImportRunStore(stateDir);
-    const retried = await rollbackChatGptImportRun({ config, runId: "chatgpt-crash-retry" });
+    await expect(run.rollback()).rejects.toThrow("simulated process crash");
+    await expectText(targetPath, recreated);
+    run.reopen();
+    const retried = await run.rollback();
     expect(retried.alreadyRolledBack).toBe(false);
     expect(retried.preservedPaths).toHaveLength(2);
     const preserved = retried.preservedPaths[0];
-    expect(preserved?.path).toBe(relativePath);
     const preservedContents = await Promise.all(
-      retried.preservedPaths.map((entry) =>
-        fs.readFile(path.join(rootDir, entry.recoveryPath), "utf8"),
-      ),
+      retried.preservedPaths.map((entry) => run.readRecovery(entry.recoveryPath)),
     );
-    expect(preservedContents).toEqual(
-      expect.arrayContaining([edited, "# Recreated before fence\n"]),
-    );
+    expect(preservedContents).toEqual(expect.arrayContaining([edited, recreated]));
 
-    await fs.writeFile(path.join(rootDir, preserved?.recoveryPath ?? ""), imported, "utf8");
-    resetPluginStateStoreForTests();
-    configureDurableImportRunStore(stateDir);
+    await fs.writeFile(path.join(run.rootDir, preserved?.recoveryPath ?? ""), imported, "utf8");
+    run.reopen();
     rootControl.moves.mockClear();
-    const mkdtempRetrySpy = vi.spyOn(fs, "mkdtemp");
-    const rmRetrySpy = vi.spyOn(fs, "rm");
-    const rmdirRetrySpy = vi.spyOn(fs, "rmdir");
+    const fileSpies = (["mkdtemp", "rmdir"] as const).map((method) => vi.spyOn(fs, method));
+    const remove = vi.spyOn(fs, "rm");
     const compileCalls = compileControl.calls;
-    const repeated = await rollbackChatGptImportRun({ config, runId: "chatgpt-crash-retry" });
+    const repeated = await run.rollback();
     expect(repeated.alreadyRolledBack).toBe(true);
     expect(repeated.preservedPaths).toStrictEqual(retried.preservedPaths);
-    expect(rootControl.moves).not.toHaveBeenCalled();
-    expect(mkdtempRetrySpy).not.toHaveBeenCalled();
-    expect(rmRetrySpy).not.toHaveBeenCalled();
-    expect(rmdirRetrySpy).not.toHaveBeenCalled();
+    [rootControl.moves, ...fileSpies].forEach((spy) => expect(spy).not.toHaveBeenCalled());
+    // Releasing coordination may remove its sidecar, but never rollback data.
+    for (const [target] of remove.mock.calls) {
+      expect(target).toBe(path.join(run.rootDir, ".openclaw-wiki", "mutation.lock"));
+    }
     expect(compileControl.calls).toBe(compileCalls);
-    await expect(
-      fs.readFile(path.join(rootDir, preserved?.recoveryPath ?? ""), "utf8"),
-    ).resolves.toBe(imported);
-    await expect(
-      getMemoryWikiImportRunStateStore().read(rootDir, "chatgpt-crash-retry"),
-    ).resolves.toMatchObject({
-      rollbackStartedAt: expect.any(String),
-      rollbackTargetsFinalizedAt: expect.any(String),
-      rolledBackAt: expect.any(String),
+    await expectText(path.join(run.rootDir, preserved?.recoveryPath ?? ""), imported);
+    await expect(run.readRun()).resolves.toMatchObject({
+      ...finalized,
       createdPaths: [
         {
           path: relativePath,
@@ -296,20 +234,9 @@ describe("ChatGPT import rollback recovery", () => {
   });
 
   it("persists 32 recovery slots before retrying and preserving the 33rd target", async () => {
-    const stateDir = await createTempDir("memory-wiki-chatgpt-capacity-state-");
-    const { rootDir, config } = await createVault({ initialize: true });
-    configureDurableImportRunStore(stateDir);
-    const runId = "chatgpt-capacity-retry";
-    const relativePath = "sources/capacity.md";
-    const targetPath = path.join(rootDir, relativePath);
-    const imported = "# Imported\n";
+    const { targetPath, rollback, readRun, seedCreated, reopen } = await createRollbackVault();
     await fs.writeFile(targetPath, "# Edited before rollback\n", "utf8");
-    await seedCreatedRollback({
-      vaultRoot: rootDir,
-      runId,
-      relativePath,
-      contentHash: createHash("sha256").update(imported, "utf8").digest("hex"),
-    });
+    await seedCreated();
 
     let recreateCount = 0;
     rootControl.afterMove = async (from, to) => {
@@ -319,56 +246,34 @@ describe("ChatGPT import rollback recovery", () => {
       }
     };
 
-    await expect(rollbackChatGptImportRun({ config, runId })).rejects.toThrow(
-      "after 32 concurrent recreations",
-    );
+    await expect(rollback()).rejects.toThrow("after 32 concurrent recreations");
     rootControl.afterMove = undefined;
     expect(recreateCount).toBe(32);
-    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("# Recreated 32\n");
+    await expectText(targetPath, "# Recreated 32\n");
 
-    resetPluginStateStoreForTests();
-    configureDurableImportRunStore(stateDir);
-    const interrupted = await getMemoryWikiImportRunStateStore().read(rootDir, runId);
+    reopen();
+    const interrupted = await readRun();
     expect(interrupted?.createdPaths[0]?.recoveryPaths).toHaveLength(32);
     expect(interrupted?.rollbackTargetsFinalizedAt).toBeUndefined();
 
-    const retried = await rollbackChatGptImportRun({ config, runId });
+    const retried = await rollback();
     expect(retried.alreadyRolledBack).toBe(false);
     expect(retried.preservedPaths).toHaveLength(33);
     expect(new Set(retried.preservedPaths.map((entry) => entry.recoveryPath))).toHaveLength(33);
     await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 
-    resetPluginStateStoreForTests();
-    configureDurableImportRunStore(stateDir);
-    const persisted = await getMemoryWikiImportRunStateStore().read(rootDir, runId);
-    expect(persisted).toMatchObject({
-      rollbackStartedAt: expect.any(String),
-      rollbackTargetsFinalizedAt: expect.any(String),
-      rolledBackAt: expect.any(String),
-    });
+    reopen();
+    const persisted = await readRun();
+    expect(persisted).toMatchObject(finalized);
     expect(persisted?.createdPaths[0]?.recoveryPaths).toHaveLength(33);
-
-    resetPluginStateStoreForTests();
-    configureDurableImportRunStore(stateDir);
-    const repeated = await rollbackChatGptImportRun({ config, runId });
-    expect(repeated.alreadyRolledBack).toBe(true);
-    expect(repeated.preservedPaths).toStrictEqual(retried.preservedPaths);
   });
 
   it("queues the whole rollback behind an active vault mutation", async () => {
-    const stateDir = await createTempDir("memory-wiki-chatgpt-lock-state-");
-    const { rootDir, config } = await createVault({ initialize: true });
-    configureDurableImportRunStore(stateDir);
-    const relativePath = "sources/queued.md";
-    const targetPath = path.join(rootDir, relativePath);
+    const { rootDir, targetPath, relativePath, rollback, readRun, seedCreated } =
+      await createRollbackVault();
     const edited = "# Queued edit\n";
     await fs.writeFile(targetPath, edited, "utf8");
-    await seedCreatedRollback({
-      vaultRoot: rootDir,
-      runId: "chatgpt-queued",
-      relativePath,
-      contentHash: "not-the-edited-content",
-    });
+    await seedCreated("not-the-edited-content");
 
     const lockEntered = deferred();
     const releaseLock = deferred();
@@ -379,28 +284,16 @@ describe("ChatGPT import rollback recovery", () => {
     await lockEntered.promise;
 
     const rollbackQueued = deferred();
-    const originalEnqueue = Object.getOwnPropertyDescriptor(KeyedAsyncQueue.prototype, "enqueue")
-      ?.value as KeyedAsyncQueue["enqueue"];
-    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue").mockImplementation(function (
-      this: KeyedAsyncQueue,
-      key,
-      task,
-      hooks,
-    ) {
-      rollbackQueued.resolve();
-      return originalEnqueue.call(this, key, task, hooks);
-    });
-    let rollback: ReturnType<typeof rollbackChatGptImportRun> | undefined;
+    const enqueueSpy = observeKeyedQueueEnqueue(() => rollbackQueued.resolve());
+    let pendingRollback: ReturnType<typeof rollbackChatGptImportRun> | undefined;
     try {
-      rollback = rollbackChatGptImportRun({ config, runId: "chatgpt-queued" });
+      pendingRollback = rollback();
       await rollbackQueued.promise;
-      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe(edited);
-      await expect(
-        getMemoryWikiImportRunStateStore().read(rootDir, "chatgpt-queued"),
-      ).resolves.not.toHaveProperty("rolledBackAt");
+      await expectText(targetPath, edited);
+      await expect(readRun()).resolves.not.toHaveProperty("rolledBackAt");
 
       releaseLock.resolve();
-      await expect(rollback).resolves.toMatchObject({
+      await expect(pendingRollback).resolves.toMatchObject({
         alreadyRolledBack: false,
         preservedPaths: [{ path: relativePath }],
       });
@@ -408,176 +301,67 @@ describe("ChatGPT import rollback recovery", () => {
     } finally {
       releaseLock.resolve();
       enqueueSpy.mockRestore();
-      await Promise.allSettled([holder, ...(rollback ? [rollback] : [])]);
+      await Promise.allSettled([holder, ...(pendingRollback ? [pendingRollback] : [])]);
     }
   });
 
-  it("preserves a created page recreated while rollback is removing it", async () => {
-    const stateDir = await createTempDir("memory-wiki-chatgpt-recreated-state-");
-    const { rootDir, config } = await createVault({ initialize: true });
-    configureDurableImportRunStore(stateDir);
-    const relativePath = "sources/recreated.md";
-    const targetPath = path.join(rootDir, relativePath);
-    const imported = "# Imported\n";
-    const recreated = "# Recreated during rollback\n";
-    await fs.writeFile(targetPath, imported, "utf8");
-    await seedCreatedRollback({
-      vaultRoot: rootDir,
-      runId: "chatgpt-created-recreated",
-      relativePath,
-      contentHash: createHash("sha256").update(imported, "utf8").digest("hex"),
-    });
-    let rollbackWrites = 0;
-    configureDurableImportRunStore(stateDir, {
-      beforeWrite: async () => {
-        rollbackWrites += 1;
-      },
-    });
-
-    let recreatedOnce = false;
-    rootControl.afterMove = async (from, to) => {
-      if (!recreatedOnce && from === targetPath && path.basename(to) === "content") {
-        recreatedOnce = true;
-        await fs.writeFile(from, recreated, "utf8");
-      }
-    };
-    const result = await rollbackChatGptImportRun({
-      config,
-      runId: "chatgpt-created-recreated",
-    });
-    rootControl.afterMove = undefined;
-
-    expect(recreatedOnce).toBe(true);
-    expect(rollbackWrites).toBe(4);
-    await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(result.preservedPaths).toHaveLength(1);
-    await expect(
-      fs.readFile(path.join(rootDir, result.preservedPaths[0]?.recoveryPath ?? ""), "utf8"),
-    ).resolves.toBe(recreated);
-  });
-
-  it("preserves a trailing blank-line edit on a created page", async () => {
-    const stateDir = await createTempDir("memory-wiki-chatgpt-created-whitespace-state-");
-    const { rootDir, config } = await createVault({ initialize: true });
-    configureDurableImportRunStore(stateDir);
-    const runId = "chatgpt-created-whitespace";
-    const relativePath = "sources/created-whitespace.md";
-    const targetPath = path.join(rootDir, relativePath);
-    const imported = "# Imported\n";
-    const edited = renderCompiledRelatedPage(imported, "\n");
-    await fs.writeFile(targetPath, edited, "utf8");
-    await seedCreatedRollback({
-      vaultRoot: rootDir,
-      runId,
-      relativePath,
-      contentHash: createHash("sha256").update(imported, "utf8").digest("hex"),
-    });
-
-    const result = await rollbackChatGptImportRun({ config, runId });
-
-    expect(result.preservedPaths).toHaveLength(1);
-    await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.readFile(path.join(rootDir, result.preservedPaths[0]?.recoveryPath ?? ""), "utf8"),
-    ).resolves.toBe(edited);
-  });
-
   it("preserves trailing spaces on an updated page before restoring its snapshot", async () => {
-    const stateDir = await createTempDir("memory-wiki-chatgpt-updated-whitespace-state-");
-    const { rootDir, config } = await createVault({ initialize: true });
-    configureDurableImportRunStore(stateDir);
-    const runId = "chatgpt-updated-whitespace";
-    const relativePath = "sources/updated-whitespace.md";
-    const snapshotRelativePath = "snapshots/updated-whitespace.md";
-    const targetPath = path.join(rootDir, relativePath);
-    const runDir = path.join(rootDir, ".openclaw-wiki", "import-runs", runId);
-    const snapshotPath = path.join(runDir, snapshotRelativePath);
-    const imported = "# Imported\n";
+    const { targetPath, rollback, readRecovery, seedUpdated } = await createRollbackVault();
     const snapshot = "# Before import\n";
-    const edited = renderCompiledRelatedPage(imported, "  \n");
-    await fs.mkdir(path.dirname(snapshotPath), { recursive: true });
-    await fs.writeFile(snapshotPath, snapshot, "utf8");
-    await fs.writeFile(targetPath, edited, "utf8");
-    await getMemoryWikiImportRunStateStore().write(rootDir, {
-      version: 1,
-      runId,
-      importType: "chatgpt",
-      exportPath: "/tmp/chatgpt",
-      sourcePath: "/tmp/chatgpt/conversations.json",
-      appliedAt: "2026-04-10T10:00:00.000Z",
-      conversationCount: 1,
-      createdCount: 0,
-      updatedCount: 1,
-      skippedCount: 0,
-      createdPaths: [],
-      updatedPaths: [
-        {
-          path: relativePath,
-          snapshotPath: snapshotRelativePath,
-          contentHash: createHash("sha256").update(imported, "utf8").digest("hex"),
-        },
-      ],
-    });
+    const edited = `${imported.trimEnd()}\n\n## Related\n${WIKI_RELATED_START_MARKER}\n- No related pages yet.\n${WIKI_RELATED_END_MARKER}\n  \n`;
+    await seedUpdated(snapshot, edited);
 
-    const result = await rollbackChatGptImportRun({ config, runId });
+    const result = await rollback();
 
     expect(result.restoredCount).toBe(1);
     expect(result.preservedPaths).toHaveLength(1);
-    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe(snapshot);
-    await expect(
-      fs.readFile(path.join(rootDir, result.preservedPaths[0]?.recoveryPath ?? ""), "utf8"),
-    ).resolves.toBe(edited);
+    await expectText(targetPath, snapshot);
+    await expect(readRecovery(result.preservedPaths[0]?.recoveryPath ?? "")).resolves.toBe(edited);
   });
 
-  it("does not touch targets again after the persisted process-restart fence", async () => {
-    const stateDir = await createTempDir("memory-wiki-chatgpt-finalizing-state-");
-    const { rootDir, config } = await createVault({ initialize: true });
+  it("persists before initialization and never retouches targets after the restart fence", async () => {
+    const { stateDir, rootDir, targetPath, rollback, readRun, seedCreated, reopen } =
+      await createRollbackVault(false);
     let crashAfterFence = true;
-    configureDurableImportRunStore(stateDir, {
-      afterWrite: async (record) => {
-        if (crashAfterFence && record.rollbackTargetsFinalizedAt && !record.rolledBackAt) {
-          crashAfterFence = false;
-          expect(compileControl.calls).toBe(0);
-          throw new Error("simulated process exit after target fence");
-        }
-      },
+    configureDurableImportRunStore(stateDir, async (record) => {
+      if (crashAfterFence && record.rollbackTargetsFinalizedAt && !record.rolledBackAt) {
+        crashAfterFence = false;
+        expect(compileControl.calls).toBe(0);
+        throw new Error("simulated process exit after target fence");
+      }
     });
-    const relativePath = "sources/finalizing.md";
-    const targetPath = path.join(rootDir, relativePath);
-    const imported = "# Imported\n";
     const beforeCompile = "# Written after rollback target finalization\n";
     const afterCompilerRead = "# Saved after compiler read\n";
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
     await fs.writeFile(targetPath, imported, "utf8");
-    await seedCreatedRollback({
-      vaultRoot: rootDir,
-      runId: "chatgpt-finalizing",
-      relativePath,
-      contentHash: createHash("sha256").update(imported, "utf8").digest("hex"),
+    await seedCreated();
+    const realMkdir = fs.mkdir;
+    let checkedInitialization = false;
+    vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
+      if (!checkedInitialization && path.resolve(String(args[0])) === path.resolve(rootDir)) {
+        checkedInitialization = true;
+        await expect(readRun()).resolves.toMatchObject({ rollbackStartedAt: expect.any(String) });
+      }
+      return await Reflect.apply(realMkdir, fs, args);
     });
 
-    await expect(rollbackChatGptImportRun({ config, runId: "chatgpt-finalizing" })).rejects.toThrow(
-      "simulated process exit after target fence",
-    );
-    await expect(
-      getMemoryWikiImportRunStateStore().read(rootDir, "chatgpt-finalizing"),
-    ).resolves.toMatchObject({
+    await expect(rollback()).rejects.toThrow("simulated process exit after target fence");
+    expect(checkedInitialization).toBe(true);
+    await expect(readRun()).resolves.toMatchObject({
       rollbackStartedAt: expect.any(String),
       rollbackTargetsFinalizedAt: expect.any(String),
     });
-    expect(
-      (await getMemoryWikiImportRunStateStore().read(rootDir, "chatgpt-finalizing"))?.rolledBackAt,
-    ).toBeUndefined();
+    expect((await readRun())?.rolledBackAt).toBeUndefined();
 
     await fs.writeFile(targetPath, beforeCompile, "utf8");
-    resetPluginStateStoreForTests();
-    configureDurableImportRunStore(stateDir);
+    reopen();
     configureMemoryWikiCompiledCacheStore(undefined);
     configureCompiledCacheStore();
     const realReadFile = fs.readFile;
     const realWriteFile = fs.writeFile;
     rootControl.moves.mockClear();
     let savedAfterRead = false;
-    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+    vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
       const result = await Reflect.apply(realReadFile, fs, args);
       if (
         !savedAfterRead &&
@@ -590,16 +374,13 @@ describe("ChatGPT import rollback recovery", () => {
       return result;
     });
     let sourceWrites = 0;
-    const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+    vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
       if (typeof args[0] === "string" && path.resolve(args[0]) === path.resolve(targetPath)) {
         sourceWrites += 1;
       }
       return await Reflect.apply(realWriteFile, fs, args);
     });
-    const result = await rollbackChatGptImportRun({
-      config,
-      runId: "chatgpt-finalizing",
-    });
+    const result = await rollback();
 
     expect(savedAfterRead).toBe(true);
     expect(result.alreadyRolledBack).toBe(false);
@@ -608,25 +389,12 @@ describe("ChatGPT import rollback recovery", () => {
     ).toBe(false);
     expect(sourceWrites).toBe(0);
     await expect(realReadFile(targetPath, "utf8")).resolves.toBe(afterCompilerRead);
-    readSpy.mockRestore();
-    writeSpy.mockRestore();
-    rootControl.afterMove = undefined;
-    await expect(
-      getMemoryWikiImportRunStateStore().read(rootDir, "chatgpt-finalizing"),
-    ).resolves.toMatchObject({
-      rollbackStartedAt: expect.any(String),
-      rollbackTargetsFinalizedAt: expect.any(String),
-      rolledBackAt: expect.any(String),
-    });
+    await expect(readRun()).resolves.toMatchObject(finalized);
   });
 
-  it("scans the recovery directory once for a multi-page rollback", async () => {
-    const stateDir = await createTempDir("memory-wiki-chatgpt-linear-state-");
-    const { rootDir, config } = await createVault({ initialize: true });
-    configureDurableImportRunStore(stateDir);
-    const runId = "chatgpt-linear";
-    const imported = "# Imported\n";
-    const contentHash = createHash("sha256").update(imported, "utf8").digest("hex");
+  it("scans recovery once with bounded writes for a multi-page rollback", async () => {
+    const { stateDir, rootDir, runDir, seed, rollback } = await createRollbackVault();
+    const contentHash = hash(imported);
     const createdPaths = Array.from({ length: 24 }, (_, index) => ({
       path: `sources/linear-${index}.md`,
       contentHash,
@@ -636,212 +404,133 @@ describe("ChatGPT import rollback recovery", () => {
         await fs.writeFile(path.join(rootDir, entry.path), imported, "utf8");
       }),
     );
-    await getMemoryWikiImportRunStateStore().write(rootDir, {
-      version: 1,
-      runId,
-      importType: "chatgpt",
-      exportPath: "/tmp/chatgpt",
-      sourcePath: "/tmp/chatgpt/conversations.json",
-      appliedAt: "2026-04-10T10:00:00.000Z",
-      conversationCount: createdPaths.length,
-      createdCount: createdPaths.length,
-      updatedCount: 0,
-      skippedCount: 0,
-      createdPaths,
-      updatedPaths: [],
-    });
-    let rollbackWrites = 0;
-    configureDurableImportRunStore(stateDir, {
-      beforeWrite: async () => {
-        rollbackWrites += 1;
-      },
+    await seed({ createdPaths });
+    let writes = 0;
+    configureDurableImportRunStore(stateDir, async () => {
+      writes += 1;
     });
     rootControl.lists.length = 0;
 
-    await expect(rollbackChatGptImportRun({ config, runId })).resolves.toMatchObject({
+    await expect(rollback()).resolves.toMatchObject({
       removedCount: createdPaths.length,
       preservedPaths: [],
     });
-    const recoveryScans = rootControl.lists.flatMap(({ rootDir: listedRoot, calls }) =>
-      calls.filter(
-        ([relativePath]) =>
-          path.resolve(listedRoot, relativePath) ===
-          path.join(rootDir, ".openclaw-wiki", "import-runs", runId, "recovered"),
+    expect(
+      rootControl.lists.flatMap(({ rootDir: root, calls }) =>
+        calls.filter(
+          ([relative]) => path.resolve(root, relative) === path.join(runDir, "recovered"),
+        ),
       ),
-    );
-    expect(recoveryScans).toHaveLength(1);
-    expect(rollbackWrites).toBe(3);
+    ).toHaveLength(1);
+    expect(writes).toBe(3);
   });
 
   it.skipIf(process.platform === "win32")(
     "rejects a symlinked recovery directory without touching external files",
     async () => {
-      const stateDir = await createTempDir("memory-wiki-chatgpt-recovery-link-state-");
       const externalDir = await createTempDir("memory-wiki-chatgpt-recovery-link-external-");
-      const { rootDir, config } = await createVault({ initialize: true });
-      configureDurableImportRunStore(stateDir);
-      const runId = "chatgpt-recovery-link";
-      const relativePath = "sources/existing.md";
-      const snapshotRelativePath = "snapshots/existing.md";
-      const imported = "# Imported\n";
-      const runDir = path.join(rootDir, ".openclaw-wiki", "import-runs", runId);
-      const snapshotPath = path.join(runDir, snapshotRelativePath);
-      const targetPath = path.join(rootDir, relativePath);
-      await fs.mkdir(path.dirname(snapshotPath), { recursive: true });
-      await fs.writeFile(snapshotPath, imported, "utf8");
-      await fs.writeFile(targetPath, imported, "utf8");
-      await getMemoryWikiImportRunStateStore().write(rootDir, {
-        version: 1,
-        runId,
-        importType: "chatgpt",
-        exportPath: "/tmp/chatgpt",
-        sourcePath: "/tmp/chatgpt/conversations.json",
-        appliedAt: "2026-04-10T10:00:00.000Z",
-        conversationCount: 1,
-        createdCount: 0,
-        updatedCount: 1,
-        skippedCount: 0,
-        createdPaths: [],
-        updatedPaths: [
-          {
-            path: relativePath,
-            snapshotPath: snapshotRelativePath,
-            contentHash: createHash("sha256").update(imported, "utf8").digest("hex"),
-          },
-        ],
-      });
+      const { runDir, relativePath, targetPath, rollback, seedUpdated } =
+        await createRollbackVault();
+      await seedUpdated(imported);
 
-      const slotPrefix = `updated-0-${createHash("sha256").update(relativePath).digest("hex")}-`;
+      const slotPrefix = `updated-0-${hash(relativePath)}-`;
       const externalSlot = path.join(externalDir, `${slotPrefix}ABCDEF`);
       const externalContent = path.join(externalSlot, "content");
       await fs.mkdir(externalSlot);
       await fs.writeFile(externalContent, imported, "utf8");
       await fs.symlink(externalDir, path.join(runDir, "recovered"), "dir");
 
-      await expect(rollbackChatGptImportRun({ config, runId })).rejects.toMatchObject({
-        code: "path-alias",
-      });
-      await expect(fs.readFile(externalContent, "utf8")).resolves.toBe(imported);
-      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe(imported);
+      await expect(rollback()).rejects.toMatchObject({ code: "path-alias" });
+      await expectText(externalContent, imported);
+      await expectText(targetPath, imported);
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "refuses symlink, hardlink, and directory targets without touching them",
-    async () => {
-      const externalDir = await createTempDir("memory-wiki-chatgpt-external-");
-      const externalPath = path.join(externalDir, "outside.md");
+  it.skipIf(process.platform === "win32").each([
+    ["symlink", "path-alias"],
+    ["hardlink", "hardlink"],
+    ["directory", "invalid-path"],
+  ] as const)("refuses %s targets without touching them", async (special, code) => {
+    const externalPath = path.join(
+      await createTempDir("memory-wiki-chatgpt-external-"),
+      "outside.md",
+    );
+    const { targetPath, relativePath, rollback, readRun, seedCreated } =
+      await createRollbackVault();
+    if (special === "symlink") {
       await fs.writeFile(externalPath, "# Outside\n", "utf8");
+      await fs.symlink(externalPath, targetPath);
+    } else if (special === "hardlink") {
+      await fs.writeFile(`${targetPath}.source`, "# Hardlinked\n", "utf8");
+      await fs.link(`${targetPath}.source`, targetPath);
+    } else {
+      await fs.mkdir(targetPath);
+      await fs.writeFile(path.join(targetPath, "nested.md"), "# Nested\n", "utf8");
+    }
+    await seedCreated(`not-the-${special}`);
+    await expect(rollback()).rejects.toMatchObject({ code });
+    if (special === "symlink") {
+      await expect(fs.readlink(targetPath)).resolves.toBe(externalPath);
+      await expectText(externalPath, "# Outside\n");
+    } else if (special === "hardlink") {
+      await expectText(targetPath, "# Hardlinked\n");
+      expect((await fs.lstat(targetPath)).nlink).toBeGreaterThan(1);
+    } else {
+      await expectText(path.join(targetPath, "nested.md"), "# Nested\n");
+    }
+    const interrupted = await readRun();
+    expect(interrupted).toMatchObject({
+      rollbackStartedAt: expect.any(String),
+      createdPaths: [{ path: relativePath }],
+    });
+    expect(interrupted).not.toHaveProperty("rollbackTargetsFinalizedAt");
+    expect(interrupted?.createdPaths[0]).not.toHaveProperty("recoveryPaths");
+  });
 
-      for (const special of [
-        {
-          name: "symlink",
-          code: "path-alias",
-          setup: async (targetPath: string) => {
-            await fs.symlink(externalPath, targetPath);
-          },
-          assertUntouched: async (targetPath: string) => {
-            await expect(fs.readlink(targetPath)).resolves.toBe(externalPath);
-            await expect(fs.readFile(externalPath, "utf8")).resolves.toBe("# Outside\n");
-          },
-        },
-        {
-          name: "hardlink",
-          code: "hardlink",
-          setup: async (targetPath: string) => {
-            const sourcePath = `${targetPath}.source`;
-            await fs.writeFile(sourcePath, "# Hardlinked\n", "utf8");
-            await fs.link(sourcePath, targetPath);
-          },
-          assertUntouched: async (targetPath: string) => {
-            await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("# Hardlinked\n");
-            expect((await fs.lstat(targetPath)).nlink).toBeGreaterThan(1);
-          },
-        },
-        {
-          name: "directory",
-          code: "invalid-path",
-          setup: async (targetPath: string) => {
-            await fs.mkdir(targetPath);
-            await fs.writeFile(path.join(targetPath, "nested.md"), "# Nested\n", "utf8");
-          },
-          assertUntouched: async (targetPath: string) => {
-            await expect(fs.readFile(path.join(targetPath, "nested.md"), "utf8")).resolves.toBe(
-              "# Nested\n",
-            );
-          },
-        },
-      ]) {
-        const stateDir = await createTempDir(`memory-wiki-chatgpt-${special.name}-state-`);
-        const { rootDir, config } = await createVault({ initialize: true });
-        configureDurableImportRunStore(stateDir);
-        const runId = `chatgpt-${special.name}-target`;
-        const relativePath = `sources/${special.name}.md`;
-        const targetPath = path.join(rootDir, relativePath);
-        await special.setup(targetPath);
-        await seedCreatedRollback({
-          vaultRoot: rootDir,
-          runId,
-          relativePath,
-          contentHash: `not-the-${special.name}`,
-        });
+  it("refuses a file replaced by a directory at the move boundary", async () => {
+    const { targetPath, rollback, readRun, seedCreated } = await createRollbackVault();
+    const retainedPath = `${targetPath}.retained`;
+    await fs.writeFile(targetPath, "# Original\n");
+    await seedCreated("changed");
+    const swap = beforeNextMove(async () => {
+      await fs.rename(targetPath, retainedPath);
+      await fs.mkdir(targetPath);
+      await fs.writeFile(path.join(targetPath, "nested.md"), "# Nested\n");
+    });
 
-        await expect(rollbackChatGptImportRun({ config, runId })).rejects.toMatchObject({
-          code: special.code,
-        });
-        await special.assertUntouched(targetPath);
-        const interrupted = await getMemoryWikiImportRunStateStore().read(rootDir, runId);
-        expect(interrupted).toMatchObject({
-          rollbackStartedAt: expect.any(String),
-          createdPaths: [{ path: relativePath }],
-        });
-        expect(interrupted).not.toHaveProperty("rollbackTargetsFinalizedAt");
-        expect(interrupted?.createdPaths[0]).not.toHaveProperty("recoveryPaths");
-      }
-    },
-  );
+    await expect(rollback()).rejects.toMatchObject({ code: "invalid-path" });
+    expect(swap).toHaveBeenCalledOnce();
+    await expectText(retainedPath, "# Original\n");
+    await expectText(path.join(targetPath, "nested.md"), "# Nested\n");
+    const interrupted = await readRun();
+    expect(interrupted).not.toHaveProperty("rollbackTargetsFinalizedAt");
+    expect(interrupted?.createdPaths[0]).not.toHaveProperty("recoveryPaths");
+  });
 
   it.skipIf(process.platform === "win32")(
     "refuses a target-parent swap at the move boundary without touching either tree",
     async () => {
-      const stateDir = await createTempDir("memory-wiki-chatgpt-parent-swap-state-");
       const externalDir = await createTempDir("memory-wiki-chatgpt-parent-swap-external-");
-      const { rootDir, config } = await createVault({ initialize: true });
-      configureDurableImportRunStore(stateDir);
-      const runId = "chatgpt-parent-swap";
-      const relativePath = "sources/swapped.md";
+      const { rootDir, targetPath, rollback, seedCreated } = await createRollbackVault();
       const sourceDir = path.join(rootDir, "sources");
       const parkedSourceDir = path.join(rootDir, "sources-parked");
-      const targetPath = path.join(sourceDir, "swapped.md");
-      const parkedTargetPath = path.join(parkedSourceDir, "swapped.md");
-      const externalTargetPath = path.join(externalDir, "swapped.md");
+      const parkedTargetPath = path.join(parkedSourceDir, path.basename(targetPath));
+      const externalTargetPath = path.join(externalDir, path.basename(targetPath));
       await fs.writeFile(targetPath, "# Internal\n", "utf8");
       await fs.writeFile(externalTargetPath, "# External\n", "utf8");
-      await seedCreatedRollback({
-        vaultRoot: rootDir,
-        runId,
-        relativePath,
-        contentHash: "not-the-internal-content",
+      await seedCreated("not-the-internal-content");
+
+      const swap = beforeNextMove(async () => {
+        await fs.rename(sourceDir, parkedSourceDir);
+        await fs.symlink(externalDir, sourceDir, "dir");
       });
 
-      let swapped = false;
-      __setFsSafeTestHooksForTest({
-        beforeRootFallbackMutation: async (operation) => {
-          if (swapped || operation !== "move") {
-            return;
-          }
-          swapped = true;
-          await fs.rename(sourceDir, parkedSourceDir);
-          await fs.symlink(externalDir, sourceDir, "dir");
-        },
-      });
-
-      await expect(rollbackChatGptImportRun({ config, runId })).rejects.toMatchObject({
+      await expect(rollback()).rejects.toMatchObject({
         code: expect.stringMatching(/path-mismatch|path-alias|not-file/),
       });
-      expect(swapped).toBe(true);
-      await expect(fs.readFile(parkedTargetPath, "utf8")).resolves.toBe("# Internal\n");
-      await expect(fs.readFile(externalTargetPath, "utf8")).resolves.toBe("# External\n");
+      expect(swap).toHaveBeenCalledOnce();
+      await expectText(parkedTargetPath, "# Internal\n");
+      await expectText(externalTargetPath, "# External\n");
     },
   );
 });

@@ -5,28 +5,30 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/shared-types.js";
 import { resolveSessionMutationAuthorizationAsync } from "../../gateway/session-sharing-authorization-async.js";
 import { roleClient, rolePolicyConfig } from "../../gateway/session-sharing.test-utils.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   listSessionPendingInputs,
   stageSessionPendingInput,
 } from "./session-accessor.pending-inputs.js";
 import { upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.js";
-import { loadTranscriptEvents } from "./session-transcript-events.js";
+import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
+
+const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
+function session(agentId: string, sessionId: string) {
+  return { agentId, sessionId, sessionKey: `agent:${agentId}:${sessionId}` };
+}
 
 it.each([false, true])(
   "retains foreign input authority through transcript rewrite (revoked: %s)",
   async (revoked) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withOpenClawTestState(profileState, async (state) => {
       const cfg = rolePolicyConfig();
-      const client = roleClient("view", "foreign-mirror-member");
+      setRuntimeConfigSnapshot(cfg);
+      const client = roleClient("view", "member");
       const profileId = expectDefined(client.authenticatedUserProfile, "fixture profile").profileId;
-      const source = {
-        agentId: "main",
-        sessionKey: "agent:main:foreign-mirror-source",
-        sessionId: "foreign-mirror-source",
-      };
+      const source = session("main", "source");
       await upsertSessionEntryCore(source, {
         sessionId: source.sessionId,
         updatedAt: 1,
@@ -45,12 +47,12 @@ it.each([false, true])(
       const authorization = expectDefined(resolved.authorization, "source authorization");
       const receipt = expectDefined(
         await stageSessionPendingInput(source, {
-          runId: "foreign-mirror",
+          runId: "foreign",
           message: {
             role: "user",
-            content: "Accepted source input",
+            content: "Accepted",
             timestamp: 2,
-            idempotencyKey: "foreign-mirror:user",
+            idempotencyKey: "foreign:user",
           },
           assertCurrent: authorization.assertCurrent,
           assertAdmittedCurrent: authorization.assertCurrent,
@@ -60,24 +62,20 @@ it.each([false, true])(
       );
       try {
         const target = {
-          agentId: "other",
-          sessionKey: "agent:other:foreign-mirror-target",
-          sessionId: "foreign-mirror-target",
+          ...session("other", "target"),
           storePath: path.join(state.agentDir("other"), "openclaw-agent.sqlite"),
         };
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
         const manager = await SessionManager.openAsync(target, state.workspaceDir);
-        const earlier: PersistedUserTurnMessage = {
-          role: "user",
-          content: "Earlier destination input",
-          timestamp: 1,
-        };
         const earlierId = expectDefined(
-          await manager.appendMessageAsync(earlier),
+          await manager.appendMessageAsync({ role: "user", content: "Earlier", timestamp: 1 }),
           "destination entry",
         );
-        const pending = await listSessionPendingInputs(source);
-        const sourceTranscript = await loadTranscriptEvents(source);
+        const sourceSnapshot = async () => ({
+          pending: await listSessionPendingInputs(source),
+          transcript: await loadTranscriptEvents(source),
+        });
+        const before = await sourceSnapshot();
         const destinationTranscript = await loadTranscriptEvents(target);
         const run = expectDefined(receipt.runAsync, "asynchronous custody");
         const result = run(async () => {
@@ -102,8 +100,7 @@ it.each([false, true])(
           ]);
           expect(manager.getLeafId()).not.toBe(receipt.inputId);
         }
-        expect(await listSessionPendingInputs(source)).toEqual(pending);
-        expect(await loadTranscriptEvents(source)).toEqual(sourceTranscript);
+        expect(await sourceSnapshot()).toEqual(before);
       } finally {
         receipt.finish("interrupted");
         await receipt.settled?.();

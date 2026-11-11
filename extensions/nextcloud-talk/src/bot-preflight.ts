@@ -4,8 +4,7 @@ import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
-import { readNextcloudTalkErrorBody } from "./guarded-response.js";
-import { ssrfPolicyFromPrivateNetworkOptIn } from "./send.runtime.js";
+import { buildNextcloudTalkOcsOptions, readNextcloudTalkErrorBody } from "./guarded-response.js";
 
 const BOT_FEATURE_RESPONSE = 2;
 
@@ -43,7 +42,7 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
       ok: true,
       skipped: true,
       code: "missing_base_url" as const,
-      message: "Nextcloud Talk bot response feature probe skipped: baseUrl is not configured.",
+      message: "Nextcloud Talk bot response feature check skipped: baseUrl is not configured.",
     };
   }
 
@@ -54,7 +53,7 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
       skipped: true,
       code: "missing_webhook_url" as const,
       message:
-        "Nextcloud Talk bot response feature probe skipped: webhookPublicUrl is not configured.",
+        "Nextcloud Talk bot response feature check skipped: webhookPublicUrl is not configured.",
     };
   }
 
@@ -69,7 +68,7 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
       skipped: true,
       code: "missing_api_credentials" as const,
       message:
-        "Nextcloud Talk bot response feature probe skipped: apiUser/apiPassword are not configured.",
+        "Nextcloud Talk bot response feature check skipped: apiUser/apiPassword are not configured.",
     };
   }
 
@@ -81,18 +80,8 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
   try {
     const { response, release } = await fetchWithSsrFGuard({
       url,
-      init: {
-        method: "GET",
-        headers: {
-          Authorization: `Basic ${auth}`,
-          "OCS-APIRequest": "true",
-          Accept: "application/json",
-        },
-      },
+      ...buildNextcloudTalkOcsOptions(auth, account.config.network?.dangerouslyAllowPrivateNetwork),
       auditContext: "nextcloud-talk.bot-response-preflight",
-      policy: ssrfPolicyFromPrivateNetworkOptIn(
-        account.config.network?.dangerouslyAllowPrivateNetwork,
-      ),
       timeoutMs,
     });
     try {
@@ -102,20 +91,20 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
           ok: false,
           code: "api_error" as const,
           status: response.status,
-          message: `Nextcloud Talk bot response feature probe failed (${response.status})${body ? `: ${body}` : ""}`,
+          message: `Nextcloud Talk bot response feature check failed (${response.status})${body ? `: ${body}` : ""}`,
         };
       }
 
       const payload = await readProviderJsonResponse<{
         ocs?: { data?: NextcloudTalkBotAdminEntry[] };
-      }>(response, "Nextcloud Talk bot response feature probe failed");
+      }>(response, "Nextcloud Talk bot response feature check failed");
       const bots = Array.isArray(payload.ocs?.data) ? payload.ocs.data : [];
       const bot = bots.find((entry) => normalizeUrlForMatch(entry.url) === webhookUrl);
       if (!bot) {
         return {
           ok: false,
           code: "bot_not_found" as const,
-          message: `Nextcloud Talk bot response feature probe could not find a bot with webhook URL ${webhookUrl}.`,
+          message: `Nextcloud Talk bot response feature check could not find a bot with webhook URL ${webhookUrl}.`,
         };
       }
 
@@ -147,7 +136,7 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
     return {
       ok: false,
       code: "request_failed" as const,
-      message: `Nextcloud Talk bot response feature probe failed: ${detail}`,
+      message: `Nextcloud Talk bot response feature check failed: ${detail}`,
     };
   }
 }

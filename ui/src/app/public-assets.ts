@@ -1,5 +1,6 @@
 import {
   CONTROL_UI_BUILD_ID_ATTRIBUTE,
+  controlUiPublicAssetVersion,
   type ControlUiRootPublicAsset,
 } from "../../../src/gateway/control-ui-root-assets.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
@@ -8,6 +9,7 @@ import { resolveControlUiPaths } from "./browser.ts";
 type ControlUiPublicAsset =
   | ControlUiRootPublicAsset
   | `fonts/${string}.css`
+  | `fonts/${string}.woff2`
   | `themes/${string}.css`
   | `provider-icons/ProviderIcon-${string}.svg`
   | `cloud-provider-icons/${string}.svg`
@@ -23,7 +25,7 @@ export function controlUiPublicAssetPath(
     asset !== "sw.js" && typeof document !== "undefined"
       ? document.documentElement.getAttribute(CONTROL_UI_BUILD_ID_ATTRIBUTE)
       : null;
-  const version = buildId ? `?v=${encodeURIComponent(buildId)}` : "";
+  const version = buildId ? `?v=${encodeURIComponent(controlUiPublicAssetVersion(buildId))}` : "";
   return `${normalizeBasePath(resourceBasePath ?? "")}/${asset}${version}`;
 }
 

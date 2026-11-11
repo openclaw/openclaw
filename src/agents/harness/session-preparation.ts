@@ -4,7 +4,7 @@ import {
   prepareSystemAgentRunAdmission,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
-import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import type { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import type {
   AgentHarnessSessionPreparationV1,
   AgentHarnessSessionRuntimeParamsV1,
@@ -36,7 +36,12 @@ export async function prepareAgentHarnessSessionRuntime(params: {
     params.sourceAuthority,
   );
   let host: ReturnType<typeof createAgentHarnessHostCapabilities> | undefined;
+  const dispose = () => {
+    host?.close();
+    admission.close();
+  };
   try {
+    const { createAgentHarnessHostCapabilities } = await import("./host-capability.js");
     const admittedRunContext = await admission.admit("plugin-harness");
     params.assertCurrent();
     const authProfileStore =
@@ -71,16 +76,9 @@ export async function prepareAgentHarnessSessionRuntime(params: {
           return await operation();
         }),
     };
-    return {
-      preparation,
-      dispose: () => {
-        owner.close();
-        admission.close();
-      },
-    };
+    return { preparation, dispose };
   } catch (error) {
-    host?.close();
-    admission.close();
+    dispose();
     throw error;
   }
 }

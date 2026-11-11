@@ -31,22 +31,18 @@ const liveTranscriptSchema = z.object({
   end_ms: z.number(),
 });
 
+function transcriptDelta(role: "user" | "assistant", text: string): OpenAIQuicksilverInboundEvent {
+  return { kind: "transcript-delta", role, text };
+}
+
 const framelessSchemas = new Map<string, z.ZodType<OpenAIQuicksilverInboundEvent>>([
   [
     "input_transcript.added",
-    transcriptAddedSchema.transform(({ item }) => ({
-      kind: "transcript-delta",
-      role: "user",
-      text: item.text,
-    })),
+    transcriptAddedSchema.transform(({ item }) => transcriptDelta("user", item.text)),
   ],
   [
     "output_transcript.added",
-    transcriptAddedSchema.transform(({ item }) => ({
-      kind: "transcript-delta",
-      role: "assistant",
-      text: item.text,
-    })),
+    transcriptAddedSchema.transform(({ item }) => transcriptDelta("assistant", item.text)),
   ],
   [
     "turn.done",
@@ -93,19 +89,11 @@ const framelessSchemas = new Map<string, z.ZodType<OpenAIQuicksilverInboundEvent
 const liveSchemas = new Map<string, z.ZodType<OpenAIQuicksilverInboundEvent>>([
   [
     "session.input_transcript.delta",
-    liveTranscriptSchema.transform(({ delta }) => ({
-      kind: "transcript-delta",
-      role: "user",
-      text: delta,
-    })),
+    liveTranscriptSchema.transform(({ delta }) => transcriptDelta("user", delta)),
   ],
   [
     "session.output_transcript.delta",
-    liveTranscriptSchema.transform(({ delta }) => ({
-      kind: "transcript-delta",
-      role: "assistant",
-      text: delta,
-    })),
+    liveTranscriptSchema.transform(({ delta }) => transcriptDelta("assistant", delta)),
   ],
   [
     "session.output_audio.delta",

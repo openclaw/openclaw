@@ -1,1 +1,1 @@
-export { loginMiniMaxPortalOAuth } from "./oauth.js";
+export { loginMiniMaxPortalOAuth, refreshMiniMaxPortalOAuthCredential } from "./oauth.js";

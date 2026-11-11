@@ -1,4 +1,3 @@
-// Approval renderer helpers convert approval request data into channel-safe display text.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import {

@@ -9,6 +9,7 @@ import {
   type GatewayClientRequestOptions,
   type GatewayReconnectPausedInfo,
 } from "../gateway/client.js";
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 import type { NodeHostGatewayConfig } from "./config.js";
 
@@ -31,6 +32,7 @@ type GatewayCandidateConnectionParams = {
   candidates: readonly NodeHostGatewayConfig[];
   cloudflareAccessByCandidate?: ReadonlyMap<NodeHostGatewayConfig, CloudflareAccessCredentials>;
   clientOptions: CandidateConnectionOptions;
+  candidateUrls?: ReadonlyMap<NodeHostGatewayConfig, string>;
   onEvent: (event: GatewayCandidateEvent) => void;
   onHelloOk: (
     hello: GatewayCandidateHello,
@@ -45,6 +47,12 @@ type GatewayCandidateConnectionParams = {
 };
 
 export function formatGatewayCandidateUrl(gateway: NodeHostGatewayConfig): string {
+  if (gateway.kind === "openclaw-id") {
+    if (!gateway.openclawId) {
+      throw new Error("OpenClaw ID node target is missing");
+    }
+    return `openclaw-id://${gateway.openclawId.pin.claw_id}`;
+  }
   const host = gateway.host ?? "127.0.0.1";
   const urlHost =
     host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;
@@ -56,10 +64,6 @@ export function formatGatewayCandidateUrl(gateway: NodeHostGatewayConfig): strin
       : `/${gateway.contextPath}`
     : "";
   return `${scheme}://${urlHost}:${port}${contextPath}`;
-}
-
-function canTryNextGatewayCandidate(info: GatewayClientCloseInfo | undefined): boolean {
-  return info?.phase === "pre-hello" && info.connectRequestSent === false;
 }
 
 export function createNodeHostGatewayCandidateConnection(params: GatewayCandidateConnectionParams) {
@@ -82,7 +86,7 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
     if (!candidate) {
       throw new Error(`node host gateway candidate ${candidateIndex} is unavailable`);
     }
-    const url = formatGatewayCandidateUrl(candidate);
+    const url = params.candidateUrls?.get(candidate) ?? formatGatewayCandidateUrl(candidate);
     const cloudflareAccess = params.cloudflareAccessByCandidate?.get(candidate);
     const candidateClient = new GatewayClient({
       ...params.clientOptions,
@@ -128,7 +132,8 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
           // endpoint. Its own reconnect path owns durable device auth from here.
           winnerSelected ||
           nextCandidateIndex >= params.candidates.length ||
-          !canTryNextGatewayCandidate(info)
+          info?.phase !== "pre-hello" ||
+          info.connectRequestSent !== false
         ) {
           return;
         }
@@ -164,15 +169,7 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
         const results = await Promise.allSettled(
           candidateClients.map((client) => client.stopAndWait()),
         );
-        const failures = results.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "node host gateway cleanup failed");
-        }
+        throwIfSettledRejected(results, "node host gateway cleanup failed");
       });
       return stopPromise;
     },

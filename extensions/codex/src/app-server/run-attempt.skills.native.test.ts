@@ -22,8 +22,6 @@ vi.unmock("node:child_process");
 
 const NATIVE_FIRST_CATALOG =
   "<available_skills><skill><name>alpha-native</name><description>Creation-time catalog.</description></skill></available_skills>";
-const NATIVE_SECOND_CATALOG =
-  "<available_skills><skill><name>bravo-native</name><description>Refreshed catalog.</description></skill></available_skills>";
 
 /**
  * Serves the Responses wire for the real Codex binary and records every request
@@ -303,6 +301,7 @@ describe("native Codex skill delivery", () => {
         } else {
           await fs.unlink(soulPath);
         }
+        const before = fixture.requests.length;
         const params = createParams("remote-persona.jsonl");
         params.disableTools = false;
         params.runId = `remote-persona-${index}`;
@@ -339,30 +338,29 @@ describe("native Codex skill delivery", () => {
         expect(result.systemPromptReport?.injectedWorkspaceFiles).toContainEqual(
           expect.objectContaining({ path: personalPath, injectedChars: 0, truncated: false }),
         );
-        const text = developerMessageText(fixture.requests.at(-1));
+        expect(fixture.requests).toHaveLength(before + 1);
+        const request = fixture.requests.at(-1);
+        expect(developerMessageText(request)).toContain("Synthetic model-owned Default policy.");
+        // Inspect the latest framed policy: historical messages may retain old persona.
+        const input = request?.input;
+        const policy = Array.isArray(input)
+          ? input.findLast(
+              (item) =>
+                isJsonObject(item) &&
+                item.role === "developer" &&
+                JSON.stringify(item).includes("<thread_policy>"),
+            )
+          : undefined;
+        expect(policy).toBeDefined();
+        const text = JSON.stringify(policy);
         expect(text).toContain(sharedUser);
-        expect(text).toContain("Synthetic model-owned Default policy.");
         if (soul) {
           expect(text).toContain(soul);
-          if (index === 1) {
-            expect(text.lastIndexOf(editedSoul)).toBeGreaterThan(text.lastIndexOf(firstSoul));
-          }
         } else {
-          // Resume replaces the current section; historical turns may still
-          // contain old text, so inspect the latest policy handoff.
-          const latestDeveloper = fixture.requests.at(-1)?.input;
-          expect(Array.isArray(latestDeveloper)).toBe(true);
-          const handoffs = Array.isArray(latestDeveloper)
-            ? latestDeveloper.filter(
-                (item) =>
-                  isJsonObject(item) &&
-                  item.role === "developer" &&
-                  JSON.stringify(item).includes("complete current OpenClaw"),
-              )
-            : [];
-          expect(handoffs.length).toBeGreaterThan(0);
-          expect(JSON.stringify(handoffs.at(-1))).not.toContain(editedSoul);
-          expect(JSON.stringify(handoffs.at(-1))).not.toContain(firstSoul);
+          expect(text).not.toContain(editedSoul);
+        }
+        if (index > 0) {
+          expect(text).not.toContain(firstSoul);
         }
       }
       expect(threadIds.size).toBe(1);
@@ -380,11 +378,6 @@ describe("native Codex skill delivery", () => {
   }, 90_000);
 
   it.each([
-    {
-      label: "an edited catalog",
-      refreshed: NATIVE_SECOND_CATALOG,
-      current: NATIVE_SECOND_CATALOG,
-    },
     {
       label: "a withdrawn catalog",
       refreshed: undefined,

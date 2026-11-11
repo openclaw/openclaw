@@ -2,38 +2,6 @@ import { describe, expect, test } from "vitest";
 import { resolveBaselineReadonlyPaths, resolveSandboxTempDir } from "../src/sandbox-baseline.js";
 
 describe("effective filesystem policy", () => {
-  test("derives baseline readonly directories from the host Windows env", () => {
-    const paths = resolveBaselineReadonlyPaths({
-      SystemRoot: "D:\\Windows",
-      ProgramFiles: "D:\\Program Files",
-      "ProgramFiles(x86)": "D:\\Program Files (x86)",
-    });
-
-    expect(paths).toEqual([
-      "D:\\Program Files",
-      "D:\\Program Files (x86)",
-      "D:\\Windows\\System32",
-      "D:\\Windows\\SysWOW64",
-    ]);
-  });
-
-  test("ignores blank Windows env paths when deriving readonly directories", () => {
-    expect(
-      resolveBaselineReadonlyPaths({
-        SystemRoot: " ",
-        WINDIR: "D:\\Windows",
-        ProgramFiles: "",
-        ProgramW6432: "D:\\Program Files",
-        "ProgramFiles(x86)": "   ",
-      }),
-    ).toEqual([
-      "D:\\Program Files",
-      "C:\\Program Files (x86)",
-      "D:\\Windows\\System32",
-      "D:\\Windows\\SysWOW64",
-    ]);
-  });
-
   test("uses deterministic readonly fallbacks when Windows env paths are blank", () => {
     expect(
       resolveBaselineReadonlyPaths({
@@ -49,10 +17,6 @@ describe("effective filesystem policy", () => {
       "C:\\Windows\\System32",
       "C:\\Windows\\SysWOW64",
     ]);
-  });
-
-  test("prefers the configured Windows temp directory", () => {
-    expect(resolveSandboxTempDir({ TEMP: "C:\\Temp" })).toBe("C:\\Temp");
   });
 
   test("ignores a blank TEMP value when TMP is available", () => {

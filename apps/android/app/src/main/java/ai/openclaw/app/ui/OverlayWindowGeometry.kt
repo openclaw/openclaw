@@ -25,17 +25,16 @@ internal fun sampleOverlayWindowGeometry(
   overlayView: View,
 ): OverlayWindowGeometry? {
   val displayId = activityView.display?.displayId
-  return if (activity != null && activityView.isAttachedToWindow && overlayView.isAttachedToWindow &&
-    displayId != null && displayId == overlayView.display?.displayId
+  if (activity == null || !activityView.isAttachedToWindow || !overlayView.isAttachedToWindow ||
+    displayId == null || displayId != overlayView.display?.displayId
   ) {
-    val extent = WindowMetricsCalculator.getOrCreate().computeCurrentWindowMetrics(activity).bounds
-    OverlayWindowGeometry(
-      IntRect(0, 0, extent.width(), extent.height()),
-      activityView.windowScreenOrigin() - overlayView.windowScreenOrigin(),
-    )
-  } else {
-    null
+    return null
   }
+  val extent = WindowMetricsCalculator.getOrCreate().computeCurrentWindowMetrics(activity).bounds
+  return OverlayWindowGeometry(
+    IntRect(0, 0, extent.width(), extent.height()),
+    activityView.windowScreenOrigin() - overlayView.windowScreenOrigin(),
+  )
 }
 
 @Composable
@@ -59,10 +58,9 @@ internal fun rememberOverlayWindowGeometry(
         sample()
         true
       }
-    val activityObserver = activityView.viewTreeObserver
-    val overlayObserver = overlayView.viewTreeObserver
-    activityObserver.addOnPreDrawListener(observer)
-    overlayObserver.addOnPreDrawListener(observer)
+    val views = listOf(activityView, overlayView)
+    val observers = views.map { it.viewTreeObserver }
+    observers.forEach { it.addOnPreDrawListener(observer) }
     val attachment =
       object : View.OnAttachStateChangeListener {
         override fun onViewAttachedToWindow(view: View) = sample()
@@ -74,15 +72,12 @@ internal fun rememberOverlayWindowGeometry(
     // The dialog retains its original initial/pre-draw behavior. Terminal sheets additionally
     // need direct detach delivery, before disposal or conflatable composition can run.
     if (onPublication != null) {
-      activityView.addOnAttachStateChangeListener(attachment)
-      overlayView.addOnAttachStateChangeListener(attachment)
+      views.forEach { it.addOnAttachStateChangeListener(attachment) }
     }
     sample()
     onDispose {
-      if (activityObserver.isAlive) activityObserver.removeOnPreDrawListener(observer)
-      if (overlayObserver.isAlive) overlayObserver.removeOnPreDrawListener(observer)
-      activityView.removeOnAttachStateChangeListener(attachment)
-      overlayView.removeOnAttachStateChangeListener(attachment)
+      observers.forEach { if (it.isAlive) it.removeOnPreDrawListener(observer) }
+      views.forEach { it.removeOnAttachStateChangeListener(attachment) }
       deliver?.invoke(null)
     }
   }

@@ -100,10 +100,18 @@ function trustedBundledPluginRootsForPackageRoot(packageRoot: string): string[] 
   return roots;
 }
 
-function resolvePackageRootsForBundledPlugins(): string[] {
+function resolvePackageRootsForBundledPlugins(rejectedOverride?: string | null): string[] {
   const argvRoot = resolveOpenClawPackageRootSync({ argv1: process.argv[1] });
+  const safeArgvRoot =
+    argvRoot &&
+    rejectedOverride &&
+    isPluginInPackageBundledRoots({ rootDir: rejectedOverride, packageRoot: argvRoot })
+      ? null
+      : argvRoot;
   const moduleRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-  return uniqueStrings([argvRoot, moduleRoot].filter((entry): entry is string => Boolean(entry)));
+  return uniqueStrings(
+    [safeArgvRoot, moduleRoot].filter((entry): entry is string => Boolean(entry)),
+  );
 }
 
 export function resolveSourceCheckoutDependencyDiagnostic(
@@ -262,47 +270,25 @@ function resolveBundledPluginsDirUncached(env: NodeJS.ProcessEnv): string | unde
     }
   }
 
-  try {
-    const argvRoot = resolveOpenClawPackageRootSync({ argv1: process.argv[1] });
-    const rejectedOverrideUsesArgvRoot = Boolean(
-      argvRoot &&
-      rejectedExistingOverride &&
-      isPluginInPackageBundledRoots({
-        rootDir: rejectedExistingOverride,
-        packageRoot: argvRoot,
-      }),
+  for (const packageRoot of resolvePackageRootsForBundledPlugins(rejectedExistingOverride)) {
+    const bundledDir = resolveBundledDirFromPackageRoot(
+      packageRoot,
+      resolvePluginRuntimeArtifactPreference(),
     );
-    const safeArgvRoot = rejectedOverrideUsesArgvRoot ? null : argvRoot;
-    const moduleRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-    const packageRoots = uniqueStrings(
-      [safeArgvRoot, moduleRoot].filter((entry): entry is string => Boolean(entry)),
-    );
-    for (const packageRoot of packageRoots) {
-      const bundledDir = resolveBundledDirFromPackageRoot(
-        packageRoot,
-        resolvePluginRuntimeArtifactPreference(),
-      );
-      if (bundledDir) {
-        return bundledDir;
-      }
+    if (bundledDir) {
+      return bundledDir;
     }
-  } catch {
-    // ignore
   }
 
   // bun --compile: ship a sibling bundled plugin tree next to the executable.
-  try {
-    const execDir = path.dirname(process.execPath);
-    const siblingBuilt = path.join(execDir, "dist", "extensions");
-    if (pluginCacheExistsSync(siblingBuilt)) {
-      return siblingBuilt;
-    }
-    const sibling = path.join(execDir, "extensions");
-    if (pluginCacheExistsSync(sibling)) {
-      return sibling;
-    }
-  } catch {
-    // ignore
+  const execDir = path.dirname(process.execPath);
+  const siblingBuilt = path.join(execDir, "dist", "extensions");
+  if (pluginCacheExistsSync(siblingBuilt)) {
+    return siblingBuilt;
+  }
+  const sibling = path.join(execDir, "extensions");
+  if (pluginCacheExistsSync(sibling)) {
+    return sibling;
   }
 
   // npm/dev: walk up from this module to find the bundled plugin tree at the package root.

@@ -20,9 +20,6 @@ export type MSTeamsApprovalActionToken = {
 };
 
 export type MSTeamsPendingApprovalCard = {
-  approvalId: string;
-  approvalKind: ChannelApprovalKind;
-  expiresAtMs: number;
   card: Record<string, unknown>;
   actionTokens: MSTeamsApprovalActionToken[];
   allowedDecisions: readonly ExecApprovalDecision[];
@@ -117,9 +114,6 @@ export function buildMSTeamsPendingApprovalCard(params: {
     buildApprovalMetadata(view.approvalId, view.metadata),
   ];
   return {
-    approvalId: view.approvalId,
-    approvalKind: view.approvalKind,
-    expiresAtMs: view.expiresAtMs,
     card: buildAdaptiveCard(body, actions),
     actionTokens,
     allowedDecisions: view.actions.map(({ decision }) => decision),

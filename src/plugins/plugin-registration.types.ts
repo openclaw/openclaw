@@ -22,21 +22,12 @@ import type { OpenClawPluginNodeWorkspace } from "./types.node-host.js";
 
 export type { PluginServiceSchedulerV1 } from "./service-scheduler.types.js";
 
-type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
-type AnyChannelPlugin = import("../channels/plugins/types.plugin.js").AnyChannelPlugin;
-type DiagnosticTracePropagationBridge = DiagnosticTracePropagationBridgeContract<
-  DiagnosticEventPayload,
-  DiagnosticEventMetadata
->;
-
-type PluginInteractiveHandlerResult = {
-  handled?: boolean;
-} | void;
-
 export type PluginInteractiveRegistration<
   TContext = unknown,
   TChannel extends string = string,
-  TResult = PluginInteractiveHandlerResult,
+  TResult = {
+    handled?: boolean;
+  } | void,
 > = {
   channel: TChannel;
   namespace: string;
@@ -74,10 +65,6 @@ export type OpenClawPluginHttpRouteParams = {
   replaceExisting?: boolean;
 };
 
-export type OpenClawPluginHostedMediaResolver = (
-  mediaUrl: string,
-) => string | null | undefined | Promise<string | null | undefined>;
-
 export type WidgetPresenterContext = Readonly<{
   messageChannel?: string;
   accountId?: string;
@@ -85,12 +72,17 @@ export type WidgetPresenterContext = Readonly<{
   nativeChannelId?: string;
   currentChannelId?: string;
   currentMessagingTarget?: string;
+  /** Channel-local id of the inbound message this turn answers. */
+  currentMessageId?: string;
   sessionKey?: string;
 }>;
 
 export type WidgetPresenterDocument = Readonly<{
   kind: "html";
+  /** Core-wrapped document for hosts that run widgets inside OpenClaw's iframe bridge. */
   html: string;
+  /** Agent-authored widget code before wrapping, for hosts with their own widget runtime. */
+  source: string;
   hostedUrl?: string;
 }>;
 
@@ -102,9 +94,15 @@ export type WidgetPresentationError =
 
 export type WidgetPresentationSuccess =
   | { kind: "node"; nodeId: string; nodeName?: string }
-  | { kind: "message"; receipt: MessageReceipt };
+  | {
+      kind: "message";
+      receipt: MessageReceipt;
+      updated?: boolean;
+      /** Advisory findings for the model; the widget was still delivered. */
+      notes?: readonly string[];
+    };
 
-type WidgetPresenterBase = {
+export type WidgetPresenter = {
   description: string;
   availability: (
     context: WidgetPresenterContext,
@@ -112,26 +110,34 @@ type WidgetPresenterBase = {
   present: (params: {
     document: WidgetPresenterDocument;
     title: string;
+    /** Stable widget name: the explicit `name`, or one derived from the title. */
+    name: string;
+    /** Agent-written widget state, passed only to presenters that declare `capabilities.state`. */
+    state?: string;
     context: WidgetPresenterContext;
   }) => Promise<Result<WidgetPresentationSuccess, WidgetPresentationError>>;
-};
-
-export type WidgetPresenter = WidgetPresenterBase &
-  (
-    | {
-        target: "node_panel";
-        match?: never;
-        capabilities?: never;
-      }
-    | {
-        target: "current_channel";
-        match: (context: WidgetPresenterContext) => boolean;
-        capabilities: Readonly<{
-          sourceKinds: readonly string[];
-          maxSourceBytes?: number;
-        }>;
-      }
-  );
+} & (
+  | {
+      target: "node_panel";
+      match?: never;
+      capabilities?: never;
+    }
+  | {
+      target: "current_channel";
+      match: (context: WidgetPresenterContext) => boolean;
+      capabilities: Readonly<{
+        sourceKinds: readonly string[];
+        maxSourceBytes?: number;
+        /**
+         * Replaces the browser-host authoring rules in the `show_widget` description while this
+         * presenter owns the current channel. Keep it bounded; it is part of the tool prompt.
+         */
+        authoringGuidance?: string;
+        /** Accepts the `state` argument: a UTF-8 string of at most `maxBytes` the widget reads. */
+        state?: Readonly<{ maxBytes: number; description: string }>;
+      }>;
+    }
+);
 
 export type OpenClawPluginCliContext = {
   /**
@@ -164,23 +170,18 @@ export type OpenClawPluginCliRootCommandDescriptor = OpenClawPluginCliCommandDes
   machineOutput?: (params: { argv: readonly string[]; stdoutIsTTY: boolean }) => boolean;
 };
 
-type OpenClawPluginRootCliRegistrationOptions = {
-  /** Omit or pass an empty path for root commands. */
-  parentPath?: readonly [];
-  commands?: readonly string[];
-  descriptors?: readonly OpenClawPluginCliRootCommandDescriptor[];
-};
-
-/** Backward-compatible registration shape for dynamic root or nested paths. */
-type OpenClawPluginLegacyCliRegistrationOptions = {
-  parentPath?: readonly string[];
-  commands?: readonly string[];
-  descriptors?: readonly OpenClawPluginCliCommandDescriptor[];
-};
-
 export type OpenClawPluginCliRegistrationOptions =
-  | OpenClawPluginRootCliRegistrationOptions
-  | OpenClawPluginLegacyCliRegistrationOptions;
+  | {
+      /** Omit or pass an empty path for root commands. */
+      parentPath?: readonly [];
+      commands?: readonly string[];
+      descriptors?: readonly OpenClawPluginCliRootCommandDescriptor[];
+    } /** Backward-compatible registration shape for dynamic root or nested paths. */
+  | {
+      parentPath?: readonly string[];
+      commands?: readonly string[];
+      descriptors?: readonly OpenClawPluginCliCommandDescriptor[];
+    };
 
 export type OpenClawPluginNodeCliFeatureOptions = {
   /** Explicit node feature command names owned under `openclaw nodes`. */
@@ -221,24 +222,6 @@ export type OpenClawPluginNodeInvokeTransportResult =
 
 type OpenClawPluginNodeInvokeApprovalDecision = "allow-once" | "allow-always" | "deny";
 
-type OpenClawPluginNodeInvokePolicyApprovalRuntime = {
-  request: (input: {
-    title: string;
-    description: string;
-    scope?: ApprovalScope;
-    severity?: "info" | "warning" | "critical";
-    toolName?: string;
-    toolCallId?: string;
-    agentId?: string;
-    sessionKey?: string;
-    allowedDecisions?: readonly OpenClawPluginNodeInvokeApprovalDecision[];
-    timeoutMs?: number;
-  }) => Promise<{
-    id?: string;
-    decision?: OpenClawPluginNodeInvokeApprovalDecision | null;
-  }>;
-};
-
 export type OpenClawPluginNodeInvokePolicyContext = {
   nodeId: string;
   command: string;
@@ -264,7 +247,23 @@ export type OpenClawPluginNodeInvokePolicyContext = {
     /** Stable, content-free family name; never include user or action arguments. */
     family: string;
   };
-  approvals?: OpenClawPluginNodeInvokePolicyApprovalRuntime;
+  approvals?: {
+    request: (input: {
+      title: string;
+      description: string;
+      scope?: ApprovalScope;
+      severity?: "info" | "warning" | "critical";
+      toolName?: string;
+      toolCallId?: string;
+      agentId?: string;
+      sessionKey?: string;
+      allowedDecisions?: readonly OpenClawPluginNodeInvokeApprovalDecision[];
+      timeoutMs?: number;
+    }) => Promise<{
+      id?: string;
+      decision?: OpenClawPluginNodeInvokeApprovalDecision | null;
+    }>;
+  };
   /** Full covers only the selected harness's declared node commands; undefined requires a human decision. */
   invokeNodeWithSessionFull?: (input: {
     workspace: OpenClawPluginNodeWorkspace;
@@ -368,9 +367,23 @@ export type OpenClawPluginServiceContext = {
   serviceHealth?: OpenClawPluginServiceHealth;
   /** Gateway-owned timed work; required by the version 2 service contract. */
   scheduler?: PluginServiceSchedulerV1;
+  /** Remote device-only Control UI ingress, available only to admitted trusted services. */
+  controlUiIngress?: import("./gateway-ingress.types.js").GatewayControlUiIngressFactoryV2;
   /** Gateway-owned scheduler access, revoked when this service stops. */
   getCron?: () =>
     | (import("./hook-gateway.types.js").PluginHookGatewayCronService & {
+        /** Only this plugin's event sources, without credentials or creator authority. */
+        readEventSources?: () => Promise<
+          import("../cron/event-source.js").CronEventSourceSnapshot[]
+        >;
+        /** Transfer a durable ingress claim into this plugin's bound Automation. */
+        runEvent?: (
+          id: string,
+          input: Omit<import("../cron/event-source.js").CronEventRunOptions, "commitGuard"> & {
+            /** Additional current source/account authority; never replaces the host guard. */
+            assertCurrent: () => void;
+          },
+        ) => Promise<import("../cron/event-source.js").CronEventRunResult>;
         /** Admit service-owned work through the scheduler's normal run queue. */
         enqueueRun?: (
           id: string,
@@ -378,6 +391,29 @@ export type OpenClawPluginServiceContext = {
         ) => Promise<import("../cron/service-contract.js").CronServiceRunResult>;
       })
     | undefined;
+  /** Host-authenticated MCP Events requests bound to this plugin's persisted event source. */
+  mcpEvents?: {
+    /** One binding lifetime, including exact finite cleanup across benign policy refresh. */
+    prepareSource: (input: {
+      jobId: string;
+      sourceIdentity: string;
+      serverName: string;
+    }) => Promise<{
+      accountId: string;
+      principalId: string;
+      assertCurrent: () => void;
+      /** Refresh current policy and credential-owner facts; retired authorization never revives. */
+      revalidate: () => Promise<void>;
+      request: (
+        method: "server/discover" | "events/list" | "events/subscribe",
+        params: Record<string, unknown>,
+        signal: AbortSignal,
+      ) => Promise<unknown>;
+      /** Close subscribe admission and clean up this handle’s captured webhook identity. */
+      unsubscribe: (signal: AbortSignal) => Promise<unknown>;
+      dispose: () => void;
+    }>;
+  };
   /** Service-owned node calls for this plugin's commands; normal node policy still applies. */
   invokeNode?: (
     params: Omit<
@@ -398,8 +434,22 @@ export type OpenClawPluginServiceContext = {
     measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
   };
   internalDiagnostics?: {
+    /** Synchronous WebSocket counters; arrays and attribution are borrowed until return. */
+    onGatewayWsMetrics?: (
+      listener: import("../infra/gateway-ws-metrics.js").GatewayWsMetricsListener,
+    ) => () => void;
+    /** Synchronous worker measurements; timing fields are borrowed and must not be mutated. */
+    onWorkerRequestMetrics?: (
+      listener: import("../infra/worker-request-diagnostics.js").WorkerRequestMetricsListener,
+    ) => () => void;
     /** Identity of the hosting process, available only while this service is active. */
     getRuntimeIdentity?: () => { processInstanceId: string; buildId?: string };
+    /** Current owner-projected work; undefined while the Gateway projection is unavailable. */
+    onGatewayWorkMetrics?: (
+      listener: (
+        snapshot: import("../infra/gateway-work-metrics.js").GatewayWorkMetricsSnapshot | undefined,
+      ) => void,
+    ) => () => void;
     emit: (event: DiagnosticEventInput, privateData?: DiagnosticEventPrivateData) => void;
     onEvent: (
       listener: (
@@ -411,7 +461,12 @@ export type OpenClawPluginServiceContext = {
       /** Defaults to true; false skips private payload copies and passes a frozen empty object. */
       options?: { includePrivateData?: boolean },
     ) => () => void;
-    registerTracePropagationBridge?: (bridge: DiagnosticTracePropagationBridge) => () => void;
+    registerTracePropagationBridge?: (
+      bridge: DiagnosticTracePropagationBridgeContract<
+        DiagnosticEventPayload,
+        DiagnosticEventMetadata
+      >,
+    ) => () => void;
   };
 };
 
@@ -439,7 +494,10 @@ export type OpenClawPluginServiceV2 = Omit<
   stop?: (ctx: OpenClawPluginServiceContextV2) => void | Promise<void>;
 };
 
-export type OpenClawPluginChannelRegistration<Plugin extends AnyChannelPlugin = ChannelPlugin> = {
+export type OpenClawPluginChannelRegistration<
+  Plugin extends import("../channels/plugins/types.plugin.js").AnyChannelPlugin =
+    import("../channels/plugins/types.plugin.js").ChannelPlugin,
+> = {
   plugin: Plugin;
 };
 
@@ -464,3 +522,22 @@ export type PluginRegistrationMode =
   | "setup-only"
   | "setup-runtime"
   | "cli-metadata";
+
+export type {
+  PluginServiceSessionWorkV1,
+  PluginServiceSessionWorkContextV1,
+} from "./service-session-work.types.js";
+
+export type OpenClawPluginServiceContextV3 = OpenClawPluginServiceContextV2 & {
+  sessionWork: import("./service-session-work.types.js").PluginServiceSessionWorkV1;
+};
+
+/** A service with host-owned durable session-work admission and current reauthorization. */
+export type OpenClawPluginServiceV3 = Omit<
+  OpenClawPluginService,
+  "apiVersion" | "start" | "stop"
+> & {
+  apiVersion: 3;
+  start: (ctx: OpenClawPluginServiceContextV3) => void | Promise<void>;
+  stop?: (ctx: OpenClawPluginServiceContextV3) => void | Promise<void>;
+};

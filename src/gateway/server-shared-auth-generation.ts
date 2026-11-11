@@ -1,5 +1,3 @@
-// Gateway shared-auth generation enforcement.
-// Disconnects clients when config writes invalidate shared credentials.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { captureGatewayAuthPolicy, isGatewayAuthGrantCurrent } from "./auth-policy.js";
@@ -10,7 +8,6 @@ import {
   type GatewayPolicyClient,
 } from "./server/ws-policy-close.js";
 
-/** Gateway client subset relevant to shared auth generation enforcement. */
 export type SharedGatewayAuthClient = GatewayPolicyClient & {
   usesSharedGatewayAuth?: boolean;
   sharedGatewaySessionGeneration?: string;
@@ -282,7 +279,6 @@ export function disconnectStaleSharedGatewayAuthClients(params: {
   }
 }
 
-/** Enforce shared auth generation behavior after a config write. */
 export function enforceSharedGatewaySessionGenerationForConfigWrite(params: {
   state: SharedGatewaySessionGenerationState;
   nextConfig: OpenClawConfig;

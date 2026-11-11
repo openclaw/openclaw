@@ -1,7 +1,7 @@
 import { PermissionFlagsBits } from "discord-api-types/v10";
 import { readNonNegativeIntegerParam, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 
-export type DiscordModerationAction = "timeout" | "kick" | "ban";
+export type DiscordModerationAction = keyof typeof moderationPermissions;
 
 export type DiscordModerationCommand = {
   action: DiscordModerationAction;
@@ -13,14 +13,14 @@ export type DiscordModerationCommand = {
   deleteMessageDays?: number;
 };
 
-const moderationPermissions: Record<DiscordModerationAction, bigint> = {
+const moderationPermissions = {
   timeout: PermissionFlagsBits.ModerateMembers,
   kick: PermissionFlagsBits.KickMembers,
   ban: PermissionFlagsBits.BanMembers,
-};
+} satisfies Record<string, bigint>;
 
 export function isDiscordModerationAction(action: string): action is DiscordModerationAction {
-  return action === "timeout" || action === "kick" || action === "ban";
+  return Object.hasOwn(moderationPermissions, action);
 }
 
 export function requiredGuildPermissionForModerationAction(

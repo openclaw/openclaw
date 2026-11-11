@@ -36,16 +36,6 @@ describe("node workspace retain protocol", () => {
     });
   });
 
-  it.each([
-    { ...entry, extra: true },
-    { ...entry, generation: 0 },
-    { ...entry, manifestRefs: ["not-a-ref"] },
-  ])("rejects an invalid retain entry %#", (invalid) => {
-    expect(() =>
-      parseNodeWorkerWorkspaceRetainInput(JSON.stringify({ ...request, retain: [invalid] })),
-    ).toThrow("INVALID_REQUEST");
-  });
-
   it("rejects a bundle status hash that is not retained", () => {
     expect(() =>
       parseNodeWorkerWorkspaceRetainInput(

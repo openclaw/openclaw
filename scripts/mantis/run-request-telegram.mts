@@ -240,19 +240,17 @@ async function run() {
       "Usage: run-request-telegram.mts <sha> <fresh-public-output> [runtime-image] [trusted-bridge-image]",
     );
   }
-  const subject = {
-    repositoryId: process.env.GITHUB_REPOSITORY_ID ?? "",
-    pullRequest: Number(process.env.TARGET_PR),
-    candidateSha: candidate,
-  };
   const identity = telegramProofIdentitySchema.parse({
     // The consumer binds the request to its source comment and target snapshot.
     // Recomputing it from PR/head would lose that identity and collapse new requests.
     request_id: process.env.REQUEST_ID,
     plan_sha256: process.env.PLAN_SHA256,
-    repository: { id: subject.repositoryId, full_name: process.env.GITHUB_REPOSITORY },
-    pull_request: subject.pullRequest,
-    candidate_sha: subject.candidateSha,
+    repository: {
+      id: process.env.GITHUB_REPOSITORY_ID ?? "",
+      full_name: process.env.GITHUB_REPOSITORY,
+    },
+    pull_request: Number(process.env.TARGET_PR),
+    candidate_sha: candidate,
     scenario: "telegram-bot-e2e-proof",
     workflow: {
       path: ".github/workflows/mantis-telegram-bot-e2e-proof.yml",

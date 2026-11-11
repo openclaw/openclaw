@@ -42,21 +42,17 @@ internal data class EncodedPhotoPayload(
 )
 
 internal interface PhotosDataSource {
-  fun hasPermission(context: Context): Boolean
+  fun hasPermission(): Boolean
 
-  fun latest(
-    context: Context,
-    request: PhotosLatestRequest,
-  ): List<EncodedPhotoPayload>
+  fun latest(request: PhotosLatestRequest): List<EncodedPhotoPayload>
 }
 
-private object SystemPhotosDataSource : PhotosDataSource {
-  override fun hasPermission(context: Context): Boolean = hasPhotoReadPermission(context)
+private class SystemPhotosDataSource(
+  private val context: Context,
+) : PhotosDataSource {
+  override fun hasPermission(): Boolean = hasPhotoReadPermission(context)
 
-  override fun latest(
-    context: Context,
-    request: PhotosLatestRequest,
-  ): List<EncodedPhotoPayload> {
+  override fun latest(request: PhotosLatestRequest): List<EncodedPhotoPayload> {
     val resolver = context.contentResolver
     val rows = queryLatestRows(resolver, request.limit)
     if (rows.isEmpty()) return emptyList()
@@ -150,8 +146,13 @@ private object SystemPhotosDataSource : PhotosDataSource {
       } else {
         bounds.outWidth
       }
-    val inSampleSize = computeInSampleSize(sourceWidth, maxWidth)
-    val decodeOptions = BitmapFactory.Options().apply { this.inSampleSize = inSampleSize }
+    val decodeOptions =
+      BitmapFactory.Options().apply {
+        inSampleSize = 1
+        while (sourceWidth / inSampleSize / 2 >= maxWidth) {
+          inSampleSize *= 2
+        }
+      }
     val decoded =
       resolver.openInputStream(uri).use { input ->
         if (input == null) return null
@@ -168,17 +169,6 @@ private object SystemPhotosDataSource : PhotosDataSource {
     } finally {
       oriented.recycle()
     }
-  }
-
-  private fun computeInSampleSize(
-    width: Int,
-    maxWidth: Int,
-  ): Int {
-    var sample = 1
-    while (width / sample / 2 >= maxWidth) {
-      sample *= 2
-    }
-    return sample
   }
 
   private fun encodeJpegUnderBudget(
@@ -222,21 +212,18 @@ private object SystemPhotosDataSource : PhotosDataSource {
 }
 
 class PhotosHandler internal constructor(
-  private val appContext: Context,
-  private val dataSource: PhotosDataSource = SystemPhotosDataSource,
+  appContext: Context,
+  private val dataSource: PhotosDataSource = SystemPhotosDataSource(appContext),
 ) {
   fun handlePhotosLatest(paramsJson: String?): GatewaySession.InvokeResult {
-    if (!dataSource.hasPermission(appContext)) {
+    if (!dataSource.hasPermission()) {
       return nodeInvokeError("PHOTOS_PERMISSION_REQUIRED", "grant Photos permission")
     }
     val request =
       parseRequest(paramsJson)
         ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
-    return try {
-      val photos = dataSource.latest(appContext, request)
-      GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("photos" to photos)))
-    } catch (err: Throwable) {
-      nodeInvokeError("PHOTOS_UNAVAILABLE", err.message ?: "photo fetch failed")
+    return nodeInvokeJson("PHOTOS_UNAVAILABLE", "photo fetch failed") {
+      Json.encodeToString(mapOf("photos" to dataSource.latest(request)))
     }
   }
 

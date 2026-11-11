@@ -5,7 +5,9 @@ import {
   emptySqliteCounts,
   observeParentSqlite,
 } from "../../../test/helpers/sqlite-parent-observer.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
@@ -15,10 +17,12 @@ import {
 import * as archiveWorkers from "./session-accessor.sqlite-archive.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
+import { selectSessionColdBatch } from "./session-cold-storage-selection.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
+  currentId,
   historicalId,
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
@@ -58,21 +62,14 @@ afterAll(async () => {
 function delayPreparation() {
   const entered = createDeferred();
   const release = createDeferred();
-  const run = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
-  const worker = vi
-    .spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation")
-    .mockImplementation(async (params) => {
-      const result = await run(params);
-      if (
-        params.expectedMessageType === "done" &&
-        "operation" in params.workerData &&
-        params.workerData.operation === "cold-prepare"
-      ) {
-        entered.resolve();
-        await release.promise;
-      }
-      return result;
-    });
+  const run = archiveWorkers.prepareSqliteColdArchiveBatch;
+  vi.spyOn(archiveWorkers, "prepareSqliteColdArchiveBatch").mockImplementation(async (...args) => {
+    const result = await run(...args);
+    entered.resolve();
+    await release.promise;
+    return result;
+  });
+  const worker = vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation");
   return { entered, release, worker };
 }
 
@@ -81,11 +78,16 @@ function expectHistoryUnchanged() {
   expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
 }
 
+function maintain(config = maintenanceConfig(fixture.scope.storePath), assertCurrent?: () => void) {
+  return runSessionColdStorageMaintenance({ config, assertCurrent });
+}
+
 it.each([
-  { name: "a newly admitted normalized logical key", change: "protected" },
-  { name: "an unrelated newly admitted key", change: "unrelated" },
-  { name: "revoked configuration", change: "configuration" },
-])("rechecks $name after worker selection without parent SQLite", async ({ change }) => {
+  ["a newly admitted normalized logical key", "protected"],
+  ["a newly registered live run", "registry"],
+  ["an unrelated newly admitted key", "unrelated"],
+  ["revoked configuration", "configuration"],
+])("rechecks %s after worker selection without parent SQLite", async (_name, change) => {
   const protectsHistory = change !== "unrelated";
   const ownerStorePath =
     change === "configuration"
@@ -96,19 +98,18 @@ it.each([
   const delayed = delayPreparation();
   const observer = observeParentSqlite();
   const config = maintenanceConfig(ownerStorePath);
-  const pending = runSessionColdStorageMaintenance({
+  const pending = maintain(
     config,
-    assertCurrent:
-      change === "configuration"
-        ? () => {
-            if (!config.session.maintenance.coldStorage.enabled) {
-              throw new Error("Cold maintenance configuration was revoked");
-            }
+    change === "configuration"
+      ? () => {
+          if (!config.session.maintenance.coldStorage.enabled) {
+            throw new Error("Cold maintenance configuration was revoked");
           }
-        : undefined,
-  });
+        }
+      : undefined,
+  );
   const outcome = pending.catch((error: unknown) => error);
-  let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+  let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   try {
     await awaitGateBeforeSettlement(
       delayed.entered.promise,
@@ -117,8 +118,14 @@ it.each([
     );
     if (change === "configuration") {
       config.session.maintenance.coldStorage.enabled = false;
+    } else if (change === "registry") {
+      registerAgentRunContext("cold-live-run", {
+        agentId: "main",
+        sessionKey: fixture.scope.sessionKey,
+        projectSessionActive: true,
+      });
     } else {
-      admission = await beginSessionWorkAdmission({
+      admission = await beginSessionEffect({
         scope: ownerStorePath,
         identities: [
           protectsHistory ? fixture.scope.sessionKey.toUpperCase() : "agent:main:unrelated-work",
@@ -147,6 +154,7 @@ it.each([
     delayed.release.resolve();
     await outcome;
     observer.restore();
+    clearAgentRunContext("cold-live-run");
     admission?.release();
     await admission?.released;
   }
@@ -160,16 +168,44 @@ it.each([
   }
 });
 
+it.each(["registry", "resume-marker"] as const)(
+  "keeps %s custody hot during cold selection",
+  async (custody) => {
+    if (custody === "registry") {
+      registerAgentRunContext("cold-live-run", {
+        agentId: "main",
+        sessionKey: fixture.scope.sessionKey,
+        projectSessionActive: true,
+      });
+    } else {
+      replaceSessionEntrySync(fixture.scope, {
+        sessionId: currentId,
+        updatedAt: 1,
+        resumeAfterRestart: { queuedInputIds: [] },
+      });
+    }
+    const before = fixture.snapshot();
+    try {
+      await expect(maintain()).resolves.toEqual({
+        archivedTranscripts: 0,
+        externalizedTranscripts: 0,
+      });
+      expect(fixture.snapshot()).toEqual(before);
+      expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
+    } finally {
+      clearAgentRunContext("cold-live-run");
+    }
+  },
+);
+
 it("propagates selection failure without a mutation or synchronous fallback", async () => {
   const failure = new Error("Cold selection worker refused");
   const worker = vi
-    .spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation")
+    .spyOn(archiveWorkers, "prepareSqliteColdArchiveBatch")
     .mockRejectedValueOnce(failure);
   const observer = observeParentSqlite();
   try {
-    await expect(
-      runSessionColdStorageMaintenance({ config: maintenanceConfig(fixture.scope.storePath) }),
-    ).rejects.toBe(failure);
+    await expect(maintain()).rejects.toBe(failure);
     expect(observer.counts).toEqual(emptySqliteCounts());
     expect(worker).toHaveBeenCalledOnce();
   } finally {
@@ -178,9 +214,83 @@ it("propagates selection failure without a mutation or synchronous fallback", as
   expectHistoryUnchanged();
 });
 
+it("scans hot-window protection only when embedded archives leave a batch slot", async () => {
+  await expect(maintain()).resolves.toEqual({
+    archivedTranscripts: 1,
+    externalizedTranscripts: 0,
+  });
+  const archive = readSessionColdTranscript(fixture.database(), historicalId)!;
+  const bytes = await fs.readFile(
+    resolveSessionColdArchivePath(fixture.scope.storePath, archive.archive_name),
+  );
+  fixture
+    .database()
+    .prepare(
+      "UPDATE session_transcript_cold_archives SET storage = 'sqlite', archive_blob = ? WHERE session_id = ?",
+    )
+    .run(bytes, historicalId);
+  fixture
+    .database()
+    .prepare(
+      "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+    )
+    .run(currentId);
+  const referenceScope = {
+    ...fixture.scope,
+    sessionKey: "agent:main:cold-reference",
+    sessionId: "cold-reference-current",
+  };
+  replaceSessionEntrySync(referenceScope, {
+    sessionId: referenceScope.sessionId,
+    updatedAt: 1,
+    previousSessionId: currentId,
+  });
+  const input = {
+    databaseOptions: fixture.options,
+    admissionIdentities: [],
+    liveSessionKeys: [],
+    cooledSessionIds: [],
+    beforeMs: 100,
+    maxTranscripts: 1,
+    maxBytes: 64 * 1024 * 1024,
+  };
+  for (const maxTranscripts of [1, 2]) {
+    const observer = observeHostDataSql();
+    try {
+      const selected = selectSessionColdBatch({ ...input, maxTranscripts });
+      expect(selected.found).toBe(true);
+      if (!selected.found) {
+        throw new Error("Cold selection database was not found");
+      }
+      expect(selected.value.externalizations.map((item) => item.session_id)).toEqual([
+        historicalId,
+      ]);
+      expect(selected.value.plans).toEqual([]);
+      expect(
+        observer.queries.some(
+          (sql) =>
+            sql.includes('from "session_nodes"') &&
+            sql.includes('"last_activity_at"') &&
+            sql.includes('"last_interaction_at"'),
+        ),
+      ).toBe(maxTranscripts > 1);
+    } finally {
+      observer.restore();
+    }
+  }
+  replaceSessionEntrySync(referenceScope, {
+    sessionId: referenceScope.sessionId,
+    updatedAt: 1,
+  });
+  const unprotected = selectSessionColdBatch({ ...input, maxTranscripts: 2 });
+  expect(unprotected.found && unprotected.value.plans.map((plan) => plan.sessionId)).toEqual([
+    currentId,
+  ]);
+});
+
 it("retains an embedded archive when its window gains an admitted owner after preparation", async () => {
   const config = maintenanceConfig(fixture.scope.storePath);
-  await expect(runSessionColdStorageMaintenance({ config })).resolves.toEqual({
+  await expect(maintain(config)).resolves.toEqual({
     archivedTranscripts: 1,
     externalizedTranscripts: 0,
   });
@@ -204,9 +314,9 @@ it("retains an embedded archive when its window gains an admitted owner after pr
   await closeOpenClawAgentDatabasesAsync();
 
   const delayed = delayPreparation();
-  const pending = runSessionColdStorageMaintenance({ config });
+  const pending = maintain(config);
   const outcome = pending.catch((error: unknown) => error);
-  let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+  let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   try {
     await awaitGateBeforeSettlement(
       delayed.entered.promise,
@@ -218,7 +328,7 @@ it("retains an embedded archive when its window gains an admitted owner after pr
       .prepare("UPDATE session_windows SET session_key = ? WHERE session_id = ?")
       .run(reboundKey, historicalId);
     const before = fixture.snapshot();
-    admission = await beginSessionWorkAdmission({
+    admission = await beginSessionEffect({
       scope: fixture.scope.storePath,
       identities: [reboundKey],
       assertAllowed: () => {},

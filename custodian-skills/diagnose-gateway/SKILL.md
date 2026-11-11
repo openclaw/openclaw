@@ -42,7 +42,7 @@ Translate each finding into the next action, naming the responsible skill when o
 
 ## Prove
 
-Repeat the smallest read-only probe that exposes the condition and record its output, for example:
+Repeat the smallest read-only check that exposes the condition and record its output, for example:
 
 ```
 openclaw gateway status --deep

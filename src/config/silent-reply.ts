@@ -16,11 +16,7 @@ export function resolveSilentReplySettings(params: {
 }): {
   policy: SilentReplyPolicy;
 } {
-  const conversationType = classifySilentReplyConversationType({
-    sessionKey: params.sessionKey,
-    surface: params.surface,
-    conversationType: params.conversationType,
-  });
+  const conversationType = classifySilentReplyConversationType(params);
   const normalizedSurface = normalizeLowercaseStringOrEmpty(params.surface);
   // Surfaces are stored under normalized ids; keep explicit conversationType untouched.
   const surface = normalizedSurface ? params.cfg?.surfaces?.[normalizedSurface] : undefined;

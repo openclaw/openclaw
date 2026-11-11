@@ -16,7 +16,7 @@ pub(crate) enum GatewayOperation {
     },
     RetryRemote,
     Install(InstallChannel),
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     Runtime(crate::RuntimeAction),
     Action(GatewayAction),
     RecoverRemote {
@@ -26,7 +26,7 @@ pub(crate) enum GatewayOperation {
 
 pub(crate) enum GatewayOperationError {
     Action(String),
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     Runtime(String),
 }
 
@@ -59,13 +59,17 @@ impl GatewayOperationQueue {
                     {
                         continue;
                     }
-                    #[cfg(target_os = "linux")]
+                    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
                     let runtime_action = matches!(&request.operation, GatewayOperation::Runtime(_));
                     let result = sink(request.operation, request.selection);
                     if let Some(reply) = request.reply {
                         let _ = reply.send(result);
                     } else if let Err(error) = result {
-                        #[cfg(target_os = "linux")]
+                        #[cfg(any(
+                            target_os = "linux",
+                            target_os = "windows",
+                            target_os = "macos"
+                        ))]
                         if runtime_action {
                             show_error(GatewayOperationError::Runtime(error));
                             continue;
@@ -97,14 +101,7 @@ impl GatewayOperationQueue {
     }
 
     pub(crate) fn submit_recovery(&self, child_id: u64) {
-        // Capture the latest intent in the same critical section as explicit
-        // submission, so recovery follows it in FIFO order without replacing it.
-        let selection = self.selection.lock().expect("selection");
-        let _ = self.sender.send(QueuedGatewayOperation {
-            operation: GatewayOperation::RecoverRemote { child_id },
-            reply: None,
-            selection: *selection,
-        });
+        self.submit_detached(GatewayOperation::RecoverRemote { child_id });
     }
 
     pub(crate) fn submit_connect(&self) {
@@ -115,7 +112,7 @@ impl GatewayOperationQueue {
         self.submit_detached(GatewayOperation::Action(action));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     pub(crate) fn submit_runtime(&self, action: crate::RuntimeAction) {
         self.submit_detached(GatewayOperation::Runtime(action));
     }
@@ -144,10 +141,12 @@ impl GatewayOperationQueue {
         operation: GatewayOperation,
         reply: Option<oneshot::Sender<Result<GatewaySnapshot, String>>>,
     ) -> Result<(), String> {
-        // Invalidate automatic work at submission, while retaining every
-        // explicit operation in channel order.
+        // Recovery follows the latest explicit intent in FIFO order without
+        // replacing it; explicit submissions invalidate older automatic work.
         let mut selection = self.selection.lock().expect("selection");
-        *selection = selection.wrapping_add(1);
+        if !matches!(operation, GatewayOperation::RecoverRemote { .. }) {
+            *selection = selection.wrapping_add(1);
+        }
         self.sender
             .send(QueuedGatewayOperation {
                 operation,
@@ -224,60 +223,13 @@ mod tests {
     }
 
     #[test]
-    fn orders_non_tray_connect_after_gateway_action() {
-        let contention = Arc::new(Barrier::new(2));
-        let worker_contention = Arc::clone(&contention);
-        let (observed_sender, observed_receiver) = mpsc::channel();
-        let queue = Arc::new(GatewayOperationQueue::new(
-            move |operation, _| {
-                let observed = match operation {
-                    GatewayOperation::Action(GatewayAction::Stop) => {
-                        worker_contention.wait();
-                        thread::sleep(Duration::from_millis(100));
-                        ObservedOperation::Stop
-                    }
-                    GatewayOperation::Connect => ObservedOperation::Connect,
-                    _ => panic!("unexpected operation"),
-                };
-                observed_sender.send(observed).expect("record operation");
-                Err("test operation".to_string())
-            },
-            |_| {},
-        ));
-
-        let connect_queue = Arc::clone(&queue);
-        let connect_submitter = thread::spawn(move || {
-            contention.wait();
-            connect_queue.submit_connect();
-        });
-        let action_queue = Arc::clone(&queue);
-        let action_submitter = thread::spawn(move || {
-            action_queue.submit_action(GatewayAction::Stop);
-        });
-
-        action_submitter.join().expect("action submitter");
-        connect_submitter.join().expect("connect submitter");
-        let observed = (0..2)
-            .map(|_| {
-                observed_receiver
-                    .recv_timeout(Duration::from_secs(1))
-                    .expect("operation should execute")
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            observed,
-            [ObservedOperation::Stop, ObservedOperation::Connect]
-        );
-    }
-
-    #[test]
     fn selection_submission_invalidates_queued_recovery_without_dropping_explicit_work() {
         let entered = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
         let worker_entered = Arc::clone(&entered);
         let worker_release = Arc::clone(&release);
         let (sender, receiver) = mpsc::channel();
-        let queue = GatewayOperationQueue::new(
+        let queue = Arc::new(GatewayOperationQueue::new(
             move |operation, _| {
                 let observed = match operation {
                     GatewayOperation::Action(GatewayAction::Stop) => {
@@ -292,11 +244,13 @@ mod tests {
                 Err("fixture".to_string())
             },
             |_| {},
-        );
+        ));
         queue.submit_action(GatewayAction::Stop);
         entered.wait();
         queue.submit_recovery(23);
-        queue.submit_connect();
+        let connect_queue = Arc::clone(&queue);
+        let connect_submitter = thread::spawn(move || connect_queue.submit_connect());
+        connect_submitter.join().expect("connect submitter");
         assert!(
             !queue.selection_is_current(1),
             "invalidation must precede execution"

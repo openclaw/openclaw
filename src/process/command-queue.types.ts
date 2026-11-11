@@ -12,7 +12,6 @@ export type CommandLaneSnapshot = {
   saturatedLaneCount?: number;
   draining: boolean;
   generation: number;
-  /** Group this lane belongs to, if any. */
   group?: string;
   /** Sum of active tasks across every member of the group. Always derived. */
   groupActive?: number;
@@ -28,15 +27,19 @@ export type CommandLaneSnapshot = {
   blockedBy?: CommandLaneBlockReason;
 };
 
-/**
- * Public enqueue knobs shared by command-lane callers and narrower injection
- * points that should not import the full queue implementation.
- */
 export type CommandQueueTaskDeadline =
   | { kind: "bounded"; deadlineAtMs: number }
   | { kind: "unlimited" };
 
-export type CommandQueueEnqueueOptions = {
+/** Borrowed queue-entry facts; the queue clears membership when admission ends. */
+export type CommandQueueWait = {
+  lane: string;
+  queued?: true;
+  queuedAheadAtEnqueue: number;
+  activeAheadAtEnqueue: number;
+};
+
+export type CommandQueueAdmissionOptions = {
   sessionTarget?: Readonly<{ agentId?: string; sessionKey?: string; sessionId: string }>;
   /** Enqueue-time provenance for diagnostics only; never used for admission. */
   taskIdentity?: Readonly<{
@@ -44,15 +47,22 @@ export type CommandQueueEnqueueOptions = {
     sessionKey?: string;
     runId?: string;
     requesterSessionKey?: string;
+    /** The outer model chain owns this candidate's FailoverError diagnostics. */
+    modelFallbackCandidate?: boolean;
   }>;
   /** Owner-resolved capacity, installed atomically with this enqueue. */
   maxConcurrent?: number;
   /** Cancels queued admission; the task owns cancellation after it starts. */
   abortSignal?: AbortSignal;
   /** Called only when this entry remains queued after immediate lane admission. */
-  onQueued?: () => void;
+  onQueued?: (wait?: Readonly<CommandQueueWait>) => void;
   warnAfterMs?: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
+  priority?: "foreground" | "normal" | "background";
+};
+
+/** Execution deadlines belong to the embedded-run controller, not queue admission. */
+export type CommandQueueEnqueueOptions = CommandQueueAdmissionOptions & {
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
   /** Replaces idle timing with an owner deadline; undefined restores idle timing. */
@@ -63,10 +73,8 @@ export type CommandQueueEnqueueOptions = {
   taskTimeoutAbortGraceMs?: number;
   /** Ends the task after a caller-owned timeout cleanup grace has already elapsed. */
   taskTimeoutReleaseSignal?: AbortSignal;
-  priority?: "foreground" | "normal" | "background";
 };
 
-/** Minimal queue function contract used by code that only needs to schedule work. */
 export type CommandQueueEnqueueFn = <T>(
   task: () => Promise<T>,
   opts?: CommandQueueEnqueueOptions,

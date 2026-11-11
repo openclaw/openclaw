@@ -52,15 +52,6 @@ function normalizeResolvedChannel(channel: string): string {
   );
 }
 
-function getLoadedSessionChannelPlugin(channel: string) {
-  const normalizedChannel = normalizeResolvedChannel(channel);
-  try {
-    return getLoadedChannelPlugin(normalizedChannel);
-  } catch {
-    return undefined;
-  }
-}
-
 function buildGenericConversationResolution(rawId: string): ResolvedSessionConversation | null {
   const parsed = parseThreadSessionSuffix(rawId);
   // Generic parsing treats `:thread:*` suffixes as child thread metadata while
@@ -162,7 +153,7 @@ export function resolveSessionConversation(params: {
     return null;
   }
 
-  const channelPlugin = getLoadedSessionChannelPlugin(params.channel);
+  const channelPlugin = getLoadedChannelPlugin(normalizeResolvedChannel(params.channel));
   const messaging = channelPlugin?.messaging;
   const pluginResolved = normalizeSessionConversationResolution(
     messaging?.resolveSessionConversation?.({
@@ -234,9 +225,8 @@ export function resolveSessionConversationRef(
 
 export function resolveSessionThreadInfo(
   sessionKey: string | undefined | null,
-  opts: SessionConversationResolutionOptions = {},
 ): ParsedThreadSessionSuffix {
-  const resolved = resolveSessionConversationRef(sessionKey, opts);
+  const resolved = resolveSessionConversationRef(sessionKey);
   if (!resolved) {
     return parseThreadSessionSuffix(sessionKey);
   }

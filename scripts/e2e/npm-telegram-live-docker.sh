@@ -39,34 +39,6 @@ case ",${selected_scenarios//[[:space:]]/,}," in
     ;;
 esac
 
-resolve_credential_source() {
-  if [ -n "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE:-}" ]; then
-    printf "%s" "$OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE"
-    return 0
-  fi
-  if [ -n "${OPENCLAW_QA_CREDENTIAL_SOURCE:-}" ]; then
-    printf "%s" "$OPENCLAW_QA_CREDENTIAL_SOURCE"
-    return 0
-  fi
-  if [ -n "${CI:-}" ] && [ -n "${OPENCLAW_QA_CONVEX_SITE_URL:-}" ]; then
-    if [ -n "${OPENCLAW_QA_CONVEX_SECRET_CI:-}" ] || [ -n "${OPENCLAW_QA_CONVEX_SECRET_MAINTAINER:-}" ]; then
-      printf "convex"
-      return 0
-    fi
-  fi
-  printf "convex"
-}
-
-resolve_credential_role() {
-  if [ -n "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE:-}" ]; then
-    printf "%s" "$OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE"
-    return 0
-  fi
-  if [ -n "${OPENCLAW_QA_CREDENTIAL_ROLE:-}" ]; then
-    printf "%s" "$OPENCLAW_QA_CREDENTIAL_ROLE"
-  fi
-}
-
 validate_openclaw_package_spec() {
   local spec="$1"
   if [[ "$spec" == openclaw@alpha ]]; then
@@ -105,23 +77,12 @@ resolve_package_tgz() {
 
 resolve_package_dir() {
   local candidate="$1"
+  local env_name="$2"
   if [ -z "$candidate" ]; then
     return 0
   fi
   if [ ! -d "$candidate" ]; then
-    echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR must point to an existing directory; got: $candidate" >&2
-    exit 1
-  fi
-  (cd "$candidate" && pwd)
-}
-
-resolve_prepublish_plugin_registry_dir() {
-  local candidate="$1"
-  if [ -z "$candidate" ]; then
-    return 0
-  fi
-  if [ ! -d "$candidate" ]; then
-    echo "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR must point to an existing directory; got: $candidate" >&2
+    echo "$env_name must point to an existing directory; got: $candidate" >&2
     exit 1
   fi
   (cd "$candidate" && pwd)
@@ -148,9 +109,9 @@ prepublish_registry_mount_args=()
 package_install_source="$PACKAGE_SPEC"
 package_source_kind="npm-package"
 resolved_package_tgz="$(resolve_package_tgz "$PACKAGE_TGZ")"
-resolved_package_dir="$(resolve_package_dir "$PACKAGE_DIR")"
+resolved_package_dir="$(resolve_package_dir "$PACKAGE_DIR" OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR)"
 resolved_prepublish_plugin_registry_dir="$(
-  resolve_prepublish_plugin_registry_dir "$PREPUBLISH_PLUGIN_REGISTRY_DIR"
+  resolve_package_dir "$PREPUBLISH_PLUGIN_REGISTRY_DIR" OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR
 )"
 if [ -n "$resolved_package_dir" ]; then
   if [ -z "$resolved_package_tgz" ]; then
@@ -214,8 +175,8 @@ if [ "$upgrade_selected" = "1" ]; then
   package_install_label="$PACKAGE_SPEC (published upgrade baseline)"
 fi
 
-credential_source="$(resolve_credential_source)"
-credential_role="$(resolve_credential_role)"
+credential_source="$(printf '%s' "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE:-${OPENCLAW_QA_CREDENTIAL_SOURCE:-convex}}")"
+credential_role="$(printf '%s' "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE:-${OPENCLAW_QA_CREDENTIAL_ROLE:-}}")"
 if [ -z "$credential_role" ] && [ "$credential_source" = "convex" ]; then
   if [ -n "${CI:-}" ]; then
     credential_role="ci"

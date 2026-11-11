@@ -1,5 +1,4 @@
 import type { AssistantMessage, StreamFn } from "@openclaw/llm-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   OpenAIResponsesWebSocketSafeRetryError,
   OpenAIResponsesWebSocketPreDispatchError,
@@ -10,6 +9,7 @@ import { safeDebugValue } from "./openai-responses-debug.js";
 import {
   createResponsesStreamWithRecovery,
   isInvalidEncryptedContentError,
+  readResponsesRecoveryEvent,
   resolveNextResponsesEncryptedContentAttempt,
 } from "./openai-responses-replay-internal.js";
 import {
@@ -58,25 +58,12 @@ export function createRecoverableResponsesWebSocketStream<
   } = params;
   return {
     async *[Symbol.asyncIterator]() {
-      let providerAccepted = false;
+      let acceptance: "pending" | "observing" | "accepted" = "pending";
       let outputObserved = false;
-      let responseHookFailed = false;
       try {
         for await (const event of trackedWebSocketStream) {
-          const failure =
-            isRecord(event) && event.type === "response.failed" && isRecord(event.response)
-              ? event.response.error
-              : isRecord(event) && event.type === "error"
-                ? (event.error ?? event)
-                : undefined;
-          if (
-            isRecord(event) &&
-            isRecord(event.response) &&
-            Array.isArray(event.response.output) &&
-            event.response.output.length
-          ) {
-            outputObserved = true;
-          }
+          const { failure, hasResponseOutput, isPrelude } = readResponsesRecoveryEvent(event);
+          outputObserved ||= hasResponseOutput;
           if (isResponsesServiceTierRejection(failure) && !websocket.hasActiveResponse) {
             throw new OpenAIResponsesWebSocketSafeRetryError(
               "invalid_request_error",
@@ -86,25 +73,14 @@ export function createRecoverableResponsesWebSocketStream<
               failure,
             );
           }
-          if (
-            !isRecord(event) ||
-            !["response.created", "response.in_progress", "response.queued"].includes(
-              String(event.type),
-            )
-          ) {
-            outputObserved = true;
-          }
-          if (!providerAccepted) {
-            providerAccepted = true;
-            try {
-              await notifyProviderStreamOpened({
-                options,
-                cancelStream: () => websocket.finish({ keep: false }),
-              });
-            } catch (error) {
-              responseHookFailed = true;
-              throw error;
-            }
+          outputObserved ||= !isPrelude;
+          if (acceptance === "pending") {
+            acceptance = "observing";
+            await notifyProviderStreamOpened({
+              options,
+              cancelStream: () => websocket.finish({ keep: false }),
+            });
+            acceptance = "accepted";
           }
           startStream();
           yield event;
@@ -116,7 +92,7 @@ export function createRecoverableResponsesWebSocketStream<
             if (
               !nextTier ||
               outputObserved ||
-              responseHookFailed ||
+              acceptance === "observing" ||
               output.content.length ||
               websocketSignal.aborted ||
               websocket.hasActiveResponse

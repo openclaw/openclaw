@@ -1,16 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { hasErrnoCode } from "../infra/errno.js";
 import { FsSafeError, pathExists, root as fsSafeRoot } from "../infra/fs-safe.js";
-import { retryAsync } from "../infra/retry.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "./workspace-bootstrap-policy.js";
 import { WorkspaceBootstrapSeedConflictError } from "./workspace-bootstrap-publish.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "./workspace-bootstrap-read.js";
 import { readWorkspaceFileWithGuards } from "./workspace-file-read.js";
-import { runWorkspacePreparation } from "./workspace-preparation.js";
+import {
+  runWorkspacePreparation,
+  settleWorkspaceBootstrapDeferral,
+} from "./workspace-preparation.js";
 import { readCanonicalWorkspaceStateSnapshot } from "./workspace-state-read.js";
 import { mergeWorkspaceSetupState } from "./workspace-state-store.js";
 
@@ -19,6 +20,9 @@ type SeedWorkspaceBootstrapParams = {
   content: Buffer;
   nowMs?: number;
   stateOptions?: OpenClawStateDatabaseOptions;
+  beforePersistentApply?: () => void;
+  beforePersistentEffect?: () => Promise<void>;
+  mergeSetupState?: typeof mergeWorkspaceSetupState;
 };
 
 export async function seedWorkspaceBootstrap(
@@ -51,15 +55,30 @@ export async function seedWorkspaceBootstrap(
   if (text.trim().length === 0) {
     throw new WorkspaceBootstrapSeedConflictError("BOOTSTRAP.md must not be empty.");
   }
-  return runWorkspacePreparation(captured.dir, (assertCurrent) =>
-    seedWorkspaceBootstrapOwned(captured, assertCurrent),
-  );
+  return runWorkspacePreparation(captured.dir, async (assertCurrent) => {
+    const result = await seedWorkspaceBootstrapOwned(captured, assertCurrent);
+    await captured.beforePersistentEffect?.();
+    assertCurrent();
+    captured.beforePersistentApply?.();
+    await settleWorkspaceBootstrapDeferral(captured.dir, {
+      ...captured.stateOptions,
+      assertCurrent: () => {
+        assertCurrent();
+        captured.beforePersistentApply?.();
+      },
+    });
+    return result;
+  });
 }
 
 async function seedWorkspaceBootstrapOwned(
   params: SeedWorkspaceBootstrapParams,
   assertCurrent: () => void,
 ): Promise<"seeded" | "already-seeded" | "consumed"> {
+  const assertSeedCurrent = () => {
+    assertCurrent();
+    params.beforePersistentApply?.();
+  };
   const dir = params.dir;
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
   const initialState = (
@@ -76,6 +95,8 @@ async function seedWorkspaceBootstrapOwned(
     return "consumed";
   }
 
+  await params.beforePersistentEffect?.();
+  assertSeedCurrent();
   await fs.mkdir(dir, { recursive: true });
   assertCurrent();
   const workspaceRoot = await fsSafeRoot(dir, {
@@ -86,9 +107,11 @@ async function seedWorkspaceBootstrapOwned(
   let created = false;
   if (!bootstrapExists) {
     try {
+      await params.beforePersistentEffect?.();
+      assertSeedCurrent();
       await workspaceRoot.write(DEFAULT_BOOTSTRAP_FILENAME, params.content, {
         overwrite: false,
-        assertBeforeMutation: assertCurrent,
+        assertBeforeMutation: assertSeedCurrent,
       });
       created = true;
     } catch (error) {
@@ -102,71 +125,36 @@ async function seedWorkspaceBootstrapOwned(
   }
 
   if (!created) {
-    const statExistingBootstrap = () =>
-      fs.stat(bootstrapPath).catch((error: unknown) => {
-        throw new WorkspaceBootstrapSeedConflictError(
-          "Existing BOOTSTRAP.md could not be read safely.",
-          { cause: error },
-        );
-      });
-    await retryAsync(
-      async () => {
-        const statBefore = await statExistingBootstrap();
-        const existing = await readWorkspaceFileWithGuards({
-          filePath: bootstrapPath,
-          workspaceDir: dir,
-          useCache: false,
-        });
-        if (!existing.ok) {
-          throw new WorkspaceBootstrapSeedConflictError(
-            "Existing BOOTSTRAP.md could not be read safely.",
-          );
-        }
-        if (!Buffer.from(existing.content, "utf8").equals(params.content)) {
-          throw new WorkspaceBootstrapSeedConflictError(
-            "Existing BOOTSTRAP.md differs from the consented Claw bootstrap.",
-          );
-        }
-        await delay(20);
-        const statAfter = await statExistingBootstrap();
-        if (
-          statBefore.size !== statAfter.size ||
-          statBefore.mtimeMs !== statAfter.mtimeMs ||
-          statAfter.size !== params.content.byteLength
-        ) {
-          throw new WorkspaceBootstrapSeedConflictError(
-            "Existing BOOTSTRAP.md write has not stabilized.",
-          );
-        }
-        const stable = await readWorkspaceFileWithGuards({
-          filePath: bootstrapPath,
-          workspaceDir: dir,
-          useCache: false,
-        });
-        if (!stable.ok || !Buffer.from(stable.content, "utf8").equals(params.content)) {
-          throw new WorkspaceBootstrapSeedConflictError(
-            "Existing BOOTSTRAP.md differs from the consented Claw bootstrap.",
-          );
-        }
-      },
-      {
-        attempts: 5,
-        minDelayMs: 20,
-        maxDelayMs: 80,
-        shouldRetry: (error) => error instanceof WorkspaceBootstrapSeedConflictError,
-      },
-    );
+    // Local seeders share the preparation FIFO; an external writer may require another run.
+    const existing = await readWorkspaceFileWithGuards({
+      filePath: bootstrapPath,
+      workspaceDir: dir,
+      useCache: false,
+    });
+    assertCurrent();
+    if (!existing.ok) {
+      throw new WorkspaceBootstrapSeedConflictError(
+        "Existing BOOTSTRAP.md could not be read safely.",
+      );
+    }
+    if (!Buffer.from(existing.content, "utf8").equals(params.content)) {
+      throw new WorkspaceBootstrapSeedConflictError(
+        "Existing BOOTSTRAP.md differs from the consented Template bootstrap.",
+      );
+    }
   }
 
   if (!initialState.bootstrapSeededAt) {
     const nowMs = params.nowMs ?? Date.now();
-    await mergeWorkspaceSetupState(
+    await params.beforePersistentEffect?.();
+    assertSeedCurrent();
+    await (params.mergeSetupState ?? mergeWorkspaceSetupState)(
       dir,
       {
         bootstrapSeededAt: new Date(nowMs).toISOString(),
       },
       nowMs,
-      { ...params.stateOptions, assertCurrent },
+      { ...params.stateOptions, assertCurrent: assertSeedCurrent },
     );
   }
   assertCurrent();

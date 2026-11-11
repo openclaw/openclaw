@@ -30,7 +30,7 @@ scenario:
     - docs/gateway/heartbeat.md
     - docs/channels/qa-channel.md
   codeRefs:
-    - src/infra/heartbeat-runner-execution.ts
+    - src/cron/session-run.ts
     - src/auto-reply/reply/get-reply-run-context.ts
     - src/auto-reply/reply/inbound-meta.ts
     - extensions/qa-channel/src/inbound.ts

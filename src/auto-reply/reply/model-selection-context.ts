@@ -11,11 +11,7 @@ export function resolveContextTokens(params: {
 }): number {
   return (
     resolveContextTokensForModel({
-      cfg: params.cfg,
-      provider: params.provider,
-      model: params.model,
-      modelContextWindow: params.modelContextWindow,
-      modelContextTokens: params.modelContextTokens,
+      ...params,
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS
   );

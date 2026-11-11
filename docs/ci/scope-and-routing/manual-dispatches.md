@@ -15,11 +15,11 @@ Ordinary manual CI dispatches run the same job graph as normal CI but force ever
 
 PR baseline ratchets derive their comparison state from the checked-out synthetic merge tree and verify its head parent against the event head. The max-lines entry chains the environment-variable budget with the same fork-point ref before the assertion-safety check, so production source growth cannot first surface on `main`. Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref; ratchet baselines are compared with the target's merge base against the default-branch head resolved for that run. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pull_request_number` to identify the open PR whose merge tree is validated. Release-gate merge-tree lint uses the same five core stripes as hosted PR CI plus one extension stripe, so no single hosted runner owns the full type-aware lint workload.
 
-Ordinary canonical manual CI also retains QA Smoke's full profile and Control UI
+Ordinary upstream manual CI also retains QA Smoke's full profile and Control UI
 performance without owner-path filtering. When the target declares
 `docker-seed-e2e-contract-v1`, it selects `published-upgrade-survivor`, preserving
 the exact `legacy-operator-state` plus `auto-auth` proof used by every admitted
-canonical main run. Every ordinary manual dispatch adds `cron-mcp-cleanup`, `fleet-cache`,
+upstream main run. Every ordinary manual dispatch adds `cron-mcp-cleanup`,
 `mcp-channels`, `mcp-code-mode-gateway`, and `update-channel-switch` through
 `resolveDockerSeedLanes`, including `npm-beta` and `npm-stable` qualification.
 Older targets without the tier selector retain the survivor. Ordinary manual CI
@@ -68,6 +68,14 @@ supplied. Neither job depends on the other, so
 their results remain independently visible; either requested proof failing fails
 the workflow.
 
+The source-native job compiles and validates test workers in a separate
+five-minute preparation step, then reuses that generation through the existing
+content-validated worker cache. The lifecycle step retains its own five-minute
+limit, including cache validation and finalization; the case's 240-second limit,
+65-second restart observation, assertions, and cleanup are unchanged. Both steps
+remain inside the 75-minute job limit. Preparation failure fails the job and
+prevents the lifecycle step from running.
+
 Set `skip_defender_exclusions=true` to leave Windows Defender policy unchanged
 throughout the workflow, including native and installed Scheduled Task proof jobs.
 This skips only the workspace and Node process exclusions; proof selection,
@@ -97,7 +105,7 @@ The existing package resolver authenticates the candidate, then passes a verifie
 artifact within the same workflow run to the native job. That job retains
 `contents: read` permissions. It runs a fresh installed candidate and the unchanged
 published 2026.9.3 and 2026.9.4 CLI updaters against the candidate. Each upgrade
-also preserves a separate running profile under its canonical Task name. Live
+also preserves a separate running profile under its standard Task name. Live
 status handshakes must match the verified package version and build ID; the
 updated Gateway must have a new PID, while the peer retains its PID and baseline
 identity. Candidate update preview and deep Doctor discovery inspect actual
@@ -126,7 +134,8 @@ to a JSON object with `nodeVersion`, `packageManager`, `vitestVersion`,
 `maxWorkers`, `files`, and `projects`. Use an exact Node 24 patch and the
 checkout's complete pnpm integrity pin and Vitest version. `maxWorkers` is an
 integer from 1 through 4. `files` is the original ordered array of literal,
-tracked test paths; `projects` is the original ordered array of
+tracked test paths under `src/`, `test/`, `extensions/`, or `packages/`;
+`projects` is the original ordered array of
 `test/vitest/vitest.<name>.config.ts` paths. Globs, shell text, arbitrary CLI
 arguments, and environment overrides are not accepted.
 

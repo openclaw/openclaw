@@ -1,4 +1,3 @@
-// Token-provider normalization hooks for provider-backed auth choices.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveProviderMatch } from "../plugins/provider-auth-choice-helpers.js";
 import { resolvePluginProviders } from "../plugins/provider-auth-choice.runtime.js";

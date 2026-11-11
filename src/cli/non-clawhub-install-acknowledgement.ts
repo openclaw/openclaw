@@ -22,13 +22,9 @@ export async function confirmNonClawHubInstall(params: {
     sourceClass: params.sourceClass,
     spec: params.spec,
   });
-  if (params.acknowledged) {
+  if (params.acknowledged || (process.stdin.isTTY && process.stdout.isTTY)) {
     params.runtime.log(theme.warn(warning));
-    return true;
-  }
-  if (process.stdin.isTTY && process.stdout.isTTY) {
-    params.runtime.log(theme.warn(warning));
-    return await promptYesNo("Install this non-ClawHub plugin source?");
+    return params.acknowledged || (await promptYesNo("Install this non-ClawHub plugin source?"));
   }
   params.runtime.error(
     `${warning}\nInstall cancelled; rerun with ${NON_CLAWHUB_INSTALL_FORCE_FLAG} after reviewing the source.`,

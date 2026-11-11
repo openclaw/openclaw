@@ -2,7 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizedString } from "@openclaw/normalization-core/string-coerce";
 import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { projectSessionResultRows } from "./reconcile.ts";
+import { mapSessionResultRows } from "./reconcile.ts";
 
 // Lifecycle notes are transient UI state, so bound them for long-lived board tabs.
 const MAX_TRACKED_SWARM_GROUPS = 10_000;
@@ -90,10 +90,7 @@ export class SwarmActivityTracker {
   }
 
   decorate(result: SessionsListResult | null): SessionsListResult | null {
-    if (!result) {
-      return result;
-    }
-    const sessions = result.sessions.map((row): GatewaySessionRow => {
+    return mapSessionResultRows(result, (row): GatewaySessionRow => {
       const phase = this.phaseByChild.get(row.key) ?? row.swarmPhase;
       const groupId = row.swarmGroupId?.trim();
       const log = (groupId ? this.latestLogByGroup.get(groupId) : undefined) ?? row.swarmLog;
@@ -111,6 +108,5 @@ export class SwarmActivityTracker {
         ...(log ? { swarmLog: log } : {}),
       };
     });
-    return projectSessionResultRows(result, sessions);
   }
 }
