@@ -3814,7 +3814,22 @@ extension NodeAppModel {
                 LiveActivityManager.shared.handleReconnect()
             }
         }
+        if self.connection.isPaused {
+            self.stopReconnectingSessions()
+        }
         return true
+    }
+
+    /// A pause owns retries. GatewayChannel's own watchdog judges some credential rejections
+    /// recoverable and would keep reconnecting a dropped session on its backoff, so stop every
+    /// session that is not connected. A connected session keeps its socket.
+    private func stopReconnectingSessions() {
+        let stopNode = self.connection.node.connectedInfo == nil
+        let stopOperator = self.connection.operator.connectedInfo == nil
+        Task {
+            if stopNode { await self.nodeGateway.disconnect() }
+            if stopOperator { await self.operatorGateway.disconnect() }
+        }
     }
 
     /// Both reconnect loops wait while paused, so leaving the pause lets them attempt on their next poll.
@@ -4544,11 +4559,8 @@ extension NodeAppModel {
                         }
                         return nextProblem
                     }
-                    if problem?.needsPairingApproval == true || problem?.pauseReconnect == true {
-                        // Stop this socket's watchdog; the loop waits on the pause at its top.
-                        await self.operatorGateway.disconnect()
-                        continue
-                    }
+                    // The loop waits on the pause at its top; apply stopped this socket's watchdog.
+                    if problem?.needsPairingApproval == true || problem?.pauseReconnect == true { continue }
                     let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
                     try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
                 }
@@ -4856,12 +4868,7 @@ extension NodeAppModel {
                         error: error,
                         route: (routeGeneration, stableID))
                     GatewayDiagnostics.log("gateway connect error: \(error.localizedDescription)")
-                    if problem?.needsPairingApproval == true {
-                        // Pairing owns its status until explicit recovery; stop both watchdogs.
-                        await self.operatorGateway.disconnect()
-                        await self.nodeGateway.disconnect()
-                    }
-                    // Both loops wait on the pause at the top of the loop.
+                    // Both loops wait on the pause at the top; apply stopped the unconnected watchdogs.
                     if problem?.pauseReconnect == true || problem?.needsPairingApproval == true { continue }
                     let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
                     try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))

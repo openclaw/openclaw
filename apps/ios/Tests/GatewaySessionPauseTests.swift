@@ -35,21 +35,18 @@ import Testing
         #expect(appModel.canAutoReconnect)
     }
 
-    @Test @MainActor func `node reconnect does not lift an operator pause`() async throws {
+    @Test @MainActor func `a dropped node stays down while the operator is paused`() async throws {
         try await Self.withFixtureGateway { server, appModel in
             try await TestWait.observed("node connected") { appModel.gatewayConnected }
             try appModel.applyOperatorGatewayConnectionProblem(Self.rateLimitProblem(), route: nil)
-
-            // The node socket's own watchdog reconnects after this drop, while the operator stays paused.
-            server.closeConnection(at: 0)
-            try await TestWait.state("node socket reconnected") { server.roles.count > 1 }
-            try await Task.sleep(for: .milliseconds(500))
+            // A connected session keeps its socket through the other session's pause.
             #expect(appModel.gatewayConnected)
 
-            server.stop()
+            // Neither the node loop nor the socket's own watchdog may reconnect into a locked Gateway.
+            server.closeConnection(at: 0)
             try await TestWait.observed("node dropped") { !appModel.gatewayConnected }
-            // An unpaused node loop would retry the stopped Gateway here and record its failure.
-            try await Task.sleep(for: .seconds(3))
+            try await Task.sleep(for: .seconds(2))
+            #expect(server.roles == ["node"])
             #expect(appModel.lastGatewayProblem?.kind == .authRateLimited)
         }
     }
