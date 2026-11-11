@@ -27,7 +27,6 @@ const uiE2eIncludePatterns = [
 // These files own their server instead of leasing the global production bundle.
 // Keep any shared source-module optimizer cache under one worker.
 export const uiE2ePrivateServerTestFiles = [
-  "ui/src/e2e/new-session-clone-checkout.real-gateway.e2e.test.ts",
   "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/agents-settings-delete.e2e.test.ts",
@@ -89,6 +88,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/model-setup-provider-errors.real-gateway.e2e.test.ts",
   "ui/src/e2e/mount-recovery.e2e.test.ts",
   "ui/src/e2e/native-notifications-loading.e2e.test.ts",
+  "ui/src/e2e/new-session-clone-checkout.real-gateway.e2e.test.ts",
   "ui/src/e2e/pinned-snooze.e2e.test.ts",
   "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
