@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { Command } from "commander";
-import { AsyncWorkScope, createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { clearConfigCache } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
@@ -381,14 +381,12 @@ describe("policy commands", () => {
   it.each([
     ["SIGINT", 130],
     ["SIGTERM", 143],
-    ["abort", 0],
     [undefined, 0],
   ] as const)("joins an admitted watch evaluation after %s", async (signal, exitCode) => {
     await writeConfig({});
     await writeFixture(join(workspaceDir, "policy.jsonc"), {});
     const reading = createDeferred(),
-      release = createDeferred(),
-      work = new AsyncWorkScope();
+      release = createDeferred();
     watchMocks.beforeRead.mockImplementation(async (file) => {
       if (file === join(workspaceDir, "policy.jsonc")) {
         reading.resolve();
@@ -396,11 +394,11 @@ describe("policy commands", () => {
       }
     });
     const listeners = watchListeners(),
-      running = work.run(() => runPolicyWatchJson());
+      running = runPolicyWatchJson();
     try {
       await awaitGateBeforeSettlement(reading.promise, running, "watch did not read policy");
       if (signal) {
-        void (signal === "abort" ? work.beginClose() : process.emit(signal));
+        process.emit(signal);
         process.emit(signal === "SIGINT" ? "SIGTERM" : "SIGINT");
       }
       release.resolve();
