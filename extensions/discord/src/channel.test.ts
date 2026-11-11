@@ -292,8 +292,11 @@ it.each([
 });
 
 describe("discordPlugin outbound", () => {
-  it("builds tool context with separate native and routable DM targets", () => {
-    const buildToolContext = discordPlugin.threading?.buildToolContext;
+  it.each([
+    ["1234567890123456789", "1234567890123456789"],
+    ["855a9b56-ced7-4627-b9ca-454c30a91f9d", undefined],
+  ])("builds DM tool context and reply transport for message id %s", (id, anchor) => {
+    const { buildToolContext, resolveReplyTransport } = discordPlugin.threading ?? {};
     assert(buildToolContext);
     const hasRepliedRef = { value: false };
 
@@ -304,7 +307,7 @@ describe("discordPlugin outbound", () => {
           To: "user:123456789",
           NativeChannelId: "987654321",
           ChatType: "direct",
-          CurrentMessageId: "message-1",
+          CurrentMessageId: id,
         },
         hasRepliedRef,
       }),
@@ -312,9 +315,12 @@ describe("discordPlugin outbound", () => {
       currentChannelId: "channel:987654321",
       currentChatType: "direct",
       currentMessagingTarget: "user:123456789",
-      currentMessageId: "message-1",
+      currentMessageId: anchor,
       hasRepliedRef,
     });
+    expect(resolveReplyTransport?.({ cfg: {}, replyToId: id, threadId: "42" }) ?? null).toEqual(
+      anchor ? null : { replyToId: null },
+    );
   });
 
   it("resolves the current thread only for sends addressed to that thread's channel", () => {
