@@ -211,6 +211,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/checkbox.tsx":
     case "ui/src/lib/session-progress-cards.ts":
     case "ui/src/pages/templates/creator-publication.ts":
+    case "src/shared/plugin-inline-view.ts":
     case "src/agents/core-tool-facts.ts":
     case "src/agents/tools/automations-tool-name.ts":
     case "ui/src/components/terminal/terminal-controller-lifecycle.ts":
@@ -621,9 +622,6 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
             ...(["shared", "new", "chat"] as const).map((route, index) => {
               const modules = new Set(controlUiBootModules[route]);
               if (route === "shared") {
-                // Plugin activation validates versions on every route without
-                // evaluating Chat or adding a separate contract request.
-                modules.add("src/shared/plugin-inline-view.ts");
                 // Plugin contributions can initialize after the New Session boot capture.
                 modules.add("ui/src/plugins/control-ui-actions.ts");
                 // Both routes read deferred resources; share their existing boot partition.
