@@ -1,5 +1,6 @@
 import { marked } from "marked";
 import { expect, it } from "vitest";
+import { markdownToStory } from "../urbit/story.js";
 import { extractMessageText, formatModelName, formatSummarizationHistoryText } from "./utils.js";
 
 it.each([
@@ -20,6 +21,18 @@ it.each([
   const text = extractMessageText([{ block: { code: { code, lang } } }]);
   const tokens = marked.lexer(text).filter((token) => token.type !== "space");
   expect(tokens).toMatchObject([{ type: "code", lang, text: code }]);
+});
+
+it.each(["~zod please summarize:\n1. parent\n   - child", "- [ ] todo\n- [x] done"])(
+  "extractMessageText keeps native lists from %j",
+  (markdown) => expect(extractMessageText(markdownToStory(markdown))).toBe(markdown),
+);
+
+it("omits code from nested list items and tasks when extracting mentions", () => {
+  const story = markdownToStory("- parent\n  - `~zod`\n- [ ] `~nec`");
+  expect(extractMessageText(story)).toContain("`~zod`");
+  expect(extractMessageText(story)).toContain("`~nec`");
+  expect(extractMessageText(story, true)).not.toMatch(/~zod|~nec/);
 });
 
 const MAX_DEPTH = 100;

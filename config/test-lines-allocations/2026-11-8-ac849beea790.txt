@@ -1,0 +1,4 @@
+13
+# LOCAL 2026.11.8 row46 source ac849beea790ff66bb829b7951aa1ece1c0e0ead.
+# Native-list regression6LF plus omitCode conflict-safety regression7LF.
+# Existing assertions retained; scalar baseline unchanged.
