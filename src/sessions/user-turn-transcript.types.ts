@@ -38,7 +38,6 @@ export type PersistedUserTurnMediaInput = Pick<
   | "messageId"
   | "path"
   | "sizeBytes"
-  | "source"
   | "transcribed"
   | "url"
   | "width"

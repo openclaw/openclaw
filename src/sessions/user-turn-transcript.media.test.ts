@@ -1,6 +1,5 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { readPersistedMediaFacts } from "../media/media-facts.js";
 import {
   buildLateMediaAttachedProjection,
   buildPersistedUserTurnMediaInputsFromFields,
@@ -22,32 +21,6 @@ const workspaceMedia = {
 type MediaFields = Partial<PersistedUserTurnMessage> & { MediaPath?: string; MediaType?: string };
 
 describe("buildPersistedUserTurnMediaInputsFromFields", () => {
-  it("preserves quoted media provenance through transcript reload and reconstruction", () => {
-    const message = buildPersistedUserTurnMessage({
-      text: "follow-up",
-      media: [
-        { path: "/tmp/current.ogg", contentType: "audio/ogg" },
-        { path: "/tmp/quoted.ogg", contentType: "audio/ogg", source: "quote" },
-      ],
-    });
-    const persisted = JSON.stringify(message);
-    const reloaded = JSON.parse(persisted) as typeof message;
-    expect(readPersistedMediaFacts(reloaded)?.map((fact) => fact.source)).toEqual([
-      undefined,
-      "quote",
-    ]);
-    const recovered = buildPersistedUserTurnMediaInputsFromFields(reloaded);
-    expect(recovered).toEqual([
-      { path: "/tmp/current.ogg", contentType: "audio/ogg", kind: "audio" },
-      { path: "/tmp/quoted.ogg", contentType: "audio/ogg", kind: "audio", source: "quote" },
-    ]);
-    expect(
-      readPersistedMediaFacts(buildPersistedUserTurnMessage({ media: recovered }))?.map(
-        (fact) => fact.source,
-      ),
-    ).toEqual([undefined, "quote"]);
-  });
-
   it("builds media inputs from canonical persisted facts", () => {
     const media = [
       { path: "/tmp/a.png", contentType: "image/png" },

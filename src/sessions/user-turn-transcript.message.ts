@@ -66,7 +66,6 @@ function normalizeStructuredMediaEntryForTranscript(
     ...(height ? { height } : {}),
     ...(media.transcribed === true ? { transcribed: true } : {}),
     ...(messageId ? { messageId } : {}),
-    ...(media.source === "quote" ? { source: "quote" } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
     ...(media.hydrationSuppressed === true ? { hydrationSuppressed: true } : {}),
   };
@@ -101,7 +100,6 @@ export function buildPersistedUserTurnMediaInputsFromFields(
     set("kind", fact.kind);
     set("fileName", fact.fileName);
     set("origin", fact.origin);
-    set("source", fact.source === "quote" ? "quote" : undefined);
     set("sizeBytes", fact.sizeBytes);
     set("durationMs", fact.durationMs);
     set("width", fact.width);

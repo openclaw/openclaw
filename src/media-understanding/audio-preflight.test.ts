@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
-import { transcribeAudioAttachments, transcribeFirstAudio } from "./audio-preflight.js";
+import { transcribeFirstAudio } from "./audio-preflight.js";
 
 const runCapabilityMock = vi.hoisted(() => vi.fn());
 const sendTranscriptEchoMock = vi.hoisted(() => vi.fn());
@@ -95,53 +95,5 @@ describe("transcribeFirstAudio", () => {
       transcript: "hello from dm audio",
       format: "Heard: {transcript}",
     });
-  });
-
-  it("retains quoted audio in the transcript without echoing it", async () => {
-    transcriptOutput("quoted voice context");
-    const ctx: MsgContext = {
-      Body: "follow-up",
-      media: [{ ...voice, source: "quote" }],
-    };
-    await expect(
-      transcribeFirstAudio({ ctx, cfg: { tools: { media: { audio: { echoTranscript: true } } } } }),
-    ).resolves.toBe("quoted voice context");
-    expect(sendTranscriptEchoMock).not.toHaveBeenCalled();
-    expect(ctx.media?.[0]).toMatchObject({ source: "quote", transcribed: true });
-  });
-
-  it("keeps a quoted first audio at its original nonzero index", async () => {
-    transcriptOutput("quoted voice context");
-    const ctx: MsgContext = {
-      media: [
-        { path: "/tmp/photo.jpg", contentType: "image/jpeg" },
-        { ...voice, source: "quote" },
-      ],
-    };
-    await expect(
-      transcribeFirstAudio({ ctx, cfg: { tools: { media: { audio: { echoTranscript: true } } } } }),
-    ).resolves.toBe("quoted voice context");
-    expect(sendTranscriptEchoMock).not.toHaveBeenCalled();
-    expect(ctx.media?.[0]?.transcribed).not.toBe(true);
-    expect(ctx.media?.[1]).toMatchObject({ source: "quote", transcribed: true });
-  });
-
-  it("echoes only current audio when preflight transcribes a mixed selection", async () => {
-    runCapabilityMock.mockResolvedValueOnce({
-      outputs: [
-        { kind: "audio.transcription", attachmentIndex: 0, text: "current words" },
-        { kind: "audio.transcription", attachmentIndex: 1, text: "quoted words" },
-      ],
-      decision: { capability: "audio", outcome: "success", attachments: [] },
-    });
-    const ctx: MsgContext = { media: [{ ...voice }, { ...voice, source: "quote" }] };
-    const result = await transcribeAudioAttachments({
-      ctx,
-      cfg: { tools: { media: { audio: { echoTranscript: true } } } },
-    });
-    expect(result).toContain("current words");
-    expect(result).toContain("quoted words");
-    expect(sendTranscriptEchoMock).toHaveBeenCalledOnce();
-    expect(sendTranscriptEchoMock.mock.calls[0]?.[0].transcript).toBe("current words");
   });
 });

@@ -257,7 +257,6 @@ export function canonicalizePersistedUserMessageMedia<T extends object>(
       ...(fact.height ? { height: fact.height } : {}),
       ...(fact.transcribed ? { transcribed: true } : {}),
       ...(fact.messageId ? { messageId: fact.messageId } : {}),
-      ...(fact.source === "quote" ? { source: "quote" } : {}),
       ...(fact.workspaceDir ? { workspaceDir: fact.workspaceDir } : {}),
       ...(fact.staged || stagedMedia?.[index]?.staged ? { staged: true } : {}),
       ...(fact.hydrationSuppressed ? { hydrationSuppressed: true } : {}),
