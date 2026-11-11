@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { expectText } from "../test-utils/text-assertions.js";
@@ -188,6 +189,56 @@ const remoteConnection = [
 ];
 const connectionReminder = "Reuse the same connection options when rerunning: --url, --token.";
 const connectionSecrets = /gateway-user|url-secret|gateway.example|secret-token/;
+
+describe("read cancellation", () => {
+  it.each(
+    [["list"], ["approve"], ["approve", "--latest"]].flatMap((args) =>
+      ["pre-aborted", "success", "failure", "fallback"].map((mode) => ({ args, mode })),
+    ),
+  )("stops $args during $mode without fallback or output", async ({ args, mode }) => {
+    const work = new AsyncWorkScope();
+    const cancellation = new Error("device read cancelled");
+    if (mode === "pre-aborted") {
+      work.beginClose(cancellation);
+    } else if (mode === "fallback") {
+      deny();
+      listDevicePairing.mockImplementationOnce(async () => {
+        work.beginClose(cancellation);
+        return { pending: [pending()], paired: [] };
+      });
+    } else {
+      callGateway.mockImplementationOnce(async (options: { signal?: AbortSignal }) => {
+        expect(options.signal).toBe(work.signal);
+        work.beginClose(cancellation);
+        if (mode === "failure") {
+          throw new Error("gateway closed (1008): pairing required");
+        }
+        return { pending: [pending()], paired: [] };
+      });
+    }
+    await expect(work.run(() => run(...args, "--json"))).rejects.toBe(cancellation);
+    expect(callGateway).toHaveBeenCalledTimes(mode === "pre-aborted" ? 0 : 1);
+    expect(listDevicePairing).toHaveBeenCalledTimes(mode === "fallback" ? 1 : 0);
+    expect(approveDevicePairing).not.toHaveBeenCalled();
+    expect(mocks.formatGatewayTransportErrorJson).not.toHaveBeenCalled();
+    for (const writeOutput of Object.values(runtime)) {
+      expect(writeOutput).not.toHaveBeenCalled();
+    }
+  });
+
+  it("retains an admitted mutation receipt after cancellation", async () => {
+    const work = new AsyncWorkScope();
+    const receipt = { deviceId: "device-1" };
+    callGateway.mockImplementationOnce(async (options: { signal?: AbortSignal }) => {
+      expect(options.signal).toBeUndefined();
+      work.beginClose();
+      return receipt;
+    });
+    await work.run(() => run("remove", "device-1", "--json"));
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(runtime.writeJson).toHaveBeenCalledWith(receipt);
+  });
+});
 
 describe("approval", () => {
   it.each([
