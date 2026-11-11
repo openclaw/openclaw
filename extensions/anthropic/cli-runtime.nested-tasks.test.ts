@@ -157,17 +157,38 @@ async function context(
     useResume: false,
     liveSession,
     timeoutMs: 1500,
-    // Native process construction belongs to the test budget, not a second 2s clock.
-    // Vitest cancellation still reaches the real process owner and joins cleanup.
     abortSignal: signal,
     requestToolPermission: async () => ({ behavior: "deny", message: "unused" }),
     requestUserInput: async () => ({ status: "cancelled", message: "unused" }),
   } satisfies CliBackendExecuteContext;
   return { ...ctx, generations };
 }
+async function* executeTurn(ctx: CliBackendExecuteContext) {
+  const deadline = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    yield* executeClaudeCli({
+      ...ctx,
+      abortSignal: ctx.abortSignal
+        ? AbortSignal.any([ctx.abortSignal, deadline.signal])
+        : deadline.signal,
+      registerMessageInjection: (injection) => {
+        ctx.registerMessageInjection?.(injection);
+        // Dispatch follows native initialization, including on a reused session.
+        // Keep the 2s request bound without racing service-child construction.
+        timer = setTimeout(() => {
+          deadline.abort(new DOMException("Nested-task request timed out", "TimeoutError"));
+        }, 2000);
+      },
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function collect(ctx: CliBackendExecuteContext) {
   const records: Record<string, unknown>[] = [];
-  for await (const record of executeClaudeCli(ctx)) {
+  for await (const record of executeTurn(ctx)) {
     records.push(record);
   }
   return records.filter((record) => record.type === "result");
@@ -360,7 +381,7 @@ it("retires deep ancestry holds when the consumer cancels the stream", async ({ 
   scenario.stopAfterWaiting = true;
   const ctx = await context(signal, "ancestry", "local_agent", scenario);
   let sawWaiting = false;
-  for await (const record of executeClaudeCli(ctx)) {
+  for await (const record of executeTurn(ctx)) {
     if (record.type === "result") {
       expect(record).toMatchObject({ result: "waiting", openclaw_interim_result: true });
       sawWaiting = true;
