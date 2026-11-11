@@ -188,6 +188,96 @@ private actor VoiceWakeCommandBarrier {
         #expect(manager.statusText == "Paused")
     }
 
+    @Test(.testWaitLimit, arguments: ["focus", "gateway", "watch-target", "agent"]) @MainActor
+    func `route changes cancel pending commands and retire buffered recognition`(change: String) async throws {
+        let isolation = await GatewayRegistryTestIsolation()
+        defer { isolation.restore() }
+        try await withUserDefaults([
+            VoiceWakePreferences.enabledKey: false,
+            VoiceWakePreferences.triggerWordsKey: ["openclaw"],
+            "talk.enabled": false,
+            "gateway.autoconnect": false,
+            "watch.execApproval.bridge.state.v1": nil,
+        ]) {
+            let model = NodeAppModel()
+            let manager = model.voiceWake
+            defer { manager.stop() }
+            if change == "agent" {
+                model.setSelectedAgentId("alpha")
+            }
+            model.focusChatSession("agent:main:original")
+            if change == "agent" {
+                // Talk can already target another agent while phone focus still
+                // belongs to the old agent. Selecting it must retire that capture.
+                model.synchronizeTalkSessionKey("agent:beta:main")
+                try #require(model.chatSessionKey == "agent:main:original")
+                try #require(model.chatSessionKey != model.mainSessionKey)
+            } else if change == "watch-target" {
+                // Watch-started Talk can leave its target after Talk stops;
+                // phone focus must invalidate wake even when Talk already targets the next chat.
+                model.synchronizeTalkSessionKey("agent:main:replacement")
+            }
+            manager.isEnabled = true
+            manager.isListening = true
+            let generation = manager._test_recognitionGeneration()
+            let entered = AsyncTestGate()
+            let release = AsyncTestGate()
+            defer { release.open() }
+            let finished = AsyncTestGate()
+            let fresh = AsyncTestGate()
+            var observedCancellation: Bool?
+            var deliveries: [String] = []
+            manager.configure { command in
+                if command == "pending" {
+                    entered.open()
+                    await release.wait()
+                    defer { finished.open() }
+                    observedCancellation = Task.isCancelled
+                    try Task.checkCancellation()
+                }
+                deliveries.append(command)
+                if command == "fresh" { fresh.open() }
+            }
+            @MainActor func receive(_ command: String, generation: UInt64) throws {
+                let transcript = "openclaw " + command
+                try manager._test_handleRecognitionCallback(
+                    transcript: transcript,
+                    segments: [
+                        WakeWordSegment(
+                            text: "openclaw", start: 0, duration: 0.2,
+                            range: #require(transcript.range(of: "openclaw"))),
+                        WakeWordSegment(
+                            text: command, start: 0.8, duration: 0.2,
+                            range: #require(transcript.range(of: command))),
+                    ],
+                    errorText: nil,
+                    recognitionGeneration: generation)
+            }
+
+            try receive("pending", generation: generation)
+            try await entered.wait("wake command admitted")
+            if change == "gateway" {
+                await model.resetGatewaySessionsForTargetSwitch()
+            } else if change == "agent" {
+                model.setSelectedAgentId("beta")
+                #expect(model.mainSessionKey == "agent:beta:main")
+                #expect(model.chatSessionKey == model.mainSessionKey)
+            } else {
+                model.focusChatSession("agent:main:replacement")
+            }
+            release.open()
+            try await finished.wait("retired wake command settled")
+            #expect(observedCancellation == true)
+            #expect(deliveries.isEmpty)
+
+            try receive("stale", generation: generation)
+            #expect(manager.lastTriggeredCommand == "pending")
+            try receive("fresh", generation: manager._test_recognitionGeneration())
+            try await fresh.wait("current recognition delivered")
+            #expect(deliveries == ["fresh"])
+        }
+    }
+
     @Test @MainActor func `Voice Wake deactivates only its owned audio session`() {
         var deactivationCount = 0
         let manager = VoiceWakeManager._test_withoutRestartDelays {

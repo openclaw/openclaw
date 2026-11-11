@@ -1,5 +1,7 @@
 import path from "node:path";
+import { createAgentHarnessToolCallMessage } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -8,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createPluginRuntimeMock,
+  loadUserTurnTranscriptRecorderFactoryForTest,
   runInHarnessToolAuthorityForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -17,12 +20,13 @@ import {
   withNativeSessionMutationForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { assert, vi } from "vitest";
+import { makeTextToolResult } from "../test-support/message-fixtures.test-support.js";
 import { createAttemptParams } from "./agentsapi-attempt.test-helpers.js";
 import type { StoredBinding } from "./agentsapi-binding-record.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
 import { createAgentsApiHarness } from "./agentsapi-harness.js";
-import { createHostedSession } from "./agentsapi.test-support.js";
+import { createHostedSession, createTurn } from "./agentsapi.test-support.js";
 
 export function registerHarness(
   env: NodeJS.ProcessEnv,
@@ -154,4 +158,70 @@ export function mockClient(sessionId: string) {
   const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue();
   vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
   return { create, update, message, session };
+}
+
+export async function prepareHistoryHandoff(params: Awaited<ReturnType<typeof createAttempt>>) {
+  const history = await SessionManager.openAsync(params.sessionTarget!, params.workspaceDir);
+  await history.appendMessageAsync({
+    role: "user",
+    content: "Merge fixture PR 42, then archive the task.",
+    timestamp: 1,
+  });
+  await history.appendMessageAsync(
+    createAgentHarnessToolCallMessage(
+      { api: "openai-responses", provider: "openai", modelId: "previous-model" },
+      { id: "merge-receipt", name: "merge", arguments: { number: 42 } },
+      2,
+    ),
+  );
+  await history.appendMessageAsync(
+    makeTextToolResult("merge-receipt", "merge", "PR 42 is already merged.", false, 2),
+  );
+  const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+  const recorder = createRecorder({
+    target: { ...params.sessionTarget!, sessionEntry: undefined },
+    input: { text: "Continue and check completed actions.", idempotencyKey: "continue-user" },
+  });
+  await recorder.persistApproved();
+  await (
+    await SessionManager.openAsync(params.sessionTarget!, params.workspaceDir)
+  ).appendMessageAsync({ role: "user", content: "Later unrelated input.", timestamp: 4 });
+  vi.spyOn(AgentsApiClient.prototype, "items").mockImplementation(async (_session, turnId) => [
+    {
+      id: `reply-${turnId}`,
+      type: "message",
+      role: "assistant",
+      phase: "final_answer",
+      status: "completed",
+      turn_id: turnId,
+      content: [{ type: "output_text", text: "Archive remains." }],
+    },
+  ]);
+  return recorder;
+}
+
+export function createCompletedSessionFactory(): typeof import("./agentsapi-session.js").createAgentsApiSession {
+  let nextTurn = 0;
+  return (options) => {
+    const turn = createTurn({
+      id: `turn-${options.sessionId}-${++nextTurn}`,
+      session_id: options.sessionId,
+    });
+    return {
+      isAvailable: () => false,
+      isSettled: () => true,
+      wasSubmitted: () => true,
+      queueMessage: async () => {},
+      readUsageTurns: async () => [],
+      run: async (prompt, persistInput, onSubmitted) => {
+        await persistInput();
+        await options.client.message(options.sessionId, prompt, options.signal);
+        onSubmitted();
+        options.onSettled?.();
+        return { turn, cancelled: false, terminatedByTool: false };
+      },
+      close: async () => {},
+      reconcileAfterClose: async () => turn,
+    };
+  };
 }

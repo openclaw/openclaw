@@ -785,7 +785,12 @@ function readCompactLog(
         }
       }
       let exactKey: string | undefined;
-      if (group && !splitTiming && typeof workerCeiling === "number" && hasExactSelection) {
+      if (
+        group &&
+        (!splitTiming || (extensionGroup && matchesSplitSelection)) &&
+        typeof workerCeiling === "number" &&
+        hasExactSelection
+      ) {
         const env = sampledEnv;
         if (
           extensionGroup &&

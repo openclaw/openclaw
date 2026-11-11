@@ -57,7 +57,9 @@ export function resolveUiTypeScriptPath(file, cwd = repoRoot) {
   if (!/\.tsx?$/u.test(file)) {
     return file;
   }
-  const inventory = getRepositoryFileInventory(cwd, [dirname(file)]);
+  // UI ownership imports resolve many directories from the same source tree.
+  const scope = file.startsWith("ui/src/") ? "ui/src" : dirname(file);
+  const inventory = getRepositoryFileInventory(cwd, [scope]);
   const exists = (candidate) =>
     inventory ? inventory.has(candidate) : existsSync(resolve(cwd, candidate));
   if (exists(file)) {
@@ -80,6 +82,7 @@ export const uiTimingTestFiles = ["ui/src/components/markdown.progress.node.test
 // These files launch Playwright from Node; all other .browser tests run in Chromium.
 export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/pages/chat/chat-responsive.browser.test.ts",
+  "ui/src/pages/chat/chat-rhythm-alignment.browser.test.ts",
   "ui/src/pages/chat/chat-search-layout.browser.test.ts",
   "ui/src/pages/chat/chat-footer-layout.browser.test.ts",
   "ui/src/pages/chat/chat-message-footer-actions.browser.test.ts",
@@ -88,6 +91,8 @@ export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/components/form-controls.browser.test.ts",
   "ui/src/components/sidebar-footer-layout.browser.test.ts",
   "ui/src/styles/corner-shape.browser.test.ts",
+  "ui/src/styles/settings-rhythm.browser.test.ts",
+  "ui/src/styles/page-toolbar-rhythm.browser.test.ts",
   "ui/src/styles/cursor-policy.browser.test.ts",
   "ui/src/styles/chat-file-link-presentation.browser.test.ts",
   "ui/src/styles/shimmer.browser.test.ts",
@@ -140,6 +145,8 @@ export function isUiTestTarget(relative) {
 }
 
 export const uiE2eRealGatewayTestFiles = [
+  "ui/src/e2e/guest-owner-filter.real-gateway.e2e.test.ts",
+  "ui/src/e2e/browser-pair-code.real-gateway.e2e.test.ts",
   "ui/src/e2e/slack-inline-identity.e2e.test.ts",
   "ui/src/e2e/gateway-fresh-visit.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",

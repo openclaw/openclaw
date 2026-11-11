@@ -160,6 +160,7 @@ try {
       id: identity(row),
       key,
       agentId: "main",
+      storePath: row.storeTarget.storePath,
       row: selectionRow(row),
       scope: "session-entry",
     });

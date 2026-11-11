@@ -168,6 +168,13 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       if (typeof spanName !== "string") {
         return undefined;
       }
+      if (
+        stage === "startup" &&
+        spanName.startsWith("reply.admission.") &&
+        spanName.endsWith("_wait")
+      ) {
+        stage = "queued";
+      }
       const phase = `detail.${spanName}` as const;
       if (durationMs !== undefined) {
         totals.set(phase, (totals.get(phase) ?? 0) + durationMs);

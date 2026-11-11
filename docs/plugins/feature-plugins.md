@@ -191,6 +191,26 @@ Its id must match the plugin manifest. Register contributions through
 | `registerWidget`                        | Native dashboard widget views.                                                                                                          |
 | `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, or `tool-result`.                                                                |
 
+Panels can supply an optional `icon` with a fixed host icon-registry name, such as
+`bookOpenText`, `barChart`, `activity`, or `terminal`:
+
+```typescript
+host.ui.registerPanel({
+  id: "activity",
+  label: "Activity",
+  icon: "activity",
+  mount(container) {
+    // Mount the plugin's panel content.
+  },
+});
+```
+
+The same icon appears in panel pickers and tabs, including mobile launchers.
+Omitted or unknown names fall back to `plug`; URLs, raw SVG, and emoji are not
+accepted as registry names. A plugin's [manifest-provided SVG](/plugins/manifest/surfaces#controlui-reference)
+takes precedence over this per-panel choice. If that artwork cannot render, the
+host uses the registered icon, or `plug` when no known icon was selected.
+
 Set a navigation item's `parent` to another navigation ID in the same plugin to
 show it nested while the parent or a child destination is active; children only
 appear as top-level entries when pinned. Set `defaultVisible: false` to offer an

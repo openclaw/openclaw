@@ -111,6 +111,12 @@ With OpenClaw ID off, those headers do not change loopback locality.
 
 Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. `openclaw gateway status` selects this local password automatically when no `--url` override is supplied, including with `--json`. For browser access, omit `gateway.controlUi.allowedOrigins` to use `gateway.publicOrigin` as the default, or configure an explicit list that overrides it.
 
+Browser OAuth sign-in can use the HTTPS origin from `gateway.publicOrigin` on a
+trusted-proxy-authenticated connection even when the proxy rewrites `Host` to an
+internal Gateway address. The browser must still pass the configured origin
+policy, and operator MCP sign-in requires administrator access. An additional
+allowlisted origin alone does not qualify as an OAuth callback address.
+
 Update and restart health checks can also reuse the local CLI's existing paired device credentials when no shared credential is configured. These checks read existing identity and token state without creating an identity or saving replacement credentials.
 </Warning>
 

@@ -103,6 +103,35 @@ afterEach(async () => {
 });
 
 describe("X account monitor", () => {
+  it("does not mark initial stream failures as reconnecting", async () => {
+    const test = fixture({
+      posts: [],
+      cfg: {
+        ...config,
+        channels: {
+          x: { ...config.channels?.x, bearerToken: "test-bearer", events: { mode: "stream" } },
+        },
+      },
+    });
+    test.api.openActivityStream
+      .mockRejectedValueOnce(new Error("initial connection failed"))
+      .mockResolvedValue(new Response(new ReadableStream<Uint8Array>()));
+    const running = test.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(running.status()).toMatchObject({
+      connected: false,
+      lifecycle: "ready",
+      lastDisconnect: null,
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(running.status()).toMatchObject({
+      connected: true,
+      lifecycle: "ready",
+      lastConnectedAt: Date.now(),
+      lastDisconnect: null,
+    });
+  });
+
   it("carries a previous work session into a later mention without rerouting the front door", async () => {
     const workKey = "agent:worker:dashboard:existing-demo";
     const test = fixture({
