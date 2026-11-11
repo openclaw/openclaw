@@ -39,7 +39,7 @@ import {
   createStandaloneCompactionRequestBudget,
   estimateCompactedRequestTokens,
   estimateCompactionHistoryTokens,
-  replayWindow,
+  replayTokenBudget,
   resolveCompactionRetentionBudget,
   type CompactionRequestBudget,
   type CompactionRequestConstraints,
@@ -508,7 +508,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     const completedCompaction = {
       ...compactionResult,
       summary: commitCompactionSummary(compactionResult, preparation, withoutSummary, () =>
-        replayWindow(model, this.agent, projectReplacement(compactionResult, "")),
+        replayTokenBudget(this, model, options.settings, projectReplacement(compactionResult, "")),
       ),
     };
 

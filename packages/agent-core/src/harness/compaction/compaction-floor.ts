@@ -204,25 +204,21 @@ export function commitCompactionSummary(
   preparation: Pick<
     CompactionPreparation,
     "messagesToSummarize" | "turnPrefixMessages" | "summaryTokenBudget"
-  > & { settings: { maxSummaryChars?: number; reserveTokens?: number } },
+  > & { settings: { maxSummaryChars?: number } },
   withoutSummary: boolean,
-  window?: () => { contextWindow?: number; retainedTokens: number },
+  replayTokenBudget?: () => number | undefined,
 ): string {
-  const { maxSummaryChars, reserveTokens = 0 } = preparation.settings;
+  const { maxSummaryChars } = preparation.settings;
   const summary = capCompactionSummary(result.summary, maxSummaryChars);
   if (withoutSummary || parseCompactionDetails(result.details)?.summaryRefused) {
     return summary;
   }
   // Accepted edge case: with an unknown window the floor is bounded only by its own budget.
-  const fit = preparation.summaryTokenBudget === undefined ? window?.() : undefined;
-  const windowTokens = fit?.contextWindow
-    ? fit.contextWindow - reserveTokens - fit.retainedTokens
-    : undefined;
   return appendSummaryFloor(
     summary,
     [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages],
     maxSummaryChars,
-    preparation.summaryTokenBudget ?? windowTokens,
+    preparation.summaryTokenBudget ?? replayTokenBudget?.(),
   );
 }
 

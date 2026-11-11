@@ -1,5 +1,6 @@
 import { resolveSummaryFloorChars } from "../../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { SAFETY_MARGIN } from "../../compaction-planning.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
 import {
@@ -166,25 +167,35 @@ export function estimateCompactedRequestTokens(
   );
 }
 
-/** The window a replacement without a foreground budget must fit: fixed prompt, tools, history. */
-export function replayWindow(
-  model: { contextWindow?: number },
-  agent: {
-    state: Pick<Parameters<typeof createCompactionRequestBudget>[0], "systemPrompt" | "tools">;
+/**
+ * Summary tokens a replacement without a foreground budget may spend in the window beside its
+ * fixed prompt, tools and retained history, in the same units as the foreground summary budget.
+ * An unknown window yields no limit.
+ */
+export function replayTokenBudget(
+  session: {
+    agent: {
+      state: Pick<Parameters<typeof createCompactionRequestBudget>[0], "systemPrompt" | "tools">;
+    };
   },
+  model: { contextWindow?: number },
+  settings: { reserveTokens: number },
   messages: AgentMessage[],
-) {
-  const { systemPrompt, tools } = agent.state;
+): number | undefined {
+  if (!model.contextWindow || model.contextWindow <= 0) {
+    return undefined;
+  }
+  const { systemPrompt, tools } = session.agent.state;
   const budget = createCompactionRequestBudget({
     contextWindow: 0,
     reserveTokens: 0,
     systemPrompt,
     tools,
   });
-  return {
-    contextWindow: model.contextWindow,
-    retainedTokens: estimateCompactedRequestTokens(messages, budget),
-  };
+  const remaining =
+    model.contextWindow - settings.reserveTokens - estimateCompactedRequestTokens(messages, budget);
+  // The estimator above carries the safety margin; the summary is fitted without it.
+  return Math.floor(remaining / SAFETY_MARGIN) - 1;
 }
 
 export function assertCompactionRequestCanFit(
