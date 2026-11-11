@@ -91,7 +91,7 @@ export function validateCorePluginDeferrals(value, { targetSha, releaseTag, npmD
   for (const entry of value) {
     if (
       !isRecord(entry) ||
-      Object.keys(entry).sort().join(",") !== "evidence,packageName,reason,sourceSha,version" ||
+      Object.keys(entry).toSorted().join(",") !== "evidence,packageName,reason,sourceSha,version" ||
       typeof entry.packageName !== "string" ||
       !/^@openclaw\/[a-z0-9][a-z0-9._-]*$/u.test(entry.packageName) ||
       names.has(entry.packageName) ||
@@ -99,7 +99,9 @@ export function validateCorePluginDeferrals(value, { targetSha, releaseTag, npmD
       entry.version !== releaseTag.slice(1) ||
       !["npm-eneedauth", "npm-trusted-publisher-exchange-http-404"].includes(entry.reason) ||
       typeof entry.evidence !== "string" ||
-      !/^https:\/\/github\.com\/openclaw\/openclaw\/actions\/runs\/[1-9][0-9]*\/job\/[1-9][0-9]*$/u.test(entry.evidence)
+      !/^https:\/\/github\.com\/openclaw\/openclaw\/actions\/runs\/[1-9][0-9]*\/job\/[1-9][0-9]*$/u.test(
+        entry.evidence,
+      )
     ) {
       throw new Error(
         "Core plugin deferral must name a unique exact-source package and original authentication failure job.",

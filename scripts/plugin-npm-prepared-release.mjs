@@ -709,7 +709,10 @@ export async function selectUnpublishedPreparedNpmPackages(params) {
         deferrals.some((deferred) => deferred.packageName === entry.packageName),
       `${entry.packageName}@${entry.version}: final core publication requires the complete original plugin roster.`,
     );
-    if (!alreadyPublished && !deferrals.some((deferred) => deferred.packageName === entry.packageName)) {
+    if (
+      !alreadyPublished &&
+      !deferrals.some((deferred) => deferred.packageName === entry.packageName)
+    ) {
       pending.push(entry);
     }
   }
@@ -1078,6 +1081,7 @@ async function runPreparedNpmCommand(argv) {
     });
   } else if (command === "load") {
     const requirePublished = options["--require-published"] === "true";
+    const prunePublished = options["--prune-published"] === "true";
     requireValue(
       !requirePublished ||
         (common.selectionMode === "all-publishable" &&
@@ -1088,7 +1092,13 @@ async function runPreparedNpmCommand(argv) {
     const parentRunId =
       process.env.PREPARED_NPM_PARENT_RUN_ID ||
       (options["--core-deferral-parent"] === "true" ? process.env.GITHUB_RUN_ID : "");
-    if (parentRunId && common.selectionMode === "all-publishable") {
+    // Only beta roster selection can apply deferrals; plain evidence loads cannot.
+    if (
+      parentRunId &&
+      adoption.publicationSelection?.npmDistTag === "beta" &&
+      common.selectionMode === "all-publishable" &&
+      (prunePublished || requirePublished)
+    ) {
       const { receipt } = await downloadReleaseApprovalReceipt({
         token: common.token,
         expected: {
@@ -1105,7 +1115,7 @@ async function runPreparedNpmCommand(argv) {
       corePluginDeferrals = receipt.corePluginDeferrals ?? [];
     }
     const matrix =
-      options["--prune-published"] === "true" || requirePublished
+      prunePublished || requirePublished
         ? await selectUnpublishedPreparedNpmPackages({
             ...common,
             fetchImpl: capacity?.packageFetchImpl ?? common.fetchImpl,

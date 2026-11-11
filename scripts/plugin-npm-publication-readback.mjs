@@ -19,8 +19,8 @@ import {
   verifyPublishedNpmRegistry,
 } from "./plugin-npm-prepared-release.mjs";
 import { verifyPluginPublicationArtifact } from "./plugin-publication-artifact.mjs";
-import { validateCorePluginDeferrals } from "./release-approval-receipt.mjs";
 import { parseGithubResponse } from "./pr-lib/gh-api-preflight.mjs";
+import { validateCorePluginDeferrals } from "./release-approval-receipt.mjs";
 import { runReleaseToolingGh } from "./release-tooling-identity.mjs";
 
 const WORKFLOW = ".github/workflows/plugin-npm-release.yml";
