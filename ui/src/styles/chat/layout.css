@@ -40,16 +40,6 @@ openclaw-pending-session-create {
   margin-block-start: -4px;
 }
 
-/* The long discard label would squeeze the message into a sliver on phones. */
-@media (max-width: 560px) {
-  .chat-error .app-toast__content > .chat-error__actions:has(> .chat-error__discard) {
-    grid-row: auto;
-    grid-column: 1 / -1;
-    justify-self: start;
-    margin-block-start: 6px;
-  }
-}
-
 /* Persistent errors do not time out, so their dismiss control stays visible
  * and sits inside the card: a corner badge would be clipped by scrolling
  * composer containers on phones. */
@@ -65,6 +55,14 @@ openclaw-pending-session-create {
 }
 
 @media (max-width: 560px) {
+  /* The long discard label would squeeze the message into a sliver on phones. */
+  .chat-error .app-toast__content > .chat-error__actions:has(> .chat-error__discard) {
+    grid-row: auto;
+    grid-column: 1 / -1;
+    justify-self: start;
+    margin-block-start: 6px;
+  }
+
   .chat-error__discard,
   .chat-error__refresh {
     white-space: normal;
@@ -514,6 +512,7 @@ openclaw-pending-session-create {
   .chat-model-recovery .chat-error__refresh {
     grid-column: 2;
     min-width: 0;
+    white-space: normal;
     overflow-wrap: anywhere;
   }
 
@@ -768,11 +767,6 @@ openclaw-pending-session-create {
 .chat-history-boundary__action:not([aria-disabled="true"]):hover {
   border-color: var(--border-strong);
   background: var(--bg-hover);
-}
-
-.chat-history-boundary__action:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 
 @keyframes chat-history-comet {
@@ -2204,6 +2198,7 @@ button.chat-pr__diff {
   background: color-mix(in srgb, currentColor 17%, transparent);
 }
 
+.chat-history-boundary__action:focus-visible,
 .chat-pr__checks-pill:focus-visible,
 .chat-ci__automation-retry:focus-visible {
   outline: 2px solid var(--accent);
@@ -2553,7 +2548,8 @@ openclaw-chat-ci-details {
   white-space: nowrap;
 }
 
-.chat-pr__create:hover {
+.chat-pr__create:hover,
+.chat-subagent-detail__stop:hover {
   background: var(--bg-hover);
   color: var(--text);
 }
@@ -2859,11 +2855,6 @@ openclaw-chat-ci-details {
   color: var(--muted);
   font: inherit;
   font-size: 12px;
-}
-
-.chat-subagent-detail__stop:hover {
-  background: var(--bg-hover);
-  color: var(--text);
 }
 
 .chat-subagent-detail__stop svg {
