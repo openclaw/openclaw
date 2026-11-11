@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { PROFILE_OPTIONS } from "../agents/core-tool-facts.js";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import {
   expandToolGroups,
@@ -12,12 +13,9 @@ import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import {
   TEMPLATE_BOOTSTRAP_FILE_NAMES,
-  TEMPLATE_EXTENSION_FORMATS,
-  TEMPLATE_PACKAGE_KINDS,
   TEMPLATE_PACKAGE_SOURCE,
   TEMPLATE_SCHEMA_VERSION,
   type TemplateDiagnostic,
-  type TemplateOpenClawAgentSettings,
 } from "./manifest-contract.js";
 import {
   conflictsWithTemplatePath,
@@ -42,10 +40,6 @@ const nonEmptyString = z
     "Value must not have leading or trailing whitespace.",
   );
 const optionalString = nonEmptyString.optional();
-const legacyV1ModelRef = nonEmptyString.regex(
-  /^[^\s/]+\/[^\s/]+(?:\/[^\s/]+)*$/,
-  "Model must use provider/model form.",
-);
 
 function isBoundedTemplateToolGrant(value: string): boolean {
   const normalized = normalizeToolPolicyName(value);
@@ -109,7 +103,7 @@ const identitySchema = z
   })
   .strict();
 
-const agentSchema = z
+const agentIdentitySchema = z
   .object({
     id: agentId,
     name: optionalString,
@@ -118,224 +112,159 @@ const agentSchema = z
   })
   .strict();
 
-const openClawExtensionSchema = z
+const agentSettingsSchema = z
   .object({
-    id: agentId,
-    kind: z.literal("plugin"),
-    format: z.enum(TEMPLATE_EXTENSION_FORMATS),
-    source: z.literal(TEMPLATE_PACKAGE_SOURCE),
-    ref: clawHubPackageName,
-    version: exactVersion,
-  })
-  .strict();
-
-const openClawProfileSchema = z
-  .object({
-    schemaVersion: z.literal(1),
-    agent: z
+    groupChat: z
+      .object({ mentionPatterns: z.array(nonEmptyString).min(1).optional() })
+      .strict()
+      .optional(),
+    sandbox: z
       .object({
-        groupChat: z
-          .object({ mentionPatterns: z.array(nonEmptyString).min(1).optional() })
+        mode: z.enum(["off", "non-main", "all"]).optional(),
+        scope: z.enum(["session", "agent", "shared"]).optional(),
+        workspaceAccess: z.enum(["none", "ro", "rw"]).optional(),
+      })
+      .strict()
+      .optional(),
+    tools: z
+      .object({
+        profile: z.enum(PROFILE_OPTIONS.map(({ id }) => id)).optional(),
+        allow: z
+          .array(nonEmptyString.refine(isBoundedTemplateToolGrant, "Tool grants must be bounded."))
+          .min(1)
+          .optional(),
+        alsoAllow: z
+          .array(nonEmptyString.refine(isBoundedTemplateToolGrant, "Tool grants must be bounded."))
+          .min(1)
+          .optional(),
+        deny: z.array(nonEmptyString).min(1).optional(),
+        fs: z
+          .object({ workspaceOnly: z.literal(true).optional() })
           .strict()
           .optional(),
-        sandbox: z
+      })
+      .strict()
+      .superRefine((tools, ctx) => {
+        if (tools.profile === "full" && !tools.allow) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["profile"],
+            message: "The full tool profile requires a bounded explicit allowlist.",
+          });
+        }
+        if (tools.profile && tools.profile !== "full" && tools.allow) {
+          const profileAllow = expandToolGroups(resolveToolProfilePolicy(tools.profile)?.allow);
+          if (
+            tools.allow.some(
+              (grant) =>
+                !profileAllow.some((tool) => isToolAllowedByPolicyName(tool, { allow: [grant] })) &&
+                !(profileAllow.includes("bundle-mcp") && isConcreteBundleMcpToolName(grant)),
+            )
+          ) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["allow"],
+              message: "Every agent tools allow grant must overlap the selected profile.",
+            });
+          }
+        }
+        if (
+          tools.profile &&
+          resolveTemplateToolProfileSnapshot(tools)?.allow.includes("bundle-mcp")
+        ) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["allow"],
+            message:
+              "Profiles containing bundle-mcp require a bounded allowlist of concrete tool names.",
+          });
+        }
+        if (tools.alsoAllow && !tools.profile) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["alsoAllow"],
+            message: "Agent tools can set alsoAllow only when a bounded profile is selected.",
+          });
+        }
+        if (tools.allow && tools.alsoAllow) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["alsoAllow"],
+            message:
+              "Agent tools cannot set both allow and alsoAllow; use allow alone or profile with alsoAllow.",
+          });
+        }
+      })
+      .optional(),
+    memory: z
+      .object({
+        search: z
           .object({
-            mode: z.enum(["off", "non-main", "all"]).optional(),
-            scope: z.enum(["session", "agent", "shared"]).optional(),
-            workspaceAccess: z.enum(["none", "ro", "rw"]).optional(),
-          })
-          .strict()
-          .optional(),
-        tools: z
-          .object({
-            profile: nonEmptyString
-              .refine(
-                (value) => resolveToolProfilePolicy(value) !== undefined,
-                "Tool profile must name a registered OpenClaw built-in profile.",
-              )
-              .optional(),
-            allow: z
-              .array(
-                nonEmptyString.refine(isBoundedTemplateToolGrant, "Tool grants must be bounded."),
-              )
+            enabled: z.boolean().optional(),
+            rememberAcrossConversations: z.boolean().optional(),
+            sources: z
+              .array(z.enum(["memory", "sessions"]))
               .min(1)
               .optional(),
-            alsoAllow: z
-              .array(
-                nonEmptyString.refine(isBoundedTemplateToolGrant, "Tool grants must be bounded."),
-              )
-              .min(1)
-              .optional(),
-            deny: z.array(nonEmptyString).min(1).optional(),
-            fs: z
-              .object({ workspaceOnly: z.literal(true).optional() })
-              .strict()
-              .optional(),
           })
           .strict()
-          .superRefine((tools, ctx) => {
-            if (tools.profile === "full" && !tools.allow) {
-              ctx.addIssue({
-                code: "custom",
-                path: ["profile"],
-                message: "The full tool profile requires a bounded explicit allowlist.",
-              });
-            }
-            if (tools.profile && tools.profile !== "full" && tools.allow) {
-              const profileAllow = expandToolGroups(resolveToolProfilePolicy(tools.profile)?.allow);
-              if (
-                tools.allow.some(
-                  (grant) =>
-                    !profileAllow.some((tool) =>
-                      isToolAllowedByPolicyName(tool, { allow: [grant] }),
-                    ) &&
-                    !(profileAllow.includes("bundle-mcp") && isConcreteBundleMcpToolName(grant)),
-                )
-              ) {
-                ctx.addIssue({
-                  code: "custom",
-                  path: ["allow"],
-                  message: "Every agent tools allow grant must overlap the selected profile.",
-                });
-              }
-            }
+          .superRefine((search, ctx) => {
             if (
-              tools.profile &&
-              resolveTemplateToolProfileSnapshot(tools)?.allow.includes("bundle-mcp")
+              search.sources?.includes("sessions") &&
+              search.rememberAcrossConversations !== true
             ) {
               ctx.addIssue({
                 code: "custom",
-                path: ["allow"],
+                path: ["rememberAcrossConversations"],
                 message:
-                  "Profiles containing bundle-mcp require a bounded allowlist of concrete tool names.",
-              });
-            }
-            if (tools.alsoAllow && !tools.profile) {
-              ctx.addIssue({
-                code: "custom",
-                path: ["alsoAllow"],
-                message: "Agent tools can set alsoAllow only when a bounded profile is selected.",
-              });
-            }
-            if (tools.allow && tools.alsoAllow) {
-              ctx.addIssue({
-                code: "custom",
-                path: ["alsoAllow"],
-                message:
-                  "Agent tools cannot set both allow and alsoAllow; use allow alone or profile with alsoAllow.",
+                  "The sessions source requires rememberAcrossConversations: true in agent.memory.search.",
               });
             }
           })
-          .optional(),
-        memory: z
-          .object({
-            search: z
-              .object({
-                enabled: z.boolean().optional(),
-                rememberAcrossConversations: z.boolean().optional(),
-                sources: z
-                  .array(z.enum(["memory", "sessions"]))
-                  .min(1)
-                  .optional(),
-              })
-              .strict()
-              .superRefine((search, ctx) => {
-                if (
-                  search.sources?.includes("sessions") &&
-                  search.rememberAcrossConversations !== true
-                ) {
-                  ctx.addIssue({
-                    code: "custom",
-                    path: ["rememberAcrossConversations"],
-                    message:
-                      "The sessions source requires rememberAcrossConversations: true in the OpenClaw profile.",
-                  });
-                }
-              })
-              .optional(),
-          })
-          .strict()
-          .optional(),
-        heartbeat: z
-          .object({
-            every: nonEmptyString
-              .refine((value) => {
-                try {
-                  parseDurationMs(value, { defaultUnit: "m" });
-                  return true;
-                } catch {
-                  return false;
-                }
-              }, "Invalid heartbeat duration.")
-              .optional(),
-            activeHours: z
-              .object({
-                start: nonEmptyString.regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).optional(),
-                end: nonEmptyString.regex(/^(?:(?:[01]\d|2[0-3]):[0-5]\d|24:00)$/).optional(),
-                timezone: nonEmptyString
-                  .refine(isValidTemplateTimezone, "Invalid IANA timezone.")
-                  .optional(),
-              })
-              .strict()
-              .optional(),
-            lightContext: z.boolean().optional(),
-            isolatedSession: z.boolean().optional(),
-            timeoutSeconds: z.number().int().positive().optional(),
-          })
-          .strict()
-          .optional(),
-        humanDelay: z
-          .object({
-            mode: z.enum(["off", "natural", "custom"]).optional(),
-            minMs: z.number().int().nonnegative().optional(),
-            maxMs: z.number().int().nonnegative().optional(),
-          })
-          .strict()
           .optional(),
       })
-      .strict(),
-    extensions: z.array(openClawExtensionSchema).optional().default([]),
-  })
-  .strict()
-  .superRefine((profile, ctx) => {
-    const ids = new Set<string>();
-    const refs = new Set<string>();
-    profile.extensions.forEach((extension, index) => {
-      if (ids.has(extension.id)) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["extensions", index, "id"],
-          message: `Extension id ${JSON.stringify(extension.id)} is declared more than once.`,
-        });
-      }
-      ids.add(extension.id);
-      const ref = extension.ref.toLowerCase();
-      if (refs.has(ref)) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["extensions", index, "ref"],
-          message: `Extension ${JSON.stringify(extension.ref)} is declared more than once.`,
-        });
-      }
-      refs.add(ref);
-    });
-  });
-
-const legacyLocalUpdateHostSettingsSchema = z
-  .object({
-    model: z
-      .object({ primary: legacyV1ModelRef, fallbacks: z.array(legacyV1ModelRef).optional() })
       .strict()
       .optional(),
-    subagents: z
+    heartbeat: z
       .object({
-        allowAgents: z.array(agentId).optional(),
-        delegationMode: z.enum(["suggest", "prefer"]).optional(),
+        every: nonEmptyString
+          .refine((value) => {
+            try {
+              parseDurationMs(value, { defaultUnit: "m" });
+              return true;
+            } catch {
+              return false;
+            }
+          }, "Invalid heartbeat duration.")
+          .optional(),
+        activeHours: z
+          .object({
+            start: nonEmptyString.regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).optional(),
+            end: nonEmptyString.regex(/^(?:(?:[01]\d|2[0-3]):[0-5]\d|24:00)$/).optional(),
+            timezone: nonEmptyString
+              .refine(isValidTemplateTimezone, "Invalid IANA timezone.")
+              .optional(),
+          })
+          .strict()
+          .optional(),
+        lightContext: z.boolean().optional(),
+        isolatedSession: z.boolean().optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
+    humanDelay: z
+      .object({
+        mode: z.enum(["off", "natural", "custom"]).optional(),
+        minMs: z.number().int().nonnegative().optional(),
+        maxMs: z.number().int().nonnegative().optional(),
       })
       .strict()
       .optional(),
   })
-  .passthrough();
+  .strict();
+
+const agentSchema = agentIdentitySchema.extend(agentSettingsSchema.shape);
 
 const workspaceSourceSchema = z.object({ source: packageRelativePath }).strict();
 const bootstrapFilesSchema = z
@@ -362,10 +291,8 @@ const workspaceSchema = z
   .strict()
   .default({ bootstrapFiles: {}, files: [] });
 
-const packageSchema = z
+const dependencyReferenceSchema = z
   .object({
-    kind: z.enum(TEMPLATE_PACKAGE_KINDS),
-    source: z.literal(TEMPLATE_PACKAGE_SOURCE),
     ref: clawHubPackageName,
     version: exactVersion,
   })
@@ -535,7 +462,8 @@ const manifestSchema = z
       .optional(),
     metadata: z.record(nonEmptyString, z.string()).optional().default({}),
     workspace: workspaceSchema.optional().default({ bootstrapFiles: {}, files: [] }),
-    packages: z.array(packageSchema).optional().default([]),
+    skills: z.array(dependencyReferenceSchema).optional().default([]),
+    plugins: z.array(dependencyReferenceSchema).optional().default([]),
     mcpServers: z
       .record(
         nonEmptyString.regex(/^[a-z][a-z0-9_-]{0,63}$/, "Invalid MCP server name."),
@@ -574,18 +502,19 @@ const manifestSchema = z
       workspaceTargets.add(destinationKey);
     });
 
-    const packageKeys = new Set<string>();
-    manifest.packages.forEach((pkg, index) => {
-      const key = `${pkg.kind}:${pkg.source}:${pkg.ref.toLowerCase()}`;
-      if (packageKeys.has(key)) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["packages", index],
-          message: `Package ${JSON.stringify(pkg.ref)} is declared more than once for ${pkg.kind}.`,
-        });
-      }
-      packageKeys.add(key);
-    });
+    for (const kind of ["skills", "plugins"] as const) {
+      const refs = new Set<string>();
+      manifest[kind].forEach((dependency, index) => {
+        if (refs.has(dependency.ref)) {
+          ctx.addIssue({
+            code: "custom",
+            path: [kind, index, "ref"],
+            message: `Dependency ${JSON.stringify(dependency.ref)} is declared more than once in ${kind}.`,
+          });
+        }
+        refs.add(dependency.ref);
+      });
+    }
 
     const managedPaths = new Set(
       manifest.workspace.files.map((file) => portableTemplatePathKey(file.path)),
@@ -616,13 +545,11 @@ const manifestSchema = z
     });
   });
 
-export type TemplateOpenClawExtension = z.output<typeof openClawExtensionSchema>;
-export type TemplateOpenClawProfile = {
-  schemaVersion: 1;
-  agent: TemplateOpenClawAgentSettings;
-  extensions?: TemplateOpenClawExtension[];
+export type TemplateDependencyReference = z.output<typeof dependencyReferenceSchema>;
+export type TemplatePackage = TemplateDependencyReference & {
+  kind: "skill" | "plugin";
+  source: typeof TEMPLATE_PACKAGE_SOURCE;
 };
-export type TemplatePackage = z.output<typeof packageSchema>;
 export type TemplateMcpServer = z.output<typeof mcpServerSchema>;
 export type TemplateCronJob = z.output<typeof cronJobSchema>;
 export type TemplateManifest = Omit<z.output<typeof manifestSchema>, "metadata"> & {
@@ -653,80 +580,29 @@ export function parseTemplateManifest(
 ):
   | { ok: true; manifest: TemplateManifest; diagnostics: TemplateDiagnostic[] }
   | { ok: false; diagnostics: TemplateDiagnostic[] } {
-  // Normalize published v1 packages once at ingestion. When both keys occur,
-  // keep cronJobs so strict validation rejects the ambiguous declaration.
-  let input = value;
-  if (isRecord(value) && Object.hasOwn(value, "cronJobs") && !Object.hasOwn(value, "automations")) {
-    const { cronJobs, ...manifest } = value;
-    input = { ...manifest, automations: cronJobs };
+  if (isRecord(value)) {
+    const retired = ["packages", "profiles", "cronJobs"].filter((key) => Object.hasOwn(value, key));
+    const profilePointer =
+      isRecord(value.metadata) && Object.hasOwn(value.metadata, "openclaw.config");
+    if (retired.length || profilePointer) {
+      return {
+        ok: false,
+        diagnostics: [
+          {
+            level: "error",
+            code: "retired_template_configuration",
+            phase: "schema",
+            path: profilePointer ? "$.metadata.openclaw.config" : `$.${retired[0]}`,
+            message:
+              "Move native settings into CLAW.md agent and exact ClawHub references into skills/plugins. Use automations for scheduled work; remove packages, profiles, cronJobs, and metadata.openclaw.config; keep schemaVersion: 1.",
+          },
+        ],
+      };
+    }
   }
-  const parsed = manifestSchema.safeParse(input);
+  const parsed = manifestSchema.safeParse(value);
   if (!parsed.success) {
     return { ok: false, diagnostics: diagnosticsFromZodError(parsed.error) };
   }
   return { ok: true, manifest: parsed.data, diagnostics: [] };
-}
-
-export function parseTemplateOpenClawProfile(value: unknown):
-  | {
-      ok: true;
-      profile: TemplateOpenClawProfile;
-      diagnostics: TemplateDiagnostic[];
-    }
-  | { ok: false; diagnostics: TemplateDiagnostic[] } {
-  const parsed = openClawProfileSchema.safeParse(value);
-  if (!parsed.success) {
-    return { ok: false, diagnostics: diagnosticsFromZodError(parsed.error) };
-  }
-  return {
-    ok: true,
-    profile: parsed.data as TemplateOpenClawProfile,
-    diagnostics: [],
-  };
-}
-
-export function parseLegacyLocalUpdateTemplateOpenClawProfile(
-  value: unknown,
-): ReturnType<typeof parseTemplateOpenClawProfile> {
-  if (!isRecord(value) || !isRecord(value.agent)) {
-    return parseTemplateOpenClawProfile(value);
-  }
-  const legacy = legacyLocalUpdateHostSettingsSchema.safeParse(value.agent);
-  if (!legacy.success) {
-    const diagnostics = diagnosticsFromZodError(legacy.error);
-    for (const entry of diagnostics) {
-      entry.path = `$.agent${entry.path.slice(1)}`;
-    }
-    return {
-      ok: false,
-      diagnostics,
-    };
-  }
-  const { model: _model, subagents: _subagents, ...agent } = value.agent;
-  const parsed = parseTemplateOpenClawProfile({ ...value, agent });
-  if (!parsed.ok) {
-    return parsed;
-  }
-  const diagnostics: TemplateDiagnostic[] = [...parsed.diagnostics];
-  if (Object.hasOwn(value.agent, "model")) {
-    diagnostics.push({
-      level: "warning",
-      code: "legacy_openclaw_model_ignored",
-      phase: "schema",
-      path: "$.agent.model",
-      message:
-        "Legacy agent.model is ignored during local Template Update; host model settings are operator-owned.",
-    });
-  }
-  if (Object.hasOwn(value.agent, "subagents")) {
-    diagnostics.push({
-      level: "warning",
-      code: "legacy_openclaw_subagents_ignored",
-      phase: "schema",
-      path: "$.agent.subagents",
-      message:
-        "Legacy agent.subagents is ignored during local Template Update; named delegation settings are operator-owned.",
-    });
-  }
-  return { ...parsed, diagnostics };
 }

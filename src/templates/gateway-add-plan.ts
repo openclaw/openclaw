@@ -110,7 +110,6 @@ export async function buildGatewayTemplateAddPlan(
     manifest: source.manifest,
     templateMarkdownBody: source.templateMarkdownBody,
     packageBootstrap: source.packageBootstrap,
-    openClawProfile: source.openClawProfile,
     source: source.source,
     diagnostics: source.diagnostics,
     context: {
