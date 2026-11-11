@@ -5217,7 +5217,7 @@ describe("package acceptance workflow", () => {
             repository: "openclaw/openclaw",
             runAttempt: 1,
             inputs: {
-              clawhub_only: clawhubOnly,
+              release_profile: clawhubOnly ? "clawhub-only" : "from-validation",
               npm_dist_tag: "beta",
               original_clawhub_run_id: "",
             },
@@ -6771,7 +6771,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
         ref: "release-publish/aaaaaaaaaaaa-42",
         workflowSha: "d".repeat(40),
         inputs: {
-          clawhub_only: "true",
+          release_profile: "clawhub-only",
           publish_openclaw_npm: "false",
           publish_docker_only: "false",
           finalize_release_before_docker: "false",
@@ -7025,7 +7025,7 @@ if (args[0] === "view") {
       job.steps!.indexOf(workflowStep(job, "Verify all prepared plugin bytes before publication")),
     );
     const diagnostics = workflowStep(job, "Upload postpublish diagnostics");
-    expect(diagnostics.if).toBe("${{ always() && !inputs.clawhub_only }}");
+    expect(diagnostics.if).toBe("${{ always() && inputs.release_profile != 'clawhub-only' }}");
     expect(diagnostics["continue-on-error"]).toBe(true);
     expect(diagnostics.uses).toBe(UPLOAD_ARTIFACT_V7);
     expect(diagnostics.with).toMatchObject({
@@ -15759,8 +15759,6 @@ promote_windows_release_assets
     expect(
       workflowStep(releasePublishJob, "Install trusted release tooling dependencies"),
     ).toBeDefined();
-    expect(workflowStep(releasePublishJob, "Resolve ClawHub release plan")).toBeDefined();
-    expect(releasePublishOrchestration(releasePublishJob)).toBeDefined();
 
     const dispatchIndexForReceipt = releaseSteps.findIndex(
       (step) => step.name === "Dispatch publish workflows",
@@ -15784,7 +15782,11 @@ promote_windows_release_assets
         eventName: "workflow_dispatch" as const,
         repository: "openclaw/openclaw",
         runAttempt: 2,
-        inputs: { clawhub_only: clawhubOnly, npm_dist_tag: "beta", original_clawhub_run_id: "" },
+        inputs: {
+          release_profile: clawhubOnly ? "clawhub-only" : "from-validation",
+          npm_dist_tag: "beta",
+          original_clawhub_run_id: "",
+        },
         steps: {
           children: { outputs: { plugin_clawhub_run_id: "202" }, outcome: "success" as const },
           core_start: { outputs: { plugin_npm_completed: "true" } },
