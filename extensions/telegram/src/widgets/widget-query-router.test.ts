@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { TelegramCallbackMessageRuntime } from "../bot-handlers.callback-router-controls.js";
 
 const lookupTelegramSentWidget = vi.hoisted(() => vi.fn());
 const recordResult = vi.hoisted(() => vi.fn());
@@ -77,27 +78,6 @@ describe("readTelegramWidgetQuery", () => {
   });
 });
 
-describe("formatTelegramWidgetRequestText", () => {
-  it("names the widget and its current state so the agent keeps the state shape", async () => {
-    const { formatTelegramWidgetRequestText } = await import("./widget-query-router.js");
-    const text = formatTelegramWidgetRequestText("vote:v", { title: "Poll", state: '{"v":0}' });
-    expect(text).toMatch(/^widget_request: vote:v\n/);
-    expect(text).toContain('the widget "Poll"');
-    expect(text).toContain(JSON.stringify('{"v":0}'));
-  });
-
-  it("includes short widget code so a later session can keep the state shape", async () => {
-    const { formatTelegramWidgetRequestText } = await import("./widget-query-router.js");
-    const source = "<script>draw(JSON.parse(TelegramWidget.chatData).done)</script>";
-    expect(formatTelegramWidgetRequestText("done:1", { title: "Today", source })).toContain(
-      `Widget code:\n${source}`,
-    );
-    expect(
-      formatTelegramWidgetRequestText("done:1", { title: "Today", source: "x".repeat(9_000) }),
-    ).not.toContain("Widget code:");
-  });
-});
-
 describe("widget query router", () => {
   runtimeConfig.current = { channels: { telegram: { botToken: "123:abc", widgets: true } } };
   const query = {
@@ -108,12 +88,12 @@ describe("widget query router", () => {
     data: "vote:v",
   };
   const createRouter = (
-    processMessageWithReplyChain: (...args: unknown[]) => Promise<unknown> = vi.fn(),
+    processMessageWithReplyChain: TelegramCallbackMessageRuntime["processMessageWithReplyChain"] = vi.fn(),
     authorized = true,
   ) =>
     createTelegramWidgetQueryRouter({
       params: { accountId: "default", runtime: { error: vi.fn() } } as never,
-      message: { processMessageWithReplyChain } as never,
+      message: { processMessageWithReplyChain },
       authorization: {
         resolveTelegramEventAuthorizationContext: async () => ({ storeAllowFrom: [] }),
         authorizeTelegramEventSender: async () => authorized,
@@ -124,6 +104,33 @@ describe("widget query router", () => {
     me: { id: 1 },
     getFile: vi.fn(),
   } as never;
+
+  it("dispatches the widget name and current state so the agent keeps the state shape", async () => {
+    lookupTelegramSentWidget.mockResolvedValueOnce({ title: "Poll", state: '{"v":0}' });
+    const process = vi.fn<TelegramCallbackMessageRuntime["processMessageWithReplyChain"]>();
+    await createRouter(process).route(ctx, vi.fn());
+    expect(process).toHaveBeenCalledOnce();
+    const text = process.mock.calls[0]![0].msg.text;
+    expect(text).toMatch(/^widget_request: vote:v\n/);
+    expect(text).toContain('the widget "Poll"');
+    expect(text).toContain(JSON.stringify('{"v":0}'));
+  });
+
+  it("dispatches short widget code and omits over-budget code", async () => {
+    const source = "<script>draw(JSON.parse(TelegramWidget.chatData).done)</script>";
+    for (const code of [source, "x".repeat(9_000)]) {
+      lookupTelegramSentWidget.mockResolvedValueOnce({ title: "Today", source: code });
+      const process = vi.fn<TelegramCallbackMessageRuntime["processMessageWithReplyChain"]>();
+      await createRouter(process).route(ctx, vi.fn());
+      expect(process).toHaveBeenCalledOnce();
+      const text = process.mock.calls[0]![0].msg.text;
+      if (code === source) {
+        expect(text).toContain(`Widget code:\n${source}`);
+      } else {
+        expect(text).not.toContain("Widget code:");
+      }
+    }
+  });
 
   it("drops every tap while widgets are disabled for the account", async () => {
     runtimeConfig.current = { channels: { telegram: { botToken: "123:abc" } } };
@@ -155,7 +162,7 @@ describe("widget query router", () => {
   it("records a retryable dispatch outcome for the ingress owner", async () => {
     recordResult.mockClear();
     lookupTelegramSentWidget.mockResolvedValueOnce(undefined);
-    const failure = { kind: "failed-retryable", error: new Error("session busy") };
+    const failure = { kind: "failed-retryable" as const, error: new Error("session busy") };
     await createRouter(async () => failure).route(ctx, vi.fn());
     expect(recordResult).toHaveBeenCalledWith(failure);
   });
