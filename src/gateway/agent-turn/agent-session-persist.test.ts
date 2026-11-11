@@ -14,8 +14,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { withSessionTurn } from "../../sessions/session-controller.admission.js";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -116,8 +115,6 @@ it.each([false, true])(
     await withPersistFixture(
       { sessions: { others: "none" }, agents: allowedAgents, scopes: [] },
       async (params) => {
-        const respond = vi.fn<PersistParams["respond"]>();
-        params.respond = respond;
         params.buildSessionPatch = async () => {
           await Promise.resolve();
           allowedAgents.length = 0;
@@ -125,7 +122,7 @@ it.each([false, true])(
         };
         await expect(persistAgentSessionPhase(params)).resolves.toBeUndefined();
 
-        expect(respond).toHaveBeenCalledWith(
+        expect(params.respond).toHaveBeenCalledWith(
           false,
           undefined,
           expect.objectContaining({
@@ -139,12 +136,13 @@ it.each([false, true])(
 );
 
 it.each([
-  { mode: "idle", rejection: undefined },
-  { mode: "daily", rejection: undefined },
-  { mode: "idle", rejection: "superseded" },
-  { mode: "idle", rejection: "denied" },
-  { mode: "daily", rejection: "owner-settled" },
-] as const)("handles a $mode Gateway reset (rejection: $rejection)", ({ mode, rejection }) =>
+  { mode: "idle", rejection: undefined, writer: "running" },
+  { mode: "idle", rejection: undefined, writer: "queued" },
+  { mode: "daily", rejection: undefined, writer: undefined },
+  { mode: "idle", rejection: "superseded", writer: undefined },
+  { mode: "idle", rejection: "denied", writer: undefined },
+  { mode: "daily", rejection: "owner-settled", writer: "running" },
+] as const)("$mode reset (rejection: $rejection, writer: $writer)", ({ mode, rejection, writer }) =>
   withPersistFixture(
     { sessions: { others: "view" }, agents: ["main"], scopes: [] },
     async (params) => {
@@ -186,32 +184,31 @@ it.each([
           visibleRequest: true,
           touchInteraction: true,
         });
+      const turn = writer ? createReplyOperation({ ...target, resetTriggered: false }) : undefined;
+      turn?.setPhase(writer ?? "running");
+      params.initialPatchBuild = await params.buildSessionPatch(entry);
       if (rejection === "owner-settled") {
-        const started = createDeferredCore();
-        const release = createDeferredCore();
-        const writer = withSessionTurn(target, async (operation) => {
-          operation?.setPhase("running");
-          started.resolve();
-          await release.promise;
-        });
-        try {
-          await started.promise;
-          params.initialPatchBuild = await params.buildSessionPatch(entry);
-          expect(params.initialPatchBuild.automaticResetReason).toBeUndefined();
-        } finally {
-          release.resolve();
-          await writer;
-        }
-      } else {
-        params.initialPatchBuild = await params.buildSessionPatch(entry);
-      }
-      if (rejection === "superseded") {
+        turn?.complete();
+        await turn?.ownerSettlement;
+      } else if (rejection === "superseded") {
         await replaceSessionEntry(target, { ...entry, lifecycleRevision: "newer-reset" });
       } else if (rejection === "denied") {
         params.request.deliver = true;
         params.cfg.session = { sendPolicy: { default: "deny" } };
       }
       const result = await persistAgentSessionPhase(params);
+      expect(turn?.abortSignal.aborted).not.toBe(true);
+      turn?.complete();
+      const reset = !rejection && writer !== "running";
+      await appendTranscriptMessage(target, { message: makeUserMessage("After: COBALT942", now) });
+      const events = await loadTranscriptEvents(target);
+      expect(events.filter((event) => isRecord(event) && event.type === "reset")).toEqual(
+        reset ? [expect.objectContaining({ reason: mode })] : [],
+      );
+      expect(events.filter((event) => isRecord(event) && event.type === "message")).toMatchObject([
+        { message: { content: "Before: AMBER731" } },
+        { message: { content: "After: COBALT942" } },
+      ]);
       if (rejection) {
         expect(result).toBeUndefined();
         expect(params.respond).toHaveBeenCalledWith(
@@ -221,34 +218,13 @@ it.each([
             code: rejection === "denied" ? "INVALID_REQUEST" : "UNAVAILABLE",
           }),
         );
-        expect(
-          (await loadTranscriptEvents(target)).filter(
-            (event) => isRecord(event) && event.type === "reset",
-          ),
-        ).toEqual([]);
-        if (rejection === "owner-settled") {
-          expect(loadSessionEntry(target)).toMatchObject(entry);
-        }
         return;
       }
       expect(result?.sessionEntry).toMatchObject({
         sessionId: target.sessionId,
-        sessionStartedAt: now,
+        sessionStartedAt: reset ? now : expiredAt,
       });
-      expect(result?.sessionEntry?.lifecycleRevision).not.toBe(entry.lifecycleRevision);
-      await appendTranscriptMessage(target, { message: makeUserMessage("After: COBALT942", now) });
-      const events = await loadTranscriptEvents(target);
-      expect(events.filter((event) => isRecord(event) && event.type === "reset")).toEqual([
-        expect.objectContaining({ reason: mode }),
-      ]);
-      expect(events.filter((event) => isRecord(event) && event.type === "message")).toEqual([
-        expect.objectContaining({
-          message: expect.objectContaining({ content: "Before: AMBER731" }),
-        }),
-        expect.objectContaining({
-          message: expect.objectContaining({ content: "After: COBALT942" }),
-        }),
-      ]);
+      expect(result?.sessionEntry?.lifecycleRevision === entry.lifecycleRevision).toBe(!reset);
     },
   ),
 );
