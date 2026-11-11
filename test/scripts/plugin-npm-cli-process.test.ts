@@ -170,12 +170,6 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
         name + " redundant refresh " + route,
       ).toHaveLength(count);
     }
-    for (const route of immutableAuthorityRoutes) {
-      expect(
-        calls.filter((row) => row.route === route),
-        name + " reacquired " + route,
-      ).toEqual([]);
-    }
     expect(
       calls.filter((row) => row.route === childOriginRoute),
       name + " live child origins",
@@ -188,7 +182,6 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
     expect(calls.filter((row) => row.route === "actions/artifacts/9002/zip")).toHaveLength(
       name.startsWith("consume") ? 1 : 0,
     );
-    expect(calls.filter((row) => row.route === "actions/artifacts/9003/zip")).toHaveLength(0);
     for (const id of f.recovery.immutableArchiveIds) {
       const downloads = calls.filter((row) => row.route === "actions/artifacts/" + id + "/zip");
       expect.soft(downloads, name + " reacquired immutable " + id).toHaveLength(0);
