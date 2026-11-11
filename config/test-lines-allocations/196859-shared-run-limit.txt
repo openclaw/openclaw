@@ -1,0 +1,5 @@
+# A scheduler regression in which the agent limit and the conversation turns in progress decide
+# how many automations run at once, with a run ending and a turn ending each passing a slot
+# on, plus a worker row for the re-check while a run waits for a slot.
+# Exact net growth for the shared automation and conversation limit change (#196859).
+69

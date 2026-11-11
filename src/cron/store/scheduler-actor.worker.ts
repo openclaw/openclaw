@@ -1,5 +1,5 @@
 import { BroadcastChannel } from "node:worker_threads";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
+import { MIN_CRON_RUN_SLOTS } from "../../config/cron-limits.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
@@ -30,7 +30,7 @@ import { hasMissedCronSlotSinceLastRun, isRunnableJob } from "../service/timer-r
 import type { CronJob } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
-import { requestAndDrainCronRunsInWorker } from "./run-queue.worker.js";
+import { awaitsRunSlot, requestAndDrainCronRunsInWorker } from "./run-queue.worker.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
 import { listActiveCronRunReceiptJobIdsInDatabase } from "./run-receipt-store.js";
 import { createCronScheduledRunId } from "./run-request-id.js";
@@ -241,11 +241,20 @@ function armActor(
       );
     }
   }
-  if (!enabled) {
+  // A conversation turn ending frees a run slot without any automation event. While a run is
+  // queued or a fired condition waits for a slot, look again within a minute.
+  const awaitingRunSlot = jobs.some(
+    (job) =>
+      job.state.queuedAtMs !== undefined ||
+      (job.state.runningReceiptId !== undefined && awaitsRunSlot(job, job.state.runningReceiptId)),
+  );
+  if (!enabled && !awaitingRunSlot) {
     return undefined;
   }
-  const delay =
-    nextWakeAtMs === undefined ? MAX_CRON_TIMER_DELAY_MS : Math.max(0, nextWakeAtMs - nowMs);
+  const delay = Math.min(
+    nextWakeAtMs === undefined ? MAX_CRON_TIMER_DELAY_MS : Math.max(0, nextWakeAtMs - nowMs),
+    awaitingRunSlot ? MAX_CRON_TIMER_DELAY_MS : Infinity,
+  );
   const wakeAtMs = nowMs + (delay === 0 ? MIN_REFIRE_GAP_MS : delay);
   actor.wakeAtMs = wakeAtMs;
   // Observe wall-clock changes without reloading SQL every minute. Native timers
@@ -574,7 +583,7 @@ export function runCronSchedulerInWorker(
         },
         {
           requests: input.requests ?? [],
-          maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+          maxConcurrentRuns: snapshot.config.maxConcurrentRuns ?? MIN_CRON_RUN_SLOTS,
           schedulingPaused: input.paused,
           preparingAgentIds: snapshot.config.preparingAgentIds,
           busyConversationJobIds: snapshot.config.busyConversationJobIds,
