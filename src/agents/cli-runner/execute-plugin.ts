@@ -54,7 +54,7 @@ import { createSteeredCliMessageInjection } from "./execute-plugin.steered-trans
 import { attachCliReplyBackend, createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError as failover } from "./exit-error.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
-import { normalizeCliToolName } from "./tool-policy.js";
+import { isCliNativeToolCallable, normalizeCliToolName } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 function denyTool(message: string): CliBackendToolPermissionResult {
@@ -93,11 +93,7 @@ async function createPluginToolPermissionHandler(params: {
       return denyTool("OpenClaw denied an unnamed native tool.");
     }
     const discoveryOnly = run.cliToolAvailability?.discovery?.includes(toolName) === true;
-    if (
-      run.cliToolAvailability &&
-      !run.cliToolAvailability.native.includes(toolName) &&
-      !discoveryOnly
-    ) {
+    if (!discoveryOnly && !isCliNativeToolCallable(run, toolName, params.context.backendResolved)) {
       return denyTool(`OpenClaw denied native tool ${toolName}: it is unavailable to this run.`);
     }
 
