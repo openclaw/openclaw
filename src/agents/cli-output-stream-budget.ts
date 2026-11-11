@@ -9,9 +9,11 @@
 // and the parser keeps watching for that record while assembling nothing more.
 // The per-line `maxPendingLineChars` bound is unaffected and stays fatal.
 //
-// Only traffic the parent lane actually assembles is charged. Claude Code
-// forwards subagent output on the parent's stdout for the parent to discard, so
-// charging it spends a budget on bytes that never become parent output.
+// What each line costs is not this module's decision: `chargeClaudeStreamJsonLine`
+// in `cli-output-stream-limits.ts` owns every discount, including the fixed
+// allowance forwarded subagent message records are charged. Forwarded traffic is
+// charged here exactly as any other line is, so a flood of discarded child
+// records still stops the parse at the frame odometer.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   CliBackendConfig,
@@ -26,7 +28,6 @@ import type {
 } from "./cli-output-contracts.js";
 import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
 import { dispatchClaudeCliStreamingToolEvent } from "./cli-output-events.js";
-import { isClaudeSubagentJsonlLine } from "./cli-output-jsonl-scan.js";
 import {
   parseCliBackendLifecycleLine,
   projectCliBackendLifecycleEvent,
@@ -58,12 +59,7 @@ export function createCliStreamJsonTurnBudget(limits: CliStreamJsonTurnLimits) {
   let chargedChars = 0;
   let chargedLines = 0;
   let observedLines = 0;
-  let chargeable = true;
   return {
-    /** Whether the line most recently observed is charged to this turn. */
-    get chargeable(): boolean {
-      return chargeable;
-    },
     /** False once the cumulative character budget is spent. */
     chargeChars(chars: number): boolean {
       chargedChars += chars;
@@ -74,23 +70,21 @@ export function createCliStreamJsonTurnBudget(limits: CliStreamJsonTurnLimits) {
       return false;
     },
     /**
-     * Records a line and classifies whether this turn pays for it (forwarded
-     * subagent traffic on the Claude path never does). An uncharged line still
-     * counts as output seen, so a turn carrying only discarded traffic is not
-     * mistaken for a stream that produced nothing.
+     * Records that a line was seen, so a turn is never mistaken for a stream
+     * that produced nothing, and charges the line budget for the dialects whose
+     * classification is already known.
      *
-     * Non-Claude lines are chargeable by definition and count toward the line
-     * budget immediately. Chargeable Claude lines are NOT counted here: a line
-     * recognized as a partial-message delta (content_block_delta text/thinking/
-     * tool-input) is discarded as soon as it's assembled and must stay exempt
-     * from the line odometer too, but that classification needs the decoded
-     * record, which isn't available yet at this call site. Call `chargeLine()`
-     * once that's known, for every chargeable, non-partial-message Claude line.
+     * Non-Claude lines count toward the line budget immediately. Claude lines
+     * are NOT counted here: a line recognized as a partial-message delta
+     * (content_block_delta text/thinking/tool-input) is discarded as soon as
+     * it's assembled and stays exempt from the line odometer, but that
+     * classification needs the decoded record, which isn't available yet at
+     * this call site. Call `chargeLine()` once that's known, for every
+     * non-partial-message Claude line.
      */
-    observeLine(line: string, claudeStreamJson: boolean): boolean {
+    observeLine(claudeStreamJson: boolean): boolean {
       observedLines += 1;
-      chargeable = !claudeStreamJson || !isClaudeSubagentJsonlLine(line);
-      if (!chargeable || claudeStreamJson) {
+      if (claudeStreamJson) {
         return true;
       }
       chargedLines += 1;
@@ -102,8 +96,8 @@ export function createCliStreamJsonTurnBudget(limits: CliStreamJsonTurnLimits) {
     },
     /**
      * Charges one line toward the cumulative line budget. Used only for a
-     * chargeable Claude line once partial-message exemption is known (see
-     * `observeLine`); non-Claude and subagent-forwarded lines never call this.
+     * Claude line once partial-message exemption is known (see `observeLine`);
+     * non-Claude lines never call this.
      */
     chargeLine(): boolean {
       chargedLines += 1;

@@ -204,13 +204,10 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     handleCustomJsonlEvent(event);
   });
 
-  // Only traffic the parent lane assembles is charged; see the budget module.
   // A line a custom or lifecycle parser claims is an ordinary frame: it pays a
   // line as well as its characters, whatever it decodes to.
   const chargeClaudeRawLine = (chars: number) =>
-    !claudeStreamJson ||
-    !turnBudget.chargeable ||
-    (turnBudget.chargeLine() && turnBudget.chargeChars(chars));
+    !claudeStreamJson || (turnBudget.chargeLine() && turnBudget.chargeChars(chars));
 
   const observeSessionId = (parsed: Record<string, unknown>) => {
     const parsedSessionId = pickCliSessionId(parsed, params.backend);
@@ -638,11 +635,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (!line && !claudeStreamJson) {
       return;
     }
-    // Forwarded subagent traffic reaches the parent only through the Agent tool
-    // result, so the parent lane discards it. `observeLine` therefore leaves it
-    // uncharged rather than spending the turn's budget on bytes that never
-    // become parent output.
-    if (!turnBudget.observeLine(line, claudeStreamJson) && !claudeStreamJson) {
+    if (!turnBudget.observeLine(claudeStreamJson) && !claudeStreamJson) {
       parseErrorText = turnBudget.errorText(false);
       lineBuffer.pending = "";
       return;
@@ -661,15 +654,18 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       return;
     }
     const parsedRecords = decodeCliRecords(line);
-    if (claudeStreamJson && turnBudget.chargeable) {
+    if (claudeStreamJson) {
       const record = parsedRecords.length === 1 ? parsedRecords[0] : undefined;
-      // Also normalizes Claude's echoed binary in place, as the dispatch below
-      // and the post-budget watcher both require.
+      // Owns every discount, including the fixed allowance for the forwarded
+      // subagent message records the parent lane discards. Also normalizes
+      // Claude's echoed binary in place, as the dispatch below and the
+      // post-budget watcher both require.
       const charge = chargeClaudeStreamJsonLine(record, rawLine);
       // Partial-message deltas and the discarded control frames that share
       // their per-frame callbacks are consumed as soon as they're assembled, so
       // they are exempt from the ordinary line odometer (matches
-      // #150132/#153545); every other chargeable Claude line still counts.
+      // #150132/#153545); every other Claude line still counts, forwarded
+      // subagent records included.
       if (!charge.partialMessage && !turnBudget.chargeLine()) {
         // The line that exhausts the budget may itself be the terminal result.
         handlePostBudgetLine(line);

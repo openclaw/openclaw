@@ -582,8 +582,9 @@ export function parseClaudeCliStreamingDelta(
   // Forwarded child text is not parent reply text, in either record shape. The
   // cumulative-snapshot branch below has always rejected it; a partial-message
   // delta carries the same attribution and is rejected here for the same reason.
-  // Both budgets exempt these lines because the parent lane discards them, so a
-  // delta that slipped through would be retained and emitted uncharged.
+  // Dropping it does not discount it: `chargeClaudeStreamJsonLine` charges a
+  // child-attributed stream event in full, so the only thing this guard changes
+  // is whether the child's text leaks into the parent's reply.
   if (isClaudeSubagentRecord(params.parsed)) {
     return null;
   }
