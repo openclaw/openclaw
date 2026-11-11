@@ -564,15 +564,18 @@ export const createExtensionTestShards = () => [{
     expect(manifestStep.env.OPENCLAW_CI_RUNNER_BACKEND).toBe(
       "${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}",
     );
-    const physicalRows = JSON.parse(selected.plugin_prerelease_extension_matrix).include;
+    const physicalRows = JSON.parse(
+      expectDefined(selected.plugin_prerelease_extension_matrix, "hourly extension matrix"),
+    ).include;
     const boatRows = JSON.parse(
-      outputs(boatHourly.output).plugin_prerelease_extension_matrix,
+      expectDefined(outputs(boatHourly.output).plugin_prerelease_extension_matrix, "Boat matrix"),
     ).include;
     expect(boatRows).toEqual(
-      physicalRows.map((row: Record<string, unknown>) => ({
-        ...row,
-        runner_label: row.runner_label === "blacksmith-4vcpu-ubuntu-2404" ? "boat-large" : "boat",
-      })),
+      physicalRows.map((row: Record<string, unknown>) =>
+        Object.assign({}, row, {
+          runner_label: row.runner_label === "blacksmith-4vcpu-ubuntu-2404" ? "boat-large" : "boat",
+        }),
+      ),
     );
     const boatLabels = new Set(boatRows.map((row: Record<string, unknown>) => row.runner_label));
     expect(boatLabels).toEqual(new Set(["boat", "boat-large"]));
