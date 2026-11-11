@@ -10,6 +10,7 @@ import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import * as sessionChangeEvent from "./server-methods/session-change-event.js";
 import * as gateway from "./server.auth.test-helpers.js";
+import * as deviceProvider from "./worker-environments/device-provider.js";
 import * as placementDispatch from "./worker-environments/placement-dispatch.js";
 
 gateway.installGatewayTestHooks({ scope: "suite" });
@@ -132,6 +133,11 @@ test("required placement survives disconnect but stops setup when committed call
 
   // Observe real provider setup, never replace it.
   const setupCalls: string[] = [];
+  const resolveDeviceAvailability = deviceProvider.resolveDeviceWorkerAvailability;
+  vi.spyOn(deviceProvider, "resolveDeviceWorkerAvailability").mockImplementation((...args) => {
+    setupCalls.push("resolveDeviceWorkerAvailability");
+    return resolveDeviceAvailability(...args);
+  });
   const dispatchErrors: string[] = [];
   let dispatchSettled: Promise<unknown> | undefined;
   let hold: { committed: Deferred; resume: Promise<void>; afterAck: boolean } | undefined;
@@ -241,7 +247,7 @@ test("required placement survives disconnect but stops setup when committed call
         ws.close();
         await closed;
       },
-      ["prepareProjectIntent", "createWithRequest"],
+      ["resolveDeviceWorkerAvailability"],
       true,
     );
 

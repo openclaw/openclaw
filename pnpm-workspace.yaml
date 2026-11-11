@@ -35,6 +35,18 @@ minimumReleaseAgeExclude:
   - "@openclaw/fs-safe-win32-arm64-msvc@0.27.1"
   - "@openclaw/fs-safe-win32-x64-msvc@0.27.1"
   - "@openclaw/fs-safe@0.27.1"
+  # Reviewed fs-safe 0.27.2 release and native helpers; remove after 2026-11-13T01:30:43Z.
+  - "@openclaw/fs-safe-darwin-arm64@0.27.2"
+  - "@openclaw/fs-safe-darwin-x64@0.27.2"
+  - "@openclaw/fs-safe-freebsd-arm64@0.27.2"
+  - "@openclaw/fs-safe-freebsd-x64@0.27.2"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.27.2"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.27.2"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.27.2"
+  - "@openclaw/fs-safe-linux-x64-musl@0.27.2"
+  - "@openclaw/fs-safe-win32-arm64-msvc@0.27.2"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.27.2"
+  - "@openclaw/fs-safe@0.27.2"
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated
