@@ -425,6 +425,8 @@ export async function proveSandboxMutationCheckpoints(owner: LocalWorkspaceOwner
     pending_target: null,
     journal_json: null,
   });
+  const gitDir = await requireGit(owner.worktree.path, ["rev-parse", "--absolute-git-dir"]);
+  expect(await fs.readdir(path.join(gitDir, "openclaw-worker-results"))).toEqual([]);
 }
 
 function restoreV31CheckpointLayout(

@@ -23,7 +23,7 @@ import { hasWorkerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 type RecoveryState = Pick<
   ReturnType<typeof projectionOperations>,
-  "current" | "canonicalPaths" | "baselineDocument" | "buildCacheInputs" | "capture"
+  "current" | "resultRoot" | "canonicalPaths" | "baselineDocument" | "buildCacheInputs" | "capture"
 >;
 
 function recoveryPath(value: string) {
@@ -62,7 +62,6 @@ async function hasAggregateOverflow(state: RecoveryState): Promise<boolean> {
 }
 
 async function openRecoverableFile(
-  owner: LocalWorkspaceOwner,
   state: RecoveryState,
   stateRoot: Root,
   selectedPath: string,
@@ -74,7 +73,7 @@ async function openRecoverableFile(
     !selected.pending_ref ||
     selected.pending_target !== "canonical" ||
     (await hasWorkerWorkspaceResultRef({
-      root: owner.worktree.repoRoot,
+      root: state.resultRoot(),
       stagedResultRef: selected.pending_ref,
     }))
   ) {
@@ -118,7 +117,6 @@ export async function describeLocalWorkspaceRecovery(
         hardlinks: "reject",
       });
       const file = await openRecoverableFile(
-        owner,
         state,
         stateRoot,
         selectedPath,
@@ -206,7 +204,7 @@ export async function recoverLocalWorkspaceFile(params: {
         }
         return await result();
       }
-      await using file = await openRecoverableFile(owner, state, stateRoot, selectedPath);
+      await using file = await openRecoverableFile(state, stateRoot, selectedPath);
       await stateRoot.mkdir(path.dirname(destination), { private: true });
       current();
       try {

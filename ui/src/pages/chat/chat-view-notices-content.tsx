@@ -60,9 +60,15 @@ function workspaceConflictGitCommands(
   const stagedPath = shellQuote(`${conflict.stagedResultRef}:${entryPath}`);
   const stagedRef = shellQuote(conflict.stagedResultRef);
   const literalPathspec = shellQuote(`:(top,literal)${entryPath}`);
+  const privateDirectory = shellQuote(
+    `openclaw-worker-results/result-${conflict.stagedResultRef.split("/").at(-1)}`,
+  );
+  const resolveResult = `result=$(git rev-parse --absolute-git-dir) && if [ -d "$result"/${privateDirectory} ]; then result="$result"/${privateDirectory}; fi`;
+  const resultGit = 'git --git-dir="$result"';
+  // Promote the selected blob before staging it; retained result storage can then be deleted.
   return {
-    inspect: `git show ${stagedPath}`,
-    takeCloud: `git checkout ${stagedRef} -- ${literalPathspec}`,
+    inspect: `(${resolveResult} && ${resultGit} show ${stagedPath})`,
+    takeCloud: `(set -o pipefail; cd "$(git rev-parse --show-toplevel)" && ${resolveResult} && mode=$(${resultGit} ls-tree --format='%(objectmode)' ${stagedRef} -- ${literalPathspec}) && blob=$(${resultGit} cat-file blob ${stagedPath} | git hash-object -w --stdin) && git update-index --add --cacheinfo "$mode" "$blob" ${shellQuote(entryPath)} && git checkout-index -f -- ${shellQuote(entryPath)})`,
   };
 }
 

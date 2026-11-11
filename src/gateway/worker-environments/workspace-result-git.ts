@@ -138,25 +138,30 @@ export async function updateWorkspaceResultRefs(
     | readonly WorkspaceResultRefUpdate[]
     | (() => readonly WorkspaceResultRefUpdate[] | Promise<readonly WorkspaceResultRefUpdate[]>),
   assertCurrent?: () => void,
+  prepared?: { commonDir?: string; baseEnv: NodeJS.ProcessEnv },
 ): Promise<void> {
-  await withWorkspaceResultRefMutation(root, async (baseEnv) => {
-    assertCurrent?.();
-    const current = typeof updates === "function" ? await updates() : updates;
-    assertCurrent?.();
-    if (current.length === 0) {
-      return;
-    }
-    const input = current
-      .map(({ ref, objectId }) =>
-        objectId === undefined ? `delete ${ref}\0\0` : `update ${ref}\0${objectId}\0\0`,
-      )
-      .join("");
-    await requireWorkspaceResultGit(root, ["update-ref", "--stdin", "-z"], {
-      input: Buffer.from(input),
-      baseEnv,
-      beforeInput: assertCurrent,
-    });
-  });
+  await withWorkspaceResultRefMutation(
+    root,
+    async (baseEnv) => {
+      assertCurrent?.();
+      const current = typeof updates === "function" ? await updates() : updates;
+      assertCurrent?.();
+      if (current.length === 0) {
+        return;
+      }
+      const input = current
+        .map(({ ref, objectId }) =>
+          objectId === undefined ? `delete ${ref}\0\0` : `update ${ref}\0${objectId}\0\0`,
+        )
+        .join("");
+      await requireWorkspaceResultGit(root, ["update-ref", "--stdin", "-z"], {
+        input: Buffer.from(input),
+        baseEnv,
+        beforeInput: assertCurrent,
+      });
+    },
+    prepared,
+  );
 }
 
 export async function readWorkspaceResultRefObjects(

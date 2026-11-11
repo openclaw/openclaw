@@ -65,10 +65,26 @@ export async function proveRejectedWorkspaceCheckpoint(
   expect(pending.journal_json).toBeNull();
   expect(
     await hasWorkerWorkspaceResultRef({
-      root: owner.worktree.repoRoot,
+      root: owner.worktree.path,
       stagedResultRef: pending.pending_ref!,
     }),
   ).toBe(true);
+  if (target === "canonical") {
+    const { describeLocalWorkspaceRecovery } = await import("./local-workspace-recovery.js");
+    const oversized = path.join(projection, "retained.bin");
+    await fs.writeFile(oversized, "retained bytes\n");
+    await fs.truncate(oversized, 65 * 1024 * 1024);
+    try {
+      const failure = new Error("Cloud workspace result is too large: retained.bin");
+      expect(
+        await withLocalWorkspaceProjection(owner, (state) =>
+          describeLocalWorkspaceRecovery(failure, owner, state),
+        ),
+      ).toBe(failure);
+    } finally {
+      await fs.rm(oversized);
+    }
+  }
   if (target === "canonical") {
     await expectMissing(destination, resultPath);
   } else {
@@ -106,7 +122,7 @@ export async function proveRejectedWorkspaceCheckpoint(
   expect(await readProjection()).toMatchObject({ pending_ref: null, pending_target: null });
   expect(
     await hasWorkerWorkspaceResultRef({
-      root: owner.worktree.repoRoot,
+      root: owner.worktree.path,
       stagedResultRef: pending.pending_ref!,
     }),
   ).toBe(true);

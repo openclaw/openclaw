@@ -87,7 +87,7 @@ describe("workspace conflict copy actions", () => {
     await vi.waitFor(() => expect(button?.textContent?.trim()).toBe(expected));
     expect(button?.getAttribute("aria-label")).toBeNull();
     expect(writeText).toHaveBeenCalledWith(
-      "git show 'refs/openclaw/worker-results/claim-test:src/local.ts'",
+      expect.stringContaining("show 'refs/openclaw/worker-results/claim-test:src/local.ts'"),
     );
   });
 });

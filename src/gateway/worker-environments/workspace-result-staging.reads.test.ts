@@ -20,6 +20,7 @@ import {
 import { updateWorkspaceResultRefs } from "./workspace-result-git.js";
 import {
   deleteWorkerWorkspaceResultCleanupRefs,
+  deleteStagedWorkerWorkspaceResult,
   hasWorkerWorkspaceResultRef,
   moveStagedWorkerWorkspaceResultToCleanup,
   preparedWorkerWorkspaceResultRef,
@@ -48,6 +49,7 @@ type FixtureOptions = {
   largeFileBytes?: number;
   objectFormat?: "sha1" | "sha256";
   linked?: boolean;
+  isolated?: boolean;
 };
 function flipByte(bytes: Buffer, index: number, mask = 0xff) {
   bytes[index] = bytes[index]! ^ mask;
@@ -93,7 +95,12 @@ const git = (root: string, args: string[]) =>
 
 async function stagedFixture(
   fileCount = 64,
-  { largeFileBytes = 0, objectFormat = "sha1", linked = false }: FixtureOptions = {},
+  {
+    largeFileBytes = 0,
+    objectFormat = "sha1",
+    linked = false,
+    isolated = false,
+  }: FixtureOptions = {},
 ) {
   const root = await fs.realpath(tempDirs.make("workspace-staged-reads-"));
   let repository = path.join(
@@ -107,9 +114,7 @@ async function stagedFixture(
   );
   const input = path.join(root, "input");
   await Promise.all([fs.mkdir(repository), fs.mkdir(input)]);
-  if (objectFormat === "sha256" || linked) {
-    await git(repository, ["init", "--quiet", "--template=", `--object-format=${objectFormat}`]);
-  }
+  await git(repository, ["init", "--quiet", "--template=", `--object-format=${objectFormat}`]);
   if (linked) {
     await git(repository, ["config", "core.longpaths", "false"]);
     await git(repository, [
@@ -134,6 +139,7 @@ async function stagedFixture(
     repository = linkedRoot;
   }
   const originalHead = linked ? await git(repository, ["rev-parse", "HEAD"]) : undefined;
+  const originalObjects = isolated ? await git(repository, ["count-objects", "-v"]) : undefined;
   const files = new Map<string, Buffer>();
   for (let index = 0; index < fileCount; index++) {
     files.set(`file-${String(index).padStart(3, "0")}.txt`, Buffer.from(`payload ${index}\n`));
@@ -163,6 +169,7 @@ async function stagedFixture(
     root: repository,
     stagingRoot: input,
     stagedResultRef,
+    ...(isolated ? {} : { sharedResultStore: true as const }),
     baseManifestRaw,
     currentManifestRaw,
     baseManifestRef: manifestRef(baseManifestRaw),
@@ -175,11 +182,34 @@ async function stagedFixture(
     stagedResultRef,
     publishedRef,
     originalHead,
+    originalObjects,
     commit,
     files,
     binaryPath,
   };
 }
+
+it.each([1, 300])(
+  "releases a %i-file result without adding objects to a linked workspace's base",
+  async (fileCount) => {
+    const fixture = await stagedFixture(fileCount, { linked: true, isolated: true });
+    await fixture.read(async (snapshot) => {
+      expect(await fs.readFile(path.join(snapshot.stagingRoot, "file-000.txt"), "utf8")).toBe(
+        "payload 0\n",
+      );
+    });
+    await deleteStagedWorkerWorkspaceResult({
+      root: fixture.repository,
+      stagedResultRef: fixture.stagedResultRef,
+    });
+    const common = await git(fixture.repository, ["rev-parse", "--git-common-dir"]);
+    const packs = await fs.readdir(path.resolve(fixture.repository, common, "objects", "pack"));
+    expect(packs.filter((name) => name.endsWith(".pack"))).toEqual([]);
+    expect(await git(fixture.repository, ["count-objects", "-v"])).toBe(fixture.originalObjects);
+    const gitDir = await git(fixture.repository, ["rev-parse", "--absolute-git-dir"]);
+    expect(await fs.readdir(path.join(gitDir, "openclaw-worker-results"))).toEqual([]);
+  },
+);
 
 it("joins only matching pending staged reads and forgets settled results", async () => {
   const fixture = await stagedFixture(0);

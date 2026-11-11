@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { mkdtemp, mkdir, readFile, readlink, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -20,11 +24,93 @@ const workerFailureDiagnostic = [
   "Final diagnostic line: enrollment did not complete.",
 ].join("\n");
 
+const conflictPaths: [string, string] = ["src/[local] 'file.ts", "ui/src/app.ts"];
 const conflict = {
-  paths: ["src/local.ts", "ui/src/app.ts"],
+  paths: conflictPaths,
   stagedResultRef: "refs/openclaw/worker-results/claim-proof",
   totalCount: 2,
 };
+
+async function verifyRecoveryCommands(commands: { inspect: string; take: string }[]) {
+  for (const [shell, isolated] of [
+    ["bash", true],
+    ...(process.platform === "darwin" ? [["zsh", true] as const] : []),
+    ["bash", false],
+  ] as const) {
+    const root = await mkdtemp(path.join(tmpdir(), "openclaw-conflict-commands-"));
+    const git = (cwd: string, args: string[], input?: string) =>
+      execFileSync("git", args, { cwd, input, encoding: "utf8" }).trimEnd();
+    try {
+      const base = path.join(root, "base repo");
+      const workspace = path.join(root, "linked workspace");
+      await mkdir(base);
+      git(base, ["init", "-q"]);
+      git(base, [
+        "-c",
+        "user.name=Proof",
+        "-c",
+        "user.email=proof@example.invalid",
+        "commit",
+        "-qm",
+        "base",
+        "--allow-empty",
+      ]);
+      git(base, ["worktree", "add", "--detach", "-q", workspace]);
+      git(workspace, ["config", "core.filemode", "false"]);
+      const gitDir = git(workspace, ["rev-parse", "--absolute-git-dir"]);
+      const storage = isolated
+        ? path.join(gitDir, "openclaw-worker-results", "result-claim-proof")
+        : gitDir;
+      if (isolated) {
+        git(base, ["init", "--bare", "-q", storage]);
+      }
+      const resultGit = (args: string[], input?: string) =>
+        git(base, [`--git-dir=${storage}`, ...args], input);
+      const contents = ["#!/bin/sh\nprintf cloud\\n\n", "../../src/[local] 'file.ts"];
+      const blobs = contents.map((content) => resultGit(["hash-object", "-w", "--stdin"], content));
+      const sourceTree = resultGit(["mktree"], `100755 blob ${blobs[0]}\t[local] 'file.ts\n`);
+      const appTree = resultGit(["mktree"], `120000 blob ${blobs[1]}\tapp.ts\n`);
+      const uiTree = resultGit(["mktree"], `040000 tree ${appTree}\tsrc\n`);
+      const tree = resultGit(
+        ["mktree"],
+        `040000 tree ${sourceTree}\tsrc\n040000 tree ${uiTree}\tui\n`,
+      );
+      const commit = resultGit([
+        "-c",
+        "user.name=Proof",
+        "-c",
+        "user.email=proof@example.invalid",
+        "commit-tree",
+        tree,
+        "-m",
+        "result",
+      ]);
+      resultGit(["update-ref", conflict.stagedResultRef, commit]);
+      await mkdir(path.join(workspace, "src"));
+      await writeFile(path.join(workspace, conflict.paths[0]), "local\n");
+      git(workspace, ["add", "--", conflict.paths[0]]);
+      for (const [index, command] of commands.entries()) {
+        const execute = (text: string) =>
+          execFileSync(shell, ["-c", text], { cwd: path.join(workspace, "src"), encoding: "utf8" });
+        expect(execute(command.inspect)).toBe(contents[index]);
+        execute(command.take);
+      }
+      if (isolated) {
+        await rm(storage, { recursive: true });
+      }
+      expect(await readFile(path.join(workspace, conflict.paths[0]), "utf8")).toBe(contents[0]);
+      expect(await readlink(path.join(workspace, conflict.paths[1]))).toBe(contents[1]);
+      for (const [index, entry] of conflict.paths.entries()) {
+        expect(git(workspace, ["show", `:${entry}`])).toBe(contents[index]!.trimEnd());
+        expect(git(workspace, ["ls-files", "--stage", "--", entry])).toMatch(
+          index === 0 ? /^100755 / : /^120000 /,
+        );
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+}
 
 const pageOptions = createDarkDesktopControlUiContextOptions();
 function sessionList(label: string, placement: Record<string, unknown>, now = Date.now()) {
@@ -170,10 +256,20 @@ suite.define(() => {
       }
 
       await notice.locator(".chat-workspace-conflict-notice__summary").click();
-      await notice.locator(".chat-workspace-conflict-path-actions button").first().click();
-      await expect
-        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-        .toBe("git show 'refs/openclaw/worker-results/claim-proof:src/local.ts'");
+      const commands = [];
+      for (const row of await notice.locator(".chat-workspace-conflict-path-actions").all()) {
+        const copied = [];
+        for (const button of await row.locator("button").all()) {
+          await page.evaluate(() => navigator.clipboard.writeText(""));
+          await button.click();
+          await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).not.toBe("");
+          copied.push(await page.evaluate(() => navigator.clipboard.readText()));
+        }
+        expect(copied).toHaveLength(2);
+        commands.push({ inspect: copied[0]!, take: copied[1]! });
+      }
+      expect(commands).toHaveLength(2);
+      await verifyRecoveryCommands(commands);
 
       await dismiss.click();
       await notice.waitFor({ state: "detached" });

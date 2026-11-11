@@ -11,6 +11,7 @@ import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { prepareWorkspaceBaseRefresh } from "./workspace-manifest-worker.js";
 import { localWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
 import { workerWorkspaceResultStaging } from "./workspace-result-staging.js";
+import { resolveWorkspaceResultStorage } from "./workspace-result-storage.js";
 
 /** Each stopped turn revokes the projection pass at its next durable effect. */
 export async function proveResumedBaseRefresh(params: {
@@ -93,6 +94,8 @@ export async function proveResumedBaseRefresh(params: {
       await state.applyBaseRefresh(stagedRef);
     }),
   ).rejects.toThrow("indeterminate");
+  const storage = await resolveWorkspaceResultStorage(canonical, stagedRef);
+  expect(storage.isolated).toBe(true);
   expect(await readLocalWorkspaceProjection(owner.worktree.id)).toMatchObject({
     pending_target: "projection",
   });
@@ -113,4 +116,5 @@ export async function proveResumedBaseRefresh(params: {
   });
   expect(await readSource(canonical)).toBe("refreshed\n");
   expect(await readSource(projection)).toBe("refreshed\n");
+  await expect(fs.stat(storage.root)).rejects.toMatchObject({ code: "ENOENT" });
 }

@@ -34,6 +34,7 @@ import {
   workerWorkspaceResultStaging,
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
+import { resolveWorkspaceResultStorage } from "./workspace-result-storage.js";
 
 const { prepareRequestedWorkerWorkspaceResult, stageWorkerWorkspaceResult } =
   workerWorkspaceResultStaging;
@@ -129,9 +130,67 @@ it.each(["base", "current"] as const)(
       expect(error).not.toHaveProperty("code");
     }
     expect(await hasRef(fixture.ref)).toBe(false);
+    expect(await fs.readdir(path.join(local, ".git", "openclaw-worker-results"))).toEqual([]);
     expect(await readText("result.txt")).toBe("base\n");
   },
 );
+
+it("isolates concurrent result objects and releases only the settled result", async () => {
+  const first = await resultFixture("first");
+  await gitInit(local);
+  const second = { ...first, ref: workerWorkspaceResultRef("claim-second"), base: first.current };
+  const [firstCommit, secondCommit] = await Promise.all([stageResult(first), stageResult(second)]);
+  const stores = await Promise.all(
+    [first, second].map((f) => resolveWorkspaceResultStorage(local, f.ref)),
+  );
+  expect(stores[0]!.root).not.toBe(stores[1]!.root);
+  for (const [index, object] of [secondCommit, firstCommit].entries()) {
+    const storage = stores[index]!;
+    const missing = await runCommandWithTimeout(
+      ["git", "-C", storage.root, "cat-file", "-e", object],
+      {
+        timeoutMs: 10_000,
+        baseEnv: storage.baseEnv,
+      },
+    );
+    expect(missing.code).not.toBe(0);
+  }
+  await deleteStagedWorkerWorkspaceResult({ root: local, stagedResultRef: first.ref });
+  await expect(fs.stat(stores[0]!.root)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await hasRef(second.ref)).toBe(true);
+  await replayResult(second.ref, second.base.ref);
+  await deleteStagedWorkerWorkspaceResult({ root: local, stagedResultRef: second.ref });
+  await expect(fs.stat(stores[1]!.root)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("finishes a pre-upgrade candidate in its original store without shadowing its refs", async () => {
+  const fixture = await resultFixture("legacy-replay");
+  await gitInit(local);
+  await stageWorkerWorkspaceResult({
+    root: local,
+    stagingRoot: staged,
+    stagedResultRef: preparedWorkerWorkspaceResultRef(fixture.ref),
+    baseManifestRef: fixture.base.ref,
+    currentManifestRef: fixture.current.ref,
+    baseManifestRaw: fixture.base.raw,
+    currentManifestRaw: fixture.current.raw,
+    sharedResultStore: true,
+  });
+  const prepared = await prepareWorkspaceResult(fixture);
+  await prepared.applyPreparedStagedResult();
+  await prepared.publishStagedResult();
+  expect((await resolveWorkspaceResultStorage(local, fixture.ref)).isolated).toBe(false);
+  const cleanupRef = await moveStagedWorkerWorkspaceResultToCleanup({
+    root: local,
+    stagedResultRef: fixture.ref,
+  });
+  await deleteStagedWorkerWorkspaceResult({ root: local, stagedResultRef: cleanupRef });
+  expect(await hasRef(fixture.ref)).toBe(false);
+  expect(await hasRef(preparedWorkerWorkspaceResultRef(fixture.ref))).toBe(false);
+  await expect(fs.stat(path.join(local, ".git", "openclaw-worker-results"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+});
 
 function prepareWorkspaceResult(params: {
   ref: string;
@@ -299,10 +358,13 @@ it("applies the candidate before publishing its recovery ref", async () => {
     },
   });
 
-  const probe = (targetRef: string) =>
-    runCommandWithTimeout(["git", "-C", local, "show-ref", "--verify", targetRef], {
+  const probe = async (targetRef: string) => {
+    const storage = await resolveWorkspaceResultStorage(local, targetRef);
+    return runCommandWithTimeout(["git", "-C", storage.root, "show-ref", "--verify", targetRef], {
       timeoutMs: 10_000,
+      baseEnv: storage.baseEnv,
     });
+  };
   const expectRefs = async () => {
     expect(await probe(preparedWorkerWorkspaceResultRef(ref))).toMatchObject({ code: 0 });
     expect((await probe(ref)).code).not.toBe(0);
@@ -425,6 +487,25 @@ it("does not sweep cleanup refs retained by another pending result", async () =>
   await deleteWorkerWorkspaceResultCleanupRefs({ root: local });
   await expect(hasRef(cleanupRef)).resolves.toBe(false);
 });
+
+it.each([false, true])(
+  "reclaims private objects after interrupted last-ref cleanup (base refresh: %s)",
+  async (refresh) => {
+    const fixture = await resultFixture("interrupted-cleanup", {}, { "result.txt": "worker\n" });
+    if (refresh) {
+      fixture.ref = localWorkspaceBaseRefreshRef("a".repeat(64));
+    }
+    await stageResult(fixture);
+    const storage = await resolveWorkspaceResultStorage(local, fixture.ref);
+    const removed = await runCommandWithTimeout(
+      ["git", "-C", storage.root, "update-ref", "-d", fixture.ref],
+      { timeoutMs: 10_000, baseEnv: storage.baseEnv },
+    );
+    expect(removed.code).toBe(0);
+    await deleteWorkerWorkspaceResultCleanupRefs({ root: local });
+    await expect(fs.stat(storage.root)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
 
 it("resnapshots an offline local edit after the staged manifest committed", async () => {
   const fixture = await resultFixture(

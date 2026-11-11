@@ -1,14 +1,24 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi } from "vitest";
+import { requireGit } from "../../agents/worktrees/git.js";
 import { getRegistryWorktree } from "../../agents/worktrees/registry.test-support.js";
 import type { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import {
+  observeAcknowledgedUpdate,
+  prepareLocalWorkspaceArchiveFixture,
+} from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
-import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
+import {
+  observeLocalWorkspaceStoreSql,
+  readLocalWorkspaceProjection,
+} from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+import { resolveWorkspaceResultStorage } from "./workspace-result-storage.js";
 
 const prepare = (owner: LocalWorkspaceOwner) =>
   withLocalWorkspaceProjection(owner, (state) => state.prepare());
@@ -133,7 +143,7 @@ export async function proveAcceptedDirectoryRetention(
   expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBeNull();
 }
 
-export async function prepareLegacyArchiveRetention(params: {
+async function prepareLegacyArchiveRetention(params: {
   owner: LocalWorkspaceOwner;
   receipt: string;
   originalInput: string;
@@ -225,4 +235,155 @@ export async function proveArchivedInputRetention(
   inventory.mockRestore();
   await expectText(canonical, input, "restored authored edit\n");
   await expectMissing(canonical, generated);
+}
+
+export async function proveArchivedOverlayRetention(
+  owner: LocalWorkspaceOwner,
+  mode: "legacy decoder" | "failed restore retry" | "retention" | "legacy retention",
+) {
+  const canonical = owner.worktree.path;
+  const repo = owner.worktree.repoRoot;
+  const git = (cwd: string, ...args: string[]) => requireGit(cwd, args);
+  const treePaths = (tree: string) => git(repo, "ls-tree", "-r", "--name-only", tree);
+  const readProjection = () => readLocalWorkspaceProjection(owner.worktree.id);
+  const { restoreProvisionedFiles } = await import("../../agents/worktrees/provisioned-files.js");
+  const { service, registry, retentionMs } = await prepareLocalWorkspaceArchiveFixture(owner, [
+    ".env.allowed",
+  ]);
+  const originalInput = ".artifacts/build-cache-inputs/node_modules/archived.json";
+  await fs.mkdir(path.dirname(path.join(canonical, originalInput)), { recursive: true });
+  await writeText(canonical, originalInput, "original archived input\n");
+  await git(canonical, "add", "--force", "--", originalInput);
+  await writeText(canonical, ".env.allowed", "original provisioned bytes");
+  await fs.chmod(path.join(canonical, ".env.allowed"), 0o600);
+  await writeText(canonical, ".gitignore", ".env.local\n.env.allowed\nguest-ignored/\n");
+  await fs.mkdir(path.join(canonical, "guest-ignored"));
+  await writeText(canonical, "guest-ignored/host-secret", "not guest custody");
+  const projection = await prepare(owner);
+  await fs.mkdir(path.join(projection, "guest-ignored/empty"), { recursive: true });
+  const bytes = Buffer.from("guest-owned ignored bytes\0\n");
+  await fs.writeFile(path.join(projection, "guest-ignored/data"), bytes);
+  if (process.platform !== "win32") {
+    await fs.symlink("../source.txt", path.join(projection, "guest-ignored/link"));
+  }
+  await synchronize(owner);
+  expect(await fs.readFile(path.join(canonical, "guest-ignored/data"))).toEqual(bytes);
+  const removed = await service.remove({
+    id: owner.worktree.id,
+    reason: "accepted-ignored-archive",
+  });
+  expect(removed.removed).toBe(true);
+  expect(await treePaths(removed.snapshotRef!)).not.toContain("guest-ignored");
+  const receipt = (await readProjection())!.pending_ref!;
+  expect(receipt).toBeTruthy();
+  const receiptStorage = await resolveWorkspaceResultStorage(repo, receipt);
+  expect(receiptStorage.isolated).toBe(true);
+  const legacyState = (await registry.getRegistryWorktreeProvisionedState(
+    process.env,
+    owner.worktree.id,
+  ))!;
+  expect(legacyState).toEqual([{ path: ".env.allowed", mode: expect.any(Number), chunks: 1 }]);
+  await closeOpenClawStateDatabaseAsync();
+  if (mode === "retention" || mode === "legacy retention") {
+    await registry.updateRegistryWorktree(process.env, owner.worktree.id, {
+      removedAt: Date.now() - retentionMs - 1,
+    });
+    if (mode === "legacy retention") {
+      await prepareLegacyArchiveRetention({ owner, receipt, originalInput });
+    }
+    await writeText(projection, "guest-ignored/data", "unaccepted newer bytes");
+    expect((await service.gc()).snapshotsPruned).toBe(0);
+    expect(await git(repo, "rev-parse", "--verify", removed.snapshotRef!)).toMatch(/^[a-f0-9]+$/u);
+    await fs.writeFile(path.join(projection, "guest-ignored/data"), bytes);
+    const sql = observeLocalWorkspaceStoreSql();
+    try {
+      sql.calibrate();
+      expect((await service.gc()).snapshotsPruned).toBe(1);
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+    expect(await readProjection()).toBeUndefined();
+    expect(getRegistryWorktree(process.env, owner.worktree.id)).toBeUndefined();
+    expect(
+      await git(repo, "for-each-ref", "--format=%(refname)", receipt, removed.snapshotRef!),
+    ).toBe("");
+    await expect(fs.stat(receiptStorage.root)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(projection)).rejects.toMatchObject({ code: "ENOENT" });
+    return;
+  }
+  if (mode === "legacy decoder") {
+    // Execute the pre-feature restore sequence and unchanged old decoder, not
+    // just its schema preflight. The ledger contains only original regular files.
+    const snapshot = await git(repo, "rev-parse", removed.snapshotRef!);
+    const parent = await git(repo, "rev-parse", snapshot + "^");
+    await git(
+      repo,
+      "worktree",
+      "add",
+      "--no-checkout",
+      "-b",
+      owner.worktree.branch,
+      canonical,
+      parent,
+    );
+    await git(canonical, "read-tree", "--reset", "--no-recurse-submodules", "-u", snapshot);
+    await git(canonical, "reset", "--quiet", parent);
+    await restoreProvisionedFiles(process.env, owner.worktree.id, canonical, legacyState);
+    await expectText(canonical, ".env.allowed", "original provisioned bytes");
+    expect(existsSync(path.join(canonical, "guest-ignored/data"))).toBe(false);
+    await registry.updateRegistryWorktree(process.env, owner.worktree.id, {
+      removedAt: undefined,
+      lastActiveAt: Date.now(),
+      provisionedPaths: legacyState.map((entry) => entry.path),
+    });
+    await closeOpenClawStateDatabaseAsync();
+  } else {
+    let injected = false;
+    const acknowledgement = observeAcknowledgedUpdate((row) => {
+      if (
+        row.pending_ref &&
+        row.pending_target === null &&
+        existsSync(path.join(canonical, "guest-ignored/data"))
+      ) {
+        injected = true;
+      }
+    });
+    await expect(
+      service.restore({
+        id: owner.worktree.id,
+        commitGuard: () => {
+          if (injected) {
+            throw new Error("restore interrupted after overlay acceptance");
+          }
+        },
+      }),
+    ).rejects.toThrow("restore interrupted after overlay acceptance");
+    acknowledgement.mockRestore();
+    expect(injected).toBe(true);
+    expect(existsSync(canonical)).toBe(false);
+    expect((await readProjection())?.pending_ref).toBe(receipt);
+    expect(getRegistryWorktree(process.env, owner.worktree.id)?.removedAt).toBeDefined();
+    await service.restore({ id: owner.worktree.id });
+  }
+  await prepare(owner);
+  for (const workspace of [canonical, projection]) {
+    await expectText(workspace, originalInput, "original archived input\n");
+    expect(await fs.readFile(path.join(workspace, "guest-ignored/data"))).toEqual(bytes);
+    expect((await fs.stat(path.join(workspace, "guest-ignored/empty"))).isDirectory()).toBe(true);
+    if (process.platform !== "win32") {
+      expect(await fs.readlink(path.join(workspace, "guest-ignored/link"))).toBe("../source.txt");
+    }
+    await expectMissing(workspace, "guest-ignored/host-secret");
+    await expectMissing(workspace, ".env.local");
+  }
+  await expectText(canonical, ".env.allowed", "original provisioned bytes");
+  await expectMissing(projection, ".env.allowed");
+  expect((await readProjection())?.pending_ref).toBeNull();
+  await expect(fs.stat(receiptStorage.root)).rejects.toMatchObject({ code: "ENOENT" });
+  await git(repo, "config", "--unset-all", "credential.helper");
+  const { captureGitHubPublicationWorkspaceSnapshot } =
+    await import("../github-publication-git-transport.js");
+  const published = await captureGitHubPublicationWorkspaceSnapshot({ cwd: canonical });
+  expect(await treePaths(published.workspaceTree)).not.toContain("guest-ignored");
 }

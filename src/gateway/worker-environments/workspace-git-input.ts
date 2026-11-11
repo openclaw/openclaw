@@ -73,7 +73,11 @@ export async function writeWorkspaceGitInput(params: {
       `commit ${params.ref}\nmark :${entries.length + 1}\nauthor OpenClaw <openclaw@localhost> 0 +0000\ncommitter OpenClaw <openclaw@localhost> 0 +0000\ndata ${params.message?.byteLength ?? 0}\n`,
     );
     yield* params.message?.chunks ?? [];
-    yield Buffer.from(`\n${params.parentCommit ? `from ${params.parentCommit}\n` : ""}deleteall\n`);
+    // A complete snapshot needs the parent identity, never its discarded tree.
+    // Reset inherited parentage so retries against the same ref remain identical.
+    yield Buffer.from(
+      `\n${params.parentCommit ? `from ${"0".repeat(params.parentCommit.length)}\nmerge ${params.parentCommit}\n` : ""}deleteall\n`,
+    );
     for (let offset = 0; offset < entries.length; offset += 256) {
       yield Buffer.from(
         entries

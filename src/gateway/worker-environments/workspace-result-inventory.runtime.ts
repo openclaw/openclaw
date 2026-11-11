@@ -29,6 +29,7 @@ import {
   type StagedWorkerWorkspaceReadEntry,
   type WorkspaceArtifactReadOperations,
 } from "./workspace-result-inventory.js";
+import { resolveWorkspaceResultStorage } from "./workspace-result-storage.js";
 
 const STAGED_RESULT_METADATA_LIMIT = 128 * 1024 * 1024 + 4_096;
 
@@ -37,6 +38,7 @@ export async function loadStagedWorkerWorkspace(
   stagedResultRef: string,
   buildCacheInputs?: string[],
   reconciliation?: { baseManifestRef: string; alreadyAccepted?: boolean },
+  env?: NodeJS.ProcessEnv,
 ): Promise<
   Omit<StagedWorkerWorkspaceInventory, "reconciliation"> & {
     nodes: {
@@ -47,6 +49,7 @@ export async function loadStagedWorkerWorkspace(
 > {
   const ref = requireWorkerResultStorageRef(stagedResultRef);
   const rawCommit = await runGitBuffered(root, ["cat-file", "commit", ref], {
+    env,
     timeoutMs: PATCH_TIMEOUT_MS,
     maxOutputBytes: STAGED_RESULT_METADATA_LIMIT,
   });
@@ -143,6 +146,7 @@ export async function loadStagedWorkerWorkspace(
       ? reconciliationEntries(current.entries, undefined, buildCacheInputs)
       : changedEntries;
   const tree = await runGitBuffered(root, ["ls-tree", "-r", "-z", "--full-tree", ref], {
+    env,
     timeoutMs: PATCH_TIMEOUT_MS,
     maxOutputBytes: 2 * MAX_RECONCILIATION_FILE_BYTES,
   });
@@ -212,6 +216,7 @@ function assertStagedEntryContent(entry: WorkerWorkspaceManifestEntry, content: 
 
 export async function readStagedWorkerWorkspaceEntries(params: {
   root: string;
+  env?: NodeJS.ProcessEnv;
   entries: readonly StagedWorkerWorkspaceReadEntry[];
 }): Promise<Buffer> {
   if (params.entries.length > STAGED_WORKSPACE_READ_MAX_ENTRIES) {
@@ -239,6 +244,7 @@ export async function readStagedWorkerWorkspaceEntries(params: {
 
   // Only verified OIDs enter the line protocol; filenames remain in the manifest.
   const result = await runGitBuffered(params.root, ["cat-file", "--batch"], {
+    env: params.env,
     input: Buffer.from(params.entries.map(({ object }) => `${object.objectId}\n`).join("")),
     timeoutMs: PATCH_TIMEOUT_MS,
     maxOutputBytes: bytes + params.entries.length * 128 + 1,
@@ -288,6 +294,7 @@ export async function materializeStagedWorkerWorkspace(
   root: string,
   stagingRoot: string | undefined,
   snapshot: Pick<StagedWorkerWorkspaceInventory, "changedEntries" | "objectsByPath">,
+  env?: NodeJS.ProcessEnv,
 ): Promise<void> {
   let nextEntry = 0;
   while (nextEntry < snapshot.changedEntries.length) {
@@ -306,7 +313,7 @@ export async function materializeStagedWorkerWorkspace(
       bytes += size;
       nextEntry++;
     }
-    const contents = await readStagedWorkerWorkspaceEntries({ root, entries });
+    const contents = await readStagedWorkerWorkspaceEntries({ root, entries, env });
     if (!stagingRoot) {
       continue;
     }
@@ -336,7 +343,14 @@ export async function materializeStagedWorkerWorkspace(
 export async function collectStagedWorkerArtifacts(
   input: WorkspaceArtifactReadOperations["workspace.artifacts"]["input"],
 ): Promise<StagedWorkerArtifactInventory> {
-  const snapshot = await loadStagedWorkerWorkspace(input.root, input.ref);
+  const storage = await resolveWorkspaceResultStorage(input.root, input.ref);
+  const snapshot = await loadStagedWorkerWorkspace(
+    storage.root,
+    input.ref,
+    undefined,
+    undefined,
+    storage.env,
+  );
   const currentPaths = new Set(snapshot.current.entries.map((entry) => entry.path));
   const basePaths = new Set(snapshot.base.entries.map((entry) => entry.path));
   const changes: StagedWorkerArtifactInventory["changes"] = [
@@ -360,7 +374,8 @@ export async function collectStagedWorkerArtifacts(
   const preview =
     selected?.type === "file" && selected.size <= WORKSPACE_PREVIEW_MAX_BYTES
       ? await readStagedWorkerWorkspaceEntries({
-          root: input.root,
+          root: storage.root,
+          env: storage.env,
           entries: [resolveStagedWorkspaceReadEntry(snapshot.objectsByPath, selected)],
         })
       : undefined;

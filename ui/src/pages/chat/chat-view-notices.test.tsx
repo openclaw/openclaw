@@ -485,10 +485,13 @@ describe("chat view notice integration", () => {
       const commands = [...notice.querySelectorAll(".chat-workspace-conflict-commands code")].map(
         (element) => element.textContent,
       );
-      expect(commands).toEqual([
-        "git show 'refs/openclaw/worker-results/claim-123:src/[path]-1.ts'",
-        "git checkout 'refs/openclaw/worker-results/claim-123' -- ':(top,literal)src/[path]-1.ts'",
-      ]);
+      expect(commands).toHaveLength(2);
+      expect(commands[0]).toContain(
+        "show 'refs/openclaw/worker-results/claim-123:src/[path]-1.ts'",
+      );
+      expect(commands[1]).toContain(
+        "'refs/openclaw/worker-results/claim-123' -- ':(top,literal)src/[path]-1.ts'",
+      );
       expect(
         notice.querySelector<HTMLButtonElement>('[aria-label="Copy cloud inspect command"]'),
       ).toBeInstanceOf(HTMLButtonElement);
@@ -500,7 +503,9 @@ describe("chat view notice integration", () => {
       rows[1]?.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
       await Promise.resolve();
       expect(writeText).toHaveBeenCalledWith(
-        "git checkout 'refs/openclaw/worker-results/claim-123' -- ':(top,literal)src/path-2.ts'",
+        expect.stringContaining(
+          "'refs/openclaw/worker-results/claim-123' -- ':(top,literal)src/path-2.ts'",
+        ),
       );
 
       notice

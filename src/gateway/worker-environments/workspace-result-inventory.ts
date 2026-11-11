@@ -15,7 +15,7 @@ export const WorkerWorkspaceGitHistorySchema = workerProtocolObject({
 });
 export type WorkerWorkspaceGitHistory = z.infer<typeof WorkerWorkspaceGitHistorySchema>;
 
-// Deleting the owning ref releases its objects to ordinary Git garbage collection.
+// Settlement deletes the owning ref and its private result repository together.
 export const WORKER_RESULT_REF_PREFIX = "refs/openclaw/worker-results";
 export const WORKER_RESULT_CANDIDATE_REF_PREFIX = "refs/openclaw/worker-result-candidates";
 export const WORKER_RESULT_CLEANUP_REF_PREFIX = "refs/openclaw/worker-result-cleanup";

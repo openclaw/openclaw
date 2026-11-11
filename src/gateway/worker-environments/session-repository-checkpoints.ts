@@ -517,6 +517,7 @@ export async function stageSessionRepositoryCheckpoint(
       gitHistory: undefined,
       gitPackPath: undefined,
       parentCommit: history.parentCommit,
+      sharedResultStore: true,
       stagedResultRef: candidateRef,
       assertCurrent: assertRevision,
     });
@@ -539,6 +540,7 @@ export async function stageSessionRepositoryCheckpoint(
         assertRevision();
         companionId = await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
           root,
+          sharedResultStore: true,
           assertCurrent: assertRevision,
           stagedResultRef: companionCandidate,
           stagingRoot: publicationStagingRoot,

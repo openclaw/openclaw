@@ -238,11 +238,14 @@ export async function executeWorkspaceManifestComputation(
     case "workspace.manifest.staged": {
       const { loadStagedWorkerWorkspace, materializeStagedWorkerWorkspace } =
         await import("./workspace-result-inventory.runtime.js");
+      const { resolveWorkspaceResultStorage } = await import("./workspace-result-storage.js");
+      const storage = await resolveWorkspaceResultStorage(command.input.root, command.input.ref);
       const { nodes, ...snapshot } = await loadStagedWorkerWorkspace(
-        command.input.root,
+        storage.root,
         command.input.ref,
         command.input.buildCacheInputs,
         command.input.reconciliation,
+        storage.env,
       );
       const reconciliation = command.input.reconciliation;
       if (
@@ -253,9 +256,10 @@ export async function executeWorkspaceManifestComputation(
               reconciliation.baseManifestRef === snapshot.baseManifestRef)))
       ) {
         await materializeStagedWorkerWorkspace(
-          command.input.root,
+          storage.root,
           command.input.stagingRoot,
           snapshot,
+          storage.env,
         );
       }
       if (command.type === "workspace.manifest.result") {

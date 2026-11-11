@@ -90,6 +90,13 @@ export function projectionOperations(
     return row;
   };
   const current = () => selectCurrent(owner.assertCurrent);
+  const resultRoot = () => {
+    const selected = current();
+    // Archive receipts omit the delta checkpoint and survive worktree removal in the repo owner.
+    return selected.checkpoint_json || isLocalWorkspaceBaseRefreshRef(selected.pending_ref)
+      ? owner.worktree.path
+      : owner.worktree.repoRoot;
+  };
   // Subprocess input admission requires an undefined result.
   const assertCurrent = () => void current();
   const workerAuthority: WorktreeWorkerAuthority = {
@@ -276,7 +283,7 @@ export function projectionOperations(
     }
     quiescence?.markPhase("cleanup");
     await deleteStagedWorkerWorkspaceResult({
-      root: owner.worktree.repoRoot,
+      root: resultRoot(),
       stagedResultRef: selected.pending_ref,
       assertCurrent,
     });
@@ -323,7 +330,7 @@ export function projectionOperations(
     // source bytes untouched and resumes capture into this exact reserved ref.
     if (
       !(await hasWorkerWorkspaceResultRef({
-        root: owner.worktree.path,
+        root: resultRoot(),
         stagedResultRef: selected.pending_ref,
       }))
     ) {
@@ -368,7 +375,7 @@ export function projectionOperations(
       quiescence?.markPhase("staging");
       await stageLocalWorkspaceCheckpoint(
         {
-          root: owner.worktree.path,
+          root: resultRoot(),
           stagingRoot: source?.root ?? sourcePath(target),
           stagedResultRef: selected.pending_ref,
           baseManifestRef: snapshot?.baseManifestRef ?? stagingBase!.manifestRef,
@@ -400,7 +407,7 @@ export function projectionOperations(
     const refreshBaseline = refresh ? await baselineDocument() : undefined;
     await withStagedWorkerWorkspaceManifest(
       {
-        root: owner.worktree.path,
+        root: resultRoot(),
         stagedResultRef: selected.pending_ref,
         buildCacheInputs: checkpoint?.buildCacheInputs ?? (await buildCacheInputs()),
       },
@@ -535,6 +542,7 @@ export function projectionOperations(
   };
   return {
     current,
+    resultRoot,
     workerAuthority,
     canonicalPaths,
     capture,
@@ -580,7 +588,7 @@ export function projectionOperations(
         // A failed restore may have applied the overlay before its checkout was
         // rolled back. Retain and replay the same accepted receipt on retry.
         const receipt = await loadStagedWorkspaceManifest(
-          owner.worktree.repoRoot,
+          resultRoot(),
           selected.pending_ref,
           undefined,
           await buildCacheInputs(),
@@ -665,7 +673,7 @@ export function projectionOperations(
         }
         if (selected.pending_target) {
           const receipt = await loadStagedWorkspaceManifest(
-            owner.worktree.repoRoot,
+            resultRoot(),
             selected.pending_ref,
             undefined,
             await buildCacheInputs(),

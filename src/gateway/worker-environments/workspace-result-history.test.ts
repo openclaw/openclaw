@@ -12,6 +12,7 @@ import {
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
+import { resolveWorkspaceResultStorage } from "./workspace-result-storage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const git = (root: string, ...args: string[]) =>
@@ -29,7 +30,9 @@ const git = (root: string, ...args: string[]) =>
     { timeoutMs: 10_000 },
   );
 
-async function fixture(kind: "fast-forward" | "moved" | "divergent" | "empty" = "fast-forward") {
+async function fixture(
+  kind: "fast-forward" | "moved" | "divergent" | "empty" | "unchanged" = "fast-forward",
+) {
   const root = tempDirs.make("workspace-history-");
   const local = path.join(root, "local");
   const worker = path.join(root, "worker");
@@ -45,11 +48,13 @@ async function fixture(kind: "fast-forward" | "moved" | "divergent" | "empty" = 
   if (kind === "divergent") {
     await git(worker, "checkout", "--quiet", "--orphan", "rewritten");
   }
-  if (kind !== "empty") {
+  if (kind !== "empty" && kind !== "unchanged") {
     await fs.writeFile(path.join(worker, "tracked.txt"), "committed\n");
     await git(worker, "add", ".");
   }
-  await git(worker, "commit", "--quiet", "--allow-empty", "-m", "worker-authored commit");
+  if (kind !== "unchanged") {
+    await git(worker, "commit", "--quiet", "--allow-empty", "-m", "worker-authored commit");
+  }
   const headCommit = await git(worker, "rev-parse", "HEAD");
   let gitPackPath: string | undefined;
   if (kind !== "divergent") {
@@ -65,7 +70,7 @@ async function fixture(kind: "fast-forward" | "moved" | "divergent" | "empty" = 
     gitPackPath = path.join(root, "worker.pack");
     await fs.writeFile(gitPackPath, pack.stdout);
   }
-  if (kind !== "empty") {
+  if (kind !== "empty" && kind !== "unchanged") {
     await fs.writeFile(path.join(worker, "tracked.txt"), "uncommitted edit\n");
     await fs.writeFile(path.join(worker, "new.txt"), "uncommitted new file\n");
   }
@@ -119,9 +124,13 @@ it("retains worker history through result GC and adopts it while leaving later e
     f.headCommit,
   );
   await git(f.local, "gc", "--prune=now", "--quiet");
-  expect(await git(f.local, "show", "-s", "--format=%s", `${f.ref}^`)).toBe(
-    "worker-authored commit",
-  );
+  const storage = await resolveWorkspaceResultStorage(f.local, f.ref);
+  expect(
+    await requireGit(storage.root, ["cat-file", "commit", f.headCommit], {
+      baseEnv: storage.baseEnv,
+      env: storage.env,
+    }),
+  ).toContain("\n\nworker-authored commit");
   await f.apply();
   expect(await f.git("rev-parse", "HEAD")).toBe(f.baseCommit);
   await expect(f.adopt()).resolves.toBeUndefined();
@@ -190,9 +199,12 @@ it.each([
   },
 );
 
-it("adopts an empty worker commit when file manifests are identical", async () => {
-  const f = await fixture("empty");
-  await expect(f.adopt()).resolves.toBeUndefined();
-  expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
-  expect(await f.git("status", "--porcelain")).toBe("");
-});
+it.each(["empty", "unchanged"] as const)(
+  "adopts %s worker history when file manifests are identical",
+  async (kind) => {
+    const f = await fixture(kind);
+    await expect(f.adopt()).resolves.toBeUndefined();
+    expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
+    expect(await f.git("status", "--porcelain")).toBe("");
+  },
+);
