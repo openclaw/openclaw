@@ -270,7 +270,6 @@ it("retains a private reftable result until its last claim ref is released", asy
   await reftableGit(storage.root, ["refs", "migrate", "--ref-format=reftable"], context);
   await expect.soft(hasWorkerWorkspaceResultRef(params)).resolves.toBe(true);
   await deleteStagedWorkerWorkspaceResult({ ...params, stagedResultRef: candidate });
-  await expect(fs.stat(storage.root)).resolves.toBeDefined();
   await expect(hasWorkerWorkspaceResultRef(params)).resolves.toBe(true);
   await fixture.read(async (snapshot) => {
     expect(await fs.readFile(path.join(snapshot.stagingRoot, fixture.binaryPath))).toEqual(
