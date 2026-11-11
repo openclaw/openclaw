@@ -151,6 +151,8 @@ export function registerCodexUsageLimitTests() {
         source === "rpc-overload" ? -32001 : source === "rpc-invalid" ? -32602 : undefined;
       const message =
         'unexpected status 403 Forbidden: {"error":"middleware_denied","reason_code":"request_credential_denied","layer":"l7"}';
+      // Identical text must not let a prior notice replace an explicit RPC rejection.
+      const rpcMessage = source === "rpc-invalid" ? message : "ordinary RPC refusal";
       const harness: Harness = createStartedThreadHarness(async (method) => {
         if (method === "turn/start") {
           await harness.notify({
@@ -168,10 +170,7 @@ export function registerCodexUsageLimitTests() {
             },
           });
           if (rpcCode !== undefined) {
-            throw new CodexAppServerRpcError(
-              { code: rpcCode, message: "ordinary RPC refusal" },
-              "turn/start",
-            );
+            throw new CodexAppServerRpcError({ code: rpcCode, message: rpcMessage }, "turn/start");
           }
           if (notificationOnly) {
             throw new Error(message);
@@ -191,7 +190,7 @@ export function registerCodexUsageLimitTests() {
       });
       const run = runCodexAppServerAttempt(createUsageParams());
       if (rpcCode !== undefined) {
-        await expect(run).rejects.toMatchObject({ code: rpcCode, message: "ordinary RPC refusal" });
+        await expect(run).rejects.toMatchObject({ code: rpcCode, message: rpcMessage });
         return;
       }
       const result = await run;
