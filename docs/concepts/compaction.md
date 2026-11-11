@@ -273,6 +273,22 @@ Preflight compaction also uses that chain when the primary auth profile is alrea
 
 In safeguard mode, provider timeouts and rate limits from built-in summarization remain eligible for that chain when no earlier summary can be reused. A summary deadline or an HTTP 408 or 504 instead uses the automatic timeout fallback (see [Auto-compaction](#auto-compaction)). Caller cancellation and failed safeguard quality checks do not trigger a model switch.
 
+When a safeguard summary fails for any other reason than a refusal (a timeout,
+overload, network error or malformed output), compaction is cancelled and history is
+kept while the context still has headroom. Compaction instead keeps the prepared
+recent history without a summary, as after a refusal, and shows the degraded-compaction
+warning when either:
+
+- the context has reached the reserve below the model window, or an overflow or
+  context-budget recovery is waiting on this compaction; or
+- this is the third failed attempt in a row since the last committed compaction.
+
+At the hard limit this commits on the route that failed instead of trying the model
+fallback chain, because the next request cannot fit until something is trimmed.
+Each failed or cancelled attempt is saved in the session transcript as an
+`openclaw.compaction-attempt` entry with its failure class, pressure, tokens before,
+streak and outcome. These entries never enter model context.
+
 ### Summary size
 
 Client-side compaction keeps at most 16,000 characters in its persisted summary

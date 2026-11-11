@@ -1,16 +1,16 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import { commitCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { AssistantMessage, ModelRequestHeaders } from "../../llm/types.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
-import { resolveCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
+import { buildCoreCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
 import { SAFETY_MARGIN } from "../compaction-planning.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import {
   compactWithoutNewSummary,
+  settleCompactionSafeguardCancellation,
   settleCompactionSummary,
   withCompactionSummaryRoute,
 } from "../compaction-summary-refusal.js";
@@ -25,7 +25,6 @@ import {
   type CompactionResult,
   type AgentMessage,
 } from "../runtime/index.js";
-import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 import { AgentSessionInspection } from "./agent-session-inspection.js";
 import {
   agentSessionDeferThresholdCompaction,
@@ -419,7 +418,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
 
     let compactionResult: CompactionResult | undefined;
     let fromExtension = false;
-    const withoutSummary = options.summaryOutputPolicy === "deterministic";
+    let withoutSummary = options.summaryOutputPolicy === "deterministic";
     if (withoutSummary) {
       // Summary producers, including session_before_compact hooks, already failed.
       compactionResult = compactWithoutNewSummary(preparation, this.sessionManager);
@@ -437,7 +436,16 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       });
 
       if (extensionResult?.cancel) {
-        return { status: "aborted" };
+        const floor = await settleCompactionSafeguardCancellation(
+          this.sessionManager,
+          preparation,
+          { ...options, contextMessages, requestBudget, model },
+        );
+        if (!floor) {
+          return { status: "aborted" };
+        }
+        compactionResult = floor;
+        withoutSummary = true;
       }
 
       if (extensionResult?.compaction) {
@@ -447,32 +455,17 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
 
     if (!compactionResult) {
-      // Hooks keep the original input. Only the host's core path bounds raw focus
-      // before escaping, and both summaries and any retry share this prepared text.
-      const focus = normalizeOptionalString(options.customInstructions);
-      const boundedFocus = focus ? resolveCompactionInstructions(focus, undefined) : undefined;
-      const focusInstructions = boundedFocus
-        ? wrapUntrustedPromptDataBlock({ label: "Compaction focus", text: boundedFocus })
-        : "";
-      const unresolvedRequestInstructions = preparation.latestUnresolvedUserRequest
-        ? [
-            "The run owner will resume this request after compaction. Preserve it as current work.",
-            wrapUntrustedPromptDataBlock({
-              label: "Latest unresolved user request",
-              text: preparation.latestUnresolvedUserRequest,
-            }),
-          ].join("\n")
-        : "";
-      const coreInstructions = [focusInstructions, unresolvedRequestInstructions]
-        .filter(Boolean)
-        .join("\n\n");
+      const coreInstructions = buildCoreCompactionInstructions(
+        options.customInstructions,
+        preparation.latestUnresolvedUserRequest,
+      );
       const runCoreCompaction = () =>
         compact(
           preparation,
           model,
           auth.apiKey,
           auth.headers,
-          coreInstructions || undefined,
+          coreInstructions,
           options.signal,
           compactionThinkingLevel,
           this.agent.streamFn,

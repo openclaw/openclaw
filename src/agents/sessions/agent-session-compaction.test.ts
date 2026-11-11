@@ -965,4 +965,79 @@ describe("degraded compaction reload", () => {
       fixture.dispose();
     }
   });
+
+  it("keeps history on transient failures until a third or hard-limit failure commits the floor", async () => {
+    const dir = tempDirs.make("openclaw-compaction-failure-streak-");
+    const target = sessionTarget(path.join(dir, "sessions.json"), "compaction-failure-streak");
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    let sessionManager = SessionManager.open(target, dir);
+    let at = 0;
+    const appendTurn = () => {
+      sessionManager.appendMessage(makeUserMessage(`prompt ${(at += 1)}`, at));
+      sessionManager.appendMessage({ ...createAssistant(model, `answer ${at}`), timestamp: at });
+    };
+    appendTurn();
+    appendTurn();
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream({
+        ...createAssistant(activeModel, [], "error"),
+        errorMessage: "Request timed out",
+      }),
+    );
+    const attempts = () =>
+      sessionManager
+        .getBranch()
+        .flatMap((entry) =>
+          entry.type === "custom" && entry.customType === "openclaw.compaction-attempt"
+            ? [entry.data]
+            : [],
+        );
+    let fixture = await safeguardFixture(model, sessionManager);
+    const compactOnce = async (unresolved?: "unresolved") => {
+      const events = collectCompactionEnds(fixture.session);
+      await (
+        unresolved
+          ? fixture.session[agentSessionAutomaticCompaction](undefined, unresolved)
+          : fixture.session.compact()
+      ).catch((error: unknown) => {
+        expect(String(error)).toContain("Compaction cancelled");
+      });
+      return events.at(-1)?.outcome;
+    };
+
+    const context = JSON.stringify(sessionManager.buildSessionContext());
+    expect(await compactOnce()).toEqual({ status: "aborted" });
+    expect(await compactOnce()).toEqual({ status: "aborted" });
+    // Attempt rows survive a reopen and never reach model context.
+    fixture.session.dispose();
+    fixture.dispose();
+    sessionManager.flushPendingPersistence();
+    sessionManager = await reopen(target, dir);
+    fixture = await safeguardFixture(model, sessionManager);
+    expect(JSON.stringify(sessionManager.buildSessionContext())).toBe(context);
+    expect(attempts()).toEqual(
+      [1, 2].map((streak) => ({
+        failure: "timeout",
+        pressure: "headroom",
+        tokensBefore: expect.any(Number),
+        streak,
+        outcome: "cancelled",
+      })),
+    );
+
+    // The third failure in a row commits the floor and takes the degraded notice path.
+    expect(await compactOnce()).toMatchObject({ status: "completed", qualityDegraded: true });
+    expect(lastCompaction(sessionManager).details).toMatchObject({ qualityDegraded: true });
+    expect(lastCompaction(sessionManager).details).not.toHaveProperty("summaryRefused");
+    expect(attempts().at(-1)).toMatchObject({ streak: 3, outcome: "floor" });
+
+    // A committed compaction resets the streak; at the hard limit one failure commits the floor.
+    appendTurn();
+    appendTurn();
+    expect(await compactOnce()).toEqual({ status: "aborted" });
+    expect(attempts().at(-1)).toMatchObject({ streak: 1, outcome: "cancelled" });
+    expect(await compactOnce("unresolved")).toMatchObject({ qualityDegraded: true });
+    expect(attempts().at(-1)).toMatchObject({ streak: 2, pressure: "hard", outcome: "floor" });
+    fixture.dispose();
+  });
 });
