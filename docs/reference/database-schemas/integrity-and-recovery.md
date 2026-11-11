@@ -225,6 +225,15 @@ without revoking an earlier clean-close seal. Once native opening begins, failed
 or uncertain cleanup still invalidates proof. Shutdown cancellation alone is not
 evidence that a previously sealed database needs another full scan.
 
+A live Gateway that loses a worker holding an agent database, for example when
+its carrier thread exits or is terminated at its heap limit, still owns the file
+it admitted. Its proof stops lending, but the loss is not corruption evidence:
+the next native worker open reports `stale-lease-full` with `because=worker-loss`
+and takes bounded admission instead of a whole-file scan before sessions resume.
+That admission records `deferred` / `pending` and publishes no seal, so the next
+Gateway startup owes background verification. A stale foreign lease or any other
+revocation, including one that follows the loss, keeps its full check.
+
 Existing-file integrity and schema preparation may be shared by current callers.
 Every preparation effect still requires a live caller; cancellation cannot leave
 authority behind after its last caller departs. A successor joins any pending
@@ -339,6 +348,7 @@ Rollback releases the fence and restores ordinary expiry handling.
 | Shared-state startup, migration, repair, or update canary                                                          | Retain foreground validation and required integrity checks                                                                                                                                                                                           |
 | Doctor/update agent open with no seal or an outdated schema seal; current schema and only non-unique index repairs | Bounded schema/owner and header admission; record pending verification, publish no seal, and defer full verification to the Gateway's background check. Explicit FULL policy retains its scan in the integrity child                                 |
 | Same-process reopen or new worker                                                                                  | Reuse live file-bound admission, including bounded admission after `checkpoint-incomplete`; retain current ownership and durable quarantine-row checks. A changed identity or foreign writer prevents local proof reuse                              |
+| New native worker after a live Gateway loses a worker that held the file                                           | Bounded schema/owner and header admission (`because=worker-loss`) with no seal, so the next Gateway startup owes background verification. A stale foreign lease or any other revocation retains the full check                                       |
 | Another live process already admitted the same file                                                                | On Linux, macOS, and Windows, reuse that admission instead of a full scan when the peer's PID, start time, and lease provenance (including inode) still match; schema and index checks still run, and the borrower cannot publish a clean-close seal |
 | Shared-state fast path while a live Gateway holds the file                                                         | On Linux, macOS, and Windows, trust the live Gateway owner when PID, start time, and exact-file provenance match; skip only the integrity scan, retain schema, version, and legacy-repair checks, and never publish a clean-close seal               |
 | Before a migration or other same-version repair                                                                    | Run whole-database quick integrity, full integrity of affected tables, and existing foreign-key, role, schema, and index checks; `--full-integrity-check` requests full database integrity                                                           |

@@ -56,6 +56,8 @@ type ValidationEntry = {
   validation?: OpenClawAgentDatabaseValidation;
   integrityVerified: boolean;
   revoked?: true;
+  /** Revoked only because this live owner lost a worker; every other invalidation clears it. */
+  workerLoss?: true;
 };
 
 // Writable admission owns transferable proof; canonical row receipts cannot supply it.
@@ -211,6 +213,12 @@ export function hasRevokedOpenClawAgentDatabaseValidation(
     (previous?.validation !== undefined &&
       Atomics.load(new Int32Array(previous.validation.valid), 0) !== 1)
   );
+}
+
+/** A successor may re-earn this proof through bounded admission instead of a whole-file scan. */
+export function hasOpenClawAgentDatabaseWorkerLoss(pathname: string): boolean {
+  const entry = validatedPaths.get(resolveDatabasePathKey(pathname));
+  return entry?.revoked === true && entry.workerLoss === true;
 }
 
 export function getOpenClawAgentDatabaseValidation(
@@ -677,6 +685,7 @@ export function publishOpenClawAgentDatabaseSchema(database: ValidationDatabase)
 export function invalidateOpenClawAgentDatabaseValidation(
   pathname: string,
   identity = validatedPaths.get(resolveDatabasePathKey(pathname))?.validation?.identity,
+  workerLoss = false,
 ): void {
   const resolved = resolveDatabasePathKey(pathname);
   const paths = new Set([resolved]);
@@ -691,6 +700,10 @@ export function invalidateOpenClawAgentDatabaseValidation(
     releaseValidationObservation(candidate);
     const entry = validatedPaths.get(candidate);
     const validation = entry?.validation;
+    // A lost worker marks only proof that was live or already worker-lost, never a stronger refusal.
+    const live = validation && Atomics.load(new Int32Array(validation.valid), 0) === 1;
+    const lost =
+      workerLoss && (entry?.revoked ? entry.workerLoss : entry?.integrityVerified && live);
     if (validation) {
       Atomics.store(new Int32Array(validation.valid), 0, 0);
     }
@@ -700,6 +713,7 @@ export function invalidateOpenClawAgentDatabaseValidation(
       validation,
       integrityVerified: false,
       revoked: true,
+      ...(lost ? { workerLoss: true as const } : {}),
     });
   }
 }

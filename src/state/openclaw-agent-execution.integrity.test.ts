@@ -580,6 +580,41 @@ it.each(["confirmed close", "native exit"] as const)(
   },
 );
 
+it.each(["worker loss", "worker loss then invalidation"] as const)(
+  "re-admits an agent database after its native worker exits (%s)",
+  async (revocation) => {
+    const expectedChecks = revocation === "worker loss" ? 0 : 1;
+    const env = makeEnv("agent-native-loss-");
+    const database = openAgent({ agentId: "main", env });
+    counter.path = database.path;
+    counter.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+    const context = workerContext({ env });
+    const workers: Worker[] = [];
+    const observeWorker = (worker: Worker) => workers.push(worker);
+    process.on("worker", observeWorker);
+    using _ = { [Symbol.dispose]: () => process.off("worker", observeWorker) };
+    {
+      await using lost = nativeGeneration(database, context);
+      await expect(lost.run(lost.source, async () => "opened")).resolves.toBe("opened");
+      await Promise.all(workers.map((worker) => worker.terminate()));
+    }
+    // Only a lost native worker revokes this proof, so the terminations above were observed.
+    expect(getValidation(database)).toBeUndefined();
+    if (revocation === "worker loss then invalidation") {
+      // Any other revocation is stronger than a lost worker and keeps the whole-file gate.
+      invalidateValidation(database.path);
+    }
+    await using successor = nativeGeneration(database, context);
+    await expect(successor.run(successor.source, async () => "opened")).resolves.toBe("opened");
+    await successor.close();
+    // The live Gateway lost one worker, not the file: admission must not wait for integrity_check.
+    expect(checks()).toEqual([expectedChecks, expectedChecks]);
+    await closeOpenClawAgentDatabasesAsync();
+    // Bounded admission certifies nothing: without a seal the next Gateway start owes verification.
+    expect(readSqliteDatabaseCleanClose(database.path)).toBe(expectedChecks === 1);
+  },
+);
+
 it.each(["cleanup", "protocol"] as const)(
   "retires every borrower when native opening fails (%s)",
   async (failure) => {

@@ -290,7 +290,7 @@ function* openOpenClawAgentDatabaseSteps(
     // A host refusal may have no positive validation receipt to transfer.
     integrityRevoked =
       invalidated || preparedLease?.integrityRevoked === true || pending?.integrityRevoked === true;
-    diagnostics.because = invalidated ? because : undefined;
+    diagnostics.because = invalidated ? because : preparedLease?.revocation;
     if (invalidated && validation) {
       // Stale-peer cleanup precedes adoption of proof already transferred by the host.
       Atomics.store(new Int32Array(validation.valid), 0, 0);

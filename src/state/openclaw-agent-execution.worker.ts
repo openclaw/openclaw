@@ -254,10 +254,12 @@ function openAgentDatabaseBackend(
         const preparation = receiveMessageOnPort(port1)?.message as {
           validation?: OpenClawAgentDatabaseValidation;
           integrityRevoked: boolean;
+          workerLoss?: boolean;
           startupIntegrity?: import("./agent-database-startup-integrity.js").AgentDatabaseStartupIntegrity;
         };
         lease.validation = preparation.validation;
         lease.integrityRevoked = preparation.integrityRevoked;
+        lease.revocation = preparation.workerLoss ? "worker-loss" : undefined;
         lease.startupIntegrity = preparation.startupIntegrity;
         lease.startupRepair = startupJournalRequested
           ? maintenance.repairStartupIntegrity.bind(undefined, lease.receipt)

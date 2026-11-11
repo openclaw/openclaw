@@ -45,6 +45,7 @@ import {
 import {
   captureOpenClawAgentDatabaseAdmissionPublication,
   getOpenClawAgentDatabaseValidationForTransfer,
+  hasOpenClawAgentDatabaseWorkerLoss,
   hasRevokedOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidation,
   retireReplacedAgentValidation,
@@ -142,7 +143,8 @@ export function createAgentDatabaseNativeGeneration(
     lifetime.retire();
     // Before the lease handoff this generation has borrowed no validation.
     if (lease) {
-      invalidateOpenClawAgentDatabaseValidation(pathname);
+      // The live host still owns the file; only this worker and the proof it borrowed are gone.
+      invalidateOpenClawAgentDatabaseValidation(pathname, undefined, true);
     }
     // Failed opening admission can be ordinary lock contention; run classifies it after settlement.
     if (preparationPublished) {
@@ -284,6 +286,7 @@ export function createAgentDatabaseNativeGeneration(
             const preparation = {
               startupIntegrity: captureAgentDatabaseStartupIntegrity(pathname, agentId),
               integrityRevoked: hasRevokedOpenClawAgentDatabaseValidation(pathname),
+              workerLoss: hasOpenClawAgentDatabaseWorkerLoss(pathname),
               validation: getOpenClawAgentDatabaseValidationForTransfer({
                 agentId,
                 path: pathname,

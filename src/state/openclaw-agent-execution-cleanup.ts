@@ -52,7 +52,7 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   params.assertOwned();
   // Uncertified retirement cannot lend proof while shared-state cleanup admission waits.
   if (!refusedBeforeAgentOpen) {
-    invalidateOpenClawAgentDatabaseValidation(params.lease.path);
+    invalidateOpenClawAgentDatabaseValidation(params.lease.path, undefined, true);
   }
   const context = {
     environment: params.context.environment,
@@ -94,7 +94,7 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
         admission: createSqliteWorkerOperationAdmission((request, grant) => {
           params.assertOwned();
           if (request.stage === "prepare" && request.facts === "agent-integrity-invalidated") {
-            invalidateOpenClawAgentDatabaseValidation(params.lease.path);
+            invalidateOpenClawAgentDatabaseValidation(params.lease.path, undefined, true);
           }
           grant();
         }),

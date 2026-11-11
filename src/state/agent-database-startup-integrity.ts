@@ -77,6 +77,8 @@ export function admitAgentDatabaseStartupStructure(
   if (
     diagnostics?.integrityGateReason !== "no-proof" &&
     diagnostics?.integrityGateReason !== "schema-mismatch" &&
+    // A live Gateway that lost a worker still owns the file it admitted.
+    diagnostics?.because !== "worker-loss" &&
     (!policy || Atomics.load(new Int32Array(policy.valid), 0) !== 1)
   ) {
     return false;

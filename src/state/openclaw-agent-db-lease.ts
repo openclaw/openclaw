@@ -466,6 +466,8 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
   provenance: string | null;
   validation?: OpenClawAgentDatabaseValidation;
   integrityRevoked?: boolean;
+  /** The live host revoked its proof only because it lost a worker that held this file. */
+  revocation?: "worker-loss";
   startupIntegrity?: import("./agent-database-startup-integrity.js").AgentDatabaseStartupIntegrity;
   startupRepair?: (
     check: SqliteIntegrityCheck,
