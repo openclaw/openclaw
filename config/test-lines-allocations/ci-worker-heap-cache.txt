@@ -1,2 +1,2 @@
-# 46 regression lines plus 7 lines of inherited debt on the frozen base.
-53
+# 46 regression lines for heap-independent worker caches and UI workflow inputs.
+46
