@@ -546,7 +546,7 @@ model configuration, provider credentials, and session access rules still apply.
 
 ## Composer capability menu
 
-Select **+** beside the chat composer to open attachments and session capabilities in one menu:
+Select **+** beside the chat composer to open attachments and session capabilities in one menu. Available attachment choices appear first, above the session capability controls:
 
 - **Skills** enables or disables individual skills for this session.
 - **Plugins** enables or disables configured MCP servers for this session.

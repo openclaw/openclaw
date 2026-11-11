@@ -59,6 +59,8 @@ const enSettings = {
     },
     copyId: "Copy ID",
     setDefault: "Set default",
+    accessRestricted:
+      "You do not have access to this agent setting. Ask a Gateway operator for access.",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
