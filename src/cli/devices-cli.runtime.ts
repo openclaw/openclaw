@@ -37,7 +37,6 @@ import {
 } from "../infra/device-pairing.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
-import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import {
   resolvePendingDeviceApprovalState,
@@ -50,7 +49,7 @@ import {
   buildFallbackStateMismatchError,
   resolveLocalPairingFallback,
 } from "./devices-cli-fallback.js";
-import { callDevicesGateway as callGatewayCli } from "./devices-cli-gateway.js";
+import { callDevicesGateway as callGatewayCli, readUnlessAborted } from "./devices-cli-gateway.js";
 import {
   findPairedDevicePendingNodeApprovalNotices,
   formatKeptOpenClawIdNote,
@@ -536,9 +535,9 @@ function failDevicesCommand(json: boolean | undefined, ...lines: string[]): void
 }
 
 export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void> {
-  let list: DevicePairingList;
+  let list: DevicePairingList | null;
   try {
-    list = await listPairingWithFallback(opts, getAsyncWorkSignal());
+    list = await readUnlessAborted((signal) => listPairingWithFallback(opts, signal));
   } catch (error) {
     if (opts.json) {
       const payload = formatGatewayTransportErrorJson(error);
@@ -549,6 +548,9 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
       }
     }
     throw error;
+  }
+  if (!list) {
+    return;
   }
   const pairedByDeviceId = indexPairedDevices(list.paired);
   if (opts.json) {
@@ -733,7 +735,10 @@ export async function runDevicesApproveCommand(
   const usingImplicitSelection = !resolvedRequestId || Boolean(opts.latest);
   let selectedRequest: PendingDevice | null = null;
   if (usingImplicitSelection) {
-    pairingList = await listPairingWithFallback(opts, getAsyncWorkSignal());
+    pairingList = await readUnlessAborted((signal) => listPairingWithFallback(opts, signal));
+    if (!pairingList) {
+      return;
+    }
     selectedRequest = selectLatestPendingRequest(pairingList.pending);
     resolvedRequestId = selectedRequest?.requestId?.trim();
   }
