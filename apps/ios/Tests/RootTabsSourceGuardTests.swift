@@ -87,6 +87,27 @@ struct RootTabsSourceGuardTests {
             gatewayStableID: secondID).token == "second-token")
     }
 
+    @Test func `pasted setup codes stay in memory and clear when mounted settings reset`() throws {
+        let settings = try Self.source("Sources/Design/SettingsProTab.swift")
+        let reset = try Self.extract(
+            Self.source("Sources/Design/SettingsProTabActions.swift"),
+            from: "func syncAfterOnboardingReset()",
+            to: "func connect(")
+        #expect(!settings.contains(#"@AppStorage("gateway.setupCode")"#))
+        #expect(settings.contains(#"@State var setupCode = """#))
+        #expect(reset.contains(#"self.setupCode = """#))
+    }
+
+    @Test func `startup deletes legacy setup codes before creating the app model`() throws {
+        let startup = try Self.source("Sources/OpenClawApp.swift")
+        let cleanup = try #require(startup.range(
+            of: #"UserDefaults.standard.removeObject(forKey: "gateway.setupCode")"#))
+        let model = try #require(startup.range(of: "let appModel = NodeAppModel("))
+        #expect(cleanup.lowerBound < model.lowerBound)
+        let reset = try Self.source("Sources/Onboarding/GatewayOnboardingReset.swift")
+        #expect(!reset.contains(#""gateway.setupCode""#))
+    }
+
     private static func source(_ path: String) throws -> String {
         try String(contentsOf: self.iOSRoot.appendingPathComponent(path), encoding: .utf8)
     }
