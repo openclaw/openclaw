@@ -44,7 +44,7 @@ describeTelegramDispatch("DM topic label recovery", () => {
     await dispatchWithContext({ context: command, bot, streamMode: "off" });
     expect(generateTopicLabel).not.toHaveBeenCalled();
     const turn = new AsyncWorkScope();
-    const real = topicContext("Review an invoice", "New Thread");
+    const real = topicContext("/tmp/report.csv summarize", "New Thread");
     await turn.track(() => dispatchWithContext({ context: real, bot, streamMode: "off" }));
     await turn.drain();
     await vi.waitFor(() => expect(edit).toHaveBeenCalledWith(123, 777, { name: "Invoice review" }));
