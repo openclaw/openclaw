@@ -60,6 +60,15 @@ arbitrary later candidate. A new channel, identity, scope, or material risk
 requires a new decision. Tool access and green CI are not approval; enforced
 signing and workflow environment gates still apply.
 
+Carry explicit channel/contact restrictions and approved gate exceptions through
+candidate changes and handoffs alongside that authority. A version-wide grant
+remains scoped to that version; an attempt-bound grant does not expand to later
+attempts. Resolve eligibility from pinned P’s checked-in policy, not a fresh
+conversational approval or a blanket “performance cannot be waived” rule.
+Distinguish required failures from advisory results using the selected coverage
+and policy. Neither an advisory warning nor an optional confidence check creates
+a new approval gate; an operator instruction alone cannot bypass enforced gates.
+
 Before requesting stable/extended-stable approval, finish authorized preparation
 and present the exact version, candidate/Release SHA, qualifying run, selected
 surfaces, included/deferred changes, and remaining risks. Approval is the final
@@ -184,9 +193,11 @@ publication approval wait “released.”
 Keep the [handoff record](release-handoff-template.md) current at meaningful
 phase changes. The outgoing owner stops new mutations and identifies any
 in-flight operations before the successor takes over; never have two writers.
-The successor acknowledges ownership and verifies branch/tag SHAs, live run
-attempts, receipts, approval scope, pending fixes, and next action. Reconcile
-uncertain writes before retrying. A predecessor's credential failure is not a
+The successor acknowledges ownership and verifies remote branch/tag SHAs, live run
+attempts, receipts, approval scope (including restrictions and gate exceptions),
+pending fixes, and next action. Local tracking refs alone do not establish remote
+freshness. Preserve frozen C/Q/P while reconciling; newer main is not a new cut.
+Reconcile uncertain writes before retrying. A predecessor's credential failure is not a
 reason to re-cut, rerun green proof, or discard publication approval.
 
 Link the predecessor's record and frozen retrospective snapshot. Preserve
