@@ -54,9 +54,17 @@ The runtime store keeps `SessionEntry` values in per-agent SQLite. The value typ
 - `subject`, `groupChannel`, `space`, `displayName`: group/channel labeling metadata; `displayName` also stores generated conversation titles.
 - Toggles: `thinkingLevel`, `verboseLevel`, `reasoningLevel`, `elevatedLevel`, `sendPolicy` (per-session override)
 - Model selection: `providerOverride`, `modelOverride`, `authProfileOverride`
-- Token counters (best-effort/provider-dependent): `inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`
+- Run accounting (best-effort/provider-dependent): `inputTokens` and `outputTokens` are snapshots for the latest recorded run, which can include multiple model calls.
+- Context occupancy: `totalTokens` is a separate context-usage snapshot; `contextTokens` is the resolved capacity, not a usage count.
+- Context freshness: stored `totalTokensFresh` must be `true` and `totalTokensVersion` must match the current accounting version for the snapshot to be considered fresh.
 - `compactionCount`: total number of completed compactions for this session key
 - `memoryFlushAt` / `memoryFlushCompactionCount`: timestamp and compaction count of the last pre-compaction memory flush
+
+Run accounting does not become a live context estimate when a session is idle or
+its row is read. The CLI derives its JSON `totalTokensFresh` from the stored
+freshness and version checks; this is not a wall-clock activity marker. Use the
+[CLI token-field guidance](/cli/sessions#token-counts-and-freshness) when estimating
+context pressure from session JSON.
 
 Existing label-only records are preserved: the Gateway does not infer whether a
 saved `label` was automatic from its text. Clear or replace it explicitly to
