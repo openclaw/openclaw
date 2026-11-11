@@ -14,7 +14,7 @@ import {
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI immediate agent creation" });
-const greeting = "Hi, I’m New agent. Happy to help.";
+const creationStatus = "Creating new agent…";
 const previousMessage = "Synthetic Harbor conversation before agent creation.";
 const pendingSelector = 'openclaw-pending-session-create[aria-hidden="false"]';
 const pageOptions = {
@@ -187,13 +187,17 @@ suite.define(() => {
               const started = performance.now();
               const sample = () => {
                 const host = document.querySelector(pending);
-                const message = host?.querySelector(".chat-group.assistant .chat-text");
+                const status = host?.querySelector(
+                  '.chat-working-indicator[role="status"] .chat-working-indicator__status > span',
+                );
+                const title = host?.querySelector(".chat-pane__session-title");
                 const elapsedMs = performance.now() - started;
                 const presented =
                   host &&
                   getComputedStyle(host).opacity === "1" &&
-                  message?.textContent?.trim() === text &&
-                  message.getBoundingClientRect().height > 0 &&
+                  status?.textContent?.trim() === text &&
+                  status.getBoundingClientRect().height > 0 &&
+                  title?.textContent?.trim() === "New agent" &&
                   location.pathname !== originalPath &&
                   !document.querySelector(".sidebar-agent-menu");
                 if (presented || elapsedMs >= 5_000) {
@@ -210,7 +214,7 @@ suite.define(() => {
             }),
           {
             pending: pendingSelector,
-            text: greeting,
+            text: creationStatus,
             originalPath: new URL(originalUrl).pathname,
           },
         ),
