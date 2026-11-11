@@ -45,7 +45,6 @@
 }
 
 .templates-content-skeleton .skeleton {
-  border-radius: var(--radius-md);
   background: var(--bg-elevated);
 }
 
@@ -92,9 +91,6 @@
     padding: 0;
     border: 0;
     background: transparent;
-    color: inherit;
-    font: inherit;
-    cursor: var(--cursor-action);
   }
 }
 .templates-workspace-file__open {
@@ -464,7 +460,6 @@
     }
     & .code-chunk {
       white-space: pre-wrap;
-      overflow-wrap: anywhere;
     }
   }
   @media (max-width: 640px) {
@@ -574,7 +569,6 @@
   border: 0;
   border-radius: inherit;
   background: transparent;
-  cursor: var(--cursor-action);
 }
 
 .agents-home__template-card-link:focus-visible {
@@ -694,16 +688,61 @@
   display: block;
 }
 
-.templates-trust-warning div strong {
-  margin-right: 3px;
-}
-
 .templates-trust-warning a {
   color: inherit;
-  overflow-wrap: anywhere;
   text-decoration: underline;
 }
 
 .templates-trust-warning__plain {
   white-space: pre-wrap;
+}
+
+/* Hover references share this deferred template presentation sheet. */
+.template-reference-card {
+  width: min(360px, calc(100vw - 32px));
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  & header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  & strong,
+  & small {
+    display: block;
+  }
+  & strong {
+    font-size: 15px;
+  }
+  & small {
+    margin-top: 3px;
+    color: var(--muted);
+  }
+  & p {
+    margin: 16px 0;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+}
+.template-reference-card__art {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  color: var(--accent);
+  & img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    border-radius: 8px;
+  }
+}
+.template-reference-card__view {
+  width: 100%;
+  justify-content: center;
 }

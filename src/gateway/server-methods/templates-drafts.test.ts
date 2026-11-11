@@ -418,7 +418,9 @@ Research public sources.
         },
       ],
     ] as const) {
-      expect(review.items.find((item) => item.kind === kind)).toMatchObject(details);
+      expect(review.items).toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind, ...details })]),
+      );
     }
     const template = review.files.find((file) => file.path === "CLAW.md")!.content;
     expect(template).toContain("description: Researches public sources for a new user.");

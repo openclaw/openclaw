@@ -100,16 +100,6 @@ const historyMessages = [
     timestamp: 1_790_000_000_000,
   },
   {
-    role: "assistant",
-    content: [
-      {
-        type: "text",
-        text: "The private proposal is ready for your review. Nothing has been published.",
-      },
-    ],
-    timestamp: 1_790_000_001_000,
-  },
-  {
     role: "toolResult",
     toolName: "screen",
     toolCallId: "review-template-1",
