@@ -18,8 +18,8 @@ import { cleanupSessionStateForTest } from "../../test-utils/session-state-clean
 import { sweepTombstonedCronRunRemnantsForStore } from "./cleanup-tombstones.js";
 import { patchSessionEntryCore, replaceSessionEntry } from "./session-accessor.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
-import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
+import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";

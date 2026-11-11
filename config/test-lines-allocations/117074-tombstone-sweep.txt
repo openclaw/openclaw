@@ -1,0 +1,5 @@
+# Expired cron-run placeholder reclaim: the sweep's own suites pin candidate selection,
+# live-cron and unidentified-row preservation, the cascade-complete reclaim snapshot and its
+# restore, the shared-generation holdback, and the batched reference memo's freshness proof
+# across a replaced connection. Exact net growth for PR #117074.
+1515

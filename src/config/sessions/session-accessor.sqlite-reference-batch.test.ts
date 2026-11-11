@@ -9,9 +9,9 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { readReferencedSessionIds } from "./session-accessor.sqlite-references.js";
 import { trackMaterializedKeys } from "./session-accessor.sqlite-read-tracking.test-support.js";
 import { withBatchedSessionReferenceAnalysis } from "./session-accessor.sqlite-reference-scan.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-references.js";
 import { SESSION_STATE_ID_TRIM_CHARACTERS } from "./session-accessor.sqlite-references.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

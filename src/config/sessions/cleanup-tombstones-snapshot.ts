@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { type EngineConnection, isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import {
   getAdmittedSqliteSchemaFacts,
   type SqliteSchemaFacts,
@@ -218,10 +219,25 @@ function selectRowsBySessionId(
   );
 }
 
+/**
+ * The snapshot reads the cascade out of SQLite's own schema
+ * (`PRAGMA foreign_key_list`, `sqlite_master`), so it describes a SQLite store
+ * and nothing else. `sweepTombstonedCronRunRemnantsForStore` returns before any
+ * candidate is reclaimed unless a real SQLite file backs the store, so this is
+ * the contract that boundary already enforces, stated where the reads happen.
+ */
+function requireSqliteSnapshotStore(database: EngineConnection): DatabaseSync {
+  if (isPostgresSqlConnection(database)) {
+    throw new Error("Tombstone reclaim snapshots require a SQLite session store");
+  }
+  return database;
+}
+
 export function captureReclaimedRowSnapshot(
-  database: DatabaseSync,
+  engine: EngineConnection,
   sessionKey: string,
 ): ReclaimedRowSnapshot | undefined {
+  const database = requireSqliteSnapshotStore(engine);
   const node =
     /* sqlite-allow-raw: paired with the dynamic cascade reads below so one snapshot is taken through one statement style. */ database
       .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
@@ -281,9 +297,10 @@ function insertRows(
  * because a half-applied restore is worse than a failed one.
  */
 export function restoreReclaimedRowSnapshot(
-  database: DatabaseSync,
+  engine: EngineConnection,
   snapshot: ReclaimedRowSnapshot,
 ): void {
+  const database = requireSqliteSnapshotStore(engine);
   insertRows(database, "session_nodes", [snapshot.node]);
   insertRows(database, ROOT_TABLE, snapshot.windows);
   for (const { table, rows } of snapshot.cascaded) {

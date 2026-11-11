@@ -256,8 +256,8 @@ export function readReferencedSessionIds(
     return new Set();
   }
   // Disk-budget reads carry their own recency policy, so they never share a batch.
-  // The memo's freshness proof is SQLite-local (data_version plus a TEMP
-  // generation counter), so a PostgreSQL store always reads the table.
+  // The memo's freshness proof reads the SQLite-local session entry cache
+  // validity token, so a PostgreSQL store always reads the table.
   if (
     candidateSessionIds &&
     diskBudget === undefined &&

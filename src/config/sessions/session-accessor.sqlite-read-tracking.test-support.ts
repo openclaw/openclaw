@@ -12,7 +12,8 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 export function trackMaterializedKeys(database: Pick<OpenClawAgentDatabase, "db">): string[] {
   const materializedKeys: string[] = [];
   const prepare = database.db.prepare.bind(database.db);
-  vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+  // `db` is the widened engine union, so the spy cannot infer its own argument.
+  vi.spyOn(database.db, "prepare").mockImplementation((sql: string) => {
     const statement = prepare(sql);
     const iterate = statement.iterate.bind(statement);
     vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {

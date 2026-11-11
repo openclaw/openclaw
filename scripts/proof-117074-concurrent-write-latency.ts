@@ -63,15 +63,19 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { sweepTombstonedCronRunRemnantsForStore } from "../src/config/sessions/cleanup-tombstones.js";
 import { loadSessionEntry, replaceSessionEntry } from "../src/config/sessions/session-accessor.js";
+import {
+  cacheValidityTokensEqual,
+  readSessionEntryCacheValidityToken,
+} from "../src/config/sessions/session-accessor.sqlite-entry-revision.js";
 import { deleteSessionEntryRows } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
-import { readReferencedSessionIds } from "../src/config/sessions/session-accessor.sqlite-lifecycle-state.js";
 import { resolveBatchedReferencedSessionIds } from "../src/config/sessions/session-accessor.sqlite-reference-batch.js";
 import { withBatchedSessionReferenceAnalysis } from "../src/config/sessions/session-accessor.sqlite-reference-scan.js";
+import { readReferencedSessionIds } from "../src/config/sessions/session-accessor.sqlite-references.js";
 import { getSessionKysely } from "../src/config/sessions/session-accessor.sqlite-scope.js";
-import { replaceTranscriptEventsSync } from "../src/config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../src/config/sessions/session-sqlite-target.js";
 import { executeSqliteQuerySync } from "../src/infra/kysely-sync.js";
-import { readSqliteDataVersion } from "../src/infra/sqlite-schema-facts.js";
+import { type EngineConnection, isPostgresSqlConnection } from "../src/infra/sql-connection.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -145,6 +149,11 @@ function delay(ms: number): Promise<void> {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+/** Reproduces the default string sort order explicitly, so both answers share one order. */
+function byCodeUnit(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function percentile(values: readonly number[], fraction: number): number {
@@ -357,16 +366,29 @@ async function withWorkerAttribution<T>(
   }
 }
 
-/** Waits until another connection's commit is visible to this one. */
-async function waitForForeignCommit(database: { db: Parameters<typeof readSqliteDataVersion>[0] }) {
-  const initial = readSqliteDataVersion(database.db);
+/**
+ * Waits until another connection's commit is visible to this one.
+ *
+ * Reads the same validity token the batch memo keys its reuse on, so "visible"
+ * here means exactly what the memo means by it.
+ */
+async function waitForForeignCommit(database: { db: EngineConnection }) {
+  const initial = readSessionEntryCacheValidityToken(database.db);
   for (let attempt = 0; attempt < 600; attempt += 1) {
-    if (readSqliteDataVersion(database.db) !== initial) {
+    if (!cacheValidityTokensEqual(initial, readSessionEntryCacheValidityToken(database.db))) {
       return;
     }
     await delay(50);
   }
   throw new Error("no concurrent commit became visible within 30s");
+}
+
+/** This harness only ever opens real SQLite files; the narrowing states that. */
+function sqliteHandle(database: { db: EngineConnection }) {
+  if (isPostgresSqlConnection(database.db)) {
+    throw new Error("proof-117074 measures the SQLite reference memo only");
+  }
+  return database.db;
 }
 
 function makeStateDir(): string {
@@ -586,10 +608,13 @@ async function scenarioQuietSweep(): Promise<{ durationMs: number }> {
   await withBatchedSessionReferenceAnalysis(database, probeIds, async () => {
     for (const sessionId of probeIds) {
       const excluded = new Set([`agent:main:cron:job-x:run:run-x`]);
-      const served = resolveBatchedReferencedSessionIds(database.db, database.path, excluded, [
-        sessionId,
-      ]);
-      batchedAnswers.push(served ? [...served].toSorted() : null);
+      const served = resolveBatchedReferencedSessionIds(
+        sqliteHandle(database),
+        database.path,
+        excluded,
+        [sessionId],
+      );
+      batchedAnswers.push(served ? [...served].toSorted(byCodeUnit) : null);
     }
     await Promise.resolve();
   });
@@ -598,7 +623,7 @@ async function scenarioQuietSweep(): Promise<{ durationMs: number }> {
       ...readReferencedSessionIds(database, new Set([`agent:main:cron:job-x:run:run-x`]), [
         sessionId,
       ]),
-    ].toSorted(),
+    ].toSorted(byCodeUnit),
   );
   check(
     "batched answers equal unbatched answers on a quiet store",
@@ -707,7 +732,9 @@ async function scenarioInvalidationRate(): Promise<void> {
       for (const sessionId of probeIds) {
         for (let question = 0; question < 2; question += 1) {
           if (
-            resolveBatchedReferencedSessionIds(database.db, database.path, excluded, [sessionId])
+            resolveBatchedReferencedSessionIds(sqliteHandle(database), database.path, excluded, [
+              sessionId,
+            ])
           ) {
             served += 1;
           } else {

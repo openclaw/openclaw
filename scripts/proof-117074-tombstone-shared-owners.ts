@@ -44,7 +44,7 @@ import { runSessionsCleanup } from "../src/config/sessions/cleanup-service.js";
 import { replaceSessionEntry } from "../src/config/sessions/session-accessor.js";
 import { deleteSessionEntryRows } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
 import { getSessionKysely } from "../src/config/sessions/session-accessor.sqlite-scope.js";
-import { replaceTranscriptEventsSync } from "../src/config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../src/config/sessions/session-sqlite-target.js";
 import { resolveSessionStoreTargets } from "../src/config/sessions/targets.js";
 import type { OpenClawConfig } from "../src/config/types.js";

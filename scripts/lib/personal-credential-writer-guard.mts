@@ -569,7 +569,14 @@ const callers = new Map<string, readonly string[]>([
   ],
   [
     key(sessionArtifacts, "deleteSessionNodeArtifacts"),
-    [key(sessionEntries, "deleteSessionEntryRows")],
+    [
+      key(sessionEntries, "deleteSessionEntryRows"),
+      // The cron tombstone sweep reclaims a retained-history placeholder whose
+      // windows it already removed in the same write transaction. The row holds
+      // no readable entry, so `deleteSessionEntryRows` cannot reach it; the
+      // sweep owns the node-scoped artifacts itself under the same exclusion.
+      key("src/config/sessions/cleanup-tombstones.ts", "sweepTombstonedCronRunRemnants/reclaim"),
+    ],
   ],
   // Alias moves publish both canonical entry postimages; the other callers hold offline repair ownership.
   [

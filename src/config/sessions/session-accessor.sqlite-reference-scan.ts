@@ -1,6 +1,7 @@
 import { toUSVString } from "node:util";
 import { sql } from "kysely";
 import { iterateSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withSessionReferenceBatch } from "./session-accessor.sqlite-reference-batch.js";
 import {
@@ -116,6 +117,13 @@ export async function withBatchedSessionReferenceAnalysis<T>(
   candidateSessionIds: readonly string[],
   run: () => Promise<T>,
 ): Promise<T> {
+  // The memo's freshness proof reads a SQLite-local token, so a PostgreSQL store
+  // opens no batch and every reference read inside `run` reads the table instead.
+  // Skipping the pass only drops the amortization; `readReferencedSessionIds`
+  // already refuses its fast path on the same connection test.
+  if (isPostgresSqlConnection(database.db)) {
+    return await run();
+  }
   return await withSessionReferenceBatch(
     database.db,
     database.path,
