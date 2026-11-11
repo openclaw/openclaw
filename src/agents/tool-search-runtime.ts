@@ -31,7 +31,12 @@ import {
 } from "./tool-execution-error.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import { isToolResultError } from "./tool-result-error.js";
-import { runWithToolResultDelivery } from "./tool-result-limits.js";
+import {
+  runWithToolResultDelivery,
+  runWithToolResultDeliveryProjection,
+  getToolResultDeliveryProjection,
+  toolResultFitsBudget,
+} from "./tool-result-limits.js";
 import {
   compactToolSearchCatalogEntry,
   describeToolSearchCatalogEntry,
@@ -41,6 +46,7 @@ import {
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
 import {
+  projectToolSearchCallResult,
   renderToolSearchControlText,
   serializeToolSearchControlResult,
 } from "./tool-search-control-result.js";
@@ -384,9 +390,26 @@ export class ToolSearchRuntime {
       ),
       signal: options?.signal,
       execute: (currentEntry, signal) =>
-        runWithToolResultDelivery(fullValue, () =>
-          this.executeEntry(resolveCatalog(this.ctx), currentEntry, input, { ...options, signal }),
-        ),
+        runWithToolResultDelivery(fullValue, () => {
+          const execute = () =>
+            this.executeEntry(resolveCatalog(this.ctx), currentEntry, input, {
+              ...options,
+              signal,
+            });
+          // A Code Mode bridge owns its returned value envelope instead of dispatch_action.
+          return fullValue || getToolResultDeliveryProjection()
+            ? execute()
+            : runWithToolResultDeliveryProjection(
+                (result, budget) =>
+                  toolResultFitsBudget(
+                    serializeToolSearchControlResult(
+                      projectToolSearchCallResult(currentEntry, result),
+                    ),
+                    budget,
+                  ),
+                execute,
+              );
+        }),
     });
 
   private readonly executeEntry = async (

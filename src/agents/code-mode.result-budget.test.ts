@@ -4,11 +4,8 @@ import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  createOpenClawReadTool,
-  createSandboxedReadTool,
-  wrapReadToolWithSkillContent,
-} from "./agent-tools.read.js";
+import { createOpenClawReadTool, createSandboxedReadTool } from "./agent-tools.read.js";
+import { wrapReadToolWithSkillContent } from "./agent-tools.skill-read.js";
 import {
   expectCodeModeSharedBudget,
   expectCompleted,
@@ -346,7 +343,7 @@ describe("fresh producer results through persistence and model guards", () => {
     expect(text(mcp)).toContain("Retry with a narrower query.");
   });
 
-  it("refuses a whole skill that fits the byte cap but exceeds the model text budget", async () => {
+  it("pages a skill that fits the byte cap but exceeds the model text budget", async () => {
     const locator = "node://fixture/skills/whole/SKILL.md";
     const base = createReadTool("/");
     const read = wrapReadToolWithSkillContent(
@@ -354,8 +351,8 @@ describe("fresh producer results through persistence and model guards", () => {
       [{ filePath: locator, readContent: "INSTRUCTIONS" + "中".repeat(9000) }],
       { modelContextWindowTokens: contextWindow },
     );
-    const result = await read.execute("skill", { path: locator, offset: 2, limit: 1 });
-    expect(text(result)).toContain("cannot be partially served");
-    expect(text(result)).not.toContain("INSTRUCTIONS");
+    const result = await read.execute("skill", { path: locator });
+    expect(text(result)).toContain("nextCursor=");
+    expect(text(result)).toContain("INSTRUCTIONS");
   });
 });

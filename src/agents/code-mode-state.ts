@@ -515,6 +515,8 @@ export function createPendingBridgeStates(
       codeModeRunId: params.codeModeRunId,
       reply,
       remainingMs: Math.max(1, params.remainingMs),
+      maxOutputBytes: params.maxOutputBytes,
+      resultBudget: params.resultBudget,
       completionRequired: params.completionRequired,
       ctx: params.ctx,
       request,

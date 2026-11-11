@@ -22,3 +22,11 @@ export function renderToolSearchControlText(text: string, networkContent: boolea
       : bounded.text;
   return { text: wrapExternalContent(modelText, { source: "api" }), truncated };
 }
+
+export function projectToolSearchCallResult(
+  tool: { id: string; name: string; source: string },
+  result: { content: unknown[]; details?: unknown },
+) {
+  const { details: _details, ...modelResult } = result;
+  return { tool: { id: tool.id, name: tool.name, source: tool.source }, result: modelResult };
+}

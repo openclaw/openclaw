@@ -56,6 +56,13 @@ export function buildSkillsSection(params: {
             "Search by the task goal and distinctive terms. Simple conversation or a self-contained answer does not need a search. Search covers installed skills; it does not install skills.",
           ]
         : []),
+      ...(params.promptSurface !== "cli_backend" || installedSkillRead
+        ? [
+            params.codeModeActive
+              ? "Skill reads return bounded pages. Return one page per cell; continue with skills.read(name, relativePath, cursor) using nextCursor until null before applying instructions."
+              : "Skill reads return bounded pages. Continue with nextCursor as cursor until null before applying instructions.",
+          ]
+        : []),
       "Several: most specific. No relevant skill: read none.",
       "Up-front max one. Never invent paths.",
       "External writes: batch safely; no tight loops; honor 429/Retry-After.",

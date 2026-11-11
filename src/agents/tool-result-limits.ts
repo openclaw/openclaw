@@ -97,3 +97,22 @@ export function assertCompleteToolResult(text: string, budget?: ToolResultBudget
     );
   }
 }
+
+/** Invocation-local projection lets producers fit the envelope owned by their transport. */
+export type ToolResultDeliveryProjection = (
+  result: { content: { type: "text"; text: string }[]; details: unknown },
+  budget: ToolResultBudget,
+) => boolean;
+const toolResultDeliveryProjection = resolveGlobalSingleton(
+  Symbol.for("openclaw.toolResultDeliveryProjection"),
+  () => new AsyncContext<ToolResultDeliveryProjection>(Symbol("toolResultDeliveryProjection")),
+);
+export function getToolResultDeliveryProjection() {
+  return toolResultDeliveryProjection.getStore();
+}
+export function runWithToolResultDeliveryProjection<T>(
+  project: ToolResultDeliveryProjection,
+  action: () => Promise<T>,
+): Promise<T> {
+  return toolResultDeliveryProjection.run(project, action);
+}

@@ -957,6 +957,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/agent-tools.collector.integration.test.ts",
   "src/agents/agent-tools.construction-routing.test.ts",
   "src/agents/agent-tools.create-openclaw-coding-tools.test.ts",
+  "src/agents/agent-tools.skill-read.test.ts",
   "src/agents/agent-tools.deferred-followup-guidance.test.ts",
   "src/agents/agent-tools.read.workspace-mutations.test.ts",
   "src/agents/agent-tools.scheduled-exec-target.test.ts",

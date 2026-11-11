@@ -204,7 +204,7 @@ export class CodeModeOutputState {
 
   constructor(
     private readonly maxBytes: number,
-    private readonly modelBudget?: ToolResultBudget,
+    readonly modelBudget?: ToolResultBudget,
   ) {}
 
   append(leg: CodeModeOutputSource): void {
@@ -503,4 +503,20 @@ export class CodeModeOutputState {
     }
     return project;
   }
+}
+
+/** Fit one returned skill string through the same terminal envelope as ordinary cell delivery. */
+export function codeModeSkillPageFits(params: {
+  value: string;
+  maxOutputBytes: number;
+  metadata: object;
+  budget: ToolResultBudget;
+}): boolean {
+  return (
+    Buffer.byteLength(JSON.stringify(params.value), "utf8") <= params.maxOutputBytes &&
+    toolResultFitsBudget(
+      serializeToolSearchControlResult({ ...params.metadata, output: [], value: params.value }),
+      params.budget,
+    )
+  );
 }

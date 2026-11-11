@@ -23,7 +23,7 @@ beforeEach(async () => {
 afterEach(() => cleanupDynamicToolBuildFixture(tempDir, hostCapabilityClosers));
 
 it.each(["allowed", "denied", "oversized"])(
-  "delivers whole skills or refuses %s reads",
+  "delivers bounded skill pages or refuses %s reads",
   async (mode) => {
     const denied = mode === "denied";
     const oversized = mode === "oversized";
@@ -84,16 +84,26 @@ it.each(["allowed", "denied", "oversized"])(
     expect(result.success).toBe(!denied);
     if (!denied) {
       expect(JSON.stringify(result)).toContain("release-guide");
-      const read = await call("skills_read", { name: "release-guide" });
-      expect(read.success).toBe(!oversized);
-      if (oversized) {
-        expect(read.diagnosticTerminalType).toBe("error");
-        expect(JSON.stringify(read.contentItems)).toContain("cannot deliver the whole skill");
-        expect(JSON.stringify(read.contentItems)).not.toContain("Complete instructions.");
-      } else {
-        const text = `Skill location: ${skill.filePath}\nResolve relative resource paths from the directory containing this SKILL.md.\n\n${skill.readContent}`;
-        expect(read.contentItems).toEqual([{ type: "inputText", text }]);
-      }
+      let cursor: string | undefined;
+      let reconstructed = "";
+      do {
+        const read = await call("skills_read", {
+          name: "release-guide",
+          ...(cursor ? { cursor } : {}),
+        });
+        expect(read.success).toBe(true);
+        const text = read.contentItems.find((item) => item.type === "inputText")!;
+        if (text.type !== "inputText") {
+          throw new Error("Missing skill page");
+        }
+        expect(text.text).not.toContain("truncated dynamic tool result");
+        const match = /\n\n\[Skill page (\d+):(\d+)\/(\d+); nextCursor=(null|"[^"]+")\./u.exec(
+          text.text,
+        )!;
+        reconstructed += text.text.slice(text.text.indexOf("\n\n") + 2, match.index);
+        cursor = JSON.parse(match[4]!) ?? undefined;
+      } while (cursor);
+      expect(reconstructed).toBe(skill.readContent);
     }
   },
 );

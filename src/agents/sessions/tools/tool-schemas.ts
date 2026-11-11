@@ -90,7 +90,17 @@ export const readToolInputSchema = Type.Object({
   offset: Type.Optional(Type.Integer({ minimum: 1, description: "Start line; 1-based." })),
   limit: Type.Optional(Type.Number({ description: "Max lines." })),
   cursor: Type.Optional(
-    Type.Integer({ minimum: 0, description: "Character position within the start line; 0-based." }),
+    Type.Union([
+      Type.Integer({
+        minimum: 0,
+        description: "Character position within the start line; 0-based.",
+      }),
+      Type.String({
+        minLength: 1,
+        description:
+          "Opaque continuation for recognized skill instructions only; do not combine with offset/limit.",
+      }),
+    ]),
   ),
   optional: Type.Optional(
     Type.Literal(true, {
@@ -123,6 +133,19 @@ export const readTruncationOutputSchema = Type.Object(
 );
 
 export const readToolOutputSchema = Type.Union([
+  Type.Object(
+    {
+      kind: Type.Literal("skill_page"),
+      name: Type.String(),
+      location: Type.String(),
+      content: Type.String(),
+      startByte: Type.Integer(),
+      endByte: Type.Integer(),
+      totalBytes: Type.Integer(),
+      nextCursor: Type.Union([Type.String(), Type.Null()]),
+    },
+    { additionalProperties: false },
+  ),
   Type.Object(
     { kind: Type.Literal("text"), content: Type.String() },
     { additionalProperties: false },

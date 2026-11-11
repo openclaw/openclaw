@@ -897,13 +897,17 @@ and self-contained answers do not require discovery.
   is 20. Queries must contain 1-1,000 characters. Results contain names, locations,
   and shortened descriptions, not instructions. `hasMore` indicates that additional
   matches exist.
-- `skills_read({ name })` loads the complete `SKILL.md` for an exact name.
+- `skills_read({ name, cursor? })` returns a bounded page of `SKILL.md` for an exact name.
   The response includes the skill's location and any host-specific guidance, so
   relative resource paths can be resolved without a preceding search. The
   instruction body is unchanged. Instructions omitted
   from the prompt directory are limited to 256 KiB and rejected if larger, not
-  truncated. Prompt-listed instructions retain the existing whole-read contract,
-  including Code Mode's separate program-data limits.
+  truncated. Prompt-listed instructions retain their larger source allowance.
+  Read every page before applying instructions: pass `nextCursor` as `cursor` until
+  it is `null`. Each page preserves exact source bytes, including line endings.
+  A changed document invalidates its cursor; restart without a cursor.
+  Recognized skill reads through `read` use the same continuation and reject
+  numeric cursors and line windows. Ordinary file paging is unchanged.
 
 Both tools use the current session's eligible catalog. Disabled, filtered,
 ineligible, and model-hidden skills are not added by search. Existing explicit
@@ -921,9 +925,11 @@ instruction-body reads. Revocation also excludes cached body matches and rejects
 in-flight indexing started under the previous grant.
 
 In OpenClaw Code Mode, use `await skills.search(query, limit)` and
-`await skills.read(name)`. These calls dispatch through the same tools and
-policies. The read returns a string with the same location context and complete
-instructions. Cloud worker turns use the Gateway's admitted skill catalog for
+`await skills.read(name, relativePath, cursor)`. Return one page per cell, then
+continue until `nextCursor` is `null`; do not accumulate all pages in one output.
+These calls dispatch through the same tools and
+policies. The read returns a string with the same location context, exact page
+content, and continuation. Cloud worker turns use the Gateway's admitted skill catalog for
 search and reads, with the same turn-lifetime checks. If a request fails, the
 Code Mode bridge reports a bounded, redacted cause.
 `await skills.list(offset)` returns up to 20 directory entries;

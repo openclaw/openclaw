@@ -208,6 +208,15 @@ resolves. Each entry points at the page that now holds the content.
 - <a id="validation-checklist" />[Validation checklist](/tools/code-mode/maintainers#validation-checklist)
 - <a id="e2e-test-plan" />[E2E test plan](/tools/code-mode/maintainers#e2e-test-plan)
 
+## Installed skill pages
+
+`await skills.read(name, relativePath?, cursor?)` returns a string containing one
+bounded instruction page and its `nextCursor`. Return one page per cell, then
+continue with that cursor until it is `null` before applying the instructions.
+Omit `relativePath` (or use `null`) for `SKILL.md`. Do not concatenate all pages
+into one cell result: ordinary output limits still apply. A stale cursor requires
+restarting without a cursor. Local companion files use the same paging contract.
+
 ## Related
 
 - [Swarm](/tools/swarm) for fan-out agent orchestration from Code Mode scripts

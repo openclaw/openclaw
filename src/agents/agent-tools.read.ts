@@ -58,17 +58,13 @@ import {
   type ReadToolTruncationDetails,
 } from "./sessions/tools/index.js";
 import { normalizePositiveLimit } from "./sessions/tools/limits.js";
-import { expandOsHomePrefix, resolveToCwd } from "./sessions/tools/path-utils.js";
+import { expandOsHomePrefix } from "./sessions/tools/path-utils.js";
 import {
   createBoundedReadTextPage,
   formatReadContinuationNotice,
 } from "./sessions/tools/read-page.js";
 import type { ReadToolContinuation } from "./sessions/tools/tool-contracts.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./sessions/tools/truncate.js";
-import {
-  createAlreadyDeliveredSkillResult,
-  rememberSkillInstructionDelivery,
-} from "./skill-instruction-result.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 import {
   resolveToolResultBudget,
@@ -90,22 +86,15 @@ const ADAPTIVE_READ_CONTEXT_SHARE = 0.1;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_ADAPTIVE_READ_PAGES = 4;
 
-type OpenClawReadToolOptions = {
+export type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
   cwd?: string;
   bridge?: SandboxFsBridge;
 };
 
-type SkillReadContent = {
-  filePath: string;
-  readContent?: string;
-};
-
-export type SkillInstructionDeliveryCache = Map<string, Promise<boolean>>;
-
 /** Erase a schema-specific session tool only after its input passes that owned schema. */
-function eraseSessionFileTool<TParameters extends TSchema, TDetails>(
+export function eraseSessionFileTool<TParameters extends TSchema, TDetails>(
   tool: AgentTool<TParameters, TDetails>,
 ): AnyAgentTool<TDetails> {
   return {
@@ -267,6 +256,9 @@ async function executeReadWithAdaptivePaging(params: {
     }
     const pageResult = await params.base.execute(params.toolCallId, pageArgs, params.signal);
     firstResult ??= pageResult;
+    if (pageResult.details.kind === "skill_page") {
+      return pageResult;
+    }
 
     const rawText = getToolResultText(pageResult);
     if (typeof rawText !== "string") {
@@ -477,7 +469,7 @@ function resolveContainerPathCandidate(filePath: string): string {
   return candidate;
 }
 
-function mapContainerPathToWorkspaceRoot(params: {
+export function mapContainerPathToWorkspaceRoot(params: {
   filePath: string;
   root: string;
   containerWorkdir?: string;
@@ -972,149 +964,6 @@ export function createOpenClawReadTool(
         options?.imageSanitization,
       );
       return normalizeReadResultDetails({ ...sanitizedResult, details: normalizedResult.details });
-    },
-  };
-}
-
-/** Serve exact non-filesystem skill locators before workspace path guards run. */
-export function wrapReadToolWithSkillContent(
-  tool: AnyAgentTool<ReadToolDetails>,
-  skills: readonly SkillReadContent[] | undefined,
-  options?: OpenClawReadToolOptions & {
-    cwd?: string;
-    containerWorkdir?: string;
-    instructionPaths?: readonly string[];
-    instructionDeliveryCache?: SkillInstructionDeliveryCache;
-  },
-): AnyAgentTool<ReadToolDetails> {
-  const cwd = options?.cwd ?? process.cwd();
-  const resolveInstructionPath = (filePath: string): string => {
-    if (filePath.startsWith("node://")) {
-      return filePath;
-    }
-    const mapped = mapContainerPathToWorkspaceRoot({
-      filePath,
-      root: cwd,
-      containerWorkdir: options?.containerWorkdir,
-    });
-    return resolveToCwd(mapped, cwd);
-  };
-  const instructionContent = new Map<string, string | undefined>(
-    (options?.instructionPaths ?? []).map((filePath) => [
-      resolveInstructionPath(filePath),
-      undefined,
-    ]),
-  );
-  for (const skill of skills ?? []) {
-    instructionContent.set(
-      resolveInstructionPath(skill.filePath),
-      skill.filePath.startsWith("node://") ? skill.readContent : undefined,
-    );
-  }
-  if (instructionContent.size === 0) {
-    return tool;
-  }
-  const instructionDeliveryCache = options?.instructionDeliveryCache;
-  const readContent = (filePath: string): string => {
-    const content = instructionContent.get(filePath);
-    if (content === undefined) {
-      throw Object.assign(new Error(`Virtual skill file not found: ${filePath}`), {
-        code: "ENOENT",
-      });
-    }
-    return content;
-  };
-  let virtualRead: AnyAgentTool<ReadToolDetails> | undefined;
-  return {
-    ...tool,
-    execute: async (toolCallId, args, signal, onUpdate) => {
-      const record = getToolParamsRecord(args);
-      const rawPath = record?.path;
-      const normalizedPath =
-        typeof rawPath === "string" ? normalizeFileToolPathParam(rawPath) : undefined;
-      const instructionPath = normalizedPath ? resolveInstructionPath(normalizedPath) : undefined;
-      if (!normalizedPath || !instructionPath || !instructionContent.has(instructionPath)) {
-        return tool.execute(toolCallId, args, signal, onUpdate);
-      }
-      for (;;) {
-        const priorDelivery = instructionDeliveryCache?.get(instructionPath);
-        if (!priorDelivery) {
-          break;
-        }
-        const delivered = await priorDelivery;
-        if (instructionDeliveryCache?.get(instructionPath) !== priorDelivery) {
-          continue;
-        }
-        if (delivered) {
-          return createAlreadyDeliveredSkillResult(priorDelivery);
-        }
-        instructionDeliveryCache?.delete(instructionPath);
-      }
-      let settleDelivery = (_delivered: boolean): void => undefined;
-      let delivery: Promise<boolean> | undefined;
-      if (instructionDeliveryCache) {
-        delivery = new Promise<boolean>((resolve) => {
-          settleDelivery = resolve;
-        });
-        // The resolved promise covers sequential and concurrent reads without
-        // changing prior transcript bytes. The compaction owner clears it.
-        instructionDeliveryCache.set(instructionPath, delivery);
-      }
-      const resetDelivery = () => {
-        settleDelivery(false);
-        if (delivery && instructionDeliveryCache?.get(instructionPath) === delivery) {
-          instructionDeliveryCache.delete(instructionPath);
-        }
-      };
-      const instructionTool =
-        typeof instructionContent.get(instructionPath) === "string"
-          ? (virtualRead ??= createOpenClawReadTool(
-              eraseSessionFileTool(
-                createReadTool("/", {
-                  maxBytes: resolveAdaptiveReadMaxBytes(options),
-                  modelBudget: resolveToolResultBudget(options?.modelContextWindowTokens),
-                  operations: {
-                    resolvePath: (filePath) => filePath,
-                    access: async (filePath) => void readContent(filePath),
-                    readFile: async (filePath) => Buffer.from(readContent(filePath), "utf8"),
-                  },
-                }),
-              ),
-              options,
-            ))
-          : tool;
-      // Skill instructions are served whole. Some models still send paging arguments,
-      // so windows are dropped rather than rejected.
-      const instructionArgs: Record<string, unknown> = { ...record, path: normalizedPath };
-      for (const key of ["offset", "limit", "cursor"]) {
-        delete instructionArgs[key];
-      }
-      try {
-        const result = await instructionTool.execute(toolCallId, instructionArgs, signal, onUpdate);
-        const details = result.details;
-        const detailsKind = details.kind;
-        if (detailsKind === "truncated") {
-          resetDelivery();
-          const text =
-            "Skill instructions cannot be partially served: the whole document exceeds this call's read or model-context budget. Ask the operator to reduce the document or increase the model context.";
-          return {
-            content: [{ type: "text", text }],
-            details: { kind: "text", content: text },
-          };
-        }
-        if (detailsKind !== "text") {
-          resetDelivery();
-          return result;
-        }
-        if (!signal?.aborted) {
-          rememberSkillInstructionDelivery(result, details.content, delivery);
-        }
-        settleDelivery(true);
-        return result;
-      } catch (error) {
-        resetDelivery();
-        throw error;
-      }
     },
   };
 }

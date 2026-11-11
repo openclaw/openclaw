@@ -20,11 +20,13 @@ import {
   createSandboxedReadTool,
   createSandboxedWriteTool,
   resolveAdaptiveReadMaxBytes,
-  type SkillInstructionDeliveryCache,
-  wrapReadToolWithSkillContent,
   wrapToolWorkspaceRootGuardWithOptions,
   wrapSandboxFileToolPath,
 } from "./agent-tools.read.js";
+import {
+  type SkillInstructionDeliveryCache,
+  wrapReadToolWithSkillContent,
+} from "./agent-tools.skill-read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import type { ApplyPatchContainmentSource } from "./apply-patch-containment-hint.js";
 import { createApplyPatchTool } from "./apply-patch.js";

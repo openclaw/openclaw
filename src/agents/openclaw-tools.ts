@@ -51,6 +51,7 @@ import {
   type PreparedToolConstruction,
   type ToolConstructionPreparationOptions,
 } from "./tool-construction-preparation.js";
+import { resolveToolResultBudget } from "./tool-result-limits.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createAskUserTool } from "./tools/ask-user-tool.js";
 import { createChannelQuestionPromptDelivery } from "./tools/channel-question-prompt-delivery.js";
@@ -492,7 +493,10 @@ function* createOpenClawToolsSteps(
     workspaceDir: spawnWorkspaceDir,
   };
   const tools: AnyAgentTool[] = [
-    ...createInstalledSkillTools(options?.installedSkills ?? []),
+    ...createInstalledSkillTools(
+      options?.installedSkills ?? [],
+      resolveToolResultBudget(options?.modelContextWindowTokens),
+    ),
     createDashboardTool({
       agentSessionKey:
         scheduledTargets?.boardSessionKey ?? options?.runSessionKey ?? options?.agentSessionKey,

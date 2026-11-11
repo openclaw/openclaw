@@ -7,7 +7,7 @@ import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { MemoryFlushToolRunContext } from "./agent-tools.memory-flush.types.js";
-import type { SkillInstructionDeliveryCache } from "./agent-tools.read.js";
+import type { SkillInstructionDeliveryCache } from "./agent-tools.skill-read.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import type {

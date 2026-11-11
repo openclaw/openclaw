@@ -110,7 +110,7 @@ it("reads local skill companions through the worker without exposing escaped, bi
     value: {
       found: { skills: [{ name: "guide" }] },
       whole: expect.stringContaining("Read references/workflow.md."),
-      companion: "Companion text 😀",
+      companion: expect.stringContaining("Companion text 😀"),
       denied: Array(16).fill(true),
     },
   });
@@ -118,7 +118,7 @@ it("reads local skill companions through the worker without exposing escaped, bi
   expect(
     (await read.execute("native", { name: "guide", relativePath: "references/workflow.md" }))
       .content,
-  ).toEqual([{ type: "text", text: "Companion text 😀" }]);
+  ).toEqual([{ type: "text", text: expect.stringContaining("Companion text 😀") }]);
   const resourceRoot = (await catalog[0]!.resourceRoot)!;
   const readFile = resourceRoot.read.bind(resourceRoot);
   for (const cancel of [false, true]) {
@@ -277,7 +277,7 @@ it("reads a known skill with resource context before discovery through the worke
       body:
         `Skill location: ${location}\n` +
         "Resolve relative resource paths from the directory containing this SKILL.md.\n" +
-        `${locationNote}\n\n${body}`,
+        `${locationNote}\n\n${body}\n\n[Skill page 0:${Buffer.byteLength(body)}/${Buffer.byteLength(body)}; nextCursor=null. Read all pages before applying instructions.]`,
     },
   });
 });
@@ -335,4 +335,64 @@ it("keeps core signatures visible when the catalog overflows", () => {
   expect(lines.some((line) => line.startsWith("- read "))).toBe(true);
   applyCodeModeCatalog({ ...ctx, tools: [...controls, ...targets.toReversed()] });
   expect(render()).toBe(description);
+});
+
+it.each([
+  [1024, 50_000],
+  [4096, 2000],
+])(
+  "delivers intact Code Mode skill pages with maxOutputBytes=%s and context=%s",
+  async (maxOutputBytes, modelContextWindowTokens) => {
+    const content = '😀中é\\"\t\r\n'.repeat(250);
+    const location = "/synthetic/guide/SKILL.md";
+    const tools = createInstalledSkillTools([
+      {
+        name: "guide",
+        description: "guide",
+        location,
+        source: { filePath: location, readContent: content },
+      },
+    ]);
+    const h = createCatalogCodeModeHarness(tools, {
+      codeMode: { maxOutputBytes },
+      modelContextWindowTokens,
+    });
+    let cursor: string | undefined;
+    let reconstructed = "";
+    do {
+      const result = await h.execute(
+        `return await skills.read("guide", null, ${JSON.stringify(cursor) ?? "undefined"});`,
+      );
+      const text = result.content.find((part) => part.type === "text")!.text;
+      const visible = JSON.parse(text) as { status: string; value: string };
+      expect(visible.status, text).toBe("completed");
+      expect(typeof visible.value).toBe("string");
+      const match = /\n\n\[Skill page (\d+):(\d+)\/(\d+); nextCursor=(null|"[^"]+")\./u.exec(
+        visible.value,
+      )!;
+      expect(match).not.toBeNull();
+      reconstructed += visible.value.slice(visible.value.indexOf("\n\n") + 2, match.index);
+      cursor = JSON.parse(match[4]!) ?? undefined;
+    } while (cursor);
+    expect(reconstructed).toBe(content);
+  },
+);
+
+it("reports an unusable Code Mode page envelope instead of returning truncated instructions", async () => {
+  const location = "/synthetic/guide/SKILL.md";
+  const tools = createInstalledSkillTools([
+    {
+      name: "guide",
+      description: "guide",
+      location,
+      source: { filePath: location, readContent: "😀".repeat(1000) },
+    },
+  ]);
+  const h = createCatalogCodeModeHarness(tools, { modelContextWindowTokens: 1000 });
+  const result = await h.execute('return await skills.read("guide");');
+  const visible = JSON.parse(result.content.find((part) => part.type === "text")!.text);
+  expect(visible).toMatchObject({
+    status: "failed",
+    error: expect.stringContaining("cannot fit a usable character"),
+  });
 });

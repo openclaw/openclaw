@@ -13,6 +13,7 @@ import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { getBeforeToolCallFailureDisposition } from "./agent-tools.before-tool-call.js";
 import { redactCodeModeCatalogIds, type CodeModeCatalogProjection } from "./code-mode-catalog.js";
+import { codeModeSkillPageFits } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { CodeModeReplyLease } from "./code-mode-program-data.js";
 import type { CodeModeResultsAccess } from "./code-mode-results.js";
@@ -24,12 +25,15 @@ import {
 import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import { formatSkillInstructions } from "./skill-instruction-result.js";
 import { isCollectorSpawnTool } from "./subagents/swarm/swarm-collector-capability.js";
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { getToolContractFailureCode } from "./tool-contract-error.js";
 import { isTrustedToolInputError } from "./tool-input-error.js";
 import { formatToolExecutionGatedMessage, isToolExecutionAllowed } from "./tool-policy-shared.js";
+import {
+  runWithToolResultDeliveryProjection,
+  type ToolResultBudget,
+} from "./tool-result-limits.js";
 import { omitDescribedOutputSchema } from "./tool-search-catalog.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry, ToolSearchToolContext } from "./tool-search-types.js";
@@ -219,6 +223,8 @@ export async function runBridgeRequest(params: {
   results: CodeModeResultsAccess;
   sessionStore?: CodeModeSessionStoreAccess;
   remainingMs: number;
+  maxOutputBytes?: number;
+  resultBudget?: ToolResultBudget;
   completionRequired?: boolean;
   ctx: ToolSearchToolContext;
   request: PendingBridgeRequest;
@@ -487,12 +493,29 @@ export async function runBridgeRequest(params: {
         if (!binding) {
           throw new ToolInputError(`${toolName} is not available in this run.`);
         }
-        const called = await params.runtime.callExactId(
-          binding.id,
-          params.request.method === "skillsRead"
-            ? { name: values[0], ...(values[1] === undefined ? {} : { relativePath: values[1] }) }
-            : { query: values[0], ...(values[1] === undefined ? {} : { limit: values[1] }) },
-          callOptions(),
+        const called = await runWithToolResultDeliveryProjection(
+          (result, budget) =>
+            codeModeSkillPageFits({
+              value: result.content[0]?.text ?? "",
+              maxOutputBytes: params.maxOutputBytes ?? 65_536,
+              metadata: {
+                status: "completed",
+                telemetry: { ...params.runtime.telemetry(), visibleTools: ["exec", "wait"] },
+              },
+              budget: params.resultBudget ?? budget,
+            }),
+          () =>
+            params.runtime.callExactId(
+              binding.id,
+              params.request.method === "skillsRead"
+                ? {
+                    name: values[0],
+                    ...(values[1] == null ? {} : { relativePath: values[1] }),
+                    ...(values[2] === undefined ? {} : { cursor: values[2] }),
+                  }
+                : { query: values[0], ...(values[1] === undefined ? {} : { limit: values[1] }) },
+              callOptions(),
+            ),
         );
         const result = called.result;
         if (!isRecord(result) || result.isError || !isRecord(result.details)) {
@@ -510,17 +533,10 @@ export async function runBridgeRequest(params: {
           );
         }
         if (params.request.method === "skillsRead") {
-          const { name, location, locationNote, relativePath, content } = result.details;
-          if (
-            typeof name !== "string" ||
-            typeof location !== "string" ||
-            typeof content !== "string" ||
-            (relativePath !== undefined && typeof relativePath !== "string") ||
-            (locationNote !== undefined && typeof locationNote !== "string")
-          ) {
+          value = result.content.find((part) => part.type === "text")?.text;
+          if (typeof value !== "string") {
             throw new ToolInputError("Installed skill instructions are unavailable.");
           }
-          value = formatSkillInstructions({ name, location, locationNote, relativePath, content });
         } else {
           value = result.details;
         }

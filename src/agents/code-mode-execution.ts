@@ -273,6 +273,8 @@ function dispatchCodeModeRequests(
     ...createPendingBridgeStates(newPendingRequests, {
       inbox: params.owner.inbox,
       results: params.owner.results,
+      maxOutputBytes: params.config.maxOutputBytes,
+      resultBudget: params.output.modelBudget,
       sessionStore: params.owner.sessionStore,
       runtime: params.runtime,
       catalogProjection: params.catalogProjection,

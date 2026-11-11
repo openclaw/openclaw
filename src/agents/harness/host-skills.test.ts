@@ -54,7 +54,8 @@ function skillContent(location: string, content: string, note = "") {
         `Skill location: ${location}\n` +
         "Resolve relative resource paths from the directory containing this SKILL.md.\n" +
         (note ? note + "\n\n" : "\n") +
-        content,
+        content +
+        `\n\n[Skill page 0:${Buffer.byteLength(content)}/${Buffer.byteLength(content)}; nextCursor=null. Read all pages before applying instructions.]`,
     },
   ];
 }

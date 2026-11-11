@@ -36,7 +36,6 @@ import {
   getCoreTtsToolResultMediaUrls,
   normalizeAcceptedSessionSpawnResult,
   recordAgentHarnessToolResultTelemetry,
-  runAgentHarnessToolInvocation,
   type AgentHarnessToolResultTelemetry,
   type AcceptedSessionSpawn,
   type AgentHarnessToolExecutionSnapshot,
@@ -73,6 +72,7 @@ import {
   type CodexDynamicToolHookContextBase,
   projectCodexExecutableDynamicToolSurface,
 } from "./dynamic-tool-executable-projection.js";
+import { runCodexToolInvocation } from "./dynamic-tool-invocation.js";
 import {
   createFailedDynamicToolResponse,
   failedToolResult,
@@ -359,7 +359,7 @@ export function createCodexDynamicToolBridge(params: {
       let finalSourceReplyDelivered = false;
       let telemetryRawResultForPresentation: unknown;
       let presentationIsError = false;
-      return runAgentHarnessToolInvocation({
+      return runCodexToolInvocation(toolResultMaxChars, {
         tool,
         call: {
           toolCallId: call.callId,

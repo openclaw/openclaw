@@ -473,7 +473,11 @@ export function renderCodexSkillsInstructions(params: {
           "The OpenClaw skills list may omit installed skills. Use OpenClaw's skills_search to discover relevant installed skills. Search does not install anything.",
         ]
       : []),
-    ...(read ? ["Use OpenClaw's skills_read with a known exact name for full instructions."] : []),
+    ...(read
+      ? [
+          "Use OpenClaw's skills_read with a known exact name. Continue with nextCursor as cursor until null; read all pages before applying instructions.",
+        ]
+      : []),
     ...(prompt ? [prompt] : []),
   ].join("\n");
 }

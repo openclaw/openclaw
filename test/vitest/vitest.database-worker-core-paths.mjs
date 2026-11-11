@@ -1223,6 +1223,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/acp/runtime/session-meta-doctor.test.ts",
   "src/agents/agent-tools.at-prefixed-remote-paths.test.ts",
   "src/agents/agent-tools.create-openclaw-coding-tools.test.ts",
+  "src/agents/agent-tools.skill-read.test.ts",
   "src/agents/bash-tools.notify-on-exit-ack.test.ts",
   "src/agents/memory-write-provenance.test.ts",
   "src/agents/bootstrap-files.memory-core.test.ts",

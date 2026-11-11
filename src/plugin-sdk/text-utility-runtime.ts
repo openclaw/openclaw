@@ -14,6 +14,8 @@ export {
 export {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   resolveLiveToolResultMaxChars,
+  runWithToolResultDeliveryProjection,
+  toolResultFitsBudget,
 } from "../agents/tool-result-limits.js";
 export { escapeHtml } from "../shared/html-escape.js";
 export { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";

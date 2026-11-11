@@ -2,8 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import { Type } from "typebox";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -22,7 +20,7 @@ import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js"
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { registerPluginOnlyCallerIdentityCase } from "./agent-tools.caller-identity.test-support.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { createSandboxedReadTool, wrapReadToolWithSkillContent } from "./agent-tools.read.js";
+import { createSandboxedReadTool } from "./agent-tools.read.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
@@ -33,7 +31,6 @@ import {
 } from "./cron-creator-authority-context.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import type { ReadToolDetails } from "./sessions/tools/tool-contracts.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import {
   expectReadWriteEditTools,
@@ -67,27 +64,6 @@ const baseOnlyPlan = {
   includeOpenClawTools: false,
   includeBaseCodingTools: true,
 };
-const skillLocator = "/skills/pond/SKILL.md";
-const skillContent = "# Pond\ncomplete instructions";
-const fullSkillResult: AgentToolResult<ReadToolDetails> = {
-  content: [{ type: "text", text: skillContent }],
-  details: { kind: "text", content: skillContent },
-};
-
-function skillReadTool(execute: Parameters<typeof wrapReadToolWithSkillContent>[0]["execute"]) {
-  return wrapReadToolWithSkillContent(
-    {
-      name: "read",
-      label: "read",
-      description: "read a file",
-      parameters: Type.Object({ path: Type.String() }),
-      execute,
-    },
-    [{ filePath: skillLocator }],
-    { instructionDeliveryCache: new Map<string, Promise<boolean>>() },
-  );
-}
-
 function sandboxReadTool(root: string) {
   return createSandboxedReadTool({ root, bridge: createHostSandboxFsBridge(root) });
 }
@@ -203,62 +179,6 @@ function lastCoreOptions(): OpenClawToolsOptions {
 }
 
 describe("createOpenClawCodingTools", () => {
-  it.each([
-    ["multi-page node", "node", `${"ok\n".repeat(2_100)}done`, false],
-    ["oversized local", "local", `# Pond\n${"x".repeat(33 * 1024)}`, true],
-  ] as const)(
-    "serves %s skill instructions whole or refuses them",
-    async (_name, backend, content, oversized) => {
-      const virtual = backend === "node";
-      const baseDir = virtual
-        ? "node://node-1/skills/pond"
-        : tempDirs.make("openclaw-assembled-local-skill-");
-      const locator = virtual ? `${baseDir}/SKILL.md` : path.join(baseDir, "SKILL.md");
-      if (!virtual) {
-        await fs.writeFile(locator, content, "utf8");
-      }
-      const tools = createOpenClawCodingTools({
-        config: { tools: { fs: { workspaceOnly: true } } },
-        skillsSnapshot: {
-          prompt: "",
-          skills: [{ name: "pond" }],
-          resolvedSkills: [
-            {
-              name: "pond",
-              description: "Pond skill",
-              filePath: locator,
-              baseDir,
-              ...(virtual ? { readContent: content } : {}),
-              source: virtual ? "openclaw-node" : "test",
-              sourceInfo: {
-                source: virtual ? "openclaw-node" : "test",
-                path: locator,
-                scope: "temporary",
-                origin: "top-level",
-              },
-              disableModelInvocation: false,
-            },
-          ],
-        },
-      });
-
-      const result = await requireTool(tools, "read").execute("whole-skill-read", {
-        path: locator,
-      });
-
-      if (oversized) {
-        expect(extractToolText(result)).toMatch(
-          /(?:cannot|omitted|exceeds).*whole|whole.*(?:cannot|exceeds)|partially served/i,
-        );
-        expect(extractToolText(result)).not.toContain("# Pond");
-        expect(Buffer.byteLength(extractToolText(result), "utf8")).toBeLessThanOrEqual(32 * 1024);
-        return;
-      }
-
-      expect(extractToolText(result)).toBe(content);
-    },
-  );
-
   const testConfig: OpenClawConfig = {};
 
   afterEach(() => {
@@ -1061,114 +981,8 @@ describe("createOpenClawCodingTools", () => {
     ).rejects.toThrow(/Missing required parameter: path/);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 describe("createOpenClawCodingTools read behavior", () => {
-  it("protects materialized sandbox skill identities when no skill snapshot exists", async () => {
-    const relativePath = "skills/demo/SKILL.md";
-    const { root, filePath } = await fileFixture(relativePath, "# Demo\ncomplete instructions");
-    const sandbox = createAgentToolsSandboxContext({
-      workspaceDir: root,
-      fsBridge: createContainerWorkspaceSandboxFsBridge(root),
-    });
-    const tools = createOpenClawCodingTools({
-      sandbox,
-      skillUsagePaths: [
-        {
-          readPath: `/workspace/${relativePath}`,
-          skillFile: filePath,
-          skillName: "demo",
-          skillSource: "workspace",
-        },
-      ],
-    });
-    const read = requireTool(tools, "read");
-
-    expect(extractToolText(await read.execute("sandbox-skill", { path: relativePath }))).toBe(
-      "# Demo\ncomplete instructions",
-    );
-    for (const window of [{ offset: 2 }, { limit: 1 }, { cursor: 0 }]) {
-      const windowed = await read.execute("sandbox-skill-window", {
-        path: `/workspace/${relativePath}`,
-        ...window,
-      });
-      expect(extractToolText(windowed)).toBe("# Demo\ncomplete instructions");
-    }
-  });
-
-  it("deduplicates sequential and concurrent successful skill reads within one attempt", async () => {
-    const locator = skillLocator;
-    let releaseRead = (): void => undefined;
-    const pendingRead = new Promise<AgentToolResult<ReadToolDetails>>((resolve) => {
-      releaseRead = () => resolve(fullSkillResult);
-    });
-    const execute = vi.fn(() => pendingRead);
-    const tool = skillReadTool(execute);
-
-    const first = tool.execute("first-skill-read", { path: locator });
-    const concurrent = tool.execute("concurrent-skill-read", { path: locator });
-    expect(execute).toHaveBeenCalledTimes(1);
-    releaseRead();
-
-    expect(extractToolText(await first)).toBe("# Pond\ncomplete instructions");
-    expect(extractToolText(await concurrent)).toContain("already served whole");
-    expect(
-      extractToolText(await tool.execute("sequential-skill-read", { path: locator })),
-    ).toContain("already served whole");
-    expect(execute).toHaveBeenCalledTimes(1);
-  });
-
-  it("retries skill reads after failures, whole-read refusals, and optional misses", async () => {
-    const locator = skillLocator;
-    const truncatedResult: AgentToolResult<ReadToolDetails> = {
-      content: [{ type: "text", text: "partial" }],
-      details: {
-        kind: "truncated",
-        content: "partial",
-        continuation: { kind: "line", offset: 2 },
-        truncation: {
-          truncated: true,
-          truncatedBy: "lines",
-          totalLines: 2,
-          totalBytes: 16,
-          outputLines: 1,
-          outputBytes: 7,
-          lastLinePartial: false,
-          firstLineExceedsLimit: false,
-          maxLines: 1,
-          maxBytes: 32_768,
-        },
-      },
-    };
-    const notFoundResult: AgentToolResult<ReadToolDetails> = {
-      content: [{ type: "text", text: `Optional file not found: ${locator}.` }],
-      details: { kind: "not_found", status: "not_found", path: locator, optional: true },
-    };
-    const execute = vi
-      .fn<() => Promise<AgentToolResult<ReadToolDetails>>>()
-      .mockRejectedValueOnce(new Error("transient read failure"))
-      .mockResolvedValueOnce(truncatedResult)
-      .mockResolvedValueOnce(notFoundResult)
-      .mockResolvedValueOnce(fullSkillResult);
-    const tool = skillReadTool(execute);
-
-    await expect(tool.execute("failed-skill-read", { path: locator })).rejects.toThrow(
-      "transient read failure",
-    );
-    expect(
-      extractToolText(await tool.execute("oversized-skill-read", { path: locator })),
-    ).toContain("cannot be partially served");
-    expect(
-      extractToolText(
-        await tool.execute("optional-missing-skill-read", { path: locator, optional: true }),
-      ),
-    ).toContain("Optional file not found");
-    expect(extractToolText(await tool.execute("retried-skill-read", { path: locator }))).toBe(
-      "# Pond\ncomplete instructions",
-    );
-    expect(execute).toHaveBeenCalledTimes(4);
-  });
-
   it("applies sandbox path guards to canonical path", async () => {
     const tmpDir = tempDirs.make("openclaw-sbx-");
     const { filePath: outsidePath } = await fileFixture("outside.txt", "outside");

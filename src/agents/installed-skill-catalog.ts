@@ -13,7 +13,7 @@ import { ToolInputError } from "./tools/common.js";
 export type InstalledSkill = CodeModeSkill & {
   /** Published content generation; projections preserve it, never read authority. */
   catalogRevision?: string;
-  /** Prompt-listed instructions retain the shipped Code Mode whole-read contract. */
+  /** Prompt-listed instructions retain their larger source admission allowance. */
   promptListed?: boolean;
   assertCurrent?: () => void;
   /** Only the local placement owner may grant access to this pinned skill directory. */
@@ -354,7 +354,7 @@ export async function searchInstalledSkills(
   };
 }
 
-/** Instructions are delivered whole or rejected, never silently truncated. */
+/** Admit the complete source before the delivery owner selects a bounded page. */
 export async function readInstalledSkill(
   skills: readonly InstalledSkill[],
   name: string,

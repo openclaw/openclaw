@@ -25,6 +25,7 @@ import { loadTuiRuntime } from "../../modes/interactive/tui-runtime.js";
 import { getReadmePath } from "../../package-metadata.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { sanitizeBinaryOutput } from "../../shell-utils.js";
+import { createSkillInstructionPage, getSkillReadContext } from "../../skill-instruction-page.js";
 import { bindAgentToolReplaySafety } from "../../tool-replay-safety.js";
 import type { ToolResultBudget } from "../../tool-result-limits.js";
 import { processImage } from "../../utils/image-resize.js";
@@ -195,7 +196,7 @@ type ReadRenderArgs = {
   file_path?: string;
   offset?: number;
   limit?: number;
-  cursor?: number;
+  cursor?: number | string;
 };
 
 function formatReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): string {
@@ -443,7 +444,7 @@ export function createReadToolDefinition(
       if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 1)) {
         throw new Error("Offset must be an integer at least 1");
       }
-      if (!Number.isSafeInteger(cursor) || cursor < 0) {
+      if (typeof cursor !== "number" || !Number.isSafeInteger(cursor) || cursor < 0) {
         throw new Error("Cursor must be an integer at least 0");
       }
       return await racePromiseWithAbortSignal(
@@ -477,7 +478,7 @@ export function createReadToolDefinition(
                   assertFileToolNotAborted(signal);
                   return {
                     ...resolved,
-                    ...(ops === defaultReadOperations
+                    ...(ops === defaultReadOperations && !getSkillReadContext()
                       ? await captureLocalReadFile(
                           resolved.absolutePath,
                           {
@@ -516,6 +517,20 @@ export function createReadToolDefinition(
                   optional: true,
                 },
               };
+            }
+            const skillRead = getSkillReadContext();
+            if (skillRead) {
+              assertFileToolNotAborted(signal);
+              const result = createSkillInstructionPage(
+                {
+                  name: skillRead.location,
+                  location: skillRead.location,
+                  content: buffer.toString("utf8"),
+                },
+                skillRead.cursor,
+                skillRead.budget,
+              );
+              return { ...result, details: { kind: "skill_page" as const, ...result.details } };
             }
             const mimeType = capturedText
               ? null

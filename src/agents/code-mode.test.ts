@@ -101,7 +101,7 @@ function contractedTool(name: string, pluginId?: string) {
 }
 
 function skillBody(location: string, content: string) {
-  return `Skill location: ${location}\nResolve relative resource paths from the directory containing this SKILL.md.\n\n${content}`;
+  return `Skill location: ${location}\nResolve relative resource paths from the directory containing this SKILL.md.\n\n${content}\n\n[Skill page 0:${Buffer.byteLength(content)}/${Buffer.byteLength(content)}; nextCursor=null. Read all pages before applying instructions.]`;
 }
 
 function expectFragments(value: unknown, included: string[], excluded: string[] = []) {
@@ -238,7 +238,7 @@ describe("Code Mode catalog and model-visible surface", () => {
       [
         "- alpha_tool { value?: string } -> Array<{ id: string; score: number }>",
         "- zeta_tool { value?: string } -> ?",
-        "- read { path: string; cursor?: number /* integer, >= 0 */; limit?: number; offset?: number /* integer, >= 1 */; optional?: true } -> ?",
+        "- read { path: string; cursor?: number /* integer, >= 0 */ | string; limit?: number; offset?: number /* integer, >= 1 */; optional?: true } -> ?",
         "If an input hint leaves needed arguments unclear (`...` or `unknown`), read `await callableName.describe()`",
         "Call globals directly when their input contract is clear",
       ],
@@ -585,7 +585,7 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
 );
 
 it.each([undefined, "read", "skills_read"])(
-  "preserves prompt-listed whole reads under read grants with explicit denial=%s",
+  "preserves prompt-listed source admission under read grants with explicit denial=%s",
   async (denied) => {
     const guide = createFixtureSkillEntry("guide");
     const hidden = createFixtureSkillEntry("hidden");
@@ -612,15 +612,13 @@ it.each([undefined, "read", "skills_read"])(
         let hidden;
         try {
           const content = await skills.read("guide");
-          body = { length: content.length, tail: content.slice(-13) };
+          body = { paged: content.includes("nextCursor=\\"v1:") };
         } catch (error) { body = error.message; }
         try { await skills.read("hidden"); } catch (error) { hidden = error.message; }
         return { body, hidden };
       `);
     expectCompleted(result, {
-      body: denied
-        ? "skills_read is not available in this run."
-        : { length: skillBody("/skills/guide/SKILL.md", body).length, tail: "complete tail" },
+      body: denied ? "skills_read is not available in this run." : { paged: true },
       hidden: denied
         ? "skills_read is not available in this run."
         : 'Skill "hidden" exceeds the 262144-byte instruction limit.',

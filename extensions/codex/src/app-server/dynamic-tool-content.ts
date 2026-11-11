@@ -25,7 +25,7 @@ export function enforceWholeSkillResult(
   return budget <= maxChars
     ? result
     : failedToolResult(
-        `This Codex turn cannot deliver the whole skill within its ${maxChars}-character weighted output budget. No instructions were returned; use a harness with a larger instruction budget.`,
+        `This Codex turn cannot deliver this skill page within its ${maxChars}-character weighted output budget. No instructions were returned; restart the read with a larger instruction budget.`,
       );
 }
 

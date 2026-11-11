@@ -9,10 +9,9 @@ import {
   searchInstalledSkills,
   type InstalledSkill,
 } from "../installed-skill-catalog.js";
-import {
-  formatSkillInstructions,
-  rememberSkillInstructionDelivery,
-} from "../skill-instruction-result.js";
+import { createSkillInstructionPage } from "../skill-instruction-page.js";
+import { rememberSkillInstructionDelivery } from "../skill-instruction-result.js";
+import type { ToolResultBudget } from "../tool-result-limits.js";
 import {
   asToolParamsRecord,
   jsonResult,
@@ -28,9 +27,13 @@ const SkillsSearchSchema = Type.Object({
 const SkillsReadSchema = Type.Object({
   name: Type.String({ minLength: 1 }),
   relativePath: Type.Optional(Type.String({ minLength: 1 })),
+  cursor: Type.Optional(Type.String({ minLength: 1 })),
 });
 
-export function createInstalledSkillTools(skills: readonly InstalledSkill[]): AnyAgentTool[] {
+export function createInstalledSkillTools(
+  skills: readonly InstalledSkill[],
+  budget?: ToolResultBudget,
+): AnyAgentTool[] {
   if (skills.length === 0) {
     return [];
   }
@@ -76,7 +79,7 @@ export function createInstalledSkillTools(skills: readonly InstalledSkill[]): An
         name: "skills_read",
         label: "Read Installed Skill",
         description:
-          "Load complete SKILL.md instructions for an exact installed skill name; search is not required first. Optional relativePath reads a UTF-8 text companion (up to 256 KiB) inside a local skill directory. Restricted placements are instruction-only. Does not execute files or grant command permissions.",
+          "Read a bounded page of SKILL.md instructions for an exact installed skill name; search is not required first. Optional relativePath reads a UTF-8 text companion (up to 256 KiB) inside a local skill directory. Restricted placements are instruction-only. Pass nextCursor as cursor until it is null; read every page before applying instructions. Does not execute files or grant command permissions.",
         parameters: SkillsReadSchema,
         execute: async (_id, args, signal) => {
           const params = asToolParamsRecord(args);
@@ -86,11 +89,12 @@ export function createInstalledSkillTools(skills: readonly InstalledSkill[]): An
             trim: false,
           });
           const instructions = await readInstalledSkill(skills, name, signal, relativePath);
-          const result = {
-            content: [{ type: "text" as const, text: formatSkillInstructions(instructions) }],
-            details: instructions,
-          };
-          if (relativePath === undefined) {
+          const result = createSkillInstructionPage(instructions, params.cursor, budget);
+          if (
+            relativePath === undefined &&
+            result.details.startByte === 0 &&
+            result.details.nextCursor === null
+          ) {
             rememberSkillInstructionDelivery(result, instructions.content);
           }
           return result;

@@ -12,7 +12,7 @@ import { registerDiagnosticTracePropagationBridge } from "../../infra/diagnostic
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
-import { wrapReadToolWithSkillContent } from "../agent-tools.read.js";
+import { wrapReadToolWithSkillContent } from "../agent-tools.skill-read.js";
 import { createInstalledSkillTools } from "./installed-skill-tools.js";
 
 it("records successful discovered skill reads with the original sandbox provenance", async () => {

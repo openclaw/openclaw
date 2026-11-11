@@ -29,7 +29,8 @@ function skillTools(skills: InstalledSkill[]) {
     read,
     find: (id: string, query = "canary", signal?: AbortSignal) =>
       search.execute(id, { query }, signal),
-    load: (id: string, name = "guide") => read.execute(id, { name }),
+    load: (id: string, name = "guide", cursor?: string) =>
+      read.execute(id, { name, ...(cursor ? { cursor } : {}) }),
   };
 }
 it("requires the effective native read tool for body I/O and cached body matches", async () => {
@@ -76,55 +77,66 @@ it.each([
   ["inline", "/skills/guide/SKILL.md"],
   ["reader", "/skills/guide/SKILL.md"],
   ["partial", "/skills/guide/SKILL.md"],
-] as const)("searches and reads whole %s instructions at %s", async (mode, location) => {
-  const name = mode === "reader" ? "release-guide" : "guide";
-  const content =
-    mode === "partial"
-      ? "x".repeat(16 * 1024) + "\nUnabridged ending"
-      : "# Guide\n\nUse a canary deployment.\nPreserve the complete rollback procedure.";
-  const reader = vi.fn(async () => content);
-  const source = { filePath: "/private/gateway/guide/SKILL.md" };
-  const entry = skill({
-    name,
-    location,
-    source: mode === "reader" ? source : { ...source, readContent: content },
-    ...(mode === "reader" ? { reader, readSearchContent: reader } : {}),
-  });
-  const unreadable = skill({
-    name: "unavailable",
-    async reader() {
-      throw new Error("Unavailable");
-    },
-  });
-  const { find, load } = skillTools(mode === "partial" ? [entry, unreadable] : [entry]);
-  const result = await find("find", mode === "reader" ? "canary" : "operations");
-  expect(result.details).toEqual({
-    skills: [
-      { ...guideMetadata, name, location },
-      ...(mode === "partial" ? [{ ...guideMetadata, name: "unavailable" }] : []),
-    ],
-    hasMore: false,
-    ...(mode === "partial"
-      ? { coverage: { bodyIndexed: 1, metadataOnly: 1, truncatedBodies: 1 } }
-      : {}),
-  });
-  if (mode === "reader") {
-    expect(JSON.stringify(result)).not.toContain("rollback");
-    await find("cached-search", "rollback");
-    expect(reader).toHaveBeenCalledTimes(1);
-  } else if (mode === "inline") {
-    await expect(load("invalid", "/etc/passwd")).rejects.toThrow("is not available to this agent");
-    expect(createInstalledSkillTools([])).toEqual([]);
-  }
-  const loaded = await load("load", name);
-  const text = `Skill location: ${location}\nResolve relative resource paths from the directory containing this SKILL.md.\n\n${content}`;
-  expect(loaded.content).toEqual([{ type: "text", text }]);
-  expect(loaded.details).toMatchObject({ name, location, content });
-  expect(JSON.stringify(loaded)).not.toContain("/private/gateway");
-  if (mode === "reader") {
-    expect(reader).toHaveBeenCalledTimes(2);
-  }
-});
+] as const)(
+  "searches and reads complete %s instructions through pages at %s",
+  async (mode, location) => {
+    const name = mode === "reader" ? "release-guide" : "guide";
+    const content =
+      mode === "partial"
+        ? "x".repeat(16 * 1024) + "\nUnabridged ending"
+        : "# Guide\n\nUse a canary deployment.\nPreserve the complete rollback procedure.";
+    const reader = vi.fn(async () => content);
+    const source = { filePath: "/private/gateway/guide/SKILL.md" };
+    const entry = skill({
+      name,
+      location,
+      source: mode === "reader" ? source : { ...source, readContent: content },
+      ...(mode === "reader" ? { reader, readSearchContent: reader } : {}),
+    });
+    const unreadable = skill({
+      name: "unavailable",
+      async reader() {
+        throw new Error("Unavailable");
+      },
+    });
+    const { find, load } = skillTools(mode === "partial" ? [entry, unreadable] : [entry]);
+    const result = await find("find", mode === "reader" ? "canary" : "operations");
+    expect(result.details).toEqual({
+      skills: [
+        { ...guideMetadata, name, location },
+        ...(mode === "partial" ? [{ ...guideMetadata, name: "unavailable" }] : []),
+      ],
+      hasMore: false,
+      ...(mode === "partial"
+        ? { coverage: { bodyIndexed: 1, metadataOnly: 1, truncatedBodies: 1 } }
+        : {}),
+    });
+    if (mode === "reader") {
+      expect(JSON.stringify(result)).not.toContain("rollback");
+      await find("cached-search", "rollback");
+      expect(reader).toHaveBeenCalledTimes(1);
+    } else if (mode === "inline") {
+      await expect(load("invalid", "/etc/passwd")).rejects.toThrow(
+        "is not available to this agent",
+      );
+      expect(createInstalledSkillTools([])).toEqual([]);
+    }
+    let cursor: string | undefined;
+    let reconstructed = "";
+    do {
+      const loaded = await load("load", name, cursor);
+      const page = loaded.details as { content: string; nextCursor: string | null };
+      expect(loaded.details).toMatchObject({ name, location });
+      expect(JSON.stringify(loaded)).not.toContain("/private/gateway");
+      reconstructed += page.content;
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    expect(reconstructed).toBe(content);
+    if (mode === "reader") {
+      expect(reader).toHaveBeenCalledTimes(2);
+    }
+  },
+);
 it("does not serve a cached body index after its owner loses authority", async () => {
   let current = true;
   const { find } = skillTools([

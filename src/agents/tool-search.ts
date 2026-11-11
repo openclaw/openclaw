@@ -21,7 +21,10 @@ import {
   resolveCatalog,
 } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
-import { renderToolSearchControlText } from "./tool-search-control-result.js";
+import {
+  projectToolSearchCallResult,
+  renderToolSearchControlText,
+} from "./tool-search-control-result.js";
 import {
   applyToolSchemaDirectoryCatalog,
   buildMcpToolSearchDirectory,
@@ -419,7 +422,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           // Invocation results need identity, not another copy of the discovery metadata.
           // Keep the full target result in details; forward its already-projected images as content.
           const controlResult = formatToolSearchControlResult(
-            { tool: { id, name, source }, result: modelResult },
+            projectToolSearchCallResult({ id, name, source }, modelResult),
             runtime,
             { parentToolCallId: toolCallId, images },
           );
