@@ -1,31 +1,27 @@
 import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildTemplateAddPlan } from "./lifecycle.js";
 import { emptyPluginCapabilityEvidence } from "./packages.test-support.js";
 import { parseTemplateManifest } from "./schema.js";
-import type {
-  TemplateManifest,
-  TemplatePackagePreflightResult,
-  TemplateSourceIdentity,
-} from "./types.js";
+import type { TemplatePackagePreflightResult } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function requireManifest(value: unknown): TemplateManifest {
-  const result = parseTemplateManifest(value);
-  if (!result.ok) {
-    throw new Error(JSON.stringify(result.diagnostics));
-  }
-  return result.manifest;
-}
+const extension = { ref: "@acme/market-data", version: "2.0.1" } as const;
 
-async function createPlanSource(): Promise<{ source: TemplateSourceIdentity; workspace: string }> {
+async function planApplication(
+  manifest: Record<string, unknown>,
+  packagePreflight?: () => Promise<TemplatePackagePreflightResult>,
+) {
   const root = tempDirs.make("openclaw-template-application-plan-");
   await mkdir(join(root, "workspace", "schemas"), { recursive: true });
   await writeFile(join(root, "workspace", "schemas", "market.json"), "{}\n", "utf8");
-  return {
+  const parsed = parseTemplateManifest({ schemaVersion: 1, agent: { id: "analyst" }, ...manifest });
+  assert(parsed.ok, JSON.stringify(parsed.diagnostics));
+  return buildTemplateAddPlan({
+    manifest: parsed.manifest,
     source: {
       kind: "package",
       name: "@acme/market-analyst",
@@ -36,21 +32,10 @@ async function createPlanSource(): Promise<{ source: TemplateSourceIdentity; wor
       integrity: "sha256:test",
       byteLength: 0,
     },
-    workspace: join(await realpath(root), "new-workspace"),
-  };
-}
-
-const extension = { ref: "@acme/market-data", version: "2.0.1" } as const;
-
-async function planApplication(
-  manifest: Record<string, unknown>,
-  packagePreflight?: () => Promise<TemplatePackagePreflightResult>,
-) {
-  const { source, workspace } = await createPlanSource();
-  return buildTemplateAddPlan({
-    manifest: requireManifest({ schemaVersion: 1, agent: { id: "analyst" }, ...manifest }),
-    source,
-    context: { workspace, ...(packagePreflight ? { packagePreflight } : {}) },
+    context: {
+      workspace: join(await realpath(root), "new-workspace"),
+      ...(packagePreflight ? { packagePreflight } : {}),
+    },
   });
 }
 
