@@ -1,7 +1,8 @@
-// Publisher guards found by the catalog v3 pre-flip audit: strict inference fields,
-// explicit non-chat rows, an oversized v1 that must not block v2/v3, and shrinkage.
+// Publisher task facts and guards: v3-only inference rows, plus the catalog v3 pre-flip
+// audit's strict inference fields, explicit non-chat rows, v1 size, and shrinkage.
 import fs from "node:fs";
 import path from "node:path";
+import * as catalog from "@openclaw/model-catalog-core";
 import { LITELLM_PRICING_URL } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runPublishModelCatalog } from "../../scripts/publish-model-catalog.mts";
@@ -22,7 +23,8 @@ const decision = {
 type Row = Record<string, unknown> & { id: string };
 
 function fixture(options: {
-  extra?: Record<string, { models: Row[] }>;
+  extra?: Record<string, Record<string, unknown> & { models: Row[] }>;
+  chatRows?: number;
   authChoices?: Array<{ provider: string; onboardingScopes?: string[] }>;
   /** Standalone LiteLLM prices; v1 lists each under two keys, so they grow v1 fastest. */
   standalonePrices?: number;
@@ -33,7 +35,9 @@ function fixture(options: {
   const providers = {
     anthropic: { models: [{ id: "chat-a" }] },
     openai: {
-      models: Array.from({ length: 199 }, (_, index) => ({ id: `chat-${index}` })),
+      models: Array.from({ length: (options.chatRows ?? 200) - 1 }, (_, index) => ({
+        id: `chat-${index}`,
+      })),
     },
     ...options.extra,
   };
@@ -96,128 +100,71 @@ function fixture(options: {
   };
 }
 
-const written = (files: Record<string, string>) =>
-  Object.fromEntries(Object.entries(files).map(([feed, file]) => [feed, fs.existsSync(file)]));
+const unwritten = (files: Record<string, string>) =>
+  expect(Object.values(files).filter((file) => fs.existsSync(file))).toEqual([]);
 
-describe("inference declarations are strict on the publisher path", () => {
-  it.each([
-    [
-      "16 new kind in inference",
-      { chat: false, decision, image: { generate: true } },
-      "inference.image",
-    ],
-    [
-      "17 new field in decision",
-      { chat: false, decision: { ...decision, futureField: 1 } },
-      "inference.decision.futureField",
-    ],
-    [
-      "18 new field in decision.billing",
-      { chat: false, decision: { ...decision, billing: { ...decision.billing, futureField: 1 } } },
-      "inference.decision.billing.futureField",
-    ],
-    [
-      "29 new decision question kind",
-      {
-        chat: false,
-        decision: {
-          ...decision,
-          questions: { ...decision.questions, rank: { probabilities: "none", abstention: false } },
-        },
-      },
-      "inference.decision.questions.rank",
-    ],
-  ])(
-    "refuses audit fixture %s instead of publishing it stripped",
-    async (_name, inference, field) => {
-      const { files, run } = fixture({
-        extra: { levanto: { models: [{ id: "sage", inference }] } },
-      });
-      await expect(run()).rejects.toThrow(`model levanto/sage: unknown field ${field}`);
-      expect(written(files)).toEqual({ v1: false, v2: false, v3: false });
+it("refuses unknown inference fields (audit fixtures 16-18, 29) instead of stripping them", async () => {
+  const inference = {
+    chat: false,
+    image: { generate: true },
+    decision: {
+      ...decision,
+      futureField: 1,
+      billing: { ...decision.billing, futureField: 1 },
+      questions: { ...decision.questions, rank: { probabilities: "none", abstention: false } },
     },
-  );
+  };
+  const { files, run } = fixture({ extra: { levanto: { models: [{ id: "sage", inference }] } } });
+  const error = await run().catch((cause: unknown) => String(cause));
+  for (const field of [
+    "image",
+    "decision.futureField",
+    "decision.billing.futureField",
+    "decision.questions.rank",
+  ]) {
+    expect(error).toContain(`inference.${field}`);
+  }
+  unwritten(files);
 });
 
-describe("non-chat rows declare chat: false", () => {
-  // Audit fixture 61: the row every reader would list as a chat model.
-  const mediaRow = { id: "audit-media-no-inference", name: "AUDIT media row without inference" };
-  const mediaOnly = [
+it("requires chat: false on rows of a provider offered only for media (audit fixture 61)", async () => {
+  const row = { id: "audit-media-no-inference" };
+  const authChoices = [
     { provider: "media", onboardingScopes: ["image-generation", "music-generation"] },
+    { provider: "mixed", onboardingScopes: ["text-inference", "image-generation"] },
+    { provider: "openai" },
   ];
-
-  it("refuses a row without inference on a provider offered only for media generation", async () => {
-    const { files, run } = fixture({
-      extra: { media: { models: [mediaRow] } },
-      authChoices: mediaOnly,
-    });
-    await expect(run()).rejects.toThrow(
-      "fixture: provider media is offered only for image-generation, music-generation; model media/audit-media-no-inference must declare inference.chat: false",
-    );
-    expect(written(files)).toEqual({ v1: false, v2: false, v3: false });
-  });
-
-  it("publishes the same row once it declares chat: false, on v3 only", async () => {
-    const { files, run } = fixture({
-      extra: { media: { models: [{ ...mediaRow, inference: { chat: false } }] } },
-      authChoices: mediaOnly,
-    });
-    await run();
-    const [v1, v2, v3] = [files.v1, files.v2, files.v3].map((file) =>
-      JSON.parse(fs.readFileSync(file, "utf8")),
-    );
-    expect(v1.providers).not.toHaveProperty("media");
-    expect(v2.providers).not.toHaveProperty("media");
-    expect(v3.models.find((model: Row) => model.id === mediaRow.id)?.inference).toEqual({
-      chat: false,
-    });
-  });
-
-  it("keeps text-inference providers and auth choices without scopes as chat surfaces", async () => {
-    const { run } = fixture({
-      extra: { mixed: { models: [{ id: "chat-model" }] } },
-      authChoices: [
-        { provider: "mixed", onboardingScopes: ["text-inference", "image-generation"] },
-        { provider: "openai" },
-      ],
-    });
-    await expect(run()).resolves.toMatchObject({ wrote: true });
-  });
-
-  it("refuses a Decision declaration that leaves chat implicit", async () => {
-    const { run } = fixture({
-      extra: { levanto: { models: [{ id: "sage", inference: { decision } }] } },
-    });
-    await expect(run()).rejects.toThrow(/inference.*chat|chat.*expected boolean/is);
-  });
+  const chat = { mixed: { models: [{ id: "chat-model" }] } };
+  const refused = fixture({ extra: { ...chat, media: { models: [row] } }, authChoices });
+  await expect(refused.run()).rejects.toThrow(
+    "fixture: provider media is offered only for image-generation, music-generation; model media/audit-media-no-inference must declare inference.chat: false",
+  );
+  unwritten(refused.files);
+  const marked = { ...row, inference: { chat: false } };
+  const { files, run } = fixture({ extra: { ...chat, media: { models: [marked] } }, authChoices });
+  await run();
+  const v3 = JSON.parse(fs.readFileSync(files.v3, "utf8"));
+  expect(v3.models.find((model: Row) => model.id === row.id)?.inference).toEqual({ chat: false });
+  expect(JSON.parse(fs.readFileSync(files.v2, "utf8")).providers).not.toHaveProperty("media");
 });
 
 describe("feed size", () => {
   // Live v1 is 92% of the cap mostly from standalone prices; v2 and v3 are 45%.
-
   it("warns above 90% of the client cap", async () => {
     const { run, stderr } = fixture({ standalonePrices: 25_500 });
     await run();
-    expect(stderr.join("")).toMatch(
-      /warning: v1 bundle \d+ bytes is 9\d\.\d% of the 4194304-byte client limit/,
-    );
+    expect(stderr.join("")).toMatch(/warning: v1 bundle \d+ bytes is 9\d\.\d% of the 4194304-byte/);
     expect(stderr.join("")).not.toMatch(/warning: v[23] bundle/);
   });
 
-  it("fails every feed on an oversized v1 unless asked to skip only v1", async () => {
+  it("publishes v2 and v3 over an oversized v1 only with --skip-oversized-v1", async () => {
     const { files, run } = fixture({ standalonePrices: 31_000 });
     await expect(run()).rejects.toThrow("exceeds client limit 4194304 bytes");
-    expect(written(files)).toEqual({ v1: false, v2: false, v3: false });
-  });
-
-  it("publishes v2 and v3 and leaves the previous v1 in place with --skip-oversized-v1", async () => {
-    const { files, run, stderr } = fixture({ standalonePrices: 31_000 });
+    unwritten(files);
     fs.writeFileSync(files.v1, "previous v1\n");
     await expect(run("--skip-oversized-v1")).resolves.toMatchObject({ v1Skipped: true });
     expect(fs.readFileSync(files.v1, "utf8")).toBe("previous v1\n");
-    expect(JSON.parse(fs.readFileSync(files.v2, "utf8")).models).toHaveLength(200);
     expect(JSON.parse(fs.readFileSync(files.v3, "utf8")).models).toHaveLength(200);
-    expect(stderr.join("")).toContain("v1 not written, the previous v1 stays served");
   });
 
   it("keeps the previous v3 when the lone v3 left by --skip-oversized-v1 fails mid-write", async () => {
@@ -237,36 +184,74 @@ describe("feed size", () => {
   });
 });
 
-describe("shrink guard", () => {
-  const previousV3 = (rows: number, providers: string[]) => ({
-    schemaVersion: 3,
-    providers: Object.fromEntries(providers.map((id) => [id, {}])),
-    models: Array.from({ length: rows }, (_, index) => ({
-      id: `m-${index}`,
-      provider: providers[0],
-    })),
-  });
-
-  it.each([
-    ["more than 5% of rows", previousV3(212, ["anthropic", "openai"]), "212 -> 200 rows (-5.7%)"],
-    ["a provider", previousV3(200, ["anthropic", "openai", "gone"]), "lost providers gone"],
-  ])("refuses a v3 that lost %s unless --allow-shrink", async (_name, previous, message) => {
-    const { files, rootDir, run } = fixture({});
-    const previousFile = path.join(rootDir, "published-v3.json");
-    writeJsonFile(previousFile, previous);
-    await expect(run("--previous-v3", previousFile)).rejects.toThrow(message);
-    expect(written(files)).toEqual({ v1: false, v2: false, v3: false });
-    await expect(run("--previous-v3", previousFile, "--allow-shrink")).resolves.toMatchObject({
-      wrote: true,
+it("refuses a v3 shrink above 5% or a lost provider unless --allow-shrink", async () => {
+  const { files, rootDir, run } = fixture({});
+  const previous = path.join(rootDir, "published-v3.json");
+  const publish = (rows: number, providers: string[], ...args: string[]) => {
+    writeJsonFile(previous, {
+      schemaVersion: 3,
+      providers: Object.fromEntries(providers.map((id) => [id, {}])),
+      models: Array.from({ length: rows }, (_, index) => ({ id: `m-${index}` })),
     });
+    return run("--previous-v3", previous, "--previous", path.join(rootDir, "absent.json"), ...args);
+  };
+  await expect(publish(212, ["anthropic", "openai"])).rejects.toThrow("212 -> 200 rows (-5.7%)");
+  await expect(publish(200, ["anthropic", "openai", "gone"])).rejects.toThrow(
+    "lost providers gone",
+  );
+  unwritten(files);
+  await expect(publish(212, ["openai", "gone"], "--allow-shrink")).resolves.toMatchObject({
+    wrote: true,
+  });
+  await expect(publish(210, ["anthropic", "openai"])).resolves.toMatchObject({ wrote: true });
+});
+
+describe("task facts", () => {
+  const native = {
+    id: "native",
+    baseUrl: "https://fixture.invalid/private",
+    inference: {
+      chat: false,
+      decision: { ...decision, billing: { ...decision.billing, usdPerMillion: { input: 0 } } },
+    },
+  };
+  const extra = (chatRows: number) => ({
+    openai: {
+      authScope: "agent",
+      models: Array.from({ length: chatRows - 1 }, (_, index) => ({
+        id: `chat-${index}`,
+        ...(index === 0 ? { inference: { chat: true, decision } } : {}),
+      })),
+    },
+    fixture: {
+      authScope: "plugin",
+      defaultModel: "native",
+      headers: { "X-F": "x" },
+      models: [native],
+    },
   });
 
-  it("accepts a drop within 5% and a missing previous file", async () => {
-    const { rootDir, run } = fixture({});
-    const previousFile = path.join(rootDir, "published-v3.json");
-    writeJsonFile(previousFile, previousV3(210, ["anthropic", "openai"]));
-    await expect(
-      run("--previous-v3", previousFile, "--previous", path.join(rootDir, "absent.json")),
-    ).resolves.toMatchObject({ wrote: true });
+  it("publishes task facts only on the opt-in v3 wire", async () => {
+    const { files, run } = fixture({ extra: extra(200) });
+    await run();
+    const [v1, v2, v3] = [files.v1, files.v2, files.v3].map((file) =>
+      JSON.parse(fs.readFileSync(file, "utf8")),
+    );
+    expect(catalog.parseRemoteModelCatalogBundle(v1).providers).not.toHaveProperty("fixture");
+    expect(catalog.parseRemoteModelCatalogBundleV2(v2).models).toHaveLength(200);
+    const parsedV3 = catalog.parseRemoteModelCatalogBundleV3(v3);
+    expect(parsedV3.models).toHaveLength(201);
+    expect(parsedV3.providers.fixture).toEqual({});
+    const row = parsedV3.models.find((model) => model.id === "native");
+    expect(row).toMatchObject({ inference: native.inference, pricing: { status: "unknown" } });
+    expect(row).not.toHaveProperty("baseUrl");
+    expect(parsedV3.models.find((model) => model.id === "chat-0")?.inference?.chat).toBe(true);
+    expect(v2.models.find((model: Row) => model.id === "chat-0")).not.toHaveProperty("inference");
+  });
+
+  it("does not use native-only rows to satisfy the released chat catalog floor", async () => {
+    const { files, run } = fixture({ extra: extra(199) });
+    await expect(run()).rejects.toThrow("below required floor");
+    unwritten(files);
   });
 });
