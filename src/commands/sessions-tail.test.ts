@@ -9,6 +9,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.test-support.js";
@@ -390,8 +391,10 @@ describe("sessionsTailCommand", () => {
   it.each([
     { signal: "SIGINT" as const, exitCode: 130 },
     { signal: "SIGTERM" as const, exitCode: 143 },
+    { signal: "abort" as const, exitCode: undefined },
   ])("continues following until $signal and exits with $exitCode", async ({ signal, exitCode }) => {
     vi.useFakeTimers();
+    const work = new AsyncWorkScope();
     const initialListeners = listeners();
     await writeSessionEntry();
     await appendEvents([
@@ -402,24 +405,20 @@ describe("sessionsTailCommand", () => {
     vi.mocked(runtime.log).mockImplementation((message) => {
       if (!appended && String(message).includes("session.started")) {
         appended = true;
-        appendSqliteTrajectoryRuntimeEvents(
-          { agentId: "main", sessionId: "session-one", storePath },
-          [appendedEvent],
-        );
+        void appendEvents([appendedEvent]);
       }
     });
 
-    const run = explicitTail({ tail: "1", follow: true });
+    const run = work.run(() => explicitTail({ tail: "1", follow: true }));
     try {
       await vi.advanceTimersByTimeAsync(1_000);
     } finally {
-      process.emit(signal, signal);
+      void (signal === "abort" ? work.beginClose() : process.emit(signal, signal));
       await run;
     }
 
     expectOutput(["tool.result", "sqlite ok"]);
-    expect(runtime.exit).toHaveBeenCalledOnce();
-    expect(runtime.exit).toHaveBeenCalledWith(exitCode);
+    expect(vi.mocked(runtime.exit).mock.calls).toEqual(exitCode ? [[exitCode]] : []);
     expect(listeners()).toEqual(initialListeners);
   });
 
