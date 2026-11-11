@@ -68,7 +68,14 @@ it.each([390, 1440].flatMap((width) => [false, true].map((reduced) => ({ width, 
     await expect.element(remove).toBeVisible();
     const row = remove.element().closest<HTMLElement>('[role="listitem"]')!;
     const label = row.querySelector<HTMLElement>(".openclaw-id-devices__text")!;
-    await Promise.all(document.getAnimations().map((animation) => animation.finished));
+    const dialog = row.closest<HTMLElement>("openclaw-modal-dialog")!;
+    await vi.waitFor(() =>
+      expect(
+        dialog
+          .getAnimations({ subtree: true })
+          .some((animation) => animation.pending || animation.playState === "running"),
+      ).toBe(false),
+    );
     const initial = label.getBoundingClientRect();
     const initialRow = row.getBoundingClientRect();
     await remove.click();

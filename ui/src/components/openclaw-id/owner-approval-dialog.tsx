@@ -7,13 +7,13 @@ import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts"
 import { openClawIdFeatureSignal } from "../../lib/openclaw-id/feature-lifetime.ts";
 import { ownerApprovalFor } from "../../lib/openclaw-id/owner-approval-lifetime.ts";
 import type { OwnerApproval, OwnerApprovalRequest } from "../../lib/openclaw-id/owner-approval.ts";
-import { openClawIdUiError } from "../../lib/openclaw-id/ui-error.ts";
+import { openClawIdErrorToast, openClawIdUiError } from "../../lib/openclaw-id/ui-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { showToast } from "../../lib/toast.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
 import { IconButton } from "../solid/icon-button.tsx";
 import { OpenClawIdErrorMessage } from "./error-message.tsx";
-import { showOwnerDevicesDialog } from "./owner-devices-dialog.tsx";
 import { createOwnerDialogMotion } from "./owner-dialog-motion.ts";
 
 registerEnglishCatalog(registerOpenClawIdDialogsEnglish);
@@ -142,6 +142,18 @@ export function showOwnerApprovalDialog(params: { client: GatewayBrowserClient }
   // Closes when the feature turns off.
   const lifetime = { signal: openClawIdFeatureSignal(), value: undefined };
   return withPromiseModalHost<void>(lifetime, (modal) => {
+    const openDevices = async () => {
+      try {
+        const { showOwnerDevicesDialog } = await import("./owner-devices-dialog.tsx");
+        if (modal.settled) {
+          return;
+        }
+        modal.finish(undefined);
+        await showOwnerDevicesDialog(params);
+      } catch (error) {
+        showToast({ severity: "error", message: openClawIdErrorToast(error, "open") });
+      }
+    };
     modal.render(() => {
       const motion = createOwnerDialogMotion();
       const projection = owner ? projectOwner(owner, (value) => value.read()) : null;
@@ -191,10 +203,7 @@ export function showOwnerApprovalDialog(params: { client: GatewayBrowserClient }
                 <ApprovalRow
                   request={request()}
                   owner={owner!}
-                  onDevices={() => {
-                    modal.finish(undefined);
-                    void showOwnerDevicesDialog(params);
-                  }}
+                  onDevices={() => void openDevices()}
                 />
               )}
             </For>

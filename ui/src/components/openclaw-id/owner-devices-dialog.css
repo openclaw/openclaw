@@ -73,7 +73,7 @@
 
 .openclaw-id-devices summary {
   width: fit-content;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .openclaw-id-devices__error details > div {
