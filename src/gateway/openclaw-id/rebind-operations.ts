@@ -66,7 +66,7 @@ function replacesBoth(
 export function createRebindOperations(owner: {
   serialize: <T>(work: () => Promise<T>) => Promise<T>;
   load: () => Promise<StoredClaw | undefined>;
-  commit: (record: StoredClaw) => Promise<void>;
+  commit: (record: StoredClaw, assertCurrent?: () => void) => Promise<void>;
 }) {
   const { serialize, load, commit } = owner;
   return {
@@ -107,7 +107,7 @@ export function createRebindOperations(owner: {
       input: unknown,
       channel: Channel | undefined,
       staged: { kSrv: IrohEndpointKey; kGw: Ed25519PublicKey },
-      /** Service-owned lifetime, checked after verification in this serialized write lane. */
+      /** Service-owned lifetime, retained through verification and durable write admission. */
       isCurrent?: () => boolean,
     ): Promise<(AuthorityAccepted & { bindingSeq: number }) | AuthorityRefusal> {
       return serialize(async () => {
@@ -144,10 +144,22 @@ export function createRebindOperations(owner: {
         if (!binding.ok) {
           return binding;
         }
-        if (isCurrent && !isCurrent()) {
-          return { ok: false, code: "rebind_cancelled", detail: "the re-bind lifetime ended" };
+        const cancelled = new Error("the re-bind lifetime ended");
+        const assertCurrent = () => {
+          if (isCurrent && !isCurrent()) {
+            throw cancelled;
+          }
+        };
+        try {
+          assertCurrent();
+          await commit({ ...record, binding: binding.statement }, assertCurrent);
+        } catch (error) {
+          // Storage wraps a refused host admission; uncertain outcomes remain errors.
+          if (error === cancelled || (error instanceof Error && error.cause === cancelled)) {
+            return { ok: false, code: "rebind_cancelled", detail: cancelled.message };
+          }
+          throw error;
         }
-        await commit({ ...record, binding: binding.statement });
         // Members' rows at Discovery follow the snapshot published for the new binding.
         return { ok: true, status: "applied", events: [{ type: "publish_snapshot" }], bindingSeq };
       });
