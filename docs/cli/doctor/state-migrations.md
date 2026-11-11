@@ -443,6 +443,8 @@ After explicit repair (`--fix`, `--repair`, or `--yes`), Doctor verifies runtime
 
 Doctor also discovers retired setup state and interrupted migration claims in every resolved agent workspace, active sandbox workspace, and explicitly configured `agents.defaults.workspace` root. That shared root is included even when an explicit multi-agent roster uses only its subdirectories. Doctor imports `<workspace>/openclaw-workspace-state.json` through the existing migration; it does not assign the root to an agent or move persona and memory files.
 
+Gateway startup and config reloads refuse while a configured workspace still has any of these sources. Sandboxed code can write inside its sandbox workspace, so for a sandbox workspace only a state-directory attestation blocks the Gateway. A setup file inside the sandbox copy blocks only that sandbox's turns until `openclaw doctor --fix` repairs it.
+
 Doctor no longer scans, imports, or removes the older
 `<workspace>/.openclaw/workspace-state.json` layout. Its files remain untouched. Upgrade
 through OpenClaw `2026.9.7` and run `openclaw doctor --fix` there before updating
