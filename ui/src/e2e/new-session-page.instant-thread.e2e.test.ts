@@ -95,6 +95,10 @@ suite.define(() => {
           await followUpComposer.fill("Still writing my next message");
           expect(await page.locator(".chat-queue__text").allTextContents()).toEqual(followers);
           expect(await page.locator(".chat-pane__incognito").count()).toBe(incognito ? 1 : 0);
+          // The dashed frame must hold while the session is still being created.
+          expect(await page.locator('.agent-chat__input[data-incognito="true"]').count()).toBe(
+            incognito ? 1 : 0,
+          );
           if (!incognito) {
             await navigationDrawerToggle(page).click();
             // The sliding drawer can hover a tooltip under the stationary pointer.
@@ -196,9 +200,12 @@ suite.define(() => {
             header,
             page.locator(".chat-group.user .chat-bubble"),
           ]);
-          for (const selector of [".chat-pane__incognito", ".chat-pane__incognito-notice"]) {
-            expect(await page.locator(selector).isVisible()).toBe(incognito);
-          }
+          expect(await page.locator(".chat-pane__actions .chat-pane__incognito").isVisible()).toBe(
+            incognito,
+          );
+          expect(await page.locator('.agent-chat__input[data-incognito="true"]').isVisible()).toBe(
+            incognito,
+          );
           for (const [selector, target, pending] of [
             ["header", header, pendingHeader],
             [

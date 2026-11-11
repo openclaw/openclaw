@@ -311,8 +311,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   };
   phases.mark("attempt.system-prompt.context");
   const activeProjectKeys = attempt.preparedModelRuntime?.activeProjectKeys ?? [];
-  // These owners read independent prompt facts. Drain all preparations before
-  // attempt cleanup can release their workspace or database authority.
+  // These owners read independent prompt facts. Budgeted project recall may settle
+  // later; it retains the turn's live authority checks and owns its provider cleanup.
   const [
     { preparedMemoryPrompt, preparedWatchedSessions },
     projectMemoryBootstrap,

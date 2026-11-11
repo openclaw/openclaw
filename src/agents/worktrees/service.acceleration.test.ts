@@ -42,6 +42,7 @@ import {
 import {
   listTemplatesAsync,
   markTemplateReadyAsync,
+  readTemplateAsync,
   releaseTemplateReaderAsync,
   retainTemplateReaderAsync,
 } from "./template-registry-async.js";
@@ -176,6 +177,11 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       true,
     );
     expect(await listTemplatesAsync(env)).toEqual([
+      expect.objectContaining({
+        status: "preparing",
+        id: template.id,
+        cacheKey: `retired:${template.id}`,
+      }),
       expect.objectContaining({ status: "ready", id: expect.not.stringMatching(template.id) }),
     ]);
   });
@@ -604,10 +610,10 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         provisionIgnoredFiles,
       });
 
-      const replacement = (await listTemplatesAsync(env))[0];
+      const replacement = await readTemplateAsync(env, original.cacheKey);
       assert(replacement);
       expect(replacement.id).not.toBe(original.id);
-      await expect(fs.access(original.path)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(original.path)).resolves.toBeUndefined();
       expect((await fs.readdir(created.path)).toSorted()).toEqual([
         ".git",
         ".gitignore",

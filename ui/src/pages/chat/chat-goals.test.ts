@@ -446,7 +446,9 @@ describe("Goal control requests", () => {
     const captured = chatGoalRecovery(host);
     expect
       .soft(renderedError)
-      .toBe("Goal update was not sent because its recovery request could not be saved.");
+      .toBe(
+        "Couldn’t save the recovery request. Free browser storage and try again. Your goal update wasn’t sent.",
+      );
     expect.soft(host.request).not.toHaveBeenCalled();
     expect.soft(sessionStorage.length).toBe(0);
     // Credentials changed, but both clients lack a distinguishable scope and share a session.

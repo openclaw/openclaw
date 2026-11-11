@@ -127,10 +127,10 @@ function renderPreview(
 
 describe.runIf(browserMode)("agent file preview", () => {
   it.each([
-    [false, null, "Saved", "Updated Unknown"],
-    [true, null, "Will Create on Save", "Not Created Yet"],
-    [true, "AGENTS.md", "Live draft", "Updated Unknown"],
-    [true, "SOUL.md", "Will Create on Save", "Not Created Yet"],
+    [false, null, "Saved", "Update time unknown"],
+    [true, null, "Will create on save", "Not created yet"],
+    [true, "AGENTS.md", "Live draft", "Update time unknown"],
+    [true, "SOUL.md", "Will create on save", "Not created yet"],
   ] as const)(
     "opens a sanitized document with current metadata (missing %s, conflict %s)",
     async (missing, conflict, status, updated) => {

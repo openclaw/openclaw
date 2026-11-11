@@ -75,4 +75,75 @@ suite.define(() => {
       expect(await sidebar.locator(".sidebar-recent-session").count()).toBe(8);
     });
   });
+
+  it.each([
+    ["none", true],
+    ["category", false],
+  ] as const)(
+    "auto-loads at the sidebar end only in flat view (%s)",
+    async (grouping, autoLoads) => {
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const pageSize = 40;
+        // The chat pane follows the mocked cursor too; only sidebar pages count here.
+        const sidebarOlderPage = { offset: pageSize, source: "sidebar" };
+        const rows = Array.from({ length: pageSize + 1 }, (_, index) =>
+          sessionRow("agent:main:thread-" + index, "Conversation " + index, 1000 - index),
+        );
+        const gateway = await installMockGateway(page, {
+          sessions: rows,
+          sessionKey: rows[0]!.key,
+          methodResponses: {
+            "sessions.list": {
+              cases: [
+                {
+                  match: { offset: pageSize },
+                  response: sessionsListResponse(rows.slice(pageSize), {
+                    offset: pageSize,
+                    totalCount: rows.length,
+                    hasMore: false,
+                    nextOffset: null,
+                  }),
+                },
+                {
+                  response: sessionsListResponse(rows.slice(0, pageSize), {
+                    offset: 0,
+                    totalCount: rows.length,
+                    hasMore: true,
+                    nextOffset: pageSize,
+                  }),
+                },
+              ],
+            },
+          },
+        });
+        await page.addInitScript((value) => {
+          localStorage.setItem("openclaw:sidebar:sessions:grouping", value);
+        }, grouping);
+        await page.setViewportSize({ width: 1280, height: 600 });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, rows[0]!.key));
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const more = sidebar.getByRole("button", { name: "Load more sessions", exact: true });
+        await more.waitFor();
+        const olderPageRequests = () => gateway.getRequests("sessions.list", sidebarOlderPage);
+        expect(await olderPageRequests()).toEqual([]);
+
+        await more.scrollIntoViewIfNeeded();
+        if (autoLoads) {
+          await gateway.waitForRequest("sessions.list", { match: sidebarOlderPage });
+          await more.waitFor({ state: "detached" });
+          return;
+        }
+        // Let the observer deliver before proving grouped views stay manual.
+        await page.evaluate(
+          () =>
+            new Promise((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(resolve));
+            }),
+        );
+        expect(await olderPageRequests()).toEqual([]);
+        await more.click();
+        await gateway.waitForRequest("sessions.list", { match: sidebarOlderPage });
+      });
+    },
+  );
 });

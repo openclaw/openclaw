@@ -82,10 +82,7 @@
 .chat-workspace-rail__group-chevron svg,
 .sidebar-file-view__action svg,
 .session-diff__toolbar-button svg,
-.session-diff__toolbar-icon svg,
-.session-diff__refresh svg,
 .session-diff__chevron svg,
-.session-diff__file-menu svg,
 .session-diff__footer svg {
   width: 14px;
   height: 14px;
@@ -252,7 +249,7 @@
 
 .chat-workspace-rail__row-action:hover,
 .chat-workspace-rail__row-action:focus-visible,
-.chat-workspace-rail__row-actions :where(.chat-copy-btn:hover, .chat-copy-btn:focus-visible) {
+.chat-workspace-rail__row-actions :where(.chat-copy-btn:is(:hover, :focus-visible)) {
   border-color: color-mix(in srgb, var(--border-strong) 72%, transparent);
   background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
   color: var(--text);
@@ -650,6 +647,12 @@ button.sidebar-image-view__image {
 
 .sidebar-file-view__edit-actions .btn:last-child:not(:disabled):hover {
   background: var(--primary-hover);
+  color: var(--primary-foreground);
+}
+
+.sidebar-file-view__edit-actions .btn:last-child:not(:disabled):active {
+  background: var(--primary-active);
+  color: var(--primary-foreground);
 }
 
 .sidebar-file-view__compact-action {
@@ -856,17 +859,11 @@ button.sidebar-image-view__image {
   animation: btn-spinner-spin 0.7s linear infinite;
 }
 
-.session-diff__toolbar-button,
-.session-diff__toolbar-icon,
-.session-diff__refresh,
-.session-diff__file-menu {
+.session-diff__toolbar-button {
   min-width: 26px;
   height: 26px;
   min-height: 26px;
   padding: 4px;
-}
-
-.session-diff__toolbar-button {
   display: inline-flex;
   align-items: center;
   gap: 2px;

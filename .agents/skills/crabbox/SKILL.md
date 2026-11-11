@@ -1,6 +1,6 @@
 ---
 name: crabbox
-description: "Crabbox and Blacksmith Testbox remote testing: isolation, cross-platform E2E, diagnostics, cleanup."
+description: "Crabbox remote testing with Boat and Blacksmith Testbox: isolation, cross-platform E2E, diagnostics, cleanup."
 ---
 
 # Crabbox
@@ -14,6 +14,7 @@ description: "Crabbox and Blacksmith Testbox remote testing: isolation, cross-pl
 
 Backends:
 
+- `ascii-box` (`boat` alias): direct Boat Linux VMs. `cbx_...`.
 - `blacksmith-testbox`: trusted maintainer source. Prepared CI. `tbx_...`.
 - `aws`: direct brokered Crabbox. Fresh PRs. Custom sync/env/capture. `cbx_...`.
 - `local-container`: Docker fallback. Not remote proof.
@@ -39,9 +40,10 @@ Crabbox.”
 
 ## Route First
 
-- Preserve resolved provider: Testbox for trusted source; direct AWS when its
-  semantics required; secretless CI/AWS for untrusted code. Never run untrusted
-  wrappers/config locally or hydrate untrusted lease.
+- For trusted source, preserve the provider resolved from the consumer's
+  configuration and explicit task instructions. Use secretless CI/AWS for
+  untrusted code. Never run untrusted wrappers/config locally or hydrate
+  untrusted lease.
 - Acquire when command ready; reuse owned ID; stop afterward.
 - Smallest proven profile. Larger: recorded memory evidence or measured
   total-cost benefit required, not generic failure/delay/timeout. Do not raise
@@ -71,6 +73,14 @@ test -n "$CRABBOX"
 ```
 
 - Use consumer's trusted wrapper/install instructions.
+- Native Linux/WSL command-lifecycle and cancellation proof requires a complete
+  matching Crabbox distribution, or a verified runtime manifest selected with
+  `CRABBOX_RUNTIME_ARTIFACTS`. Match the companions to the frozen source and verify
+  that the manifest binds the exact selected controller. A development CLI without
+  a runtime pack uses legacy SSH supervision; `--version` alone does not establish
+  native supervision. Verify the selected pack before allocation; do not count
+  CLI-only proof as native lifecycle proof. Follow the upstream
+  [runtime artifact instructions](https://github.com/openclaw/crabbox/blob/main/scripts/runtime-artifacts/README.md).
 - Repairs: verify upstream; use clean task-owned checkout; preserve installed
   binary + unrelated source. Never trust sibling checkout merely by name.
 

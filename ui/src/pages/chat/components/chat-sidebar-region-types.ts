@@ -3,6 +3,7 @@ import type { IconName } from "../../../components/solid/icon.tsx";
 import type { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import type { AgentIdentity } from "../../../lib/identity-avatar-view.ts";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
+import type { PresentationBinding } from "../../../lib/presentation.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import type { MobileSheetScrollFades } from "../chat-mobile-scroll-fades.ts";
@@ -55,6 +56,7 @@ export type SidebarRegionCallbacks = {
 };
 
 export type RegionProps = {
+  visualPresentation?: PresentationBinding;
   elements: {
     readonly shell: HTMLElement;
     readonly header: HTMLElement;
@@ -98,6 +100,7 @@ export type RegionMethods = {
 export type RegionElement = SolidBridgeElement<RegionProps, RegionMethods>;
 
 export type SidebarRegionParams = {
+  visualPresentation?: PresentationBinding;
   onPanelReady?: RegionProps["onPanelReady"];
   onRegionElementRef?: (element: HTMLElement) => void | (() => void);
   onHeaderElementRef?: (element: HTMLElement) => void | (() => void);

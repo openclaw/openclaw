@@ -140,3 +140,10 @@ openclaw-app[data-native-titlebar] .shell--embed > .content {
     padding: var(--space-3);
   }
 }
+
+/* The native apps keep the platform's touch rows. */
+@media (pointer: coarse) {
+  .shell--embed {
+    --menu-item-height: 44px;
+  }
+}

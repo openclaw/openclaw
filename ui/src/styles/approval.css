@@ -346,12 +346,11 @@
 }
 
 .approval-page__spinner {
+  --spinner-art: var(--spinner-mask-large);
   width: 34px;
   height: 34px;
   margin-bottom: 20px;
   color: var(--accent);
-  background: currentColor;
-  mask: var(--spinner-mask-large);
   border-radius: 50%;
   animation: btn-spinner-spin 800ms linear infinite;
 }
@@ -573,14 +572,6 @@
     .chat-question-panel__option:not(.chat-question-panel__option--selected)
     .chat-question-panel__option-marker {
     border-color: var(--border-strong);
-  }
-
-  /* Own answer is one more choice among the radios, so it takes their round marker. */
-  .question-page
-    .chat-question-panel:has(.chat-question-panel__option[role="radio"])
-    .chat-question-panel__option--other
-    .chat-question-panel__option-marker {
-    border-radius: var(--radius-full);
   }
 
   .question-page .chat-question-panel .input {

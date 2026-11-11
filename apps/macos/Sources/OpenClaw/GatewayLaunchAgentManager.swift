@@ -724,32 +724,18 @@ extension GatewayLaunchAgentManager {
         expectedServiceAuthority: ServiceAuthority? = nil,
         checkCurrent: (@MainActor @Sendable () async throws -> Void)? = nil) async -> String?
     {
-        // An install that pins `serviceRuntime` runs its Bun from the stable service path.
-        var finishStaging: (@Sendable (Bool) -> Void)?
-        if let serviceRuntime, args.first == "install" {
-            do { finishStaging = try await serviceRuntime.stageServiceBun() } catch {
-                return "The Gateway service runtime could not be prepared (\(error.localizedDescription)). " +
-                    "Retry, or reinstall OpenClaw.app if it keeps failing."
-            }
-        }
         let result = await self.runDaemonCommandResult(
             args,
             timeout: timeout,
             quiet: quiet,
             runtime: runtime,
+            serviceRuntime: serviceRuntime,
             installedCLI: installedCLI,
             restoring: restoring,
             legacyAuthority: legacyAuthority,
             expectedServiceAuthority: expectedServiceAuthority,
             checkCurrent: checkCurrent)
-        if case let .failure(message) = result {
-            // The installer can publish the service and then fail, so settle on what is installed.
-            let installedRoot = self.installedServiceCLI()?.prefix.last
-                .flatMap(BundledRuntime.init(serviceEntrypoint:))?.root.resolvingSymlinksInPath()
-            finishStaging?(installedRoot != nil && installedRoot == serviceRuntime?.root.resolvingSymlinksInPath())
-            return message ?? "Gateway daemon command failed"
-        }
-        finishStaging?(true)
+        if case let .failure(message) = result { return message ?? "Gateway daemon command failed" }
         return nil
     }
 
@@ -758,6 +744,7 @@ extension GatewayLaunchAgentManager {
         timeout: Double,
         quiet: Bool,
         runtime: BundledRuntime? = nil,
+        serviceRuntime: BundledRuntime? = nil,
         installedCLI: InstalledServiceCLI? = nil,
         restoring: InstalledServiceCLI? = nil,
         legacyAuthority: InstalledServiceCLI? = nil,
@@ -803,6 +790,18 @@ extension GatewayLaunchAgentManager {
         } else {
             beforeSpawn = nil
         }
+        let prepared: BundledRuntime.PreparedServiceBun?
+        do {
+            prepared = if let serviceRuntime, args.first == "install" {
+                try await serviceRuntime.prepareServiceBun()
+            } else {
+                nil
+            }
+        } catch {
+            return .failure("The Gateway service runtime could not be prepared (\(error.localizedDescription)). " +
+                "Retry, or reinstall OpenClaw.app if it keeps failing.")
+        }
+        defer { prepared?.discard() }
         let invocation = await self.daemonInvocation(runtime: runtime, installedCLI: selectedCLI)
         if args.first == "install", invocation.supportsExpectedRuntimePin {
             let intent: RuntimeIntent
@@ -820,13 +819,37 @@ extension GatewayLaunchAgentManager {
                 arguments += ["--expected-runtime-pin", expectation]
             }
         }
-        return await self.executeDaemonCommand(
+        let finishStaging: (@Sendable (Bool) -> Void)?
+        do {
+            // Preparation and runtime-intent inspection can suspend. No live executable changes
+            // until cancellation, update selection, and the originally captured custody agree.
+            if let prepared {
+                try await checkCurrent?()
+                try Task.checkCancellation()
+                if let error = beforeSpawn?() { return .failure(error) }
+                finishStaging = try prepared.publish()
+            } else {
+                finishStaging = nil
+            }
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+        let result = await self.executeDaemonCommand(
             arguments,
             invocation: invocation,
             timeout: timeout,
             quiet: quiet,
             beforeSpawn: beforeSpawn,
             checkCurrent: checkCurrent)
+        if case .failure = result {
+            // The installer can publish the service and then fail, so settle on what is installed.
+            let installedRoot = self.installedServiceCLI()?.prefix.last
+                .flatMap(BundledRuntime.init(serviceEntrypoint:))?.root.resolvingSymlinksInPath()
+            finishStaging?(installedRoot != nil && installedRoot == serviceRuntime?.root.resolvingSymlinksInPath())
+        } else {
+            finishStaging?(true)
+        }
+        return result
     }
 
     private static func executeDaemonCommand(

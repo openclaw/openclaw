@@ -8,6 +8,8 @@ import {
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   commandSuccess,
+  gogSchemaSuccess,
+  gogServeSchema,
   commandGate,
   createGmailConfig,
   WatcherChild,
@@ -19,7 +21,9 @@ const mocks = vi.hoisted(() => ({
   hasBinary: vi.fn(() => true),
   resolveExecutable: vi.fn((name: string) => name),
   runCommandWithTimeout: vi.fn(),
+  runUtf8CommandWithTimeout: vi.fn(),
   spawn: vi.fn(),
+  log: { debug: vi.fn(), trace: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   killProcessTree: vi.fn(),
 }));
 
@@ -35,13 +39,24 @@ vi.mock("node:child_process", async () => {
 vi.mock("../skills/loading/config.js", () => ({ hasBinary: mocks.hasBinary }));
 
 // mock-isolation: resolve synthetic executables without inspecting host installations.
-vi.mock("../infra/executable-path.js", () => ({ resolveExecutable: mocks.resolveExecutable }));
+vi.mock("../infra/executable-path.js", () => ({
+  resolveExecutable: mocks.resolveExecutable,
+  resolveExecutablePath: mocks.resolveExecutable,
+}));
 
 // mock-isolation: command completion is driven by the fixture, not real tools.
-vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.runCommandWithTimeout }));
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: mocks.runCommandWithTimeout,
+  runUtf8CommandWithTimeout: mocks.runUtf8CommandWithTimeout,
+}));
 
 // mock-isolation: terminate only the fixture's fake child processes.
 vi.mock("../process/kill-tree.js", () => ({ killProcessTree: mocks.killProcessTree }));
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+  createSubsystemLogger: () => mocks.log,
+}));
 
 const { startGmailWatcher, stopGmailWatcher } = await import("./gmail-watcher.js");
 
@@ -93,6 +108,8 @@ beforeEach(async () => {
   vi.useFakeTimers();
   allChildren = [];
   mocks.runCommandWithTimeout.mockReset();
+  mocks.runUtf8CommandWithTimeout.mockReset().mockResolvedValue(gogSchemaSuccess);
+  Object.values(mocks.log).forEach((fn) => fn.mockClear());
   mocks.spawn.mockReset();
   mocks.killProcessTree.mockReset().mockImplementation((pid: number) => {
     const child = allChildren.find((candidate) => candidate.pid === pid);
@@ -120,6 +137,7 @@ it("does not let a stale cancelled startup clear newer watcher config", async ()
     .mockResolvedValue(commandSuccess);
 
   const staleStart = startWatcher(createGmailConfig(), { signal: oldController.signal });
+  await vi.advanceTimersByTimeAsync(0);
 
   await expect(startWatcher(createGmailConfig("newer@example.com"))).resolves.toEqual({
     started: true,
@@ -360,4 +378,78 @@ it("bounds bind retries despite late oversized stderr and keeps renewing after e
   expect(children).toHaveLength(5);
   expect(children.filter((child) => child.alive)).toHaveLength(0);
   expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
+});
+
+it.each(["unsupported", "indeterminate"])(
+  "keeps existing Gmail running with one actionable %s warning across respawns",
+  async (support) => {
+    mocks.runUtf8CommandWithTimeout.mockResolvedValue({
+      ...commandSuccess,
+      stdout: support === "unsupported" ? JSON.stringify(gogServeSchema([])) : "not json",
+    });
+    const children = await startMockWatcher();
+    expect(children).toHaveLength(1);
+    for (let index = 0; index < 2; index++) {
+      childAt(children, index).exit(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    expect(children).toHaveLength(3);
+    for (const [, args] of mocks.spawn.mock.calls) {
+      expect(args).toEqual(
+        expect.arrayContaining(["--token", "push-token", "--hook-token", "hook-token"]),
+      );
+    }
+    const warnings = mocks.log.warn.mock.calls
+      .map(([line]) => String(line))
+      .filter((line) => line.includes("legacy Gog token arguments"));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("doctor --repair");
+    expect(warnings[0]).toContain(support === "unsupported" ? "lacks" : "Could not verify");
+  },
+);
+
+it("keeps secure child-only credentials across serve failures without downgrade", async () => {
+  vi.stubEnv("OPENCLAW_GOG_WATCH_PUSH_TOKEN", "inherited-push");
+  vi.stubEnv("OPENCLAW_GOG_WATCH_HOOK_TOKEN", "inherited-hook");
+  try {
+    const children = await startMockWatcher();
+    // Even a usage error after a successful probe cannot authorize token arguments.
+    childAt(children).exit(2);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(children).toHaveLength(2);
+    for (const [, args, options] of mocks.spawn.mock.calls) {
+      expect(args).toEqual(expect.arrayContaining(["--token-env", "--hook-token-env"]));
+      expect(args).not.toContain("push-token");
+      expect(args).not.toContain("hook-token");
+      expect(options.env).toMatchObject({
+        OPENCLAW_GOG_WATCH_PUSH_TOKEN: "push-token",
+        OPENCLAW_GOG_WATCH_HOOK_TOKEN: "hook-token",
+      });
+    }
+    expect(process.env.OPENCLAW_GOG_WATCH_PUSH_TOKEN).toBe("inherited-push");
+    expect(process.env.OPENCLAW_GOG_WATCH_HOOK_TOKEN).toBe("inherited-hook");
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+it.each(["probe", "upgrade"])("cancels pending %s before registration or serve", async (phase) => {
+  const held = createDeferred<typeof gogSchemaSuccess>();
+  const prepared = createDeferred<{ executable: string; support: "supported" }>();
+  const controller = new AbortController();
+  mocks.runUtf8CommandWithTimeout.mockReturnValueOnce(held.promise);
+  const starting = startWatcher(createGmailConfig(), {
+    signal: controller.signal,
+    prepareGog: () => prepared.promise,
+  });
+  if (phase === "upgrade") {
+    held.resolve({ ...commandSuccess, stdout: JSON.stringify(gogServeSchema([])) });
+    await vi.advanceTimersByTimeAsync(0);
+  }
+  controller.abort();
+  held.resolve(gogSchemaSuccess);
+  prepared.resolve({ executable: "gog", support: "supported" });
+  expect(await starting).toEqual({ started: false, reason: "startup cancelled" });
+  expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
+  expect(mocks.spawn).not.toHaveBeenCalled();
 });

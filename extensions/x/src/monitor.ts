@@ -40,6 +40,8 @@ const REASON_LABELS: Record<XWithheldReason, string> = {
 type IngressPayload = { version: number; rawEvent: string };
 type Stats = XEventStatus & {
   droppedMentions: number;
+  lastConnectedAt: number | null;
+  lastDisconnect: { at: number } | null;
   lastDroppedAuthor?: string;
   guestModeBlockedReason?: string;
   guests?: Awaited<ReturnType<typeof getXGuestStatus>>;
@@ -51,13 +53,24 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
   const readConfig = createRuntimeConfigReader(ctx.cfg);
   const api = await getXApi(account.accountId, ctx.cfg);
   const log = core.logging.getChildLogger({ channel: "x", accountId: account.accountId });
-  const stats: Stats = { droppedMentions: 0 };
+  const stats: Stats = { droppedMentions: 0, lastConnectedAt: null, lastDisconnect: null };
   const guestUsage = openXGuestUsage(core);
   const publish = (next: Partial<Stats> = {}) => {
     if (next.message && next.message !== stats.message && !next.message.startsWith("X API ")) {
       log.info(next.message);
     }
+    if (next.streamConnected === true) {
+      stats.lastConnectedAt = Date.now();
+      stats.lastDisconnect = null;
+    } else if (next.streamConnected === false && stats.streamConnected === true) {
+      stats.lastDisconnect = { at: Date.now() };
+    }
     Object.assign(stats, next);
+    if (stats.eventMode === "poll") {
+      stats.lastDisconnect = null;
+    }
+    const connected =
+      !stats.terminalDisconnect && (stats.eventMode === "poll" || stats.streamConnected);
     ctx.setStatus({
       ...ctx.getStatus(),
       ...stats,
@@ -72,7 +85,12 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
         : {}),
       accountId: account.accountId,
       mode: stats.eventMode,
-      connected: stats.eventMode === "poll" || stats.streamConnected,
+      connected,
+      lifecycle: stats.terminalDisconnect
+        ? "blocked"
+        : stats.lastDisconnect
+          ? "recovering"
+          : "ready",
       tokenStatus: getXTokenState(account.accountId),
       lastInboundAt: stats.lastEventAt,
     });
@@ -546,6 +564,8 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
       signal: ctx.abortSignal,
       onStatus: publish,
       onWarning: (message) => log.warn(message),
+      onStreamTiming: (step, elapsedMs) =>
+        log.info(`activity stream timing step=${step} elapsedMs=${Math.round(elapsedMs)}`),
       getCursor: async () => (await cursor.lookup(account.accountId)) ?? {},
       setCursor: async (next) => {
         await cursor.register(

@@ -28,6 +28,14 @@ const EXPECTED: Record<string, { levels: string[]; defaultLevel: string }> = {
   "moonshot/kimi-k3": { levels: ["max"], defaultLevel: "max" },
   "moonshot/kimi-k3.1-pro": { levels: ["max"], defaultLevel: "max" },
   "moonshot/kimi-k3.1-pro-highspeed": { levels: ["max"], defaultLevel: "max" },
+  "tencent-tokenhub/hy4": {
+    levels: ["off", "minimal", "low", "medium", "high"],
+    defaultLevel: "high",
+  },
+  "tencent-tokenplan/hy4": {
+    levels: ["off", "minimal", "low", "medium", "high"],
+    defaultLevel: "high",
+  },
   "xai/grok-4.7": { levels: ["low", "medium", "high", "xhigh"], defaultLevel: "high" },
   "xai/grok-4.6": { levels: ["low", "medium", "high", "xhigh"], defaultLevel: "high" },
   "xai/grok-4.5": { levels: ["low", "medium", "high"], defaultLevel: "high" },

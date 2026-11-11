@@ -629,10 +629,13 @@ active for the turn that actually calls it.
 
 ### x_search config
 
-With `enabled` omitted, `x_search` is exposed only when the active model's
-provider is `xai` and xAI credentials resolve. For an active model with a known
-non-xAI provider, set `plugins.entries.xai.config.xSearch.enabled` to `true` to
-opt in to cross-provider use. If the active model provider is missing or
+With `enabled` omitted, `x_search` is exposed when the active model's provider
+is `xai` and xAI credentials resolve. It is also exposed for a known non-xAI
+model provider when you signed in with Grok OAuth: those searches use only the
+OAuth credential, which draws on your SuperGrok or X Premium subscription, and
+never fall back to an API key. To use an xAI API key with a non-xAI model, set
+`plugins.entries.xai.config.xSearch.enabled` to `true` to opt in to
+cross-provider API billing. If the active model provider is missing or
 unresolved, the tool stays hidden. Set `enabled` to `false` to disable it for
 every provider. xAI credentials are always required.
 
@@ -643,7 +646,7 @@ every provider. xAI credentials are always required.
       xai: {
         config: {
           xSearch: {
-            enabled: true, // required for a known non-xAI model provider
+            enabled: true, // API-key billing with a non-xAI model; Grok OAuth needs no opt-in
             model: "grok-4.3",
             baseUrl: "https://api.x.ai/v1", // optional, overrides webSearch.baseUrl
             inlineCitations: false,
@@ -685,6 +688,10 @@ expiry.
 | `enable_video_understanding` | Let xAI inspect videos attached to matching posts      |
 
 `allowed_x_handles` and `excluded_x_handles` are mutually exclusive.
+
+Date bounds are inclusive UTC calendar days. OpenClaw sends the following UTC day
+as xAI's exclusive `to_date` bound; the date reported in the tool result remains
+the date you supplied.
 
 ### x_search example
 

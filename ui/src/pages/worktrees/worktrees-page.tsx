@@ -9,6 +9,7 @@ import {
   Show,
 } from "solid-js";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
@@ -30,9 +31,9 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { sessionHubTabs } from "../sessions/session-hub-tabs.ts";
-import { WorktreesModel } from "./worktrees-model.ts";
 import "../../styles/settings.css";
 import "../../styles/hub-tabs.css";
+import { WorktreesModel } from "./worktrees-model.ts";
 
 const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees";
 
@@ -135,14 +136,14 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
       <SettingsWorkspace id="sessions-hub-panel">
         <SettingsPage wide>
           <Show when={!view().operatorAccess.canAdmin}>
-            <div class="callout info" role="note">
+            <InlineAlert tone="info" role="note">
               {t("worktrees.adminRequired")}
-            </div>
+            </InlineAlert>
           </Show>
           <Show when={view().error}>
-            <div class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               {view().error}
-            </div>
+            </InlineAlert>
           </Show>
           <SettingsSection
             title={t("worktrees.title")}
@@ -164,9 +165,7 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                   disabled={!model.gateway.connected || !view().operatorAccess.canAdmin || busy()}
                   onClick={() => void mutate("gc", () => model.gc())}
                 >
-                  {operation() === "gc" || view().loading
-                    ? t("common.loading")
-                    : t("worktrees.cleanNow")}
+                  {operation() === "gc" ? t("common.loading") : t("worktrees.cleanNow")}
                 </button>
               </>
             }

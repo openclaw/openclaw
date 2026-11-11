@@ -1,8 +1,6 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "../pages/chat/chat-history-events.ts";
-import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
@@ -30,13 +28,11 @@ async function sendComment(page: Page, gateway: Awaited<ReturnType<typeof instal
     message: string;
     idempotencyKey: string;
     sessionKey: string;
-    attachments: Array<{ content: string }>;
+    attachments?: unknown[];
   };
-  expect(sent.attachments).toHaveLength(1);
-  return {
-    ...sent,
-    attachment: Buffer.from(sent.attachments[0]!.content, "base64").toString("utf8"),
-  };
+  // Comments are user message text, never an uploaded file.
+  expect(sent.attachments ?? []).toHaveLength(0);
+  return sent;
 }
 
 async function sendWithoutComments(
@@ -78,51 +74,32 @@ async function selectText(text: Locator) {
 
 async function addComment(page: Page, source: Locator, comment: string) {
   await selectText(source);
-  await button(page.getByRole("toolbar", { name: "Selection actions" }), "Add to message").click();
+  await button(page.getByRole("toolbar", { name: "Selection actions" }), "Add to chat").click();
   const editor = page.getByRole("dialog", { name: "Comment", exact: true });
   await editor.getByRole("textbox").fill(comment);
   await editor.getByRole("textbox").press("Enter");
 }
 
 suite.define(() => {
-  it("keeps the annotation-only bubble visible while its sent attachment is read", async () => {
+  it("keeps a legacy comment-file bubble stable while its attachment is read", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       await page.clock.install({ time: new Date() });
-      const history = [
-        ...Array.from({ length: 30 }, (_, index) => ({
-          role: index % 2 === 0 ? "user" : "assistant",
-          content: `Deployment checkpoint ${index + 1}. Review the service health before proceeding.`,
-        })),
-        { role: "assistant", content: passage },
-      ];
-      const { source, gateway } = await openChat(page, passage, history);
       const comment = "Explain the rollback steps before changing the deployment.";
-      await addComment(page, source, comment);
-      await gateway.deferNext("chat.send");
-      const sent = await sendComment(page, gateway);
-      expect(sent.message).toBe("");
-      const inline = page.locator(".chat-sent-comments-inline");
-      const quote = inline.getByRole("button", { name: passage, exact: true });
-      await quote.waitFor();
-      const before = await inline.boundingBox();
-      expect(before).not.toBeNull();
-      await gateway.resolveDeferred("chat.send", {
-        runId: sent.idempotencyKey,
-        status: "started",
-      });
-      expect(await quote.isVisible()).toBe(true);
-      expect(await inline.textContent()).toContain(comment);
-      expect(await inline.textContent()).not.toContain("Loading");
-      expect((await inline.boundingBox())?.height).toBe(before!.height);
-      const canonicalBody = createDeferred();
-      const canonicalBodyRead = createDeferred();
-      const historySettled = createDeferred();
-      const reread = createDeferred();
+      // Transcripts from before comments became message text still carry this file.
+      const legacyFile = [
+        `Selected text:\n${passage}`,
+        `User comment:\n${comment}`,
+        [
+          "Source session: agent:main:main",
+          `Selected text UTF-16 length: ${passage.length}`,
+          `DOM text UTF-16 range: [0, ${passage.length})`,
+        ].join("\n"),
+      ].join("\n\n");
       let reads = 0;
       let tickets = 0;
+      const reread = createDeferred();
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         if (new URL(route.request().url()).searchParams.has("meta")) {
-          await historySettled.promise;
           const now = await page.evaluate(() => Date.now());
           await route.fulfill({
             json: {
@@ -133,84 +110,42 @@ suite.define(() => {
           return;
         }
         reads += 1;
-        canonicalBodyRead.resolve();
-        await (reads === 1 ? canonicalBody.promise : reread.promise);
-        await route.fulfill({ contentType: "text/plain", body: sent.attachment });
-      });
-      const canonicalRead = page.waitForResponse(
-        (response) =>
-          response.url().includes("/assistant-media?") &&
-          !new URL(response.url()).searchParams.has("meta"),
-      );
-      // An earlier assertion can close the page before the response is awaited.
-      void canonicalRead.catch(() => undefined);
-      const canonicalId = `mock-user:${sent.idempotencyKey}`;
-      const canonicalSeq = history.length + 1;
-      const canonical = {
-        role: "user",
-        content: "",
-        idempotencyKey: `${sent.idempotencyKey}:user`,
-        __openclaw: {
-          id: canonicalId,
-          seq: canonicalSeq,
-          media: [
-            {
-              kind: "file",
-              url: "media://inbound/selection-comment.txt",
-              fileName: "selection-comment.txt",
-              contentType: "text/plain",
-            },
-          ],
-        },
-      };
-      const session = await gateway.getSessionRow(sent.sessionKey);
-      await gateway.deferNext("chat.history");
-      try {
-        await gateway.emitGatewayEvent("session.message", {
-          sessionKey: sent.sessionKey,
-          sessionId: session.sessionId,
-          status: session.status,
-          hasActiveRun: session.hasActiveRun,
-          activeRunIds: session.activeRunIds,
-          session,
-          clientRunId: sent.idempotencyKey,
-          messageId: canonicalId,
-          messageSeq: canonicalSeq,
-          message: canonical,
-        });
-        await page.locator(`[data-entry-id="${canonicalId}"]`).waitFor();
-        // History reconciliation can retire the live row's first attachment reader.
-        await gateway.waitForRequest("chat.history");
-        const historyCommitted = await page
-          .locator(`[data-entry-id="${canonicalId}"]`)
-          .evaluateHandle((element, eventName) => {
-            const pane = element.closest<ChatPaneElement>("openclaw-chat-pane")!;
-            return {
-              ready: new Promise<void>((resolve) => {
-                pane.addEventListener(eventName, () => resolve(), { once: true });
-              }).then(() => pane.updateComplete),
-            };
-          }, CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT);
-        try {
-          await gateway.resolveDeferred("chat.history");
-          await Promise.race([historyCommitted.evaluate(({ ready }) => ready), canonicalRead]);
-        } finally {
-          await historyCommitted.dispose();
+        if (reads > 1) {
+          await reread.promise;
         }
-        historySettled.resolve();
-        await Promise.race([canonicalBodyRead.promise, canonicalRead]);
-        expect(await quote.isVisible()).toBe(true);
-        expect(await inline.textContent()).toContain(comment);
-        expect(await inline.textContent()).not.toContain("Loading");
-        expect((await inline.boundingBox())?.height).toBe(before!.height);
-      } finally {
-        historySettled.resolve();
-        canonicalBody.resolve();
-      }
-      await (await canonicalRead).finished();
+        await route.fulfill({ contentType: "text/plain", body: legacyFile });
+      });
+      const history = [
+        ...Array.from({ length: 30 }, (_, index) => ({
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `Deployment checkpoint ${index + 1}. Review the service health before proceeding.`,
+        })),
+        { role: "assistant", content: passage },
+        {
+          role: "user",
+          content: "",
+          __openclaw: {
+            id: "legacy-comment",
+            seq: 32,
+            media: [
+              {
+                kind: "file",
+                url: "media://inbound/selection-comment.txt",
+                fileName: "selection-comment.txt",
+                contentType: "text/plain",
+              },
+            ],
+          },
+        },
+      ];
+      await openChat(page, passage, history);
+      const inline = page.locator(".chat-sent-comments-inline");
+      const quote = inline.getByRole("button", { name: passage, exact: true });
       await quote.waitFor();
       await waitForChatScrollIdle(page);
       expect(await inline.textContent()).toContain(comment);
+      const before = await inline.boundingBox();
+      expect(before).not.toBeNull();
       const thread = page.locator(".chat-thread");
       const observation = await page.evaluateHandle(() => {
         let loading = false;
@@ -254,7 +189,7 @@ suite.define(() => {
     { width: 1440, height: 900, theme: "dark" },
     { width: 390, height: 844, theme: "light" },
   ] as const)(
-    "keeps an annotation-only quote on one line at $width px",
+    "renders an annotation-only message as a quoted passage at $width px",
     async ({ width, height, theme }) => {
       await suite.withPage(
         { ...pageOptions, viewport: { width, height }, colorScheme: theme },
@@ -267,11 +202,11 @@ suite.define(() => {
           const { source, gateway } = await openChat(page, selected);
           await addComment(page, source, comment);
           const params = await sendComment(page, gateway);
-          expect(params.message).toBe("");
-          expect(params.attachment).toContain(
-            `Selected text:\n${selected}\n\nUser comment:\n${comment}`,
-          );
-          expect(params.attachment).toContain("Source session:");
+          const quoted = selected
+            .split("\n")
+            .map((line) => `> ${line}`)
+            .join("\n");
+          expect(params.message).toBe(`${quoted}\n\n${comment}`);
           await gateway.emitChatFinal({
             runId: params.idempotencyKey,
             sessionKey: params.sessionKey,
@@ -284,33 +219,18 @@ suite.define(() => {
             })
             .waitFor();
           await waitForChatScrollIdle(page);
-          const inline = page.locator(".chat-sent-comments-inline");
-          await inline.waitFor();
-          const authored = inline.locator(".chat-sent-comments-inline__comment");
-          await expect.poll(() => authored.textContent()).toBe(comment);
-          const selection = inline.getByRole("button", { name: selected });
-          await selection.waitFor();
-          const geometry = await selection.evaluate((element) => ({
-            height: element.getBoundingClientRect().height,
-            lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
-            overflows: element.scrollWidth > element.clientWidth,
-            documentOverflows: document.documentElement.scrollWidth > window.innerWidth,
-          }));
-          expect(geometry.height).toBeLessThanOrEqual(geometry.lineHeight + 1);
-          expect(geometry.overflows).toBe(true);
-          expect(geometry.documentOverflows).toBe(false);
-          await page.keyboard.press("Tab");
-          await selection.focus();
-          const fullQuote = inline.getByRole("region", {
-            name: "Highlighted passage:",
-            exact: true,
-          });
-          await fullQuote.waitFor({ state: "visible" });
-          expect(await fullQuote.textContent()).toBe(selected);
-          await page.keyboard.press("Escape");
-          await fullQuote.waitFor({ state: "hidden" });
-          await selection.click();
-          await fullQuote.waitFor({ state: "visible" });
+          const blockquote = page.locator(".chat-bubble blockquote");
+          await blockquote.waitFor();
+          // The quoted passage keeps both lines; the comment follows as ordinary message text.
+          const quoteText = (await blockquote.textContent())?.replace(/\s+/g, " ").trim();
+          expect(quoteText).toBe(selected.replace(/\s+/g, " "));
+          const bubble = page.locator(".chat-bubble").filter({ has: page.locator("blockquote") });
+          expect(await bubble.textContent()).toContain(
+            "Explain the rollback steps before changing",
+          );
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth),
+          ).toBe(false);
           expect(await gateway.getRequests("chat.send")).toHaveLength(1);
         },
       );

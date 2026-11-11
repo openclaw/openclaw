@@ -89,7 +89,7 @@ suite.define(() => {
   // Narrow phones drop the big title but keep the heading for assistive tech.
   it.each([
     [390, false],
-    [620, true],
+    [620, false],
   ])("keeps the phone list toolbar usable at %i px", async (width, visibleTitle) => {
     await suite.withPage(
       { viewport: { width, height: 900 }, colorScheme: "dark" },
