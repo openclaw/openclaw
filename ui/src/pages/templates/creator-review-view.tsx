@@ -9,7 +9,7 @@ import type { SourceProjection } from "../../lib/reactive/projection.ts";
 import { TemplateArtwork } from "../agents-home/template-artwork.tsx";
 import { agentDocuments, fileRole } from "../agents-home/template-workspace-file-roles.ts";
 import { createSessionAutomationSchedule } from "../chat/components/session-automation-schedule-loader.ts";
-import "../../styles/template-creator.css";
+import "../../styles/templates-catalog.css";
 import { TemplateItemDetails } from "./creator-item-details.tsx";
 import type { TemplateCreator } from "./creator-publication.ts";
 import "../../components/tooltip.ts";
@@ -119,7 +119,11 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
   }
   return (
     <section
-      class={["template-creator", { "template-creator--detail": Boolean(category()) }]}
+      class={[
+        "template-package-preview",
+        "template-creator",
+        { "template-creator--detail": Boolean(category()) },
+      ]}
       aria-label={t("templatesDraft.reviewTitle")}
     >
       <header
@@ -131,7 +135,7 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
         <Show
           when={category()}
           fallback={
-            <span class="template-creator__art">
+            <span class="template-package-art template-creator__art">
               <TemplateArtwork />
             </span>
           }
@@ -190,7 +194,7 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
                   <Show when={section.kind === "file" || entries(section.kind).length > 0}>
                     <button
                       type="button"
-                      class="template-creator__row"
+                      class="template-package-row template-creator__row"
                       onClick={() => setCategory(section.kind)}
                     >
                       <span class="template-creator__row-icon">
@@ -204,7 +208,9 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
                             .join(", ") || t("templatesDraft.emptyContents")}
                         </small>
                       </span>
-                      <span class="template-creator__count">{entries(section.kind).length}</span>
+                      <span class="template-package-count template-creator__count">
+                        {entries(section.kind).length}
+                      </span>
                       <Icon name="chevronRight" />
                     </button>
                   </Show>
@@ -239,7 +245,7 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
                     {(item) => (
                       <button
                         type="button"
-                        class="template-creator__row"
+                        class="template-package-row template-creator__row"
                         aria-label={item().label}
                         onClick={() => setSelectedId(item().id)}
                       >
@@ -267,7 +273,7 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
                   >
                     <button
                       type="button"
-                      class="template-creator__row"
+                      class="template-package-row template-creator__row"
                       onClick={() => setAllFiles(true)}
                     >
                       <span class="template-creator__row-icon">
