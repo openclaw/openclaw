@@ -233,19 +233,27 @@ async function runWithRetainedUpdateRuntime<T>(
           const materializationStartedAt = performance.now();
           const counts = await withUpdateCandidateIoBudget(
             { directory: privateRoot, bytes: plan.bytes, timeoutMs, progress: "reported" },
-            async (signal, reportProgress) =>
-              await linkUpdateCandidatePluginTrees(plan, {
-                targetStateDir: privateRoot,
-                candidateRoot,
-                onMaterialized: reportProgress,
-                onProgress: () => {
-                  signal.throwIfAborted();
-                },
-                assertCurrent: () => {
-                  signal.throwIfAborted();
-                  assertCurrent();
-                },
-              }),
+            async (signal, reportProgress) => {
+              try {
+                const materialized = await linkUpdateCandidatePluginTrees(plan, {
+                  targetStateDir: privateRoot,
+                  candidateRoot,
+                  onMaterialized: reportProgress,
+                  onProgress: () => {
+                    signal.throwIfAborted();
+                  },
+                  assertCurrent: () => {
+                    signal.throwIfAborted();
+                    assertCurrent();
+                  },
+                });
+                trace("materializer-returned");
+                return materialized;
+              } catch (error) {
+                trace("materializer-failed");
+                throw error;
+              }
+            },
           );
           const materializationMs = Math.round(performance.now() - materializationStartedAt);
           trace("materialization-completed");

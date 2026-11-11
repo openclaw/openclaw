@@ -46,7 +46,32 @@ export async function linkUpdateCandidatePluginTrees(
     onMaterialized?: () => void;
   },
 ): Promise<{ linked: number; copied: number }> {
+  // Temporary CI diagnostics; remove before production integration.
+  const diagnostics = process.env.OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS === "1";
+  const started = diagnostics ? performance.now() : 0;
+  const counts = { linked: 0, copied: 0 };
+  let completed = 0;
+  let aliasesVerified = 0;
+  let modesCompleted = 0;
+  const trace = (stage: string) => {
+    if (diagnostics) {
+      process.stderr.write(
+        JSON.stringify({
+          phase: "retained-tree",
+          stage,
+          elapsedMs: Math.round(performance.now() - started),
+          entries: plan.entries.length,
+          completed,
+          ...counts,
+          aliasesVerified,
+          modesCompleted,
+        }) + "\n",
+      );
+    }
+  };
+  trace("targets-start");
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
+  trace("targets-completed");
   const { privateRoot, candidateRoot, hostLinks, relocations, destinationFor } = targets;
   const assertEntry = async (entry: UpdateCandidatePluginEntry) => {
     await params.onProgress?.();
@@ -57,13 +82,19 @@ export async function linkUpdateCandidatePluginTrees(
     }
     return current;
   };
+  trace("manifest-checks-start");
   for (const entry of plan.entries) {
     if (path.basename(entry.path) === "openclaw.plugin.json") {
       await assertEntry(entry);
     }
   }
+  trace("manifest-checks-completed");
+  trace("plugin-safety-start");
   const pluginFiles = collectPluginSafetyInspectedFiles(plan.entries);
+  trace("plugin-safety-completed");
+  trace("initial-bindings-start");
   await targets.assertBindings();
+  trace("initial-bindings-completed");
   params.assertCurrent();
   await fs.mkdir(privateRoot, { recursive: true, mode: 0o700 });
   const preparedDirectories = new Map<string, Promise<string | undefined>>([
@@ -113,7 +144,7 @@ export async function linkUpdateCandidatePluginTrees(
     }
     return copy;
   };
-  const counts = { linked: 0, copied: 0 };
+  trace("entry-walk-start");
   const directories: Array<Extract<UpdateCandidatePluginEntry, { kind: "directory" }>> = [];
   const materialize = async (entry: UpdateCandidatePluginEntry) => {
     const admitted = await assertEntry(entry);
@@ -177,6 +208,13 @@ export async function linkUpdateCandidatePluginTrees(
       }
     }
     params.onMaterialized?.();
+    if (diagnostics) {
+      completed++;
+      // First completion plus at most 32 milestones, independent of graph size.
+      if (completed === 1 || (completed % 1024 === 0 && completed <= 32768)) {
+        trace("entry-completed");
+      }
+    }
   };
   const files: Array<Extract<UpdateCandidatePluginEntry, { kind: "file" }>> = [];
   const inodes = new Set<string>();
@@ -202,7 +240,11 @@ export async function linkUpdateCandidatePluginTrees(
   if (files.length) {
     await drain();
   }
+  trace("entry-walk-completed");
+  trace("final-bindings-start");
   await targets.assertBindings();
+  trace("final-bindings-completed");
+  trace("aliases-publish-start");
   const privateAliases = await publishUpdateCandidatePluginTreeLinks({
     privateRoot,
     candidateRoot,
@@ -210,13 +252,30 @@ export async function linkUpdateCandidatePluginTrees(
     aliases: targets.aliases,
     assertBeforeMutation: params.assertCurrent,
   });
+  trace("aliases-publish-completed");
+  trace("aliases-verify-start");
   for (const alias of privateAliases) {
     await verifyUpdateCandidatePluginTree(alias, { privateRoot, candidateRoot, hostLinks });
+    if (diagnostics) {
+      aliasesVerified++;
+      if (aliasesVerified === 1 || (aliasesVerified % 64 === 0 && aliasesVerified <= 512)) {
+        trace("alias-verified");
+      }
+    }
   }
+  trace("aliases-verify-completed");
+  trace("modes-start");
   for (const entry of directories.toSorted((left, right) => right.path.length - left.path.length)) {
     params.assertCurrent();
     await fs.chmod(destinationFor(entry.path), entry.mode);
     params.onMaterialized?.();
+    if (diagnostics) {
+      modesCompleted++;
+      if (modesCompleted === 1 || (modesCompleted % 1024 === 0 && modesCompleted <= 8192)) {
+        trace("mode-completed");
+      }
+    }
   }
+  trace("modes-completed");
   return counts;
 }

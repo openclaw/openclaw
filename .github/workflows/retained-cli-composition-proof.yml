@@ -100,7 +100,7 @@ jobs:
           cache-mode: "off"
       - name: Materialize canonical formatting and exact bytes
         run: |
-          files=(scripts/lib/vitest-worker-build-entries.mts src/cli/cli-entrypoint.test-support.ts src/cli/runtime-cleanup-scope.retirement.test.ts src/cli/runtime-cleanup-retained.test-support.ts src/infra/update-retained-runtime-imports.process.test.ts src/infra/update-retained-runtime-alias.test-support.ts src/infra/update-retained-runtime.ts src/infra/update-candidate-plugin-hash.ts .github/workflows/retained-cli-composition-proof.yml)
+          files=(scripts/lib/vitest-worker-build-entries.mts src/cli/cli-entrypoint.test-support.ts src/cli/runtime-cleanup-scope.retirement.test.ts src/cli/runtime-cleanup-retained.test-support.ts src/infra/update-retained-runtime-imports.process.test.ts src/infra/update-retained-runtime-alias.test-support.ts src/infra/update-retained-runtime.ts src/infra/update-candidate-plugin-hash.ts src/infra/update-candidate-io.ts src/infra/update-retained-runtime-tree.ts .github/workflows/retained-cli-composition-proof.yml)
           pnpm exec oxfmt --write --threads=1 "${files[@]}"
           git diff --binary -- "${files[@]}" > .artifacts/composition-static/formatted.patch
           sha256sum "${files[@]}" > .artifacts/composition-static/formatted.sha256
@@ -114,7 +114,7 @@ jobs:
           import fs from "node:fs";
           import { createChangedCiTypeCheckPlan } from "./scripts/run-tsgo-core-test-shards.mts";
           // Only changed TypeScript selects compiler consumers; the workflow cannot widen it.
-          const paths = ["scripts/lib/vitest-worker-build-entries.mts", "src/cli/cli-entrypoint.test-support.ts", "src/cli/runtime-cleanup-scope.retirement.test.ts", "src/cli/runtime-cleanup-retained.test-support.ts", "src/infra/update-retained-runtime-imports.process.test.ts", "src/infra/update-retained-runtime-alias.test-support.ts", "src/infra/update-retained-runtime.ts", "src/infra/update-candidate-plugin-hash.ts"];
+          const paths = ["scripts/lib/vitest-worker-build-entries.mts", "src/cli/cli-entrypoint.test-support.ts", "src/cli/runtime-cleanup-scope.retirement.test.ts", "src/cli/runtime-cleanup-retained.test-support.ts", "src/infra/update-retained-runtime-imports.process.test.ts", "src/infra/update-retained-runtime-alias.test-support.ts", "src/infra/update-retained-runtime.ts", "src/infra/update-candidate-plugin-hash.ts", "src/infra/update-candidate-io.ts", "src/infra/update-retained-runtime-tree.ts"];
           const plan = await createChangedCiTypeCheckPlan(paths);
           if (!plan.graphs.length) throw new Error("Missing compiler ownership for changed TypeScript");
           fs.writeFileSync(".artifacts/composition-static/type-plan.json", JSON.stringify({ paths, ...plan }, null, 2) + "\n");
@@ -170,9 +170,9 @@ jobs:
               ;;
             static-checks)
               {
-                pnpm exec oxfmt --check scripts/lib/vitest-worker-build-entries.mts src/cli/cli-entrypoint.test-support.ts src/cli/runtime-cleanup-scope.retirement.test.ts src/cli/runtime-cleanup-retained.test-support.ts src/infra/update-retained-runtime-imports.process.test.ts src/infra/update-retained-runtime-alias.test-support.ts src/infra/update-retained-runtime.ts src/infra/update-candidate-plugin-hash.ts .github/workflows/retained-cli-composition-proof.yml
+                pnpm exec oxfmt --check scripts/lib/vitest-worker-build-entries.mts src/cli/cli-entrypoint.test-support.ts src/cli/runtime-cleanup-scope.retirement.test.ts src/cli/runtime-cleanup-retained.test-support.ts src/infra/update-retained-runtime-imports.process.test.ts src/infra/update-retained-runtime-alias.test-support.ts src/infra/update-retained-runtime.ts src/infra/update-candidate-plugin-hash.ts src/infra/update-candidate-io.ts src/infra/update-retained-runtime-tree.ts .github/workflows/retained-cli-composition-proof.yml
                 node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts/lib/vitest-worker-build-entries.mts
-                node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/cli/cli-entrypoint.test-support.ts src/cli/runtime-cleanup-scope.retirement.test.ts src/cli/runtime-cleanup-retained.test-support.ts src/infra/update-retained-runtime-imports.process.test.ts src/infra/update-retained-runtime-alias.test-support.ts src/infra/update-retained-runtime.ts src/infra/update-candidate-plugin-hash.ts
+                node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/cli/cli-entrypoint.test-support.ts src/cli/runtime-cleanup-scope.retirement.test.ts src/cli/runtime-cleanup-retained.test-support.ts src/infra/update-retained-runtime-imports.process.test.ts src/infra/update-retained-runtime-alias.test-support.ts src/infra/update-retained-runtime.ts src/infra/update-candidate-plugin-hash.ts src/infra/update-candidate-io.ts src/infra/update-retained-runtime-tree.ts
                 pnpm check:workflows
                 git diff --check
               } 2>&1 | tee .artifacts/composition-static/result.log
