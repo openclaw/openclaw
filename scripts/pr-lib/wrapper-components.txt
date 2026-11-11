@@ -324,6 +324,7 @@ src/agents/model-catalog-metadata.ts
 src/agents/model-compat-catalog.ts
 src/agents/model-cost-normalization.ts
 src/agents/model-extra-params.ts
+src/agents/model-fallback-stop.ts
 src/agents/model-ref-profile.ts
 src/agents/model-ref-shared.ts
 src/agents/model-runtime-policy.ts
