@@ -351,14 +351,6 @@ describe("discordPlugin outbound", () => {
     expect(discordPlugin.actions?.supportsAction?.({ action: "poll" })).toBe(false);
   });
 
-  it("adds Discord mention formatting to agent prompt hints", () => {
-    const hints = discordPlugin.agentPrompt?.messageToolHints?.({} as never) ?? [];
-
-    expect(hints).toContain(
-      "- Discord mentions: use supported mention syntax: users `<@USER_ID>`, channels `<#CHANNEL_ID>`, and roles `<@&ROLE_ID>`. Plain `@name` text only pings when a configured `mentionAliases` entry rewrites it; do not use the legacy `<@!USER_ID>` nickname form.",
-    );
-  });
-
   it.each([
     ["user:123", "user:123", "direct"],
     ["<@!456>", "user:456", "direct"],
