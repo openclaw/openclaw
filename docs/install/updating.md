@@ -45,6 +45,15 @@ backup.
 
 ## Update implementation contract
 
+Lazy SQLite schema catalogs load through the retained updater's module loader.
+An updater that first needs a catalog after Git activation therefore reads its
+own generation, not the candidate's replacement JSON. This fix must be present
+in the running updater; a newer candidate cannot repair an older updater's
+filesystem-based loader. If an older Git updater fails with a catalog `tables`
+TypeError after activation, preserve its recovery artifacts and use the
+[manual source update procedure](/install/updating/update-methods#source-checkout-servers-reference-script)
+to install a corrected updater before retrying.
+
 Private plugin projection materializes eligible external data-suffixed file links
 at their logical in-package filenames before recording the final code-link
 inventory. Both the alias and its inventoried canonical target must have one of
