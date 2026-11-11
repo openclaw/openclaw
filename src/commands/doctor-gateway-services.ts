@@ -58,11 +58,11 @@ import {
 import {
   assertGatewayServiceInstallationRepairAllowed,
   canRepairRunningGatewayDefinition,
+  GatewayServiceInstallationOwnershipError,
   installDoctorGatewayService,
   isExecStartRepairIssue,
-  resolveSystemdScopeFromServicePath,
+  noteOperatorOwnedSystemdDropIn,
   resolveSystemdServiceRewriteBlock,
-  resolveSystemdUnitNameFromServicePath,
   type DoctorGatewayInstallationMaintenance,
 } from "./doctor-gateway-installation.js";
 import {
@@ -449,6 +449,18 @@ export async function maybeRepairGatewayServiceConfig(
         maintenance: options.serviceMaintenance,
       });
     } catch (error) {
+      // A launcher override locks the drift in place: the "another owner" is the
+      // operator's own drop-in, so report its guidance instead of the refusal.
+      // Only an ownership refusal selects the drop-in guidance; inspection
+      // failures and definition changes keep their own error.
+      if (
+        error instanceof GatewayServiceInstallationOwnershipError &&
+        platform === "linux" &&
+        hasGatewayServiceLauncherOverride(command)
+      ) {
+        noteOperatorOwnedSystemdDropIn(command);
+        return cfg;
+      }
       note(String(error), "Gateway service installation");
       return cfg;
     }
@@ -508,13 +520,7 @@ export async function maybeRepairGatewayServiceConfig(
         auditUi.isOperatorOwnedServiceIssue(issue, command, expectedPlan.environmentValueSources),
     )
   ) {
-    const unitName = resolveSystemdUnitNameFromServicePath(command.sourcePath);
-    const scope = resolveSystemdScopeFromServicePath(command.sourcePath);
-    const inspectCommand = `systemctl${scope === "user" ? " --user" : ""} cat ${unitName}`;
-    note(
-      `Gateway service command, working directory, or environment comes from an operator-owned systemd drop-in; rewriting the managed unit cannot repair it. Inspect with \`${inspectCommand}\`, then update or remove the drop-in and rerun doctor.`,
-      "Gateway service config",
-    );
+    noteOperatorOwnedSystemdDropIn(command);
     return cfg;
   }
 

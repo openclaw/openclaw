@@ -152,6 +152,14 @@ export async function installDoctorGatewayService(
   }
 }
 
+/** Thrown only when installation repair is refused because another owner controls the service. */
+export class GatewayServiceInstallationOwnershipError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayServiceInstallationOwnershipError";
+  }
+}
+
 /** Doctor consumes the updater's verified ownership; a recorded path alone grants no repair. */
 export async function assertGatewayServiceInstallationRepairAllowed(
   params: GatewayServiceInstallationRepair,
@@ -195,7 +203,7 @@ export async function assertGatewayServiceInstallationRepairAllowed(
     );
   }
   if (verdict.kind !== "owned" || !verdict.requiresInstallRootRefresh) {
-    throw new Error(
+    throw new GatewayServiceInstallationOwnershipError(
       `Gateway service installation is controlled by another owner; automatic installation repair was skipped. Inspect it with \`${formatCliCommand("openclaw gateway status --deep", state.env)}\`.`,
     );
   }
@@ -225,6 +233,17 @@ export function resolveSystemdScopeFromServicePath(
 export function resolveSystemdUnitNameFromServicePath(sourcePath: string | undefined): string {
   const base = sourcePath ? path.posix.basename(sourcePath.replaceAll("\\", "/")) : "";
   return base.endsWith(".service") ? base : "openclaw-gateway.service";
+}
+
+/** Points the operator at their own drop-in instead of a repair Doctor cannot make. */
+export function noteOperatorOwnedSystemdDropIn(command: GatewayServiceCommandConfig): void {
+  const unitName = resolveSystemdUnitNameFromServicePath(command.sourcePath);
+  const scope = resolveSystemdScopeFromServicePath(command.sourcePath);
+  const inspectCommand = `systemctl${scope === "user" ? " --user" : ""} cat ${unitName}`;
+  note(
+    `Gateway service command, working directory, or environment comes from an operator-owned systemd drop-in; rewriting the managed unit cannot repair it. Inspect with \`${inspectCommand}\`, then update or remove the drop-in and rerun doctor.`,
+    "Gateway service config",
+  );
 }
 
 export async function resolveSystemdServiceRewriteBlock(
