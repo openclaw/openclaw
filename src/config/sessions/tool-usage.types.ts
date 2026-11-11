@@ -1,5 +1,15 @@
 import type { ToolUsageCatalogEntry, ToolUsageRow } from "../../agents/tool-usage.js";
 
+export type AgentToolUsageAppend =
+  | { kind: "begin"; runId: string; now: number }
+  | {
+      kind: "flush";
+      runId: string;
+      generation: number;
+      rows: readonly ToolUsageRow[];
+      now: number;
+    };
+
 export type AgentToolUsageState = {
   generation: number;
   liveSince: number | null;
@@ -51,4 +61,5 @@ export type AgentToolUsageImportReadInput = {
   catalog: readonly ToolUsageCatalogEntry[];
   since: number;
   before: number;
+  activeRunIds?: readonly string[];
 };

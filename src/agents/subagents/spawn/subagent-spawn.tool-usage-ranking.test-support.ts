@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import * as toolUsage from "../../../config/sessions/tool-usage.js";
+import { seedAgentToolUsageRunForTest } from "../../../config/sessions/tool-usage.test-support.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
 import {
@@ -161,7 +162,7 @@ export function registerToolUsageRankingSpawnCase(options: RankingSpawnOptions) 
         orderedToolIds: [deniedId, allowedId],
       });
       const usageScope = { agentId: "main", config: bound.cfg };
-      const { generation } = await toolUsage.beginAgentToolUsageRecording(usageScope);
+      const { generation } = await seedAgentToolUsageRunForTest(usageScope);
       await toolUsage.flushAgentToolUsage({
         ...usageScope,
         generation,

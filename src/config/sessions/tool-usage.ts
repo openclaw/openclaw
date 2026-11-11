@@ -89,19 +89,12 @@ export async function readAgentToolUsage(input: AgentToolUsageOptions): Promise<
   return (await readAgentToolUsageStatus(input)).rows;
 }
 
-/** Establish the historical/live partition before the first successful call, not at flush time. */
-export function beginAgentToolUsageRecording(input: AgentToolUsageOptions & { runId?: string }) {
-  const now = input.now ?? Date.now();
-  return withDatabase(input, (options, current) =>
-    write(options, current, "toolUsage.begin", { now, runId: input.runId }),
-  );
-}
-
 export function flushAgentToolUsage(
   input: AgentToolUsageOptions & {
     rows: readonly ToolUsageRow[];
     generation: number;
     runId?: string;
+    startedAt?: number;
   },
 ): Promise<boolean> {
   const now = input.now ?? Date.now();
@@ -112,6 +105,7 @@ export function flushAgentToolUsage(
       rows,
       generation: input.generation,
       runId: input.runId,
+      startedAt: input.startedAt,
       now,
     }),
   );
@@ -145,9 +139,8 @@ export async function importAgentToolUsage(
     Math.floor(now - Math.min(TOOL_USAGE_RETENTION_MS, sinceDays * 86_400_000)),
   );
   const catalog = input.catalog.map(({ id, name }) => ({ id, name }));
-  const { settlePendingAgentToolUsageAdmissions } =
-    await import("../../agents/tool-usage-recorder.js");
-  await settlePendingAgentToolUsageAdmissions(normalizeAgentId(input.agentId));
+  const { captureActiveAgentToolUsageRuns } = await import("../../agents/tool-usage-recorder.js");
+  const activeRunIds = captureActiveAgentToolUsageRuns(normalizeAgentId(input.agentId));
   return withDatabase(input, async (options, current) => {
     const state = await withSessionHistoryWorkerDatabase(options, (owner) =>
       owner.readAgentToolUsage({ now, env: options.env ?? {} }),
@@ -172,6 +165,7 @@ export async function importAgentToolUsage(
           executingAgentId: normalizeAgentId(input.agentId),
           counterDatabase: { agentId: options.agentId!, path: options.path! },
           previous: state,
+          activeRunIds,
           env: options.env ?? {},
         }),
     );

@@ -1,16 +1,17 @@
 import { expect, it } from "vitest";
+import { createRunToolUsageRecorder } from "../../agents/tool-usage-recorder.js";
 import { decayToolUsage } from "../../agents/tool-usage.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import {
-  beginAgentToolUsageRecording,
   flushAgentToolUsage,
   importAgentToolUsage,
   readAgentToolUsageStatus,
   pruneRegisteredAgentToolUsage,
   resetAgentToolUsage,
 } from "./tool-usage.js";
+import { seedAgentToolUsageRunForTest } from "./tool-usage.test-support.js";
 
 const day = 86_400_000;
 const now = Date.UTC(2026, 9, 1);
@@ -106,7 +107,7 @@ it("imports terminal calls once through workers, preserves live counts, and fenc
       lastImportAt: null,
     });
 
-    const { generation } = await beginAgentToolUsageRecording(options);
+    const { generation } = await seedAgentToolUsageRunForTest(options);
     expect(
       await flushAgentToolUsage({
         ...options,
@@ -226,7 +227,7 @@ it("imports terminal calls once through workers, preserves live counts, and fenc
       ["live-first", now + 30],
       ["live-second", now + 70],
     ] as const) {
-      const admitted = await beginAgentToolUsageRecording({ ...gapOptions, runId, now: at });
+      const admitted = await seedAgentToolUsageRunForTest({ ...gapOptions, runId, now: at });
       await seedRun(runId, at + 1);
       await flushAgentToolUsage({
         ...gapOptions,
@@ -260,5 +261,27 @@ it("imports terminal calls once through workers, preserves live counts, and fenc
     ).toBe(1);
     await pruneRegisteredAgentToolUsage({ env, now: now + 96 * day, assertCurrent: () => {} });
     expect((await readAgentToolUsageStatus({ ...gapOptions, now })).rows).toEqual([]);
+    const pendingRunId = "active-before-first-transcript-commit";
+    await seedRun(pendingRunId, now + 96 * day);
+    const active = createRunToolUsageRecorder({
+      agentId: gapOptions.agentId,
+      runId: pendingRunId,
+      config: { agents: { defaults: { experimental: { usageRankedToolIndex: true } } } },
+      log: { warn: () => {} },
+      now: () => now + 96 * day,
+    });
+    expect(active).toBeDefined();
+    try {
+      expect(
+        await importAgentToolUsage({
+          ...gapOptions,
+          catalog,
+          dryRun: true,
+          now: now + 96 * day + 1,
+        }),
+      ).toMatchObject({ successfulCalls: 0, excluded: { recordedLive: 1 } });
+    } finally {
+      await active?.settle();
+    }
   });
 });

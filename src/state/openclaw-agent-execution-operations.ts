@@ -547,7 +547,6 @@ export function createAgentWorkerOperationLoaders(
     "session.maintenance.prepare": loadMaintenanceOperations,
     "session.maintenance.metadata": loadMaintenanceOperations,
     "toolUsage.prune": loadAgentToolUsageOperations,
-    "toolUsage.begin": loadAgentToolUsageOperations,
     "toolUsage.flush": loadAgentToolUsageOperations,
     "toolUsage.reset": loadAgentToolUsageOperations,
     "toolUsage.import": loadAgentToolUsageOperations,

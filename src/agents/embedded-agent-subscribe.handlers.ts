@@ -103,9 +103,6 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
       case "turn_end":
         void scheduleEvent(evt, () => {
           ctx.noteLastAssistant(evt.message);
-          // The event chain has recorded this turn's direct and nested outcomes.
-          // Storage is best effort and must not delay the next model request.
-          void ctx.params.toolUsageRecorder?.flush();
         });
         return;
       case "tool_execution_start":

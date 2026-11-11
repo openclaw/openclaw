@@ -24,7 +24,9 @@ import type { RunToolUsageRecorder } from "./tool-usage-recorder.js";
 function recordingSink() {
   return {
     record: vi.fn(),
-    flush: vi.fn(async () => {}),
+    bindTranscript: vi.fn(),
+    takeAppend: vi.fn(),
+    committed: vi.fn(),
     settle: vi.fn(async () => {}),
   } satisfies RunToolUsageRecorder;
 }
@@ -104,13 +106,10 @@ describe("usage at the embedded completion boundary", () => {
         ["openclaw:notes:lookup"],
         ["openclaw:core:exec"],
       ]);
-      expect(recorder.flush).not.toHaveBeenCalled();
-      const write = Promise.withResolvers<void>();
-      recorder.flush.mockImplementationOnce(() => write.promise);
       emit({ type: "turn_end", message: { role: "assistant", content: [] }, toolResults: [] });
       await subscription.waitForPendingEvents();
-      expect(recorder.flush).toHaveBeenCalledTimes(1);
-      write.resolve();
+      expect(recorder.takeAppend).not.toHaveBeenCalled();
+      expect(recorder.settle).not.toHaveBeenCalled();
     } finally {
       subscription.unsubscribe();
       clearToolSearchCatalog({ catalogRef });

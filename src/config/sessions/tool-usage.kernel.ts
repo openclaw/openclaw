@@ -6,6 +6,7 @@ import {
 } from "../../agents/tool-usage.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
+import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { AgentToolUsageState, AgentToolUsageStatus } from "./tool-usage.types.js";
 
@@ -139,19 +140,21 @@ function retainLiveRun(db: EngineConnection, runId: string | undefined, now: num
 }
 
 export function pruneAgentToolUsageInDatabase(db: EngineConnection, now: number): void {
-  executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<DB>(db)
-      .deleteFrom("cache_entries")
-      .where("scope", "=", liveScope)
-      .where("expires_at", "<", now),
-  );
-  executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<DB>(db)
-      .deleteFrom("agent_tool_usage")
-      .where("updated_at", "<", now - TOOL_USAGE_RETENTION_MS),
-  );
+  return withSqliteDatabaseWriteScope(db, [], () => {
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<DB>(db)
+        .deleteFrom("cache_entries")
+        .where("scope", "=", liveScope)
+        .where("expires_at", "<", now),
+    );
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<DB>(db)
+        .deleteFrom("agent_tool_usage")
+        .where("updated_at", "<", now - TOOL_USAGE_RETENTION_MS),
+    );
+  });
 }
 
 export function readAgentToolUsageInDatabase(
@@ -174,14 +177,16 @@ export function beginAgentToolUsageInDatabase(
   now: number,
   runId?: string,
 ): AgentToolUsageState {
-  const state = readAgentToolUsageStateInDatabase(db);
-  retainLiveRun(db, runId, now);
-  if (state.liveSince === null) {
-    state.liveSince = now;
-    writeState(db, state, now);
-  }
-  pruneAgentToolUsageInDatabase(db, now);
-  return state;
+  return withSqliteDatabaseWriteScope(db, [], () => {
+    const state = readAgentToolUsageStateInDatabase(db);
+    retainLiveRun(db, runId, now);
+    if (state.liveSince === null) {
+      state.liveSince = now;
+      writeState(db, state, now);
+    }
+    pruneAgentToolUsageInDatabase(db, now);
+    return state;
+  });
 }
 
 function mergeRows(db: EngineConnection, rows: readonly ToolUsageRow[], now: number): void {
@@ -235,32 +240,48 @@ export function flushAgentToolUsageInDatabase(
     generation: number;
     runId?: string;
     rows: readonly ToolUsageRow[];
+    startedAt?: number;
     now: number;
   },
 ): boolean {
-  const state = readAgentToolUsageStateInDatabase(db);
-  if (state.generation !== input.generation || state.liveSince === null) {
-    return false;
-  }
-  retainLiveRun(db, input.runId, input.now);
-  mergeRows(db, input.rows, input.now);
-  pruneAgentToolUsageInDatabase(db, input.now);
-  return true;
+  return withSqliteDatabaseWriteScope(db, [], () => {
+    const state = readAgentToolUsageStateInDatabase(db);
+    if (state.generation !== input.generation) {
+      return false;
+    }
+    if (state.liveSince === null) {
+      if (input.startedAt === undefined) {
+        return false;
+      }
+      state.liveSince = input.startedAt;
+      writeState(db, state, input.now);
+    }
+    retainLiveRun(db, input.runId, input.now);
+    mergeRows(db, input.rows, input.now);
+    pruneAgentToolUsageInDatabase(db, input.now);
+    return true;
+  });
 }
 
 export function resetAgentToolUsageInDatabase(
   db: EngineConnection,
   now: number,
 ): AgentToolUsageState {
-  const state = readAgentToolUsageStateInDatabase(db);
-  const next = { ...emptyAgentToolUsageState(), generation: state.generation + 1, liveSince: now };
-  executeSqliteQuerySync(db, getNodeSqliteKysely<DB>(db).deleteFrom("agent_tool_usage"));
-  executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<DB>(db).deleteFrom("cache_entries").where("scope", "=", liveScope),
-  );
-  writeState(db, next, now);
-  return next;
+  return withSqliteDatabaseWriteScope(db, [], () => {
+    const state = readAgentToolUsageStateInDatabase(db);
+    const next = {
+      ...emptyAgentToolUsageState(),
+      generation: state.generation + 1,
+      liveSince: now,
+    };
+    executeSqliteQuerySync(db, getNodeSqliteKysely<DB>(db).deleteFrom("agent_tool_usage"));
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<DB>(db).deleteFrom("cache_entries").where("scope", "=", liveScope),
+    );
+    writeState(db, next, now);
+    return next;
+  });
 }
 
 export function commitAgentToolUsageImportInDatabase(
@@ -272,41 +293,45 @@ export function commitAgentToolUsageImportInDatabase(
     now: number;
   },
 ): boolean {
-  const state = readAgentToolUsageStateInDatabase(db);
-  if (
-    state.generation !== input.expected.generation ||
-    state.liveSince !== input.expected.liveSince ||
-    JSON.stringify(state.importedWindows) !== JSON.stringify(input.expected.importedWindows) ||
-    state.lastImportAt !== input.expected.lastImportAt
-  ) {
-    return false;
-  }
-  mergeRows(db, input.rows, input.now);
-  pruneAgentToolUsageInDatabase(db, input.now);
-  const floor = input.now - TOOL_USAGE_RETENTION_MS;
-  const windows = [...state.importedWindows, { since: input.since, before: input.now }]
-    .filter((window) => window.before > Math.max(floor, window.since))
-    .map((window) => ({ before: window.before, since: Math.max(window.since, floor) }))
-    .toSorted((a, b) => a.since - b.since);
-  const importedWindows: AgentToolUsageState["importedWindows"] = [];
-  for (const window of windows) {
-    const previous = importedWindows.at(-1);
-    if (previous && previous.before >= window.since) {
-      previous.before = Math.max(previous.before, window.before);
-    } else {
-      importedWindows.push(window);
+  return withSqliteDatabaseWriteScope(db, [], () => {
+    const state = readAgentToolUsageStateInDatabase(db);
+    if (
+      state.generation !== input.expected.generation ||
+      state.liveSince !== input.expected.liveSince ||
+      JSON.stringify(state.importedWindows) !== JSON.stringify(input.expected.importedWindows) ||
+      state.lastImportAt !== input.expected.lastImportAt
+    ) {
+      return false;
     }
-  }
-  writeState(db, { ...state, importedWindows, lastImportAt: input.now }, input.now);
-  return true;
+    mergeRows(db, input.rows, input.now);
+    pruneAgentToolUsageInDatabase(db, input.now);
+    const floor = input.now - TOOL_USAGE_RETENTION_MS;
+    const windows = [...state.importedWindows, { since: input.since, before: input.now }]
+      .filter((window) => window.before > Math.max(floor, window.since))
+      .map((window) => ({ before: window.before, since: Math.max(window.since, floor) }))
+      .toSorted((a, b) => a.since - b.since);
+    const importedWindows: AgentToolUsageState["importedWindows"] = [];
+    for (const window of windows) {
+      const previous = importedWindows.at(-1);
+      if (previous && previous.before >= window.since) {
+        previous.before = Math.max(previous.before, window.before);
+      } else {
+        importedWindows.push(window);
+      }
+    }
+    writeState(db, { ...state, importedWindows, lastImportAt: input.now }, input.now);
+    return true;
+  });
 }
 
 /** Agent retirement has already closed pending database admissions. */
 export function deleteAgentToolUsageInDatabase(db: EngineConnection): void {
-  const sql = getNodeSqliteKysely<DB>(db);
-  executeSqliteQuerySync(db, sql.deleteFrom("agent_tool_usage"));
-  executeSqliteQuerySync(
-    db,
-    sql.deleteFrom("cache_entries").where("scope", "in", [scope, liveScope]),
-  );
+  return withSqliteDatabaseWriteScope(db, [], () => {
+    const sql = getNodeSqliteKysely<DB>(db);
+    executeSqliteQuerySync(db, sql.deleteFrom("agent_tool_usage"));
+    executeSqliteQuerySync(
+      db,
+      sql.deleteFrom("cache_entries").where("scope", "in", [scope, liveScope]),
+    );
+  });
 }

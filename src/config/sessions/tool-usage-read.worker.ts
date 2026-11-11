@@ -133,6 +133,9 @@ export function readAgentToolUsageImportInWorker(input: AgentToolUsageImportRead
     throw new Error(`Tool usage coverage unavailable: ${receipts.reason}`);
   }
   const liveRuns = receipts.found ? receipts.value : new Set<string>();
+  for (const runId of input.activeRunIds ?? []) {
+    liveRuns.add(runId);
+  }
   const read = withOpenClawAgentDatabaseReadOnly(
     (database) =>
       runSqliteReadSnapshotSync(database.db, () =>

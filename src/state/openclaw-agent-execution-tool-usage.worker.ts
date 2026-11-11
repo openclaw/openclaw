@@ -11,12 +11,6 @@ export async function loadAgentToolUsageOperations() {
         kernel.pruneAgentToolUsageInDatabase(db, input.now);
         admit("commit");
       }),
-    "toolUsage.begin": (input: { now: number; runId?: string }, { writeTransaction, admit }) =>
-      writeTransaction("tool-usage.begin", "Tool usage", ({ db }) => {
-        const state = kernel.beginAgentToolUsageInDatabase(db, input.now, input.runId);
-        admit("commit");
-        return state;
-      }),
     "toolUsage.flush": (
       input: Parameters<typeof kernel.flushAgentToolUsageInDatabase>[1],
       { writeTransaction, admit },

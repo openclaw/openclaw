@@ -1,11 +1,11 @@
 import { expect, it } from "vitest";
 import { seedUnindexedTranscriptForTest } from "../../config/sessions/session-accessor.sqlite-import.test-support.js";
 import {
-  beginAgentToolUsageRecording,
   flushAgentToolUsage,
   importAgentToolUsage,
   readAgentToolUsage,
 } from "../../config/sessions/tool-usage.js";
+import { seedAgentToolUsageRunForTest } from "../../config/sessions/tool-usage.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildCodeModeCatalogPrompt } from "../code-mode.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
@@ -108,7 +108,7 @@ it("imports stored transcript calls into both real listings and freezes bytes wh
         ],
       });
       expect((await importAgentToolUsage({ ...options, catalog })).successfulCalls).toBe(1);
-      const { generation } = await beginAgentToolUsageRecording(options);
+      const { generation } = await seedAgentToolUsageRunForTest(options);
       const entries: SessionEntry[] = [];
       const routeKey = buildSystemPromptRouteKey({
         provider: "synthetic",
