@@ -533,7 +533,11 @@ function ensureAgentSchema(
       }
       migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
       if (previousVersion === targetVersion) {
-        jsonPredicates.repairDeepTranscriptPredicatesInTransaction(db);
+        // Doctor also prepares schema 16 before the media cutover; predicate
+        // repair requires the columns introduced by the later schema 26 step.
+        if (targetVersion >= AGENT_JSON_PREDICATE_SCHEMA_VERSION) {
+          jsonPredicates.repairDeepTranscriptPredicatesInTransaction(db);
+        }
         ensureSessionAdditiveColumns(db);
         ensureSessionEntryValidityProjection(db);
         ensureSessionKeyContractSchemaInTransaction(db);
@@ -543,9 +547,7 @@ function ensureAgentSchema(
           db.exec(schemaSql);
         }
         // Repair canonical indexes after the same-version additive schema changes.
-        repairCanonicalSqliteIndexes(db, pathname, schemaSql, {
-          verifyPhysicalIntegrity: false,
-        });
+        repairCanonicalSqliteIndexes(db, pathname, schemaSql, { verifyPhysicalIntegrity: false });
         persistAgentSchemaMetadata(db, agentId, targetVersion);
         assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion }, schemaSql);
         maintenanceAuthority.assertAgentDatabaseMaintenanceAuthorityIfPresent();
