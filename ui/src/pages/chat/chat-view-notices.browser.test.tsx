@@ -126,6 +126,7 @@ it("contains mobile default-model recovery help and long action labels", async (
       })}
     />
   ));
+
   try {
     await waitForSolid(() =>
       expect(view.container.querySelector(".chat-model-recovery")).not.toBeNull(),
