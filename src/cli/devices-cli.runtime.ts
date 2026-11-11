@@ -115,7 +115,6 @@ async function listPairingWithFallback(
   opts: DevicesRpcOpts,
   signal?: AbortSignal,
 ): Promise<DevicePairingList> {
-  signal?.throwIfAborted();
   try {
     return parseDevicePairingList(
       await callGatewayCli("device.pair.list", opts, {}, { scopes: [PAIRING_SCOPE], signal }),
@@ -127,9 +126,7 @@ async function listPairingWithFallback(
       throw error;
     }
     await prepareCliGatewayStateAccess();
-    signal?.throwIfAborted();
     const local = await listDevicePairing();
-    signal?.throwIfAborted();
     const list = {
       pending: local.pending as PendingDevice[],
       paired: local.paired.map((device) => redactLocalPairedDevice(device)),
@@ -539,12 +536,10 @@ function failDevicesCommand(json: boolean | undefined, ...lines: string[]): void
 }
 
 export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void> {
-  const signal = getAsyncWorkSignal();
   let list: DevicePairingList;
   try {
-    list = await listPairingWithFallback(opts, signal);
+    list = await listPairingWithFallback(opts, getAsyncWorkSignal());
   } catch (error) {
-    signal?.throwIfAborted();
     if (opts.json) {
       const payload = formatGatewayTransportErrorJson(error);
       if (payload) {
@@ -555,7 +550,6 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
     }
     throw error;
   }
-  signal?.throwIfAborted();
   const pairedByDeviceId = indexPairedDevices(list.paired);
   if (opts.json) {
     defaultRuntime.writeJson(list);
@@ -739,9 +733,7 @@ export async function runDevicesApproveCommand(
   const usingImplicitSelection = !resolvedRequestId || Boolean(opts.latest);
   let selectedRequest: PendingDevice | null = null;
   if (usingImplicitSelection) {
-    const signal = getAsyncWorkSignal();
-    pairingList = await listPairingWithFallback(opts, signal);
-    signal?.throwIfAborted();
+    pairingList = await listPairingWithFallback(opts, getAsyncWorkSignal());
     selectedRequest = selectLatestPendingRequest(pairingList.pending);
     resolvedRequestId = selectedRequest?.requestId?.trim();
   }
