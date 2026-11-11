@@ -191,7 +191,15 @@ it("keeps retained source comparison across an authenticated browser reconnect",
     invalidateGatewayDeviceRevocation(proof.context, "reconnect-device", "operator");
     expect(() => original.authority.assertCurrent()).toThrow();
     expect(() => reconnected.authority.assertCurrent()).toThrow();
-    expect(() => afterRelease.authority.assertCurrent()).toThrow();
+    expect(afterRelease.authority.signal?.reason).toMatchObject({
+      message: expect.stringContaining("Reconnect to the Gateway"),
+    });
+    expect(() => afterRelease.authority.assertCurrent()).toThrow("Reconnect to the Gateway");
+    for (let turn = 0; turn < 3; turn++) {
+      const fresh = await proof.capture(proof.connect().client);
+      fresh.authority.assertCurrent();
+      expect(() => afterRelease.authority.assertCurrent()).toThrow("Reconnect to the Gateway");
+    }
   }));
 
 it("keeps unproven, reduced, foreign and rotated reconnect sources separate", () =>

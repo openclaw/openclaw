@@ -58,6 +58,9 @@
  * preparation owner, not Docker or a model. --transcript-mib seeds genuine
  * synthetic transcript payloads using the shared Team fixture; report DB bytes
  * separately because compression changes physical size. Filesystem is host-owned.
+ * --source-authority captures a new operator authority for each preparation, revokes
+ * one during reconciliation, and proves later admissions reuse the same workspace.
+ * This calls the real authority and preparation owners, not WS or model transport.
  * Compare --requests 8 --burst 8 in fresh-process A/A and interleaved A/B runs;
  * allocation is a separate instrumented pass. Later writes must still reconcile.
  * After the first preparation fixture, --reuse-fixture --report <name>.json
@@ -141,6 +144,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
 import type { Worker } from "node:worker_threads";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { transformSync } from "esbuild";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
 import type { LocalWorkspaceOwner } from "../../src/gateway/worker-environments/local-workspace-types.ts";
@@ -158,6 +162,7 @@ const { values } = parseArgs({
     "source-root": { type: "string" },
     "fixture-source": { type: "string" },
     "serial-turns": { type: "boolean", default: false },
+    "source-authority": { type: "boolean", default: false },
     "owner-switch": { type: "boolean", default: false },
     "restart-stage": { type: "string" },
     "creation-contender": { type: "boolean", default: false },
@@ -426,6 +431,7 @@ assert(
       values.acceleration),
 );
 const reuseFixture = values["reuse-fixture"] || resumeOwnerSwitch;
+assert(!values["source-authority"] || (values.mode === "preparation" && !serialTurns));
 assert(!reuseFixture || values.mode === "preparation" || fileReads || turnLoop);
 const requests = Number(values.requests),
   burst = Number(values.burst),
@@ -591,6 +597,7 @@ const owners = [
   ...(!values.revision ? ["src/gateway/worker-environments/local-workspace-read.ts"] : []),
   "src/agents/worktrees/gc-artifacts.ts",
   "src/state/openclaw-state-lease-acquisition.ts",
+  ...(values["source-authority"] ? ["src/gateway/operator-run-authority.ts"] : []),
 ];
 const source = new Map(
   owners.map((file) => [
@@ -1573,13 +1580,59 @@ measurement: try {
     assert.deepEqual(result, { orphansDeleted: 0, snapshotsPruned: 0 });
     return result;
   };
-  const prepareWorkspace = async () => {
+  const authorityRuntime = values["source-authority"]
+    ? await import("../../src/gateway/operator-run-authority.js")
+    : undefined;
+  const deviceRuntime = values["source-authority"]
+    ? await import("../../src/gateway/device-revocation.js")
+    : undefined;
+  const operatorProfile = values["source-authority"]
+    ? (await import("../../src/state/user-profiles.js")).ensureProfileForEmail(
+        "source-authority-fixture@example.invalid",
+      )
+    : undefined;
+  const authorityContext = { getRuntimeConfig: () => config };
+  let admissions = 0;
+  const captureSource = async () => {
+    assert(authorityRuntime && deviceRuntime && operatorProfile);
+    const device = deviceRuntime.captureGatewayDeviceRevocation(
+      authorityContext,
+      { deviceId: "synthetic-source", role: "operator" },
+      () => true,
+    );
+    try {
+      const captured = await authorityRuntime.captureGatewayOperatorRunAuthority({
+        client: {
+          connId: `synthetic-${++admissions}`,
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: { id: "openclaw-control-ui", mode: "webchat", version: "dev", platform: "web" },
+            role: "operator",
+            scopes: ["operator.admin"],
+          },
+          internal: { operatorRoleActor: { kind: "operator", profileId: operatorProfile.id } },
+        },
+        context: authorityContext,
+        hasCurrentClientAuthority: device.isCurrent,
+      });
+      assert(captured, "An admitted operator must receive authority");
+      return captured;
+    } finally {
+      device.release();
+    }
+  };
+  const prepareWithAuthority = async (
+    authority?: Awaited<ReturnType<typeof captureSource>>["authority"],
+  ) => {
     using prepared = await prepareLocalSandboxWorkspace({
       cfg: config,
       agentId: owner.agentId,
       sessionKey,
       workspaceDir: canonical,
       sandbox,
+      assertCurrent: authority?.assertCurrent,
+      signal: authority?.signal,
     });
     assert(prepared, "Preparation must resolve the selected session-owned workspace");
     workspace ??= prepared.workspaceDir;
@@ -1590,6 +1643,62 @@ measurement: try {
     );
     return prepared.workspaceDir;
   };
+  const prepareWorkspace = async () => {
+    const captured = values["source-authority"] ? await captureSource() : undefined;
+    try {
+      return await prepareWithAuthority(captured?.authority);
+    } finally {
+      captured?.release();
+    }
+  };
+  let sourceAuthorityProof: unknown;
+  if (values["source-authority"]) {
+    const original = await captureSource();
+    let revoked = false;
+    const errors: string[] = [];
+    const recordRevocation = (error: unknown) => {
+      const causes = collectNestedErrorCandidates(error);
+      errors.push(...causes.map(String));
+      return (
+        original.authority.signal?.aborted === true &&
+        causes.includes(original.authority.signal.reason)
+      );
+    };
+    try {
+      await assert.rejects(
+        withDiagnosticsTimelineObserver(
+          (name) => {
+            if (!revoked && name === "attempt.setup.sandbox.workspace_selection.reuse.reconcile") {
+              revoked = true;
+              deviceRuntime!.invalidateGatewayDeviceRevocation(
+                authorityContext,
+                "synthetic-source",
+                "operator",
+              );
+            }
+            return undefined;
+          },
+          () => prepareWithAuthority(original.authority),
+        ),
+        recordRevocation,
+      );
+      assert(revoked, "Revocation must occur inside real workspace reconciliation");
+      for (let attempt = 0; attempt < 3; attempt++) {
+        assert.throws(original.authority.assertCurrent, recordRevocation);
+        await prepareWorkspace();
+      }
+      sourceAuthorityProof = {
+        revokedDuring: "attempt.setup.sandbox.workspace_selection.reuse.reconcile",
+        staleAssertionsRejected: 3,
+        freshPreparationsCompleted: 3,
+        errors,
+        abortReason: String(original.authority.signal?.reason),
+        boundary: "real operator/source and sandbox preparation owners; no WS or model",
+      };
+    } finally {
+      original.release();
+    }
+  }
   const runOne = (i: number) =>
     turnLoop
       ? runTurn!()
@@ -2395,6 +2504,8 @@ measurement: try {
   };
   const report = {
     mode: values.mode,
+    sourceAuthorityProof,
+    operatorAdmissions: values["source-authority"] ? admissions : undefined,
     harnessSha256,
     turn: turnLoop
       ? {
