@@ -1000,7 +1000,8 @@ See [update compatibility and recovery](/reference/database-engines#updates-and-
 These captures are portable SQLite images by default. To keep their rows on the
 server and skip the local export, set `database.postgres.recoveryCaptures: "server"`;
 see [server recovery captures](/reference/database-engines#server-recovery-captures)
-for the durability and cleanup trade.
+for the durability and cleanup trade. [Original state captures](/cli/update/repair-and-recovery#original-state-captures)
+stay portable either way.
 
 Store owners run consecutive forward schema migrations under a writer transaction.
 Admission verifies the generated destination schema before publication. Missing

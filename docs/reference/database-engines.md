@@ -872,6 +872,9 @@ server instead:
 - The update rollback capture of the shared `state` family and the candidate
   state copy stay portable, because client credential rollback and the update
   rehearsal read their SQLite images.
+- [Original state captures](/cli/update/repair-and-recovery#original-state-captures),
+  taken before an update or a standalone `doctor --fix` writes state, also stay
+  portable: they still write local SQLite images of PostgreSQL stores.
 
 The server capture uses space on the database server and the runtime role's
 existing `CREATE` privilege. Existing portable captures stay readable and
