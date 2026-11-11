@@ -1,25 +1,22 @@
 import { existsSync } from "node:fs";
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { assert, expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import {
-  loadSessionEntry,
-  replaceSessionEntry,
-  updateSessionEntry,
-} from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
-import { resolveSessionMutationAuthorization } from "../../gateway/session-sharing.js";
-import { sharingPolicyClient } from "../../gateway/session-sharing.test-utils.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import {
+  createReplyOperation,
+  type ReplyOperation,
+  getSessionControllerOperation,
+} from "../../sessions/session-controller.js";
+import { captureSessionControllerSettlement } from "../../sessions/session-controller.lifecycle.js";
+import * as controllerMailbox from "../../sessions/session-controller.mailbox.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { TemplateContext } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { scheduleFollowupDrain, type FollowupRun } from "./queue.js";
@@ -27,13 +24,8 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import {
-  createReplyOperation,
-  replyRunRegistry,
-  type ReplyOperation,
-} from "./reply-run-registry.js";
 import * as turnAdmission from "./reply-turn-admission.js";
-import { buildChannelSourceTurnId } from "./source-turn-id.js";
+import * as sessionEntryHandle from "./session-entry-handle.js";
 
 type AdmissionFixture = {
   createMinimalRun: (params?: {
@@ -42,6 +34,7 @@ type AdmissionFixture = {
     sessionStore?: Record<string, SessionEntry>;
     sessionKey?: string;
     storePath?: string;
+    resolvedQueueMode?: string;
     runOverrides?: Partial<FollowupRun["run"]>;
     isActive?: boolean;
     shouldSteer?: boolean;
@@ -65,12 +58,15 @@ type AdmissionFixture = {
 
 function observePredecessorWait() {
   const entered = createDeferred();
-  const waitForIdle = replyRunRegistry.waitForIdle.bind(replyRunRegistry);
-  const spy = vi.spyOn(replyRunRegistry, "waitForIdle").mockImplementation((...args) => {
-    const pending = waitForIdle(...args);
-    entered.resolve();
-    return pending;
-  });
+  const claimInput = controllerMailbox.claimSessionControllerInput;
+  const spy = vi
+    .spyOn(controllerMailbox, "claimSessionControllerInput")
+    .mockImplementation((source) => {
+      const pending = claimInput(source);
+      expect(source.controllerInput?.phase).toBe("waiting");
+      entered.resolve();
+      return pending;
+    });
   return {
     async wait(pending: Promise<unknown>) {
       await Promise.race([
@@ -88,101 +84,16 @@ export function registerReplyAdmissionCases({
   createMinimalRun,
   makeSessionFixture,
   runEmbeddedAgentMock,
-  queueEmbeddedAgentMessageMock,
 }: AdmissionFixture): void {
-  it("tombstones a redelivered source whose recovery claim is already terminal", async () => {
-    const sessionCtx = {
-      Provider: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "channel:24680",
-      MessageSid: "redelivered-terminal-message",
-    } as const;
-    const sourceTurnId = expectDefined(
-      buildChannelSourceTurnId({
-        provider: "discord",
-        conversationId: "channel:24680",
-        messageId: "redelivered-terminal-message",
-      }),
-      "terminal redelivery source identity",
-    );
-    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
-      status: "done",
-      restartRecoveryDeliveryRunId: "terminal-recovery-run",
-      restartRecoveryDeliverySourceRunId: sourceTurnId,
-      restartRecoveryDeliveryContext: {
-        channel: "discord",
-        to: "channel:24680",
-      },
-    });
-    const onAdopted = vi.fn();
-    const duplicate = createMinimalRun({
-      isActive: true,
-      shouldSteer: true,
-      opts: { turnAdoptionLifecycle: { onAdopted } },
-      sessionCtx,
-      runOverrides: { messageProvider: "discord" },
-      sessionEntry,
-      sessionStore,
-      sessionKey: "main",
-      storePath,
-    });
-    const cfg: OpenClawConfig = { session: { store: storePath } };
-    const profileId = "retirement-operator";
-    const scopes = ["operator.admin"];
-    const authorized = resolveSessionMutationAuthorization({
-      client: sharingPolicyClient({ user: profileId, scopes }),
-      context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-      method: "sessions.patch",
-      requestParams: { key: "main" },
-      expectedTarget: {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        sessionId: sessionEntry.sessionId,
-        storePath,
-      },
-    });
-    expect(authorized.error).toBeNull();
-    const authority = expectDefined(
-      authorized.authorization,
-      "session-backed retirement authority",
-    );
-    duplicate.followupRun.operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId,
-      scopes,
-      assertCurrent: authority.assertCurrent,
-    });
-
-    await expect(duplicate.run()).resolves.toBeUndefined();
-
-    expect(duplicate.sourceTurnId).toBe(sourceTurnId);
-    expect(onAdopted).not.toHaveBeenCalled();
-    expect(queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-    const stored = expectDefined(
-      loadSessionEntry({ storePath, sessionKey: "main", readConsistency: "latest" }),
-      "stored terminal session",
-    );
-    expect(stored).toMatchObject({
-      status: "done",
-      restartRecoveryTerminalRunIds: [sourceTurnId],
-    });
-    expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
-  });
-
   it.each(["backend", "adoption"] as const)(
     "settles a tracked reply after lifecycle rotation during %s completion",
     async (stage) => {
       const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
         status: undefined,
-        restartRecoveryDeliveryRunId: "msg",
       });
       let operation: ReplyOperation | undefined;
       const retire = () => {
-        expect(loadSessionEntry({ storePath, sessionKey: "main" })).toMatchObject({
-          restartRecoveryDeliveryRunId: "msg",
-        });
-        operation = replyRunRegistry.get("main");
+        operation = getSessionControllerOperation("main");
         expect(operation).toBeDefined();
         rotateAgentEventLifecycleGeneration();
         expect(operation?.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
@@ -210,17 +121,9 @@ export function registerReplyAdmissionCases({
             : undefined,
       });
       try {
-        await expect(run()).resolves.toMatchObject({
-          text:
-            stage === "backend"
-              ? SILENT_REPLY_TOKEN
-              : "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
-        });
+        await expect(run()).resolves.toEqual({});
         expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(stage === "backend" ? 1 : 0);
         expect(scheduleFollowupDrain).toHaveBeenCalledOnce();
-        expect(loadSessionEntry({ storePath, sessionKey: "main" })).toMatchObject({
-          restartRecoveryDeliveryRunId: "msg",
-        });
       } finally {
         operation?.complete();
       }
@@ -256,7 +159,7 @@ export function registerReplyAdmissionCases({
         updatedAt: 2,
       };
       active.complete();
-      await pending;
+      await expect(pending).resolves.toMatchObject({ text: "final" });
       expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     } finally {
       active.complete();
@@ -265,14 +168,9 @@ export function registerReplyAdmissionCases({
     }
   });
 
-  it.each([
-    { storage: "durable", terminalRecovery: false, claimedRecovery: false },
-    { storage: "durable", terminalRecovery: true, claimedRecovery: false },
-    { storage: "incognito", terminalRecovery: false, claimedRecovery: false },
-    { storage: "durable", terminalRecovery: false, claimedRecovery: true },
-  ])(
-    "publishes the admitted rotation without rereading it ($storage, terminal recovery=$terminalRecovery, claimed recovery=$claimedRecovery)",
-    async ({ storage, terminalRecovery, claimedRecovery }) => {
+  it.each(["durable", "incognito"] as const)(
+    "publishes the admitted rotation without rereading it (%s)",
+    async (storage) => {
       const sessionKey = "agent:main:main";
       const initial = {
         sessionId: "pre-compact-session",
@@ -284,6 +182,7 @@ export function registerReplyAdmissionCases({
           ? await (async () => {
               const state = await createOpenClawTestState({ label: "reply-admission-incognito" });
               onTestFinished(() => state.cleanup());
+              await captureRuntimeConfigAsyncReader()();
               const storePath = resolveIncognitoOpenClawAgentSqlitePath({
                 agentId: "main",
                 env: state.env,
@@ -316,55 +215,15 @@ export function registerReplyAdmissionCases({
       const replacement: SessionEntry = {
         ...sessionEntry,
         ...expected,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         updatedAt: sessionEntry.updatedAt + 1,
-        ...(terminalRecovery
-          ? {
-              status: undefined,
-              abortedLastRun: false,
-              restartRecoveryRuns: [{ runId: "terminal-run", lifecycleGeneration: "retired" }],
-              restartRecoveryTerminalRunIds: ["terminal-run"],
-            }
-          : {}),
-        ...(claimedRecovery
-          ? {
-              status: undefined,
-              abortedLastRun: true,
-              mainRestartRecovery: { cycleId: "admitted-cycle", revision: 1, chargedAttempts: 0 },
-            }
-          : {}),
-      };
-      const settleClaimedFixture = async () => {
-        if (!claimedRecovery) {
-          return;
-        }
-        // The mock backend must settle its synthetic interruption before releasing foreground custody.
-        await updateSessionEntry(scope, (current) =>
-          current.sessionId === expected.sessionId
-            ? { status: "done", abortedLastRun: false }
-            : null,
-        );
       };
       const assertPublished = () => {
         const published = sessionStore[sessionKey];
         assert(published);
         expect(published).toMatchObject(expected);
-        expect(published.restartRecoveryRuns).toBeUndefined();
-        if (claimedRecovery) {
-          assert(admittedOperation);
-          expect(published).toMatchObject({
-            abortedLastRun: true,
-            mainRestartRecovery: {
-              cycleId: "admitted-cycle",
-              chargedAttempts: 0,
-              foregroundClaims: {
-                lifecycleGeneration: admittedOperation.lifecycleGeneration,
-                tokens: [expect.any(String)],
-              },
-            },
-          });
-        } else {
-          expect(published.mainRestartRecovery).toBeUndefined();
-        }
       };
       let observer: ReturnType<typeof observeMainThreadSql> | undefined;
       const restoreObserver = () => {
@@ -372,7 +231,7 @@ export function registerReplyAdmissionCases({
         observer = undefined;
       };
       let admittedOperation: ReplyOperation | undefined;
-      let restoreBinding: (() => void) | undefined;
+      let restorePublication: (() => void) | undefined;
       let handoffChecked = false;
       let sqlFailure: unknown;
       const admit = turnAdmission.admitReplyTurn;
@@ -382,12 +241,13 @@ export function registerReplyAdmissionCases({
           const result = await admit(params);
           if (result.status === "owned") {
             admittedOperation = result.operation;
-            const bind = result.operation.bindToolAuthoritySnapshotAsync.bind(result.operation);
-            const binding = vi
-              .spyOn(result.operation, "bindToolAuthoritySnapshotAsync")
-              .mockImplementation(async (snapshot) => {
+            const createHandle = sessionEntryHandle.createReplySessionEntryHandle;
+            const publication = vi
+              .spyOn(sessionEntryHandle, "createReplySessionEntryHandle")
+              .mockImplementation((handleParams) => {
+                const handle = createHandle(handleParams);
                 try {
-                  // Stop before unrelated runtime preparation; publication must already be complete.
+                  // Observe admission through its actual publication, before unrelated preflight.
                   assertPublished();
                   assert(observer);
                   try {
@@ -398,10 +258,11 @@ export function registerReplyAdmissionCases({
                   handoffChecked = true;
                 } finally {
                   restoreObserver();
+                  publication.mockRestore();
                 }
-                return bind(snapshot);
+                return handle;
               });
-            restoreBinding = () => binding.mockRestore();
+            restorePublication = () => publication.mockRestore();
             observer = observeMainThreadSql();
           }
           return result;
@@ -413,12 +274,7 @@ export function registerReplyAdmissionCases({
         assert(published);
         expect(stored).toMatchObject(expected);
         expect(published).toMatchObject(expected);
-        expect(published.restartRecoveryRuns).toEqual(stored?.restartRecoveryRuns);
-        expect(published.mainRestartRecovery).toEqual(stored?.mainRestartRecovery);
-        if (!claimedRecovery) {
-          assertPublished();
-        }
-        await settleClaimedFixture();
+        assertPublished();
         if (storage === "incognito") {
           expect(existsSync(storePath)).toBe(false);
         }
@@ -430,6 +286,7 @@ export function registerReplyAdmissionCases({
         sessionStore,
         sessionKey,
         storePath,
+        resolvedQueueMode: "interrupt",
         runOverrides: { sessionId: sessionEntry.sessionId },
       });
       const pending = run();
@@ -453,16 +310,14 @@ export function registerReplyAdmissionCases({
         active.complete();
         await Promise.allSettled([pending]);
         restoreObserver();
-        try {
-          await settleClaimedFixture();
-        } finally {
-          const released = getSessionWorkAdmissionRelease({
+        {
+          const released = captureSessionControllerSettlement({
             scope: storePath,
             identities: [sessionKey],
           });
           admittedOperation?.complete();
           await released;
-          restoreBinding?.();
+          restorePublication?.();
           admission.mockRestore();
           waiting.restore();
         }

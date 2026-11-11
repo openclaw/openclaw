@@ -11,14 +11,15 @@ OpenClaw includes a bundled **Amazon Bedrock Mantle** provider that connects to
 the Mantle OpenAI-compatible endpoint. Mantle hosts open-source and
 third-party models (GPT-OSS, Qwen, Kimi, GLM, and similar) through a standard
 `/v1/chat/completions` surface backed by Bedrock infrastructure. Mantle also
-exposes Anthropic Claude models through an Anthropic Messages route.
+routes numbered OpenAI GPT models through `/openai/v1/responses` and exposes
+Anthropic Claude models through an Anthropic Messages route.
 
-| Property       | Value                                                                                  |
-| -------------- | -------------------------------------------------------------------------------------- |
-| Provider ID    | `amazon-bedrock-mantle`                                                                |
-| API            | `openai-completions` for discovered OSS models, `anthropic-messages` for Claude models |
-| Auth           | Explicit `AWS_BEARER_TOKEN_BEDROCK` or IAM credential-chain bearer-token generation    |
-| Default region | `us-east-1` (override with `AWS_REGION` or `AWS_DEFAULT_REGION`)                       |
+| Property       | Value                                                                                                            |
+| -------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Provider ID    | `amazon-bedrock-mantle`                                                                                          |
+| API            | `openai-completions` for OSS models, `openai-responses` for numbered GPT models, `anthropic-messages` for Claude |
+| Auth           | Explicit `AWS_BEARER_TOKEN_BEDROCK` or IAM credential-chain bearer-token generation                              |
+| Default region | `us-east-1` (override with `AWS_REGION` or `AWS_DEFAULT_REGION`)                                                 |
 
 ## Getting started
 
@@ -86,6 +87,10 @@ When `AWS_BEARER_TOKEN_BEDROCK` is set, OpenClaw uses it directly. Otherwise,
 OpenClaw attempts to generate a Mantle bearer token from the AWS default
 credential chain. It then discovers available Mantle models by querying the
 region's `/v1/models` endpoint.
+
+Discovered numbered OpenAI GPT models (for example, `openai.gpt-5.6-luna`) use
+`openai-responses` at the region's `/openai/v1` base URL automatically. GPT-OSS
+models keep `openai-completions` at `/v1`. You do not need a manual route override.
 
 | Behavior          | Detail                                                              |
 | ----------------- | ------------------------------------------------------------------- |

@@ -188,7 +188,6 @@ async function runCases(runtime: Runtime, repoRoot: string, artifactBase: string
             ...config.agents,
             defaults: {
               ...config.agents?.defaults,
-              heartbeat: { every: "0m" },
               compaction: { mode: "default", memoryFlush: { enabled: false } },
             },
           },

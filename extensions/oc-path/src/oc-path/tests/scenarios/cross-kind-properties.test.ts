@@ -15,19 +15,19 @@ describe("cross-kind property invariants", () => {
   const jsonlRaw = '{"a":1}\n\nbroken\n{"b":2}\n';
 
   it("resolve is non-mutating across all kinds", () => {
-    const md = parseMd(mdRaw).ast;
+    const md = parseMd(mdRaw);
     let before = JSON.stringify(md);
     resolveMdOcPath(md, parseOcPath("oc://X/[frontmatter]/name"));
     resolveMdOcPath(md, parseOcPath("oc://X/boundaries"));
     expect(JSON.stringify(md)).toBe(before);
 
-    const jsonc = parseJsonc(jsoncRaw).ast;
+    const jsonc = parseJsonc(jsoncRaw);
     before = JSON.stringify(jsonc);
     resolveJsoncOcPath(jsonc, parseOcPath("oc://X/k"));
     resolveJsoncOcPath(jsonc, parseOcPath("oc://X/n.0"));
     expect(JSON.stringify(jsonc)).toBe(before);
 
-    const jsonl = parseJsonl(jsonlRaw).ast;
+    const jsonl = parseJsonl(jsonlRaw);
     before = JSON.stringify(jsonl);
     resolveJsonlOcPath(jsonl, parseOcPath("oc://X/L1"));
     resolveJsonlOcPath(jsonl, parseOcPath("oc://X/$last"));

@@ -1,0 +1,2 @@
+# Desktop/mobile QR payload and geometry, theme contrast, and unavailable-code fallback regressions.
+173

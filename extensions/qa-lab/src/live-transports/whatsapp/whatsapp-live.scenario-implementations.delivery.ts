@@ -6,7 +6,7 @@ import type {
 import { callWhatsAppGatewaySend } from "./whatsapp-live.gateway.js";
 import {
   requireWhatsAppTriggerMessageId,
-  waitForScenarioObservedMessage,
+  waitForWhatsAppQuotedMessage,
   waitForWhatsAppSutReactionSequenceToTrigger,
   waitForWhatsAppSutReactionToTrigger,
 } from "./whatsapp-live.observations.js";
@@ -17,7 +17,6 @@ function createWhatsAppApprovalScenario(
   run: Omit<WhatsAppQaApprovalScenarioRun, "kind" | "token">,
 ): WhatsAppQaScenarioImplementation {
   return {
-    posture: "native-approval",
     configOverrides: {
       approvals: { exec: true, ...(run.approvalKind === "plugin" ? { plugin: true } : {}) },
     },
@@ -32,7 +31,6 @@ function createWhatsAppApprovalScenario(
 
 export const whatsappDeliveryScenarios = {
   whatsappQaReplyDeliveryShapeScenario: createWhatsAppMessageScenario({
-    posture: "direct-gateway",
     marker: "WHATSAPP_QA_REPLY_SHAPE",
     buildRun: (token) => ({
       afterReply: async (_reply, context) => {
@@ -44,38 +42,18 @@ export const whatsappDeliveryScenarios = {
           message: longText,
           replyToId: quotedTriggerMessageId,
         });
-        const firstChunk = await waitForScenarioObservedMessage(context, {
+        const firstChunk = await waitForWhatsAppQuotedMessage(context, {
           observedAfter: chunkStartedAt,
-          diagnosticChecks: [
-            {
-              label: "longBeginMarker",
-              match: (message) => message.text.includes(`${token}_LONG_BEGIN`),
-            },
-            {
-              label: "quotesTrigger",
-              match: (message) => message.quoted?.messageId === quotedTriggerMessageId,
-            },
-          ],
-          match: (message) =>
-            message.text.includes(`${token}_LONG_BEGIN`) &&
-            message.quoted?.messageId === quotedTriggerMessageId,
+          textMarker: `${token}_LONG_BEGIN`,
+          quotedMessageId: quotedTriggerMessageId,
+          diagnosticLabels: ["longBeginMarker", "quotesTrigger"],
         });
-        const secondChunk = await waitForScenarioObservedMessage(context, {
+        const secondChunk = await waitForWhatsAppQuotedMessage(context, {
           observedAfter: chunkStartedAt,
-          diagnosticChecks: [
-            {
-              label: "longEndMarker",
-              match: (message) => message.text.includes(`${token}_LONG_END`),
-            },
-            {
-              label: "quotesTrigger",
-              match: (message) => message.quoted?.messageId === quotedTriggerMessageId,
-            },
-          ],
-          match: (message) =>
-            message.messageId !== firstChunk.messageId &&
-            message.text.includes(`${token}_LONG_END`) &&
-            message.quoted?.messageId === quotedTriggerMessageId,
+          textMarker: `${token}_LONG_END`,
+          quotedMessageId: quotedTriggerMessageId,
+          diagnosticLabels: ["longEndMarker", "quotesTrigger"],
+          distinctFrom: firstChunk,
         });
         return `long reply chunked across ${firstChunk.messageId ?? "<first>"} and ${secondChunk.messageId ?? "<second>"}`;
       },
@@ -84,7 +62,6 @@ export const whatsappDeliveryScenarios = {
   }),
 
   whatsappQaStreamFinalMessageAccountingScenario: {
-    posture: "user-path",
     buildRun: () => ({
       configMode: "allowlist",
       expectReply: true,
@@ -103,7 +80,6 @@ export const whatsappDeliveryScenarios = {
   }),
 
   whatsappQaStatusReactionsScenario: createWhatsAppMessageScenario({
-    posture: "user-path",
     configOverrides: {
       statusReactions: true,
     },
@@ -121,21 +97,13 @@ export const whatsappDeliveryScenarios = {
   }),
 
   whatsappQaStatusReactionLifecycleScenario: createWhatsAppMessageScenario({
-    posture: "user-path",
     configOverrides: {
       statusReactions: true,
     },
     marker: "WHATSAPP_QA_STATUS_LIFECYCLE",
     buildRun: (token) => ({
       afterReply: async (_reply, context) => {
-        const reactions = await waitForWhatsAppSutReactionSequenceToTrigger(context, {
-          emojis: ["👀", "✅"],
-          observedAfter: context.requestStartedAt,
-          timeoutMs: 60_000,
-        });
-        for (const reaction of reactions) {
-          context.recordObservedMessage(reaction);
-        }
+        const reactions = await waitForWhatsAppSutReactionSequenceToTrigger(context, ["👀", "✅"]);
         return `status reaction lifecycle observed ${reactions
           .map((reaction) => reaction.reaction?.emoji ?? "<unknown>")
           .join(" -> ")}`;
@@ -145,7 +113,6 @@ export const whatsappDeliveryScenarios = {
   }),
 
   whatsappQaGroupAllowlistBlockScenario: {
-    posture: "user-path",
     configOverrides: {
       blockGroupSender: true,
       groupPolicy: "allowlist",

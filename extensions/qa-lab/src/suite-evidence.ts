@@ -11,9 +11,8 @@ import { createQaEvidenceInvocation } from "./evidence-invocation.js";
 import {
   buildQaSuiteEvidenceSummary,
   collectQaEvidenceArtifacts,
-  validateQaEvidenceSummaryJson,
   type QaEvidenceIdentity,
-  type QaEvidenceSummaryJson,
+  type QaEvidenceSummaryV3Json,
   type QaEvidenceSummaryEntry,
 } from "./evidence-summary.js";
 import type {
@@ -24,7 +23,7 @@ import type {
 } from "./suite-types.js";
 
 /** Rebase both raw entries and bound receipts through the same artifact owner. */
-export function rebaseQaSuiteEvidence(summary: QaEvidenceSummaryJson, from: string, to: string) {
+export function rebaseQaSuiteEvidence(summary: QaEvidenceSummaryV3Json, from: string, to: string) {
   const rebased = structuredClone(summary);
   for (const artifact of collectQaEvidenceArtifacts(rebased)) {
     if (
@@ -37,7 +36,7 @@ export function rebaseQaSuiteEvidence(summary: QaEvidenceSummaryJson, from: stri
       artifact.path = toRepoRelativePath(to, path.resolve(from, artifact.path));
     }
   }
-  return validateQaEvidenceSummaryJson(rebased);
+  return rebased;
 }
 
 /** Flow lifecycle adapter: scheduling and selection remain with the invocation owner. */
@@ -48,10 +47,9 @@ export async function createQaSuiteEvidenceInvocation(
     "repoRoot" | "outputDir" | "selectedScenarios" | "providerMode" | "primaryModel" | "transportId"
   >,
 ) {
-  const launch = structuredClone(
+  const launch =
     params?.evidenceAnchors?.[0]?.launch ??
-      (await captureQaEvidenceLaunchIdentity(context.repoRoot)),
-  );
+    (await captureQaEvidenceLaunchIdentity(context.repoRoot));
   const channel = params?.channelId ?? context.transportId;
   const invocation = createQaEvidenceInvocation({
     scenarios: context.selectedScenarios,
@@ -78,7 +76,7 @@ export async function createQaSuiteEvidenceInvocation(
       env?: QaSuiteEnvironment;
       selectedId?: string;
       importedEntries?: readonly QaEvidenceSummaryEntry[];
-      childEvidence?: QaEvidenceSummaryJson;
+      childEvidence?: QaEvidenceSummaryV3Json;
     } = {},
   ) {
     const scenario = context.selectedScenarios[index];
@@ -113,12 +111,7 @@ export async function createQaSuiteEvidenceInvocation(
     };
     const preparedId = `${id}:prepared`;
     const runtimeId = `${id}:runtime`;
-    const childEvidence = options.childEvidence
-      ? validateQaEvidenceSummaryJson(options.childEvidence)
-      : undefined;
-    if (childEvidence && childEvidence.schemaVersion !== 3) {
-      throw new Error("retained flow child evidence requires recorded v3 custody");
-    }
+    const childEvidence = options.childEvidence;
     const childContent = childEvidence ? `${JSON.stringify(childEvidence, null, 2)}\n` : undefined;
     const childPath = path.join("artifacts", "occurrences", `${id}.producer-evidence.json`);
     if (childContent !== undefined) {

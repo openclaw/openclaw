@@ -1,5 +1,4 @@
 /**
- * Live-session model switch control-flow error.
  * Carries the requested provider/model/auth-profile selection out of live
  * session setup code without treating the switch as a failure.
  */
@@ -11,7 +10,6 @@ export type LiveSessionModelSelection = {
   authProfileIdSource?: "auto" | "user";
 };
 
-/** Control-flow error used to request a live session model switch. */
 export class LiveSessionModelSwitchError extends Error {
   provider: string;
   model: string;

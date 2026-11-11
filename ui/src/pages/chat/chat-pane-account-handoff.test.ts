@@ -8,11 +8,9 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { restorePaneStagedAttachments } from "./chat-pane-attachment-handoff.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
-import {
-  admitStoredChatComposerQueueItem,
-  ChatComposerPersistence,
-  loadChatComposerSnapshot,
-} from "./composer-persistence.ts";
+import { loadChatComposerState } from "./composer-draft-storage.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
+import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -56,12 +54,12 @@ it("keeps A offline input with A when a same-client B hello replaces the pane be
   ready = false;
   state.connected = false;
   expect(
-    admitStoredChatComposerQueueItem(state, captureChatOutboxAdmission(state, state.sessionKey), {
-      id: "a-queue",
-      text: "A queued work",
-      createdAt: 1,
-    }),
-  ).toBe(true);
+    admitStoredChatComposerQueueItemResult(
+      state,
+      captureChatOutboxAdmission(state, state.sessionKey),
+      { id: "a-queue", text: "A queued work", createdAt: 1 },
+    ),
+  ).toBe("admitted");
   const attachment: ChatAttachment = {
     id: "a-attachment",
     mimeType: "text/plain",
@@ -73,7 +71,7 @@ it("keeps A offline input with A when a same-client B hello replaces the pane be
   persistence.schedule();
   persistence.persistNow();
   await settle();
-  const original = loadChatComposerSnapshot(state, state.sessionKey);
+  const original = loadChatComposerState(state, state.sessionKey).snapshot;
   expect(original?.draft).toBe("A newer private draft");
   // GatewayBrowserClient replaces identity before notifying hello observers. The
   // route can unmount the A pane before its persistence sees recovery readiness.
@@ -98,16 +96,15 @@ it("keeps A offline input with A when a same-client B hello replaces the pane be
   b.start();
   b.persistChangedState();
   await settle();
-  expect(destination.chatMessage).toBe("");
-  expect(destination.chatAttachments).toEqual([]);
-  expect(loadChatComposerSnapshot(destination, destination.sessionKey)?.draft ?? "").toBe("");
+  expect(destination).toMatchObject({ chatMessage: "", chatAttachments: [] });
+  expect(loadChatComposerState(destination, destination.sessionKey).snapshot?.draft ?? "").toBe("");
   expect(
     write.mock.calls
       .filter(([scope]) => scope.recoveryScope === "account-b")
       .some(([, draft]) => draft.text.includes("A newer") || draft.attachments.length),
   ).toBe(false);
   account = "account-a";
-  expect(loadChatComposerSnapshot(destination, destination.sessionKey)).toMatchObject({
+  expect(loadChatComposerState(destination, destination.sessionKey).snapshot).toMatchObject({
     draft: "A newer private draft",
     queue: [{ id: "a-queue" }],
   });

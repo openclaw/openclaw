@@ -1,0 +1,2 @@
+# Forward publication revocation and independent compensation across npm/pnpm.
+210

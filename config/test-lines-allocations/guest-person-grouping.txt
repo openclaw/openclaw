@@ -1,0 +1,3 @@
+# Person grouping availability and preference transitions, plus real guest identity
+# and readable-membership proof. Exact net regression-test LF growth for G09.
+175

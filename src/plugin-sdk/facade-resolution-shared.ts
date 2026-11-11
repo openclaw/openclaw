@@ -12,7 +12,7 @@ import { parsePluginCacheJson, readPluginCacheFile } from "../plugins/plugin-cac
 import {
   resolveBundledPluginPublicSurfacePath,
   resolveBundledPluginSourcePublicSurfacePath,
-  resolvePluginRootPublicSurfacePath,
+  resolvePluginRootPublicSurfaceLocation,
 } from "../plugins/public-surface-runtime.js";
 import type { PluginRecord } from "../plugins/registry-types.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
@@ -73,14 +73,12 @@ export function resolveRuntimeFacadeModuleLocation(
   if (!owner) {
     return undefined;
   }
-  const modulePath = resolvePluginRootPublicSurfacePath({
+  const location = resolvePluginRootPublicSurfaceLocation({
     pluginRoot: owner.rootDir!,
     pluginId: owner.id,
     artifactBasename: params.artifactBasename,
   });
-  return modulePath
-    ? { modulePath, boundaryRoot: owner.rootDir!, pluginId: owner.id, origin: owner.origin }
-    : null;
+  return location ? { ...location, pluginId: owner.id, origin: owner.origin } : null;
 }
 
 type FacadeRegistryRecordLike = {
@@ -247,15 +245,14 @@ export function resolveRegistryPluginModuleLocationFromRecords(params: {
   for (const matchFn of tiers) {
     for (const record of params.registry.filter(matchFn)) {
       const rootDir = path.resolve(record.rootDir);
-      const modulePath = resolvePluginRootPublicSurfacePath({
+      const location = resolvePluginRootPublicSurfaceLocation({
         pluginRoot: rootDir,
         pluginId: record.id,
         artifactBasename: params.artifactBasename,
       });
-      if (modulePath) {
+      if (location) {
         return {
-          modulePath,
-          boundaryRoot: rootDir,
+          ...location,
           ...(record.origin ? { origin: record.origin } : {}),
         };
       }

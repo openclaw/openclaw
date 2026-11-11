@@ -58,15 +58,15 @@ export async function editChannelMessage(
   )) as APIMessage;
 }
 
-function messageMutation(method: "put" | "delete", route: "channelMessage" | "channelPin") {
+function messageMutation(method: "put" | "delete", route: "channelMessage" | "channelMessagesPin") {
   return async (rest: RequestClient, channelId: string, messageId: string): Promise<void> => {
     await rest[method](Routes[route](channelId, normalizeDiscordMessageId(messageId)));
   };
 }
 
 export const deleteChannelMessage = messageMutation("delete", "channelMessage");
-export const pinChannelMessage = messageMutation("put", "channelPin");
-export const unpinChannelMessage = messageMutation("delete", "channelPin");
+export const pinChannelMessage = messageMutation("put", "channelMessagesPin");
+export const unpinChannelMessage = messageMutation("delete", "channelMessagesPin");
 
 export async function createThread<T extends object = APIChannel>(
   rest: RequestClient,

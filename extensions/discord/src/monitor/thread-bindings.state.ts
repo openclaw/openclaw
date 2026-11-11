@@ -1,3 +1,4 @@
+import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import {
   resolveNonNegativeIntegerOption,
@@ -20,14 +21,6 @@ import type {
   ThreadBindingTargetKind,
 } from "./thread-bindings.types.js";
 
-export type ThreadBindingPersistence = {
-  targetKey: string;
-  deletingTarget: boolean;
-  nextRecord: ThreadBindingRecord | null;
-  writingKey?: string;
-  committedKeys: Set<string>;
-};
-
 type ThreadBindingsGlobalState = {
   managersByAccountId: Map<string, ThreadBindingManager>;
   bindingsByThreadId: Map<string, ThreadBindingRecord>;
@@ -40,10 +33,8 @@ type ThreadBindingsGlobalState = {
   loadedPersistentBindings: boolean;
   persistenceAvailable: boolean;
   lastPersistedAtMs: number;
-  revision: number;
   mutationTail: Promise<void>;
   accountOperationTails: WeakMap<ThreadBindingManager, Promise<void>>;
-  activePersistence?: ThreadBindingPersistence;
 };
 
 // Plugin hooks can load this module through a separate runtime path while core
@@ -63,7 +54,6 @@ function createThreadBindingsGlobalState(): ThreadBindingsGlobalState {
     loadedPersistentBindings: false,
     persistenceAvailable: true,
     lastPersistedAtMs: 0,
-    revision: 0,
     mutationTail: Promise.resolve(),
     accountOperationTails: new WeakMap(),
   };
@@ -73,8 +63,6 @@ export const THREAD_BINDINGS_STATE = resolveGlobalSingleton(
   THREAD_BINDINGS_STATE_KEY,
   createThreadBindingsGlobalState,
 );
-// Source-plugin reloads retain the previous generation's shared registry.
-THREAD_BINDINGS_STATE.accountOperationTails ??= new WeakMap();
 
 export const MANAGERS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.managersByAccountId;
 export const BINDINGS_BY_THREAD_ID = THREAD_BINDINGS_STATE.bindingsByThreadId;
@@ -116,7 +104,7 @@ export function openThreadBindingsStore() {
 }
 
 export function openThreadBindingsStoreAsync() {
-  return getDiscordRuntime().state.openKeyedStore<ThreadBindingRecord>({
+  return getDiscordRuntime().state.openKeyedStoreV2<ThreadBindingRecord>({
     namespace: THREAD_BINDINGS_NAMESPACE,
     maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
   });
@@ -126,7 +114,7 @@ export function normalizeTargetKind(
   raw: unknown,
   targetSessionKey: string,
 ): ThreadBindingTargetKind {
-  if (raw === "subagent" || raw === "acp") {
+  if (raw === "subagent" || raw === "acp" || raw === "session") {
     return raw;
   }
   return targetSessionKey.includes(":subagent:") ? "subagent" : "acp";
@@ -147,10 +135,7 @@ export function resolveBindingRecordKey(params: {
   return toBindingRecordKey({ accountId: params.accountId, threadId });
 }
 
-export function normalizePersistedBinding(
-  threadIdKey: string,
-  raw: unknown,
-): ThreadBindingRecord | null {
+function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBindingRecord | null {
   if (!raw || typeof raw !== "object") {
     return null;
   }
@@ -163,8 +148,11 @@ export function normalizePersistedBinding(
   }
   const accountId = normalizeAccountId(value.accountId);
   const targetKind = normalizeTargetKind(value.targetKind, targetSessionKey);
-  const agentIdRaw = normalizeOptionalString(value.agentId) ?? "";
-  const agentId = agentIdRaw || resolveAgentIdFromSessionKey(targetSessionKey);
+  const agentId =
+    normalizeOptionalString(value.agentId) ??
+    (isPluginOwnedSessionBindingRecord(value)
+      ? undefined
+      : resolveAgentIdFromSessionKey(targetSessionKey));
   const label = normalizeOptionalString(value.label);
   const webhookId = normalizeOptionalString(value.webhookId);
   const webhookToken = normalizeOptionalString(value.webhookToken);
@@ -290,7 +278,7 @@ export function toReusableWebhookKey(params: { accountId: string; channelId: str
   return `${normalizeLowercaseStringOrEmpty(params.accountId)}:${params.channelId.trim()}`;
 }
 
-export function rememberReusableWebhook(record: ThreadBindingRecord) {
+function rememberReusableWebhook(record: ThreadBindingRecord) {
   const webhookId = record.webhookId?.trim();
   const webhookToken = record.webhookToken?.trim();
   if (!webhookId || !webhookToken) {
@@ -322,7 +310,6 @@ export function setBindingRecord(record: ThreadBindingRecord) {
     unlinkSessionBinding(existing.targetSessionKey, bindingKey);
   }
   BINDINGS_BY_THREAD_ID.set(bindingKey, record);
-  THREAD_BINDINGS_STATE.revision += 1;
   linkSessionBinding(record.targetSessionKey, bindingKey);
   rememberReusableWebhook(record);
 }
@@ -337,7 +324,6 @@ export function removeBindingRecord(bindingKeyRaw: string): ThreadBindingRecord 
     return null;
   }
   BINDINGS_BY_THREAD_ID.delete(key);
-  THREAD_BINDINGS_STATE.revision += 1;
   unlinkSessionBinding(existing.targetSessionKey, key);
   return existing;
 }
@@ -345,7 +331,6 @@ export function removeBindingRecord(bindingKeyRaw: string): ThreadBindingRecord 
 function beginBindingsLoad() {
   THREAD_BINDINGS_STATE.loadedBindings = true;
   BINDINGS_BY_THREAD_ID.clear();
-  THREAD_BINDINGS_STATE.revision += 1;
   BINDINGS_BY_SESSION_KEY.clear();
   REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.clear();
   THREAD_BINDINGS_STATE.loadedPersistentBindings = false;
@@ -356,10 +341,9 @@ function restoreBindings(entries: PluginStateEntry<ThreadBindingRecord>[]) {
   THREAD_BINDINGS_STATE.loadedPersistentBindings = entries.length > 0;
   for (const entry of entries) {
     const normalized = normalizePersistedBinding(entry.key, entry.value);
-    if (!normalized) {
-      continue;
+    if (normalized) {
+      setBindingRecord(normalized);
     }
-    setBindingRecord(normalized);
   }
 }
 

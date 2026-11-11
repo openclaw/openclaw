@@ -3,26 +3,62 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  PreparedModelRuntimePluginGenerationRetiredError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { AgentDatabaseSchemaAdmissionChangedError } from "../state/agent-database-admission-error.js";
 import {
   readAgentDatabaseAdmissionRefusal,
+  readAgentDatabaseReadAdmissionRefusal,
   recordAgentDatabaseAdmissions,
+  retainAgentDatabaseStartupWorker,
 } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { activateGatewayAgentDatabaseStartup } from "./server-agent-database-startup.js";
+import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   migrate: vi.fn(),
+  maintain: vi.fn(),
   journal: vi.fn(),
   opened: vi.fn(),
   refreshSecrets: vi.fn(),
   refreshModels: vi.fn(),
+  retireModels: vi.fn(),
+  clearAuth: vi.fn(),
+  replacement: vi.fn(),
+  modelSnapshot: vi.fn(),
   snapshot: vi.fn(),
   revision: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
+  integrityCheck: vi.fn(),
+  corruption: vi.fn(),
+}));
+
+// mock-isolation: Keep the real background verdict owner while controlling its native I/O.
+vi.mock("../infra/sqlite-integrity-worker.js", () => ({
+  assertSqliteIntegrityInWorker: mocks.integrityCheck,
+}));
+// mock-isolation: Native execution transport must not open the synthetic identity files.
+vi.mock("../state/openclaw-agent-execution.js", () => ({
+  captureOpenClawAgentDatabaseExecution: () => ({
+    onTerminal: () => () => {},
+    release: async () => {},
+  }),
+}));
+// mock-isolation: Observe corruption revocation without retiring unrelated database handles.
+vi.mock("../state/openclaw-agent-db-lifecycle.js", () => ({
+  recordOpenClawAgentDatabaseOpenFailure: mocks.corruption,
+}));
+
+// mock-isolation: This suite owns startup timers; filesystem observation has separate coverage.
+vi.mock("../infra/owned-directory-observation.js", () => ({
+  observeOwnedDirectory: () => ({ close() {} }),
 }));
 
 // mock-isolation: Path resolution needs no auth database or credential loaders.
@@ -34,6 +70,11 @@ vi.mock("../agents/auth-profiles/sqlite.js", () => ({
 vi.mock("../infra/sqlite-readonly-worker.js", () => ({
   withSqliteReadOnlyWorkerScope: (run: () => Promise<unknown>) => run(),
 }));
+// mock-isolation: Retry delays are not the behavior under test.
+vi.mock("../infra/backoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/backoff.js")>()),
+  sleepWithAbort: async () => {},
+}));
 // mock-isolation: Journal transport is independent of the real pending-admission owner.
 vi.mock("../state/agent-deletion-journal.read.js", () => ({
   readAgentDeletionJournalStatusInWorker: mocks.journal,
@@ -44,12 +85,23 @@ vi.mock("./server-startup-session-migration.js", () => ({
     await mocks.migrate(params);
     return [];
   },
-  runGatewaySessionStartupMaintenance: async () => {},
+  runGatewaySessionStartupMaintenance: mocks.maintain,
+}));
+// mock-isolation: Native restart discovery/admission is covered by the real integrity suite.
+vi.mock("./session-restart-resume.js", () => ({
+  prepareAgentRestartRecovery: async () => undefined,
 }));
 // mock-isolation: Model preparation stays observable without loading provider plugins.
 vi.mock("../agents/prepared-model-runtime.js", () => ({
   refreshPreparedModelRuntimeSnapshots: mocks.refreshModels,
-  getPreparedModelRuntimeSnapshot: () => ({}),
+  getPreparedModelRuntimeSnapshot: mocks.modelSnapshot,
+  getPendingPreparedModelRuntimeReplacement: mocks.replacement,
+  retirePreparedModelRuntimeAgent: mocks.retireModels,
+}));
+// mock-isolation: This scheduling suite observes withdrawal without opening auth storage.
+vi.mock("../agents/auth-profiles/runtime-snapshots.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/auth-profiles/runtime-snapshots.js")>()),
+  clearRuntimeAuthProfileStoreSnapshotAtDatabasePath: mocks.clearAuth,
 }));
 // mock-isolation: Configured model inputs are not the behavior under test.
 vi.mock("../agents/prepared-model-runtime.configured.js", () => ({
@@ -64,7 +116,7 @@ vi.mock("../secrets/runtime.js", () => ({
 }));
 // mock-isolation: Capture startup diagnostics without process logging state.
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ info: mocks.info, warn: mocks.warn }),
+  createSubsystemLogger: () => ({ info: mocks.info, warn: mocks.warn, error: mocks.warn }),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -81,15 +133,21 @@ type StartupAdmission = NonNullable<
 function createFleet(
   agentIds = ["large", "small"],
   migrateAgent?: Parameters<StartupAdmission["activate"]>[0]["migrateAgent"],
+  acpOnlyAgentIds: readonly string[] = [],
+  openAgent?: Parameters<StartupAdmission["activate"]>[0]["openAgent"],
 ) {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("startup-preparation-") };
+  const acpOnly = new Set(acpOnlyAgentIds);
+  const nativeAgentIds = agentIds.filter((agentId) => !acpOnly.has(agentId));
+  const nativeEntries = nativeAgentIds.length > 0 ? nativeAgentIds : ["main"];
   let cfg: OpenClawConfig = {
     gateway: { auth: { mode: "token", token: "synthetic-before-refresh" } },
     agents: {
-      entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
-      defaults: { systemAgent: { agentId: agentIds[0] } },
+      entries: Object.fromEntries(nativeEntries.map((id) => [id, {}])),
+      defaults: { systemAgent: { agentId: nativeEntries[0] } },
     },
+    ...(acpOnlyAgentIds.length > 0 ? { acp: { allowedAgents: [...acpOnlyAgentIds] } } : {}),
   };
   const paths = agentIds.map((agentId) => resolveOpenClawAgentSqlitePath({ agentId, env }));
   for (const pathname of paths) {
@@ -105,11 +163,16 @@ function createFleet(
     }
   });
   mocks.journal.mockResolvedValue("absent");
+  mocks.refreshModels.mockResolvedValue(undefined);
+  mocks.retireModels.mockResolvedValue(undefined);
+  mocks.modelSnapshot.mockReturnValue({});
   mocks.migrate.mockImplementation(async ({ assertCurrent }) => assertCurrent());
   mocks.revision.mockImplementation(() => revision);
   mocks.snapshot.mockImplementation(() => ({
     sourceConfig: cfg,
-    authStores: paths.map((databasePath) => ({ databasePath })),
+    authStores: paths.flatMap((databasePath, index) =>
+      acpOnly.has(agentIds[index]!) ? [] : [{ databasePath }],
+    ),
   }));
   mocks.refreshSecrets.mockImplementation(
     async ({ assertCurrent }: { assertCurrent: () => void }) => {
@@ -128,10 +191,14 @@ function createFleet(
     return gate;
   };
   const inspections = agentIds.map(() =>
-    createDeferredCore<{ incompatible: []; indeterminate: [] }>(),
+    createDeferredCore<{ incompatible: []; indeterminate: []; readReadyAgentPaths?: string[] }>(),
   );
-  const inspect = (index: number) =>
-    inspections[index]!.resolve({ incompatible: [], indeterminate: [] });
+  const inspect = (index: number, readReady = false) =>
+    inspections[index]!.resolve({
+      incompatible: [],
+      indeterminate: [],
+      ...(readReady ? { readReadyAgentPaths: [paths[index]!] } : {}),
+    });
   return {
     env,
     opened: opened.promise,
@@ -147,9 +214,16 @@ function createFleet(
         cfg.session = { ...cfg.session, store: path.join(agentDir, "openclaw-agent.sqlite") };
       }
     },
+    reloadConfig: () => {
+      cfg = structuredClone(cfg);
+    },
+    bumpSecretsRevision: () => {
+      revision++;
+    },
     run: (
       run: (admission: StartupAdmission) => Promise<void>,
       preparationReady: Promise<void> = Promise.resolve(),
+      postReadyWork: Promise<void> = Promise.resolve(),
     ) =>
       withAgentDatabaseStartupAdmission(async (admission) => {
         const refusals = admission.defer({
@@ -168,15 +242,21 @@ function createFleet(
           activate({
             ...activation,
             migrateAgent: migrateAgent ?? activation.migrateAgent,
-            openAgent: async ({ assertCurrent }) => {
-              assertCurrent();
-              mocks.opened();
-            },
+            openAgent:
+              openAgent ??
+              (async ({ assertCurrent }) => {
+                assertCurrent();
+                mocks.opened();
+              }),
           }),
         );
+        const context = createContext([], () => cfg);
+        context.agentDatabaseStartup = admission.observation;
         activateGatewayAgentDatabaseStartup({
           admission,
+          context,
           preparationReady,
+          waitForPostReadyWork: () => postReadyWork,
           getConfig: () => cfg,
           getPluginRegistry: vi.fn(),
           getPluginMetadataSnapshot: () => undefined,
@@ -196,6 +276,202 @@ function createFleet(
 
 const recoveredMessage = "agent database recovered after background inspection and preparation";
 const progressMessage = "agent database startup preparation still running";
+const supersededRetryMessage = "agent database startup publication interrupted; retrying";
+
+function expectLog(log: typeof mocks.info, message: string, fields: Record<string, unknown>) {
+  expect(log).toHaveBeenCalledWith(message, expect.objectContaining(fields));
+}
+
+function expectAdmission(fleet: ReturnType<typeof createFleet>, agentId: string, code?: string) {
+  const refusal = readAgentDatabaseAdmissionRefusal(agentId, fleet);
+  if (code) {
+    expect(refusal?.code).toBe(code);
+  } else {
+    expect(refusal).toBeUndefined();
+  }
+}
+
+it.for(["borrow", "worker", "rejecting worker", "failed publication"] as const)(
+  "isolates a %s cleanup from sibling publication and shutdown",
+  async (cleanup, { signal }) => {
+    const closing = createDeferredCore();
+    const closed = createDeferredCore();
+    const release = createDeferredCore();
+    const close = async () => {
+      closing.resolve();
+      try {
+        await release.promise;
+        if (cleanup === "rejecting worker") {
+          throw new Error("synthetic native close failure");
+        }
+      } finally {
+        closed.resolve();
+      }
+    };
+    const fleet = createFleet(["large", "small"], undefined, [], async (input) => {
+      if (input.agentId !== "large") {
+        return undefined;
+      }
+      if (cleanup === "borrow") {
+        return { [Symbol.asyncDispose]: close };
+      }
+      expect(retainAgentDatabaseStartupWorker(input.agentId, input, close)).toBe(true);
+      return undefined;
+    });
+    const publicationFails = cleanup === "failed publication";
+    if (publicationFails) {
+      mocks.refreshModels.mockRejectedValueOnce(new Error("synthetic model publication failure"));
+    }
+    try {
+      await fleet.run(async (admission) => {
+        try {
+          const firstPreparation = Promise.allSettled([
+            admission.waitForAgentPreparation("large", fleet)!,
+          ]);
+          fleet.inspect(0);
+          await withinTest(closing.promise, signal);
+          fleet.inspect(1);
+          // Drain the sibling's ready, migration, publication, and disposal continuations.
+          await vi.advanceTimersByTimeAsync(0);
+          expectAdmission(fleet, "small");
+          if (publicationFails) {
+            expect(readAgentDatabaseReadAdmissionRefusal("large", fleet)?.code).toBe(
+              "agent-database-inspection-failed",
+            );
+          } else {
+            expect(readAgentDatabaseReadAdmissionRefusal("large", fleet)).toBeUndefined();
+            expectAdmission(fleet, "large", "agent-database-inspection-pending");
+          }
+          if (cleanup === "rejecting worker") {
+            release.resolve();
+            await withinTest(firstPreparation, signal);
+            expectAdmission(fleet, "large", "agent-database-inspection-failed");
+            expect(readAgentDatabaseReadAdmissionRefusal("large", fleet)?.code).toBe(
+              "agent-database-inspection-failed",
+            );
+            expectAdmission(fleet, "small");
+          } else {
+            if (!publicationFails) {
+              fleet.changeAgentDatabase("large", "agent removal");
+              expect(readAgentDatabaseReadAdmissionRefusal("large", fleet)?.code).toBe(
+                "agent-database-inspection-pending",
+              );
+            }
+            // The close never settles during shutdown; its owner still holds the promise.
+            await withinTest(admission.stop(), signal);
+            expect(await withinTest(firstPreparation, signal)).toEqual([
+              expect.objectContaining({ status: "rejected" }),
+            ]);
+          }
+        } finally {
+          release.resolve();
+        }
+      });
+    } finally {
+      release.resolve();
+      await withinTest(closed.promise, signal);
+    }
+  },
+);
+
+it("cancels a queued publisher without letting it overtake during shutdown", async ({ signal }) => {
+  const closed: string[] = [];
+  const fleet = createFleet(["large", "small"], undefined, [], async ({ agentId }) => ({
+    async [Symbol.asyncDispose]() {
+      closed.push(agentId);
+    },
+  }));
+  const modelsEntered = createDeferredCore();
+  const releaseModels = fleet.hold();
+  mocks.refreshModels.mockImplementationOnce(async () => {
+    modelsEntered.resolve();
+    await releaseModels.promise;
+  });
+  await fleet.run(async (admission) => {
+    fleet.inspect(0);
+    await withinTest(modelsEntered.promise, signal);
+    fleet.inspect(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.migrate).toHaveBeenCalledTimes(2);
+    const stopping = admission.stop();
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(closed).toEqual(["small"]);
+      expect(mocks.refreshSecrets).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseModels.resolve();
+      await withinTest(stopping, signal);
+    }
+    expectAdmission(fleet, "large", "agent-database-inspection-pending");
+    expectAdmission(fleet, "small", "agent-database-inspection-pending");
+    expect(mocks.info).not.toHaveBeenCalledWith(recoveredMessage, expect.anything());
+  });
+});
+
+it("admits configured ACP-only stores without native runtime publication", async ({ signal }) => {
+  const fleet = createFleet(["codex"], undefined, ["codex"]);
+  await fleet.run(async (admission) => {
+    fleet.inspect(0);
+    await withinTest(admission.waitForAgentPreparation("codex", fleet)!, signal);
+    expectAdmission(fleet, "codex");
+    expect(mocks.refreshSecrets).not.toHaveBeenCalled();
+    expect(mocks.refreshModels).not.toHaveBeenCalled();
+  });
+});
+
+it.for(["openclaw", "crestodian"])(
+  "prepares the deferred reserved %s store without a configured roster entry",
+  async (agentId, { signal }) => {
+    const fleet = createFleet(["main", agentId]);
+    fleet.changeAgentDatabase(agentId, "agent removal");
+    await fleet.run(async (admission) => {
+      expectAdmission(fleet, agentId, "agent-database-inspection-pending");
+      fleet.inspect(1);
+      await withinTest(admission.waitForAgentPreparation(agentId, fleet)!, signal);
+      expectAdmission(fleet, agentId);
+      expect(mocks.warn).not.toHaveBeenCalled();
+    });
+  },
+);
+
+it("admits agents before transcript repair and joins repair on shutdown", async ({ signal }) => {
+  const fleet = createFleet();
+  const entered = createDeferredCore();
+  const release = fleet.hold();
+  const postReady = fleet.hold();
+  mocks.maintain.mockImplementation(async ({ assertCurrent }) => {
+    assertCurrent();
+    entered.resolve();
+    await release.promise;
+    assertCurrent();
+  });
+  await fleet.run(
+    async (admission) => {
+      fleet.inspect(0);
+      await withinTest(admission.waitForAgentPreparation("large", fleet)!, signal);
+      expectAdmission(fleet, "large");
+      expect(admission.waitForAgentPreparation("large", fleet)).toBeUndefined();
+      expect(mocks.maintain).not.toHaveBeenCalled();
+      postReady.resolve();
+      await withinTest(entered.promise, signal);
+      fleet.inspect(1);
+      await vi.advanceTimersByTimeAsync(0);
+      expectAdmission(fleet, "small");
+      expect(mocks.refreshModels).toHaveBeenCalledTimes(2);
+      let stopped = false;
+      const stopping = admission.stop().then(() => {
+        stopped = true;
+      });
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+      release.resolve();
+      await stopping;
+      expect(mocks.warn).not.toHaveBeenCalled();
+    },
+    Promise.resolve(),
+    postReady.promise,
+  );
+});
 
 it("admits a small deferred agent while an earlier agent's session migration is blocked", async ({
   signal,
@@ -216,42 +492,34 @@ it("admits a small deferred agent while an earlier agent's session migration is 
     await withinTest(migrationEntered.promise, signal);
     fleet.inspect(1);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(readAgentDatabaseAdmissionRefusal("small", fleet)).toBeUndefined();
-    expect(readAgentDatabaseAdmissionRefusal("large", fleet)?.code).toBe(
-      "agent-database-inspection-pending",
-    );
+    expectAdmission(fleet, "small");
+    expectAdmission(fleet, "large", "agent-database-inspection-pending");
     expect(mocks.warn).toHaveBeenCalledWith(progressMessage, {
       agentId: "large",
       phase: "migration",
       elapsedMs: 60_000,
       phaseElapsedMs: 60_000,
     });
-    expect(mocks.info).toHaveBeenCalledWith(
-      recoveredMessage,
-      expect.objectContaining({
-        agentId: "small",
-        elapsedMs: expect.any(Number),
-        phaseDurationsMs: expect.objectContaining({
-          inspection: expect.any(Number),
-          migration: 0,
-          secrets: 0,
-          models: 0,
-          publication: 0,
-        }),
+    expectLog(mocks.info, recoveredMessage, {
+      agentId: "small",
+      elapsedMs: expect.any(Number),
+      phaseDurationsMs: expect.objectContaining({
+        inspection: expect.any(Number),
+        migration: 0,
+        secrets: 0,
+        models: 0,
+        publication: 0,
       }),
-    );
+    });
     // B's secrets publication replaced the config while A was migrating.
     releaseMigration.resolve();
     await vi.advanceTimersByTimeAsync(0);
-    expect(readAgentDatabaseAdmissionRefusal("large", fleet)).toBeUndefined();
-    expect(mocks.info).toHaveBeenCalledWith(
-      recoveredMessage,
-      expect.objectContaining({
-        agentId: "large",
-        elapsedMs: 60_000,
-        phaseDurationsMs: expect.objectContaining({ migration: 60_000 }),
-      }),
-    );
+    expectAdmission(fleet, "large");
+    expectLog(mocks.info, recoveredMessage, {
+      agentId: "large",
+      elapsedMs: 60_000,
+      phaseDurationsMs: expect.objectContaining({ migration: 60_000 }),
+    });
     mocks.warn.mockClear();
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(60_000);
@@ -287,30 +555,41 @@ it("holds the publication turn through models and the final deletion check", asy
     await vi.advanceTimersByTimeAsync(60_000);
     expect(mocks.migrate).toHaveBeenCalledTimes(2);
     expect(mocks.refreshSecrets).toHaveBeenCalledTimes(1);
-    expect(mocks.warn).toHaveBeenCalledWith(
-      progressMessage,
-      expect.objectContaining({
-        agentId: "small",
-        phase: "publication-wait",
-        publishingAgentId: "large",
-      }),
-    );
+    expectLog(mocks.warn, progressMessage, {
+      agentId: "small",
+      phase: "publication-wait",
+      publishingAgentId: "large",
+    });
     releaseModels.resolve();
     await withinTest(journalEntered.promise, signal);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(mocks.refreshSecrets).toHaveBeenCalledTimes(1);
-    expect(readAgentDatabaseAdmissionRefusal("small", fleet)?.code).toBe(
-      "agent-database-inspection-pending",
-    );
+    expectAdmission(fleet, "small", "agent-database-inspection-pending");
     releaseJournal.resolve();
     await vi.advanceTimersByTimeAsync(0);
-    expect(readAgentDatabaseAdmissionRefusal("small", fleet)).toBeUndefined();
-    expect(readAgentDatabaseAdmissionRefusal("large", fleet)).toBeUndefined();
+    expectAdmission(fleet, "small");
+    expectAdmission(fleet, "large");
     expect(
       mocks.info.mock.calls
         .filter(([message]) => message === recoveredMessage)
         .map(([, fields]) => fields.agentId),
     ).toEqual(["large", "small"]);
+  });
+});
+
+it("retries publication when a config reload retires its plugin generation", async ({ signal }) => {
+  const fleet = createFleet(["idle"]);
+  mocks.refreshModels.mockRejectedValueOnce(
+    new PreparedModelRuntimePluginGenerationRetiredError(
+      "Prepared plugin generation retired before publication",
+    ),
+  );
+  await fleet.run(async (admission) => {
+    fleet.inspect(0);
+    await withinTest(admission.waitForAgentPreparation("idle", fleet)!, signal);
+    expectAdmission(fleet, "idle");
+    expect(mocks.refreshModels).toHaveBeenCalledTimes(2);
+    expectLog(mocks.warn, supersededRetryMessage, { agentId: "idle", attempt: 1 });
   });
 });
 
@@ -349,13 +628,8 @@ it("keeps database opens off readiness and retains the four-agent migration pool
     expect(mocks.opened).not.toHaveBeenCalled();
     expect(mocks.migrate).not.toHaveBeenCalled();
     for (const agentId of agentIds) {
-      expect(readAgentDatabaseAdmissionRefusal(agentId, fleet)?.code).toBe(
-        "agent-database-inspection-pending",
-      );
-      expect(mocks.warn).toHaveBeenCalledWith(
-        progressMessage,
-        expect.objectContaining({ agentId, phase: "readiness" }),
-      );
+      expectAdmission(fleet, agentId, "agent-database-inspection-pending");
+      expectLog(mocks.warn, progressMessage, { agentId, phase: "readiness" });
     }
     ready.resolve();
     await withinTest(fleet.opened, signal);
@@ -368,7 +642,7 @@ it("keeps database opens off readiness and retains the four-agent migration pool
     releases.forEach((release) => release.resolve());
     await withinTest(allAdmitted.promise, signal);
     for (const agentId of agentIds) {
-      expect(readAgentDatabaseAdmissionRefusal(agentId, fleet)).toBeUndefined();
+      expectAdmission(fleet, agentId);
     }
   }, ready.promise);
 });
@@ -379,18 +653,13 @@ it("cancels unopened agent preparation when the Gateway closes before readiness"
   await fleet.run(async (admission) => {
     fleet.inspect(0);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(mocks.warn).toHaveBeenCalledWith(
-      progressMessage,
-      expect.objectContaining({ agentId: "worker", phase: "readiness" }),
-    );
+    expectLog(mocks.warn, progressMessage, { agentId: "worker", phase: "readiness" });
     await admission.stop();
     ready.resolve();
     await vi.advanceTimersByTimeAsync(0);
     expect(mocks.opened).not.toHaveBeenCalled();
     expect(mocks.migrate).not.toHaveBeenCalled();
-    expect(readAgentDatabaseAdmissionRefusal("worker", fleet)?.code).toBe(
-      "agent-database-inspection-pending",
-    );
+    expectAdmission(fleet, "worker", "agent-database-inspection-pending");
     expect(vi.getTimerCount()).toBe(0);
   }, ready.promise);
 });
@@ -431,23 +700,199 @@ it.for(["agent removal", "database move", "deletion", "shutdown"] as const)(
       expect(refusal?.code).toBe(
         outcome === "shutdown"
           ? "agent-database-inspection-pending"
-          : "agent-database-inspection-failed",
+          : outcome === "deletion"
+            ? "agent-deletion"
+            : "agent-database-inspection-failed",
       );
       expect(mocks.info).not.toHaveBeenCalledWith(recoveredMessage, expect.anything());
       if (outcome !== "shutdown") {
-        expect(mocks.warn).toHaveBeenCalledWith(
-          "agent database remains degraded",
-          expect.objectContaining({
-            agentId: "large",
-            reason: expect.stringContaining(
-              outcome === "deletion" ? "deleted" : "database configuration changed",
-            ),
-            elapsedMs: expect.any(Number),
-            phaseDurationsMs: expect.any(Object),
-          }),
-        );
+        expectLog(mocks.warn, "agent database remains degraded", {
+          agentId: "large",
+          reason: expect.stringContaining(
+            outcome === "deletion" ? "deleted" : "database configuration changed",
+          ),
+          elapsedMs: expect.any(Number),
+          phaseDurationsMs: expect.any(Object),
+        });
         expect(vi.getTimerCount()).toBe(0);
       }
+    });
+  },
+);
+
+it.for([
+  "config",
+  "secrets",
+  "secrets preparation",
+  "model runtime",
+  "queued model runtime",
+  "schema admission",
+] as const)(
+  "retries a superseded publication after %s replacement",
+  async (replacement, { signal }) => {
+    const fleet = createFleet(["large"]);
+    const entered = createDeferredCore();
+    const release = fleet.hold();
+    const successor = fleet.hold();
+    const joining = createDeferredCore();
+    mocks.replacement.mockImplementation(() => {
+      joining.resolve();
+      return successor.promise;
+    });
+    if (replacement === "queued model runtime") {
+      mocks.modelSnapshot.mockReturnValueOnce(undefined);
+    }
+    if (replacement === "secrets preparation") {
+      const refresh = mocks.refreshSecrets.getMockImplementation()!;
+      mocks.refreshSecrets.mockImplementationOnce(async (params) => {
+        entered.resolve();
+        await release.promise;
+        return refresh(params);
+      });
+    } else {
+      mocks.refreshModels.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        if (replacement === "model runtime") {
+          throw new PreparedModelRuntimePublicationSupersededError("publication was superseded");
+        }
+        if (replacement === "schema admission") {
+          throw new AgentDatabaseSchemaAdmissionChangedError();
+        }
+      });
+    }
+    await fleet.run(async (admission) => {
+      fleet.inspect(0);
+      await withinTest(entered.promise, signal);
+      if (replacement === "secrets") {
+        fleet.bumpSecretsRevision();
+      } else if (replacement === "config" || replacement === "secrets preparation") {
+        fleet.reloadConfig();
+      }
+      release.resolve();
+      if (replacement === "model runtime" || replacement === "queued model runtime") {
+        await withinTest(joining.promise, signal);
+        expectAdmission(fleet, "large", "agent-database-inspection-pending");
+        expect(mocks.refreshModels).toHaveBeenCalledTimes(1);
+        successor.resolve();
+      }
+      await withinTest(admission.waitForAgentPreparation("large", fleet)!, signal);
+      expectAdmission(fleet, "large");
+      expectLog(mocks.info, recoveredMessage, { agentId: "large" });
+      expectLog(mocks.warn, supersededRetryMessage, { agentId: "large", attempt: 1 });
+      expect(mocks.opened).toHaveBeenCalledTimes(1);
+      expect(mocks.migrate).toHaveBeenCalledTimes(1);
+      expect(mocks.refreshSecrets).toHaveBeenCalledTimes(2);
+    });
+  },
+);
+
+it.for(["secrets", "model runtime"] as const)(
+  "fails admission after four continuously superseded %s publications",
+  async (replacement, { signal }) => {
+    const fleet = createFleet(["large"]);
+    mocks.refreshModels.mockImplementation(async () => {
+      if (replacement === "model runtime") {
+        throw new PreparedModelRuntimePublicationSupersededError("publication was superseded");
+      }
+      fleet.bumpSecretsRevision();
+    });
+    await fleet.run(async (admission) => {
+      fleet.inspect(0);
+      await withinTest(admission.waitForAgentPreparation("large", fleet)!, signal);
+      expect(readAgentDatabaseAdmissionRefusal("large", fleet)).toMatchObject({
+        code: "agent-database-inspection-failed",
+        reason: expect.stringContaining("preparation was superseded"),
+        repairHint: expect.stringContaining("does not require database repair"),
+      });
+      expect(mocks.refreshModels).toHaveBeenCalledTimes(4);
+      expect(mocks.opened).toHaveBeenCalledTimes(1);
+      expect(mocks.migrate).toHaveBeenCalledTimes(1);
+      expect(mocks.info).not.toHaveBeenCalledWith(recoveredMessage, expect.anything());
+    });
+  },
+);
+
+it.for(["initial", "successor"] as const)(
+  "preserves a genuine %s model publication failure without retrying",
+  async (publication, { signal }) => {
+    const fleet = createFleet(["main"]);
+    const error = new Error("Cannot load model catalog: permission denied");
+    mocks.refreshModels.mockRejectedValue(
+      publication === "initial"
+        ? error
+        : new PreparedModelRuntimePublicationSupersededError("publication was superseded"),
+    );
+    mocks.replacement.mockImplementation(async () => {
+      throw error;
+    });
+    await fleet.run(async (admission) => {
+      fleet.inspect(0);
+      await withinTest(admission.waitForAgentPreparation("main", fleet)!, signal);
+      expect(readAgentDatabaseAdmissionRefusal("main", fleet)).toMatchObject({
+        code: "agent-database-inspection-failed",
+        reason: error.message,
+        repairHint: expect.stringContaining("openclaw doctor --fix"),
+      });
+      expect(mocks.refreshModels).toHaveBeenCalledTimes(1);
+      expect(mocks.info).not.toHaveBeenCalledWith(recoveredMessage, expect.anything());
+    });
+  },
+);
+
+it.for(["agent removal", "database move"] as const)(
+  "does not quarantine a replacement after %s during background integrity verification",
+  async (change, { signal }) => {
+    const fleet = createFleet(["large"]);
+    const entered = createDeferredCore();
+    const release = fleet.hold();
+    mocks.integrityCheck.mockImplementation(async () => {
+      entered.resolve();
+      await release.promise;
+      throw Object.assign(new Error("synthetic full-check corruption"), {
+        name: "SqliteIntegrityError",
+      });
+    });
+    await fleet.run(async (admission) => {
+      fleet.inspect(0, true);
+      await withinTest(entered.promise, signal);
+      expectAdmission(fleet, "large");
+      fleet.changeAgentDatabase("large", change);
+      release.resolve();
+      await withinTest(admission.pendingPreparation!, signal);
+      expectAdmission(fleet, "large");
+      expect(mocks.corruption).not.toHaveBeenCalled();
+      expectLog(mocks.warn, "agent database background integrity verification incomplete", {
+        agentId: "large",
+        reason: expect.stringContaining("database configuration changed"),
+      });
+    });
+  },
+);
+
+it.for(["agent removal", "database move"] as const)(
+  "does not readmit after %s during publication",
+  async (outcome, { signal }) => {
+    const fleet = createFleet(["large"]);
+    const modelsEntered = createDeferredCore();
+    const releaseModels = fleet.hold();
+    mocks.refreshModels.mockImplementation(async () => {
+      modelsEntered.resolve();
+      await releaseModels.promise;
+    });
+    await fleet.run(async (admission) => {
+      fleet.inspect(0);
+      await withinTest(modelsEntered.promise, signal);
+      fleet.changeAgentDatabase("large", outcome);
+      releaseModels.resolve();
+      await withinTest(admission.waitForAgentPreparation("large", fleet)!, signal);
+      const refusal = readAgentDatabaseAdmissionRefusal("large", fleet);
+      expect(refusal?.code).toBe("agent-database-inspection-failed");
+      expect(mocks.info).not.toHaveBeenCalledWith(recoveredMessage, expect.anything());
+      expectLog(mocks.warn, "agent database remains degraded", {
+        agentId: "large",
+        reason: expect.stringContaining("database configuration changed"),
+      });
     });
   },
 );

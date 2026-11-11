@@ -12,6 +12,8 @@ describe("Claude CLI instruction isolation", () => {
         useResume,
         baseArgs: [
           "-p",
+          "--output-format",
+          "stream-json",
           "--setting-sources",
           "user",
           '--settings={"hooks":{"SessionStart":[]}}',
@@ -53,10 +55,12 @@ describe("Claude CLI instruction isolation", () => {
           "--disallowedTools",
           "ScheduleWakeup,mcp__other__*",
         ],
-        toolAvailability: { native: [], openClaw: ["message"] },
+        toolAvailability: { native: [], openClaw: ["message", "read"] },
       }),
     ).toEqual([
       "-p",
+      "--output-format",
+      "stream-json",
       "--mcp-config",
       "/tmp/openclaw-message-mcp.json",
       "--resume",
@@ -71,7 +75,7 @@ describe("Claude CLI instruction isolation", () => {
       "--tools",
       "",
       "--allowedTools",
-      "mcp__openclaw__message",
+      "mcp__openclaw__message,mcp__openclaw__read",
       "--disallowedTools",
       "ScheduleWakeup,mcp__other__*",
     ]);

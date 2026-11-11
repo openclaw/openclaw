@@ -1,5 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -10,17 +9,15 @@ import {
   readMentionStoreHead,
   readMentionStoreSnapshot,
   writeMentionStoreChanges,
-} from "./mention-inbox-store.js";
+} from "./mention-inbox-store.worker.js";
 import type { MentionMutation, MentionMutationResult } from "./mention-inbox.worker-contract.js";
 
 export const mentionReadOperations = {
   "mentions.snapshot": (revision: number, db) => ({
     type: "mentions.snapshot" as const,
-    snapshot: runSqliteDeferredTransactionSync(db, () => readMentionStoreSnapshot(revision, db), {
-      operationLabel: "mentions.read",
-    }),
+    snapshot: readMentionStoreSnapshot(revision, db),
   }),
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
 export const mentionWorkerOperations = {
   "mentions.mutate": (input: MentionMutation, { open, stateOptions }): MentionMutationResult =>

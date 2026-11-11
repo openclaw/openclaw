@@ -92,6 +92,9 @@ function buildProviderEntry(params: {
   ) {
     return null;
   }
+  const onboardingScopes = normalizeOnboardingScopes(params.provider.onboardingScopes);
+  const credentialLabel = normalizeString(params.provider.credentialLabel);
+  const docsUrl = normalizeString(params.provider.docsUrl);
   return {
     id: providerId,
     pluginId: params.pluginId,
@@ -101,16 +104,10 @@ function buildProviderEntry(params: {
     placeholder,
     signupUrl,
     credentialPath,
-    ...(normalizeOnboardingScopes(params.provider.onboardingScopes)
-      ? { onboardingScopes: normalizeOnboardingScopes(params.provider.onboardingScopes) }
-      : {}),
+    ...(onboardingScopes ? { onboardingScopes } : {}),
     ...(params.provider.requiresCredential === false ? { requiresCredential: false } : {}),
-    ...(normalizeString(params.provider.credentialLabel)
-      ? { credentialLabel: normalizeString(params.provider.credentialLabel) }
-      : {}),
-    ...(normalizeString(params.provider.docsUrl)
-      ? { docsUrl: normalizeString(params.provider.docsUrl) }
-      : {}),
+    ...(credentialLabel ? { credentialLabel } : {}),
+    ...(docsUrl ? { docsUrl } : {}),
     ...(typeof params.provider.autoDetectOrder === "number"
       ? { autoDetectOrder: params.provider.autoDetectOrder }
       : {}),
@@ -171,16 +168,12 @@ export function resolveWebSearchInstallCatalogEntriesForEnv(
   );
 }
 
-/** Resolves one web-search install catalog entry by provider id or plugin id. */
+/** Resolves one web-search install catalog entry by provider id. */
 export function resolveWebSearchInstallCatalogEntry(params: {
   providerId?: string;
-  pluginId?: string;
 }): WebSearchInstallCatalogEntry | undefined {
   const providerId = normalizeString(params.providerId);
-  const pluginId = normalizeString(params.pluginId);
   return resolveWebSearchInstallCatalogEntries().find(
-    (entry) =>
-      (!providerId || entry.provider.id === providerId) &&
-      (!pluginId || entry.pluginId === pluginId),
+    (entry) => !providerId || entry.provider.id === providerId,
   );
 }

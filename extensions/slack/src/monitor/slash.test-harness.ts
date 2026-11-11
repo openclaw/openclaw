@@ -1,4 +1,5 @@
 // Slack plugin module implements slash harness behavior.
+import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { expect, vi } from "vitest";
 import { installSlackTestRuntime } from "../test-runtime.test-support.js";
 
@@ -14,6 +15,12 @@ const mocks = vi.hoisted(() => ({
   resolveConversationLabelMock: vi.fn(),
   recordSessionMetaFromInboundMock: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   resolveStorePathMock: vi.fn(),
+  recordDeliveredCommandExchangeMock:
+    vi.fn<
+      (
+        params: Parameters<typeof SessionTranscriptRuntime.recordDeliveredCommandExchange>[0],
+      ) => Promise<{ ok: true }>
+    >(),
   deliverSlackSlashRepliesMock: vi.fn<(params: unknown) => Promise<unknown>>(async (params) => {
     const delivery = params as {
       replies?: unknown[];
@@ -28,6 +35,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./slash-dispatch.runtime.js", async (importOriginal) => {
   return {
     ...(await importOriginal<typeof import("./slash-dispatch.runtime.js")>()),
+    recordDeliveredCommandExchange: mocks.recordDeliveredCommandExchangeMock,
     deliverSlackSlashReplies: (params: unknown) => mocks.deliverSlackSlashRepliesMock(params),
     dispatchChannelInboundTurn: async (plan: {
       cfg: unknown;
@@ -103,6 +111,7 @@ type SlashHarnessMocks = {
   recordSessionMetaFromInboundMock: AsyncMock;
   resolveStorePathMock: ReturnType<typeof vi.fn>;
   deliverSlackSlashRepliesMock: AsyncMock;
+  recordDeliveredCommandExchangeMock: typeof mocks.recordDeliveredCommandExchangeMock;
 };
 
 export function getSlackSlashMocks(): SlashHarnessMocks {
@@ -113,6 +122,7 @@ export function resetSlackSlashMocks() {
   installSlackTestRuntime();
   mocks.dispatchMock.mockReset().mockResolvedValue({ counts: { final: 1, tool: 0, block: 0 } });
   mocks.turnPlanMock.mockReset();
+  mocks.recordDeliveredCommandExchangeMock.mockReset().mockResolvedValue({ ok: true });
   mocks.readAllowFromStoreMock.mockReset().mockResolvedValue([]);
   mocks.upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
   mocks.resolveAgentRouteMock.mockReset().mockReturnValue({

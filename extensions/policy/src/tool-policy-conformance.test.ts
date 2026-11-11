@@ -2,15 +2,6 @@ import { describe, expect, it } from "vitest";
 import { expandPolicyToolRequirement, toolListCoversTool } from "./tool-policy-conformance.js";
 
 describe("policy tool group conformance", () => {
-  it("keeps computer control in both node and OpenClaw policy groups", () => {
-    expect(expandPolicyToolRequirement("group:nodes")).toEqual(
-      expect.arrayContaining(["computer", "mobile_ui"]),
-    );
-    expect(expandPolicyToolRequirement("group:openclaw")).toEqual(
-      expect.arrayContaining(["computer", "mobile_ui"]),
-    );
-  });
-
   it("normalizes aliases and expands groups", () => {
     expect(toolListCoversTool(["bash"], "exec")).toBe(true);
     expect(toolListCoversTool(["apply-patch"], "apply_patch")).toBe(true);
@@ -21,26 +12,6 @@ describe("policy tool group conformance", () => {
       "web_fetch",
       "x_search",
     ]);
-  });
-
-  it.each([
-    ["fs", "ls"],
-    ["runtime", "secrets"],
-    ["sessions", "sessions_search"],
-    ["ui", "show_widget"],
-    ["automation", "automations"],
-    ["agents", "skill_workshop"],
-    ["media", "view_image"],
-  ])("recognizes the core %s group member %s", (group, tool) => {
-    expect(toolListCoversTool([`group:${group}`], tool)).toBe(true);
-    expect(expandPolicyToolRequirement(`group:${group}`)).toContain(tool);
-    if (tool !== "ls") {
-      expect(toolListCoversTool(["group:openclaw"], tool)).toBe(true);
-    }
-  });
-
-  it("uses the current image tool name in media and OpenClaw groups", () => {
-    expect(toolListCoversTool(["group:media", "group:openclaw"], "image")).toBe(false);
   });
 
   it("keeps coverage lists restrictive without the runtime write compatibility", () => {

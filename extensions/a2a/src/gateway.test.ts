@@ -1,51 +1,21 @@
-import {
-  createPluginRuntimeMock,
-  createStartAccountContext,
-} from "openclaw/plugin-sdk/channel-test-helpers";
-import {
-  createTestRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startA2aGatewayAccount } from "./gateway.js";
-import { setA2aChannelRuntime } from "./runtime.js";
-import type { ResolvedA2aChannelAccount } from "./types.js";
+import { a2aChannelPlugin } from "./channel.js";
+import { createA2aGatewayFixture } from "./gateway.test-support.js";
+import * as taskStores from "./task-store.js";
+import { createTerminalStoreFixture } from "./task-store.test-support.js";
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-function createA2aGatewayFixture() {
-  const registry = createTestRegistry([]);
-  setActivePluginRegistry(registry);
-  const runtime = createPluginRuntimeMock();
-  setA2aChannelRuntime(runtime);
-  const controller = new AbortController();
-  const account: ResolvedA2aChannelAccount = {
-    accountId: "default",
-    enabled: true,
-    configured: true,
-    config: { peers: { hermes: { token: "test-token" } } },
-    unresolvedPeers: [],
-    unresolvedOutboundPeers: [],
-  };
-  const statusPatchSink = vi.fn();
-  const ctx = createStartAccountContext({
-    account,
-    abortSignal: controller.signal,
-    statusPatchSink,
-  });
-  ctx.channelRuntime = runtime.channel;
-  return { registry, runtime, controller, account, statusPatchSink, ctx };
-}
-
 describe("A2A gateway account lifecycle", () => {
   it("registers exact plugin-owned routes and removes them when the account stops", async () => {
     const fixture = createA2aGatewayFixture();
-    const lifecycle = startA2aGatewayAccount(fixture.ctx);
+    const lifecycle = a2aChannelPlugin.gateway!.startAccount!(fixture.ctx);
 
+    await vi.waitFor(() => expect(fixture.ctx.getStatus().lifecycle).toBe("ready"));
     expect(fixture.registry.httpRoutes).toEqual(
       ["/.well-known/agent-card.json", "/.well-known/agent.json", "/a2a/v1"].map((path) =>
         expect.objectContaining({ path, auth: "plugin", match: "exact", pluginId: "a2a" }),
@@ -64,6 +34,28 @@ describe("A2A gateway account lifecycle", () => {
     );
   });
 
+  it("restores terminal state before admitting any HTTP routes", async () => {
+    const fixture = createA2aGatewayFixture();
+    const durable = createTerminalStoreFixture();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(taskStores.openTerminalStore).mockReturnValue({
+      ...durable,
+      entries: async () => {
+        await gate;
+        return durable.entries();
+      },
+    });
+    const lifecycle = a2aChannelPlugin.gateway!.startAccount!(fixture.ctx);
+    expect(fixture.registry.httpRoutes).toEqual([]);
+    release();
+    await vi.waitFor(() => expect(fixture.ctx.getStatus().lifecycle).toBe("ready"));
+    fixture.controller.abort();
+    await lifecycle;
+  });
+
   it("rolls back already registered routes when a later route belongs to another plugin", async () => {
     const fixture = createA2aGatewayFixture();
     const releaseConflict = registerPluginHttpRoute({
@@ -75,7 +67,9 @@ describe("A2A gateway account lifecycle", () => {
       throwOnFailure: true,
     });
 
-    await expect(startA2aGatewayAccount(fixture.ctx)).rejects.toThrow(/other-plugin/);
+    await expect(a2aChannelPlugin.gateway!.startAccount!(fixture.ctx)).rejects.toThrow(
+      /other-plugin/,
+    );
 
     expect(fixture.registry.httpRoutes).toEqual([
       expect.objectContaining({
@@ -93,7 +87,9 @@ describe("A2A gateway account lifecycle", () => {
     const fixture = createA2aGatewayFixture();
     fixture.account.configured = false;
 
-    await expect(startA2aGatewayAccount(fixture.ctx)).rejects.toThrow(/not configured/);
+    await expect(a2aChannelPlugin.gateway!.startAccount!(fixture.ctx)).rejects.toThrow(
+      /not configured/,
+    );
 
     expect(fixture.registry.httpRoutes).toEqual([]);
   });

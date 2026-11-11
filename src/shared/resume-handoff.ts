@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Guard } from "typebox/guard";
-import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/primitives.js";
+import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../packages/gateway-protocol/src/session-limits.js";
 import { hasTerminalControl } from "../../packages/terminal-core/src/safe-text.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 
@@ -60,7 +60,7 @@ function encodeBase64Url(bytes: Uint8Array): string {
   for (const byte of bytes) {
     binary += String.fromCharCode(byte);
   }
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/[=]+$/u, "");
 }
 
 function decodeBase64Url(encoded: string): Uint8Array {

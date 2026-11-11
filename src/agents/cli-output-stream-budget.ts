@@ -13,7 +13,7 @@ import type {
   CliBackendParseJsonlEvent,
   CliBackendParsedJsonlEvent,
 } from "../plugins/cli-backend.types.js";
-import type { CliStreamJsonOutputLimits, CliToolResultDelta } from "./cli-output-contracts.js";
+import type { CliToolResultDelta } from "./cli-output-contracts.js";
 import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
 import {
   type ClaudeToolUseTracker,
@@ -26,6 +26,14 @@ import {
   readClaudeAttributedSubagentProgressId,
 } from "./cli-output-records.js";
 import { streamJsonOutputLimitErrorText } from "./cli-output-stream-limits.js";
+
+// The two cumulative odometers this module owns. `CLI_STREAM_JSON_OUTPUT_LIMITS`
+// satisfies it structurally; the per-line bound it also carries is enforced by
+// the framer and stays fatal, so it is deliberately not part of this shape.
+type CliStreamJsonTurnLimits = {
+  maxTurnRawChars: number;
+  maxTurnLines: number;
+};
 
 /**
  * Picks a terminal result's reply text from the streamed boundary state.
@@ -88,7 +96,7 @@ function streamJsonOutputTruncationText(kind: "raw" | "lines", limit: number): s
   return `CLI JSONL output exceeded ${measure}; stopped assembling output and kept watching for the terminal result.`;
 }
 
-export function createCliStreamJsonTurnBudget(limits: CliStreamJsonOutputLimits) {
+export function createCliStreamJsonTurnBudget(limits: CliStreamJsonTurnLimits) {
   let spent: { kind: "raw" | "lines"; limit: number } | null = null;
   let rawChars = 0;
   let rawLines = 0;

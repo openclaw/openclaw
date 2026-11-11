@@ -1,4 +1,8 @@
-import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
+import {
+  jsonResult,
+  readStringParam,
+  readStringArrayParam,
+} from "openclaw/plugin-sdk/channel-actions";
 import { buildChannelConfigSchema, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";
 import { buildOpenGroupPolicyWarning } from "openclaw/plugin-sdk/channel-policy";
@@ -13,6 +17,7 @@ import {
 import { normalizeXUserId } from "./allowlist.js";
 import { XConfigSchema } from "./config-schema.js";
 import { resolveXGuestToolPolicy, resolveXSenderTier } from "./guest-policy.js";
+import { readXReplyOutcome, xReplyOutcomeGuidance } from "./outcome.js";
 import { getXRuntime } from "./runtime.js";
 import { channelSecrets } from "./secret-contract.js";
 import type { sendXDelivery } from "./send.js";
@@ -22,7 +27,7 @@ const send = async (params: Parameters<typeof sendXDelivery>[0]) =>
   (await import("./send.js")).sendXDelivery(params);
 const senderGuidance =
   "X turns come from verified users and guests. Every turn starts with a host-generated sender line. Verified users may request work sessions; guests receive repository answers only.";
-const message = defineChannelMessageAdapter({ id: "x", send: { text: send } });
+const message = defineChannelMessageAdapter({ id: "x", send: { text: send, media: send } });
 
 export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
   id: "x",
@@ -37,7 +42,7 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
   },
   capabilities: {
     chatTypes: ["group"],
-    media: false,
+    media: true,
     reactions: false,
     threads: true,
     polls: false,
@@ -74,10 +79,17 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
   },
   secrets: channelSecrets,
   agentPrompt: {
-    messageToolHints: () => [senderGuidance],
+    messageToolHints: () => [
+      senderGuidance,
+      "X supports native proof attachments: up to four images or one MP4 video/GIF. Prefer inspected native media over sign-in links when useful; public work-session replies still require explicit approval.",
+    ],
     inboundFormattingHints: () => ({
       text_markup: "plain_text",
-      rules: [senderGuidance, "Replies are public plain text; documentation URLs may be cited."],
+      rules: [
+        senderGuidance,
+        "Replies are public plain text with optional native image/video attachments; documentation URLs may be cited.",
+        xReplyOutcomeGuidance,
+      ],
     }),
   },
   groups: {
@@ -122,17 +134,37 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
         : null,
     supportsAction: ({ action }) => action === "send",
     extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
-    handleAction: async ({ action, params, cfg, accountId, assertDirectAdapterHandoff }) => {
+    handleAction: async ({
+      action,
+      params,
+      cfg,
+      accountId,
+      sessionKey,
+      mediaAccess,
+      mediaLocalRoots,
+      mediaReadFile,
+      assertDirectAdapterHandoff,
+    }) => {
       if (action !== "send") {
         throw new Error(`X does not support ${action}.`);
+      }
+      // Message-tool posts are explicit sends; they only refuse declared failures.
+      const reply = readXReplyOutcome(readStringParam(params, "message") ?? "");
+      if (reply.outcome === "failure") {
+        throw new Error("X does not post failure replies; report the failure in this session.");
       }
       const result = await send({
         cfg,
         accountId,
         to: readStringParam(params, "to", { required: true }),
-        text: readStringParam(params, "message", { required: true }),
+        text: reply.text,
         mediaUrl: readStringParam(params, "media"),
+        mediaUrls: readStringArrayParam(params, "mediaUrls"),
+        mediaAccess,
+        mediaLocalRoots,
+        mediaReadFile,
         assertDirectAdapterHandoff,
+        sessionKey,
       });
       return jsonResult({ ok: true, messageId: result.messageId });
     },
@@ -140,10 +172,11 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
   message,
   outbound: {
     deliveryMode: "direct",
+    // Keep a reply's images on one post; `payload` is declared only to enable that grouping.
+    sendPayloadGroupsMedia: true,
+    deliveryCapabilities: { durableFinal: { payload: true } },
     sendText: send,
-    sendMedia: async () => {
-      throw new Error("X supports text replies only; media is not supported.");
-    },
+    sendMedia: send,
     // The native sender chunks the complete payload once, preserving its reply chain and signature.
     sendPayload: async (ctx) => {
       const result = await send({
@@ -158,7 +191,7 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
   },
   status: {
     defaultRuntime: { accountId: "default", running: false },
-    buildChannelSummary: ({ snapshot }) => ({ ...snapshot }),
+    buildChannelSummary: ({ snapshot }) => snapshot,
     buildAccountSnapshot: async ({ account, runtime, cfg }) => ({
       ...runtime,
       accountId: account.accountId,
@@ -167,6 +200,9 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
       configured: account.configured,
       dmPolicy: "disabled",
       guests: await (await import("./guests.js")).getXGuestStatus(getXRuntime(), account, cfg),
+      verifiedFromGitHub: await (
+        await import("./verified-github.js")
+      ).getXGitHubStatus(getXRuntime(), account),
     }),
   },
   gateway: { startAccount: async (ctx) => (await import("./monitor.js")).startXAccount(ctx) },

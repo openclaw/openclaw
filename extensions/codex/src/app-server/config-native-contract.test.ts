@@ -13,3 +13,9 @@ describe("native Codex config contract", () => {
     expect(readCodexPluginConfig(nativeConfig)).toEqual(nativeConfig);
   });
 });
+
+it("admits the documented worker-hosted opt-in through the manifest and runtime parser", () => {
+  const config = { appServer: { workerHostedCloud: true } };
+  expect(validateJsonSchemaValue({ schema: manifest.configSchema, value: config }).ok).toBe(true);
+  expect(readCodexPluginConfig(config)).toEqual(config);
+});

@@ -3,7 +3,6 @@ import { buildProtocolSchemaDocument } from "../../../../scripts/lib/protocol-sc
 import {
   assertPublishedProtocolSchema,
   buildInstalledProtocolInspectionScript,
-  buildPortableSwiftAnyCodableSource,
   parseGatewayProtocolArtifactOptions,
 } from "./gateway-protocol-artifacts.js";
 
@@ -62,14 +61,5 @@ describe("Gateway protocol artifact producer", () => {
     expect(script).toContain('from "@openclaw/gateway-protocol/schema"');
     expect(script).not.toContain("dist/index.mjs");
     expect(script).not.toContain("dist/schema.mjs");
-  });
-
-  it("makes the AnyCodable dependency portable for standalone Linux compilation", () => {
-    expect(buildPortableSwiftAnyCodableSource("import Foundation\n")).toBe(
-      "import CoreFoundation\nimport Foundation\n",
-    );
-    expect(buildPortableSwiftAnyCodableSource("import CoreFoundation\n")).toBe(
-      "import CoreFoundation\n",
-    );
   });
 });

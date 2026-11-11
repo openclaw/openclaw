@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
+import { expect } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import type { MockGatewayControls, MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 
@@ -46,4 +47,21 @@ export function createProviderProofCapture(getArtifactDir: () => string) {
       await takeControlUiViewportScreenshot(page, page.locator(".shell"), [content]),
     );
   };
+}
+
+/**
+ * Opens a connected provider row so its accounts, credentials and actions
+ * render. Rows that are already open (by the user or because they need
+ * attention) stay open.
+ */
+export async function expandProvider(page: Page, providerId: string): Promise<Locator> {
+  const row = page.locator(`li.provider-row[data-provider-id="${providerId}"]`);
+  const summary = row.locator("button.provider-row__summary");
+  await summary.waitFor();
+  if ((await summary.getAttribute("aria-expanded")) !== "true") {
+    await summary.click();
+  }
+  await expect.poll(() => summary.getAttribute("aria-expanded")).toBe("true");
+  await row.locator(".provider-row__detail").waitFor();
+  return row;
 }

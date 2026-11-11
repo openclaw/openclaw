@@ -1,13 +1,12 @@
-// Covers managed plugin install path generation.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { expect, it, vi } from "vitest";
 import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginGitDir,
   resolveDefaultPluginNpmDir,
   resolvePluginNpmGenerationProjectDir,
-  resolvePluginNpmGenerationProjectDirPrefix,
 } from "./install-paths.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
 import {
@@ -15,125 +14,66 @@ import {
   resolveInstalledPluginIndexStorePath,
 } from "./installed-plugin-index-store-path.js";
 
-describe("plugin install root context", () => {
-  it.each([
-    { env: { OPENCLAW_HOME: "/operator/home" }, root: "/operator/home/.openclaw" },
-    { env: { OPENCLAW_CONFIG_PATH: "/operator/config/openclaw.json" }, root: "/operator/config" },
-  ])("resolves artifact directories without probing state locations ($root)", ({ env, root }) => {
-    const exists = vi.spyOn(fs, "existsSync").mockReturnValue(false);
-    try {
-      for (const [resolve, kind] of [
-        [resolveDefaultPluginExtensionsDir, "extensions"],
-        [resolveDefaultPluginNpmDir, "npm"],
-        [resolveDefaultPluginGitDir, "git"],
-      ] as const) {
-        expect(resolve(env, () => "/unused-home")).toBe(path.resolve(root, kind));
-      }
-      expect(exists).not.toHaveBeenCalled();
-    } finally {
-      exists.mockRestore();
-    }
-  });
+const artifactDirs = [
+  [resolveDefaultPluginExtensionsDir, "extensions"],
+  [resolveDefaultPluginNpmDir, "npm"],
+  [resolveDefaultPluginGitDir, "git"],
+] as const;
 
-  it("keeps discovery roots on the operator install while runtime state is redirected", async () => {
-    const operatorRoots = resolvePluginInstallRoots(
-      { OPENCLAW_STATE_DIR: "/operator/openclaw" },
-      () => "/unused-home",
-    );
-    const redirectedEnv = { OPENCLAW_STATE_DIR: "/tmp/ephemeral-run" };
+function expectRoots(env: NodeJS.ProcessEnv, root: string) {
+  for (const [resolve, kind] of artifactDirs) {
+    expect(resolve(env)).toBe(`${root}/${kind}`);
+  }
+  expect(resolveInstalledPluginIndexStorePath({ env })).toBe(`${root}/state/openclaw.sqlite`);
+  expect(resolveInstalledPluginIndexStateDatabaseOptions({ env }).env?.OPENCLAW_STATE_DIR).toBe(
+    root,
+  );
+}
 
-    await withPluginInstallRoots(operatorRoots, async () => {
-      await Promise.resolve();
-      expect(resolveDefaultPluginExtensionsDir(redirectedEnv)).toBe(
-        "/operator/openclaw/extensions",
-      );
-      expect(resolveDefaultPluginNpmDir(redirectedEnv)).toBe("/operator/openclaw/npm");
-      expect(resolveDefaultPluginGitDir(redirectedEnv)).toBe("/operator/openclaw/git");
-      expect(resolveInstalledPluginIndexStorePath({ env: redirectedEnv })).toBe(
-        "/operator/openclaw/state/openclaw.sqlite",
-      );
-      expect(
-        resolveInstalledPluginIndexStateDatabaseOptions({ env: redirectedEnv }).env
-          ?.OPENCLAW_STATE_DIR,
-      ).toBe("/operator/openclaw");
-    });
-
-    expect(resolveDefaultPluginExtensionsDir(redirectedEnv)).toBe("/tmp/ephemeral-run/extensions");
-    expect(resolveInstalledPluginIndexStorePath({ env: redirectedEnv })).toBe(
-      "/tmp/ephemeral-run/state/openclaw.sqlite",
-    );
-    expect(
-      resolveInstalledPluginIndexStateDatabaseOptions({ env: redirectedEnv }).env
-        ?.OPENCLAW_STATE_DIR,
-    ).toBe("/tmp/ephemeral-run");
-  });
-
-  it("isolates concurrent install-root scopes", async () => {
-    const resolveScopedRoot = async (stateDir: string) => {
-      const roots = resolvePluginInstallRoots({ OPENCLAW_STATE_DIR: stateDir });
-      return await withPluginInstallRoots(roots, async () => {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 0);
-        });
-        return resolveDefaultPluginExtensionsDir({ OPENCLAW_STATE_DIR: "/redirected" });
-      });
-    };
-
-    await expect(
-      Promise.all([resolveScopedRoot("/operator/one"), resolveScopedRoot("/operator/two")]),
-    ).resolves.toEqual(["/operator/one/extensions", "/operator/two/extensions"]);
-  });
+it.each([
+  { env: { OPENCLAW_HOME: "/operator/home" }, root: "/operator/home/.openclaw" },
+  { env: { OPENCLAW_CONFIG_PATH: "/operator/config/openclaw.json" }, root: "/operator/config" },
+])("resolves artifact directories without probing state locations ($root)", ({ env, root }) => {
+  using exists = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+  for (const [resolve, kind] of artifactDirs) {
+    expect(resolve(env, () => "/unused-home")).toBe(path.resolve(root, kind));
+  }
+  expect(exists).not.toHaveBeenCalled();
 });
 
-describe("managed npm plugin install paths", () => {
-  it("keeps generation project names compact for nested Windows runtime binaries", () => {
-    const packageName = "@openclaw/codex";
-    const generationKey = [
-      packageName,
-      "2026.6.10",
-      `${packageName}@2026.6.10`,
-      "sha512-test-integrity",
-      "codexshasum",
-    ].join("\n");
-    const projectDir = resolvePluginNpmGenerationProjectDir({
-      npmDir: String.raw`C:\Users\Administrator\.openclaw\npm`,
-      packageName,
-      generationKey,
-    });
-    const projectName = path.basename(projectDir);
+it("isolates concurrent operator roots from redirected state and restores them on exit", async () => {
+  const redirectedEnv = { OPENCLAW_STATE_DIR: "/tmp/ephemeral-run" };
+  await Promise.all(
+    ["/operator/one", "/operator/two"].map((stateDir) =>
+      withPluginInstallRoots(
+        resolvePluginInstallRoots({ OPENCLAW_STATE_DIR: stateDir }),
+        async () => {
+          await setImmediate();
+          expectRoots(redirectedEnv, stateDir);
+        },
+      ),
+    ),
+  );
+  expectRoots(redirectedEnv, "/tmp/ephemeral-run");
+});
 
-    expect(projectName).toMatch(
-      /^openclaw-codex-[a-f0-9]{10}__openclaw-generation__g-[a-f0-9]{16}$/u,
-    );
-    expect(projectName.length).toBeLessThanOrEqual(66);
-
-    const nestedCodexBinaryPath = path.win32.join(
-      String.raw`C:\Users\Administrator\.openclaw\npm\projects`,
-      projectName,
-      "node_modules",
-      "@openclaw",
-      "codex",
-      "node_modules",
-      "@openai",
-      "codex-win32-x64",
-      "vendor",
-      "x86_64-pc-windows-msvc",
-      "bin",
-      "codex.exe",
-    );
-    expect(nestedCodexBinaryPath.length).toBeLessThan(260);
+it("keeps generation project names compact for nested Windows runtime binaries", () => {
+  const packageName = "@openclaw/codex";
+  const projectDir = resolvePluginNpmGenerationProjectDir({
+    npmDir: String.raw`C:\Users\Administrator\.openclaw\npm`,
+    packageName,
+    generationKey: `${packageName}\n2026.6.10\n${packageName}@2026.6.10\nsha512-test-integrity\ncodexshasum`,
   });
+  const projectName = path.basename(projectDir);
 
-  it("keeps generation project names under the recoverable package prefix", () => {
-    const packageName = "@openclaw/codex";
-    const projectDir = resolvePluginNpmGenerationProjectDir({
-      npmDir: "/tmp/openclaw/npm",
-      packageName,
-      generationKey: "codex-v2",
-    });
+  expect(projectName).toMatch(
+    /^openclaw-codex-[a-f0-9]{10}__openclaw-generation__g-[a-f0-9]{16}$/u,
+  );
 
-    expect(path.basename(projectDir)).toMatch(
-      new RegExp(`^${resolvePluginNpmGenerationProjectDirPrefix(packageName)}`, "u"),
-    );
-  });
+  const nestedCodexBinaryPath = path.win32.join(
+    String.raw`C:\Users\Administrator\.openclaw\npm\projects`,
+    projectName,
+    "node_modules/@openclaw/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+  );
+  expect(nestedCodexBinaryPath.length).toBeLessThan(260);
 });

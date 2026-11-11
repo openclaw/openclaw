@@ -27,5 +27,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  }
+  },
+  "recommendedPrompts": [
+    "Help me plan a ClickClack workspace connection for this agent.",
+    "Help me plan a ClickClack discussion and choose who can access it."
+  ]
 }
