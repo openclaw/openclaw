@@ -1,5 +1,6 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
 import { readQuestionDispatchCapability } from "../agents/harness/host-private-capabilities.js";
+import { withCapturedPreparedModelRuntimeAdmissionHolds } from "../agents/prepared-model-runtime-admission.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../agents/prepared-model-runtime-generation-scope.js";
 import { captureGatewayToolCallerAssertion } from "../agents/tools/gateway-caller-context.js";
 import {
@@ -186,9 +187,11 @@ async function withInProcessGatewayDispatch<T>(
     // Autonomous turns establish their own transcript writer and must not retain
     // the caller's tool authority after that invocation closes.
     return method === "agent"
-      ? await runOutsidePreparedModelRuntimePluginGenerationScope(() =>
-          runWithoutOwnedSessionTranscriptWrites(() =>
-            runOutsideOperatorToolGatewayAuthority(() => run(resolved)),
+      ? await withCapturedPreparedModelRuntimeAdmissionHolds(() =>
+          runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+            runWithoutOwnedSessionTranscriptWrites(() =>
+              runOutsideOperatorToolGatewayAuthority(() => run(resolved)),
+            ),
           ),
         )
       : await run(resolved);

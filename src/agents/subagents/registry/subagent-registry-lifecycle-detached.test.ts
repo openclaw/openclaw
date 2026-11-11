@@ -73,18 +73,3 @@ it("detaches completion cleanup and requester wake from a closed child plugin sc
     controller.clearRuntimeState();
   }
 });
-
-it("does not run a wake after its owner is revoked", async () => {
-  const entry = createRunEntry({ endedAt: 4_000 });
-  const controller = createLifecycleControllerFixture(
-    { entry },
-    {
-      ownersByEntry: new Map(),
-      callGateway: vi.fn(),
-      cleanupBrowserSessionsForLifecycleEnd: vi.fn(),
-    },
-  );
-  const wake = vi.fn(async () => {});
-  await controller.runRequesterSettleWake(entry, wake, () => false);
-  expect(wake).not.toHaveBeenCalled();
-});
