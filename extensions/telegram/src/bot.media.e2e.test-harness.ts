@@ -125,7 +125,6 @@ function resetSaveMediaBufferMock() {
 type ApiStub = {
   config: { use: (arg: unknown) => void };
   getChat: Mock;
-  getFile: Mock;
   sendChatAction: Mock;
   sendMessage: Mock;
   deleteMyCommands: () => Promise<void>;
@@ -135,7 +134,6 @@ type ApiStub = {
 const apiStub: ApiStub = {
   config: { use: useSpy },
   getChat: vi.fn(async () => undefined),
-  getFile: vi.fn(async () => ({ file_path: "photos/external.png" })),
   sendChatAction: sendChatActionSpy,
   sendMessage: vi.fn(async () => ({ message_id: 1 })),
   deleteMyCommands: vi.fn(async () => undefined),
@@ -143,7 +141,6 @@ const apiStub: ApiStub = {
 };
 
 export const telegramMediaHarnessSendMessageSpy = apiStub.sendMessage;
-export const telegramMediaHarnessGetFileSpy = apiStub.getFile;
 
 const throttlerSpy = vi.fn(() => "throttler");
 const defaultRuntimeConfig = (() =>
@@ -340,8 +337,6 @@ beforeEach(() => {
   resetSaveMediaBufferMock();
   resetUndiciFetchMock();
   resetReadRemoteMediaBufferMock();
-  apiStub.getFile.mockReset();
-  apiStub.getFile.mockImplementation(async () => ({ file_path: "photos/external.png" }));
 });
 
 afterEach(async () => {
