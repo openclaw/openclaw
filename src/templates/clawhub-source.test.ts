@@ -247,6 +247,7 @@ beforeEach(async () => {
       {
         id: "daily-briefing",
         name: "Daily briefing",
+        enabled: false,
         schedule: { cron: "0 9 * * *", timezone: "UTC" },
         session: "isolated",
         message: "Prepare the briefing",
@@ -432,7 +433,10 @@ describe("public ClawHub Template catalog", () => {
       plugins: 1,
       mcpServers: 1,
       scheduledJobs: 1,
-      contents: { skills: [{ excerpt: "Citation check" }] },
+      contents: {
+        skills: [{ excerpt: "Citation check" }],
+        automations: [{ name: "Daily briefing", enabled: false }],
+      },
     });
   });
 

@@ -192,10 +192,16 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         t("templatesCatalog.automations"),
         contents().automations.map((item) => ({
           name: item.name,
-          description: `${item.schedule} · ${item.timezone}`,
+          description: `${item.schedule} · ${item.timezone} · ${t(item.enabled ? "templatesCatalog.automationEnabled" : "templatesCatalog.automationPaused")}`,
           details: (
             <p>
               {item.schedule} · {item.timezone}
+              {" · "}
+              {t(
+                item.enabled
+                  ? "templatesCatalog.automationEnabled"
+                  : "templatesCatalog.automationPaused",
+              )}
             </p>
           ),
         })),

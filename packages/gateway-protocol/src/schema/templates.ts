@@ -84,6 +84,7 @@ const TemplatesCatalogContentsSchema = closedObject({
   automations: Type.Array(
     closedObject({
       name: NonEmptyString,
+      enabled: Type.Boolean(),
       schedule: NonEmptyString,
       timezone: NonEmptyString,
     }),
@@ -325,6 +326,7 @@ export const TemplateConfiguredAccessSchema = closedObject({
 });
 
 const TemplateScheduledDeclarationSchema = closedObject({
+  enabled: Type.Boolean(),
   schedule: Type.Union([
     closedObject({ cron: NonEmptyString, timezone: NonEmptyString }),
     closedObject({ everyMs: Type.Integer({ minimum: 1 }) }),
