@@ -65,7 +65,10 @@
  * sentinel through canonical reconciliation before warmup; never run concurrently.
  * --serial-turns --mode preparation --burst 1 --requests 3 measures first creation,
  * three unchanged turns, one guest edit, an unchanged turn, 200 mixed guest edits,
- * and a final unchanged turn. --fixture-source <directory> imports a retained
+ * and a final unchanged turn. Simple generated serial fixtures reset their mutations
+ * after validation; --reuse-fixture reopens them with a separate first-reuse sample.
+ * Serial allocation profiles surround each owner call, excluding correctness reads.
+ * --fixture-source <directory> imports a retained
  * synthetic deep workspace into a new owned Git repository. Original files stay untouched.
  * --freeze-source <new-directory> freezes all tracked source plus working changes;
  * add --revision <sha> for an exact committed source. Both arms use this benchmark.
@@ -158,6 +161,7 @@ const { values } = parseArgs({
     "source-root": { type: "string" },
     "fixture-source": { type: "string" },
     "serial-turns": { type: "boolean", default: false },
+    "fingerprint-import": { type: "boolean", default: false },
     "owner-switch": { type: "boolean", default: false },
     "restart-stage": { type: "string" },
     "creation-contender": { type: "boolean", default: false },
@@ -206,6 +210,76 @@ const harnessSha256 = createHash("sha256")
   .digest("hex");
 const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
 const scriptRelative = "scripts/perf/local-workspace-checkpoint-measure.ts";
+// Only frozen proof sources receive these counters; no memo, extra message, or await is added.
+function installFingerprintObservers(destination: string) {
+  const rewrite = (relative: string, edits: Array<[string, string]>) => {
+    const filename = path.join(destination, relative);
+    let source = fs.readFileSync(filename, "utf8");
+    for (const [anchor, replacement] of edits) {
+      assert.equal(source.split(anchor).length, 2, `Fingerprint observer anchor: ${relative}`);
+      source = source.replace(anchor, replacement);
+    }
+    fs.writeFileSync(filename, source);
+  };
+  rewrite("src/infra/git-operation.worker.ts", [
+    [
+      "  async (command, channel, control) => {",
+      `  async (command, channel, control) => {
+    const fingerprintMetrics = { contentHashCount: 0, contentReadBytes: 0,
+      fingerprintHitCount: 0, fingerprintMissCount: 0 };
+    Reflect.set(globalThis, "__workspaceFingerprintMetrics", fingerprintMetrics);`,
+    ],
+    [
+      "return { ok: true, value, revisionUnavailableReason: diffTiming?.revisionUnavailableReason };",
+      "return { ok: true, value, revisionUnavailableReason: diffTiming?.revisionUnavailableReason, __fingerprintMetrics: fingerprintMetrics };",
+    ],
+    [
+      '      /(?:)/.test("");',
+      '      Reflect.deleteProperty(globalThis, "__workspaceFingerprintMetrics");\n      /(?:)/.test("");',
+    ],
+  ]);
+  rewrite("src/gateway/worker-environments/workspace-actual-manifest.ts", [
+    [
+      "      if (metrics) {\n        metrics.contentHashCount += 1;\n      }",
+      `      const measured = Reflect.get(globalThis, "__workspaceFingerprintMetrics");
+      if (measured) { measured.contentHashCount++; measured.contentReadBytes += size; }
+      if (metrics) { metrics.contentHashCount += 1; }`,
+    ],
+    [
+      "      const reusable = params.reuseFile?.(relative, identity, stats);",
+      `      const reusable = params.reuseFile?.(relative, identity, stats);
+      const measured = Reflect.get(globalThis, "__workspaceFingerprintMetrics");
+      if (measured) {
+        if (reusable) { measured.fingerprintHitCount++; }
+        else { measured.fingerprintMissCount++; }
+      }`,
+    ],
+  ]);
+  rewrite("src/gateway/worker-environments/workspace-manifest-computation.runtime.ts", [
+    [
+      "      const result = await executeLocalWorkspaceManifestRead(snapshot, action, records);",
+      `      const measured = Reflect.get(globalThis, "__workspaceFingerprintMetrics");
+      if (measured) {
+        measured.action = action.kind;
+        measured.target = "target" in action ? action.target : null;
+      }
+      const result = await executeLocalWorkspaceManifestRead(snapshot, action, records);`,
+    ],
+  ]);
+  rewrite("src/infra/git-worker.ts", [
+    [
+      '    outcome = "returned";\n    return reply.value;',
+      `    const measured = Reflect.get(reply, "__fingerprintMetrics");
+    if (measured) {
+      Reflect.get(globalThis, "__recordWorkspaceFingerprintMetrics")?.({
+        operation: command.type, ...measured,
+      });
+    }
+    outcome = "returned";
+    return reply.value;`,
+    ],
+  ]);
+}
 if (values["freeze-source"]) {
   const destination = path.resolve(values["freeze-source"]);
   fs.mkdirSync(destination);
@@ -239,6 +313,9 @@ if (values["freeze-source"]) {
     new URL("./sandbox-builder-engine-fixture.ts", import.meta.url),
     path.join(destination, "scripts/perf/sandbox-builder-engine-fixture.ts"),
   );
+  if (values["fingerprint-import"]) {
+    installFingerprintObservers(destination);
+  }
 
   const digest = createHash("sha256");
   let fileCount = 0;
@@ -294,6 +371,7 @@ if (values["freeze-source"]) {
         fileCount,
         sha256: digest.digest("hex"),
         sharedDependencies: path.join(sourceRoot, "node_modules"),
+        fingerprintObservers: values["fingerprint-import"],
       },
       null,
       2,
@@ -364,10 +442,8 @@ const dockerHost = fileReads
     }).trim()
   : undefined;
 const serialTurns = values["serial-turns"];
-assert(
-  !serialTurns ||
-    (values.mode === "preparation" && Number(values.burst) === 1 && !values["reuse-fixture"]),
-);
+const fingerprintImport = values["fingerprint-import"];
+assert(!serialTurns || (values.mode === "preparation" && Number(values.burst) === 1));
 assert(!values["fixture-source"] || serialTurns);
 assert(!values["owner-switch"] || serialTurns);
 assert(!values["fresh-only"] || serialTurns);
@@ -425,6 +501,25 @@ assert(
       values["fresh-only"] &&
       values.acceleration),
 );
+const reusableSerial =
+  serialTurns &&
+  !values["fixture-source"] &&
+  !values["owner-switch"] &&
+  !values["restart-stage"] &&
+  !values["fresh-only"] &&
+  !values.acceleration &&
+  !values["agent-db-fixture"] &&
+  siblingWorktrees === 0;
+assert(
+  !fingerprintImport || reusableSerial,
+  "Fingerprint import requires the simple serial fixture",
+);
+if (fingerprintImport) {
+  const frozen = path.join(sourceRoot, "checkpoint-source.json");
+  assert(fs.existsSync(frozen), "Freeze both sources with --fingerprint-import before running");
+  assert.equal(JSON.parse(fs.readFileSync(frozen, "utf8")).fingerprintObservers, true);
+}
+assert(!serialTurns || !values["reuse-fixture"] || reusableSerial);
 const reuseFixture = values["reuse-fixture"] || resumeOwnerSwitch;
 assert(!reuseFixture || values.mode === "preparation" || fileReads || turnLoop);
 const requests = Number(values.requests),
@@ -649,8 +744,20 @@ const guestHeartbeats = new EventEmitter();
 const nextGuestHeartbeat = () =>
   once(guestHeartbeats, "tick", { signal: AbortSignal.timeout(5_000) });
 const manifestReads: Array<{ kind: string; target?: string; bytes: number }> = [];
+type FingerprintMetrics = {
+  operation: string;
+  action?: string;
+  target?: string | null;
+  contentHashCount: number;
+  contentReadBytes: number;
+  fingerprintHitCount: number;
+  fingerprintMissCount: number;
+};
+const fingerprintMetrics: FingerprintMetrics[] = [];
 const leaseSources = new Map<string, { scope: string; stack: string; calls: number }>();
 Object.assign(globalThis, {
+  __recordWorkspaceFingerprintMetrics: (metrics: FingerprintMetrics) =>
+    fingerprintMetrics.push(metrics),
   __containerCommandMeasure: (command: string) => containerCommands.push(command),
   __nativeCommandFinished: nativeCommandFinished,
   __checkpointPhase: async (name: string, operation: () => Promise<unknown>) => {
@@ -983,7 +1090,7 @@ if (reuseFixture && !resumeOwnerSwitch) {
     );
   }
 }
-if (reuseFixture && !resumeOwnerSwitch) {
+if (reuseFixture && !serialTurns) {
   fs.writeFileSync(path.join(canonical, "file-0.txt"), "synthetic 0\n".padEnd(fileBytes, "."));
 }
 if (gatewayMode && !reuseFixture) {
@@ -1674,6 +1781,7 @@ measurement: try {
     const measureTurn = async (phase: string, prepare = prepareWorkspace) => {
       acquisitions = scans = probes = 0;
       manifestReads.length = 0;
+      fingerprintMetrics.length = 0;
       const workerStartsBefore = workerStarts,
         workerExitsBefore = workerExits;
       const workerAllocationBefore =
@@ -1685,6 +1793,15 @@ measurement: try {
         gitOperations[operation] = (gitOperations[operation] ?? 0) + 1;
       };
       gitDiagnostics.subscribe(observeGitOperation);
+      const inspector = values.instrument === "allocation" ? new Session() : undefined;
+      inspector?.connect();
+      await inspector?.post("Profiler.enable");
+      await inspector?.post("Profiler.start");
+      await inspector?.post("HeapProfiler.startSampling", {
+        samplingInterval: 32_768,
+        includeObjectsCollectedByMajorGC: true,
+        includeObjectsCollectedByMinorGC: true,
+      });
       const physicalBefore = snapshotSqliteReaderMetrics();
       const spans: Record<string, { count: number; totalMs: number }> = {};
       const loop = monitorEventLoopDelay({ resolution: 1 });
@@ -1693,6 +1810,7 @@ measurement: try {
         cpuBefore = process.threadCpuUsage(),
         totalBefore = process.cpuUsage();
       const allocationBefore = getHeapStatistics().total_allocated_bytes;
+      const startedAtUTC = new Date().toISOString();
       const started = performance.now();
       const buildStarted = Promise.withResolvers<void>();
       let contenderStarted = false;
@@ -1723,6 +1841,7 @@ measurement: try {
         () => withWorktreePreparationTiming("sandbox", prepare),
       ).catch(async (error: unknown) => {
         gitDiagnostics.unsubscribe(observeGitOperation);
+        inspector?.disconnect();
         if (contenderStarted) {
           await Promise.allSettled([contender]);
         }
@@ -1735,6 +1854,23 @@ measurement: try {
       const cpu = process.threadCpuUsage(cpuBefore),
         total = process.cpuUsage(totalBefore);
       const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationBefore;
+      const heapProfile = await inspector?.post("HeapProfiler.stopSampling");
+      const cpuProfile = await inspector?.post("Profiler.stop");
+      inspector?.disconnect();
+      if (cpuProfile) {
+        fs.writeFileSync(
+          path.join(output, `${values.report}.${phase}.cpuprofile`),
+          JSON.stringify(cpuProfile.profile),
+        );
+      }
+      if (heapProfile) {
+        fs.writeFileSync(
+          path.join(output, `${values.report}.${phase}.heapprofile`),
+          JSON.stringify(heapProfile.profile),
+        );
+      }
+      const sampledAllocation = (node: HeapProfiler.SamplingHeapProfileNode): number =>
+        node.selfSize + node.children.reduce((sum, child) => sum + sampledAllocation(child), 0);
       loop.disable();
       gitDiagnostics.unsubscribe(observeGitOperation);
       const readMetrics = snapshotSqliteReaderMetrics().map((metric) => {
@@ -1748,13 +1884,18 @@ measurement: try {
       const workerAllocationAfter = workerAllocationBefore
         ? await sampleWorkerAllocation()
         : undefined;
+      assert(!fingerprintImport || fingerprintMetrics.length > 0, "Missing worker hash counters");
       const result = {
         phase,
+        startedAtUTC,
         elapsedMs,
         ...(contender ? { projectionElapsedMs, contender: contenderResult } : {}),
         mainCpuMs: (cpu.user + cpu.system) / 1000,
         processCpuMs: (total.user + total.system) / 1000,
         allocatedBytes,
+        sampledAllocatedBytes: heapProfile ? sampledAllocation(heapProfile.profile.head) : null,
+        allocationAccounting:
+          "Main isolate during owner call and measurement bookkeeping, including overlapping background work; excludes CPU-profiler setup/serialization, correctness reads and reset. Unavailable V8 total counters serialize as null. Worker counters are separate; child process allocation is unmeasured.",
         gitOperations,
         workerAllocation:
           workerAllocationBefore && workerAllocationAfter
@@ -1773,6 +1914,29 @@ measurement: try {
         probes,
         manifestReads: [...manifestReads],
         manifestSnapshotBytes: manifestReads.reduce((sum, read) => sum + read.bytes, 0),
+        ...(fingerprintImport
+          ? {
+              hashMetrics: {
+                operations: [...fingerprintMetrics],
+                contentHashCount: fingerprintMetrics.reduce(
+                  (sum, entry) => sum + entry.contentHashCount,
+                  0,
+                ),
+                contentReadBytes: fingerprintMetrics.reduce(
+                  (sum, entry) => sum + entry.contentReadBytes,
+                  0,
+                ),
+                fingerprintHitCount: fingerprintMetrics.reduce(
+                  (sum, entry) => sum + entry.fingerprintHitCount,
+                  0,
+                ),
+                fingerprintMissCount: fingerprintMetrics.reduce(
+                  (sum, entry) => sum + entry.fingerprintMissCount,
+                  0,
+                ),
+              },
+            }
+          : {}),
         physicalReaderMetrics: process.platform === "linux" ? readMetrics : null,
         hostLoad: loadBefore,
         hostLoadAfter: loadavg(),
@@ -1824,6 +1988,9 @@ measurement: try {
     };
     if (resumeOwnerSwitch) {
       workspace = fs.readFileSync(path.join(output, "restart-projection.txt"), "utf8");
+    } else if (reuseFixture) {
+      workspace = fs.readFileSync(path.join(output, "serial-projection.txt"), "utf8");
+      await measureTurn("first-reuse");
     } else {
       await measureTurn("first");
     }
@@ -1848,7 +2015,41 @@ measurement: try {
         fs.writeFileSync(filename, content);
       }
     };
-    if (!values["fresh-only"]) {
+    const restoreCanonical = (expectOriginal = false) => {
+      for (const entry of mutations.keys()) {
+        const original = path.join(repo, entry),
+          target = path.join(canonical, entry);
+        if (fs.existsSync(original)) {
+          fs.copyFileSync(original, target);
+          if (expectOriginal) {
+            mutations.set(entry, fs.readFileSync(original, "utf8"));
+          }
+        } else {
+          fs.rmSync(target, { force: true });
+          if (expectOriginal) {
+            mutations.set(entry, null);
+          }
+        }
+      }
+    };
+    if (fingerprintImport) {
+      assert(regularFiles.length >= 200);
+      for (let i = 0; i < 200; i++) {
+        if (i < 20) {
+          modify(regularFiles[i]!, null);
+        } else if (i < 40) {
+          modify(`lane2383-additions/deep/added-${i}.txt`, `added ${i}\n`);
+        } else {
+          modify(regularFiles[i]!, `changed ${i}\n`);
+        }
+      }
+      await measureTurn("guest-export");
+      restoreCanonical(true);
+      await measureTurn("host-import");
+      // No whole-tree validation or extra reconciliation may warm this next probe.
+      await measureTurn("post-import-reuse");
+      await measureTurn("post-import-steady");
+    } else if (!values["fresh-only"]) {
       modify(regularFiles[0]!, "one changed guest file\n");
       await measureTurn("changed-1");
       await measureTurn("post-edit-1");
@@ -2096,8 +2297,33 @@ measurement: try {
       }
     }
     const sourceFile = path.join(root, "checkpoint-source.json");
+    if (reusableSerial) {
+      // Restore only this scenario's own edits through the real acceptance owner, after timing.
+      if (!fingerprintImport) {
+        restoreCanonical();
+        await prepareWorkspace();
+      }
+      for (const entry of mutations.keys()) {
+        const original = path.join(repo, entry);
+        for (const directory of [canonical, workspace!]) {
+          if (fs.existsSync(original)) {
+            assert.deepEqual(readFixtureEntry(directory, entry), readFixtureEntry(repo, entry));
+          } else {
+            assert(!fs.existsSync(path.join(directory, entry)), `Fixture reset retained ${entry}`);
+          }
+        }
+      }
+      fs.writeFileSync(path.join(output, "serial-projection.txt"), workspace!);
+    }
     const result = {
       mode: "serial-preparation",
+      fingerprintImport,
+      harnessSha256,
+      instrument: values.instrument,
+      reusedFixture: reuseFixture,
+      resetAfterMeasurement: reusableSerial,
+      pauseAccounting:
+        "No registered native runtime in serial preparation; empty pause samples do not qualify guest freeze latency",
       fixture: {
         files: inventory.length,
         bytes: initialBytes,
@@ -2131,6 +2357,9 @@ measurement: try {
       sourceDependentInstallMatches,
       correctness:
         "all accepted file bytes, symlink targets, types and deletions match; ignored host file excluded",
+      hashAccounting: fingerprintImport
+        ? "Successful workspace content-hash calls inside observed Git-worker tasks and logical bytes read by that helper, plus accepted-node reuse hits/misses; excludes main-isolate/native Git reads, failed partial reads and OS-level physical IO. In-memory counters piggyback on existing worker replies, with no memo wrapping."
+        : undefined,
       retainedMemory: globalThis.gc ? await collectRetainedMemory() : null,
       retainedMemoryAccounting: globalThis.gc
         ? "forced GC after all timing and correctness checks; workers then main"
