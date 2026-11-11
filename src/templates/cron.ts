@@ -15,7 +15,12 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { TEMPLATE_CRON_REF_SCHEMA_VERSION, type PersistedTemplateCronRef } from "./cron-records.js";
 import { digestTemplateBytes } from "./digest.js";
 import type { TemplateMutationStateOptions } from "./state-mutation-options.js";
-import type { TemplateAddPlan, TemplateCronJob, TemplatePlannedCronJob } from "./types.js";
+import type {
+  TemplateAddPlan,
+  TemplateCronJob,
+  TemplateDiagnostic,
+  TemplatePlannedCronJob,
+} from "./types.js";
 import { readTemplateWorkspaceActionSource } from "./workspace.js";
 
 export type { PersistedTemplateCronRef } from "./cron-records.js";
@@ -123,7 +128,7 @@ function templateCronGatewayInput(
 }
 
 /** Channels that make the scheduler reject this declared automation's delivery. */
-export function templateCronJobAmbiguousDeliveryChannels(
+function templateCronJobAmbiguousDeliveryChannels(
   agentId: string,
   job: TemplateCronJob,
   configuredChannels: readonly string[],
@@ -132,6 +137,52 @@ export function templateCronJobAmbiguousDeliveryChannels(
     templateCronGatewayInput(agentId, { declarationKey: `template:${agentId}:${job.id}`, job }),
   );
   return input ? findAmbiguousAnnounceDeliveryChannels(input, configuredChannels) : undefined;
+}
+
+type TemplateAutomationChannelPlan = {
+  jobs: { job: TemplatePlannedCronJob; blocked: boolean }[];
+  blockers: TemplateDiagnostic[];
+  channels?: TemplateAddPlan["automationChannels"];
+};
+
+/**
+ * Templates cannot name a channel, so on a host where the scheduler needs one for an
+ * announce-to-last automation, the operator picks it during Add ("none" turns updates off).
+ */
+export function planTemplateAutomationChannels(
+  agentId: string,
+  automations: readonly TemplateCronJob[],
+  host: { configuredChannels?: readonly string[]; automationChannel?: string },
+): TemplateAutomationChannelPlan {
+  const plan: TemplateAutomationChannelPlan = { jobs: [], blockers: [] };
+  for (const [index, declared] of automations.entries()) {
+    const options = host.configuredChannels
+      ? templateCronJobAmbiguousDeliveryChannels(agentId, declared, host.configuredChannels)
+      : undefined;
+    if (!options) {
+      plan.jobs.push({ job: declared, blocked: false });
+      continue;
+    }
+    const choice = host.automationChannel;
+    const delivery: TemplatePlannedCronJob["delivery"] =
+      choice === "none"
+        ? { mode: "none" }
+        : choice && options.includes(choice)
+          ? { mode: "announce", channel: choice }
+          : undefined;
+    plan.channels = { options, ...(delivery && choice ? { selected: choice } : {}) };
+    plan.jobs.push({ job: delivery ? { ...declared, delivery } : declared, blocked: !delivery });
+    if (!delivery) {
+      plan.blockers.push({
+        level: "error",
+        code: choice ? "automation_channel_invalid" : "automation_channel_required",
+        phase: "plan",
+        path: `$.automations[${index}].delivery`,
+        message: `Automation ${JSON.stringify(declared.id)} announces to the last channel and this host has several channels; choose one of ${options.join(", ")}, or none.`,
+      });
+    }
+  }
+  return plan;
 }
 
 export function templateCronGatewayJobMatchesRef(

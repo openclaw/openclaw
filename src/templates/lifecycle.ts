@@ -12,7 +12,7 @@ import { templateAgentCopyNumber, selectNextTemplateAgentId } from "./add-agent-
 import { templateOwnedAgentConfig } from "./agent-config-ownership.js";
 import { templateAddCapabilityChange, templateAgentCapabilityChange } from "./application-plan.js";
 import { planBundledTemplateDependency } from "./bundled-dependency-plan.js";
-import { templateCronJobAmbiguousDeliveryChannels } from "./cron.js";
+import { planTemplateAutomationChannels } from "./cron.js";
 import { templateDependencyInventory } from "./dependency-inventory.js";
 import { digestTemplateBytes, digestTemplateValue } from "./digest.js";
 import { digestTemplateMcpServer } from "./mcp.js";
@@ -33,7 +33,6 @@ import {
   type TemplateLocalPrerequisite,
   type TemplatePackagePreflight,
   type TemplatePackagePreflightResult,
-  type TemplatePlannedCronJob,
   type TemplateSourceIdentity,
   type TemplateWorkspaceSourceSnapshot,
   type TemplateBundledSourceSnapshot,
@@ -637,36 +636,9 @@ export async function buildTemplateAddPlan(params: {
   });
 
   // Strict v1 validation permits only deterministic main or isolated targets.
-  // Templates cannot name a channel, so on a host where the scheduler needs one
-  // for an announce-to-last automation, the operator picks it during Add.
-  let automationChannels: TemplateAddPlan["automationChannels"];
-  for (const [index, declared] of params.manifest.automations.entries()) {
-    const channelOptions = context.configuredChannels
-      ? templateCronJobAmbiguousDeliveryChannels(finalId, declared, context.configuredChannels)
-      : undefined;
-    const choice = channelOptions ? context.automationChannel : undefined;
-    const delivery: TemplatePlannedCronJob["delivery"] =
-      choice === "none"
-        ? { mode: "none" }
-        : choice && channelOptions?.includes(choice)
-          ? { mode: "announce", channel: choice }
-          : undefined;
-    const job: TemplatePlannedCronJob = delivery ? { ...declared, delivery } : declared;
-    if (channelOptions) {
-      automationChannels = {
-        options: channelOptions,
-        ...(delivery && choice ? { selected: choice } : {}),
-      };
-      if (!delivery) {
-        blockers.push(
-          blocker(
-            choice ? "automation_channel_invalid" : "automation_channel_required",
-            `$.automations[${index}].delivery`,
-            `Automation ${JSON.stringify(declared.id)} announces to the last channel and this host has several channels; choose one of ${channelOptions.join(", ")}, or none.`,
-          ),
-        );
-      }
-    }
+  const automations = planTemplateAutomationChannels(finalId, params.manifest.automations, context);
+  blockers.push(...automations.blockers);
+  for (const { job, blocked } of automations.jobs) {
     actions.push({
       kind: "cronJob",
       id: job.id,
@@ -680,7 +652,7 @@ export async function buildTemplateAddPlan(params: {
           ? { deliveryResolution: "local-channel-state:last" }
           : {}),
       },
-      blocked: channelOptions !== undefined && !delivery,
+      blocked,
     });
     capabilityChanges.push(
       templateAddCapabilityChange({
@@ -743,7 +715,7 @@ export async function buildTemplateAddPlan(params: {
       ready: readinessRequirements.length === 0,
       requirements: readinessRequirements,
     },
-    ...(automationChannels ? { automationChannels } : {}),
+    ...(automations.channels ? { automationChannels: automations.channels } : {}),
     blockers,
     diagnostics: params.diagnostics ?? [],
   };
