@@ -162,9 +162,9 @@ it.each([false, true])(
   },
 );
 
-it.each([false, true])(
-  "preserves a deployment denial through chat and history (attempt started: %s)",
-  async (started) => {
+it.each(["pre-start", "immediate", "deferred"] as const)(
+  "preserves a deployment denial through %s terminal publication",
+  async (mode) => {
     vi.useFakeTimers();
     const expected =
       "The deployment rejected this model request. Ask the administrator to check the model access policy and request settings.";
@@ -175,29 +175,35 @@ it.each([false, true])(
     h.register(runId, "session-model-policy-denial", runId);
     const deliveries: Promise<void>[] = [];
     let seq = 0;
+    const terminal = createAgentLifecycleTerminalBackstop({
+      runId,
+      getLifecycleGeneration: () => "test-generation",
+      resolveTerminationFields: () => ({}),
+      onTerminalEvent: (event) => {
+        deliveries.push(Promise.resolve(h.emit(runId, event.stream, event.data, { seq: ++seq })));
+      },
+    });
     const lifecycle = createAgentHarnessAttemptLifecycle({
-      attempt: { provider: "openai", modelId: "fixture-model" },
+      attempt: {
+        provider: "openai",
+        modelId: "fixture-model",
+        deferTerminalLifecycle: mode === "deferred",
+      },
       backend: "codex-app-server",
       startedAtMs: Date.now(),
       state: { lifecycleStarted: false, lifecycleTerminalEmitted: false },
       emitEvent: (event) => {
+        terminal.note(event);
         const delivery = Promise.resolve(h.emit(runId, event.stream, event.data, { seq: ++seq }));
         deliveries.push(delivery);
         return delivery;
       },
     });
-    if (started) {
+    if (mode !== "pre-start") {
       lifecycle.emitLifecycleStart({ provider: "openai", model: "fixture-model" });
       lifecycle.emitLifecycleTerminal({ phase: "error", error });
-    } else {
-      const terminal = createAgentLifecycleTerminalBackstop({
-        runId,
-        getLifecycleGeneration: () => "test-generation",
-        resolveTerminationFields: () => ({}),
-        onTerminalEvent: (event) => {
-          deliveries.push(Promise.resolve(h.emit(runId, event.stream, event.data, { seq: ++seq })));
-        },
-      });
+    }
+    if (mode !== "immediate") {
       terminal.capture("error", error);
       terminal.emit("error", error);
       terminal.emit("error", error);
@@ -212,6 +218,13 @@ it.each([false, true])(
       errorDetail: { providerErrorCode: "model_request_policy_denied", httpStatus: 403 },
     });
     expect(payload?.errorDetail?.failoverReason).toBeUndefined();
+    if (mode !== "pre-start") {
+      expect(payload?.errorDetail).toMatchObject({ provider: "openai", model: "fixture-model" });
+    }
+    // Only an accepted turn can have the partial assistant output projected below.
+    if (mode !== "immediate") {
+      return;
+    }
     const assistant = createAgentHarnessAssistantMessage(
       { api: "openai-responses", provider: "openai", modelId: "fixture-model" },
       "Partial reply",

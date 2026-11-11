@@ -85,7 +85,8 @@ export function registerCodexUsageLimitTests() {
   describe("runCodexAppServerAttempt usage limits", () => {
     it("keeps a confirmed denial through native finalization, history rows, and lifecycle events", async () => {
       const harness = createStartedThreadHarness(async () => undefined);
-      const params = createUsageParams();
+      const params = createUsageParams("model-policy-denial-agent");
+      saveAuthProfileStore(params.authProfileStore, params.agentDir);
       const onAgentEvent = vi.fn();
       const run = runCodexAppServerAttempt({ ...params, onAgentEvent });
       await waitForRequest(harness, run, "turn/start");
@@ -135,9 +136,11 @@ export function registerCodexUsageLimitTests() {
       expect(JSON.stringify(result.lastAssistant)).not.toContain("PRIVATE");
     });
 
-    it.each([false, true])(
-      "uses the terminal startup RPC instead of incomplete or retrying notice (retry: %s)",
-      async (willRetry) => {
+    it.each(["incomplete", "retry", "other-turn", "notification-only"] as const)(
+      "uses coherent startup facts from %s",
+      async (source) => {
+        const willRetry = source === "retry";
+        const notificationOnly = source === "notification-only";
         const message =
           'unexpected status 403 Forbidden: {"error":"middleware_denied","reason_code":"request_credential_denied","layer":"l7"}';
         const harness: Harness = createStartedThreadHarness(async (method) => {
@@ -146,22 +149,25 @@ export function registerCodexUsageLimitTests() {
               method: "error",
               params: {
                 threadId: "thread-1",
-                turnId: "turn-1",
+                turnId: source === "other-turn" ? "previous-turn" : "turn-1",
                 willRetry,
                 error: {
                   message,
-                  ...(willRetry
+                  ...(source !== "incomplete"
                     ? { codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 403 } } }
                     : {}),
                 },
               },
             });
+            if (notificationOnly) {
+              throw new Error(message);
+            }
             throw Object.assign(new Error("ordinary RPC refusal"), {
               data: {
                 error: {
                   message: "ordinary RPC refusal",
                   codexErrorInfo: {
-                    httpConnectionFailed: { httpStatusCode: willRetry ? 401 : 403 },
+                    httpConnectionFailed: { httpStatusCode: source === "incomplete" ? 403 : 401 },
                   },
                 },
               },
@@ -171,12 +177,16 @@ export function registerCodexUsageLimitTests() {
         });
         const result = await runCodexAppServerAttempt(createUsageParams());
         expect(readAttemptTerminal(result).promptError).toMatchObject({
-          message: "ordinary RPC refusal",
-          status: willRetry ? 401 : 403,
+          status: source === "incomplete" || notificationOnly ? 403 : 401,
         });
-        expect(readAttemptTerminal(result).promptError).not.toBeInstanceOf(
-          AgentHarnessModelRequestPolicyError,
-        );
+        expect(
+          readAttemptTerminal(result).promptError instanceof AgentHarnessModelRequestPolicyError,
+        ).toBe(notificationOnly);
+        if (!notificationOnly) {
+          expect(readAttemptTerminal(result).promptError).toMatchObject({
+            message: "ordinary RPC refusal",
+          });
+        }
       },
     );
 

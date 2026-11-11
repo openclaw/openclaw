@@ -181,7 +181,7 @@ it.each([
       () => {
         throw new Error("Expected failed bounded turn");
       },
-      (error: unknown) => error,
+      (failure: unknown) => failure,
     );
     expect(error instanceof AgentHarnessModelRequestPolicyError).toBe(denied);
     expect(error).toMatchObject(
@@ -189,6 +189,25 @@ it.each([
         ? { code: "model_request_policy_denied", status: 403 }
         : { message: "ordinary refusal", status: 401 },
     );
+  },
+);
+
+it.each([
+  { info: { httpConnectionFailed: { httpStatusCode: 401 } }, status: 401 },
+  { info: "usageLimitExceeded", status: 429 },
+])(
+  "retains ordinary structured failure before a detail-less completion: $status",
+  async ({ info, status }) => {
+    const message = status === 401 ? "ordinary refusal" : "You've reached your usage limit.";
+    const fake = createClientFactory({
+      errorBeforeCompletion: { message, codexErrorInfo: info, willRetry: false },
+      terminalStatus: "failed",
+      terminalError: { message },
+    });
+    await expect(runRestricted(fake)).rejects.toMatchObject({
+      status,
+      message: status === 401 ? message : expect.stringContaining("subscription usage limit"),
+    });
   },
 );
 

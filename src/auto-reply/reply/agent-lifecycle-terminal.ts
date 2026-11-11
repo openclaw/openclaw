@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { classifyOAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
@@ -146,6 +147,7 @@ export function createAgentLifecycleTerminalBackstop(params: {
         };
       } else if (terminalValue instanceof AgentHarnessModelRequestPolicyError) {
         data.errorObservation = {
+          ...(isRecord(data.errorObservation) ? data.errorObservation : {}),
           providerErrorCode: terminalValue.code,
           httpStatus: terminalValue.status,
         };

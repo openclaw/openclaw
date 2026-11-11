@@ -258,8 +258,11 @@ function readCodexTurnStartUsageLimitErrorSource(
   const notificationError = readCodexErrorNotification(errorNotification);
   const errorPayload = readCodexErrorPayload(error);
   const rateLimits = errorPayload.rateLimits ?? readRecentCodexRateLimits(client);
-  // The message and native tag must describe the same notification or RPC error.
-  const source = notificationError?.codexErrorInfo != null ? notificationError : errorPayload;
+  // An unbound notice may belong to an older turn; the failed RPC owns explicit facts.
+  const source =
+    notificationError?.codexErrorInfo != null && errorPayload.codexErrorInfo == null
+      ? notificationError
+      : errorPayload;
   // The cached snapshot may predate this attempt or belong to another turn on
   // the same process. Trust it for the auth profile only when this client saw
   // a primary update after this turn's startup began.
