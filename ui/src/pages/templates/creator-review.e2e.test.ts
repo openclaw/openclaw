@@ -1,15 +1,22 @@
-import { mkdir, readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { TemplatesDraftsReviewResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser, type Page } from "playwright";
 import { expect, inject, it } from "vitest";
 import type { OpenClawTestInstance } from "../../../../test/helpers/openclaw-test-instance.ts";
 import { createDarkDesktopControlUiContextOptions } from "../../e2e/control-ui-browser-options.test-support.ts";
 import { seedSidebarSettings } from "../../e2e/sidebar-contract.test-support.ts";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { getControlUiContextHandle } from "../../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../../test-helpers/control-ui-e2e-readiness.ts";
 import {
+  takeControlUiScreenshotFrame,
+  waitForControlUiProofSurface,
+} from "../../test-helpers/control-ui-e2e-screenshot.ts";
+import {
   installMockGateway,
+  pauseVirtualClock,
   reconnectMockGateway,
   startControlUiE2eServer,
   waitForControlUiRoute,
@@ -237,18 +244,29 @@ it.skipIf(!chromiumAvailable).each(["replacement", "read-only"] as const)(
   },
 );
 
-it.skipIf(!chromiumAvailable)(
-  "publishes the reviewed selection after closing a pending publish and retrying its failure",
-  async () => {
+it.skipIf(!chromiumAvailable).each([
+  { width: 390, colorScheme: "dark" as const },
+  { width: 390, colorScheme: "light" as const },
+  { width: 1440, colorScheme: "dark" as const },
+])(
+  "keeps optional previews readable and publishes the reviewed selection at $width/$colorScheme",
+  async ({ width, colorScheme }) => {
     const server = await startControlUiE2eServer();
     let browser: Browser | undefined;
     try {
       browser = await connectCreatorBrowser();
-      const page = await browser.newPage(createDarkDesktopControlUiContextOptions());
+      const page = await browser.newPage({
+        ...createDarkDesktopControlUiContextOptions(),
+        viewport: { width, height: 844 },
+        colorScheme,
+      });
+      const artifact = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR
+        ? createControlUiE2eArtifactDir(`template-review-${width}-${colorScheme}`)
+        : undefined;
       const draftId = "ec8f46b0-4ca3-4991-8a73-dfdcc8764087";
       const optionalFile = "workspace/checklist.md";
       const scope = { input: "Repository", job: "Summarize", output: "Brief", authority: "Read" };
-      const reviewed = {
+      const reviewed: TemplatesDraftsReviewResult = {
         revision: "a".repeat(64),
         reviewToken: "b".repeat(64),
         publisher: "maker",
@@ -261,7 +279,24 @@ it.skipIf(!chromiumAvailable)(
             id: `file:${optionalFile}`,
             kind: "file",
             label: optionalFile,
-            detail: "Check each date and citation.",
+            detail: [
+              "# Release checklist",
+              "Compare the release notes with the linked changes and verify every date and citation.",
+              "Summarize user-visible changes first. Include a link to the source for each claim.",
+              "Separate confirmed fixes from known limitations. Do not promise unverified behavior.",
+              "Call out migration steps and configuration changes only when the release requires them.",
+              "Review the final brief for private information before sharing it outside the team.",
+              "Keep unresolved questions in a separate section with the next verification step.",
+              "End of checklist.",
+            ].join("\n\n"),
+            included: true,
+          },
+          {
+            id: "skill:release-research",
+            kind: "skill",
+            label: "Release research",
+            detail:
+              "Read release notes and linked changes.\nVerify citations before drafting a brief.\nDo not publish or change repository settings.",
             included: true,
           },
         ],
@@ -297,31 +332,107 @@ it.skipIf(!chromiumAvailable)(
           },
         },
       });
+      const withoutFile = (token: string): TemplatesDraftsReviewResult => ({
+        ...reviewed,
+        reviewToken: token.repeat(64),
+        items: reviewed.items.map((item) => ({
+          ...item,
+          included: item.id !== `file:${optionalFile}`,
+        })),
+        files: reviewed.files.filter((file) => file.path !== optionalFile),
+      });
       const setReview = (token: string) =>
-        gateway.setMethodResponse("templates.drafts.review", {
-          ...reviewed,
-          reviewToken: token.repeat(64),
-          items: reviewed.items.map((item) => ({ ...item, included: false })),
-          files: reviewed.files.filter((file) => file.path !== optionalFile),
-        });
+        gateway.setMethodResponse("templates.drafts.review", withoutFile(token));
       const waitForRequests = (method: string, count: number) =>
         expect.poll(async () => (await gateway.getRequests(method)).length).toBe(count);
       await page.goto(`${server.baseUrl}templates?draft=${draftId}&agent=main`);
       const dialog = page.getByRole("dialog", { name: "Review your Template" });
-      await dialog.waitFor();
-      expect(await dialog.getByText("View", { exact: true }).count()).toBe(1);
+      await waitForControlUiProofSurface(dialog, [
+        dialog.getByRole("checkbox", { name: optionalFile }),
+      ]);
+      expect(await dialog.getByText("View", { exact: true }).count()).toBe(2);
+      for (const item of reviewed.items) {
+        const row = dialog.locator(".template-creator__row").filter({
+          has: page.getByRole("checkbox", { name: item.label, exact: true }),
+        });
+        const choice = row.locator("label");
+        const details = row.locator("details");
+        const closed = await row.boundingBox();
+        await details.locator("summary").click();
+        const preview = row.locator("pre");
+        await preview.waitFor({ state: "visible" });
+        const boxes = {
+          row: (await row.boundingBox())!,
+          choice: (await choice.boundingBox())!,
+          details: (await details.boundingBox())!,
+        };
+        if (artifact) {
+          const frame = await takeControlUiScreenshotFrame(page, dialog, [preview], {
+            animations: "disabled",
+            scrollTo: row,
+          });
+          await writeFile(path.join(artifact, `${item.kind}-expanded.png`), frame.png);
+        }
+        console.log("TEMPLATE_REVIEW_GEOMETRY", { width, colorScheme, kind: item.kind, boxes });
+        if (width < 560) {
+          expect.soft(boxes.details.width).toBeGreaterThanOrEqual(boxes.row.width - 1);
+          expect.soft(boxes.details.y).toBeGreaterThanOrEqual(boxes.choice.y + boxes.choice.height);
+        } else {
+          expect(boxes.details.x).toBeGreaterThanOrEqual(boxes.choice.x + boxes.choice.width);
+        }
+        expect(await row.getByRole("checkbox").isChecked()).toBe(true);
+        expect(await preview.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+        await preview.evaluate((el) => {
+          el.scrollTop = el.scrollHeight;
+        });
+        expect(
+          await preview.evaluate((el) => el.scrollTop + el.clientHeight >= el.scrollHeight - 1),
+        ).toBe(true);
+        await details.locator("summary").click();
+        expect((await row.boundingBox())!.height).toBeCloseTo(closed!.height, 0);
+      }
       expect(await dialog.getByLabel("Description").inputValue()).toBe("Summarizes releases");
-      await setReview("d");
+      await page.clock.install();
+      await pauseVirtualClock(page);
+      await gateway.deferNext("templates.drafts.review");
+      const fileRow = dialog.locator(".template-creator__row").first();
+      await fileRow.locator("summary").click();
       await dialog.getByRole("checkbox", { name: optionalFile }).uncheck();
+      await page.clock.runFor(349);
+      await waitForRequests("templates.drafts.review", 1);
+      expect(await dialog.getByRole("button", { name: "Publish", exact: true }).isDisabled()).toBe(
+        true,
+      );
+      await page.clock.runFor(1);
       await waitForRequests("templates.drafts.review", 2);
+      expect((await gateway.getRequests("templates.drafts.review"))[1]?.params).toMatchObject({
+        choices: { excluded: [`file:${optionalFile}`] },
+      });
+      await gateway.resolveDeferred("templates.drafts.review", withoutFile("d"));
+      await expect
+        .poll(() => dialog.getByRole("button", { name: "Publish", exact: true }).isEnabled())
+        .toBe(true);
+      expect(await fileRow.locator("details").getAttribute("open")).not.toBeNull();
+      expect(await dialog.getByRole("checkbox", { name: optionalFile }).isChecked()).toBe(false);
+      expect(await dialog.getByRole("checkbox", { name: "Release research" }).isChecked()).toBe(
+        true,
+      );
+      await page.clock.resume();
+      const card = dialog.locator(".template-creator");
+      await card.evaluate((el) => {
+        el.scrollTop = el.scrollHeight;
+      });
+      const footer = (await dialog.locator("openclaw-modal-actions").boundingBox())!;
+      const cardBox = (await card.boundingBox())!;
+      expect(footer.y + footer.height).toBeLessThanOrEqual(cardBox.y + cardBox.height + 1);
       await gateway.deferNext("templates.drafts.publish");
-      await dialog.getByRole("button", { name: "Publish to ClawHub" }).click();
+      await dialog.getByRole("button", { name: "Publish", exact: true }).click();
       await gateway.waitForRequest("templates.drafts.publish");
       await expect
         .poll(() => dialog.locator("button.btn.primary").getAttribute("aria-busy"))
         .toBe("true");
       await dialog.locator(".btn__spinner").waitFor({ state: "visible" });
-      await dialog.getByRole("button", { name: "Ask for changes" }).click();
+      await page.keyboard.press("Escape");
       await dialog.waitFor({ state: "detached" });
       await gateway.rejectDeferred("templates.drafts.publish", {
         code: "UNAVAILABLE",
@@ -334,7 +445,7 @@ it.skipIf(!chromiumAvailable)(
       await setReview("e");
       await publicationError.getByRole("button", { name: "Retry review" }).click();
       await waitForRequests("templates.drafts.review", 3);
-      await dialog.getByRole("button", { name: "Publish to ClawHub" }).click();
+      await dialog.getByRole("button", { name: "Publish", exact: true }).click();
       await waitForRequests("templates.drafts.publish", 2);
       const published = await gateway.getRequests("templates.drafts.publish");
       expect(published[1]?.params).toMatchObject({

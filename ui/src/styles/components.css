@@ -437,6 +437,12 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   text-decoration: underline;
 }
 
+.report-issue-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .card {
   border: 1px solid var(--border);
   background: var(--card);
@@ -2479,7 +2485,7 @@ td.data-table-key-col {
   padding: 4px 12px;
   font-size: 13px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--field-radius);
   background: var(--card);
   color: var(--text);
   transition:
@@ -2632,9 +2638,7 @@ select.data-table-pagination__size {
 }
 
 .agent-scope-control .agent-select__trigger {
-  min-height: 34px;
   border-color: var(--border);
-  border-radius: var(--radius-full);
   background: var(--bg-elevated);
   font-size: 12px;
   font-weight: 600;
@@ -3666,7 +3670,6 @@ select.data-table-pagination__size {
 :where(.usage-query-input),
 :where(.sessions-sort) :where(select),
 :where(.dashboards-search) :where(input),
-:where(.dashboards-select) :where(select),
 :where(.data-table-search) :where(input),
 :where(.cron-search-box) :where(input),
 :where(.input) {
@@ -3684,7 +3687,6 @@ select.data-table-pagination__size {
 :where(.usage-query-input)::placeholder,
 :where(.sessions-sort) :where(select)::placeholder,
 :where(.dashboards-search) :where(input)::placeholder,
-:where(.dashboards-select) :where(select)::placeholder,
 :where(.data-table-search) :where(input)::placeholder,
 :where(.cron-search-box) :where(input)::placeholder,
 :where(.input)::placeholder {
@@ -3701,7 +3703,6 @@ select.data-table-pagination__size {
 :where(.usage-query-input):focus-visible:focus-visible,
 :where(.sessions-sort) :where(select):focus-visible:focus-visible,
 :where(.dashboards-search) :where(input):focus-visible:focus-visible,
-:where(.dashboards-select) :where(select):focus-visible:focus-visible,
 :where(.data-table-search) :where(input):focus-visible:focus-visible,
 :where(.cron-search-box) :where(input):focus-visible:focus-visible,
 :where(.input):focus-visible:focus-visible,
@@ -3716,7 +3717,6 @@ select.data-table-pagination__size {
 :where(.usage-query-input)[aria-expanded="true"]:not(.oc-menu-item),
 :where(.sessions-sort) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
 :where(.dashboards-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
-:where(.dashboards-select) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
 :where(.data-table-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
 :where(.cron-search-box) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
 :where(.input)[aria-expanded="true"]:not(.oc-menu-item) {
@@ -3735,7 +3735,6 @@ select.data-table-pagination__size {
   :where(.usage-query-input):focus-visible:focus-visible,
   :where(.sessions-sort) :where(select):focus-visible:focus-visible,
   :where(.dashboards-search) :where(input):focus-visible:focus-visible,
-  :where(.dashboards-select) :where(select):focus-visible:focus-visible,
   :where(.data-table-search) :where(input):focus-visible:focus-visible,
   :where(.cron-search-box) :where(input):focus-visible:focus-visible,
   :where(.input):focus-visible:focus-visible,
@@ -3750,7 +3749,6 @@ select.data-table-pagination__size {
   :where(.usage-query-input)[aria-expanded="true"]:not(.oc-menu-item),
   :where(.sessions-sort) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
   :where(.dashboards-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
-  :where(.dashboards-select) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
   :where(.data-table-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
   :where(.cron-search-box) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
   :where(.input)[aria-expanded="true"]:not(.oc-menu-item) {
@@ -3839,14 +3837,6 @@ select.data-table-pagination__size {
       [aria-expanded="true"],
       [data-disabled]
     ),
-  :where(.dashboards-select)
-    :where(select):hover:not(
-      :disabled,
-      :focus-visible,
-      :focus-within,
-      [aria-expanded="true"],
-      [data-disabled]
-    ),
   :where(.data-table-search)
     :where(input):hover:not(
       :disabled,
@@ -3884,7 +3874,6 @@ select.data-table-pagination__size {
 :where(.usage-query-input):disabled,
 :where(.sessions-sort) :where(select):disabled,
 :where(.dashboards-search) :where(input):disabled,
-:where(.dashboards-select) :where(select):disabled,
 :where(.data-table-search) :where(input):disabled,
 :where(.cron-search-box) :where(input):disabled,
 :where(.input):disabled {

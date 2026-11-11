@@ -9,6 +9,64 @@ import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Sidebar rail alignment" });
 
 suite.define(() => {
+  it("matches Templates page icon ink to neighboring page icons", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
+      const config = { gateway: { controlUi: { experimental: { templates: true } } } };
+      await installMockGateway(page, {
+        methodResponses: {
+          "config.get": {
+            config,
+            sourceConfig: config,
+            hash: "icon-proof",
+            valid: true,
+            issues: [],
+          },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      await page.locator('[data-navigation-view="pages"]').click();
+      const pages = page.locator(".sidebar-pages");
+      const templates = pages.locator('.nav-item[href$="/templates"]');
+      const systems = pages.locator('.nav-item[href$="/systems"]');
+      await templates.waitFor();
+      await systems.waitFor();
+      const ink = (link: typeof templates) =>
+        link.evaluate((element) => {
+          const svg = element.querySelector("svg")!;
+          const shape = svg.querySelector("path, rect")!;
+          const style = getComputedStyle(shape);
+          return {
+            stroke: style.stroke,
+            weight: Number.parseFloat(style.strokeWidth) * svg.getScreenCTM()!.a,
+          };
+        });
+      const expectMatchingInk = () =>
+        expect
+          .poll(async () => {
+            const reference = await ink(systems);
+            const actual = await ink(templates);
+            return {
+              stroke: actual.stroke === reference.stroke,
+              weight: actual.weight - reference.weight,
+            };
+          })
+          .toEqual({ stroke: true, weight: 0 });
+      for (const theme of ["dark", "light"] as const) {
+        await page.emulateMedia({ colorScheme: theme });
+        await page.mouse.move(1000, 700);
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await captureFrame(suite.artifactDir, "templates-" + theme + ".png", pages, [
+            templates,
+            systems,
+          ]);
+        }
+        await expectMatchingInk();
+        await templates.hover();
+        await expectMatchingInk();
+      }
+    });
+  });
+
   it.each([false, true])(
     "centers rail controls and the owner toolbar (touch: %s)",
     async (hasTouch) => {
@@ -198,10 +256,10 @@ suite.define(() => {
           );
           const columns: number[] = [];
           const measure = async (view: string, fill: string, text: string) => {
-            const row = page.locator(fill).first();
-            await row.waitFor();
-            await expect.poll(() => left(row), { message: view }).toBeCloseTo(contentLeft, 1);
-            columns.push(await left(row.locator(text)));
+            const pageRow = page.locator(fill).first();
+            await pageRow.waitFor();
+            await expect.poll(() => left(pageRow), { message: view }).toBeCloseTo(contentLeft, 1);
+            columns.push(await left(pageRow.locator(text)));
           };
           await measure(
             "sessions",

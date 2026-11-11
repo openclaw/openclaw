@@ -263,53 +263,52 @@ export async function connectOverCdpTransport(
             closeTransportSocket();
             return;
           }
-          const parsed = normalizer ? normalizer.receive(received) : received;
-          if (!parsed) {
-            return;
-          }
-          const id = parsed.id;
-          if (typeof id === "number" && id <= FIRST_INTERNAL_COMMAND_ID) {
-            const targetSessionId = pendingContextlessTargetResumes.get(id);
-            if (targetSessionId) {
-              pendingContextlessTargetResumes.delete(id);
-              sendInternalCommand("Target.detachFromTarget", { sessionId: targetSessionId });
+          const messages = normalizer ? normalizer.receive(received) : [received];
+          for (const parsed of messages) {
+            const id = parsed.id;
+            if (typeof id === "number" && id <= FIRST_INTERNAL_COMMAND_ID) {
+              const targetSessionId = pendingContextlessTargetResumes.get(id);
+              if (targetSessionId) {
+                pendingContextlessTargetResumes.delete(id);
+                sendInternalCommand("Target.detachFromTarget", { sessionId: targetSessionId });
+              }
+              continue;
             }
-            return;
-          }
-          if (typeof id === "number") {
-            pendingTargetCommands.delete(id);
-          }
-          const method = readStringField(parsed, "method");
-          const params = asOptionalRecord(parsed.params);
-          if (trackInitializationCommands && method === "Target.attachedToTarget") {
-            const sessionId = readStringField(params, "sessionId");
-            const targetInfo = asOptionalRecord(params?.targetInfo);
-            const targetId = readStringField(targetInfo, "targetId");
-            if (
-              sessionId &&
-              targetId &&
-              targetId.length <= MAX_DIAGNOSTIC_TARGET_ID_CHARS &&
-              readStringField(targetInfo, "type") === "page"
-            ) {
-              pageTargetIdsBySession.set(sessionId, targetId);
+            if (typeof id === "number") {
+              pendingTargetCommands.delete(id);
             }
-          } else if (trackInitializationCommands && method === "Target.detachedFromTarget") {
-            const sessionId = readStringField(params, "sessionId");
-            if (sessionId) {
-              pageTargetIdsBySession.delete(sessionId);
-              for (const [commandId, pendingSessionId] of pendingTargetCommands) {
-                if (pendingSessionId === sessionId) {
-                  pendingTargetCommands.delete(commandId);
+            const method = readStringField(parsed, "method");
+            const params = asOptionalRecord(parsed.params);
+            if (trackInitializationCommands && method === "Target.attachedToTarget") {
+              const sessionId = readStringField(params, "sessionId");
+              const targetInfo = asOptionalRecord(params?.targetInfo);
+              const targetId = readStringField(targetInfo, "targetId");
+              if (
+                sessionId &&
+                targetId &&
+                targetId.length <= MAX_DIAGNOSTIC_TARGET_ID_CHARS &&
+                readStringField(targetInfo, "type") === "page"
+              ) {
+                pageTargetIdsBySession.set(sessionId, targetId);
+              }
+            } else if (trackInitializationCommands && method === "Target.detachedFromTarget") {
+              const sessionId = readStringField(params, "sessionId");
+              if (sessionId) {
+                pageTargetIdsBySession.delete(sessionId);
+                for (const [commandId, pendingSessionId] of pendingTargetCommands) {
+                  if (pendingSessionId === sessionId) {
+                    pendingTargetCommands.delete(commandId);
+                  }
                 }
               }
             }
+            const contextlessParams = contextlessTargetParams(parsed);
+            if (contextlessParams) {
+              releaseContextlessTarget(contextlessParams);
+              continue;
+            }
+            scheduleMessage(parsed);
           }
-          const contextlessParams = contextlessTargetParams(parsed);
-          if (contextlessParams) {
-            releaseContextlessTarget(contextlessParams);
-            return;
-          }
-          scheduleMessage(parsed);
         } catch {
           closeTransportSocket();
         }

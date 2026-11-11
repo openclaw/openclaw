@@ -35,6 +35,21 @@ export const RELEASE_VALIDATION_WAIVERS = [
       "that exception only; it does not measure or qualify the new candidate.",
   },
   {
+    targetVersion: "2026.11.3",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized the 2026.11.3 Kova waiver on " +
+      "2026-11-10 at 03:34 UTC after reviewing FRV 42733555990/1, child " +
+      "42734139245/1 on prior C fb9ce54d: RSS 1809.8-1819.6 MB > 1800 MB, " +
+      "peak gateway CPU 433.7% > 340%, and process-tree CPU 467.4% > 360%. " +
+      "Like 2026.11.2, this matches the exact version, child role, and failed " +
+      "Kova job; it does not classify individual metrics within that job. " +
+      "Retain raw failures. The prior run does not qualify new C 40223c5cc262; " +
+      "there is no not-run exemption. Other failed jobs, missing or cancelled " +
+      "evidence, and all other normal release gates remain blocking.",
+  },
+  {
     targetVersion: "2026.11.2",
     childRole: "productPerformance",
     jobName: "Kova mock provider performance",

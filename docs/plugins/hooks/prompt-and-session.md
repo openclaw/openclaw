@@ -211,9 +211,15 @@ treat an unknown option as an ordinary pre-policy hook.
 
 On the embedded and CLI runners, `before_agent_run` runs after prompt
 construction and before model submission, including `llm_input` observation.
-On the embedded path it also precedes prompt-local image loading. It receives
-the current user input as `prompt`, plus loaded session history in `messages`
-and the active system prompt. Return `{ outcome: "block", reason, message? }`
+It receives the current user input as `prompt`, loaded session history in
+`messages`, the active system prompt, and prepared current-turn images in `images`.
+Image preparation, including prompt-local image paths, completes before this gate;
+the runner submits the same prepared image bytes after approval. The event is a
+copy, so mutating its images does not rewrite model input. `images: []` means no
+current-turn images; an absent field means an older host without this contract.
+Gateway worker turns expose Gateway-prepared images too; legacy worker turns do
+not expose a worker-local system prompt. Paired-node CLI sessions do not support
+images. This hook remains limited to runners that implement it. Return `{ outcome: "block", reason, message? }`
 to stop the run before the model reads the prompt. `reason` is internal;
 `message` is the user-facing replacement. Only `pass` and `block` outcomes are
 supported; unsupported decision shapes are rejected.

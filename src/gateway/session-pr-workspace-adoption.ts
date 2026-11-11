@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { listExecSessionsForCancellation } from "../agents/bash-process-registry.js";
 import { assertLocalSandboxWorkspaceBackend } from "../agents/sandbox/local-workspace.js";
@@ -6,11 +5,8 @@ import type { SandboxContext } from "../agents/sandbox/types.js";
 import { listSubagentRunsForRequester } from "../agents/subagents/registry/subagent-registry-read.js";
 import { captureWorkspaceStateFilesystemGuard } from "../agents/workspace-state-guard.js";
 import { resolveCanonicalWorkspacePath } from "../agents/workspace-state-identity.js";
-import { requireGit } from "../agents/worktrees/git.js";
-import { resolveRepositoryIdentity } from "../agents/worktrees/repository-paths.js";
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
-import { resolveProjectRegistry } from "../projects/project-registry.js";
 import { isCompetingSessionControllerWorkActive } from "../sessions/session-controller.context.js";
 import {
   captureSessionTarget,
@@ -20,7 +16,6 @@ import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionFileWorkspace } from "./session-file-workspace.js";
 import { commitPreparedSessionWorkspace } from "./session-lifecycle-preparation.js";
-import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 
 /** The yielded caller owns admission; siblings keep their original shared source. */
@@ -28,23 +23,16 @@ export async function adoptUnboundPullRequestWorkspace(params: {
   context: GatewayRequestContext;
   target: { agentId: string; sessionKey: string; storePath: string };
   entry: InternalSessionEntry;
-  sandbox?: SandboxContext;
-  localSource?: string;
+  sandbox: SandboxContext;
   assertCurrent: () => void;
   verifyBeforeBinding?: () => Promise<void>;
   signal?: AbortSignal;
 }) {
   const { context, target, entry, sandbox } = params;
-  if (sandbox) {
-    assertLocalSandboxWorkspaceBackend(sandbox.backendId);
-  } else if (!params.localSource) {
-    throw new Error("Workspace preparation requires an admitted source.");
-  }
+  assertLocalSandboxWorkspaceBackend(sandbox.backendId);
   const cfg = context.getRuntimeConfig();
-  const workspaceDir =
-    (!sandbox && resolveSessionWorkspaceRoots(cfg, target.agentId, entry).root) ||
-    resolveAgentWorkspaceDir(cfg, target.agentId);
-  const originalRoot = sandbox?.workspaceDir ?? workspaceDir;
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, target.agentId);
+  const originalRoot = sandbox.workspaceDir;
   const prior = entry.priorWorkspace;
   const recovering =
     prior?.worktreeId === entry.worktree?.id &&
@@ -54,8 +42,7 @@ export async function adoptUnboundPullRequestWorkspace(params: {
     !recovering &&
     (entry.worktree ||
       entry.repositoryWorkspaceId ||
-      // Only a local project checkout can supply a project chat's worktree.
-      (entry.projectId && !params.localSource) ||
+      entry.projectId ||
       entry.deviceFolder ||
       entry.execNode ||
       entry.pendingWorktree ||
@@ -172,38 +159,10 @@ export async function adoptUnboundPullRequestWorkspace(params: {
           "The conversation's message boundary is unavailable; retry PR preparation.",
         );
       }
-      const source = params.localSource;
-      const gitOptions = { signal: params.signal, beforeRun: assertIdle };
-      if (source && (await requireGit(source, ["status", "--porcelain"], gitOptions))) {
-        throw new Error("Commit the task changes before publishing this checkout.");
-      }
-      if (source && entry.projectId) {
-        // A project chat's worktree must come from that project's repository.
-        const project = await resolveProjectRegistry(cfg, entry.projectId);
-        const [projectRoot, repository] = await Promise.all([
-          project ? fs.realpath(project.repoRoot).catch(() => undefined) : undefined,
-          resolveRepositoryIdentity(source),
-        ]);
-        assertIdle();
-        if (!projectRoot) {
-          throw new Error(
-            "This conversation's project is no longer available. Publish from a chat in the checkout's repository; its files were preserved.",
-          );
-        }
-        if (repository.repoRoot !== projectRoot) {
-          throw new Error(
-            "This checkout belongs to a different repository than the conversation's project. Publish it from a chat in that repository; its files were preserved.",
-          );
-        }
-      }
-      const checkoutCommit = source
-        ? await requireGit(source, ["rev-parse", "HEAD"], gitOptions)
-        : undefined;
       const prepared = await prepareSessionWorktree({
         cfg,
         target: { ...target, key: target.sessionKey, entry },
-        workspace: source ?? { kind: "empty" },
-        checkoutCommit,
+        workspace: { kind: "empty" },
         runSetupScript: false,
         signal: params.signal,
         commitGuard: assertIdle,
@@ -241,7 +200,7 @@ export async function adoptUnboundPullRequestWorkspace(params: {
             current.lifecycleRevision !== entry.lifecycleRevision ||
             current.worktree ||
             current.repositoryWorkspaceId ||
-            current.projectId !== entry.projectId ||
+            current.projectId ||
             current.spawnedCwd !== entry.spawnedCwd ||
             current.spawnedWorkspaceDir !== entry.spawnedWorkspaceDir ||
             current.pendingWorktree ||
