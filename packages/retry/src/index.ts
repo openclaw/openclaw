@@ -60,7 +60,12 @@ export async function raceWithTimeout<T, F>(
           reject(error);
         }
       };
-      timer = setTimeout(() => settle(onTimeout), timeoutMs);
+      // Native timers overflow to a near-immediate wake above MAX_TIMER_TIMEOUT_MS;
+      // clamp the deadline so a large configured timeout cannot fire early.
+      timer = setTimeout(
+        () => settle(onTimeout),
+        Number.isFinite(timeoutMs) ? Math.min(timeoutMs, MAX_TIMER_TIMEOUT_MS) : 0,
+      );
       if (options.ref === false) {
         timer.unref?.();
       }

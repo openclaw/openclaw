@@ -83,6 +83,34 @@ it.each([
   }
 });
 
+it("clamps an oversized deadline so native timers do not overflow to an early wake", async () => {
+  const scheduled = vi.spyOn(globalThis, "setTimeout");
+  const source = createDeferred<string>();
+  const pending = retry.raceWithTimeout(source.promise, TIMER_MAX + 1, () => "expired");
+  const lastCall = scheduled.mock.calls.at(-1);
+  expect(lastCall?.[1]).toBe(TIMER_MAX);
+  expect(vi.getTimerCount()).toBe(1);
+  const settled = pending.then(
+    () => "done",
+    () => "timed out",
+  );
+  await vi.advanceTimersByTimeAsync(TIMER_MAX - 1);
+  expect(await Promise.race([settled, Promise.resolve("still pending")])).toBe("still pending");
+  source.resolve("done");
+  expect(await settled).toBe("done");
+  scheduled.mockRestore();
+});
+
+it("does not hand a non-finite deadline to a native timer", async () => {
+  const scheduled = vi.spyOn(globalThis, "setTimeout");
+  const source = createDeferred<string>();
+  void retry.raceWithTimeout(source.promise, Number.NaN, () => "expired");
+  expect(scheduled.mock.calls.at(-1)?.[1]).toBe(0);
+  scheduled.mockRestore();
+  source.resolve("done");
+  await vi.advanceTimersByTimeAsync(0);
+});
+
 it("owns attempt counting, overrides, rebasing, exhaustion, and cancellation", async () => {
   const policy = { initialMs: 100, maxMs: 250, factor: 2, jitter: 0 };
   const supervisor = new retry.RetrySupervisor(policy, 2);
