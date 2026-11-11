@@ -218,53 +218,47 @@ it.for([
     };
     let sameOwnerChat: Promise<RespondCall> | undefined;
     try {
-      if (!fullPermission) {
-        await beforeReply(approvalRequested.promise, "approval publication");
-        await runSystemAgentGatewayTask(async () => undefined);
-        const pendingRecords = await manager.listPendingRecords();
-        expect(pendingRecords).toHaveLength(1);
-        expectPending(0, 1);
-        const proposalId = expectDefined(pendingRecords[0], "pending approval").id;
-        const snapshot = await manager.getSnapshot(proposalId);
-        expect(snapshot).toMatchObject({
-          request: { proposalHash, ...delegation },
-        });
-        expect(snapshot?.decision).toBeUndefined();
-        expect(broadcast).toHaveBeenCalledWith(
-          "openclaw.approval.requested",
-          expect.objectContaining({ id: proposalId }),
-          { dropIfSlow: true },
+      await beforeReply(approvalRequested.promise, "approval publication");
+      await runSystemAgentGatewayTask(async () => undefined);
+      const pendingRecords = await manager.listPendingRecords();
+      expect(pendingRecords).toHaveLength(1);
+      expectPending(0, 1);
+      const proposalId = expectDefined(pendingRecords[0], "pending approval").id;
+      const snapshot = await manager.getSnapshot(proposalId);
+      expect(snapshot).toMatchObject({
+        request: { proposalHash, ...delegation },
+      });
+      expect(snapshot?.decision).toBeUndefined();
+      expect(broadcast).toHaveBeenCalledWith(
+        "openclaw.approval.requested",
+        expect.objectContaining({ id: proposalId }),
+        { dropIfSlow: true },
+      );
+      expect(resolveOperatorApproval).not.toHaveBeenCalled();
+      expect(handle).toHaveBeenNthCalledWith(1, `${action} Gateway.`);
+      if (loss === "none" && !fullPermission) {
+        sameOwnerChat = withGatewayToolCallerIdentity(identity, () =>
+          callChat(context, {
+            sessionId: "delegate-1",
+            message: "yes",
+            delegation,
+          }),
         );
-        expect(resolveOperatorApproval).not.toHaveBeenCalled();
-        expect(handle).toHaveBeenNthCalledWith(1, `${action} Gateway.`);
-        if (loss === "none") {
-          sameOwnerChat = withGatewayToolCallerIdentity(identity, () =>
-            callChat(context, {
-              sessionId: "delegate-1",
-              message: "yes",
-              delegation,
-            }),
-          );
-          await awaitGateBeforeSettlement(
-            sameOwnerHandled.promise,
-            sameOwnerChat,
-            "Same-owner chat replied before engine handling",
-          );
-          await runSystemAgentGatewayTask(async () => undefined);
-          expect(handle).toHaveBeenCalledTimes(2);
-        }
-        expect(await manager.resolve(proposalId, "allow-once", "operator-ui")).toBe(true);
+        await awaitGateBeforeSettlement(
+          sameOwnerHandled.promise,
+          sameOwnerChat,
+          "Same-owner chat replied before engine handling",
+        );
+        await runSystemAgentGatewayTask(async () => undefined);
+        expect(handle).toHaveBeenCalledTimes(2);
       }
+      expect(await manager.resolve(proposalId, "allow-once", "operator-ui")).toBe(true);
       await beforeReply(preparationStarted.promise, "host preparation");
       expectPending(1);
       expect(delegatedSession.pendingApproval).toBeUndefined();
       expect(acceptStop).not.toHaveBeenCalled();
       expect(nativeEffect).not.toHaveBeenCalled();
       expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
-      if (fullPermission) {
-        expect(await manager.listPendingRecords()).toEqual([]);
-        expect(broadcast).not.toHaveBeenCalled();
-      }
       if (loss === "run") {
         expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
       } else if (loss === "tool") {

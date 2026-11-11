@@ -178,12 +178,15 @@ describe("prepareDelegatedSystemAgentApproval", () => {
   });
 
   it.each(["run", "tool", "gateway", "worker", "session"] as const)(
-    "fences Full Access when its %s closes during apply preparation",
+    "fences an automatically applied setting when its %s closes during apply preparation",
     async (owner) => {
       const started = createDeferred();
       const release = createDeferred();
       const effect = vi.fn();
-      const proposal = { operation: { kind: "gateway-restart" as const }, hash: "f".repeat(64) };
+      const proposal = {
+        operation: { kind: "config-set" as const, path: "logging.level", value: "debug" },
+        hash: "f".repeat(64),
+      };
       const session = {
         engine: {
           resolveOperatorApproval: async (

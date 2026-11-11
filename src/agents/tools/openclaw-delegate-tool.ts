@@ -107,7 +107,7 @@ export function createOpenClawDelegateToolsForRun(
       "Gateway restart, config, channels, plugins, agents, models/providers, API keys. " +
       "Supports multiple named custom/local model endpoints; provider IDs can be user-defined, while api selects the protocol. " +
       "Setup flows use masked entry, which keeps keys out of model context; if the user already gave a key or token in chat, pass it along and OpenClaw stores it without echoing it. " +
-      "Permitted changes apply directly; other changes wait for user approval in this chat, the Control UI, or OpenClaw apps and return the final outcome.",
+      "Some changes apply directly; others wait for user approval in chat, the Control UI, or OpenClaw apps and return the final outcome.",
     parameters: OpenClawDelegateSchema,
     outputSchema: OpenClawDelegateOutputSchema,
     execute: async (_toolCallId, args, signal) => {

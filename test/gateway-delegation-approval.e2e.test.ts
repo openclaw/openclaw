@@ -39,6 +39,7 @@ it.each([
           const input = JSON.stringify(body.input);
           const current = ++ordinal;
           if (tools.includes("openclaw") && input.includes("DELEGATED_CONFIG_ENTRY") && !issued) {
+            expect(tools.includes("exec")).toBe(allowExec);
             issued = true;
             writeRestartToolCall(
               response,
