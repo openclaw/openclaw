@@ -216,6 +216,27 @@ openclaw gateway --verbose --ws-log compact
 openclaw gateway --verbose --ws-log full
 ```
 
+### Operator authority failures
+
+The existing `lane task error` record carries three additional fields when a
+retained operator authority becomes inactive, including through sandbox and
+state-lease error wrappers:
+
+- `operatorAuthorityReason`: `source-invalidated`, `gateway-identity-retired`,
+  `closure-released`, or `closure-revoked`.
+- `operatorAuthorityCheck`: `source-current`, `source-revocation`, `gateway-current`,
+  `before-sources`, or `after-sources`, identifying the owner check that failed.
+- `operatorAuthorityAgeMs`: elapsed monotonic milliseconds from the original
+  run-authority capture to creation of that failure. Retained/delegated copies
+  keep the original capture age; a new admission creates a new capture.
+
+`source-invalidated` identifies the failed source check or revocation callback;
+it does not identify which upstream policy or lifecycle event invalidated it.
+`gateway-identity-retired` means the captured Gateway resolver no longer returns
+the same owner. Closure reasons distinguish a released final hold from a revoked
+closure. These fields add no content or identifiers and emit no additional log
+record. The recovery message remains visible to the user.
+
 ### Steering and input cancellation
 
 Ordinary channel reply routing logs
