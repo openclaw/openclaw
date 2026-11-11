@@ -107,17 +107,23 @@ export function projectMessageActionPartialDelivery(error: unknown) {
 }
 
 /**
- * A queue-owned send the model must not repeat. An attempt that failed after it
- * started may already have landed, so it reports as unknown rather than failed;
- * a queued delivery reports its pending reconciliation. Both keep the model from
- * resending identical content and duplicating the message.
+ * A send the model must not blindly repeat. An attempt that failed after it
+ * started may already have landed, so it reports as unknown rather than failed.
+ * Only a held queue row can own reconciliation: a direct send that bypassed the
+ * queue has no row to reconcile, so it reports unverified custody instead of
+ * promising a Gateway retry. A provider-proven rejection keeps its actionable
+ * error, because that classification knows more than possible-send evidence.
  */
 export function projectDeliveryOutcomeResult(error: unknown) {
   if (isOutboundDeliveryError(error) && error.sentBeforeError && error.results.length === 0) {
+    const retainedQueueCustody = error.queueCustody === "held";
+    const owner = retainedQueueCustody
+      ? "The gateway owns reconciliation and the send may already have been delivered; do not resend it."
+      : "No queued retry owns it, so the send may already have reached the recipient; check it before resending.";
     return {
       status: "delivery_unconfirmed",
       delivered: false as const,
-      message: `Delivery could not be confirmed: ${formatErrorMessage(error)}. The gateway owns reconciliation and the send may already have been delivered; do not resend it.`,
+      message: `Delivery could not be confirmed: ${formatErrorMessage(error)}. ${owner}`,
     };
   }
   if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {

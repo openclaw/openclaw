@@ -397,14 +397,22 @@ describe("message tool queued gateway delivery", () => {
 });
 
 describe("message tool unconfirmed delivery", () => {
-  const matrixFailure = (sentBeforeError: boolean) =>
-    new OutboundDeliveryError("message failed: MatrixError: [429] Server is unavailable", {
-      cause: new Error("MatrixError: [429] Server is unavailable"),
-      sentBeforeError,
-    });
+  const matrixFailure = (sentBeforeError: boolean, queueCustody?: "held" | "released") => {
+    const error = new OutboundDeliveryError(
+      "message failed: MatrixError: [429] Server is unavailable",
+      {
+        cause: new Error("MatrixError: [429] Server is unavailable"),
+        sentBeforeError,
+      },
+    );
+    if (queueCustody) {
+      error.queueCustody = queueCustody;
+    }
+    return error;
+  };
 
-  it("reports an attempt that may have landed as unknown instead of failed", async () => {
-    const error = matrixFailure(true);
+  it("names reconciliation only when the queue still holds the send", async () => {
+    const error = matrixFailure(true, "held");
     const { tool } = createFailingMessageTool(error);
     const result = await tool.execute("send", { action: "send", message: "hello" });
     expect(result.details).toMatchObject({
@@ -415,11 +423,27 @@ describe("message tool unconfirmed delivery", () => {
     });
   });
 
+  it.each([undefined, "released"] as const)(
+    "does not promise a queued retry when custody is %s",
+    async (queueCustody) => {
+      const error = matrixFailure(true, queueCustody);
+      const { tool } = createFailingMessageTool(error);
+      const result = await tool.execute("send", { action: "send", message: "hello" });
+      expect(result.details).toMatchObject({
+        status: "delivery_unconfirmed",
+        delivered: false,
+        message:
+          "Delivery could not be confirmed: message failed: MatrixError: [429] Server is unavailable. No queued retry owns it, so the send may already have reached the recipient; check it before resending.",
+      });
+    },
+  );
+
   it("keeps a failed attempt that provably did not send as an error", async () => {
     const error = matrixFailure(false);
     const { tool } = createFailingMessageTool(error);
     await expect(tool.execute("send", { action: "send", message: "hello" })).rejects.toBe(error);
   });
+
 });
 
 it.each(["read", "edit", "delete", "pin", "unpin"] as const)(
