@@ -1,6 +1,12 @@
 import { marked } from "marked";
 import { expect, it } from "vitest";
-import { extractMessageText, formatModelName, formatSummarizationHistoryText } from "./utils.js";
+import { markdownToStory } from "../urbit/story.js";
+import {
+  extractMessageText,
+  formatModelName,
+  formatSummarizationHistoryText,
+  isBotMentioned,
+} from "./utils.js";
 
 it.each([
   ["openai/gpt-4o", "GPT-4o"],
@@ -20,6 +26,39 @@ it.each([
   const text = extractMessageText([{ block: { code: { code, lang } } }]);
   const tokens = marked.lexer(text).filter((token) => token.type !== "space");
   expect(tokens).toMatchObject([{ type: "code", lang, text: code }]);
+});
+
+it.each([
+  "- buy **milk**\n- buy bread",
+  "1. first\n2. second",
+  "- [ ] todo\n- [x] done",
+  "~zod please summarize:\n- buy milk\n- buy bread",
+  "- parent\n  1. child\n  2. sibling\n- last",
+  "- parent\n  - child\n    - [x] nested\n  - sibling\n- last",
+])("extractMessageText preserves native lists from %j", (markdown) => {
+  expect(extractMessageText(markdownToStory(markdown))).toBe(markdown);
+});
+
+it.each(["- `ping ~zod now` please help", "- parent\n  - [ ] `ping ~zod now` please help"])(
+  "preserves list code without treating it as a mention: %s",
+  (markdown) => {
+    const story = markdownToStory(markdown);
+    expect(extractMessageText(story)).toBe(markdown);
+    expect(isBotMentioned(extractMessageText(story, true), "~zod")).toBe(false);
+  },
+);
+
+it.each(["list", "task"])("bounds deep native %s nesting and preserves later text", (kind) => {
+  let node: unknown = kind === "list" ? { item: ["hidden"] } : "hidden";
+  for (let i = 0; i < 2_000; i++) {
+    node =
+      kind === "list"
+        ? { list: { type: "unordered", contents: [], items: [node] } }
+        : { task: { checked: false, content: [node] } };
+  }
+  const text = extractMessageText([{ block: { listing: node } }, { inline: [node, "visible"] }]);
+  expect(text).not.toContain("hidden");
+  expect(text).toBe(kind === "list" ? "visible" : `${"[ ] ".repeat(100)}visible`);
 });
 
 const MAX_DEPTH = 100;
