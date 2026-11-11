@@ -347,16 +347,25 @@ export async function executeSystemAgentOperation(
       return await apply(
         operation.kind === "config-set" ? "config.set" : "config.setRef",
         async (ctx) => {
-          const { storeEntry, storeProvider } = await runConfigSetOperation({ operation, ctx });
+          const { storeEntry, storeProvider, runtimeApplication } = await runConfigSetOperation({
+            operation,
+            ctx,
+          });
           if (operation.kind === "config-set") {
-            return { summary: `Set config ${operation.path}`, details: { path: operation.path } };
+            return {
+              summary: `Set config ${operation.path}`,
+              runtimeApplication,
+              details: { path: operation.path, runtimeApplication },
+            };
           }
           return {
+            runtimeApplication,
             summary: storeEntry
               ? `Saved the secret as ${storeEntry} and set config ${operation.path} SecretRef`
               : `Set config ${operation.path} SecretRef`,
             details: {
               path: operation.path,
+              runtimeApplication,
               source: operation.source,
               provider: storeProvider ?? operation.provider ?? "default",
               ...(storeEntry ? { storeEntry } : {}),
