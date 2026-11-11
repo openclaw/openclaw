@@ -167,6 +167,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Config search shares this helper without loading optional session UI.
       return "control-ui-boot-shared";
     case "ui/src/lib/text-diff.ts":
+    case "ui/src/pages/chat/components/chat-message-media.ts":
+    case "ui/src/pages/chat/components/chat-message-deferred.tsx":
+    case "ui/src/pages/chat/components/widget-preview-layout.ts":
+    case "ui/src/lib/chat/youtube-video.ts":
+    case "ui/src/lib/gateway-client-kind.ts":
+    // Activity uses media custody, deferred facades, and client labels, not Chat presentation.
     case "ui/src/components/session-git-diff.tsx":
     case "ui/src/lib/sessions/usage.ts":
     case "src/shared/weak-owner-map.ts":

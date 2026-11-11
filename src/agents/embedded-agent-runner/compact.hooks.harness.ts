@@ -930,7 +930,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   return {
     ...compactModule,
     compactEmbeddedAgentSession: (params, host = {}) =>
-      compactQueuedModule.compactEmbeddedAgentSession(params, {
+      compactQueuedModule.compactQueuedEmbeddedAgentSession(params, {
         ...host,
         sourceAuthority: host.sourceAuthority ?? {
           assertActive: host.assertActive ?? (() => {}),

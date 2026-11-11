@@ -140,9 +140,13 @@ function TranscriptRows(props: {
                 return source(index());
               });
               const active = createMemo(() => props.snapshot.activeRowKeys.has(row()?.key ?? ""));
-              const preparing = createMemo(() => row()?.key === props.snapshot.preparingRowKey);
-              const preparingPredecessor = createMemo(
-                () => preparing() && virtualRow().index + 1 === activeRows()[0]?.index,
+              const forecast = () => props.snapshot.forecastRowKeys?.has(row()?.key ?? "") === true;
+              const preparing = createMemo(
+                () => row()?.key === props.snapshot.preparingRowKey || forecast(),
+              );
+              const paintPreparing = createMemo(
+                () =>
+                  forecast() || (preparing() && virtualRow().index + 1 === activeRows()[0]?.index),
               );
               const streaming = createMemo(() => row()?.streaming === true);
               const gap = () => gaps().get(virtualRow().key) ?? 0;
@@ -158,19 +162,24 @@ function TranscriptRows(props: {
                       { "chat-virtual-row--first": virtualRow().index === 0 },
                     ]}
                     style={{
-                      "min-height": `${props.snapshot.layout.rowMinimum(index())}px`,
-                      display: active() ? undefined : preparing() ? "flow-root" : "none",
+                      "min-height":
+                        active() || preparing()
+                          ? `${props.snapshot.layout.rowMinimum(index())}px`
+                          : "0",
+                      // Keep a zero-height box while parked so forecasting does
+                      // not repeatedly detach and rebuild the row's layout tree.
+                      height: active() || preparing() ? undefined : "0",
                       position: active() ? undefined : "absolute",
                       top: active()
                         ? undefined
-                        : preparingPredecessor()
+                        : paintPreparing()
                           ? `${virtualRow().start - blockStart()}px`
                           : "0",
-                      opacity: active() || preparingPredecessor() ? undefined : "0",
-                      // Keep speculative preparation hidden; the incoming predecessor
-                      // paints inside its estimated slot before entering normal flow.
+                      opacity: active() || paintPreparing() ? undefined : "0",
+                      // Incoming forecast rows paint at estimated slots while native
+                      // measurement runs; only admitted rows affect normal flow.
                       clip:
-                        !active() && preparingPredecessor()
+                        !active() && paintPreparing()
                           ? `rect(0, auto, ${virtualRow().size}px, auto)`
                           : undefined,
                       "content-visibility":

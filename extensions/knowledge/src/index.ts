@@ -4,12 +4,13 @@ import { getToolPluginMetadata, toolPluginMetadataSymbol } from "openclaw/plugin
 import { contract } from "./contract.js";
 import { createKnowledgeService } from "./service.js";
 import { PluginConfig, STORES_CONFIG_PATH } from "./stores-config.js";
+import { leanToolResults } from "./tool-results.js";
 
 const feature = defineFeaturePlugin({
   contract,
   name: "Knowledge",
   description: "Evidence-backed knowledge, inspectable in OpenClaw.",
-  setup: createKnowledgeService,
+  setup: (api, events) => leanToolResults(createKnowledgeService(api, events)),
 });
 // This host's feature helper has no config option. Compose its shared adapters
 // with the public entry/config and build-metadata SDK, without duplicating them.
