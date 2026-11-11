@@ -60,15 +60,12 @@ function holdInlineCodeSpans(text: string, code: string[]): string {
     let n = 1;
     while (text[i + n] === "`") n++;
     // Find the next backtick run of exactly this length, which closes the span.
-    const re = new RegExp("(?<![`])`{" + n + "}(?!`)");
-    const m = re.exec(text.slice(i + n));
+    const m = new RegExp("(?<![`])`{" + n + "}(?!`)").exec(text.slice(i + n));
     // A backtick run at the start of a line (CommonMark allows up to three
     // spaces of indentation) opens a fenced block, which fence stripping
     // removes whole; inline code may span lines, so only line-start runs are
     // left for the fence pass.
-    let at = i;
-    while (at > 0 && text[at - 1] === " ") at--;
-    const lineStart = at === 0 || text[at - 1] === "\n";
+    const lineStart = /(?:^|\n) *$/.test(text.slice(0, i));
     if (!m || (lineStart && n >= 3)) {
       // Consume the whole unmatched run so its tail backticks cannot reopen as a
       // narrower span and steal delimiters from a later valid code span.
