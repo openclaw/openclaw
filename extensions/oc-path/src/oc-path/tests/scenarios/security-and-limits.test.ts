@@ -23,7 +23,7 @@ it.each<[string[], RegExp?]>([
   [['oc://"C:\\\\Windows\\\\System32"/section'], /Absolute file slot/],
   [['oc://"../foo"/section', 'oc://"foo/../bar"/section'], /Parent-directory/],
   [["oc://X.jsonc/items/[]"]],
-  [["oc://X.json/nested..name"], /Empty dotted/],
+  [["oc://X.json/nested..name", "oc://./section"], /Empty dotted/],
   [["oc://X/[=foo]", "oc://X/[id=]"], /Malformed predicate/],
   [["oc://X/{}"], /Empty union/],
   [["oc://X/{a,,b}"], /Empty alternative/],

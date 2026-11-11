@@ -161,8 +161,8 @@ export function parseOcPath(input: string): OcPath {
       );
     }
     for (const sub of subs) {
-      // Dots are literal in filenames; structural slots still reject empty keys.
-      if (slotIndex === 0 && sub.length === 0) {
+      // Dots are literal in filenames; a bare `.` file and structural slots still reject empty keys.
+      if (slotIndex === 0 && sub.length === 0 && file !== ".") {
         continue;
       }
       validateSubSegment(sub, input);

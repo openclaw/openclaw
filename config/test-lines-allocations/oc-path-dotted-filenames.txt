@@ -1,2 +1,0 @@
-# Exact net growth for dotfile and consecutive-dot filename round trips and structural empty-key rejection.
-3
