@@ -1,0 +1,5 @@
+# Telegram stopped-preview final recovery (#197157): the regression proves the
+# real final text and its send authority are recovered after an ambiguous
+# initial preview failure, and that revoked authority blocks the recovered
+# send before transport I/O. Exact net growth for PR #197157.
+56

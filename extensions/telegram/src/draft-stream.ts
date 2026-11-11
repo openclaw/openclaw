@@ -240,7 +240,9 @@ export function createTelegramDraftStream(params: {
           linkPreviewParams,
           warn: params.warn,
           assertCurrentSend: () => {
-            if (streamState.stopped) {
+            // Stopped blocks further preview sends, not the final delivery
+            // that stop() owes the turn after the preview lane gave up.
+            if (streamState.stopped && !streamState.final) {
               throw new TelegramRequestNotStartedError("Telegram preview stopped");
             }
             assertPlatformSendAuthorized?.();
@@ -518,7 +520,8 @@ export function createTelegramDraftStream(params: {
     onPlatformSendDispatch?: () => Promise<void>,
     assertPlatformSendAuthorized?: () => void,
   ) => {
-    if (streamState.stopped || streamState.final) {
+    if (streamState.final) {
+      // Final delivery owns the lane; late updates keep the pending one.
       return;
     }
     if (typeof update === "string") {
@@ -528,6 +531,14 @@ export function createTelegramDraftStream(params: {
     }
     pendingPlatformSendAuthorization = assertPlatformSendAuthorized;
     requestedUpdates += 1;
+    if (streamState.stopped) {
+      // The preview lane stopped, but the turn may still hand this stream its
+      // explicit final text together with the final writer's current send
+      // authority. Record both without sending: stop() delivers that final
+      // through bounded recovery, and revoked authority blocks it at the
+      // transport instead of being bypassed by a stale preview.
+      return;
+    }
     updateDraft(update);
   };
 
@@ -538,15 +549,25 @@ export function createTelegramDraftStream(params: {
     loop.resetThrottleWindow();
     await loop.waitForInFlight();
     throwTerminalDeliveryError();
-    if (streamState.stopped) {
-      return;
-    }
-    await flush();
-    if (streamState.stopped) {
-      return;
+    if (!streamState.stopped) {
+      await flush();
     }
     const finalText = lastRequestedText.trimEnd();
-    if (finalText && finalText !== lastDeliveredText.trimEnd()) {
+    // A preview lane that stopped before any send was confirmed leaves the
+    // chat with nothing. requestDraftUpdate kept recording the newest text and
+    // the final writer's authority after the stop, so this recovery delivers
+    // the actual final — one fresh send whose only duplicate risk is the
+    // ambiguous attempt that stopped the lane. Revoked authority still blocks
+    // it at the transport. Once a preview message is confirmed, the
+    // dispatcher's accepted-answer and failure-notice paths own the outcome,
+    // so this lane must not edit the visible message behind their back.
+    const owesFinalAfterStop =
+      streamState.stopped && typeof streamMessageId !== "number" && messageSendAttempted;
+    if (
+      finalText &&
+      finalText !== lastDeliveredText.trimEnd() &&
+      (!streamState.stopped || owesFinalAfterStop)
+    ) {
       // Bounded resume attempts for transient edit failures; flood waits are
       // honored inside each attempt by the account limiter.
       for (let attempt = 0; attempt < 2; attempt += 1) {

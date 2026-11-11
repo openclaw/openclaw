@@ -199,6 +199,59 @@ describe("createTelegramDraftStream", () => {
     },
   );
 
+  it("recovers the turn's final text and authority after an ambiguous initial send stops the lane", async () => {
+    const api = createMockDraftApi();
+    // A mid-request socket death is neither a proven pre-connect failure nor a
+    // client rejection, so the first preview send stops the lane outright.
+    api.sendMessage
+      .mockRejectedValueOnce(new Error("socket hang up"))
+      .mockResolvedValueOnce({ message_id: 21 });
+    const stream = createDraftStream(api, { warn: vi.fn() });
+
+    await updateAndFlush(stream, "Checking the result");
+    expect(stream.isStopped()).toBe(true);
+
+    // The final dispatcher hands over the actual final text together with the
+    // final writer's authority; a stopped lane records both without sending.
+    const assertPlatformSendAuthorized = vi.fn();
+    stream.update("The answer is 42", { assertPlatformSendAuthorized });
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+    await stream.stop();
+
+    // Recovery sends the actual final, never the stale preview snapshot, and
+    // carries the final writer's authority into transport.
+    expect(api.sendMessage.mock.calls.map(([, text]) => text)).toEqual([
+      "Checking the result",
+      "The answer is 42",
+    ]);
+    expect(assertPlatformSendAuthorized).toHaveBeenCalled();
+    expect(stream.lastDeliveredText()).toBe("The answer is 42");
+  });
+
+  it("refuses stopped-lane recovery when the final writer's authority was revoked", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage.mockRejectedValueOnce(new Error("socket hang up"));
+    const warn = vi.fn();
+    const stream = createDraftStream(api, { warn });
+
+    await updateAndFlush(stream, "Checking the result");
+    expect(stream.isStopped()).toBe(true);
+
+    stream.update("The answer is 42", {
+      assertPlatformSendAuthorized: () => {
+        throw new Error("final writer revoked");
+      },
+    });
+    await stream.stop();
+
+    // Revoked authority blocks the recovered send before any transport I/O.
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("telegram stream preview failed: final writer revoked"),
+    );
+  });
+
   it("converts <br> joins to newlines before parse_mode=HTML transport", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, {
@@ -301,12 +354,13 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
-  it("keeps a rotated preview visible when its replacement send fails", async () => {
+  it("keeps a rotated preview visible when its replacement send fails, then recovers the final text", async () => {
     await withFakeTimers(async () => {
       const api = createMockDraftApi();
       api.sendMessage
         .mockResolvedValueOnce({ message_id: 17 })
-        .mockRejectedValueOnce(new Error("replacement rejected"));
+        .mockRejectedValueOnce(new Error("replacement rejected"))
+        .mockResolvedValueOnce({ message_id: 42 });
       const stream = createDraftStream(api, { warn: vi.fn() });
 
       await updateAndFlush(stream, "Answer preview");
@@ -315,11 +369,13 @@ describe("createTelegramDraftStream", () => {
       await stream.stop();
 
       await vi.advanceTimersByTimeAsync(10_000);
-      expect(api.sendMessage).toHaveBeenCalledTimes(2);
-      expect(stream.sendMayHaveLanded()).toBe(true);
-      expect(api.deleteMessage).not.toHaveBeenCalled();
-
-      await stream.clear();
+      // The ambiguous replacement failure stops the lane; stop() still owes
+      // the turn its final text and recovers it with one fresh send.
+      expect(api.sendMessage).toHaveBeenCalledTimes(3);
+      // The recovered replacement is confirmed, resolving the ambiguity.
+      expect(stream.messageId()).toBe(42);
+      expect(stream.sendMayHaveLanded()).toBe(false);
+      // The rotated preview retires only after the recovered replacement lands.
       await vi.advanceTimersByTimeAsync(1_500);
       expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
     });
