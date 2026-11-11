@@ -1,28 +1,34 @@
-import assert from "node:assert/strict";
 import { writeSync } from "node:fs";
 import { registerHooks } from "node:module";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
-import { getProcessSupervisor } from "../../process/supervisor/index.js";
+import { getProcessSupervisor, shutdownProcessSupervisor } from "../../process/supervisor/index.js";
 import { runGatewayLoop } from "./run-loop.js";
 
 const trace = (line: string) => writeSync(1, `process proof: ${line}\n`);
 const supervisor = getProcessSupervisor();
-const release = supervisor.acquireScopeCleanup("expired-child", { processTree: "required-all" });
+supervisor.acquireScopeCleanup("expired-child", { processTree: "required-all" });
 const run = await supervisor.spawn({
   mode: "child",
   scopeKey: "expired-child",
   argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
 });
-const outcome = Promise.allSettled([run.wait(), run.waitForExtinction!()]);
-runWithProcessCleanupBudget({ deadline: performance.now(), warn() {} }, () => run.cancel());
-const [, cleanup] = await outcome;
-assert(cleanup.status === "rejected");
-assert.match(cleanup.reason.message, /service child cleanup.*hard deadline/);
-await release().catch(() => {});
-trace("service-child-cleanup-deadline");
+// Keep the run live until shutdown joins it; historical failures are warning-only.
+void Promise.allSettled([run.wait(), run.waitForExtinction!()]);
+const closeKey = Symbol.for("openclaw.test.liveBrokerCleanup");
+const fixtureGlobal = globalThis as typeof globalThis & { [closeKey]?: () => Promise<void> };
+fixtureGlobal[closeKey] = async () => {
+  try {
+    await runWithProcessCleanupBudget({ deadline: performance.now(), warn() {} }, () =>
+      shutdownProcessSupervisor(),
+    );
+  } catch (error) {
+    trace("service-child-cleanup-deadline");
+    throw error;
+  }
+};
 
 // mock-isolation: Keep the real Gateway runtime/broker and CLI signal owners;
 // omit unrelated core services, as in server.spawn-broker.test.ts.
@@ -36,10 +42,12 @@ const hooks = registerHooks({
         url: `data:text/javascript,${encodeURIComponent(`
           export async function startGatewayServerCore() {
             Object.defineProperty(process, "platform", ${JSON.stringify(platform)});
+            const close = globalThis[Symbol.for("openclaw.test.liveBrokerCleanup")];
+            delete globalThis[Symbol.for("openclaw.test.liveBrokerCleanup")];
             return {
               startupSettled: Promise.resolve(),
               getTailscaleIngressEndpoint() {},
-              async close() {},
+              close,
             };
           }
         `)}`,

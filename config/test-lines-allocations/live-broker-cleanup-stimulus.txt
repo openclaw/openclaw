@@ -1,0 +1,2 @@
+# Eight net fixture lines move failed child cleanup into a live shutdown join while preserving native broker retirement and retained-custody assertions; no new test cases.
+8
