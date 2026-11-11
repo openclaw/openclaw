@@ -128,6 +128,7 @@ function buildPersistedDetailsFallback(
       target: fallback,
       source: src,
       keys: [
+        "contentPolicy",
         "status",
         "sessionId",
         "pid",
@@ -196,6 +197,7 @@ function sanitizeToolResultDetailsForPersistence(details: unknown): unknown {
     target: out,
     source: src,
     keys: [
+      "contentPolicy",
       "status",
       "sessionId",
       "pid",

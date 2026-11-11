@@ -133,3 +133,38 @@ export function sliceToolResultTextTailToBudget(
 ): string {
   return sliceToolResultTextBudget(text, maxChars, options, true);
 }
+
+export function appendBoundedTruncationSuffix(params: {
+  keptText: string;
+  originalTextLength: number;
+  maxChars: number;
+  suffixFactory: (truncatedChars: number) => string;
+  minimumRawWeight?: number;
+}): string {
+  let keptText = params.keptText;
+  const budgetOptions = { minimumRawWeight: params.minimumRawWeight };
+  while (true) {
+    const suffix = params.suffixFactory(Math.max(1, params.originalTextLength - keptText.length));
+    const suffixChars = estimateToolResultTextChars(suffix, budgetOptions);
+    if (suffixChars >= params.maxChars) {
+      const fullOmissionSuffix = params.suffixFactory(Math.max(1, params.originalTextLength));
+      return sliceToolResultTextToBudget(fullOmissionSuffix, params.maxChars, budgetOptions);
+    }
+    const nextKeptText = sliceToolResultTextToBudget(
+      keptText,
+      params.maxChars - suffixChars,
+      budgetOptions,
+    );
+    const finalText = nextKeptText + suffix;
+    if (
+      nextKeptText.length === keptText.length &&
+      estimateToolResultTextChars(finalText, budgetOptions) <= params.maxChars
+    ) {
+      return finalText;
+    }
+    if (nextKeptText.length === 0 && keptText.length === 0) {
+      return sliceToolResultTextToBudget(finalText, params.maxChars, budgetOptions);
+    }
+    keptText = nextKeptText;
+  }
+}

@@ -31,6 +31,7 @@ import {
 } from "./tool-result-projection-key.js";
 import { projectToolResultMessage } from "./tool-result-projection-message.js";
 import {
+  appendBoundedTruncationSuffix,
   estimateToolResultTextChars,
   getToolResultHistoryTextBudget,
   getToolResultTextBudget,
@@ -320,41 +321,6 @@ function resolveEffectiveMinKeepChars(
   return Math.max(0, Math.min(minKeepChars, maxChars - suffixFloor));
 }
 
-function appendBoundedTruncationSuffix(params: {
-  keptText: string;
-  originalTextLength: number;
-  maxChars: number;
-  suffixFactory: (truncatedChars: number) => string;
-  minimumRawWeight?: number;
-}): string {
-  let keptText = params.keptText;
-  const budgetOptions = { minimumRawWeight: params.minimumRawWeight };
-  while (true) {
-    const suffix = params.suffixFactory(Math.max(1, params.originalTextLength - keptText.length));
-    const suffixChars = estimateToolResultTextChars(suffix, budgetOptions);
-    if (suffixChars >= params.maxChars) {
-      const fullOmissionSuffix = params.suffixFactory(Math.max(1, params.originalTextLength));
-      return sliceToolResultTextToBudget(fullOmissionSuffix, params.maxChars, budgetOptions);
-    }
-    const nextKeptText = sliceToolResultTextToBudget(
-      keptText,
-      params.maxChars - suffixChars,
-      budgetOptions,
-    );
-    const finalText = nextKeptText + suffix;
-    if (
-      nextKeptText.length === keptText.length &&
-      estimateToolResultTextChars(finalText, budgetOptions) <= params.maxChars
-    ) {
-      return finalText;
-    }
-    if (nextKeptText.length === 0 && keptText.length === 0) {
-      return sliceToolResultTextToBudget(finalText, params.maxChars, budgetOptions);
-    }
-    keptText = nextKeptText;
-  }
-}
-
 const MIDDLE_OMISSION_MARKER =
   "\n\n⚠️ [... middle content omitted — showing head and tail ...]\n\n";
 
@@ -484,8 +450,33 @@ export function truncateToolResultMessage(
       : 0,
   );
   const totalTextChars = blockTextChars.reduce((sum, chars) => sum + chars, 0);
+  const details = "details" in msg && isRecord(msg.details) ? msg.details : undefined;
+  const deferredResult = isRecord(details?.result) ? details.result : undefined;
+  const deferredDetails = isRecord(deferredResult?.details) ? deferredResult.details : undefined;
+  const requiresWholeContent =
+    details?.contentPolicy === "whole" || deferredDetails?.contentPolicy === "whole";
+  // Promote deferred delivery policy before persistence compacts nested metadata.
+  const preparedMessage =
+    msg.role === "toolResult" && requiresWholeContent && details?.contentPolicy !== "whole"
+      ? { ...msg, details: { ...details, contentPolicy: "whole" } }
+      : msg;
   if (totalTextChars <= maxChars) {
-    return msg;
+    return preparedMessage;
+  }
+  if (requiresWholeContent) {
+    return {
+      ...preparedMessage,
+      content: [
+        {
+          type: "text",
+          text: sliceToolResultTextToBudget(
+            "Skill instructions cannot be partially served: the complete instructions exceed the current tool-result budget. Reduce the skill document before reading it again.",
+            maxChars,
+            budgetOptions,
+          ),
+        },
+      ],
+    };
   }
   const suffixFactory = options.suffix ?? truncationNotice.forMessage(msg);
   const minKeepChars = resolveEffectiveMinKeepChars(maxChars, options, suffixFactory);

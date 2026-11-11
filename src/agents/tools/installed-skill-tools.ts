@@ -88,7 +88,10 @@ export function createInstalledSkillTools(skills: readonly InstalledSkill[]): An
           const instructions = await readInstalledSkill(skills, name, signal, relativePath);
           const result = {
             content: [{ type: "text" as const, text: formatSkillInstructions(instructions) }],
-            details: instructions,
+            details:
+              relativePath === undefined
+                ? { ...instructions, contentPolicy: "whole" }
+                : instructions,
           };
           if (relativePath === undefined) {
             rememberSkillInstructionDelivery(result, instructions.content);
