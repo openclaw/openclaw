@@ -3,7 +3,6 @@ import type { PluginHookAgentContext } from "../../plugins/hook-agent-context.ty
 import type { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
 import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
-import { runAuthorizedPromptBuildForTurn } from "../authorized-prompt-build.js";
 import { buildAgentHookMemoryAudienceFields } from "../harness/hook-context.js";
 import { cliBackendLog } from "./log.js";
 import { resolveCliMcpMemoryAudience } from "./mcp-memory-audience.js";
@@ -103,8 +102,7 @@ export async function runCliAuthorizedPromptBuild(params: {
   }
   const { invalidatedReason } = params;
   try {
-    return await runAuthorizedPromptBuildForTurn(
-      hookRunner,
+    return await hookRunner.runAuthorizedPromptBuild(
       {
         prompt: admitted.prompt,
         messages: await params.messages(),
