@@ -27,12 +27,19 @@ const { registerTelegramWidgetPresenter } = await import("./widget-presenter.js"
 
 type Presenter = Parameters<OpenClawPluginApi["registerWidgetPresenter"]>[0];
 
+let config: Record<string, unknown> = {};
+const widgetsConfig = (widgets?: boolean) => ({
+  channels: {
+    telegram: { enabled: true, botToken: "123:abc", ...(widgets === undefined ? {} : { widgets }) },
+  },
+});
+
 function registerPresenter(): Presenter {
   let presenter: Presenter | undefined;
   const api = {
     runtime: {
       config: {
-        current: () => ({ channels: { telegram: { enabled: true, botToken: "123:abc" } } }),
+        current: () => config,
       },
     },
     registerWidgetPresenter: (registered: Presenter) => {
@@ -51,6 +58,7 @@ const SOURCE = "<p id=n></p><script>TelegramWidget.request('x')</script>";
 
 describe("Telegram widget presenter", () => {
   beforeEach(() => {
+    config = widgetsConfig(true);
     vi.clearAllMocks();
     sendTelegramWidget.mockResolvedValue({ messageId: "77", chatId: "111" });
     lookupTelegramWidgetTap.mockResolvedValue(undefined);
@@ -123,6 +131,14 @@ describe("Telegram widget presenter", () => {
       expect.objectContaining({ state: '{"v":0}', nextState: null }),
     );
     expect(editTelegramWidgetState).toHaveBeenCalledWith(expect.objectContaining({ state: "" }));
+  });
+
+  it("stays off until channels.telegram.widgets is true", () => {
+    config = widgetsConfig();
+    expect(registerPresenter().match(dm)).toBe(false);
+    config = widgetsConfig(false);
+    expect(registerPresenter().match(dm)).toBe(false);
+    config = widgetsConfig(true);
   });
 
   it("matches only private chats on Telegram", () => {

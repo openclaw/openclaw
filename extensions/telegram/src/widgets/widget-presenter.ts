@@ -69,7 +69,8 @@ function resolveTelegramWidgetRoute(
     cfg,
     accountId: context.accountId ?? context.deliveryContext?.accountId,
   });
-  if (!account.enabled || account.tokenStatus !== "available") {
+  // Opt-in: older Telegram clients cannot render Bot API 10.4 widgets.
+  if (!account.enabled || account.tokenStatus !== "available" || account.config.widgets !== true) {
     return undefined;
   }
   const threadId = context.deliveryContext?.threadId;

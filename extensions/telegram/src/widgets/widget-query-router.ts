@@ -2,6 +2,7 @@ import type { Context } from "grammy";
 import type { Message } from "grammy/types";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveTelegramAccount } from "../accounts.js";
 import type { TelegramCallbackMessageRuntime } from "../bot-handlers.callback-router-controls.js";
 import type { TelegramHandlerAuthorization } from "../bot-handlers.inbound-authorization.js";
 import {
@@ -107,6 +108,12 @@ export function createTelegramWidgetQueryRouter({
     if (query.chat.type !== "private") {
       return;
     }
+    // Widgets are opt-in; a tap on a widget sent before they were turned off is dropped.
+    const authorizationCfg = getRuntimeConfig();
+    if (resolveTelegramAccount({ cfg: authorizationCfg, accountId }).config.widgets !== true) {
+      logVerbose("telegram: widget request dropped; widgets are disabled for this account");
+      return;
+    }
     const data = query.data.trim();
     const chatId = query.chat.id;
     const widgetKey = `${chatId}:${query.message_id}`;
@@ -127,7 +134,6 @@ export function createTelegramWidgetQueryRouter({
       ...(sent ? { caption: sent.title } : {}),
     };
     const threadSpec = resolveTelegramMessageThreadSpec(widgetMessage, false);
-    const authorizationCfg = getRuntimeConfig();
     const senderId = String(query.from.id);
     const eventAuthContext = await resolveTelegramEventAuthorizationContext({
       cfg: authorizationCfg,

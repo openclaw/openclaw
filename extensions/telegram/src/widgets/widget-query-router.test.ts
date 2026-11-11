@@ -6,7 +6,10 @@ vi.mock("./widget-store.js", () => ({
   lookupTelegramSentWidget,
   recordTelegramWidgetTap: vi.fn(),
 }));
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({ readRuntimeConfig: () => ({}) }));
+const runtimeConfig = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
+  readRuntimeConfig: () => runtimeConfig.current,
+}));
 vi.mock("../bot-processing-outcome.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../bot-processing-outcome.js")>()),
   isTelegramSpooledReplayUpdate: () => true,
@@ -94,6 +97,7 @@ describe("formatTelegramWidgetRequestText", () => {
 });
 
 describe("widget query router", () => {
+  runtimeConfig.current = { channels: { telegram: { botToken: "123:abc", widgets: true } } };
   const query = {
     id: "q1",
     from: { id: 7, is_bot: false, first_name: "A" },
@@ -118,6 +122,16 @@ describe("widget query router", () => {
     me: { id: 1 },
     getFile: vi.fn(),
   } as never;
+
+  it("drops every tap while widgets are disabled for the account", async () => {
+    runtimeConfig.current = { channels: { telegram: { botToken: "123:abc" } } };
+    lookupTelegramSentWidget.mockClear();
+    const process = vi.fn();
+    await createRouter(process).route(ctx, vi.fn());
+    expect(process).not.toHaveBeenCalled();
+    expect(lookupTelegramSentWidget).not.toHaveBeenCalled();
+    runtimeConfig.current = { channels: { telegram: { botToken: "123:abc", widgets: true } } };
+  });
 
   it("drops a tap from a sender outside the allowlist before any agent turn", async () => {
     const process = vi.fn();
