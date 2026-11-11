@@ -78,6 +78,11 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   checked-in policy. All-group
   qualification requires all nine Linux/Windows/macOS Gateway install/upgrade
   combinations. Preserve first failures, identity, and complete evidence.
+- Selected npm plugins must publish successfully before core npm. ClawHub starts
+  at its existing dispatch point and runs independently thereafter; planning,
+  authorization, dispatch, publication, verification, and recovery never block
+  core, GitHub finalization, main closeout, or the retrospective PR. Record a
+  separate owner, exact run/attempt, status, and next action for ClawHub.
 - Native macOS, Windows, Linux, and Android publication is independent of
   npm/ClawHub, GitHub finalization, and main closeout. Each platform retains
   its own signing, qualification, artifact, and updater requirements; report
@@ -705,8 +710,9 @@ for publication ordering and prepared/direct recovery.
   `openclaw-release-approval-v1-<parent run>-<attempt>` receipt; bot-dispatched
   children verify it (`scripts/release-approval-receipt.mjs verify`) before
   their gates. The ClawHub OIDC child skips its `clawhub-plugin-release` gate
-  on a verified receipt and instead waits for the parent's
-  `openclaw-clawhub-parent-authorization-v2-*` receipt before publishing. npm
+  on a verified receipt and uses its own publication authorization after
+  dispatch. Core-parent completion or failure must not strand already-authorized
+  ClawHub work; keep its live-authority and exact-byte checks in that lane. npm
   children (`Plugin NPM Release`, `openclaw-npm-release.yml`) skip their
   `npm-release` approval job on the verified-receipt route and publish in
   `npm-publish`, with trusted publishers bound to that environment. Immediately
@@ -720,17 +726,17 @@ for publication ordering and prepared/direct recovery.
 - Never approve a `plugin-clawhub-release.yml` child by hand. It is
   receipt-verified on the bot route and needs no approval. The
   `Artifact not found` line for `openclaw-clawhub-recovery-approval-<run>-1`
-  is a non-fatal probe. A late human approval fails at `Revalidate trusted tooling identity`
-  with `parent state completed/failure is not allowed by authorization route`
-  once the parent has died (2026.9.6: runs 35930335388/35930341394). If core
-  npm already published, recover ClawHub through explicit ClawHub recovery
-  ([publication recovery](../release-openclaw-maintainer/references/publication-recovery.md#interrupted-preparation-and-publication));
-  otherwise cancel the children and re-dispatch the parent. Bootstrap children
+  is a non-fatal probe. Historical parent-bound children could fail with
+  `parent state completed/failure is not allowed by authorization route`
+  (2026.9.6: runs 35930335388/35930341394). Recover that ClawHub surface through
+  explicit [publication recovery](../release-openclaw-maintainer/references/publication-recovery.md#interrupted-preparation-and-publication),
+  without holding or redispatching core publication. Bootstrap children
   (`plugin-clawhub-new.yml`) always wait on `clawhub-plugin-bootstrap`. Approve
   them after the secretless pack jobs finish
   ([first package](../release-openclaw-maintainer/references/first-package.md)).
-- A v2 ClawHub child can stage most packages before one failure makes the
-  awaited parent fail, preventing finalization of the staged siblings.
+- A historical awaited v2 ClawHub child can stage most packages before one
+  failure makes its parent fail, preventing finalization of staged siblings.
+  New publication keeps that failure isolated to the ClawHub lane.
   Reconcile the original child's `*-publish-json` artifacts before any
   republish or parent resume. Use
   `pnpm release:clawhub-recovery -- --version <version> --reason '<parent failure>' --clawhub-source <isolated pinned ClawHub checkout> <package-publish.json>...`
@@ -739,22 +745,23 @@ for publication ordering and prepared/direct recovery.
   not distinguish staged from missing, and attempt status needs publisher
   authentication. Parent receipts and live-authority revalidation remain
   required; recovery does not turn a failed parent into successful evidence.
-- Before the first child dispatch the parent sweeps all selected publishers for a failed earlier parent's
-  `waiting`/`queued` children of the same release (ClawHub and core by the
-  `parent=<run>/<attempt>` run title; plugin npm by the release SHA, only
-  while no other publish parent is live): it
-  attempts gate rejection and cancellation, then waits up to 5 minutes per workflow.
+- Before npm child dispatch the parent sweeps selected npm publishers for a
+  failed earlier parent's `waiting`/`queued` children of the same release (core
+  by the `parent=<run>/<attempt>` run title; plugin npm by the release SHA, only
+  while no other publish parent is live). The independent ClawHub lane owns
+  its corresponding sweep. Each owner attempts gate rejection and cancellation,
+  then waits up to 5 minutes per workflow.
   Rejection denied with 403 needs a reviewer; logs and the step summary include
   the reject/cancel commands. Unconfirmed cancellation warns. Core npm has an
   independent publish slot and rechecks its live parent, so it does not block;
-  plugin npm and ClawHub retain target-serialized slots and refuse before any
-  new dispatch if cancellation remains unconfirmed. Legacy unidentified ClawHub
-  children or live publishers also retain the dispatch guard. A parent failure
-  cancels its own waiting npm children and its recorded unfinished ClawHub
-  children; it rejects a recorded child's pending gate first, because a cancel
-  request alone leaves a Plugin ClawHub New child waiting on
-  `clawhub-plugin-bootstrap`. A 403 rejection warns with the reviewer commands.
-  To clean up as a reviewer, list
+  plugin npm retains its target-serialized slot and refuses before a new dispatch
+  if cancellation remains unconfirmed. ClawHub reconciliation, serialized slots,
+  and dispatch guards run only in its independent lane; none holds npm dispatch
+  or core completion. Do not cancel authorized ClawHub work merely because its
+  original core parent failed. A core parent failure cancels its own waiting npm
+  children. A detached ClawHub parent failure rejects its recorded child's pending
+  gate before cancellation; an unconfirmed rejection warns with reviewer commands.
+  To clean up a confirmed stale, no-longer-authorized child as a reviewer, list
   `workflow_dispatch` runs by `github-actions[bot]` created for this release,
   reject their gate, cancel:
 
@@ -982,8 +989,9 @@ run-ID-cached bytes first.
      npm run and qualified bytes, repair the selector, and reconcile the exact
      failed parent's children before resuming the selected publication route.
      Direct finalization normally waits for npm and Docker verification; the
-     prepared button also verifies ClawHub downloads. Do not manually un-draft
-     a release to bypass those gates. Follow
+     prepared button also retains its required core checks, but neither route
+     waits for ClawHub downloads. Do not manually un-draft a release to bypass
+     required core gates. Follow
      [publication recovery](../release-openclaw-maintainer/references/publication-recovery.md#published-version-failed-parent)
      for direct resume or a new prepared button run.
    - child stuck `waiting`, ClawHub `Artifact not found`, or parent failing

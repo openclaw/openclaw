@@ -120,7 +120,14 @@ attributes are unchanged, OpenClaw clones a prepared template into a separate ge
 imports only the new Git objects, and checks out the source delta before reinstalling
 into its retained dependencies.
 Repeat installation still runs repository lifecycle scripts when manifests and
-lockfiles are unchanged.
+lockfiles are unchanged. Refresh reuses compressed Git objects without searching
+the entire snapshot for new deltas; obsolete source objects are still removed.
+Ready sandbox generations are immutable and reuse their publication-time validation.
+Installation output is still validated after the builder stops, before publication.
+Preparation logs distinguish native snapshot cloning (`templateClone`), installer
+shutdown (`templateRetire`), and publication validation (`templateValidateOutput`).
+The `snapshot` phase measures the content manifest, not the native filesystem clone.
+Nested phase durations are inclusive; do not add them to their parent duration.
 Concurrent requests for that commit share the refresh. Lockfile or attribute changes
 build a fresh template. Refresh never changes the source generation, including while
 another session is cloning it. Each
@@ -504,6 +511,12 @@ clones: Git versions including 2.56 can combine promisor and ordinary packs
 without retaining the promisor marker, then expire the original promisor pack.
 
 On Linux, maintenance also removes up to 256 abandoned temporary pack files (`tmp_pack_*`, `tmp_idx_*`, and other `tmp_*_` files Git leaves when interrupted) per pass once they are older than 24 hours. An isolated native helper must obtain an exclusive Linux file lease, which detects open users across user IDs and blocks new opens through deletion. It rechecks each file's identity, size, and timestamps before unlinking it. A live user, unsupported filesystem lease, or changed file preserves that temporary file. Other platforms retain temporary packs. Installing an update requires no migration or immediate repack; the next ordinary maintenance pass applies these bounds.
+
+An interrupted fetch can leave a temporary pack even after graceful termination.
+Exec cleanup stops the process tree but does not delete unidentified packs from
+an object store that other fetches may still be using. The maintenance policy
+above also covers registered empty-workspace sources; cleanup is deferred,
+not part of the fetch timeout.
 
 Transient fetch failures, including an incomplete object transfer, retry once after one second within the original fetch timeout. Cancellation and expired workspace authority stop recovery; a second failure surfaces the Git error. See [Retry policy](/concepts/retry#managed-git-operations).
 

@@ -707,6 +707,7 @@ export function buildCliRunResult(params: {
         usage: output.usage,
         ...(output.usage ? { lastCallUsage: output.usage } : {}),
         ...(output.diagnosticUsage ? { diagnosticUsage: output.diagnosticUsage } : {}),
+        ...output.nativeCompaction,
         ...(persistedCliSessionId
           ? {
               cliSessionBinding: buildCliSessionBinding(

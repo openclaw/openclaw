@@ -2852,6 +2852,7 @@ function releasePublishOrchestration(job: WorkflowJob): WorkflowStep {
       "Dispatch publish workflows",
       "Start core npm publication",
       "Complete publish workflows",
+      "Complete ClawHub publish workflows",
     ].includes(step.name ?? ""),
   );
   const functions = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
@@ -2881,6 +2882,8 @@ function createReleasePublishFixture(
     full_release_validation_run_attempt: overrides.FULL_RELEASE_VALIDATION_RUN_ATTEMPT ?? "3",
     publish_openclaw_npm: overrides.PUBLISH_OPENCLAW_NPM ?? "true",
     wait_for_clawhub: overrides.WAIT_FOR_CLAWHUB ?? "true",
+    prepared_plugins: overrides.PREPARED_PLUGINS ?? "{}",
+    plugin_sdk_api_acknowledgement: overrides.PLUGIN_SDK_API_ACKNOWLEDGEMENT ?? "",
   };
   const githubRef = overrides.GITHUB_REF ?? "refs/heads/main";
   const outputPath = join(root, "output");
@@ -2943,7 +2946,7 @@ promote_windows_release_assets() { record windows; }
 wait_for_core_npm_visibility() { :; }
 sync_npm_beta_floor() { :; }
 verify_published_release() {
-  record "verify:$clawhub_failed:bootstrap=$plugin_clawhub_bootstrap_completed:workflow=$openclaw_npm_expected_workflow_ref"
+  record "verify:workflow=$openclaw_npm_expected_workflow_ref"
   record "verify-attempt:\${openclaw_npm_run_attempt:-}"
 }
 ${mockEvidence ? "upload_dependency_evidence_release_asset() { record dependency-evidence; }" : ""}
@@ -2963,7 +2966,6 @@ ${functions}
     root,
     events: () => readFileSync(eventsPath, "utf8").trim().split("\n"),
     outputs,
-    record: (event: string) => writeFileSync(eventsPath, `${event}\n`, { flag: "a" }),
     summary: () => readFileSync(join(root, "summary"), "utf8"),
     run: (step: WorkflowStep, env: NodeJS.ProcessEnv = {}) =>
       spawnSync("bash", ["--noprofile", "--norc", "-c", step.run ?? ""], {
@@ -2999,6 +3001,7 @@ ${functions}
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: inputs.full_release_validation_run_attempt,
           PLUGIN_SDK_API_ACKNOWLEDGEMENT: "",
           PUBLISH_OPENCLAW_NPM: inputs.publish_openclaw_npm,
+          CLAWHUB_ONLY: "false",
           WAIT_FOR_CLAWHUB: inputs.wait_for_clawhub,
           PLUGINS: "",
           NPM_TELEGRAM_RUN_ID: "",
@@ -4221,6 +4224,8 @@ function runReleasePublishInputValidation(overrides: Record<string, string>) {
   const githubOutput = resolve(tempDirs.make("release-publish-inputs-"), "github-output");
   const result = runBash(script, {
     env: {
+      CLAWHUB_ONLY: "false",
+      FINALIZE_RELEASE_BEFORE_DOCKER: "false",
       FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "1",
       FULL_RELEASE_VALIDATION_RUN_ID: "222",
       GITHUB_OUTPUT: githubOutput,
@@ -4230,6 +4235,7 @@ function runReleasePublishInputValidation(overrides: Record<string, string>) {
       PLUGINS: "",
       PLUGIN_PUBLISH_SCOPE: "all-publishable",
       PREFLIGHT_RUN_ID: "111",
+      PREPARED_PLUGINS: "",
       PUBLISH_DOCKER_ONLY: "false",
       PUBLISH_OPENCLAW_NPM: "true",
       RELEASE_NPM_DIST_TAG: "beta",
@@ -5210,14 +5216,28 @@ describe("package acceptance workflow", () => {
     const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
     const dispatch = releasePublishOrchestration(publishJob);
 
-    expect(readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8")).toContain(
-      "group: openclaw-release-publish-${{ inputs.npm_dist_tag }}",
-    );
+    for (const clawhubOnly of [false, true]) {
+      const group = workflow.concurrency?.group?.replace(/\$\{\{[^}]+\}\}/gu, (expression) =>
+        String(
+          evaluateWorkflowExpression(expression, {
+            eventName: "workflow_dispatch",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            inputs: {
+              release_profile: clawhubOnly ? "clawhub-only" : "from-validation",
+              npm_dist_tag: "beta",
+              original_clawhub_run_id: "",
+            },
+          }),
+        ),
+      );
+      expect(group).toBe(
+        "openclaw-release-publish-" + (clawhubOnly ? "clawhub" : "core") + "-beta",
+      );
+    }
 
-    expect(input).toEqual({
+    expect(input).toMatchObject({
       default: "",
-      description:
-        "Optional override for the Plugin SDK API acknowledgement sealed by Full Release Validation",
       required: false,
       type: "string",
     });
@@ -6383,7 +6403,6 @@ node() {
 }
 zip() { cat > "$3"; }
 attach_or_verify_release_asset() { record "asset:$(cat "$1")"; }
-write_clawhub_runtime_state() { printf '%s\\n' '{"proofLines":{"normal":"normal","bootstrap":"bootstrap"}}' > "$1"; }
 render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncluded":true}' > "$3"; }
 `,
       },
@@ -6447,6 +6466,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     const proofText = readFileSync(join(fixture.root, "release-verification.md"), "utf8");
     expect(proofText).not.toContain("Stable soak waived by operator:");
     expect(proofText).toContain("npm Telegram beta E2E: not supplied");
+    expect(proofText).toContain("ClawHub registry update: independent publication");
     expect
       .soft(proofText)
       .toContain(
@@ -6638,91 +6658,152 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     }
   });
 
-  it("starts core npm without child approvals before the ClawHub receipt and bootstrap barriers", () => {
+  it("finishes npm plugins before starting core without waiting for ClawHub", () => {
     const fixture = createReleasePublishFixture();
     const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
-    for (const step of job.steps ?? []) {
-      if (step.name === "Authorize exact ClawHub package transactions") {
-        fixture.record("authorize-clawhub");
-      } else if (step.name === "Upload immutable ClawHub parent authorization") {
-        fixture.record("upload-receipt");
-      } else if (
-        step.name === "Start core npm publication" ||
-        step.name === "Complete publish workflows"
-      ) {
-        const result = fixture.run(step);
-        expect(result.status, result.stderr).toBe(0);
-      }
+    for (const stepName of ["Start core npm publication", "Complete publish workflows"]) {
+      const result = fixture.run(workflowStep(job, stepName));
+      expect(result.status, result.stderr).toBe(0);
     }
     const events = fixture.events();
+    const pluginIndex = events.indexOf("finished:plugin-npm-release.yml:0");
     const dispatchIndex = events.findIndex((event) =>
       event.startsWith("dispatch:openclaw-npm-release.yml"),
     );
-    const receiptIndex = events.indexOf("authorize-clawhub");
-    expect(dispatchIndex).toBeGreaterThanOrEqual(0);
-    expect(dispatchIndex).toBeLessThan(receiptIndex);
     const draftIndex = events.indexOf("draft");
-    expect(draftIndex).toBeGreaterThanOrEqual(0);
+    expect(pluginIndex).toBeGreaterThanOrEqual(0);
+    expect(draftIndex).toBeGreaterThan(pluginIndex);
+    expect(dispatchIndex).toBeGreaterThan(draftIndex);
+    expect(events).toContain("wait:plugin-npm-release.yml:terminal:false");
+    expect(events).toContain("wait:openclaw-npm-release.yml:publish_openclaw_npm:false");
+    expect(events).toContain("wait:openclaw-npm-release.yml:terminal:false");
+    expect(events.some((event) => event.startsWith("wait:plugin-clawhub"))).toBe(false);
     expect(events).not.toContain("windows");
     expect(events).not.toContain("android");
-    expect(dispatchIndex).toBeGreaterThan(draftIndex);
-    const startIndex = events.indexOf("wait:openclaw-npm-release.yml:publish_openclaw_npm:false");
-    expect(startIndex).toBeGreaterThan(dispatchIndex);
-    expect(startIndex).toBeLessThan(receiptIndex);
-    expect(events).toContain("wait:plugin-npm-release.yml:terminal:false");
-    expect(events.indexOf("wait:plugin-clawhub-new.yml:terminal:true")).toBeGreaterThan(
-      dispatchIndex,
-    );
     expect(events[dispatchIndex]).toContain("-f release_publish_run_id=44");
     expect(events[dispatchIndex]).toContain("-f release_publish_run_attempt=2");
     expect(events[dispatchIndex]).toContain("-f release_publish_full_ref=refs/heads/main");
     expect(events[dispatchIndex]).toContain("-f full_release_validation_run_attempt=3");
-    expect(events).toContain("verify:0:bootstrap=true:workflow=refs/heads/main");
+    expect(events).toContain("verify:workflow=refs/heads/main");
+  });
+
+  it("keeps core evidence independent of failed ClawHub authorization and publication", () => {
+    const env = {
+      CLAWHUB_AUTHORIZATION_OUTCOME: "failure",
+      CLAWHUB_RECEIPT_OUTCOME: "failure",
+      MOCK_BOOTSTRAP_RESULT: "1",
+      MOCK_CLAWHUB_RESULT: "1",
+    };
+    const fixture = createReleasePublishFixture();
+    const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+    const start = fixture.run(workflowStep(job, "Start core npm publication"));
+    expect(start.status, start.stderr).toBe(0);
+    const completed = fixture.run(workflowStep(job, "Complete publish workflows"), env);
+    expect(completed.status, completed.stderr).toBe(0);
+    const events = fixture.events();
+    expect(events).toContain("wait:openclaw-npm-release.yml:terminal:false");
+    expect(events.some((event) => event.startsWith("wait:plugin-clawhub"))).toBe(false);
+    expect(events.indexOf("verify:workflow=refs/heads/main")).toBeGreaterThan(
+      events.indexOf("finished:openclaw-npm-release.yml:0"),
+    );
+    expect(events).toContain("release-evidence");
+    expect(fixture.summary()).toContain("evidence complete");
   });
 
   it.each([
+    ["success", {}, 0, true],
     [
       "receipt preparation",
       { CLAWHUB_AUTHORIZATION_OUTCOME: "failure", CLAWHUB_RECEIPT_OUTCOME: "skipped" },
-      false,
+      1,
       false,
     ],
-    ["receipt upload", { CLAWHUB_RECEIPT_OUTCOME: "failure" }, false, false],
-    ["bootstrap publication", { MOCK_BOOTSTRAP_RESULT: "1" }, false, true],
-    ["normal ClawHub publication", { MOCK_CLAWHUB_RESULT: "1" }, true, true],
-  ])(
-    "collects core evidence after %s fails",
-    (_failure, env, bootstrapCompleted, approvesClawHub) => {
-      const fixture = createReleasePublishFixture();
+    ["receipt upload", { CLAWHUB_RECEIPT_OUTCOME: "failure" }, 1, false],
+    ["bootstrap publication", { MOCK_BOOTSTRAP_RESULT: "1" }, 1, true],
+    ["normal publication", { MOCK_CLAWHUB_RESULT: "1" }, 1, true],
+  ] as const)(
+    "settles independent ClawHub %s without collecting core",
+    (_name, env, status, approve) => {
+      const fixture = createReleasePublishFixture({
+        CLAWHUB_ONLY: "true",
+        PUBLISH_OPENCLAW_NPM: "false",
+      });
       const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
-      const initialize = job.steps?.find(
-        (step) => step.name === "Initialize postpublish diagnostics",
+      const result = fixture.run(workflowStep(job, "Complete ClawHub publish workflows"), env);
+      expect(result.status, result.stderr).toBe(status);
+      const events = fixture.events();
+      expect(events).toContain("wait:plugin-clawhub-release.yml:terminal:" + approve);
+      expect(events).toContain("wait:plugin-clawhub-new.yml:terminal:" + approve);
+      expect(events.some((event) => event.includes("openclaw-npm-release.yml"))).toBe(false);
+      expect(events.some((event) => event.includes("plugin-npm-release.yml"))).toBe(false);
+      expect(events.some((event) => event.startsWith("verify:"))).toBe(false);
+      expect(events).not.toContain("release-evidence");
+      expect(events).not.toContain("proof");
+    },
+  );
+
+  it.each([false, true])(
+    "records a single detached same-workflow dispatch (uncertain=%s)",
+    (uncertain) => {
+      const prepared = JSON.stringify({
+        npm: { runId: "333", artifact: "npm bytes" },
+        clawhub: { runId: "444", artifact: "ClawHub bytes" },
+      });
+      const acknowledgement = "Reviewed SDK changes\nincluding plugin contracts";
+      const fixture = createReleasePublishFixture(
+        {
+          GITHUB_REF: "refs/tags/release-publish/aaaaaaaaaaaa-42",
+          FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: "",
+          PREPARED_PLUGINS: prepared,
+          PLUGIN_SDK_API_ACKNOWLEDGEMENT: acknowledgement,
+        },
+        {
+          functions:
+            'dispatch_workflow_at_ref() { record detached; printf "%s\\0" "$@" > "$RUNNER_TEMP/detached-args"; ' +
+            (uncertain ? "return 7;" : "echo 505;") +
+            " }",
+        },
       );
-      if (initialize) {
-        const initialized = fixture.run(initialize);
-        expect(initialized.status, initialized.stderr).toBe(0);
+      const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+      const dispatch = workflowStep(job, "Dispatch detached ClawHub publication");
+      expect(dispatch["continue-on-error"]).toBe(true);
+      const result = fixture.run(dispatch);
+      expect(result.status, result.stderr).toBe(uncertain ? 7 : 0);
+      const receipt = readJson(join(fixture.root, "clawhub-detached-dispatch.json"));
+      expect(receipt).toMatchObject({
+        state: uncertain ? "intent" : "dispatched",
+        workflow: "openclaw-release-publish.yml",
+        ref: "release-publish/aaaaaaaaaaaa-42",
+        workflowSha: "d".repeat(40),
+        inputs: {
+          release_profile: "clawhub-only",
+          publish_openclaw_npm: "false",
+          publish_docker_only: "false",
+          finalize_release_before_docker: "false",
+          openclaw_npm_resume_run_id: "",
+          wait_for_clawhub: "true",
+          full_release_validation_run_attempt: "3",
+          prepared_plugins: prepared,
+          plugin_sdk_api_acknowledgement: acknowledgement,
+        },
+      });
+      if (!uncertain) {
+        expect(receipt.runId).toBe("505");
       }
+      expect(fixture.events().filter((event) => event === "detached")).toHaveLength(1);
+      const args = readFileSync(join(fixture.root, "detached-args"), "utf8").split("\0");
+      expect(args.slice(0, 3)).toEqual([
+        "release-publish/aaaaaaaaaaaa-42",
+        "d".repeat(40),
+        "openclaw-release-publish.yml",
+      ]);
+      expect(args).toContain("prepared_plugins=" + prepared);
+      expect(args).toContain("plugin_sdk_api_acknowledgement=" + acknowledgement);
+      expect(fixture.events().some((event) => event.startsWith("wait:"))).toBe(false);
       const start = fixture.run(workflowStep(job, "Start core npm publication"));
       expect(start.status, start.stderr).toBe(0);
-      const completed = fixture.run(workflowStep(job, "Complete publish workflows"), env);
-      expect(completed.status, completed.stderr).toBe(1);
-      const events = fixture.events();
-      expect(events).toContain("wait:openclaw-npm-release.yml:terminal:false");
-      const approval = String(approvesClawHub);
-      expect(events).toContain(`wait:plugin-clawhub-release.yml:terminal:${approval}`);
-      expect(events).toContain(`wait:plugin-clawhub-new.yml:terminal:${approval}`);
-      const verification = `verify:1:bootstrap=${bootstrapCompleted}:workflow=refs/heads/main`;
-      if (approvesClawHub) {
-        expect(events.indexOf(verification)).toBeGreaterThan(
-          events.lastIndexOf("finished:openclaw-npm-release.yml:0"),
-        );
-      } else {
-        expect(events).not.toContain(verification);
-      }
-      expect(events).toContain("release-evidence");
-      expect(events).not.toContain("windows");
-      expect(fixture.summary()).toContain("evidence updated; a required publish child failed");
-      expect(fixture.summary()).not.toContain("left as draft");
+      const completed = fixture.run(workflowStep(job, "Complete publish workflows"));
+      expect(completed.status, completed.stderr).toBe(0);
     },
   );
 
@@ -6748,7 +6829,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
         expect(fixture.outputs().plugin_npm_completed).toBeUndefined();
         expect(fixture.events().some((event) => event.startsWith("dispatch:"))).toBe(false);
         expect(fixture.events().filter((event) => event.startsWith("cancel:"))).toHaveLength(0);
-        expect(start.stderr).toContain("deferred cleanup will preserve ClawHub recovery evidence");
+        expect(start.stderr).toContain("Plugin npm publish failed;");
       } else {
         expect(fixture.outputs()).toMatchObject({
           plugin_npm_completed: "true",
@@ -6807,9 +6888,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     expect(events.some((event) => event.startsWith("wait:plugin-clawhub"))).toBe(false);
     expect(events.some((event) => event.startsWith("dispatch:"))).toBe(!resume);
     expect(events).toContain(`verify-attempt:${resume ? "1" : ""}`);
-    expect(events).toContain(
-      "verify:0:bootstrap=false:workflow=refs/tags/release-publish/aaaaaaaaaaaa-42",
-    );
+    expect(events).toContain("verify:workflow=refs/tags/release-publish/aaaaaaaaaaaa-42");
   });
 
   it.each(["success", "binding", "assets"] as const)(
@@ -6820,15 +6899,10 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
         {
           RELEASE_TAG: `v${version}`,
           PUBLISH_OPENCLAW_NPM: "false",
-          CHILD_PLUGIN_CLAWHUB_RUN_ID: "",
-          CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID: "",
         },
         {
           functions: `
 ${shellFunctionSource(readFileSync("scripts/lib/release-publish-children.sh", "utf8"), "verify_published_release")}
-clawhub_workflow_ref=main
-bootstrap_plugins=""
-write_clawhub_runtime_state() { printf '%s\\n' '{"verifierArgs":["--skip-clawhub"]}' > "$1"; }
 ${outcome === "assets" ? "upload_release_evidence_assets() { echo asset-upload-denied >&2; return 17; }" : ""}
 `,
         },
@@ -6895,6 +6969,7 @@ if (args[0] === "view") {
         verification: "success",
         stages: {
           coreNpm: { state: "success" },
+          clawHub: { state: "skipped" },
           binding: { state: outcome === "binding" ? "failure" : "success" },
           assets: {
             state:
@@ -6955,7 +7030,7 @@ if (args[0] === "view") {
       job.steps!.indexOf(workflowStep(job, "Verify all prepared plugin bytes before publication")),
     );
     const diagnostics = workflowStep(job, "Upload postpublish diagnostics");
-    expect(diagnostics.if).toBe("${{ always() }}");
+    expect(diagnostics.if).toBe("${{ always() && inputs.release_profile != 'clawhub-only' }}");
     expect(diagnostics["continue-on-error"]).toBe(true);
     expect(diagnostics.uses).toBe(UPLOAD_ARTIFACT_V7);
     expect(diagnostics.with).toMatchObject({
@@ -7264,6 +7339,7 @@ wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMEN
     expect(androidJob.if).toContain("needs.qualify_android_native.outputs.qualified == 'true'");
     expect(publishJob.needs).toEqual(["resolve_release_target"]);
     expect(workflowJob(RELEASE_PUBLISH_WORKFLOW, "finalize_github_release").needs).toEqual([
+      "resolve_release_target",
       "publish",
       "publish_docker",
       "approve_github_release",
@@ -7275,12 +7351,7 @@ wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMEN
     expect(publishOrchestration.env?.PARENT_WORKFLOW_SHA).toBe("${{ github.sha }}");
     expect(publishOrchestration.env?.PARENT_WORKFLOW_BRANCH).toBe("${{ github.ref_name }}");
     expect(publishOrchestration.env?.PARENT_WORKFLOW_FULL_REF).toBe("${{ github.ref }}");
-    expect(publishOrchestration.env?.CHILD_WORKFLOW_REF).toBe(
-      "${{ steps.clawhub_plan.outputs.child_workflow_ref }}",
-    );
-    expect(readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8")).toContain(
-      "public verification follows terminal parent success",
-    );
+    expect(publishOrchestration.env?.CHILD_WORKFLOW_REF).toBe("${{ github.ref_name }}");
     expectTextToIncludeAll(publishOrchestration.run, [
       'gh_read api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}"',
       'if [[ "$resolved_workflow_sha" != "$expected_sha" ]]',
@@ -7291,8 +7362,6 @@ wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMEN
       'wait_for_run_background openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
       '-f release_publish_branch="${PARENT_WORKFLOW_BRANCH}"',
       '-f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}"',
-      "plugin-clawhub-release.yml: detached; approval and publish not awaited",
-      "plugin-clawhub-new.yml: detached; approvals and bootstrap not awaited",
     ]);
   });
 
@@ -7746,7 +7815,7 @@ NODE
         });
       }
       writeJson(runPath, {
-        workflowName: "OpenClaw Release Publish",
+        path: ".github/workflows/openclaw-release-publish.yml",
         event: "workflow_dispatch",
         status: "completed",
         conclusion: "failure",
@@ -9084,7 +9153,9 @@ test "$package_manager" = "pnpm@12.1.0"
         RELEASE_NPM_DIST_TAG: "${{ inputs.npm_dist_tag }}",
       });
     }
-    expect(validationStep.env?.EXPECTED_RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
+    expect(validationStep.env?.EXPECTED_RELEASE_PROFILE).toBe(
+      "${{ inputs.release_profile == 'clawhub-only' && 'from-validation' || inputs.release_profile }}",
+    );
     expect(validationStep.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
       "${{ inputs.plugin_sdk_api_acknowledgement }}",
     );
@@ -14968,7 +15039,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       RELEASE_NPM_DIST_TAG: "${{ inputs.npm_dist_tag }}",
       PLUGIN_PUBLISH_SCOPE: "${{ inputs.plugin_publish_scope }}",
       RELEASE_PLUGINS: "${{ inputs.plugins }}",
-      PREPARED_PLUGINS: "${{ inputs.prepared_plugins }}",
+      PREPARED_PLUGINS: "${{ steps.inputs.outputs.prepared_plugins }}",
       WINDOWS_NODE_TAG: "${{ inputs.windows_node_tag }}",
       WINDOWS_NODE_INSTALLER_DIGESTS: "${{ inputs.windows_node_installer_digests }}",
       RUN_JSON_FILE: "${{ runner.temp }}/full-release-validation-run.json",
@@ -15033,13 +15104,14 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(verifyReleaseIndex).toBeGreaterThan(createReleaseIndex);
     expect(appendProofIndex).toBeGreaterThan(verifyReleaseIndex);
     expect(finalizeJob.needs).toEqual([
+      "resolve_release_target",
       "publish",
       "publish_docker",
       "approve_github_release",
       "finalize_github_release_before_docker",
     ]);
     expect(finalizeJob.if).toContain("needs.publish_docker.result == 'success'");
-    expect(finalizeJob.if).toContain("inputs.prepared_plugins == ''");
+    expect(finalizeJob.if).toContain("needs.resolve_release_target.outputs.prepared_plugins == ''");
     expect(finalizeJob.if).toContain("needs.approve_github_release.result == 'success'");
     expect(finalizeRelease.env).toMatchObject({
       RELEASE_TAG: "${{ inputs.tag }}",
@@ -15219,6 +15291,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "${{ inputs.publish_openclaw_npm && inputs.npm_dist_tag != 'extended-stable' }}",
     );
     expect(finalize.needs).toEqual([
+      "resolve_release_target",
       "publish",
       "publish_docker",
       "approve_github_release",
@@ -15709,8 +15782,6 @@ promote_windows_release_assets
     expect(
       workflowStep(releasePublishJob, "Install trusted release tooling dependencies"),
     ).toBeDefined();
-    expect(workflowStep(releasePublishJob, "Resolve ClawHub release plan")).toBeDefined();
-    expect(releasePublishOrchestration(releasePublishJob)).toBeDefined();
 
     const dispatchIndexForReceipt = releaseSteps.findIndex(
       (step) => step.name === "Dispatch publish workflows",
@@ -15722,11 +15793,49 @@ promote_windows_release_assets
       (step) => step.name === "Upload immutable ClawHub parent authorization",
     );
     const completionIndex = releaseSteps.findIndex(
-      (step) => step.name === "Complete publish workflows",
+      (step) => step.name === "Complete ClawHub publish workflows",
     );
     expect(authorizeIndex).toBeGreaterThan(dispatchIndexForReceipt);
     expect(receiptIndex).toBeGreaterThan(authorizeIndex);
     expect(completionIndex).toBeGreaterThan(receiptIndex);
+    expect(releasePublishJob.environment).toBe("npm-release");
+    expect(releasePublishJob.name).toBe("Publish plugins, then OpenClaw");
+    for (const clawhubOnly of [false, true]) {
+      const context = {
+        eventName: "workflow_dispatch" as const,
+        repository: "openclaw/openclaw",
+        runAttempt: 2,
+        inputs: {
+          release_profile: clawhubOnly ? "clawhub-only" : "from-validation",
+          npm_dist_tag: "beta",
+          original_clawhub_run_id: "",
+        },
+        steps: {
+          children: { outputs: { plugin_clawhub_run_id: "202" }, outcome: "success" as const },
+          core_start: { outputs: { plugin_npm_completed: "true" } },
+        },
+      };
+      for (const name of [
+        "Resolve ClawHub release plan",
+        "Authorize exact ClawHub package transactions",
+        "Upload immutable ClawHub parent authorization",
+        "Complete ClawHub publish workflows",
+      ]) {
+        const step = workflowStep(releasePublishJob, name);
+        const expression = step.if?.startsWith("${{") ? step.if : "${{ " + step.if + " }}";
+        expect(evaluateWorkflowExpression(expression, context), name).toBe(clawhubOnly);
+      }
+      for (const name of [
+        "Start core npm publication",
+        "Complete publish workflows",
+        "Dispatch detached ClawHub publication",
+      ]) {
+        expect(
+          evaluateWorkflowExpression(workflowStep(releasePublishJob, name).if, context),
+          name,
+        ).toBe(!clawhubOnly);
+      }
+    }
     expect(
       workflowStep(releasePublishJob, "Upload immutable ClawHub parent authorization").with?.[
         "if-no-files-found"

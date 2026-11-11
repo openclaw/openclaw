@@ -198,7 +198,7 @@ export async function requireGitHubPublicationCommit(
           ...(missing ? ["--refetch", "--stdin"] : []),
           "--",
           githubRepositoryUrl(repository, host),
-          ...(missing ? [] : [sha]),
+          ...(missing ? [] : [`${sha}:refs/openclaw/fetched/${sha}`]),
         ],
         gitEnv,
         missing ? `${missing.join("\n")}\n` : undefined,
@@ -232,6 +232,10 @@ export async function requireGitHubPublicationCommit(
         (directory, objects) =>
           acquire(directory, { ...isolatedEnv, GIT_OBJECT_DIRECTORY: objects }),
       );
+    }
+    if (!missing && registered === "true") {
+      // Temporary transport metadata is discarded; retain successful acquisition in the owner.
+      await command(cwd, ["git", "update-ref", `refs/openclaw/fetched/${sha}`, sha]);
     }
   };
   if (!options.commitPresent) {

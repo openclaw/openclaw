@@ -241,6 +241,9 @@ function* createOpenClawToolsSteps(
     nativeChannelId: options?.nativeChannelId,
     currentChannelId: options?.currentChannelId,
     currentMessagingTarget: options?.currentMessagingTarget,
+    ...(options?.currentMessageId !== undefined
+      ? { currentMessageId: String(options.currentMessageId) }
+      : {}),
     sessionKey: widgetSessionKey,
   };
   const widgetPresenters = resolveWidgetPresenters().map((registration) => registration.presenter);

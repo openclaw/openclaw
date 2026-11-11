@@ -1,0 +1,2 @@
+# Regression for the chat composer reading credential readiness from the session's selected runtime choice (Claude CLI native route on a model whose default route needs an API key). Exact net growth for the claude-cli Control UI banner lane.
+39
