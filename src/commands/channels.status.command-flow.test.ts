@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { channelsStatusCommand } from "./channels/status.js";
 import { createCapturingTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -198,6 +199,8 @@ function fallbackConfig(
 describe("channelsStatusCommand SecretRef fallback flow", () => {
   beforeEach(() => {
     vi.spyOn(performance, "now").mockReturnValue(0);
+    vi.mocked(waitForGatewayDiagnosticReadiness).mockReset();
+    vi.mocked(waitForGatewayDiagnosticReadiness).mockResolvedValue(undefined);
     mocks.callGateway.mockReset();
     mocks.resolveCommandConfigWithSecrets.mockReset();
     mocks.requireValidConfigFileSnapshot.mockReset();
@@ -228,6 +231,45 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
       expect(mocks.requireValidConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
       expect(runtime.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["before-readiness", "readiness", "rpc", "fallback"] as const)(
+    "does not publish status after cancellation at %s",
+    async (stage) => {
+      const scope = new AsyncWorkScope();
+      const reason = new Error("Status interrupted");
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      vi.mocked(waitForGatewayDiagnosticReadiness).mockImplementationOnce(async () => {
+        if (stage === "readiness") {
+          scope.beginClose(reason);
+        }
+        return undefined;
+      });
+      mocks.callGateway.mockImplementationOnce(async () => {
+        if (stage === "rpc") {
+          scope.beginClose(reason);
+        }
+        if (stage === "fallback") {
+          throw createGatewayTransportError();
+        }
+        return { channelAccounts: {} };
+      });
+      fallbackConfig({ channels: {} });
+      mocks.resolveCommandConfigWithSecrets.mockImplementationOnce(async () => {
+        scope.beginClose(reason);
+        return { resolvedConfig: {}, effectiveConfig: {}, diagnostics: [] };
+      });
+      if (stage === "before-readiness") {
+        scope.beginClose(reason);
+      }
+
+      await expect(
+        scope.run(() => channelsStatusCommand({ probe: true, json: true }, runtime)),
+      ).rejects.toBe(reason);
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
+      await scope.drain();
     },
   );
 
