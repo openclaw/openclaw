@@ -110,6 +110,34 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     },
   );
 
+  it("reports buffered progress answer blocks as non-visible until final delivery", async () => {
+    const first = "First ACP answer chunk. ";
+    const second = "Second ACP answer chunk completes the answer.";
+    const finalText = first + second;
+    await produce(
+      async ({ dispatcher }) => {
+        dispatcher.sendBlockReply({ text: first, textMode: "delta" });
+        dispatcher.sendBlockReply({ text: second, textMode: "delta" });
+        const receipt = await dispatcher.waitForIdle();
+
+        expect(texts()).toEqual([]);
+        expect(receipt).toMatchObject({
+          anyVisibleDelivered: false,
+          counts: {
+            block: { delivered: 0, deliveredNotVisible: 2 },
+          },
+        });
+
+        dispatcher.sendFinalReply({ text: finalText });
+        return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
+      },
+      { mode: "progress" },
+    );
+
+    expect(texts()).toEqual([finalText]);
+    expect(sends()).toHaveLength(1);
+  });
+
   it("preserves accumulated ACP answer chunks when a final status notice follows", async () => {
     const first = "First ACP answer chunk with enough text for a preview. ";
     const second = "Second ACP answer chunk completes the answer.";
