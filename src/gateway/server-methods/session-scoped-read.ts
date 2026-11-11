@@ -8,7 +8,10 @@ import {
   sharingIdentity,
 } from "../session-sharing-policy.js";
 import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
-import { prepareSessionSharingRead } from "../session-sharing-target-read.js";
+import {
+  isStartableMainSession,
+  prepareSessionSharingRead,
+} from "../session-sharing-target-read.js";
 import {
   createSessionListEntryFilter,
   SessionMutationAuthorizationChangedError,
@@ -24,6 +27,8 @@ export async function retainSessionScopedRead(
   agentId: string,
   readOptions: {
     requireMaterialized?: boolean;
+    /** Admit the caller's own not-yet-created main conversation despite requireMaterialized. */
+    allowStartableMain?: boolean;
     allowMetadataChanges?: boolean;
     retain?: boolean;
     projection?: SessionEntryReadScope["projection"];
@@ -89,7 +94,13 @@ export async function retainSessionScopedRead(
       (narrow &&
         !operatorScopeSatisfied("operator.sessions.read", options.client?.connect.scopes ?? [])) ||
       sharingIdentity(options.client, currentActor)?.id !== profileId ||
-      (readOptions.requireMaterialized && !read.entry?.sessionId) ||
+      (readOptions.requireMaterialized &&
+        !read.entry?.sessionId &&
+        !(
+          readOptions.allowStartableMain &&
+          !read.entry &&
+          isStartableMainSession({ cfg: currentCfg, client: options.client, sessionKey, agentId })
+        )) ||
       !read.isCurrentAtResponse() ||
       (read.entry && visible?.(read.legacyKey ?? read.canonicalKey, read.entry) === false)
     ) {
