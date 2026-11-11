@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import type { AgentToolResult } from "./runtime/index.js";
 import { fakeTool } from "./test-helpers/fake-tool.js";
 import {
   applyToolSchemaDirectoryCatalog,
@@ -12,7 +13,7 @@ import {
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
-import { jsonResult, type AgentToolResult, type AnyAgentTool } from "./tools/common.js";
+import { jsonResult } from "./tools/common.js";
 
 const option = "includeRarelyNeededOutputSchema";
 const controlNames = [
@@ -89,7 +90,7 @@ it("sends output schemas through tool_describe only on explicit request", async 
     [option]: true,
   });
   expect(JSON.parse(modelText(requested)).outputSchema).toEqual(
-    JSON.parse(JSON.stringify(target.outputSchema)),
+    structuredClone(target.outputSchema),
   );
 
   await expect(
