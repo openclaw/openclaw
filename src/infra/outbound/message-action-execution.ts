@@ -31,6 +31,7 @@ import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citati
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
+import { isOutboundDeliveryError } from "./deliver-types.js";
 import {
   createChannelActionContext,
   type MessageActionInput,
@@ -105,7 +106,20 @@ export function projectMessageActionPartialDelivery(error: unknown) {
       };
 }
 
-export function projectGatewayQueuedDeliveryResult(error: unknown) {
+/**
+ * A queue-owned send the model must not repeat. An attempt that failed after it
+ * started may already have landed, so it reports as unknown rather than failed;
+ * a queued delivery reports its pending reconciliation. Both keep the model from
+ * resending identical content and duplicating the message.
+ */
+export function projectDeliveryOutcomeResult(error: unknown) {
+  if (isOutboundDeliveryError(error) && error.sentBeforeError && error.results.length === 0) {
+    return {
+      status: "delivery_unconfirmed",
+      delivered: false as const,
+      message: `Delivery could not be confirmed: ${formatErrorMessage(error)}. The gateway owns reconciliation and the send may already have been delivered; do not resend it.`,
+    };
+  }
   if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
     return undefined;
   }

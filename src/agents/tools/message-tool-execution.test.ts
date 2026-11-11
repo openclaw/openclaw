@@ -22,6 +22,7 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
+import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import type {
   MessageActionInput,
   MessageActionResult,
@@ -392,6 +393,32 @@ describe("message tool queued gateway delivery", () => {
     await tool.execute("send-again", { action: "send", message: "hello" });
     expect(sentIdempotencyKey(runMessageAction, 0)).toBeDefined();
     expect(sentIdempotencyKey(runMessageAction, 1)).toBe(sentIdempotencyKey(runMessageAction, 0));
+  });
+});
+
+describe("message tool unconfirmed delivery", () => {
+  const matrixFailure = (sentBeforeError: boolean) =>
+    new OutboundDeliveryError("message failed: MatrixError: [429] Server is unavailable", {
+      cause: new Error("MatrixError: [429] Server is unavailable"),
+      sentBeforeError,
+    });
+
+  it("reports an attempt that may have landed as unknown instead of failed", async () => {
+    const error = matrixFailure(true);
+    const { tool } = createFailingMessageTool(error);
+    const result = await tool.execute("send", { action: "send", message: "hello" });
+    expect(result.details).toMatchObject({
+      status: "delivery_unconfirmed",
+      delivered: false,
+      message:
+        "Delivery could not be confirmed: message failed: MatrixError: [429] Server is unavailable. The gateway owns reconciliation and the send may already have been delivered; do not resend it.",
+    });
+  });
+
+  it("keeps a failed attempt that provably did not send as an error", async () => {
+    const error = matrixFailure(false);
+    const { tool } = createFailingMessageTool(error);
+    await expect(tool.execute("send", { action: "send", message: "hello" })).rejects.toBe(error);
   });
 });
 
