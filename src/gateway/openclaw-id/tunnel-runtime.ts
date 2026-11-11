@@ -1,12 +1,24 @@
 // The running half of OpenClaw ID remote access: the private ingress listener
 // and the supervised tunnel child. Imported only after the Labs switch is on.
+import { fork } from "node:child_process";
 import { createHash } from "node:crypto";
 import type { Server as HttpServer } from "node:http";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  isIrohEndpointKey,
+  type IrohEndpointKey,
+} from "../../../packages/openclaw-id-protocol/src/index.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../../infra/runtime-worker-url.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { startOpenClawIdIngressListener, type TunnelApiHandler } from "./ingress-listener.js";
+import { stagedKeyPath } from "./tunnel-child/keyfile.js";
+import {
+  parseTunnelToGatewayMessage,
+  TUNNEL_STAGE_ARG,
+  type TunnelStageMessage,
+} from "./tunnel-ipc.js";
 import { createTunnelSupervisor, type TunnelSupervisorStatus } from "./tunnel-supervisor.js";
 
 // Unix socket paths are limited to ~104 bytes on macOS (108 on Linux).
@@ -41,6 +53,72 @@ function resolveTunnelPaths(stateDir: string): { keyPath: string; socketPath: st
     keyPath: path.join(dir, "endpoint.key"),
     socketPath: path.join(resolvePreferredOpenClawTmpDir(), `openclaw-id-${id}`, "ingress.sock"),
   };
+}
+
+/** The tunnel child's endpoint key file (K_srv) for a state directory. */
+export function tunnelKeyPath(stateDir: string): string {
+  return resolveTunnelPaths(stateDir).keyPath;
+}
+
+const STAGE_TIMEOUT_MS = 30_000;
+
+// Runs one tunnel child in stage mode with `message`; resolves with its answer. A child that
+// cannot start, cannot be reached or answers nothing in time fails the step, never the Gateway.
+async function askStageChild(message: TunnelStageMessage): Promise<string | null> {
+  const entry = resolveRuntimeProcessEntrypointUrl("openclawIdTunnel");
+  const child = fork(fileURLToPath(entry), [TUNNEL_STAGE_ARG], {
+    execArgv: resolveRuntimeWorkerArgv(entry).slice(0, -1),
+    serialization: "advanced",
+    stdio: ["ignore", "ignore", "pipe", "ipc"],
+  });
+  const gone = new Promise<void>((resolve) => {
+    child.once("exit", () => resolve());
+    // A child that never spawned emits only `error`.
+    child.once("error", () => resolve());
+  });
+  const answer = new Promise<string | null | undefined>((resolve) => {
+    child.on("message", (raw) => {
+      const reply = parseTunnelToGatewayMessage(raw);
+      if (reply?.type === "staged") {
+        resolve(reply.endpointKey);
+      }
+    });
+    void gone.then(() => resolve(undefined));
+  });
+  const timer = setTimeout(() => child.kill("SIGKILL"), STAGE_TIMEOUT_MS);
+  try {
+    child.send(message, (error) => {
+      if (error) {
+        child.kill("SIGKILL");
+      }
+    });
+    const endpointKey = await answer;
+    if (endpointKey === undefined) {
+      throw new Error(`the tunnel child could not ${message.type} the next endpoint key`);
+    }
+    return endpointKey;
+  } finally {
+    await gone;
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Has a one-shot tunnel child create the next endpoint key in the staged `.next` file (or
+ * reuse it) and returns its K_srv. The Gateway never reads the key file itself.
+ */
+export async function stageEndpointKey(stateDir: string): Promise<IrohEndpointKey> {
+  const keyPath = stagedKeyPath(tunnelKeyPath(stateDir));
+  const endpointKey = await askStageChild({ type: "stage", keyPath });
+  if (!isIrohEndpointKey(endpointKey)) {
+    throw new Error("the tunnel child staged a malformed endpoint key");
+  }
+  return endpointKey;
+}
+
+/** Deletes the staged endpoint key unless it is `keep`, the K_srv the stored binding names. */
+export async function discardStagedEndpointKey(stateDir: string, keep: string): Promise<void> {
+  await askStageChild({ type: "discard", keyPath: stagedKeyPath(tunnelKeyPath(stateDir)), keep });
 }
 
 /** Starts the ingress listener, then the tunnel child pointed at it. */

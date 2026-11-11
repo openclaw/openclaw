@@ -531,6 +531,7 @@ export async function prepareGatewayLifecycle(params: {
     void closeAuthProfileUsage(params.sdkResourceHost);
     requestEntryLifetime.beginClose();
     runtime.scheduler.fence();
+    runtime.resolvePluginGatewayContext()?.scopeUpgradeCoordinator?.beginClose();
     cronReconciliation.invalidate();
     const preparation = await shutdownRuntime.prepareGatewayClose(
       {

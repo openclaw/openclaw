@@ -1,6 +1,11 @@
-import { expect } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, expect, vi } from "vitest";
 // Real shared-state worker proof: bounded sections, restart recovery and one-transaction rollback.
-import { formatIrohEndpointKey } from "../../../packages/openclaw-id-protocol/src/index.js";
+import {
+  formatIrohEndpointKey,
+  signStatement,
+} from "../../../packages/openclaw-id-protocol/src/index.js";
 import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { stateTest } from "../../plugin-state/plugin-state-fixtures.test-support.js";
@@ -8,11 +13,16 @@ import { createCorePluginStateKeyedStore } from "../../plugin-state/plugin-state
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as stateWriter from "../../state/openclaw-state-worker-store.js";
+import { createOpenClawIdAuthority } from "./authority.js";
 import { readStoredClaw, writeStoredClaw } from "./claw-store.js";
 import { fullClaw } from "./claw-store.test-support.js";
+import { stageGatewayKey } from "./gateway-key.js";
 import { linkedClaw, serviceFor } from "./openclaw-id.test-support.js";
+import { createKeyFile, ed25519PublicKeyHex } from "./tunnel-child/keyfile.js";
+import * as tunnelRuntime from "./tunnel-runtime.js";
 
 const it = stateTest("openclaw-id-claw-persistence");
+afterEach(() => vi.restoreAllMocks());
 
 it("saves an escaped full-capacity claw and restores every section after reopening", async ({
   state,
@@ -116,3 +126,86 @@ it("settles a durably committed removal after its write acknowledgement is lost"
   await claw.authority.recordDiscovery({ mailbox_cursor: "after-removal" });
   expect((await readStoredClaw())?.authority?.members).not.toHaveProperty("member");
 });
+
+for (const end of ["disable", "stop"] as const) {
+  it(`refuses a verified rebind held at real storage admission after ${end}`, async ({ state }) => {
+    state.applyEnv();
+    const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
+    const directory = path.join(claw.stateDir, "openclaw-id");
+    const endpointFile = path.join(directory, "endpoint.key");
+    const endpoint = createKeyFile(endpointFile);
+    const record = (await readStoredClaw())!;
+    // Bootstrap a signed fixture whose two active key files match its binding.
+    await writeStoredClaw({
+      ...record,
+      binding: await signStatement(
+        "ServerBinding",
+        {
+          ...record.binding!.body,
+          k_srv: formatIrohEndpointKey(Buffer.from(ed25519PublicKeyHex(endpoint), "hex")),
+        },
+        claw.root,
+      ),
+    });
+    const authority = createOpenClawIdAuthority();
+    await authority.load();
+    await authority.recordDiscovery({ owner_account_id: "owner", published_binding_seq: 1 });
+    const config = { enabled: true };
+    const { service } = serviceFor(authority, config, claw.stateDir);
+    const before = await readStoredClaw();
+    const activeKeys = () =>
+      ["gateway.key", "endpoint.key"].map((file) => fs.readFileSync(path.join(directory, file)));
+    const beforeKeys = activeKeys();
+    const nextEndpoint = formatIrohEndpointKey(
+      Buffer.from(ed25519PublicKeyHex(createKeyFile(`${endpointFile}.next`)), "hex"),
+    );
+    vi.spyOn(tunnelRuntime, "stageEndpointKey").mockResolvedValue(nextEndpoint);
+    const binding = await signStatement(
+      "ServerBinding",
+      {
+        ...before!.binding!.body,
+        k_gw: stageGatewayKey(claw.stateDir),
+        k_srv: nextEndpoint,
+        binding_seq: 2,
+      },
+      claw.root,
+    );
+    const verify = crypto.subtle.verify.bind(crypto.subtle);
+    let verified = false;
+    vi.spyOn(crypto.subtle, "verify").mockImplementation(async (...args) => {
+      const valid = await verify(...args);
+      verified ||= valid;
+      return valid;
+    });
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const dispatch = sqliteWorkerOwnerProbe.command(stateWriter, async (command, args, scope) => {
+      if (command.type === "pluginState.replace") {
+        entered.resolve();
+        await release.promise;
+      }
+      return scope.execute(command, args);
+    });
+    const pending = service.rebind("commit", "local_operator", { binding });
+    try {
+      await entered.promise;
+      expect(verified).toBe(true);
+      if (end === "stop") {
+        await service.stop();
+      } else {
+        config.enabled = false;
+      }
+      release.resolve();
+      const result = await pending;
+      expect(await readStoredClaw()).toEqual(before);
+      expect(authority.current()).toEqual(before);
+      expect(activeKeys()).toEqual(beforeKeys);
+      expect(result).toMatchObject({ ok: false, code: "rebind_cancelled" });
+    } finally {
+      release.resolve();
+      await pending.catch(() => {});
+      dispatch.mockRestore();
+      await service.stop();
+    }
+  });
+}

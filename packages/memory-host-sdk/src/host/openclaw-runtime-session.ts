@@ -2,10 +2,7 @@
 import path from "node:path";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { cloneEnvWithPlatformSemantics } from "../../../../src/config/config-env-vars.js";
-import {
-  readTranscriptExportSnapshotReadOnlySync,
-  readTranscriptStatsSync as readAccessorTranscriptStatsSync,
-} from "../../../../src/config/sessions/session-accessor.js";
+import { readTranscriptStatsSync as readAccessorTranscriptStatsSync } from "../../../../src/config/sessions/session-accessor.js";
 import type { SessionTranscriptReadScope } from "../../../../src/config/sessions/session-accessor.types.js";
 import { withSessionActorStorage } from "../../../../src/config/sessions/session-actor-storage-acquisition.js";
 import type { SelectedSessionActorStorageBinding } from "../../../../src/config/sessions/session-actor-storage-binding.js";
@@ -16,11 +13,16 @@ import { captureMemoryOwner } from "./session-memory-authority.js";
 export { readAccessorTranscriptStatsSync as readTranscriptStatsSync };
 export { readTranscriptStatsAsync } from "../../../../src/config/sessions/session-transcript-stats.js";
 export { warnPluginSdkDeprecation };
-export { readTranscriptExportSnapshotReadOnlySync };
 export { readRestoredSessionTranscript } from "../../../../src/config/sessions/session-cold-storage-read.js";
 export { readTranscriptStatsBatchReadOnlyAsync } from "../../../../src/config/sessions/session-transcript-stats-batch.js";
 export { SessionTranscriptColdError } from "../../../../src/config/sessions/session-transcript-cold-error.js";
 export { cloneEnvWithPlatformSemantics };
+
+export type SessionEntrySnapshot = NonNullable<
+  ReturnType<
+    typeof import("../../../../src/config/sessions/session-accessor.sqlite-export-read.js").readTranscriptExportSnapshotReadOnlySync
+  >
+>;
 
 /** Capture the memory namespace once; reads never create a missing owner or session. */
 export function captureIncognitoMemoryReader(scope: SessionTranscriptReadScope) {
@@ -56,7 +58,11 @@ export function captureIncognitoMemoryReader(scope: SessionTranscriptReadScope) 
     sessionKey: scope.sessionKey,
   };
   return {
-    memoryEntry(absPath: string, options: import("./session-files.js").BuildSessionEntryOptions) {
+    memoryEntry(
+      absPath: string,
+      options: import("./session-files.js").BuildSessionEntryOptions,
+      sink: import("./session-entry-render.js").SessionEntryRenderSink,
+    ) {
       return read(async (memory) => {
         const { buildSessionEntryFromSnapshot } = await import("./session-files.js");
         const snapshot = await memory.actor.storage.read(
@@ -83,6 +89,7 @@ export function captureIncognitoMemoryReader(scope: SessionTranscriptReadScope) 
           () => {
             memory.actor.snapshot(memory.authority);
           },
+          sink,
         );
       }, null);
     },
@@ -107,16 +114,8 @@ const bindTranscriptInventory = createLazyRuntimeMethodBinder(
   () => import("../../../../src/config/sessions/session-transcript-inventory-runtime.js"),
 );
 
-export const prepareSessionEntriesInWorker = bindTranscriptRead(
-  (runtime) => runtime.prepareSessionEntriesInWorker,
-);
-
-export const prepareSessionEntryInWorker = bindTranscriptRead(
-  (runtime) => runtime.prepareSessionEntryInWorker,
-);
-
-export const readSessionEntrySnapshotInWorker = bindTranscriptRead(
-  (runtime) => runtime.readSessionEntrySnapshotInWorker,
+export const streamSessionEntriesInWorker = bindTranscriptRead(
+  (runtime) => runtime.streamSessionEntriesInWorker,
 );
 
 export const readSessionTranscriptCorpusInWorker = bindTranscriptInventory(
@@ -139,7 +138,6 @@ export {
   resolveStorePath,
 } from "../../../../src/plugin-sdk/session-store-runtime.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
-export { prepareAssistantTranscriptText } from "../../../../src/shared/chat-message-content.js";
 
 /** Extracts the agent id from a canonical `agents/<id>/sessions` directory path. */
 export function extractAgentIdFromSessionsDir(sessionsDir: string): string | null {
