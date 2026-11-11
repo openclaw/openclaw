@@ -75,7 +75,7 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
 .openclaw-id-setup__status summary,
 .openclaw-id-steps__message summary {
   width: max-content;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .openclaw-id-setup__status.is-error {
@@ -183,7 +183,7 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
   align-items: center;
   gap: 10px;
   font-size: var(--control-ui-text-sm);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 #openclaw-recovery-kit > .openclaw-id-setup__status {
