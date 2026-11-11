@@ -1,10 +1,7 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
-import {
-  capCompactionSummary,
-  compactWithoutSummary,
-} from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { commitCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { AssistantMessage, ModelRequestHeaders } from "../../llm/types.js";
@@ -13,8 +10,9 @@ import { resolveCompactionInstructions } from "../agent-hooks/compaction-instruc
 import { SAFETY_MARGIN } from "../compaction-planning.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import {
-  compactAfterSummaryRefusal,
-  isCompactionSummaryRefusal,
+  compactWithoutNewSummary,
+  settleCompactionSummary,
+  withCompactionSummaryRoute,
 } from "../compaction-summary-refusal.js";
 import {
   calculateContextTokens,
@@ -41,6 +39,7 @@ import {
   createStandaloneCompactionRequestBudget,
   estimateCompactedRequestTokens,
   estimateCompactionHistoryTokens,
+  replayTokenBudget,
   resolveCompactionRetentionBudget,
   type CompactionRequestBudget,
   type CompactionRequestConstraints,
@@ -420,9 +419,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
 
     let compactionResult: CompactionResult | undefined;
     let fromExtension = false;
-    if (options.summaryOutputPolicy === "deterministic") {
+    const withoutSummary = options.summaryOutputPolicy === "deterministic";
+    if (withoutSummary) {
       // Summary producers, including session_before_compact hooks, already failed.
-      compactionResult = unwrapCoreResult(compactWithoutSummary(preparation));
+      compactionResult = compactWithoutNewSummary(preparation, this.sessionManager);
     } else if (this.currentExtensionRunner.hasHandlers("session_before_compact")) {
       const extensionResult = await this.currentExtensionRunner.emit({
         type: "session_before_compact",
@@ -494,10 +494,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
           return { status: "aborted" };
         }
       }
-      compactionResult =
-        !result.ok && isCompactionSummaryRefusal(result.error)
-          ? compactAfterSummaryRefusal(preparation)
-          : unwrapCoreResult(result);
+      compactionResult = settleCompactionSummary(result, preparation, this.sessionManager);
     }
     options.onSummaryReady?.();
 
@@ -506,8 +503,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
 
     const completedCompaction = {
-      ...compactionResult,
-      summary: capCompactionSummary(compactionResult.summary, options.settings.maxSummaryChars),
+      ...withCompactionSummaryRoute(compactionResult, this.sessionManager, model, withoutSummary),
+      summary: commitCompactionSummary(compactionResult, preparation, withoutSummary, () =>
+        replayTokenBudget(this, model, options.settings, projectReplacement(compactionResult, "")),
+      ),
     };
 
     // Custom hooks may choose a different retained boundary. Validate their
