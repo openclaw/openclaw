@@ -463,7 +463,7 @@ export function truncateToolResultMessage(
   if (totalTextChars <= maxChars) {
     return preparedMessage;
   }
-  if (requiresWholeContent) {
+  if (requiresWholeContent && preparedMessage.role === "toolResult") {
     return {
       ...preparedMessage,
       content: [

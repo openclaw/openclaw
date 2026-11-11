@@ -63,7 +63,7 @@ for (const deferred of [false, true]) {
         toolCallId: "read-skill",
         toolName: tool.name,
         ...produced,
-        isError: produced.isError === true,
+        isError: false,
         timestamp: 1,
       });
       const context = session.buildSessionContext().messages;

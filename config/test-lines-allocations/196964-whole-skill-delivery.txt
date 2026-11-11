@@ -1,2 +1,2 @@
-97
-# Model-delivery regressions for native/deferred skills, live caps, persisted replay and prompt caps.
+98
+# Model-delivery regressions plus the strict worker-authority consumer expectation.
