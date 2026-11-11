@@ -70,6 +70,22 @@ function compactMcpInstructions(instructions: string | undefined): string | unde
   return `${truncateUtf16Safe(instructions, MAX_SEARCH_MCP_INSTRUCTIONS_CHARS - 3)}...`;
 }
 
+/**
+ * Opt-in for the model-facing tool_describe and Code Mode describe(). Output schemas can be
+ * tens of thousands of characters, and a call's result already shows its shape, so models get
+ * them only on request. Non-model consumers read the full entry from describeToolSearchCatalogEntry.
+ */
+export const TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION = "includeRarelyNeededOutputSchema";
+export const TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION_DESCRIPTION =
+  "Rarely needed; leave unset. Adds the tool's full output schema, which can cost tens of thousands of characters of context. A call's result already shows its shape. Set true only when you must know the result shape before calling, for example to plan code over the result.";
+
+export function omitDescribedOutputSchema<T extends { outputSchema?: unknown }>(
+  described: T,
+): Omit<T, "outputSchema"> {
+  const { outputSchema: _outputSchema, ...rest } = described;
+  return rest;
+}
+
 export function describeToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
   const { mcp, ...descriptor } = compactToolSearchCatalogEntry(entry, {
     fullInstructions: true,
@@ -90,7 +106,7 @@ function instructionsHintForEntry(entry: ToolSearchCatalogEntry): string | undef
   if (instructions.length > MAX_TOOL_SEARCH_DESCRIBE_TEXT_CHARS) {
     return UNRETRIEVABLE_INSTRUCTIONS_HINT;
   }
-  return JSON.stringify(describeToolSearchCatalogEntry(entry), null, 2).length <=
+  return JSON.stringify(omitDescribedOutputSchema(describeToolSearchCatalogEntry(entry))).length <=
     MAX_TOOL_SEARCH_DESCRIBE_TEXT_CHARS
     ? INCOMPLETE_INSTRUCTIONS_HINT
     : UNRETRIEVABLE_INSTRUCTIONS_HINT;
@@ -525,7 +541,11 @@ export function compactToolSearchCatalogEntry(
     name: entry.name,
     label: entry.label,
     description: entry.description,
-    input: entry.source === "openclaw" ? compactToolInputHint(entry.parameters) : "unknown",
+    // tool_describe already returns MCP input schemas whole, so search summarizes them
+    // with the same bounded, structure-only renderer. Client tools stay "unknown":
+    // Code Mode renders their compact entries into its system-prompt index, and
+    // caller-supplied schema text stays out of the prompt.
+    input: entry.source === "client" ? "unknown" : compactToolInputHint(entry.parameters),
     ...(instructionsHint ? { instructionsHint } : {}),
     ...(output ? { output } : {}),
   };

@@ -1,6 +1,6 @@
 import type { Range, Virtualizer } from "@tanstack/virtual-core";
 
-/** Commit row keys with the header change in one setOptions; the scroll margin is relative. */
+/** Anchor structural key changes together with their relative header margin. */
 export function commitTranscriptRows(
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
   keys: readonly string[],
@@ -9,11 +9,15 @@ export function commitTranscriptRows(
 ): void {
   virtualizer.setOptions({
     ...virtualizer.options,
+    anchorTo: "end",
     count: keys.length,
     getItemKey: (index) => keys[index]!,
     rangeExtractor,
     scrollMargin: virtualizer.options.scrollMargin + headerDelta,
   });
+  // Keep the resolved key anchor, but avoid the disabled end-follow calculation
+  // rebuilding all subsequent row positions between individual measurements.
+  virtualizer.setOptions({ ...virtualizer.options, anchorTo: "start" });
 }
 
 /** Compensate a header change when unchanged row keys do not trigger a prepend anchor. */

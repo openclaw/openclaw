@@ -166,6 +166,16 @@ function awaitCallback(state: string): Promise<OpenClawIdCallbackMessage> {
   });
 }
 
+// Window features use CSS pixels, including on scaled and secondary displays.
+// The browser constrains placement to the available work area, including its own chrome.
+function centeredPopupFeatures(size: { width: number; height: number }): string {
+  const width = Math.min(size.width, window.screen.availWidth);
+  const height = Math.min(size.height, window.screen.availHeight);
+  const left = Math.round(window.screenX + (window.outerWidth - width) / 2);
+  const top = Math.round(window.screenY + (window.outerHeight - height) / 2);
+  return `popup,width=${width},height=${height},left=${left},top=${top}`;
+}
+
 /**
  * Signs in with OpenClaw ID in a popup. Call from a click so the popup is not
  * blocked: the window opens first and navigates once the Gateway returns the
@@ -183,7 +193,9 @@ export async function signInWithOpenClawId(params: {
   };
   // Reserved while the click still counts as user activation; the callback answers through
   // localStorage, so the popup needs no opener.
-  const popup = reserveExternalWindowForDeferredNavigation({ popup: { width: 520, height: 720 } });
+  const popup = reserveExternalWindowForDeferredNavigation({
+    popup: centeredPopupFeatures({ width: 520, height: 720 }),
+  });
   try {
     const started = await params.client.request<{ authorizationUrl: string; state: string }>(
       "openclawId.authority",
@@ -223,20 +235,26 @@ export async function signInWithOpenClawId(params: {
   }
 }
 
-/** A one-time Discovery link code for the signed-in account, so Make reachable needs no paste. */
-export async function requestOpenClawIdLinkCode(
-  client: GatewayBrowserClient,
-  signedIn: OpenClawIdSignedIn,
-): Promise<string> {
+/** Captures account custody for work that can outlive a tab's sign-out or replacement. */
+export function guardOpenClawIdAccount(signedIn: OpenClawIdSignedIn): () => void {
   const epoch = getSafeLocalStorage()?.getItem(SIGN_OUT_KEY);
-  const assertCurrent = () => {
+  return () => {
     if (
       openClawIdAccount()?.idToken !== signedIn.idToken ||
+      readStored()?.idToken !== signedIn.idToken ||
       getSafeLocalStorage()?.getItem(SIGN_OUT_KEY) !== epoch
     ) {
       throw new Error("You signed out while linking was in progress. Sign in again.");
     }
   };
+}
+
+/** A one-time Discovery link code for the signed-in account, so Make reachable needs no paste. */
+export async function requestOpenClawIdLinkCode(
+  client: GatewayBrowserClient,
+  signedIn: OpenClawIdSignedIn,
+): Promise<string> {
+  const assertCurrent = guardOpenClawIdAccount(signedIn);
   assertCurrent();
   const result = await client.request<{ code: string }>("openclawId.authority", {
     action: "account_link_code",

@@ -433,6 +433,11 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         // This matrix checks final colors; animation behavior has its own cases.
         host.style.setProperty("--control-ui-transition-fast", "0s");
         const { page, userEvent } = await import("vitest/browser");
+        const hover = async (element: HTMLElement) => {
+          // These fixtures are static: skip stability frames, but prove the pointer hit.
+          await page.elementLocator(element).hover({ force: true });
+          expect(element.matches(":hover"), element.textContent ?? "hover target").toBe(true);
+        };
         const style = document.head.appendChild(document.createElement("style"));
         onTestFinished(() => style.remove());
         style.textContent =
@@ -507,7 +512,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         ]) {
           const canonical = className.includes("oc-menu-item");
           for (const { name: state, menu, plain } of states) {
-            await page.elementLocator(park).hover();
+            await hover(park);
             park.focus();
             const item = host.appendChild(document.createElement("button"));
             item.className = className;
@@ -537,14 +542,14 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
             const label = `${className}: ${state}`;
             expect(getComputedStyle(item).backgroundColor, `${label} resting`).toBe(color(resting));
             expect(getComputedStyle(item).opacity, `${label} opacity`).toBe(opacity);
-            await page.elementLocator(item).hover();
+            await hover(item);
             await expect
               .poll(() => getComputedStyle(item).backgroundColor, {
                 message: `${label} hover`,
               })
               .toBe(color(interactive));
             if (!item.disabled) {
-              await page.elementLocator(park).hover();
+              await hover(park);
               await userEvent.keyboard("{Tab}");
               item.focus();
               expect(item.matches(":focus-visible"), `${label} keyboard focus`).toBe(true);

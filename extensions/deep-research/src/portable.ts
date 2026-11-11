@@ -6,7 +6,12 @@ import type {
   ResearchResult,
   ResearchSource,
 } from "./contract.js";
-import { evidenceProblem, researchPlainText, renderResearchDocument } from "./evidence.js";
+import {
+  evidenceProblem,
+  researchFindingKey,
+  researchPlainText,
+  renderResearchDocument,
+} from "./evidence.js";
 import { parseValue } from "./validation.js";
 import type { ResearchObservation } from "./view-contract.js";
 
@@ -429,21 +434,21 @@ export async function runPortableResearch(
       );
       pendingRoundGaps.push(...extracted.gaps);
       const priorByStatement = new Map(
-        findings.map((finding) => [researchPlainText(finding.statement), finding]),
+        findings.map((finding) => [researchFindingKey(finding.statement), finding]),
       );
       const candidatesByStatement = new Map(priorByStatement);
       for (const finding of extracted.findings) {
         const candidate: ResearchFinding = { ...finding, support: "quote-matched" };
         const problem = evidenceProblem(candidate, sources);
         if (!problem) {
-          const key = researchPlainText(candidate.statement);
+          const key = researchFindingKey(candidate.statement);
           if (candidatesByStatement.has(key) || candidatesByStatement.size < 12) {
             candidatesByStatement.set(key, candidate);
           } else {
             findingGaps.set(key, `Finding capacity reached: ${candidate.statement}`);
           }
         } else {
-          const key = researchPlainText(finding.statement);
+          const key = researchFindingKey(finding.statement);
           if (!priorByStatement.has(key)) {
             findingGaps.set(key, `Unverifiable citation omitted: ${finding.statement}`);
           }
@@ -464,7 +469,7 @@ export async function runPortableResearch(
         const verified: ResearchFinding[] = [];
         for (const [index, candidate] of candidates.entries()) {
           const verdicts = verification.verdicts.filter((verdict) => verdict.index === index);
-          const key = researchPlainText(candidate.statement);
+          const key = researchFindingKey(candidate.statement);
           if (verdicts.length === 1 && verdicts[0]?.verdict === "supported") {
             verified.push({ ...candidate, support: "model-supported" });
             findingGaps.delete(key);

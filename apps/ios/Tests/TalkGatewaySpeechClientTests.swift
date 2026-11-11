@@ -234,7 +234,8 @@ struct TalkGatewaySpeechClientTests {
         #expect(synthesizer.requests[0].modelId == nil)
     }
 
-    @Test func `repeated start preserves an active continuous speech turn`() async {
+    @Test(arguments: [false, true])
+    func `repeated start and microphone mute preserve an active continuous speech turn`(muted: Bool) async {
         let synthesizer = RecordingGatewaySpeechSynthesizer(audio: TalkGatewaySpeechAudio(
             data: Data([1, 2, 3]), provider: "xiaomi", outputFormat: "mp3"))
         let audioPlayer = InterruptibleBufferedAudioPlayer()
@@ -244,7 +245,7 @@ struct TalkGatewaySpeechClientTests {
         manager.bufferedPlayer = audioPlayer
         manager.updateGatewayConnected(true)
         manager.isEnabled = true
-        manager._test_applyLoadedTalkConfig(Self.parseSpeechProvider("xiaomi"))
+        manager._test_applyLoadedTalkConfig(Self.parseSpeechProvider("xiaomi", interruptOnSpeech: true))
         manager._test_setContinuousTranscriptProcessingActive(true)
         defer {
             manager._test_setContinuousTranscriptProcessingActive(false)
@@ -256,11 +257,17 @@ struct TalkGatewaySpeechClientTests {
             await Task.yield()
         }
 
+        await manager.setMicrophoneMuted(muted)
         await manager.start()
 
+        #expect(manager._test_hasRecognitionRequest() == !muted)
+        #expect(manager.canKeepContinuousTalkActiveInBackground)
         #expect(manager.phase == .speaking)
         #expect(manager.isSpeaking)
         #expect(!manager.isListening)
+        #expect(audioPlayer.isPlaying)
+        await manager.setMicrophoneMuted(false)
+        #expect(manager._test_hasRecognitionRequest())
         #expect(audioPlayer.isPlaying)
         manager.stop()
         await playback.value

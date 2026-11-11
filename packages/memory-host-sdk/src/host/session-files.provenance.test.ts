@@ -26,7 +26,7 @@ describe("session transcript provenance", () => {
     "discards earlier archive lines after an authoritative %s event identifies a dreaming run",
     async (role) => {
       const records = [
-        { type: "message", message: { role: "user", content: "Private fragment from dreaming." } },
+        { type: "message", message: { role: "user", content: "Private. ".repeat(30_000) } },
         {
           type: "message",
           message: {
