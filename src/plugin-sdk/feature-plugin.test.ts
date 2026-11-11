@@ -166,9 +166,7 @@ describe("typed feature plugins", () => {
     [new Error("x".repeat(2001)), "x".repeat(2000)],
   ])("returns bounded application errors for thrown value %#", async (error, message) => {
     const action = register(() => ({
-      inspect: async () => {
-        throw error;
-      },
+      inspect: vi.fn<() => Promise<{ value: string }>>().mockRejectedValue(error),
     }));
     await expect(
       action.handler({
