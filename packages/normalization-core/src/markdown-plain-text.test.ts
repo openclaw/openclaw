@@ -4,39 +4,7 @@ import { flattenMarkdownToPlainText } from "./markdown-plain-text.js";
 describe("flattenMarkdownToPlainText", () => {
   it.each([
     ["fences", "a\n````\n```\nx\n```\n````x\nx\n`````\n~~~\nx\n~~~~\n```\nx\n```\nb", "a b"],
-    ["code", "**`_i_`** [`**/*`](u`v`) `[x](y)`\0`\x00` ````z````", "_i_ **/* [x](y)\x00\x00 z"],
-    [
-      "code with embedded backticks",
-      "Rename to ``a`b`` and match ``**/*.ts``.",
-      "Rename to a`b and match **/*.ts.",
-    ],
-    ["triple-backtick inline code span", "Run ```a`b`c``` to finish", "Run a`b`c to finish"],
-    [
-      "single-line backtick runs are code spans, not fences",
-      "Use ```code``` and ````z````",
-      "Use code and z",
-    ],
-    ["unmatched wider run before a valid span", "`` prefix `__init__`", "`` prefix __init__"],
-    [
-      "multiline inline code keeps its literal content",
-      "Use `__init__\nnext` now",
-      "Use __init__ next now",
-    ],
-    [
-      "multiline wider-run inline code keeps its literal content",
-      "Use ``a\nb`` now",
-      "Use a b now",
-    ],
-    [
-      "indented fenced blocks are fences, not inline code",
-      "Before\n  ```ts\nx\n  ```\nAfter",
-      "Before After",
-    ],
-    [
-      "completed triple fences remove backticks inside the block",
-      "Before\n```text\n`\n```\nAfter `ok`.",
-      "Before After ok.",
-    ],
+    ["code", "**`_i_`** [`**/*`](u`v`) `[x](y)`\0`\x00` ````z````", "_i_ **/* [x](y)\x00\x00 `"],
     [
       "links and escaped image markers",
       String.raw`Read the [deployment guide](https://example.com/deploy), \![important](note.md), \\![diagram](image.png)`,

@@ -1,5 +1,5 @@
 function stripCompletedLongOrTildeFences(text: string): string {
-  if (!text.includes("```") && !text.includes("~~~")) {
+  if (!text.includes("````") && !text.includes("~~~")) {
     return text;
   }
   let open: { start: number; marker: string } | undefined;
@@ -23,8 +23,8 @@ function stripCompletedLongOrTildeFences(text: string): string {
       /^[ \t]*$/.test(trailing)
     ) {
       // Track other fences so their literal long markers cannot consume later prose.
-      // Unfinished fences retain the existing flattening behavior.
-      if (open.marker[0] === "~" || open.marker.length >= 3) {
+      // Triple-backtick and unfinished fences retain the existing flattening behavior.
+      if (open.marker[0] === "~" || open.marker.length > 3) {
         output += text.slice(cursor, open.start) + " ";
         cursor = match.index + match[0].length;
       }
@@ -32,62 +32,6 @@ function stripCompletedLongOrTildeFences(text: string): string {
     }
   }
   return output + text.slice(cursor);
-}
-
-/**
- * Replaces inline code spans with a `\0<index>\0` placeholder and records their
- * literal content, so block-marker and emphasis stripping cannot rewrite code.
- * CommonMark pairs a span by backtick runs of equal length, so code that itself
- * contains a backtick — ``a`b`` — is kept whole instead of being truncated by a
- * single-backtick regex. NULs outside code are doubled so they cannot look like
- * a placeholder. This runs after link stripping so backticks inside link
- * destinations remain visible to link parsing.
- */
-function holdInlineCodeSpans(text: string, code: string[]): string {
-  let out = "";
-  let cur = 0;
-  let lineStart = 0;
-  for (let i = 0; i < text.length;) {
-    const ch = text[i];
-    if (ch === "\n") {
-      lineStart = i + 1;
-      i++;
-      continue;
-    }
-    if (ch === "\0") {
-      out += text.slice(cur, i) + "\0\0";
-      cur = i + 1;
-      i++;
-      continue;
-    }
-    if (ch !== "`") {
-      i++;
-      continue;
-    }
-    let n = 1;
-    while (text[i + n] === "`") {
-      n++;
-    }
-    // Find the next backtick run of exactly this length, which closes the span.
-    const m = new RegExp("(?<![`])`{" + n + "}(?!`)").exec(text.slice(i + n));
-    // A 3+ run at a line start (any leading spaces) opens a fenced block, which
-    // fence stripping removes whole; inline code may span lines, so only
-    // line-start runs are left for the fence pass. Track the line start in the
-    // single forward pass so the check never scans backward.
-    const lineStartHit = n >= 3 && /^ *$/.test(text.slice(lineStart, i));
-    if (!m || lineStartHit) {
-      // Consume the whole unmatched run so its tail backticks cannot reopen as a
-      // narrower span and steal delimiters from a later valid code span.
-      i += n;
-      continue;
-    }
-    const close = i + n + m.index;
-    out += text.slice(cur, i) + `\0${code.length}\0`;
-    code.push(text.slice(i + n, close));
-    cur = close + n;
-    i = cur;
-  }
-  return out + text.slice(cur);
 }
 
 /**
@@ -100,15 +44,16 @@ function holdInlineCodeSpans(text: string, code: string[]): string {
  */
 export function flattenMarkdownToPlainText(text: string): string {
   const code: string[] = [];
-  // Real fenced blocks are stripped first so their backticks cannot become spans.
-  const withoutFences = stripCompletedLongOrTildeFences(text);
-  // Link stripping runs on the raw text so backticks inside link destinations stay visible.
-  const withoutLinks = stripInlineLinks(withoutFences);
-  // Code spans (single- or multi-backtick, matched by equal-length runs) become
-  // `\0<index>\0` placeholders so block-marker and emphasis stripping cannot rewrite them.
-  const withoutCode = holdInlineCodeSpans(withoutLinks, code)
+  const withoutFences = stripCompletedLongOrTildeFences(text)
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/```/g, " ");
+  // Code spans become `\0<index>\0` so block and emphasis stripping cannot rewrite them; other NULs are doubled.
+  // A span closes on the next backtick run of its own length, so ``a`b`` keeps its inner backtick.
+  const withoutCode = stripInlineLinks(withoutFences).replace(
+    /\0|(?<!`)(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g,
+    (_match, _run: string | undefined, literal: string | undefined) =>
+      literal === undefined ? "\0\0" : `\0${code.push(literal) - 1}\0`,
+  );
   // Quote markers may nest with horizontal whitespace, but must not consume another line.
   let flattened = withoutCode.replace(
     /^[\t ]{0,3}(?:(?:>[\t ]*)+|(?:#{1,6}|[-+*]|\d+[.)])\s+)/gm,

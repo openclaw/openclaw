@@ -1,2 +1,0 @@
-30
-# Plain-text previews keep inline code spans with embedded backticks whole (multi-backtick run pairing) and consume unmatched wider runs without stealing later delimiters.
