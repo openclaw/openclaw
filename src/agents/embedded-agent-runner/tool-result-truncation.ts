@@ -12,6 +12,7 @@ import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js
 import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { estimateMessageTokenPressure } from "../sessions/context-token-pressure.js";
 import type { SessionManager } from "../sessions/index.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { resolveLiveToolResultMaxChars } from "../tool-result-limits.js";
@@ -31,6 +32,10 @@ import {
 } from "./tool-result-projection-key.js";
 import { projectToolResultMessage } from "./tool-result-projection-message.js";
 import {
+  resolveLiveToolResultAggregateMaxChars,
+  selectToolResultRecoveryBudget,
+} from "./tool-result-recovery-budget.js";
+import {
   estimateToolResultTextChars,
   getToolResultHistoryTextBudget,
   getToolResultTextBudget,
@@ -45,8 +50,7 @@ export {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   resolveLiveToolResultMaxChars,
 } from "../tool-result-limits.js";
-const PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER = 4;
-const AGGREGATE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
+export { resolveLiveToolResultAggregateMaxChars } from "./tool-result-recovery-budget.js";
 const CACHE_TTL_IMAGE_CHARS = 8_000;
 const CACHE_TTL_IMAGE_MARKER = "[image removed during context pruning]";
 const CACHE_TTL_DEFAULT_PLACEHOLDER = "[Old tool result content cleared]";
@@ -429,32 +433,6 @@ export function truncateToolResultText(
     keptText = sliceUtf16Safe(keptText, 0, lastNewline);
   }
   return appendSuffix(keptText);
-}
-
-export function resolveLiveToolResultAggregateMaxChars(params: {
-  contextWindowTokens: number;
-  perResultMaxChars?: number;
-}): number {
-  const perResultMaxChars = Math.max(
-    1,
-    Math.floor(
-      params.perResultMaxChars ??
-        resolveLiveToolResultMaxChars({
-          contextWindowTokens: params.contextWindowTokens,
-        }),
-    ),
-  );
-  const contextWindowTokens = Number.isFinite(params.contextWindowTokens)
-    ? Math.max(1, Math.floor(params.contextWindowTokens))
-    : 1;
-  // Match the 0.5 safeguard/mid-turn pressure invariant so truncation cannot hide pressure.
-  const contextShareChars = Math.floor(
-    contextWindowTokens * 4 * AGGREGATE_TOOL_RESULT_CONTEXT_SHARE,
-  );
-  return Math.max(
-    perResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER,
-    contextShareChars,
-  );
 }
 
 export function truncateToolResultMessage(
@@ -1056,6 +1034,7 @@ export async function truncateOversizedToolResultsInSessionManager(params: {
   contextWindowTokens: number;
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
+  requiredTokenReduction?: number;
   protectTrailingToolResults?: boolean;
   projectionState?: ToolResultPromptProjectionState;
   sessionFile?: string;
@@ -1085,12 +1064,27 @@ export async function truncateOversizedToolResultsInSessionManager(params: {
         }).messages
       : messages;
     const { maxChars, aggregateBudgetChars } = resolveToolResultBudgets(params);
-    const plan = buildToolResultReplacementPlan({
-      ...params,
-      messages: projected,
-      maxChars,
+    const planForBudget = (budget: number) =>
+      buildToolResultReplacementPlan({
+        ...params,
+        messages: projected,
+        maxChars,
+        aggregateBudgetChars: budget,
+      });
+    const tokenReduction = (plan: ReturnType<typeof planForBudget>) =>
+      [...plan.changedIndices].reduce(
+        (total, index) =>
+          total +
+          estimateMessageTokenPressure(projected[index]!) -
+          estimateMessageTokenPressure(plan.messages[index]!),
+        0,
+      );
+    const chosenBudget = selectToolResultRecoveryBudget({
       aggregateBudgetChars,
+      requiredTokenReduction: Math.max(0, params.requiredTokenReduction ?? 0),
+      reductionAtBudget: (budget) => tokenReduction(planForBudget(budget)),
     });
+    const plan = planForBudget(chosenBudget);
     const replacements = branch.flatMap((entry, index) => {
       const message = plan.messages[index]!;
       return entry.message === message || JSON.stringify(entry.message) === JSON.stringify(message)
@@ -1141,7 +1135,7 @@ export async function truncateOversizedToolResultsInSessionManager(params: {
     const message =
       `[tool-result-truncation] Truncated ${rewriteResult.rewrittenEntries} tool result(s) in session ` +
       `(contextWindow=${contextWindowTokens} maxChars=${maxChars} ` +
-      `aggregateBudgetChars=${aggregateBudgetChars} ` +
+      `aggregateBudgetChars=${chosenBudget} ` +
       `oversized=${plan.oversizedReplacementCount} aggregate=${plan.aggregateReplacementCount}) ` +
       `sessionKey=${sessionLogKey}`;
     if (
