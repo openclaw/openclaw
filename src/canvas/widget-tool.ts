@@ -266,8 +266,9 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           })
         : Type.Optional(
             Type.Boolean({
-              description:
-                "Pin only for an explicit dashboard request or multiple non-code visualizations",
+              description: channelGuidance
+                ? "Pin only report data here; widget code for this channel cannot be pinned"
+                : "Pin only for an explicit dashboard request or multiple non-code visualizations",
             }),
           ),
       tab: Type.Optional(
@@ -381,6 +382,12 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       );
       if (capabilities && !shouldPin) {
         throw new WidgetHtmlInputError("capabilities require pin=true");
+      }
+      // Code written for a channel's own widget runtime cannot run in the browser dashboard shell.
+      if (shouldPin && channelGuidance && rawWidgetCode.trim() && !isReport) {
+        throw new WidgetHtmlInputError(
+          "pin=true is unavailable for this channel's widgets: their code targets the channel's own runtime, not the dashboard. Send the widget without pin, or pin a report instead.",
+        );
       }
       const pinSessionKey = shouldPin ? options.agentSessionKey?.trim() : undefined;
       if (shouldPin && !pinSessionKey) {

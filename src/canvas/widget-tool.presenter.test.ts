@@ -119,6 +119,21 @@ describe("show_widget current-channel presentation", () => {
       await expectNoDocument();
     });
 
+    it("refuses to pin channel-native widget code to the browser dashboard", async () => {
+      const present = vi.fn();
+      const tool = createTool({
+        inlineClientAvailable: false,
+        presenters: [channelPresenter(present)],
+        presenterContext: { messageChannel: "telegram" },
+        agentSessionKey: "agent:main:main",
+      });
+      await expect(
+        run(tool, { title: "Vote", pin: true, widget_code: "<p id=o></p>" }),
+      ).rejects.toThrow(/pin=true is unavailable for this channel's widgets/);
+      expect(present).not.toHaveBeenCalled();
+      await expectNoDocument();
+    });
+
     it("passes an explicitly empty state through as a clearing update", async () => {
       const present = vi.fn(async () => ({
         ok: true as const,
