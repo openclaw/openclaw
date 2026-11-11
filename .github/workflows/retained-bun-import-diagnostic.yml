@@ -2,6 +2,8 @@ name: Retained Bun import diagnostic
 
 # Diagnostic branch only; source-only proof, never release qualification.
 on:
+  push:
+    branches: [diagnostic/release-2026.11.4-bun-imports-20261111]
   workflow_dispatch:
 
 permissions:
