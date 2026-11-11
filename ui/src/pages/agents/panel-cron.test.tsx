@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { flush } from "solid-js";
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { CronJob, CronJobsListResult } from "../../api/types.ts";
+import type { CronJob, CronJobsListResult, CronStatus } from "../../api/types.ts";
 import { buildAgentContext } from "../../lib/agents/display.ts";
 import {
   createTestGatewayClient,
@@ -17,6 +17,7 @@ import {
   agentsList,
   agentsRouteData,
   createAgentsPage,
+  emitGatewaySnapshot,
   gateway,
   pageContext,
   snapshot,
@@ -141,26 +142,30 @@ describe("Agent Cron native reads and actions", () => {
     expect(jobRow(container, "Job ready")).toBe(row);
   });
 
-  it("keeps refresh pending until a failed read's sibling finishes", async () => {
-    const status = createDeferred();
+  it("keeps unsettled inventory out of empty state and retries initial errors", async () => {
     const jobs = createDeferred<CronJobsListResult>();
-    const { container } = mount((method, params) => {
-      if (method === "cron.status") {
-        return status.promise;
-      }
-      if (isRecord(params) && params.limit === 50) {
-        return jobs.promise;
-      }
-      return pageOf([]);
-    });
+    const status = createDeferred<CronStatus>();
+    let result = jobs.promise;
+    const { container, context } = mount((method) =>
+      method === "cron.status" ? status.promise : result,
+    );
     await waitForSolid(() => expect(button(container, "Refresh").disabled).toBe(true));
-    status.reject(new Error("Synthetic status unavailable"));
-    await waitForSolid(() => {
-      expect(container.textContent).toContain("Synthetic status unavailable");
-      expect(button(container, "Refresh").disabled).toBe(true);
-    });
-    jobs.resolve(pageOf([]));
+    expect(container.textContent).not.toContain("No automations yet.");
+    expect(container.textContent).not.toContain("0 of");
+    jobs.reject(new Error("Synthetic jobs unavailable"));
+    await waitForSolid(() => expect(container.textContent).toContain("Synthetic jobs unavailable"));
+    expect(button(container, "Refresh").disabled).toBe(true);
+    status.resolve({ enabled: true, triggersEnabled: true, jobs: 0, nextWakeAtMs: null });
     await waitForSolid(() => expect(button(container, "Refresh").disabled).toBe(false));
+    expect(container.textContent).not.toContain("No automations yet.");
+    expect(container.textContent).not.toContain("0 of");
+    result = Promise.resolve(pageOf([]));
+    button(container, "Refresh").click();
+    await waitForSolid(() => expect(container.textContent).toContain("No automations yet."));
+    const client = context.gateway.snapshot.client;
+    emitGatewaySnapshot(context.gateway, snapshot(client, false));
+    emitGatewaySnapshot(context.gateway, snapshot(client));
+    expect(container.textContent).toContain("No automations yet.");
   });
 
   it("retains loaded rows during an admitted page append", async () => {

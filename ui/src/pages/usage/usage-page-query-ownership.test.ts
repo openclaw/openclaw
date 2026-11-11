@@ -15,6 +15,7 @@ import {
   preloadUsage,
   refreshButton,
 } from "./usage-page.test-support.ts";
+import { openUsageDisplay, openUsageFilter } from "./view-render.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
 
@@ -157,22 +158,10 @@ describe("Usage query failure ownership", () => {
         expect(host.style.display).toBe(hidden ? "none" : "contents");
       }
     };
-    const trigger = page.querySelector<HTMLButtonElement>('[id="usage-filter-model:trigger"]')!;
-    const menu = trigger.closest<HTMLElement>(".usage-filter-select")!;
-    menu.addEventListener(
-      "overlay-show",
-      () => {
-        // JSDOM has no scrolling layout; exercise the real Menu selection path.
-        for (const item of menu.querySelectorAll<HTMLElement>('[role^="menuitem"]')) {
-          item.scrollIntoView = vi.fn();
-        }
-      },
-      { once: true },
-    );
-    trigger.click();
+    const { surface: menu } = openUsageFilter(page, "Model");
     await page.updateComplete;
-    const options = [...menu.querySelectorAll<HTMLButtonElement>(".usage-filter-option")];
-    expect(options.map((option) => option.textContent?.trim())).toEqual([
+    const options = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]')];
+    expect(options.map((option) => option.getAttribute("aria-label"))).toEqual([
       "synthetic-alpha",
       "synthetic-beta",
     ]);
@@ -197,8 +186,8 @@ describe("Usage query failure ownership", () => {
     expect(heatmapHost.style.display).toBe("none");
     expectAnalyticsHidden(true);
     expect(alphaRow.isConnected).toBe(true);
-    expect(menu.querySelectorAll(".usage-filter-option")[0]).toBe(options[0]);
-    expect(menu.querySelectorAll(".usage-filter-option")[1]).toBe(options[1]);
+    expect(menu.querySelectorAll('[role="menuitemcheckbox"]')[0]).toBe(options[0]);
+    expect(menu.querySelectorAll('[role="menuitemcheckbox"]')[1]).toBe(options[1]);
     expect(options[0]!.getAttribute("aria-checked")).toBe("true");
 
     reply.resolve(original);
@@ -234,8 +223,8 @@ describe("Usage query failure ownership", () => {
     expect(trend.hidden).toBe(true);
     expect(heatmapHost.hidden).toBe(true);
     expectAnalyticsHidden(true);
-    expect(menu.querySelectorAll(".usage-filter-option")[0]).toBe(options[0]);
-    expect(menu.querySelectorAll(".usage-filter-option")[1]).toBe(options[1]);
+    expect(menu.querySelectorAll('[role="menuitemcheckbox"]')[0]).toBe(options[0]);
+    expect(menu.querySelectorAll('[role="menuitemcheckbox"]')[1]).toBe(options[1]);
   });
 
   it("does not mount hidden charts for an incomplete zero cache", async () => {
@@ -364,20 +353,21 @@ describe("Usage query failure ownership", () => {
             ]!;
           input.value = change === "start date" ? "2026-07-01" : "2026-08-08";
           input.dispatchEvent(new Event("change", { bubbles: true }));
-        } else if (change === "scope") {
-          [...page.querySelectorAll<HTMLButtonElement>("button")]
-            .find((button) => button.textContent?.trim() === "Current instance")!
+        } else if (change === "scope" || change === "time zone") {
+          const { surface } = openUsageDisplay(page, change === "scope" ? "Sessions" : "Time zone");
+          surface
+            .querySelector<HTMLButtonElement>(
+              `[role="menuitemradio"][aria-label="${change === "scope" ? "Current instance" : "UTC"}"]`,
+            )!
             .click();
-        } else if (change === "time zone") {
-          const select = page.querySelector<HTMLSelectElement>("select.usage-select")!;
-          select.value = "utc";
-          select.dispatchEvent(new Event("change", { bubbles: true }));
         } else if (change === "agent") {
           selection.setScope("writer");
         } else {
-          const select = page.querySelector<HTMLSelectElement>(".usage-creator-filter")!;
-          select.value = "profile:opaque-alex";
-          select.dispatchEvent(new Event("change", { bubbles: true }));
+          openUsageFilter(page, "Started by");
+          await page.updateComplete;
+          page
+            .querySelector<HTMLButtonElement>('[role="menuitemradio"][aria-label="Alex Morgan"]')!
+            .click();
         }
         await page.updateComplete;
         expect(page.usageSelectedSessions).toEqual([]);
@@ -439,12 +429,17 @@ describe("Usage query failure ownership", () => {
         expect(page.textContent).not.toContain("Old query row");
         expect(refreshButton(page).disabled).toBe(false);
         if (change === "creator") {
-          const select = page.querySelector<HTMLSelectElement>(".usage-creator-filter")!;
-          expect(select.value).toBe("profile:opaque-alex");
-          expect(select.textContent).toContain("Alex Morgan");
+          const { surface } = openUsageFilter(page, "Started by");
+          expect(page.querySelector(".usage-filter-chip__open")?.textContent).toContain(
+            "Alex Morgan",
+          );
+          await page.updateComplete;
+          const selected = surface.querySelector<HTMLButtonElement>(
+            '[role="menuitemradio"][aria-label="Alex Morgan"]',
+          )!;
+          expect(selected.getAttribute("aria-checked")).toBe("true");
           phase = "initial";
-          select.value = "";
-          select.dispatchEvent(new Event("change", { bubbles: true }));
+          selected.click();
           await vi.advanceTimersByTimeAsync(0);
           await page.updateComplete;
           expect(

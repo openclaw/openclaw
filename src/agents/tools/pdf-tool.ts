@@ -66,14 +66,13 @@ import {
   prepareToolAuthProfileStore,
 } from "./model-config.helpers.js";
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
+import { buildPdfExtractionContext, parsePageRange, resolvePdfInputs } from "./pdf-tool.helpers.js";
 import {
-  buildPdfExtractionContext,
   coercePdfModelConfig,
-  parsePageRange,
-  resolvePdfInputs,
+  type PdfToolActiveModel,
+  resolvePdfModelConfigForTool,
   resolvePdfToolMaxTokens,
-} from "./pdf-tool.helpers.js";
-import { type PdfToolActiveModel, resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
+} from "./pdf-tool.model-config.js";
 
 const coercePdfAssistantText = createMediaAssistantTextCoercer("PDF");
 
@@ -553,6 +552,7 @@ export function createPdfTool(options?: {
                   : undefined;
             if (analyzePdf) {
               const text = await analyzePdf({
+                model,
                 apiKey,
                 modelId,
                 prompt: promptRaw,

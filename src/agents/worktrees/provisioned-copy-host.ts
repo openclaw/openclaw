@@ -8,6 +8,7 @@ import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   recordWorktreePreparationFailure,
+  setWorktreePreparationCopyDetails,
   startWorktreePreparationPhase,
 } from "./preparation-timing.js";
 
@@ -25,6 +26,7 @@ export async function copyProvisionedPathsInWorker(
   const assertCurrent = () => {
     options.signal?.throwIfAborted();
     options.assertCurrent?.();
+    options.signal?.throwIfAborted();
   };
   assertCurrent();
   const runtime = resolveGlobalSingleton<Runtime>(
@@ -87,6 +89,9 @@ export async function copyProvisionedPathsInWorker(
         },
       },
     );
+    if ("copyDetails" in reply && reply.copyDetails) {
+      setWorktreePreparationCopyDetails(reply.copyDetails);
+    }
     if (failure) {
       throw failure.error;
     }

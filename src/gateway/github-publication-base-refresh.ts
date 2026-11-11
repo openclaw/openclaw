@@ -284,7 +284,7 @@ export async function integrateManagedWorkspaceSource(
                 GIT_CONFIG_SYSTEM: gitNullConfigPath(),
               },
               `The selected repository base contents could not be fetched; retry ${action}.`,
-              { contents: true, commitPresent },
+              { contents: true, commitPresent, baseBranch: target.baseBranch },
             );
           await prepareContents(baseCommit, continuingIntegration);
           if (initialImport && !recoveredImport) {
@@ -326,6 +326,7 @@ export async function integrateManagedWorkspaceSource(
                   GIT_CONFIG_SYSTEM: gitNullConfigPath(),
                 },
                 `The selected PR base ancestry could not be fetched; retry ${action}.`,
+                { baseBranch: target.baseBranch },
               );
               const fromBase = await probe([
                 "merge-base",
@@ -364,6 +365,7 @@ export async function integrateManagedWorkspaceSource(
                     GIT_CONFIG_SYSTEM: gitNullConfigPath(),
                   },
                   `The current repository base ancestry could not be fetched; retry ${action}.`,
+                  { baseBranch: source.projectBase.branch },
                 );
                 const fromPublishedBase = await probe([
                   "merge-base",
@@ -683,7 +685,7 @@ export async function integrateManagedWorkspaceSource(
         GIT_CONFIG_SYSTEM: gitNullConfigPath(),
       },
       reviewPreparationError,
-      { contents: true },
+      { contents: true, baseBranch: target.baseBranch },
     );
     // Importing an older PR head does not merge the current base tip into its files.
     // Review its changes from their common ancestor, not as deletions of newer base work.

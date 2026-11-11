@@ -33,7 +33,10 @@ import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
 import { errorShapeFromError } from "../../error-shape.js";
 import { createExpectedProfileBinding } from "../../expected-profile.js";
 import { hasCurrentRemoteControlUiIngress } from "../../ingress-attribution.js";
-import { isOpenClawIdTunnelPrincipalCurrent } from "../../openclaw-id/tunnel-principal.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  recordOpenClawIdTunnelActivity,
+} from "../../openclaw-id/tunnel-principal.js";
 import {
   GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
   hasCurrentGatewayOperatorAccess,
@@ -151,6 +154,9 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     };
     if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
       return;
+    }
+    if (sendResponse === send && client.internal?.openclawIdPrincipal) {
+      recordOpenClawIdTunnelActivity(client.internal.openclawIdPrincipal);
     }
     const diagnostics = createGatewayRpcDiagnostics(req.method, getMethodRegistry, extraHandlers, {
       clientKind: client.connect.client.id,

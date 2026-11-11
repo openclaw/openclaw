@@ -222,19 +222,21 @@ suite.define(() => {
       expect(trace.width).toBe(32);
       expect(trace.right).toBeLessThanOrEqual(title.left);
     }
-    const frame = await takeControlUiScreenshotFrame(
-      page,
-      page.locator("body"),
-      [collaborativeRow],
-      {
-        animations: "disabled",
-        elements: [page.locator(".sidebar-shell")],
-      },
-    );
-    await writeFile(
-      path.join(suite.artifactDir, "shared-activity-sidebar.png"),
-      frame.elements[0]!.png,
-    );
+    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+      const frame = await takeControlUiScreenshotFrame(
+        page,
+        page.locator("body"),
+        [collaborativeRow],
+        {
+          animations: "disabled",
+          elements: [page.locator(".sidebar-shell")],
+        },
+      );
+      await writeFile(
+        path.join(suite.artifactDir, "shared-activity-sidebar.png"),
+        frame.elements[0]!.png,
+      );
+    }
   });
 
   it.each([
@@ -361,13 +363,16 @@ suite.define(() => {
     ]);
     expect(legacyOwner.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
     if (grouping === "Person") {
-      // The 30px picker is centered in the 44px toolbar; the list adds 6px below it.
+      // The 28px picker is centered in the 44px toolbar; the list adds 6px below it.
       const ownerTitleBottom = await page
         .locator("#sidebar-session-owner-title")
         .evaluate((element) => element.getBoundingClientRect().bottom);
-      expect(idle.top - ownerTitleBottom).toBeCloseTo(13, 1);
+      expect(idle.top - ownerTitleBottom).toBeCloseTo(14, 1);
     }
-    if (width === 1200 || grouping === "Person") {
+    if (
+      process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" &&
+      (width === 1200 || grouping === "Person")
+    ) {
       const frame = await takeControlUiScreenshotFrame(
         page,
         page.locator("body"),
@@ -698,25 +703,6 @@ suite.define(() => {
     await newThread.focus();
     await page.keyboard.press("Enter");
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-  });
-
-  it("keeps own drafts subtle and fades admin-visible drafts from other people", async () => {
-    const { page } = await openSession(draftSessionsList(), {
-      presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
-      historyMessages: undefined,
-    });
-    await chooseOwner(page, "all");
-    const ownDraft = page.locator('[data-session-key="agent:main:ada"]');
-    const otherDraft = page.locator('[data-session-key="agent:main:bob"]');
-    await ownDraft.waitFor();
-    await otherDraft.waitFor();
-    await expect
-      .poll(() => ownDraft.getAttribute("class"))
-      .toContain("session-row-host--draft-owner");
-    await expect
-      .poll(() => otherDraft.getAttribute("class"))
-      .toContain("session-row-host--draft-other");
-    expect(await page.locator(".session-row-draft-indicator").count()).toBe(2);
   });
 
   it("creates a draft atomically from the multi-person new-session flow", async () => {

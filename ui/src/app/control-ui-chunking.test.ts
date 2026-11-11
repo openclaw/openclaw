@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { build } from "vite";
+import { build, type Rolldown } from "vite";
 import { describe, expect, it } from "vitest";
 import {
   controlUiBootManifestKey,
@@ -26,7 +26,7 @@ function importClosure(importsFor: (file: string) => readonly string[]) {
 function buildFixture(
   entry: string,
   sources: Map<string, string>,
-  codeSplitting = controlUiCodeSplitting,
+  codeSplitting: Rolldown.CodeSplittingOptions = controlUiCodeSplitting,
 ) {
   return build({
     configFile: false,
@@ -66,6 +66,8 @@ describe("Control UI build chunking", () => {
     const hints = modulePath("../i18n/lib/config-hint-translation.ts");
     const items = modulePath("../components/config-form.array-items.ts");
     const controls = modulePath("../components/solid/settings-ui.tsx");
+    const toggle = modulePath("../components/solid/switch.tsx");
+    const checked = modulePath("../lib/reactive/live-checked.ts");
     const header = modulePath("../pages/config/settings-section-header.tsx");
     const copy = modulePath("../i18n/locales/en-settings.ts");
     const entry = "\0settings-helper-fixture";
@@ -107,7 +109,15 @@ describe("Control UI build chunking", () => {
           header,
           `import { control } from ${JSON.stringify(controls)}; export const header = control + 'header';`,
         ],
-        [controls, "export const control = 'control';"],
+        [
+          controls,
+          `import { toggle } from ${JSON.stringify(toggle)}; export const control = toggle('control');`,
+        ],
+        [
+          toggle,
+          `import { checked } from ${JSON.stringify(checked)}; export const toggle = (value) => checked(value);`,
+        ],
+        [checked, "export const checked = (value) => value;"],
         [
           lightConsumer,
           `import { value } from ${JSON.stringify(utils)}; export const credential = value;`,
@@ -133,7 +143,7 @@ describe("Control UI build chunking", () => {
     for (const [name, chunk, modules] of [
       ["config-form-analysis-runtime", analysisChunk, [analyze, shared, sensitive]],
       ["config-form-utils-runtime", utilsChunk, [utils, hints, items]],
-      ["settings-controls-runtime", controlsChunk, [controls, header]],
+      ["settings-controls-runtime", controlsChunk, [controls, header, toggle, checked]],
     ] as const) {
       expect(chunk.fileName).toContain(name);
       expect(modules.every((id) => id in chunk.modules)).toBe(true);
@@ -164,6 +174,55 @@ describe("Control UI build chunking", () => {
       chunkFor(copy),
     ]) {
       expect(lightImports.has(chunk.fileName)).toBe(false);
+    }
+  });
+
+  it("groups catalog cards without eagerly loading the skill reader or Markdown", async () => {
+    const discovery = modulePath("../pages/skills/discovery-view.tsx");
+    const reader = modulePath("../pages/skills/skill-reader-dialog.tsx");
+    const grid = modulePath("../pages/plugins/catalog-grid.tsx");
+    const card = modulePath("../pages/plugins/plugin-card.tsx");
+    const markdown = modulePath("../../node_modules/markdown-it/dist/markdown-it.mjs");
+    const entry = "\0catalog-reader-fixture";
+    const result = await buildFixture(
+      entry,
+      new Map([
+        [entry, `export const open = () => import(${JSON.stringify(discovery)});`],
+        [
+          discovery,
+          `import { grid } from ${JSON.stringify(grid)}; import { card } from ${JSON.stringify(card)}; export const render = () => grid + card; export const read = () => import(${JSON.stringify(reader)});`,
+        ],
+        [grid, "export const grid = 'catalog grid';"],
+        [card, "export const card = 'catalog card';"],
+        [
+          reader,
+          `import { card } from ${JSON.stringify(card)}; import { markdown } from ${JSON.stringify(markdown)}; export const read = () => card + markdown;`,
+        ],
+        [markdown, "export const markdown = 'reader Markdown';"],
+      ]),
+    );
+    if (Array.isArray(result) || !("output" in result)) {
+      throw new Error("Expected one in-memory build");
+    }
+    const chunks = result.output.filter((asset) => asset.type === "chunk");
+    const chunkFor = (id: string) => chunks.find((chunk) => id in chunk.modules)!;
+    const reachable = importClosure(
+      (file) => chunks.find((chunk) => chunk.fileName === file)!.imports,
+    );
+    const catalogChunk = chunkFor(grid);
+    expect(catalogChunk.fileName).toContain("plugin-catalog-runtime");
+    expect(chunkFor(card)).toBe(catalogChunk);
+    const discoveryChunk = chunkFor(discovery);
+    const readerChunk = chunkFor(reader);
+    expect(discoveryChunk.dynamicImports).toContain(readerChunk.fileName);
+    expect(reachable(discoveryChunk.fileName).has(catalogChunk.fileName)).toBe(true);
+    for (const chunk of [readerChunk, chunkFor(markdown)]) {
+      expect(reachable(discoveryChunk.fileName).has(chunk.fileName)).toBe(false);
+      expect(reachable(readerChunk.fileName).has(chunk.fileName)).toBe(true);
+    }
+    const startup = reachable(chunks.find((chunk) => chunk.isEntry)!.fileName);
+    for (const chunk of [catalogChunk, readerChunk, chunkFor(markdown)]) {
+      expect(startup.has(chunk.fileName)).toBe(false);
     }
   });
 
@@ -407,7 +466,7 @@ describe("Control UI build chunking", () => {
     const settingsUi = modulePath("../components/solid/settings-ui.tsx");
     const settingsSelect = modulePath("../components/solid/settings-select.tsx");
     const routeSubtitles = modulePath("../i18n/locales/en-route-subtitles.ts");
-    const talk = modulePath("../pages/talk/talk-page.tsx");
+    const talk = modulePath("../pages/config/talk-page.tsx");
     const channels = modulePath("../pages/channels/channels-page.tsx");
     const checkbox = modulePath("../components/solid/checkbox.tsx");
     const terminal = modulePath("../pages/terminal/terminal-page.tsx");
@@ -590,9 +649,15 @@ describe("Control UI build chunking", () => {
       [optionalStyle, ".optional-fixture { color: orange; }"],
       [inlineStyle, ".optional-fixture { color: orange; }"],
     ]);
-    const sharedHelpers = ["../components/solid/markdown-html.tsx", "../lib/text-diff.ts"].map(
-      modulePath,
-    );
+    const sharedHelpers = [
+      "../components/solid/markdown-html.tsx",
+      "../lib/text-diff.ts",
+      "../pages/chat/components/chat-message-media.ts",
+      "../pages/chat/components/chat-message-deferred.tsx",
+      "../pages/chat/components/widget-preview-layout.ts",
+      "../lib/chat/youtube-video.ts",
+      "../lib/gateway-client-kind.ts",
+    ].map(modulePath);
     const helperPage = "\0helper-only-route";
     for (const [page, helpers, prefix, name, value] of [
       [helperPage, sharedHelpers, "helper", "helpers", "shared"],
@@ -615,6 +680,29 @@ describe("Control UI build chunking", () => {
     sources.set(terminalRailStyle, ".terminal-rail-fixture { color: cyan; }");
     sources.set(terminal, `import ${JSON.stringify(terminalRailStyle)}; ${sources.get(terminal)}`);
     sources.set(chat, sources.get(chat)! + `import ${JSON.stringify(terminalRailStyle)};`);
+    const custodian = modulePath("../pages/custodian/custodian-surface.tsx");
+    const transcriptHelpers = [
+      "../pages/chat/components/chat-message-group-view.tsx",
+      "../pages/chat/components/chat-divider.tsx",
+      "../pages/chat/components/chat-composer-dom.ts",
+      "../components/markdown-blocks-owner.ts",
+      "../lib/chat/message-visibility.ts",
+    ].map(modulePath);
+    const transcriptImports = transcriptHelpers
+      .map((id, index) => `export { render as transcript${index} } from ${JSON.stringify(id)};`)
+      .join("\n");
+    for (const id of transcriptHelpers) {
+      sources.set(
+        id,
+        `import { table } from ${JSON.stringify(markdownTables)}; export function render() { return table(); }`,
+      );
+    }
+    sources.set(custodian, transcriptImports);
+    sources.set(chat, sources.get(chat)! + transcriptImports);
+    sources.set(
+      entry,
+      sources.get(entry)! + `export const custodian = () => import(${JSON.stringify(custodian)});`,
+    );
     const result = await buildFixture(entry, sources, {
       ...controlUiCodeSplitting,
       // A stale capture must not pull a lazy page into the shared boot chunk.
@@ -678,6 +766,16 @@ describe("Control UI build chunking", () => {
     );
     expect(staticImports(chatChunk.fileName)).not.toContain(newSessionChunk.fileName);
     expect(staticImports(newSessionChunk.fileName)).not.toContain(chatChunk.fileName);
+    const custodianImports = staticImports(chunkFor(custodian).fileName);
+    expect(custodianImports).not.toContain(chatChunk.fileName);
+    expect(custodianImports).not.toContain(newSessionChunk.fileName);
+    for (const helper of transcriptHelpers) {
+      expect(custodianImports).toContain(chunkFor(helper).fileName);
+      expect(staticImports(chatChunk.fileName)).toContain(chunkFor(helper).fileName);
+    }
+    expect(staticImports(newSessionChunk.fileName)).not.toContain(
+      chunkFor(transcriptHelpers[0]!).fileName,
+    );
     const markdownChunk = chunkFor(markdownTables);
     const meetingsChunk = chunkFor(meetings);
     expect(staticImports(markdownChunk.fileName)).not.toContain(chatChunk.fileName);
@@ -828,9 +926,11 @@ describe("Control UI build chunking", () => {
       [modulePath("../pages/cron/cron-page.tsx"), "cron-page"],
       [modulePath("../pages/plugins/plugins-page.tsx"), "plugins-page"],
       [modulePath("../components/markdown-parser.ts"), "markdown-runtime"],
+      [modulePath("../components/markdown-windows-paths.ts"), "markdown-runtime"],
       [modulePath("../components/config-form.shared.ts"), "config-form-analysis-runtime"],
       [modulePath("../components/cloud-profile-icon-data.ts"), "route-controls-runtime"],
       [modulePath("../components/solid/cloud-profile-icon.tsx"), "route-controls-runtime"],
+      [modulePath("../components/solid/radio-navigation.ts"), "navigation-helpers"],
       ["/repo/ui/src/lib/clipboard.ts", undefined],
       ["/repo/ui/src/build-info.ts", undefined],
       ["/repo/ui/src/build-info-normalizers.ts", undefined],

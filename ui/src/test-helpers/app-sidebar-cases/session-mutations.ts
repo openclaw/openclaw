@@ -19,6 +19,7 @@ import {
   type SidebarLifecycleState,
   successfulSessionPatch,
 } from "../app-sidebar.ts";
+import { closeArchiveUndoToast } from "../archive-undo-window.ts";
 import { registerSessionPluginAction } from "../control-ui-plugin-action.ts";
 import { gatewayHelloForMethods } from "../gateway-methods.ts";
 import { settleLitElement } from "../lit-settle.ts";
@@ -193,7 +194,7 @@ describe("AppSidebar session mutation feedback", () => {
     expect(menu.querySelector(actionSelector)).toBeNull();
   });
 
-  it("offers archive undo without altering the active session's personal pin or navigation", async () => {
+  it("holds archive behind Undo without altering the active session's personal pin or navigation", async () => {
     const { gateway, harness, sidebar } = await mountMutationHarness();
     const setSessionKey = vi.fn();
     (gateway.gateway as { setSessionKey: (key: string) => void }).setSessionKey = setSessionKey;
@@ -224,40 +225,39 @@ describe("AppSidebar session mutation feedback", () => {
     gateway.publish({ hello: gatewayHelloForMethods(["sessions.patch"]) });
     await sidebar.updateComplete;
     expect(archive?.disabled).toBe(false);
-    const pendingArchive = deferred<Awaited<ReturnType<typeof harness.patch>>>();
-    harness.patch.mockReturnValueOnce(pendingArchive.promise);
+    const rowSelector = `[data-session-key="${archivedRow.key}"]`;
     archive!.click();
     archive!.click();
-    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledOnce());
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(`[data-session-key="${archivedRow.key}"]`)).toBeNull();
-    expect(navigate).not.toHaveBeenCalled();
-    pendingArchive.resolve(successfulSessionPatch(archivedRow.key));
     await vi.waitFor(() =>
       expect(toast.querySelector(".app-toast__message")?.textContent).toBe("Session archived"),
     );
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(rowSelector)).toBeNull();
+
+    // Undo cancels the held archive locally: the row returns with no Gateway write.
+    toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
+    await vi.waitFor(() => expect(sidebar.querySelector(rowSelector)).not.toBeNull());
+    expect(harness.patch).not.toHaveBeenCalled();
+    expect(harness.refreshReplacement).not.toHaveBeenCalled();
+    expect(sidebar.sidebarEntries).toEqual([`session:${archivedKey}`]);
+
+    // Closing the toast ends the window and archives once.
+    harness.patch.mockResolvedValueOnce(successfulSessionPatch(archivedRow.key));
+    sidebar
+      .querySelector<HTMLButtonElement>(`${rowSelector} [data-sidebar-session-archive]`)!
+      .click();
+    await closeArchiveUndoToast();
+    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledOnce());
     expect(harness.patch).toHaveBeenCalledWith(
       archivedRow.key,
       { archived: true },
       { agentId: "main", expectedSessionId: `session:${archivedRow.key}` },
     );
-    toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
-
-    await vi.waitFor(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
-    expect(harness.patch).toHaveBeenCalledTimes(2);
-    expect(setSessionKey).not.toHaveBeenCalled();
-    expect(harness.patch).toHaveBeenNthCalledWith(
-      2,
-      archivedRow.key,
-      { archived: false },
-      {
-        agentId: "main",
-        expectedSessionId: `session:${archivedRow.key}`,
-        deferListRefresh: true,
-      },
-    );
-    expect(harness.patchMany).not.toHaveBeenCalled();
+    await harness.patch.mock.results[0]!.value;
+    await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual([`session:${archivedKey}`]);
+    expect(harness.patchMany).not.toHaveBeenCalled();
+    expect(setSessionKey).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
   });
 
@@ -503,6 +503,8 @@ describe("AppSidebar session mutation feedback", () => {
       ?.click();
     if (action === "delete") {
       answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+    } else {
+      await closeArchiveUndoToast();
     }
     await waitForFast(() => expect(toast.textContent).toContain("agent:main:b: rejected"));
     expect(action === "delete" ? harness.deleteMany : harness.patchMany).toHaveBeenCalledOnce();
@@ -540,6 +542,7 @@ describe("AppSidebar session mutation feedback", () => {
     await sidebar.updateComplete;
     const menu = await openSessionMenu(sidebar, "agent:main:b");
     menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
+    await closeArchiveUndoToast();
     await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
 
     gateway.publish({ phase: "reconnecting" });
@@ -581,6 +584,10 @@ describe("AppSidebar session mutation feedback", () => {
     await sidebar.updateComplete;
     let menu = await openSessionMenu(sidebar, "agent:main:b");
     menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
+    await waitForFast(() =>
+      expect(toast.querySelector(".app-toast__message")?.textContent).toBe("Archived 2 sessions"),
+    );
+    await closeArchiveUndoToast();
     await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
 
     selectSession(sidebar, "agent:main:c");
@@ -597,10 +604,8 @@ describe("AppSidebar session mutation feedback", () => {
       ],
     });
     await archive.promise;
-    await waitForFast(() =>
-      expect(toast.querySelector(".app-toast__message")?.textContent).toBe("Archived 2 sessions"),
-    );
     expect(harness.patchMany).toHaveBeenCalledTimes(2);
+    expect(harness.patchMany.mock.calls[0]?.[1]).toEqual({ archived: true });
     expect(harness.patchMany.mock.calls[1]?.[0].map((target) => target.key)).toEqual([
       "agent:main:c",
       "agent:main:d",

@@ -8,6 +8,9 @@
   "type": "module",
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
+  "scripts": {
+    "build": "node --import ../../scripts/tsx.mjs ../../scripts/build-workspace-package.mts model-catalog-core"
+  },
   "dependencies": {
     "@openclaw/normalization-core": "workspace:*",
     "zod": "4.6.7"

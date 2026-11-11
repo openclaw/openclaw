@@ -176,6 +176,7 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
     "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
     "ui/src/e2e/service-worker-update.e2e.test.ts",
+    "ui/src/e2e/template-chat-review.e2e.test.ts",
     "ui/src/lib/openclaw-id/onepassword-save.retention.e2e.test.ts",
   ]);
   expect(localSelected[3]).toEqual(
@@ -191,8 +192,10 @@ export function assertControlUiE2eOwnership(
   assertPartition(ordinarySelected, ordinary);
 
   const productionArtifactFiles = [
+    "ui/src/e2e/gateway-fresh-visit.http.e2e.test.ts",
     "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
     "ui/src/e2e/service-worker-update.e2e.test.ts",
+    "ui/src/e2e/template-chat-review.e2e.test.ts",
   ];
   const delegated = createUiE2eVitestConfig(
     { OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1", OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT: "1" },

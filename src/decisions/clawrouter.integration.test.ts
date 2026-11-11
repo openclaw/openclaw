@@ -120,6 +120,8 @@ it.each(["default", "per-agent"])(
             const evaluate = (agentId = "main") =>
               evaluateDecisionV2InRegistry(batch, decisionOptions({ agentId }), registry, config);
             try {
+              // Compile the lazy core executor before the caller's operation deadline starts.
+              await import("../agents/decision-inference.js");
               await using prepared = await prepareDecisionRuntime(
                 config,
                 "clawrouter",

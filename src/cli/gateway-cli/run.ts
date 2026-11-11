@@ -7,9 +7,7 @@ import { rethrowStartupConfigFailure } from "../../commands/doctor-startup-migra
 import type {
   ConfigFileSnapshot,
   ConfigSnapshotReadOptions,
-  GatewayAuthMode,
   GatewayBindMode,
-  GatewayTailscaleMode,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../../config/config.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
@@ -71,6 +69,15 @@ import {
 import { createGatewayCrashLoopRecovery } from "./crash-loop-recovery.js";
 import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
 import { getGatewayStartGuardErrors } from "./pre-bootstrap.js";
+import {
+  GATEWAY_AUTH_MODES,
+  GATEWAY_BIND_MODES,
+  GATEWAY_TAILSCALE_MODES,
+  INVALID_AUTH,
+  INVALID_BIND,
+  INVALID_TAILSCALE,
+  INVALID_WS_LOG,
+} from "./run-flag-checks.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
   extractGatewayMiskeys,
@@ -102,14 +109,6 @@ type GatewayRunLogger = Pick<ReturnType<typeof createSubsystemLogger>, "info" | 
  * restart storm that can render low-resource hosts unresponsive.
  */
 const EXIT_CONFIG_ERROR = 78;
-
-const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
-  "none",
-  "token",
-  "password",
-  "trusted-proxy",
-];
-const GATEWAY_TAILSCALE_MODES: readonly GatewayTailscaleMode[] = ["off", "serve", "funnel"];
 
 async function readGatewayStartupConfig(
   startupTrace: ReturnType<typeof createGatewayCliStartupTrace>,
@@ -366,7 +365,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     wsLogRaw !== "compact" &&
     wsLogRaw !== "full"
   ) {
-    defaultRuntime.error('Invalid --ws-log. Use "auto", "full", or "compact".');
+    defaultRuntime.error(INVALID_WS_LOG);
     defaultRuntime.exit(1);
   }
   setGatewayWsLogStyle(wsLogStyle);
@@ -502,12 +501,11 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   // Only capture the *explicit* bind value here.  The container-aware
   // default is deferred until after Tailscale mode is known (see below)
   // so that Tailscale's loopback constraint is respected.
-  const VALID_BIND_MODES = new Set<string>(["loopback", "lan", "auto", "custom", "tailnet"]);
   const bindExplicitRawStr = normalizeOptionalString(
     toOptionString(opts.bind) ?? cfg.gateway?.bind,
   );
-  if (bindExplicitRawStr !== undefined && !VALID_BIND_MODES.has(bindExplicitRawStr)) {
-    defaultRuntime.error('Invalid --bind. Use "loopback", "lan", "tailnet", "auto", or "custom".');
+  if (bindExplicitRawStr !== undefined && !GATEWAY_BIND_MODES.has(bindExplicitRawStr)) {
+    defaultRuntime.error(INVALID_BIND);
     defaultRuntime.exit(1);
     return;
   }
@@ -618,14 +616,14 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   const authModeRaw = toOptionString(opts.auth);
   const authMode = parseEnumOption(authModeRaw, GATEWAY_AUTH_MODES);
   if (authModeRaw && !authMode) {
-    defaultRuntime.error('Invalid --auth. Use "none", "token", "password", or "trusted-proxy".');
+    defaultRuntime.error(INVALID_AUTH);
     defaultRuntime.exit(1);
     return;
   }
   const tailscaleRaw = toOptionString(opts.tailscale);
   const tailscaleMode = parseEnumOption(tailscaleRaw, GATEWAY_TAILSCALE_MODES);
   if (tailscaleRaw && !tailscaleMode) {
-    defaultRuntime.error('Invalid --tailscale. Use "off", "serve", or "funnel".');
+    defaultRuntime.error(INVALID_TAILSCALE);
     defaultRuntime.exit(1);
     return;
   }

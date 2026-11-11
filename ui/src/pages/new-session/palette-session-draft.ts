@@ -3,19 +3,20 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
-import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { showToast } from "../../lib/toast.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "../chat/components/chat-attachment-controls.types.ts";
-import "../../styles/new-session.css";
-import "../../styles/chat/composer.css";
 import {
   appendChatAttachmentFiles,
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
 } from "../chat/components/chat-attachments.ts";
+import "../../styles/new-session.css";
+import "../../styles/chat/composer.css";
+import type { ChatCommentAction } from "../chat/components/chat-selection-annotations.tsx";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import { NewSessionDraft } from "./draft.ts";
 import type { NewSessionRouteData } from "./location.ts";
@@ -180,6 +181,8 @@ export class PaletteSessionDraft {
         this.read().context?.gateway.snapshot.hello?.policy,
       ),
       disabled: this.messageLocked,
+      // Transcript excerpts have no anchor here to reopen the comment editor against.
+      commentsEditable: false,
       getAttachments: () => attachmentDraft.attachments,
       readSignal,
       onPendingReadsChange: (delta) => attachmentDraft.reads.updatePending(readSignal, delta),
@@ -233,6 +236,26 @@ export class PaletteSessionDraft {
         read().attachmentProps()?.onAttachmentsChange?.(attachments),
       onPendingReadsChange: (delta) => read().attachmentProps()?.onPendingReadsChange?.(delta),
     });
+  }
+
+  removeComment({ id, action }: ChatCommentAction) {
+    const props = this.attachmentProps();
+    if (action === "edit" || !props) {
+      return;
+    }
+    props.onAttachmentsChange?.(
+      (props.getAttachments?.() ?? []).filter((item) =>
+        action === "delete-all" ? !item.selectionAnnotation : item.id !== id,
+      ),
+    );
+  }
+
+  adoptAttachments(attachments: readonly ChatAttachment[]) {
+    const props = this.attachmentProps();
+    if (!this.read().open || this.messageLocked || !props) {
+      return;
+    }
+    props.onAttachmentsChange?.([...(props.getAttachments?.() ?? []), ...attachments]);
   }
 
   adoptAttachmentFiles(files: readonly File[], submitRequested = false) {

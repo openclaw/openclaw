@@ -16,6 +16,7 @@ import {
   canonicalSession,
   createSessionRouteContext as contextFor,
   createSessionRouteRow as row,
+  sessionRouteListResult,
   installShortSessionResolver as installShortResolver,
   loadSessionRoute as load,
 } from "./route-resolution.test-support.ts";
@@ -75,6 +76,8 @@ describe("session route navigation handoffs", () => {
   it("uses the sidebar-carried full key without issuing a session search", async () => {
     const storedRow = row({ displayName: "Deploy monitor" });
     const { context, list } = contextFor();
+    context.sessions.state.result = sessionRouteListResult([storedRow]);
+    context.sessions.state.resultCached = true;
     const target = sessionNavigationTarget({
       face: "chat",
       sessionKey: storedRow.key,
@@ -88,6 +91,7 @@ describe("session route navigation handoffs", () => {
       kind: "session",
       sessionKey: storedRow.key,
     });
+    expect(loaded).not.toHaveProperty("sessionResolutionFromCache");
     expect(list).not.toHaveBeenCalled();
   });
 

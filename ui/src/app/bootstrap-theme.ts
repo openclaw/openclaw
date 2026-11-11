@@ -175,7 +175,18 @@ export function createApplicationTheme(
     try {
       const { createThemeCatalog } = await import("./theme-catalog.ts");
       if (!disposed) {
-        catalog = createThemeCatalog(gateway, publish, listeners.publish);
+        catalog = createThemeCatalog(
+          gateway,
+          () => {
+            // Built-in and locally imported palettes do not depend on the server catalog.
+            if (settings.theme.includes("/")) {
+              publish();
+            } else {
+              listeners.publish();
+            }
+          },
+          listeners.publish,
+        );
         catalogLoadError = undefined;
       }
     } catch (error) {

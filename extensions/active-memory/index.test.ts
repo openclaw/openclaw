@@ -2845,7 +2845,7 @@ describe("active-memory plugin", () => {
   });
 
   it("pauses failed cooldown probes and clears the streak after a completed recall", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const CONFIGURED_TIMEOUT_MS = 250;
     const COOLDOWN_MS = 60_000;
     registerPluginConfig({

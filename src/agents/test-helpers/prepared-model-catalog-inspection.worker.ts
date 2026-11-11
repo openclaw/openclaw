@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
-import { queryObjects } from "node:v8";
 import { parentPort } from "node:worker_threads";
 import { mockNativeModuleExports } from "../../../test/helpers/native-module-mock.js";
+import { forceFullGc } from "../../test-utils/retention.js";
 import type * as Catalog from "./prepared-model-catalog-inspection.js";
 
 const port = parentPort!;
@@ -24,11 +24,11 @@ mockNativeModuleExports(new URL("../../infra/sqlite-snapshot-source.ts", import.
     return copySqlite(...args);
   },
 });
-const models = await import("../models-config.js");
-const planModels = models.planOpenClawModelsJsonSource;
-mockNativeModuleExports(new URL("../models-config.ts", import.meta.url), {
+const models = await import("../models-config.core.js");
+const planModels = models.planOpenClawModelsJsonSourceWithInput;
+mockNativeModuleExports(new URL("../models-config.core.ts", import.meta.url), {
   ...models,
-  planOpenClawModelsJsonSource: async (...args: Parameters<typeof planModels>) => {
+  planOpenClawModelsJsonSourceWithInput: async (...args: Parameters<typeof planModels>) => {
     const plan = await planModels(...args);
     plans.push(plan);
     return plan;
@@ -139,7 +139,7 @@ port.postMessage = (message: { status: string; value?: object }, transferList) =
         for (let pass = 0; pass < 2; pass++) {
           await new Promise<void>((resolve) => {
             setImmediate(() => {
-              queryObjects(WeakRef);
+              forceFullGc();
               resolve();
             });
           });

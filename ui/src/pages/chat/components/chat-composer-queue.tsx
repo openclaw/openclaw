@@ -311,6 +311,9 @@ function ChatQueueItem(rowProps: {
     (rowProps.controls.offline === true ||
       isChatSendReconnecting(item().sendState, rowProps.controls.connected));
   const stateLabel = (): string | null => {
+    if (item().serverQueued) {
+      return t("chat.queue.states.followup");
+    }
     const queueItem: ChatQueueItem = item();
     const offline: boolean = !item().serverQueued && rowProps.controls.offline === true;
     const connected: boolean | undefined = rowProps.controls.connected;

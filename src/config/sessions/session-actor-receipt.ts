@@ -8,6 +8,7 @@ import type {
   SessionActorReceipt,
   SessionActorReducerOutcome,
 } from "./session-actor-contract.js";
+import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { PendingInputMutationReceipt } from "./session-pending-input-operations.types.js";
 
 export type SessionActorEntryReference = Pick<
@@ -33,11 +34,9 @@ export function projectSessionActorCommittedOutcome<
   outcome: Extract<SessionActorOutcome<Value>, { kind: "committed" }>,
   reference: SessionActorEntryReference | undefined,
 ): SessionActorCommittedWireOutcome<Value> {
-  const { receipt, value } = outcome;
-  // Turn/initialization results can also expose the entry; preserve their graph aliases.
+  const { receipt } = outcome;
+  // Initialization retains entry aliases; turn results are detached by the phase owner.
   if (
-    (value &&
-      (("kind" in value && value.kind === "session-turn") || ("turn" in value && value.turn))) ||
     receipt.transcript.append?.initialEntry ||
     !reference ||
     (receipt.postimage.entry !== reference.entry && (!receipt.postimage.entry || !reference.entry))
@@ -56,7 +55,7 @@ export function projectSessionActorCommittedOutcome<
           removed: Object.keys(base).filter((key) => !Object.hasOwn(entry, key)),
         }
       : undefined;
-  // Metadata consumers need the same full entry, not a second wire copy.
+  // Full and list publications share the canonical entry's immutable fields.
   let entryMetadataReferences: number[] | undefined;
   const entryMetadata = receipt.entryMetadata?.map((metadata, index) => {
     const key = receipt.postimage.target.sessionKey;
@@ -110,6 +109,7 @@ export function restoreSessionActorCommittedOutcome<Value>(
       const fact = receipt.entryMetadata![index]!.facts.get(receipt.postimage.target.sessionKey);
       if (fact?.kind === "postimage") {
         fact.value.fullEntry = entry;
+        fact.value.entry = attachSessionEntrySnapshots({ ...entry! }, {}, "list");
       }
     }
     delete receipt.entryReference;

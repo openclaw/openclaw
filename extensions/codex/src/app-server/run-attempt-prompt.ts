@@ -13,6 +13,7 @@ import {
   resolveCodexDeliveryHintPreservedInputRange,
 } from "./attempt-context.js";
 import { isNonEmptyString } from "./attempt-workspace-context.js";
+import type { CodexNativeModelContext } from "./client-workspace-state.js";
 import { reserveCodexHistoryBudget } from "./context-engine-history-items.js";
 import { prepareCodexContextEngineHistory } from "./context-engine-history.js";
 import {
@@ -24,7 +25,7 @@ import {
   resolveProjectionPromptBudgetTokens,
   type CodexProjectedImageGroup,
 } from "./context-engine-projection.js";
-import { joinPresentSections } from "./developer-instruction-sections.js";
+import { joinPresentSections, renderCodexThreadPolicy } from "./developer-instruction-sections.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import type { CodexAttemptContext } from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
@@ -32,6 +33,7 @@ import { resolveCodexShiftedPromptRanges } from "./run-attempt-prompt-ranges.js"
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
+import { hasAuthoredCodexBaseInstructions } from "./thread-prompt.js";
 import { resolveCodexProjectionStartupBinding } from "./thread-restricted-resume.js";
 import { buildCodexHistoryProvenancePrefix, buildTurnCollaborationMode } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -437,6 +439,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   };
   let parentLocalEgress = false;
   let inferenceInstructions: string | undefined;
+  let baseInDeveloperCarrier = false;
   // Observability view of OpenClaw-managed developer instructions; not the complete
   // native/provider prompt. Reuse registered relay text so diagnostics include every
   // relay component. Hook context is already in that text, so only native policy
@@ -444,13 +447,19 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const buildRenderedCodexDeveloperInstructions = () =>
     inferenceInstructions !== undefined
       ? joinPresentSections(
-          turnState.promptBuild.threadDeveloperInstructions ??
-            turnState.promptBuild.developerInstructions,
+          renderCodexThreadPolicy(
+            baseInDeveloperCarrier ? reportedOpenClawBaseInstructions : undefined,
+            turnState.promptBuild.threadDeveloperInstructions ??
+              turnState.promptBuild.developerInstructions,
+          ),
           inferenceInstructions,
         )
       : joinPresentSections(
-          turnState.promptBuild.developerInstructions,
-          refreshableInstructions,
+          renderCodexThreadPolicy(
+            baseInDeveloperCarrier ? reportedOpenClawBaseInstructions : undefined,
+            turnState.promptBuild.developerInstructions,
+            refreshableInstructions,
+          ),
           buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
         );
   // Reports, hooks, trajectory, and history budgets also count the pinned base. The
@@ -461,7 +470,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     : openClawBaseInstructions;
   const buildRenderedCodexInstructions = () =>
     joinPresentSections(
-      reportedOpenClawBaseInstructions,
+      baseInDeveloperCarrier ? undefined : reportedOpenClawBaseInstructions,
       buildRenderedCodexDeveloperInstructions(),
     );
   const rebuildCodexPromptBuildFromCurrentProjection = async (preserveInstructions = false) => {
@@ -663,6 +672,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     });
   };
   await rotateStartupBindingForProjectedTurn();
+  // Codex-recorded context arrives after the turn; earlier reports omit it.
+  let nativeModelContext: CodexNativeModelContext | undefined;
   const buildSystemPromptReport = (omitWorkspaceReferences = false) =>
     buildCodexSystemPromptReport({
       attempt: params,
@@ -675,6 +686,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       skillsPrompt: skillsInstructions ? (params.skillsSnapshot?.prompt ?? "") : "",
       tools: toolBridge.availableSpecs,
       sourceTools: toolBridge.availableTools,
+      nativeModelContext,
     });
   const systemPromptReport = buildSystemPromptReport();
   let workspaceReferencesIncluded = true;
@@ -700,6 +712,13 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     /** Pending supervision probes its native model during startup, after the estimate. */
     adoptThreadBaseInstructions: (thread: CodexAppServerThreadLifecycleBinding) => {
       reportedOpenClawBaseInstructions = thread.preparedOpenClawBaseInstructions;
+      baseInDeveloperCarrier = hasAuthoredCodexBaseInstructions({
+        nativeConfig: thread.preparedEffectiveConfig,
+      });
+      Object.assign(systemPromptReport, buildSystemPromptReport(!workspaceReferencesIncluded));
+    },
+    setNativeModelContext: (next: CodexNativeModelContext) => {
+      nativeModelContext = next;
       Object.assign(systemPromptReport, buildSystemPromptReport(!workspaceReferencesIncluded));
     },
     buildRenderedCodexInstructions,

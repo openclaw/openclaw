@@ -159,22 +159,28 @@ suite.define(() => {
           await expect
             .poll(() => page.locator("html").getAttribute("data-theme-mode"))
             .toBe(colorScheme);
-          const expected = await resolvedBackground(page, "var(--bg-elevated)");
-          const filters = page.locator(".usage-view-options");
+          await page.getByRole("button", { name: "Display", exact: true }).click();
+          const filters = page.locator(".usage-display-menu__metric");
           for (const label of ["Cost", "Tokens"]) {
             const selected = filters.getByRole("button", { name: label, exact: true });
             await selected.click();
+            await expect.poll(() => selected.getAttribute("aria-pressed")).toBe("true");
             await page.mouse.move(0, 0);
+            const restingBackground = await selected.evaluate(
+              (element) => getComputedStyle(element).backgroundColor,
+            );
             for (const state of ["rest", "hover"]) {
               if (state === "hover") {
                 await selected.hover();
               }
               await capture(filters, `usage-${colorScheme}-${label}-${state}.png`);
-              await expect
-                .poll(() =>
-                  selected.evaluate((element) => getComputedStyle(element).backgroundColor),
-                )
-                .toBe(expected);
+              if (state === "hover") {
+                await expect
+                  .poll(() =>
+                    selected.evaluate((element) => getComputedStyle(element).backgroundColor),
+                  )
+                  .toBe(restingBackground);
+              }
             }
           }
         },

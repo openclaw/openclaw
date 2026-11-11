@@ -731,7 +731,7 @@ describe("prepareCodexAttemptConnection", () => {
     ).toEqual([{ method: "account/read", params: { refreshToken: false } }]);
   });
 
-  it("re-resolves model and connection policy when an oversized thread rotates", async () => {
+  it("re-resolves model and connection policy when a token-full thread rotates", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
@@ -757,7 +757,16 @@ describe("prepareCodexAttemptConnection", () => {
     await fs.mkdir(rolloutDir, { recursive: true });
     await fs.writeFile(
       path.join(rolloutDir, "rollout-thread-existing.jsonl"),
-      "x".repeat(1_048_577),
+      JSON.stringify({
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: { total_tokens: 290_000 },
+            model_context_window: 300_000,
+          },
+        },
+      }),
     );
 
     const resolveConnection = vi.spyOn(bindingConnection, "resolveCodexBindingAppServerConnection");
@@ -797,7 +806,16 @@ describe("prepareCodexAttemptConnection", () => {
       await fs.mkdir(rolloutDir, { recursive: true });
       await fs.writeFile(
         path.join(rolloutDir, "rollout-thread-existing.jsonl"),
-        "x".repeat(1_048_577),
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "token_count",
+            info: {
+              last_token_usage: { total_tokens: 290_000 },
+              model_context_window: 300_000,
+            },
+          },
+        }),
       );
       const rotationError = new Error("synthetic startup binding mutation failure");
       const mutate = vi

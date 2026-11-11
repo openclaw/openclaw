@@ -9,9 +9,10 @@ import type { MailboxMessage, MailboxPayload, MailboxRecipient } from "./mailbox
  * - `user`: OpenClaw ID session (`Authorization: Bearer <id token>`).
  * - `device`: `user` plus an `OpenClaw-Signature` by a device key D bound to that account.
  * - `gateway`: `OpenClaw-Signature` by the claw's registered K_gw (no bearer secret).
+ * - `node`: W-signed request, no bearer; only node redemption mail and admitted-node descriptor reads.
  * - `relay`: the relay's static bearer token (iroh-relay `access.http`), relay address allowlisted.
  */
-export type DiscoveryAuth = "user" | "device" | "gateway" | "relay";
+export type DiscoveryAuth = "user" | "device" | "gateway" | "relay" | "node";
 
 /** Every Discovery v1 endpoint. Paths use `{name}` placeholders. */
 export const DISCOVERY_ENDPOINTS = {
@@ -21,6 +22,8 @@ export const DISCOVERY_ENDPOINTS = {
   getRegistration: { method: "GET", path: "/v1/claws/{claw_id}/registration", auth: "gateway" },
   listClaws: { method: "GET", path: "/v1/claws", auth: "user" },
   publishDescriptor: { method: "PUT", path: "/v1/claws/{claw_id}/descriptor", auth: "gateway" },
+  getNodeDescriptor: { method: "GET", path: "/v1/claws/{claw_id}/node/descriptor", auth: "node" },
+  sendNodeMail: { method: "POST", path: "/v1/claws/{claw_id}/mailbox/node", auth: "node" },
   getDescriptor: { method: "GET", path: "/v1/claws/{claw_id}/descriptor", auth: "user" },
   publishSnapshot: { method: "PUT", path: "/v1/claws/{claw_id}/snapshot", auth: "gateway" },
   getSnapshot: { method: "GET", path: "/v1/claws/{claw_id}/snapshot", auth: "user" },
@@ -107,6 +110,14 @@ export type PublishDescriptorRequest = { descriptor: ClawDescriptor };
 /** Response of GET /v1/claws/{claw_id}/descriptor. */
 export type GetDescriptorResponse = { descriptor: ClawDescriptor };
 
+/** Admitted W only: descriptor plus its current-binding snapshot for client freshness verification. */
+export type GetNodeDescriptorResponse = GetDescriptorResponse & GetSnapshotResponse;
+/** Accountless pre-admission mail: request signer must be redemption W, recipient always Gateway. */
+export type SendNodeMailRequest = {
+  to: "gateway";
+  payload: { kind: "node_redemption"; redemption: SignedStatement<"NodeRedemption"> };
+};
+
 /**
  * PUT /v1/claws/{claw_id}/snapshot. Discovery checks the K_gw signature and that the snapshot is
  * newer than the stored one by (seq, issued_at): the Gateway re-signs the same seq at least every
@@ -153,7 +164,7 @@ export type AckMailRequest = { cursor: string };
 /**
  * POST /iroh/admit (iroh-relay `access.http`). Request header `X-Iroh-Endpoint-Id: <64 hex>`,
  * `Authorization: Bearer <relay token>`. Response body is exactly `true` or `false`.
- * Admits: K_srv of each claw's latest descriptor, and the owner and member peer keys listed in
+ * Admits: K_srv of each claw's latest descriptor, and the owner, member and node peer keys listed in
  * each claw's latest snapshot (current state only; a removed key is absent). Malformed ids -> `false`. Missing or
  * wrong bearer -> 401 (the relay fails closed).
  */

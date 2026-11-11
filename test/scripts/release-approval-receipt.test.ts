@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import {
   awaitParentAuthorization,
   createReleaseApprovalReceipt,
@@ -109,6 +110,32 @@ function fixture() {
 }
 
 describe("release approval receipt", () => {
+  it("carries a retirement decision only in an authenticated extended-stable v2 receipt", () => {
+    const create = (override = {}) =>
+      createReleaseApprovalReceipt(
+        {
+          ...env,
+          RELEASE_TAG: "v2026.9.37",
+          RELEASE_NPM_DIST_TAG: "extended-stable",
+          RETIRED_LINE_PUBLICATION_REASON: "Named September publication approved November 10",
+          ...override,
+        },
+        () => [approved()],
+      );
+    expect(create()).toMatchObject({
+      version: 2,
+      retiredLineReason: "Named September publication approved November 10",
+    });
+    expect(() => create({ RELEASE_NPM_DIST_TAG: "latest" })).toThrow();
+    expect(() => create({ RETIRED_LINE_PUBLICATION_REASON: "line\nbreak" })).toThrow();
+    expect(() =>
+      validateReleaseApprovalReceipt({
+        ...fixture().receipt,
+        retiredLineReason: "unauthenticated v1 field",
+      }),
+    ).toThrow();
+  });
+
   it.each<[Partial<typeof env>, RegExp?, ReturnType<typeof approved>[]?]>([
     [
       {},
@@ -428,5 +455,128 @@ console.log(JSON.stringify(response));
     } else {
       expect(result.stderr).toContain(`completed/${conclusion} without authorizing`);
     }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "runs the trusted core child policy against frozen candidate facts and live parent approval",
+  async () => {
+    const directory = tempDirs.make("retired-line-child-");
+    const bin = join(directory, "bin");
+    mkdirSync(bin);
+    mkdirSync(join(directory, "scripts"));
+    writeFileSync(join(directory, "package.json"), JSON.stringify({ version: "2026.9.37" }));
+    writeFileSync(
+      join(directory, "scripts/openclaw-npm-extended-stable-release.mjs"),
+      "throw new Error('frozen candidate policy must not run');",
+    );
+    cpSync(resolve("scripts"), join(directory, "trusted-workflow/scripts"), { recursive: true });
+    const coreWorkflow = parse(readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8"));
+    const steps = coreWorkflow.jobs.validate_publish_request.steps as {
+      name?: string;
+      run?: string;
+    }[];
+    const policyIndex = steps.findIndex((step) => step.name === "Validate npm release request");
+    const receiptIndex = steps.findIndex((step) => step.name?.includes("approval receipt"));
+
+    const command = expectDefined(
+      expectDefined(steps[policyIndex], "policy step").run,
+      "policy command",
+    );
+    const input = fixture();
+    const identity = { releaseTag: "v2026.9.37", npmDistTag: "extended-stable" };
+    const baseReceipt = { ...input.receipt, ...identity };
+    const preload = join(directory, "fetch.mjs");
+    const responsesPath = join(directory, "responses.json");
+    const archivePath = join(directory, "receipt.zip");
+    writeFileSync(
+      preload,
+      "import fs from 'node:fs'; globalThis.fetch = async (url) => url.endsWith('/zip') ? new Response(fs.readFileSync(process.env.TEST_ARCHIVE)) : Response.json(JSON.parse(fs.readFileSync(process.env.TEST_RESPONSES, 'utf8')).artifact);",
+    );
+    writeGh(
+      bin,
+      "const fs = require('node:fs'); const responses = JSON.parse(fs.readFileSync(process.env.TEST_RESPONSES, 'utf8')).responses; const key = process.argv[3].replace('repos/openclaw/openclaw/', ''); if (!(key in responses)) throw new Error(key); console.log(JSON.stringify(responses[key]));",
+    );
+    writeFileSync(
+      join(bin, "git"),
+      '#!/bin/sh\ncase "$1" in\nfetch) exit 0;;\nrev-parse) printf "%s\\n" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";;\nshow) printf \'{"version":"2026.11.2"}\\n\';;\n*) exit 2;;\nesac\n',
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      join(bin, "node"),
+      '#!/bin/sh\nexec "' + process.execPath + '" --preserve-symlinks-main "$@"\n',
+      {
+        mode: 0o755,
+      },
+    );
+    for (const [version, parentStatus, exitCode] of [
+      [2, "in_progress", 0],
+      [1, "in_progress", 1],
+      [2, "completed", 1],
+    ] as const) {
+      const receipt =
+        version === 2
+          ? {
+              ...baseReceipt,
+              version,
+              retiredLineReason: "Named September release approved November 10",
+            }
+          : baseReceipt;
+      const archive = await new JSZip()
+        .file("approval.json", JSON.stringify(receipt))
+        .generateAsync({ type: "nodebuffer" });
+      const artifact = {
+        ...input.artifact,
+        size_in_bytes: archive.length,
+        digest: "sha256:" + createHash("sha256").update(archive).digest("hex"),
+        expires_at: "2030-01-01T00:00:00Z",
+      };
+      writeFileSync(archivePath, archive);
+      writeFileSync(
+        responsesPath,
+        JSON.stringify({
+          artifact,
+          responses: {
+            ["actions/runs/10/artifacts?name=" + artifactName + "&per_page=100"]:
+              artifactListing(artifact),
+            "actions/runs/10/attempts/2": {
+              ...input.parentRun,
+              status: parentStatus,
+              conclusion: parentStatus === "completed" ? "cancelled" : null,
+            },
+            "actions/runs/10/attempts/2/jobs?per_page=100": input.parentJobs,
+            "actions/runs/10/approvals": input.approvals,
+          },
+        }),
+      );
+      const result = spawnSync("/bin/bash", ["-c", command], {
+        cwd: directory,
+        encoding: "utf8",
+        timeout: 15000,
+        env: {
+          PATH: bin + ":" + process.env.PATH,
+          NODE_OPTIONS: "--import=" + preload,
+          TEST_ARCHIVE: archivePath,
+          TEST_RESPONSES: responsesPath,
+          GITHUB_REPOSITORY: repository,
+          GITHUB_REF_NAME: "main",
+          GITHUB_REF: "refs/heads/main",
+          GITHUB_WORKFLOW_SHA: sha,
+          RELEASE_PUBLISH_RUN_ID: "10",
+          RELEASE_PUBLISH_RUN_ATTEMPT: "2",
+          GH_TOKEN: "synthetic-token",
+          RELEASE_NPM_DIST_TAG: "extended-stable",
+          RELEASE_TAG: identity.releaseTag,
+          NPM_WORKFLOW_REF: "refs/heads/extended-stable/2026.9.33",
+        },
+      });
+      expect(result.status, result.stderr).toBe(exitCode);
+      if (exitCode === 0) {
+        expect(result.stdout).toContain("Validated extended-stable npm release 2026.9.37");
+      } else {
+        expect(result.stderr).toMatch(/trailing completed month|not allowed by active/);
+      }
+    }
+    expect(policyIndex).toBeGreaterThan(receiptIndex);
   },
 );
