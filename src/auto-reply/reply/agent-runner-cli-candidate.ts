@@ -264,7 +264,19 @@ export async function runCliFallbackCandidate(
                       sessionBinding: cliSessionBinding,
                     })
                   : undefined,
-              resolveLiveProfile,
+              // The run's selected profile is the recorded account on its own provider; another
+              // provider's CLI backend selects its account without it.
+              async () =>
+                allowCliAuthProfileForwarding
+                  ? await resolveCliExecutionAuthProfileId({
+                      cliExecutionProvider: params.cliExecutionProvider,
+                      authProfileProvider: params.provider,
+                      config: params.runtimeConfig,
+                      agentDir: params.candidateRun.agentDir,
+                      selected: undefined,
+                      sessionBinding: cliSessionBinding,
+                    })
+                  : undefined,
             )
           : await resolveLiveProfile();
         if (turn.followupRun.run.scheduledAutomation && !scheduledInference && authProfileId) {

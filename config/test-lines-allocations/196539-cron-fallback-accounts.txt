@@ -1,2 +1,2 @@
-854
-# Cron cross-provider fallback for account-bound jobs (#172590 incident, #192009): isolated and session-target live-fallback integration coverage; net growth plus base debt.
+609
+# Cron cross-provider fallback for account-bound jobs (#172590 incident, #192009): isolated, session-target and CLI live-fallback coverage. Net growth only.
