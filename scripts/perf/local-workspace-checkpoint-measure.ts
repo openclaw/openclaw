@@ -17,6 +17,10 @@
  * Run on a btrfs fixture for native filesystem proof; pause durations conservatively
  * include pause/unpause CLI latency. Reports command latency plus finalization,
  * per-command main-process CPU and main-isolate allocation, and raw pause samples.
+ * --mode reconcile instead calls the ordinary projection synchronization owner once
+ * per request. --reconcile-target canonical|projection selects guest export or host
+ * import; --reconcile-changed-files N changes N existing files at their original size.
+ * Freeze complete source arms for this mode so real worker entrypoints match the owner.
  * --mode file-read uses the same Gateway with a real Docker guest continuously
  * writing its private projection. Use --requests 30 --burst 1 --read-interval-ms 2000
  * --files 62000 --file-bytes 19050 for a minute of Control UI file reads. Reports
@@ -54,6 +58,9 @@
  * preparation owner, not Docker or a model. --transcript-mib seeds genuine
  * synthetic transcript payloads using the shared Team fixture; report DB bytes
  * separately because compression changes physical size. Filesystem is host-owned.
+ * --source-authority captures a new operator authority for each preparation, revokes
+ * one during reconciliation, and proves later admissions reuse the same workspace.
+ * This calls the real authority and preparation owners, not WS or model transport.
  * Compare --requests 8 --burst 8 in fresh-process A/A and interleaved A/B runs;
  * allocation is a separate instrumented pass. Later writes must still reconcile.
  * After the first preparation fixture, --reuse-fixture --report <name>.json
@@ -137,6 +144,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
 import type { Worker } from "node:worker_threads";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { transformSync } from "esbuild";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
 import type { LocalWorkspaceOwner } from "../../src/gateway/worker-environments/local-workspace-types.ts";
@@ -154,6 +162,7 @@ const { values } = parseArgs({
     "source-root": { type: "string" },
     "fixture-source": { type: "string" },
     "serial-turns": { type: "boolean", default: false },
+    "source-authority": { type: "boolean", default: false },
     "owner-switch": { type: "boolean", default: false },
     "restart-stage": { type: "string" },
     "creation-contender": { type: "boolean", default: false },
@@ -177,6 +186,8 @@ const { values } = parseArgs({
     "native-turns": { type: "boolean", default: false },
     "settlement-socket": { type: "string" },
     "all-mutating": { type: "boolean", default: false },
+    "reconcile-target": { type: "string", default: "canonical" },
+    "reconcile-changed-files": { type: "string", default: "1" },
     requests: { type: "string", default: "2048" },
     burst: { type: "string", default: "64" },
     files: { type: "string", default: "1000" },
@@ -327,6 +338,7 @@ assert(
       "gateway",
       "file-read",
       "turn-loop",
+      "reconcile",
       "maintenance",
       "publication",
       "heartbeat",
@@ -335,7 +347,13 @@ assert(
 );
 assert(!values.absent || values.mode !== "owner");
 const fileReads = values.mode === "file-read";
-const turnLoop = values.mode === "turn-loop";
+const reconcile = values.mode === "reconcile";
+const turnLoop = values.mode === "turn-loop" || reconcile;
+const reconcileTarget = values["reconcile-target"];
+assert(reconcileTarget === "canonical" || reconcileTarget === "projection");
+const reconcileChangedFiles = Number(values["reconcile-changed-files"]);
+assert(Number.isSafeInteger(reconcileChangedFiles) && reconcileChangedFiles > 0);
+assert(!reconcile || reconcileChangedFiles < Number(values.files));
 const nativeTurns = values["native-turns"];
 assert(!nativeTurns || (turnLoop && values["sandbox-backend"] === "podman"));
 assert(!values["settlement-socket"] || nativeTurns);
@@ -413,6 +431,7 @@ assert(
       values.acceleration),
 );
 const reuseFixture = values["reuse-fixture"] || resumeOwnerSwitch;
+assert(!values["source-authority"] || (values.mode === "preparation" && !serialTurns));
 assert(!reuseFixture || values.mode === "preparation" || fileReads || turnLoop);
 const requests = Number(values.requests),
   burst = Number(values.burst),
@@ -578,6 +597,7 @@ const owners = [
   ...(!values.revision ? ["src/gateway/worker-environments/local-workspace-read.ts"] : []),
   "src/agents/worktrees/gc-artifacts.ts",
   "src/state/openclaw-state-lease-acquisition.ts",
+  ...(values["source-authority"] ? ["src/gateway/operator-run-authority.ts"] : []),
 ];
 const source = new Map(
   owners.map((file) => [
@@ -603,6 +623,8 @@ const finalizations: Array<{
   processCpuMs: number;
   allocatedBytes: number;
   pauses: number;
+  pausedDurationMs: number;
+  maxPauseDurationMs: number;
 }> = [];
 const pauseDurationsMs: number[] = [];
 const nativeRemovals = new Set<Promise<unknown>>();
@@ -667,9 +689,11 @@ Object.assign(globalThis, {
     if (args[0] === "pause") {
       assert(!fakePaused, "Cannot pause an already-paused fixture");
       fakePaused = true;
+      pauseBegan = performance.now();
     } else if (args[0] === "unpause") {
       assert(fakePaused, "Cannot resume a running fixture");
       fakePaused = false;
+      nativeCommandFinished("unpause", performance.now(), 0);
     } else {
       assert.equal(args[0], "inspect", `Unexpected engine command: ${args.join(" ")}`);
     }
@@ -722,7 +746,7 @@ registerHooks({
         "applyStagedWorkerWorkspace",
       ],
     };
-    if (nativeTurns && phaseFunctions[relative]) {
+    if (turnLoop && phaseFunctions[relative]) {
       code ??= fs.readFileSync(path.join(root, relative), "utf8");
       for (const name of phaseFunctions[relative]) {
         const sourceText: string = code;
@@ -787,7 +811,7 @@ ${anchor}
         "globalThis.__checkpointMeasure();\nconst env = params.env ?? process.env;",
       );
       code = code.replace(anchor, anchor + "\nglobalThis.__checkpointMeasure(action.kind);");
-      if (nativeTurns) {
+      if (turnLoop) {
         const manifestOwner = "manifest: readManifest,";
         assert(code.includes(manifestOwner));
         code = code.replace(
@@ -1214,6 +1238,10 @@ measurement: try {
     const { createHostSandboxFsBridge } =
       await import("../../src/agents/test-helpers/host-sandbox-fs-bridge.js");
     if (nativeTurns) {
+      assert(
+        process.getuid && process.getgid,
+        "Native Podman proof requires a POSIX workspace owner",
+      );
       guestName = `openclaw-checkpoint-measure-${process.pid}`;
       execFileSync("podman", ["image", "inspect", values["guest-image"]], { stdio: "ignore" });
       execFileSync(
@@ -1221,8 +1249,11 @@ measurement: try {
         [
           "run",
           "--detach",
+          "--init",
           "--name",
           guestName,
+          "--user",
+          `${process.getuid()}:${process.getgid()}`,
           "--network",
           "none",
           "--cap-drop",
@@ -1287,6 +1318,78 @@ measurement: try {
     });
     let edit = 0;
     runTurn = async () => {
+      if (reconcile) {
+        const commandBegan = performance.now();
+        const commandCpu = process.cpuUsage();
+        const commandAllocated = getHeapStatistics().total_allocated_bytes;
+        const seed = `synthetic reconcile ${++edit}`;
+        const writeRoot = reconcileTarget === "canonical" ? workspace! : canonical;
+        const writeFiles = `
+          const fs = require("node:fs");
+          const [root, seed, count, bytes] = process.argv.slice(1);
+          for (let i = 1; i <= Number(count); i++) {
+            fs.writeFileSync(root + "/file-" + i + ".txt",
+              (seed + " file-" + i + "\\n").padEnd(Number(bytes), "."));
+          }
+        `;
+        assert(pauseBegan === undefined, "Fixture mutation must begin with the guest running");
+        if (nativeTurns && reconcileTarget === "canonical") {
+          execFileSync("podman", [
+            "exec",
+            turnRuntime,
+            "node",
+            "-e",
+            writeFiles,
+            "/workspace",
+            seed,
+            String(reconcileChangedFiles),
+            String(fileBytes),
+          ]);
+        } else {
+          execFileSync(process.execPath, [
+            "-e",
+            writeFiles,
+            writeRoot,
+            seed,
+            String(reconcileChangedFiles),
+            String(fileBytes),
+          ]);
+        }
+        const began = performance.now();
+        const beforePauses = pauseDurationsMs.length;
+        await projection.withLocalWorkspaceProjection(owner, (operations) =>
+          operations.synchronize(reconcileTarget),
+        );
+        const ended = performance.now();
+        const usedCpu = process.cpuUsage(commandCpu);
+        const paused = pauseDurationsMs.slice(beforePauses);
+        finalizations.push({
+          changed: true,
+          durationMs: ended - began,
+          commandDurationMs: ended - commandBegan,
+          processCpuMs: (usedCpu.user + usedCpu.system) / 1000,
+          allocatedBytes: getHeapStatistics().total_allocated_bytes - commandAllocated,
+          pauses: pauseDurationsMs.length - beforePauses,
+          pausedDurationMs: paused.reduce((sum, duration) => sum + duration, 0),
+          maxPauseDurationMs: Math.max(0, ...paused),
+        });
+        assert(pauseBegan === undefined, "Reconciliation must resume the guest");
+        for (let i = 1; i <= reconcileChangedFiles; i++) {
+          const expected = `${seed} file-${i}\n`.padEnd(fileBytes, ".");
+          for (const directory of [canonical, workspace!]) {
+            assert.equal(fs.readFileSync(path.join(directory, `file-${i}.txt`), "utf8"), expected);
+          }
+        }
+        if (nativeTurns) {
+          assert.equal(
+            execFileSync("podman", ["exec", turnRuntime, "cat", "/workspace/file-1.txt"], {
+              encoding: "utf8",
+            }),
+            `${seed} file-1\n`.padEnd(fileBytes, "."),
+          );
+        }
+        return;
+      }
       for (let tool = 0; tool < 10; tool++) {
         const commandBegan = performance.now();
         const commandCpu = process.cpuUsage();
@@ -1317,6 +1420,7 @@ measurement: try {
           }
         }
         const began = performance.now();
+        const beforePauseSamples = pauseDurationsMs.length;
         await backend.finalizeExec!({
           status: "completed",
           exitCode: 0,
@@ -1325,6 +1429,7 @@ measurement: try {
         });
         const finalizationEnded = performance.now();
         const usedCpu = process.cpuUsage(commandCpu);
+        const paused = pauseDurationsMs.slice(beforePauseSamples);
         finalizations.push({
           changed: Boolean(content),
           durationMs: finalizationEnded - began,
@@ -1332,6 +1437,8 @@ measurement: try {
           processCpuMs: (usedCpu.user + usedCpu.system) / 1000,
           allocatedBytes: getHeapStatistics().total_allocated_bytes - commandAllocated,
           pauses: containerCommands.filter((command) => command === "pause").length - beforePauses,
+          pausedDurationMs: paused.reduce((sum, duration) => sum + duration, 0),
+          maxPauseDurationMs: Math.max(0, ...paused),
         });
         assert(!fakePaused, "Finalization must resume the guest");
         if (content) {
@@ -1473,13 +1580,59 @@ measurement: try {
     assert.deepEqual(result, { orphansDeleted: 0, snapshotsPruned: 0 });
     return result;
   };
-  const prepareWorkspace = async () => {
+  const authorityRuntime = values["source-authority"]
+    ? await import("../../src/gateway/operator-run-authority.js")
+    : undefined;
+  const deviceRuntime = values["source-authority"]
+    ? await import("../../src/gateway/device-revocation.js")
+    : undefined;
+  const operatorProfile = values["source-authority"]
+    ? (await import("../../src/state/user-profiles.js")).ensureProfileForEmail(
+        "source-authority-fixture@example.invalid",
+      )
+    : undefined;
+  const authorityContext = { getRuntimeConfig: () => config };
+  let admissions = 0;
+  const captureSource = async () => {
+    assert(authorityRuntime && deviceRuntime && operatorProfile);
+    const device = deviceRuntime.captureGatewayDeviceRevocation(
+      authorityContext,
+      { deviceId: "synthetic-source", role: "operator" },
+      () => true,
+    );
+    try {
+      const captured = await authorityRuntime.captureGatewayOperatorRunAuthority({
+        client: {
+          connId: `synthetic-${++admissions}`,
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: { id: "openclaw-control-ui", mode: "webchat", version: "dev", platform: "web" },
+            role: "operator",
+            scopes: ["operator.admin"],
+          },
+          internal: { operatorRoleActor: { kind: "operator", profileId: operatorProfile.id } },
+        },
+        context: authorityContext,
+        hasCurrentClientAuthority: device.isCurrent,
+      });
+      assert(captured, "An admitted operator must receive authority");
+      return captured;
+    } finally {
+      device.release();
+    }
+  };
+  const prepareWithAuthority = async (
+    authority?: Awaited<ReturnType<typeof captureSource>>["authority"],
+  ) => {
     using prepared = await prepareLocalSandboxWorkspace({
       cfg: config,
       agentId: owner.agentId,
       sessionKey,
       workspaceDir: canonical,
       sandbox,
+      assertCurrent: authority?.assertCurrent,
+      signal: authority?.signal,
     });
     assert(prepared, "Preparation must resolve the selected session-owned workspace");
     workspace ??= prepared.workspaceDir;
@@ -1490,6 +1643,62 @@ measurement: try {
     );
     return prepared.workspaceDir;
   };
+  const prepareWorkspace = async () => {
+    const captured = values["source-authority"] ? await captureSource() : undefined;
+    try {
+      return await prepareWithAuthority(captured?.authority);
+    } finally {
+      captured?.release();
+    }
+  };
+  let sourceAuthorityProof: unknown;
+  if (values["source-authority"]) {
+    const original = await captureSource();
+    let revoked = false;
+    const errors: string[] = [];
+    const recordRevocation = (error: unknown) => {
+      const causes = collectNestedErrorCandidates(error);
+      errors.push(...causes.map(String));
+      return (
+        original.authority.signal?.aborted === true &&
+        causes.includes(original.authority.signal.reason)
+      );
+    };
+    try {
+      await assert.rejects(
+        withDiagnosticsTimelineObserver(
+          (name) => {
+            if (!revoked && name === "attempt.setup.sandbox.workspace_selection.reuse.reconcile") {
+              revoked = true;
+              deviceRuntime!.invalidateGatewayDeviceRevocation(
+                authorityContext,
+                "synthetic-source",
+                "operator",
+              );
+            }
+            return undefined;
+          },
+          () => prepareWithAuthority(original.authority),
+        ),
+        recordRevocation,
+      );
+      assert(revoked, "Revocation must occur inside real workspace reconciliation");
+      for (let attempt = 0; attempt < 3; attempt++) {
+        assert.throws(original.authority.assertCurrent, recordRevocation);
+        await prepareWorkspace();
+      }
+      sourceAuthorityProof = {
+        revokedDuring: "attempt.setup.sandbox.workspace_selection.reuse.reconcile",
+        staleAssertionsRejected: 3,
+        freshPreparationsCompleted: 3,
+        errors,
+        abortReason: String(original.authority.signal?.reason),
+        boundary: "real operator/source and sandbox preparation owners; no WS or model",
+      };
+    } finally {
+      original.release();
+    }
+  }
   const runOne = (i: number) =>
     turnLoop
       ? runTurn!()
@@ -2295,12 +2504,15 @@ measurement: try {
   };
   const report = {
     mode: values.mode,
+    sourceAuthorityProof,
+    operatorAdmissions: values["source-authority"] ? admissions : undefined,
     harnessSha256,
     turn: turnLoop
       ? {
-          tools: 10,
-          changed: values["all-mutating"] ? 10 : 2,
-          unchanged: values["all-mutating"] ? 0 : 8,
+          tools: reconcile ? 1 : 10,
+          changed: reconcile ? 1 : values["all-mutating"] ? 10 : 2,
+          unchanged: reconcile || values["all-mutating"] ? 0 : 8,
+          ...(reconcile ? { reconcileTarget, reconcileChangedFiles } : {}),
           pauses: containerCommands.filter((command) => command === "pause").length,
           unpauses: containerCommands.filter((command) => command === "unpause").length,
           filesystemType: fs.statfsSync(output).type,
@@ -2323,6 +2535,12 @@ measurement: try {
             "withStagedWorkerWorkspaceManifest includes applyStagedWorkerWorkspace; phases overlap and must not be summed",
           percentileDefinition: "sorted sample at floor((count - 1) * percentile)",
           pauseDistributionMs: distribution(pauseDurationsMs),
+          operationPauseDistributionMs: distribution(
+            finalizations.map((sample) => sample.pausedDurationMs),
+          ),
+          operationMaxPauseDistributionMs: distribution(
+            finalizations.map((sample) => sample.maxPauseDurationMs),
+          ),
           commandDistributionMs: distribution(
             finalizations.map((sample) => sample.commandDurationMs),
           ),
@@ -2360,8 +2578,9 @@ measurement: try {
           }
         : undefined,
     allocatedBytesPerRequest: allocatedBytes / requests,
-    allocationAccounting:
-      "main-isolate V8 total allocated bytes, including background work; excludes workers",
+    allocationAccounting: Number.isFinite(allocatedBytes)
+      ? "main-isolate V8 total allocated bytes, including background work; excludes workers"
+      : "V8 total allocation counter unavailable; use separate sampled allocation pass",
     workerAllocation: nativeWorkerAllocation,
     reusedFixture: reuseFixture,
     revision: values.revision ?? "candidate",
@@ -2408,7 +2627,9 @@ measurement: try {
             scope:
               "cgroup and descendants: Node workers, native helpers, Git, Podman and guest; requires an exclusively owned rig",
             membership: fs.readFileSync("/proc/self/cgroup", "utf8").trim(),
-            cpuMax: fs.readFileSync("/sys/fs/cgroup/cpu.max", "utf8").trim(),
+            cpuMax: fs.existsSync("/sys/fs/cgroup/cpu.max")
+              ? fs.readFileSync("/sys/fs/cgroup/cpu.max", "utf8").trim()
+              : null,
           },
     mainThreadCpuPercent: (cpu.user + cpu.system) / (elapsedMs * 10),
     cpuUsPerRequest: (cpu.user + cpu.system) / requests,
@@ -2469,7 +2690,10 @@ measurement: try {
   }
   if (turnLoop) {
     fs.writeFileSync(path.join(workspace!, "file-0.txt"), initial);
-    for (const editedFile of [Math.floor(files / 3), Math.floor((2 * files) / 3)]) {
+    const editedFiles = reconcile
+      ? Array.from({ length: reconcileChangedFiles }, (_, index) => index + 1)
+      : [Math.floor(files / 3), Math.floor((2 * files) / 3)];
+    for (const editedFile of editedFiles) {
       fs.writeFileSync(
         path.join(workspace!, `file-${editedFile}.txt`),
         `synthetic ${editedFile}\n`.padEnd(fileBytes, "."),
@@ -2498,6 +2722,9 @@ measurement: try {
   };
   fs.writeFileSync(path.join(output, values.report), JSON.stringify(verified, null, 2));
   console.log(JSON.stringify(verified));
+} catch (error) {
+  console.error("Workspace measurement failed before cleanup:", error);
+  throw error;
 } finally {
   turnProjection?.[Symbol.dispose]();
   if (turnLoop && !nativeTurns) {
@@ -2509,7 +2736,7 @@ measurement: try {
     // Only the named task fixture is stopped, including if an interrupted read left it paused.
     const engine = nativeTurns ? "podman" : "docker";
     spawnSync(engine, ["unpause", guestName], { stdio: "ignore" });
-    execFileSync(engine, ["rm", "--force", guestName], { stdio: "ignore" });
+    execFileSync(engine, ["rm", "--force", guestName], { stdio: ["ignore", "ignore", "inherit"] });
     await guestExited;
     await (await import("../../src/agents/sandbox/registry.js")).removeRegistryEntry(guestName);
   }

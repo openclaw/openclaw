@@ -604,6 +604,23 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       const value = parseJsonEnv(env, VITEST_EXTRA_ARGS_ENV_KEY, []);
       return isStringArray(value) ? value : [];
     });
+  // Invalid job settings must fail before runtime builds acquire artifact ownership.
+  // Historical targets use a workflow-owned adapter. Their Node
+  // contract must not import current target discovery or runtime policy code.
+  const runtimePolicy = baseEnv.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim() || "node";
+  const runtimeOwner =
+    runtimePolicy === "node" ? undefined : await import("./lib/ci-test-runtime.mts");
+  const policy = runtimeOwner?.resolveCiTestRuntimePolicy(baseEnv) ?? "node";
+  // Respect serial timing-sensitive bins and never clone cache slots that
+  // cannot receive a plan.
+  const requestedConcurrency =
+    options.concurrency === undefined
+      ? readPositiveEnvInt(
+          "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY",
+          baseEnv,
+          MAX_CI_VITEST_PLAN_CONCURRENCY,
+        )
+      : parsePositiveInt(options.concurrency, "Shard plan concurrency");
   const preparedBuildEnv: NodeJS.ProcessEnv = {};
   if (
     fileURLToPath(import.meta.url) === join(process.cwd(), "scripts/ci-run-node-test-shard.mts")
@@ -679,22 +696,6 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       }
     }
   }
-  // Historical targets use a workflow-owned adapter. Their Node
-  // contract must not import current target discovery or runtime policy code.
-  const runtimePolicy = baseEnv.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim() || "node";
-  const runtimeOwner =
-    runtimePolicy === "node" ? undefined : await import("./lib/ci-test-runtime.mts");
-  const policy = runtimeOwner?.resolveCiTestRuntimePolicy(baseEnv) ?? "node";
-  // Respect serial timing-sensitive bins and never clone cache slots that
-  // cannot receive a plan.
-  const requestedConcurrency =
-    options.concurrency === undefined
-      ? readPositiveEnvInt(
-          "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY",
-          baseEnv,
-          MAX_CI_VITEST_PLAN_CONCURRENCY,
-        )
-      : parsePositiveInt(options.concurrency, "Shard plan concurrency");
   const ci = isCiLikeEnv(baseEnv);
   const continueOnFailure = shouldContinueVitestFailures(baseEnv);
   const hostResources = ci

@@ -809,6 +809,7 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
     resolve("scripts/release-tooling-identity.mjs"),
     join(fixture.scripts, "release-tooling-identity.mjs"),
   );
+  copyFileSync(resolve("scripts/lib/plain-gh.mjs"), join(fixture.scripts, "lib/plain-gh.mjs"));
   copyFileSync(
     resolve("scripts/linux-app-channel.mjs"),
     join(fixture.scripts, "linux-app-channel.mjs"),
