@@ -90,6 +90,7 @@ describe("PostgreSQL conformance shards", () => {
         "src/infra/exec-approvals-native.test.ts",
         "src/infra/client-credential-update.test.ts",
         "src/infra/update-managed-service-handoff-engine.test.ts",
+        "src/gateway/server-methods/agents-detach.integration.test.ts",
       ]),
     );
     expect(full.filter((file) => file.startsWith("src/infra/database-engine/"))).toEqual([

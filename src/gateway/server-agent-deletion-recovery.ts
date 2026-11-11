@@ -46,6 +46,7 @@ export async function resumeAgentDeletions(
     try {
       await deleteGatewayAgent(journal.agentId, journal.deleteFiles, context, {
         recoveryOperationId: journal.operationId,
+        detach: journal.phase === "detach-draining" || journal.phase === "detach-retiring",
       });
     } catch {
       // The deletion owner records one actionable outcome after its bounded retries.

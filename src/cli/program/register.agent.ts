@@ -157,6 +157,18 @@ ${formatHelpExamples([
     });
 
   agents
+    .command("detach <id>")
+    .description("Detach an agent offline, preserving stores, history, schedules, and workspace")
+    .option("--force", "Skip confirmation", false)
+    .option("--json", "Output JSON summary", false)
+    .action(async (id, opts): Promise<void> => {
+      await runAgentsCommandAction(async () => {
+        const { agentsDetachCommand } = await import("../../commands/agents.commands.detach.js");
+        await agentsDetachCommand({ ...opts, id });
+      });
+    });
+
+  agents
     .command("delete <id>")
     .description("Delete an agent and prune workspace/state")
     .option("--force", "Skip confirmation", false)

@@ -55,6 +55,7 @@ const postgresConformanceTargets = [
   "extensions/memory-core/src/memory-forget.postgres.test.ts",
   "src/gateway/server-database-engine.postgres.test.ts",
   "src/gateway/server-handoff-sentinel.socket.postgres.test.ts",
+  "src/gateway/server-methods/agents-detach.integration.test.ts",
   "src/transcripts/meeting-chronology.postgres.test.ts",
 ] as const;
 

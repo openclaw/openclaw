@@ -141,6 +141,11 @@ export const AgentsDeleteParamsSchema = closedObject({
   deleteFiles: Type.Optional(Type.Boolean()),
 });
 
+/** Detaches an agent from this Gateway while preserving its store and files. */
+export const AgentsDetachParamsSchema = closedObject({
+  agentId: NonEmptyString,
+});
+
 /** Result returned after deleting an agent and unbinding sessions. */
 export const AgentsDeleteResultSchema = closedObject({
   ok: Type.Literal(true),
@@ -784,6 +789,7 @@ export type GatewayAgentRuntime = Static<typeof GatewayAgentRuntimeSchema>;
 export type AgentsUpdateParams = Static<typeof AgentsUpdateParamsSchema>;
 export type AgentsUpdateResult = Static<typeof AgentsUpdateResultSchema>;
 export type AgentsDeleteParams = Static<typeof AgentsDeleteParamsSchema>;
+export type AgentsDetachParams = Static<typeof AgentsDetachParamsSchema>;
 export type AgentsDeleteResult = Static<typeof AgentsDeleteResultSchema>;
 export type AgentsListResult = Static<typeof AgentsListResultSchema>;
 export type ModelsAuthSetApiKeyParams = Static<typeof ModelsAuthSetApiKeyParamsSchema>;

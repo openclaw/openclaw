@@ -267,6 +267,15 @@ export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
 
   return await withAgentDeletion(agentId, async (begin) => {
     existingJournal = await readAgentDeletionJournalAsync(agentId);
+    if (
+      existingJournal &&
+      !existingJournal.cleanupCompleted &&
+      (existingJournal.phase === "detach-draining" || existingJournal.phase === "detach-retiring")
+    ) {
+      throw new Error(
+        `Agent "${agentId}" has a pending detach. Restart the Gateway and retry agents.detach to preserve its store.`,
+      );
+    }
     if (configured && existingJournal?.cleanupCompleted) {
       if (!(await claimCompletedAgentDeletion(agentId, existingJournal.operationId))) {
         throw new Error(`Agent "${agentId}" deletion tombstone changed before fresh deletion.`);

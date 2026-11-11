@@ -746,6 +746,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.files.preview", "sessions-files", "operator.read", "2026.10"],
   ["sessions.files.preview.release", "sessions-files", "operator.read", "2026.10"],
   ["users.channelIdentity", "users", "operator.sessions.read", "2026.10", PROFILE_DEPENDENT],
+  ["agents.detach", "agents", "operator.admin", "2026.11"],
   ["sessions.groups.create", "sessions-groups", "operator.write", "2026.10"],
   ["sessions.catalog.resolve", "session-catalog", "operator.read", "2026.10"],
   ["openclawId.status", "openclaw-id", "operator.read", "2026.11"],

@@ -12,6 +12,7 @@ const descriptor = (name: string) => descriptors.find((entry) => entry.name === 
 
 it.each([
   ["agents.avatar.generate", "operator.admin", { since: "2026.10", controlPlaneWrite: true }],
+  ["agents.detach", "operator.admin", { since: "2026.10" }],
   [
     "models.authSetApiKey plugins.reload plugins.refresh cron.add cron.update cron.remove cron.run",
     "operator.admin",
