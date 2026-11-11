@@ -253,7 +253,6 @@ export {
   extractKeywords,
   isCronRunSessionKey,
   isDreamingNarrativeSessionStoreKey,
-  matchesSessionEntryPrefixHash,
   parseUsageCountedSessionIdFromFileName,
   readTranscriptStatsBatchReadOnlyAsync,
   readTranscriptStatsBatchReadOnlySync,
@@ -261,6 +260,8 @@ export {
   sessionPathForSessionIdentity,
   statSessionEntry,
   statSessionEntrySync,
+  streamSessionEntries,
+  streamSessionEntry,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
 
 // Internal actor sources are not part of the released plugin call signatures.
@@ -278,6 +279,9 @@ export const readSessionResetRecallCutoff: (
 ) => ReturnType<typeof readSessionResetRecallCutoffFromHost> = readSessionResetRecallCutoffFromHost;
 
 export type {
+  SessionEntryPage,
+  SessionEntryStream,
+  SessionEntrySummary,
   SessionFileEntry,
   SessionFileState,
   SessionTranscriptCorpusEntry,

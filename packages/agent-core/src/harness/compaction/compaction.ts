@@ -16,6 +16,7 @@ import {
   MAX_LATEST_USER_REQUEST_CHARS,
   parseCompactionDetails,
 } from "./compaction-details.js";
+import { buildCompactionFloor, stripSummaryFloor } from "./compaction-floor.js";
 import {
   capCompactionSummary,
   fitCompactionSummary,
@@ -365,7 +366,8 @@ export function prepareCompaction(
   let boundaryStart = 0;
   if (prevBoundaryIndex >= 0) {
     const prevBoundary = pathEntries[prevBoundaryIndex];
-    previousSummary = prevBoundary?.type === "compaction" ? prevBoundary.summary : undefined;
+    previousSummary =
+      prevBoundary?.type === "compaction" ? stripSummaryFloor(prevBoundary.summary) : undefined;
     if (prevBoundary?.type === "compaction") {
       const details = parseCompactionDetails(prevBoundary.details);
       previousLatestUnresolvedUserRequest = details?.latestUnresolvedUserRequest;
@@ -646,11 +648,17 @@ export function compactWithoutSummary(
     : "";
   // Keep the notice and bounded source ask; shrink only the carried summary.
   const requiredContext =
-    `[${droppedCount} earlier message(s) were removed without a summary because summarization failed. The messages after this summary are verbatim; ask the user if older details matter.]\n\n` +
+    `[${droppedCount} earlier message(s) were removed without a summary because summarization failed. The messages after this summary are verbatim; the removed messages remain in this session's stored transcript. When session history tools are available, read them there before asking the user to repeat earlier details.]\n\n` +
     (sourceAsk ? `## Original request of the current turn\n${JSON.stringify(sourceAsk)}\n\n` : "");
+  // The floor leads the shrinkable body, so a constrained budget trims the carried summary first.
+  const floor = buildCompactionFloor([
+    ...preparation.messagesToSummarize,
+    ...preparation.turnPrefixMessages,
+  ]);
+  const carriedSummary = previousSummaryWithoutFileOperations(preparation) ?? "";
   return finalizeCompaction(
     preparation,
-    previousSummaryWithoutFileOperations(preparation) ?? "",
+    [floor, carriedSummary].filter(Boolean).join("\n\n"),
     "",
     requiredContext,
   );

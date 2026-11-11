@@ -1,7 +1,9 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginHookPromptContinuity } from "../../plugins/hook-before-agent-start.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
+import { runAuthorizedPromptBuildForTurn } from "../authorized-prompt-build.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CurrentInboundPromptContext } from "../embedded-agent-runner/run/params.js";
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
@@ -49,6 +51,8 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     activeToolNames: () => readonly string[];
     assertActive: () => void;
   };
+  /** The harness session owner's decision for this request; reported to authorized hooks. */
+  continuity?: PluginHookPromptContinuity;
 }): Promise<AgentHarnessPromptBuildResult> {
   const inputPrompt = buildCurrentInboundPrompt({
     context: params.currentInboundContext,
@@ -104,13 +108,16 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   const toolAuthorityFingerprint = toolAuthority?.fingerprint?.trim();
   const authorizedPromptBuildResult =
     hookRunner && toolAuthorityFingerprint && toolAuthority
-      ? await hookRunner
-          .runAuthorizedPromptBuild(promptEvent, hookCtx, {
+      ? await runAuthorizedPromptBuildForTurn(
+          hookRunner,
+          { ...promptEvent, ...(params.continuity ? { continuity: params.continuity } : {}) },
+          hookCtx,
+          {
             toolAuthorityFingerprint,
             activeToolNames: toolAuthority.activeToolNames(),
             assertHostActive: toolAuthority.assertActive,
-          })
-          .catch(warnHookFailure("authorized before_prompt_build"))
+          },
+        ).catch(warnHookFailure("authorized before_prompt_build"))
       : undefined;
   const replacementSystemPrompt = promptBuildResult?.systemPrompt;
   const systemPromptReplaced = typeof replacementSystemPrompt === "string";

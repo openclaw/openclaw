@@ -32,6 +32,7 @@ it("keeps unrelated publications out of mounted row access and subtitle preparat
   sidebar.style.cssText = "display:block;width:320px;height:600px";
   const viewport = sidebar.querySelector<HTMLElement>(".sidebar-shell__body")!;
   viewport.style.cssText = "height:500px;flex:none;overflow:auto";
+  sidebar.setSessionSortMode("created");
   sidebar.connected = true;
   sidebar.sessionsShowPreview = true;
   const owner = getAppSidebarOwner(sidebar.hostElement)!;

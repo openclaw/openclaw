@@ -1807,6 +1807,7 @@ button.chat-reply-attribution__target:disabled {
 }
 
 .msg-meta__time,
+.msg-meta__duration,
 .msg-meta__tokens,
 .msg-meta__cache,
 .msg-meta__cost,
