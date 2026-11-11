@@ -175,24 +175,11 @@ export function prepareSessionToolSurface(params: {
 }): AnyAgentTool[] {
   const historyId = resolvePromptHistoryId(params);
   const restored = (): ToolSurface | undefined => {
-    const markerIndex = params.entries.findLastIndex(
-      (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
-    );
-    const entry = params.entries[markerIndex];
-    const data = entry?.type === "custom" ? entry.data : undefined;
-    return isRecord(data) &&
-      Array.isArray(data.tools) &&
-      data.routeKey === params.routeKey &&
-      data.historyId === historyId &&
-      data.toolPolicy === params.toolPolicy &&
-      !params.entries.slice(markerIndex + 1).some((later) => later.type === "model_change")
-      ? {
-          routeKey: params.routeKey,
-          historyId,
-          toolPolicy: params.toolPolicy,
-          // SAFETY: only this module writes `tools`, as ToolDefinition entries matched to this route and policy.
-          tools: data.tools as ToolDefinition[],
-        }
+    const pin = readToolSurfaceCheckpoint(params.entries);
+    return pin?.routeKey === params.routeKey &&
+      pin.historyId === historyId &&
+      pin.toolPolicy === params.toolPolicy
+      ? { routeKey: params.routeKey, historyId, toolPolicy: params.toolPolicy, tools: pin.tools }
       : undefined;
   };
   const candidate = params.state.pendingToolSurface ?? params.state.toolSurface ?? restored();
@@ -235,15 +222,44 @@ export function prepareSessionToolSurface(params: {
       tools: [...current, ...retained].sort((a, b) => a.name.localeCompare(b.name)),
     };
   }
-  return [
-    ...tools,
-    ...retained.map((tool) =>
-      gateAgentToolExecution(
-        { ...tool, label: tool.name, execute: async () => ({ content: [], details: {} }) },
-        `${tool.name} is not available in this turn. Do not retry ${tool.name}.`,
-      ),
-    ),
-  ];
+  return [...tools, ...retained.map(refusePinnedTool)];
+}
+
+function refusePinnedTool(tool: ToolDefinition): AnyAgentTool {
+  return gateAgentToolExecution(
+    { ...tool, label: tool.name, execute: async () => ({ content: [], details: {} }) },
+    `${tool.name} is not available in this turn. Do not retry ${tool.name}.`,
+  );
+}
+
+/** The latest checkpointed pin, unless a later model change retired it. */
+function readToolSurfaceCheckpoint(entries: SessionEntry[]) {
+  const markerIndex = entries.findLastIndex(
+    (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
+  );
+  const entry = entries[markerIndex];
+  const data = entry?.type === "custom" ? entry.data : undefined;
+  return isRecord(data) &&
+    Array.isArray(data.tools) &&
+    !entries.slice(markerIndex + 1).some((later) => later.type === "model_change")
+    ? {
+        routeKey: data.routeKey,
+        historyId: data.historyId,
+        toolPolicy: data.toolPolicy,
+        // SAFETY: only this module writes `tools`, as the ToolDefinition entries a turn sent.
+        tools: data.tools as ToolDefinition[],
+      }
+    : undefined;
+}
+
+/**
+ * The tool definitions this session last sent to the provider, or undefined before its
+ * first pin. Compaction estimates its replacement request with these: deferred catalog
+ * tools stay registered but never reach the provider. Accepted edge case: a history or
+ * tool policy change since the pin is counted from the next turn's pin.
+ */
+export function readSessionSentTools(entries: SessionEntry[]): AnyAgentTool[] | undefined {
+  return readToolSurfaceCheckpoint(entries)?.tools.map(refusePinnedTool);
 }
 
 /** Unsent preparation belongs to its attempt; an incapable route rebuilds the full prompt. */
