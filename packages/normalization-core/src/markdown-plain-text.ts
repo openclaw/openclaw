@@ -65,7 +65,9 @@ function holdInlineCodeSpans(text: string, code: string[]): string {
       continue;
     }
     let n = 1;
-    while (text[i + n] === "`") n++;
+    while (text[i + n] === "`") {
+      n++;
+    }
     // Find the next backtick run of exactly this length, which closes the span.
     const m = new RegExp("(?<![`])`{" + n + "}(?!`)").exec(text.slice(i + n));
     // A 3+ run at a line start (any leading spaces) opens a fenced block, which
