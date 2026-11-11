@@ -38,10 +38,9 @@ function select(
 
 describe("Telegram recent own-bot context", () => {
   it("emits internal presentation hints without collapsing identical native candidates", () => {
-    const messages = [row(1, 120_000), row(2, 60_000)].map((message) => ({
-      ...message,
-      body: "Build complete",
-    }));
+    const messages = [row(1, 120_000), row(2, 60_000)].map((message) =>
+      Object.assign(message, { body: "Build complete" }),
+    );
     const [selected] = selectTelegramGroupPromptContext({
       promptContext: [
         {
@@ -81,7 +80,7 @@ describe("Telegram recent own-bot context", () => {
     { name: "stale", candidate: row(1, 900_001), currentTimestampMs: now },
     { name: "future", candidate: row(1, -1), currentTimestampMs: now },
     { name: "unknown current time", candidate: row(1, 120_000), currentTimestampMs: undefined },
-    { name: "nonfinite current time", candidate: row(1, 120_000), currentTimestampMs: NaN },
+    { name: "nonfinite current time", candidate: row(1, 120_000), currentTimestampMs: Number.NaN },
     {
       name: "unknown candidate time",
       candidate: { ...row(1, 120_000), timestamp_ms: undefined },

@@ -157,11 +157,11 @@ export function selectTelegramGroupPromptContext(params: {
     const now = params.currentTimestampMs;
     if (!params.includeBeforeSelf && typeof now === "number" && Number.isFinite(now)) {
       for (const message of recentMessages
-        .filter((message) => {
-          const timestamp = message["timestamp_ms"];
+        .filter((candidate) => {
+          const timestamp = candidate["timestamp_ms"];
           return (
-            typeof message["sender"] === "string" &&
-            isTelegramSelfSenderName(message["sender"]) &&
+            typeof candidate["sender"] === "string" &&
+            isTelegramSelfSenderName(candidate["sender"]) &&
             typeof timestamp === "number" &&
             Number.isFinite(timestamp) &&
             timestamp <= now &&
