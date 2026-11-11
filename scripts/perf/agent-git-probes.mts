@@ -178,7 +178,7 @@ try {
       gitDir = git(linked, ["rev-parse", "--absolute-git-dir"]);
     }
     if (historyBlobs && values.warm) {
-      const missing = git(root, [
+      const missingBlobs = git(root, [
         "--git-dir",
         gitDir,
         "rev-list",
@@ -207,7 +207,7 @@ try {
           "origin",
           "--stdin",
         ],
-        `${missing.join("\n")}\n`,
+        `${missingBlobs.join("\n")}\n`,
       );
     }
     const trace = path.join(root, `trace-${index}.jsonl`);
@@ -297,8 +297,11 @@ try {
         (name) => name.endsWith(".promisor") && !packsBefore.has(name),
       ).length,
       outputSha256: createHash("sha256").update(result.stdout).digest("hex"),
-      allocationCalls: allocations.reduce((sum, row) => sum + row.calls, 0),
-      allocationRequestedBytes: allocations.reduce((sum, row) => sum + row.requestedBytes, 0),
+      allocationCalls: allocations.reduce((sum, receipt) => sum + receipt.calls, 0),
+      allocationRequestedBytes: allocations.reduce(
+        (sum, receipt) => sum + receipt.requestedBytes,
+        0,
+      ),
       load,
     };
     rows.push(row);
@@ -464,7 +467,7 @@ try {
         shimSha256: createHash("sha256").update(AGENT_GIT_SHIM).digest("hex"),
         platform: process.platform,
         files: files + 1,
-        workingTreeBytes: files * content.length + `history ${commits - 1}\n`.length,
+        workingTreeBytes: files * content.length + history.length,
         commits: commits + 1,
         samples,
         summary,
