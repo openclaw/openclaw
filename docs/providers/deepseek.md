@@ -113,8 +113,11 @@ PNG, JPEG, GIF, and WebP images through the same API and API key. See
 Flash and V4 models support DeepSeek's `thinking` control. OpenClaw also replays
 DeepSeek `reasoning_content` on follow-up turns so thinking sessions with tool
 calls can continue.
-Use `/think xhigh` or `/think max` with DeepSeek V4 models to request DeepSeek's
-maximum `reasoning_effort`; both map to `"max"`.
+Use `/think minimal` or `/think low` for DeepSeek's `"low"` effort;
+`/think medium`, `/think high`, and `/think xhigh` use `"high"`.
+Use `/think max` for `"max"` effort. Thinking remains enabled by default.
+DeepSeek does not expose a separate priority service tier for Fast mode;
+selecting Flash is a model choice, not a speed-tier request.
 </Tip>
 
 ## Thinking and tools
