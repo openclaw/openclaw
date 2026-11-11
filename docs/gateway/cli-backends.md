@@ -655,11 +655,21 @@ toward the output budget; IDs, metadata, padding, and frames still do. Mixed use
 records and cumulative snapshots still count. Forwarded subagent assistant
 messages and tool-result messages that the parser discards are charged a fixed
 allowance for their parent progress id. Child attribution alone does not earn
-that discount: retained stream-event text still counts toward the same 8 MiB
-output limit. Discarded stream control frames (thinking signatures and progress
-ticks, block and message stops, message deltas) are charged a fixed allowance,
-and progress ticks and stops also skip the frame count like partial-message
-envelopes. Single-line limits and bounded frame counts remain active.
+that discount: a child-attributed stream event is charged in full against the
+same 8 MiB output limit, and its text is kept out of the parent's reply rather
+than appended to it. Discarded stream control frames (thinking signatures and
+progress ticks, block and message stops, message deltas) are charged a fixed
+allowance, and progress ticks and stops also skip the frame count like
+partial-message envelopes. Single-line limits and bounded frame counts remain
+active, and forwarded subagent records count toward the frame limit like any
+other record.
+
+Spending either cumulative budget stops output assembly instead of failing the
+turn. The parser keeps watching for the terminal `result` record and keeps
+emitting tool starts, tool results, attributed subagent progress and native
+compaction phases, so a run that is still working is not reported as blocked. A
+turn whose terminal result arrives is delivered with its truncation reported
+separately; a turn that never produces one still fails with the limit error.
 
 Input modes:
 

@@ -99,7 +99,7 @@ function parentStatusLine() {
 }
 
 /**
- * Spends the line budget with chargeable ordinary records and proves it is
+ * Spends the line budget with ordinary parent records and proves it is
  * spent before the caller tests anything that depends on it: with no terminal
  * result yet, a spent budget is still a hard error.
  */
