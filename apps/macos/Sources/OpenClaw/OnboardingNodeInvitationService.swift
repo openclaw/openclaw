@@ -52,6 +52,7 @@ final class OnboardingNodeInvitationService: OnboardingOpenClawIDService {
         }
         MacOpenClawIDOperatorRoute.shared.stop()
         let state = AppStateStore.shared
+        let previous = (state.connectionMode, state.remoteTransport, state.remoteUrl)
         state.remoteTransport = .direct
         state.remoteUrl = "wss://\(target.hostname)"
         state.connectionMode = .remote
@@ -60,6 +61,10 @@ final class OnboardingNodeInvitationService: OnboardingOpenClawIDService {
             _ = try await GatewayConnection.shared.request(method: "health", params: nil, timeoutMs: 30000)
             return true
         } catch {
+            // Approved as a node only: keep the primary connection the person already had.
+            MacOpenClawIDOperatorRoute.shared.stop()
+            (state.connectionMode, state.remoteTransport, state.remoteUrl) = previous
+            await GatewayEndpointStore.shared.refresh()
             return false
         }
     }

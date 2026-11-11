@@ -1357,14 +1357,6 @@ extension MacNodeModeCoordinator {
         self.enqueueRouteInvalidation(mode: .reconnectRefresh)
     }
 
-    func isOpenClawIDTargetConnected(_ target: MacNodeOpenClawIDTarget) -> Bool {
-        guard let selected = try? self.openClawIDSelection.get(),
-              selected.enrollmentID == target.enrollmentID,
-              selected.hostname == target.hostname,
-              self.connectedNodeId != nil, let route = self.openClawIDRoute else { return false }
-        return (try? route.authority.check()) != nil
-    }
-
     func openClawIDEnrollmentDescription() async throws -> OpenClawIDNodeEnrollmentDescription {
         let provider = ComputerControlProvider.current()
         let (manifest, _) = try await self.resolveWorkerManifestForConnection(
