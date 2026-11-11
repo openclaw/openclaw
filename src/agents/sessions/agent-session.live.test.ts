@@ -66,6 +66,7 @@ function createResourceLoader(handlers: ExtensionHandlers = new Map()): Resource
 async function resolveLiveModel(
   modelsPath: string,
   authStorage: AuthStorage,
+  maxTokens: number,
 ): Promise<{ model: Model; modelRegistry: ModelRegistry }> {
   const requestedModelId =
     process.env.OPENCLAW_LIVE_AGENT_SESSION_MODEL?.trim() || DEFAULT_MODEL_ID;
@@ -103,7 +104,7 @@ async function resolveLiveModel(
     throw new Error(`No Anthropic Haiku model found for ${requestedModelId}`);
   }
   return {
-    model: { ...model, maxTokens: Math.min(model.maxTokens, 128) },
+    model: { ...model, maxTokens: Math.min(model.maxTokens, maxTokens) },
     modelRegistry,
   };
 }
@@ -112,6 +113,7 @@ async function createLiveSession(
   options: {
     customTools?: (cwd: string) => ToolDefinition[];
     handlers?: ExtensionHandlers;
+    compaction?: boolean;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "openclaw-agent-session-live-"));
@@ -121,11 +123,20 @@ async function createLiveSession(
   await mkdir(cwd, { recursive: true });
   const authStorage = AuthStorage.inMemory();
   authStorage.setRuntimeApiKey("anthropic", API_KEY);
-  const { model, modelRegistry } = await resolveLiveModel(modelsPath, authStorage);
+  // Compaction emits a structured checkpoint, not the one-word ordinary turn fixture.
+  const { model, modelRegistry } = await resolveLiveModel(
+    modelsPath,
+    authStorage,
+    options.compaction ? 1_024 : 128,
+  );
   const sessionManager = SessionManager.inMemory();
   const settingsManager = SettingsManager.inMemory({
     defaultThinkingLevel: "off",
-    compaction: { enabled: true, reserveTokens: 128, keepRecentTokens: 0 },
+    compaction: {
+      enabled: true,
+      reserveTokens: options.compaction ? 2_048 : 128,
+      keepRecentTokens: 0,
+    },
     retry: {
       enabled: false,
       provider: { timeoutMs: PROVIDER_TIMEOUT_MS, maxRetryDelayMs: 0 },
@@ -213,7 +224,7 @@ describeLive("AgentSession live", () => {
   it(
     "manually compacts a completed turn and remains usable",
     async () => {
-      const { session, sessionManager } = await createLiveSession();
+      const { session, sessionManager } = await createLiveSession({ compaction: true });
       await session.prompt("Reply with exactly OK.");
 
       const result = await session.compact();

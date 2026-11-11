@@ -448,15 +448,35 @@ describe("SQLite transcript history events", () => {
       expect(directional.events.map(({ seq }) => seq)).toEqual(seqs);
     }
 
-    expect(() =>
-      readSessionTranscriptHistoryAnchorPage(scope, { messageId: "old-notice", maxMessages: 3 }),
-    ).toThrow(/malformed JSON/i);
+    const historical = readSessionTranscriptHistoryAnchorPage(scope, {
+      messageId: "old-notice",
+      maxMessages: 3,
+    });
+    expect(historical.found).toBe(true);
+    expect(historical.events.map(historyEventId)).toEqual([
+      "old-notice",
+      "kept-user",
+      "shallow-notice",
+    ]);
+    expect(historical.events[0]?.event).toEqual(oldNotice);
 
     await replaceTranscriptEvents(scope, [
       ...events,
       { ...oldNotice, id: "current-notice", parentId: "compaction" },
     ]);
-    expect(() => readSessionTranscriptHistoryEvents(scope)).toThrow(/malformed JSON/i);
+    const current = readSessionTranscriptHistoryEvents(scope);
+    expect(current.map(historyEventId)).toEqual([
+      "kept-user",
+      "kept-assistant",
+      "reset",
+      "compaction",
+      "current-notice",
+    ]);
+    expect(current.at(-1)?.event).toEqual({
+      ...oldNotice,
+      id: "current-notice",
+      parentId: "compaction",
+    });
   });
 
   it.each([["custom_message", "deep", false, true]] as const)(

@@ -63,7 +63,9 @@ vi.mock("../state/openclaw-state-db.js", () => ({
 vi.mock("../state/openclaw-state-db-readonly.js", () => ({
   withExistingOpenClawStateDatabaseReadOnly: boundary.unexpectedNative,
 }));
+// mock-isolation: Synthetic worker scopes have no opened database or cached file identity.
 vi.mock("../state/openclaw-state-db-cache.js", () => ({
+  openClawStateDatabaseCache: { getKnownOpenClawStateDatabaseIdentity: () => undefined },
   captureOpenClawStateDatabaseReadAdmission: (databasePath: string) => ({
     databasePath,
     identity: { key: `path:${databasePath}`, canonicalPath: databasePath },

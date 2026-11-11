@@ -42,16 +42,6 @@ matching. A harness that exposes a tool under another name can supply
 can match the original name or an alias; the result retains the original tool
 objects and their execution wrappers.
 
-## Exec policy layering
-
-`openclaw/plugin-sdk/exec-approvals-runtime` exports
-`applyExecPolicyLayer(base, layer?)` for layering global and per-agent exec policy.
-An explicit `mode` supplies its corresponding security and approval settings.
-Otherwise, explicitly supplied `security` or `ask` fields replace those fields
-and clear the inherited mode; unspecified fields retain their inherited values.
-An empty or absent layer preserves the base policy. Resolve the result with
-`resolveExecModePolicy` before projecting it into a backend's permission flags.
-
 ## Sandbox bind parsing
 
 `openclaw/plugin-sdk/agent-harness-runtime` exports

@@ -29,7 +29,9 @@ vi.mock("./project-checkout.js", () => ({
   resolveProjectCheckout: vi.fn(),
   resolveProjectDirectory: vi.fn(),
 }));
+// mock-isolation: Synthetic worker scopes have no opened database or cached file identity.
 vi.mock("../state/openclaw-state-db-cache.js", () => ({
+  openClawStateDatabaseCache: { getKnownOpenClawStateDatabaseIdentity: () => undefined },
   captureOpenClawStateDatabaseReadAdmission: (databasePath: string) => ({
     databasePath,
     assertCurrent() {},
