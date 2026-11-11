@@ -9132,8 +9132,10 @@ describe("ci workflow guards", () => {
       "Check main push ratchets and protocol additions",
     );
     expect(mainPushRatchets.env.BASE_SHA).toBe("${{ steps.diff_base.outputs.sha }}");
-    expect(mainPushRatchets.run).toContain('prepare_ratchet_base_args "$BASE_SHA"');
-    expect(mainPushRatchets.run).toContain(
+    expect(mainPushRatchets.run).toBe("source scripts/ci-main-push-checks.sh ratchets");
+    const mainPushChecks = readFileSync("scripts/ci-main-push-checks.sh", "utf8");
+    expect(mainPushChecks).toContain('prepare_ratchet_base_args "$BASE_SHA"');
+    expect(mainPushChecks).toContain(
       'pnpm check:test-timeout-race-ratchet "${ratchet_base_args[@]}"',
     );
     expect(ratchetRun.run).toContain("pnpm config:docs:check");

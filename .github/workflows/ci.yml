@@ -1882,19 +1882,7 @@ jobs:
         env:
           BASE_SHA: *diff_base
           PROTOCOL_SINCE_BASE_SHA: *diff_base
-        run: |
-          set -euo pipefail
-          source .ci-harness/scripts/ci-collect-checks.sh
-          prepare_ratchet_base_args "$BASE_SHA"
-          run_check max-lines pnpm check:max-lines-ratchet "${ratchet_base_args[@]}"
-          run_check assertion-safety pnpm check:assertion-safety "${ratchet_base_args[@]}"
-          run_check database-worker pnpm check:database-worker-ratchet "${ratchet_base_args[@]}"
-          run_check database-dialect pnpm check:database-dialect-ratchet "${ratchet_base_args[@]}"
-          run_check timeout-race pnpm check:test-timeout-race-ratchet "${ratchet_base_args[@]}"
-          run_check mock-exports pnpm check:test-mock-exports "${ratchet_base_args[@]}"
-          run_check test-lines pnpm check:test-lines-ratchet "${ratchet_base_args[@]}"
-          run_check protocol-additions node --import ./scripts/tsx.mjs scripts/check-protocol-since.mts
-          finish_checks
+        run: source scripts/ci-main-push-checks.sh ratchets
 
       - name: Setup pinned Bun for main push regressions
         id: push_test_bun
@@ -1905,16 +1893,7 @@ jobs:
 
       - name: Check main push shutdown and suppression regressions
         if: ${{ !cancelled() && steps.guard_setup.outcome == 'success' && steps.push_test_bun.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        run: |
-          set -euo pipefail
-          source .ci-harness/scripts/ci-collect-checks.sh
-          for runtime in node bun; do
-            run_check "$runtime-shutdown" env OPENCLAW_VITEST_RUNTIME="$runtime" \
-              node scripts/run-vitest.mjs src/cli/gateway-cli/run-loop.direct-stop-active-work.process.test.ts --maxWorkers=1
-            run_check "$runtime-lint-suppressions" env OPENCLAW_VITEST_RUNTIME="$runtime" \
-              node scripts/run-vitest.mjs test/scripts/lint-suppressions.test.ts --maxWorkers=1
-          done
-          finish_checks
+        run: source scripts/ci-main-push-checks.sh regressions
 
   build-artifacts:
     permissions:
