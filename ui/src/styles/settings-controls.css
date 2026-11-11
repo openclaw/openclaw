@@ -97,7 +97,7 @@ select.settings-select:not([multiple]) {
 
 .settings-segmented--compact > .settings-segmented__btn {
   padding: 0 6px;
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
 }
 
 .settings-segmented > .settings-segmented__btn--active,

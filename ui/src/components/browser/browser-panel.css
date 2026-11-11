@@ -24,7 +24,7 @@ openclaw-browser-panel {
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--muted);
-    font-size: var(--control-ui-text-xs);
+    font-size: 11px;
   }
 
   .bp-toolbar[data-mobile="true"] {
@@ -38,8 +38,8 @@ openclaw-browser-panel {
     border-bottom: 1px solid var(--border-strong);
     background: color-mix(in srgb, var(--bg) 55%, var(--bg-elevated));
     color: var(--muted);
-    font-size: var(--control-ui-text-md);
-    line-height: calc(18px * var(--control-ui-text-scale));
+    font-size: 14px;
+    line-height: 18px;
   }
   .bp-toolbar[data-mobile="true"] .bp-toolbar-group {
     display: inline-flex;
@@ -212,7 +212,7 @@ openclaw-browser-panel {
     line-height: 36px;
   }
   .bp-toolbar[data-mobile="true"] .bp-url {
-    font-size: var(--control-ui-text-lg);
+    font-size: 16px;
   }
   .bp-annotatebar .bp-btn > svg {
     width: 16px;
@@ -224,7 +224,7 @@ openclaw-browser-panel {
     align-items: center;
     gap: 8px;
     padding: 5px 10px;
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     color: var(--muted);
     border-bottom: 1px solid var(--border);
     background: color-mix(in srgb, var(--accent) 7%, transparent);
@@ -240,7 +240,7 @@ openclaw-browser-panel {
     border: 1px solid var(--border);
     background: transparent;
     color: var(--text);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     font-family: inherit;
     border-radius: var(--radius-sm);
     padding: 3px 10px;
@@ -317,7 +317,7 @@ openclaw-browser-panel {
     border: 1px solid var(--border);
     background: var(--bg);
     box-shadow: var(--shadow-md);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     pointer-events: none;
   }
   .bp-tooltip__title {
@@ -356,13 +356,13 @@ openclaw-browser-panel {
     gap: 10px;
     height: 100%;
     padding: 20px;
-    font-size: calc(12.5px * var(--control-ui-text-scale));
+    font-size: 12.5px;
     color: var(--muted);
     text-align: center;
   }
   .bp-note {
     padding: 6px 12px;
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     color: var(--muted);
     border-bottom: 1px solid var(--border);
   }

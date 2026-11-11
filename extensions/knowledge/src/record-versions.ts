@@ -17,7 +17,7 @@ export function claimVersions(ui: Page, r: RecordDetail, n: number, versions: HT
         nextId === r.id
           ? r
           : (
-              await feature.invoke("record", {
+              await feature.invoke("record_detail", {
                 id: nextId,
                 metadataView: "compact",
                 maxChars: 4000,

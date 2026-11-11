@@ -23,7 +23,6 @@ import {
   withMemoryWorkspaceLock,
   withMemoryWorkspacePreparation,
 } from "../memory-workspace-lock.js";
-import { readSessionResetRecallCutoffMetadata } from "../session-reset-recall-metadata.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import { prepareMemoryIndexInWorker } from "./manager-cpu-worker-runtime.js";
 import {
@@ -42,7 +41,7 @@ import {
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
 import { resolveChunkProvenance } from "./manager-index-preparation.js";
-import { readMemoryIndexSource } from "./manager-index-source.js";
+import { prepareSessionIndexSource, readMemoryIndexSource } from "./manager-index-source.js";
 import { memoryPublicationGroup } from "./manager-publication-transfer.js";
 import {
   resolveMemoryIndexProviderIdentities,
@@ -560,7 +559,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     retain = true,
   ): Promise<PreparedMemoryIndexEntry | null> {
     const kind = entry.kind;
-    const suppliedContent = entry.content;
     const prepare = async (): Promise<PreparedMemoryIndexEntry | null> => {
       if (kind === "multimodal") {
         const multimodalChunk: Awaited<
@@ -599,35 +597,35 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         };
       }
 
+      const settings = {
+        entry: { path: entry.path, mtimeMs: entry.mtimeMs },
+        chunking: this.settings.chunking,
+        provider:
+          generation?.kind === "semantic"
+            ? { id: generation.provider.id, maxInputTokens: generation.provider.maxInputTokens }
+            : undefined,
+        hardMaxInputTokens: EMBEDDING_BATCH_MAX_TOKENS,
+      };
+      if (source === "sessions" && entry.streamSessionExport) {
+        const prepared = await prepareSessionIndexSource(entry, settings, this.workspaceDir);
+        this.dirty ||= !prepared;
+        return prepared && { entry, source, chunks: prepared.chunks };
+      }
       const read = await readMemoryIndexSource({
         absolutePath: entry.absPath,
         workspaceDir: this.workspaceDir,
         source,
-        suppliedContent,
         memoryFiles: this.memoryFiles,
       });
       if (!read) {
         this.dirty = true;
         return null;
       }
-      const cutoff = readSessionResetRecallCutoffMetadata(entry);
       const prepared = await prepareMemoryIndexInWorker({
-        entry: {
-          path: entry.path,
-          mtimeMs: entry.mtimeMs,
-          lineMap: entry.lineMap,
-          lineProvenance: entry.lineProvenance,
-        },
+        ...settings,
         source,
         content: read.content,
         pathClassification: read.pathClassification,
-        chunking: this.settings.chunking,
-        cutoffLine: cutoff.state === "valid" ? cutoff.cutoffLine : undefined,
-        provider:
-          generation?.kind === "semantic"
-            ? { id: generation.provider.id, maxInputTokens: generation.provider.maxInputTokens }
-            : undefined,
-        hardMaxInputTokens: EMBEDDING_BATCH_MAX_TOKENS,
       });
       return {
         entry:
@@ -637,7 +635,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       };
     };
     const preparedEntry =
-      source === "sessions" && kind !== "multimodal" && typeof suppliedContent === "string"
+      source === "sessions" && kind !== "multimodal" && entry.streamSessionExport
         ? await withMemoryWorkspacePreparation(this.workspaceDir, prepare)
         : await withMemoryWorkspaceLock(this.workspaceDir, prepare);
     if (!preparedEntry || !retain) {

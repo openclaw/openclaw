@@ -29,7 +29,7 @@
 .palette-session-settings__content {
   width: min(292px, calc(100vw - 40px));
   font-family: var(--font-body);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.4;
 }
 
@@ -134,7 +134,7 @@
 .palette-session-settings__secondary,
 .palette-session-settings__unavailable {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 
 .palette-session-settings__unavailable {
@@ -180,7 +180,7 @@
   padding-top: 0;
   padding-bottom: 0;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .palette-session-settings__remember input {
@@ -216,6 +216,6 @@
 .palette-session-settings__error {
   padding: 6px 10px 0;
   color: var(--danger);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   white-space: normal;
 }
