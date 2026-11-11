@@ -29,12 +29,13 @@ describe("Gateway host lifecycle authority", () => {
     return { reject: pending.reject, resolve: () => pending.resolve({ execute, dispose }) };
   }
   const owners: ReturnType<typeof createGatewayHostLifecycle>[] = [];
-  const owner = (commitExternalStop?: () => void) => {
+  const owner = (commitExternalStop?: () => void, commitExternalStopFence?: () => void) => {
     const host = createGatewayHostLifecycle({
       isCurrent: () => current,
       isServing: () => serving,
       acceptStop,
       commitExternalStop,
+      commitExternalStopFence,
       processOwner: { ownsProcessLifecycle: true, supervisor: null },
     });
     owners.push(host);
@@ -69,6 +70,19 @@ describe("Gateway host lifecycle authority", () => {
     expect(commit).toHaveBeenCalledOnce();
     expect(prepareHostedGatewayStop).not.toHaveBeenCalled();
     expect(() => commitStop!()).toThrow("retired or non-serving");
+  });
+
+  it("exposes an external stop fence only to its current serving host", () => {
+    expect(owner().capability.externalRestart?.commitStopFence).toBeUndefined();
+    const fence = vi.fn();
+    const commitFence = owner(undefined, fence).capability.externalRestart?.commitStopFence;
+    expect(commitFence).toBeTypeOf("function");
+    commitFence!();
+    expect(fence).toHaveBeenCalledOnce();
+    expect(acceptStop).not.toHaveBeenCalled();
+    current = false;
+    expect(() => commitFence!()).toThrow("retired or non-serving");
+    expect(fence).toHaveBeenCalledOnce();
   });
 
   it.each(["retired", "replaced"])("refuses committed stop from a %s host", async (change) => {

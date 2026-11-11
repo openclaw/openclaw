@@ -1064,7 +1064,7 @@ var External = [
     /(^source$|^app$)/u,
     /(^wsPath$)/u,
     /(^released$)/u,
-    /(^machineName$|^hostname$|^platform$|^release$|^arch$|^osLabel$|^lanAddress$|^port$|^nodeVersion$|^pid$|^processInstanceId$|^uptimeMs$|^cpuCount$|^cpuModel$|^loadAverage$|^memoryTotalBytes$|^memoryFreeBytes$|^eventLoop$|^processMemory$|^diskTotalBytes$|^diskAvailableBytes$|^diskPath$|^disks$|^defaultAgentUtilityModel$)/u,
+    /(^machineName$|^hostname$|^platform$|^release$|^arch$|^osLabel$|^lanAddress$|^port$|^nodeVersion$|^pid$|^processInstanceId$|^deferredStopHandoff$|^uptimeMs$|^cpuCount$|^cpuModel$|^loadAverage$|^memoryTotalBytes$|^memoryFreeBytes$|^eventLoop$|^processMemory$|^diskTotalBytes$|^diskAvailableBytes$|^diskPath$|^disks$|^defaultAgentUtilityModel$)/u,
     /(^degraded$|^degradedSinceMs$|^reasons$|^intervalMs$|^delayP99Ms$|^delayMaxMs$|^utilization$|^cpuCoreRatio$|^cpuBreakdown$)/u,
     /(^mainThreadCoreRatio$|^workerCoreRatio$|^otherThreadsCoreRatio$|^hostUtilization$|^hostCpuCount$)/u,
     /(^rssBytes$|^heapUsedBytes$|^heapTotalBytes$|^externalBytes$|^arrayBuffersBytes$)/u,
@@ -1579,7 +1579,7 @@ var External = [
     /(^status$|^ownerId$|^phase$|^expiresAtMs$|^retryAfterMs$|^activeCount$|^blockers$|^writeCustody$)/u,
     /(^status$|^ownerId$|^expiresAtMs$|^writeCustody$)/u,
     /(^suspensionId$)/u,
-    /(^suspensionId$|^commit$|^target$)/u,
+    /(^suspensionId$|^commit$|^deferExit$|^target$)/u,
     /(^pid$|^processInstanceId$)/u,
     /(^type$|^id$|^method$|^params$|^traceparent$|^expectedProfileId$)/u,
     /(^nodeId$)/u,
@@ -9376,6 +9376,9 @@ var External = [
     (value.processInstanceId === void 0 ||
       !("processInstanceId" in value) ||
       check_63(value.processInstanceId)) &&
+    (value.deferredStopHandoff === void 0 ||
+      !("deferredStopHandoff" in value) ||
+      check_330(value.deferredStopHandoff)) &&
     check_1371(value.uptimeMs) &&
     check_1371(value.cpuCount) &&
     (value.cpuModel === void 0 || !("cpuModel" in value) || check_276(value.cpuModel)) &&
@@ -18896,6 +18899,7 @@ var External = [
     ) &&
     check_561(value.suspensionId) &&
     (value.commit === void 0 || !("commit" in value) || check_330(value.commit)) &&
+    (value.deferExit === void 0 || !("deferExit" in value) || check_330(value.deferExit)) &&
     check_2822(value.target),
   check_2822 = (value) =>
     typeof value == "object" &&

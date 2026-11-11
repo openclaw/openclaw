@@ -59,6 +59,7 @@ type HeldGatewaySuspension = {
   inspect?: Partial<GatewayActiveWorkInspectors>;
   handoff?: GatewaySuspendHandoffOwner;
   committedStopOwner?: GatewaySuspendHandoffOwner;
+  deferredStopOwner?: GatewaySuspendHandoffOwner;
   shutdown?: { signal: AbortSignal; phase: "interrupting" | "exiting" };
   commitAdmission?: () => boolean;
   nowMs: () => number;
@@ -69,6 +70,8 @@ export type GatewaySuspendHandoffOwner = {
   isCurrent: () => boolean;
   /** Transfers a validated suspension into this host's synchronous one-way shutdown. */
   commitStop?: () => void;
+  /** Fence admission irreversibly without exiting ahead of the external supervisor. */
+  commitStopFence?: () => void;
 };
 
 type GatewaySuspendCoordinatorState = {
@@ -461,6 +464,7 @@ export function armGatewaySuspendHandoff(params: {
   suspensionId: string;
   owner: GatewaySuspendHandoffOwner;
   commit?: true;
+  deferExit?: true;
 }): Result<GatewaySuspendHandoffResult, HandoffRefusal> {
   const committed = params.commit ? getRestartingSuspension() : undefined;
   if (
@@ -477,6 +481,9 @@ export function armGatewaySuspendHandoff(params: {
   if (!held || held.suspensionId !== params.suspensionId) {
     return resultError({ message: "gateway suspension id does not match" });
   }
+  if (params.deferExit && !params.owner.commitStopFence) {
+    return resultError({ message: "gateway host does not support externally signalled stop" });
+  }
   const refusal = handoffRefusal(held, params.owner);
   if (refusal) {
     return resultError(refusal);
@@ -485,7 +492,8 @@ export function armGatewaySuspendHandoff(params: {
     return resultError({ message: "gateway suspension already belongs to another host iteration" });
   }
   if (params.commit) {
-    if (!params.owner.commitStop) {
+    const commitStop = params.deferExit ? params.owner.commitStopFence : params.owner.commitStop;
+    if (!commitStop) {
       return resultError({ message: "gateway host does not support committed suspension stop" });
     }
     const changed = handoffRefusal(held, params.owner);
@@ -494,7 +502,7 @@ export function armGatewaySuspendHandoff(params: {
     }
     held.handoff = params.owner;
     try {
-      params.owner.commitStop();
+      commitStop();
     } catch {
       // The callback may already have committed shutdown. Never reopen admission
       // or turn an unknown stop outcome into permission to replay native effects.
@@ -510,6 +518,9 @@ export function armGatewaySuspendHandoff(params: {
       return resultError({ message: "gateway suspension stop commitment outcome is uncertain" });
     }
     held.committedStopOwner = params.owner;
+    if (params.deferExit) {
+      held.deferredStopOwner = params.owner;
+    }
     return ok({
       status: "committed",
       suspensionId: held.suspensionId,
@@ -524,6 +535,11 @@ export function armGatewaySuspendHandoff(params: {
 export function consumeGatewaySuspendHandoff(
   owner: GatewaySuspendHandoffOwner | undefined,
 ): Result<boolean, string> {
+  const committed = getRestartingSuspension();
+  if (owner && committed?.deferredStopOwner === owner && owner.isCurrent()) {
+    committed.deferredStopOwner = undefined;
+    return ok(true);
+  }
   const held = COORDINATOR_STATE.current;
   if (!held || !owner || held.handoff !== owner) {
     return ok(false);

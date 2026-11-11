@@ -551,6 +551,18 @@ The completion lease keeps the Gateway routable for existing work and control
 requests. Unrelated readiness failures still apply. Existing connected node work
 may finish; this mode does not change the node-reconnection rules.
 
+`system.info` advertises `deferredStopHandoff: true` when the host supports this
+handoff. Authorized controllers may read it during completion waiting to
+rediscover the exact process after reconnecting; ordinary freeze still refuses
+this read. An external supervisor can preflight `gateway.suspend.handoff` with
+`deferExit: true`, then commit the same exact-process handoff with both
+`commit: true` and `deferExit: true`.
+This irreversibly closes admission but keeps the process alive until the
+supervisor sends SIGTERM. It avoids a container being restarted before its
+workload is removed. Resume and lease expiry cannot reopen committed admission;
+the supervisor must finish stopping that workload. Hosts without this capability
+refuse the preflight.
+
 Renew the same request ID and deadline before the two-minute lease expires.
 Renewal never extends the fixed deadline. Resume or lease expiry reopens
 admission; reaching the deadline alone does not stop the process. The update

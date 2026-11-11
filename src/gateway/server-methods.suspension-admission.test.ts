@@ -657,10 +657,11 @@ describe("gateway request suspension admission", () => {
       ["suspend-proof.write", "operator.write", undefined],
       ["suspend-proof.read", "operator.read", 1_000],
       ["agent.identity.get", "operator.read", 60_000],
+      ["system.info", "operator.read", 1_000],
     ] as const) {
       const blocked = await reply(method, handler, {
         scope,
-        core: method === "agent.identity.get",
+        core: method === "agent.identity.get" || method === "system.info",
       });
       expect(handler).not.toHaveBeenCalled();
       expectRejected(blocked, {

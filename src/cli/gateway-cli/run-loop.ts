@@ -22,6 +22,7 @@ import { createGatewayHostLifecycle } from "./host-lifecycle.js";
 import { installGatewayHostLifeline } from "./host-lifeline.js";
 import { createGatewayRunCleanup } from "./run-loop-cleanup.js";
 import * as loopExit from "./run-loop-exit.js";
+import { createExternalStopHandoff } from "./run-loop-external-handoff.js";
 import {
   isUpdateProcessRestartReason,
   registerGatewayRunInstallationReplacement,
@@ -71,6 +72,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
     restartDecision,
     startupBudget,
   } = initial;
+  const externalStop = createExternalStopHandoff(initial, params, gatewayLog);
   let lock = initial.lock;
   const cleanup = createGatewayRunCleanup(
     params.ownsProcessLifecycle,
@@ -863,14 +865,15 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
     startupFailedWithoutServerHandle = false;
     runAcceptedRequest(request);
   };
-  const request = (
+  const request = externalStop.wrap(acceptSignalRequest);
+  function acceptSignalRequest(
     action: GatewayRunSignalAction,
     signal: GatewayRunSignalRequest["signal"],
     restartReason?: string,
     restartIntent?: GatewayRestartIntent,
     hostedStop?: ReturnType<typeof createGatewayHostLifecycle>,
     signalContext?: GatewayRunSignalContext,
-  ) => {
+  ) {
     if (terminalExitCode !== undefined || (hostExitRequested && action !== "stop")) {
       return;
     }
@@ -1007,7 +1010,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
       return;
     }
     runAcceptedRequest(acceptedRequest);
-  };
+  }
 
   const signals = createGatewayRunSignals({
     lifecycle: eagerLifecycleRuntime,
@@ -1075,16 +1078,10 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
         break;
       }
       const iterationHost = createGatewayHostLifecycle({
-        processOwner: {
-          ownsProcessLifecycle: params.ownsProcessLifecycle === true,
-          supervisor: supervisorMode,
-        },
         isCurrent: () => hostLifecycle === iterationHost,
         isServing: () => server !== null && restartResolver !== null && !shuttingDown,
         getShutdownBudget: () => (shuttingDown ? reportedBudget : startupBudget),
-        acceptStop: () =>
-          request("stop", "hosted Gateway stop", undefined, undefined, iterationHost),
-        commitExternalStop: () => request("stop", "SIGTERM"),
+        ...externalStop.hostCallbacks(request, () => iterationHost),
       });
       hostLifecycle = iterationHost;
       let startupFailedBeforeServerHandle = false;

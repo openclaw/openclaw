@@ -80,6 +80,7 @@ export const suspendHandlers: GatewayRequestHandlers = {
       suspensionId: params.suspensionId.trim(),
       owner,
       commit: params.commit,
+      deferExit: params.deferExit,
       assertCurrent: readGatewayRequestMutationAuthority(options).assertCurrent,
     });
     if (!result.ok) {

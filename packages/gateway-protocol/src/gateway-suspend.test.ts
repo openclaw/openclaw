@@ -30,12 +30,18 @@ describe("gateway suspension protocol", () => {
     const target = { pid: 1, processInstanceId: "gateway-process" };
     const params = { suspensionId: "held-lease", target };
     const handoff = validation(validateGatewaySuspendHandoffParams);
-    handoff.accepts(params, { ...params, commit: true });
+    handoff.accepts(
+      params,
+      { ...params, commit: true },
+      { ...params, deferExit: true },
+      { ...params, commit: true, deferExit: true },
+    );
     handoff.rejects(
       { ...params, target: undefined },
       { ...params, force: true },
       { ...params, waitMs: 0 },
       { ...params, commit: false },
+      { ...params, deferExit: false },
       { ...params, target: { ...target, processInstanceId: " " } },
       { ...params, target: { ...target, pid: 0 } },
       { ...params, target: { ...target, port: 18789 } },

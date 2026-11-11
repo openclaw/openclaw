@@ -175,6 +175,9 @@ async function collectSystemInfo(
     nodeVersion: process.version,
     pid: process.pid,
     processInstanceId: getGatewayProcessInstanceId(),
+    ...(context.hostLifecycle?.externalRestart?.commitStopFence
+      ? { deferredStopHandoff: true as const }
+      : {}),
     uptimeMs: Math.round(process.uptime() * 1000),
     cpuCount,
     ...(cpuModel ? { cpuModel } : {}),

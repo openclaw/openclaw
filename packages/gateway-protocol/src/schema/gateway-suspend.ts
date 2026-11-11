@@ -135,6 +135,8 @@ export const GatewaySuspendResumeResultSchema = closedObject({
 export const GatewaySuspendHandoffParamsSchema = closedObject({
   suspensionId: SuspensionTokenSchema,
   commit: Type.Optional(Type.Literal(true)),
+  /** Commit admission now; let the external supervisor signal the actual exit. */
+  deferExit: Type.Optional(Type.Literal(true)),
   target: closedObject({
     pid: Type.Integer({ minimum: 1 }),
     processInstanceId: SuspensionTokenSchema,

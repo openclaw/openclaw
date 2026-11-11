@@ -1,6 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { GatewaySuspendPrepareResult } from "../../../packages/gateway-protocol/src/index.js";
-import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import type {
+  GatewaySuspendPrepareResult,
+  SystemInfoResult,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
+  markGatewayRestartDraining,
+  tryBeginGatewayRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resetGatewayTestState } from "../gateway.test-support.js";
 import {
@@ -22,10 +28,10 @@ vi.mock("../../infra/gateway-lock.js", async (original) => {
 
 afterEach(resetGatewayTestState);
 
-it(
-  "keeps a completion wait routable while rejecting independent work",
+it.each(["resume", "external stop"] as const)(
+  "keeps a completion wait routable while rejecting independent work: %s",
   { timeout: 60_000 },
-  async () => {
+  async (finish) => {
     await withOpenClawTestState(
       { label: "completion-wait-transport", env: createAuthorityGatewayTestEnv() },
       async (state) => {
@@ -34,6 +40,16 @@ it(
           configPath: state.configPath,
           token,
           scopes: ["operator.admin"],
+          hostLifecycle: {
+            externalRestart: {
+              isCurrent: () => true,
+              commitStopFence: () => markGatewayRestartDraining(),
+            },
+            request: async () => ({
+              ok: false,
+              error: "The external supervisor owns this test stop",
+            }),
+          },
           cfg: {
             gateway: { mode: "local", auth: { mode: "token", token } },
             agents: {
@@ -91,12 +107,33 @@ it(
             )
             .toMatchObject({ status: "ready" });
           expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
-          await reconnected.request("gateway.suspend.resume", { suspensionId: held.suspensionId });
-          expect(
-            await reconnected.request("gateway.suspend.status", {
+          if (finish === "resume") {
+            await reconnected.request("gateway.suspend.resume", {
               suspensionId: held.suspensionId,
-            }),
-          ).toMatchObject({ status: "running" });
+            });
+            expect(
+              await reconnected.request("gateway.suspend.status", {
+                suspensionId: held.suspensionId,
+              }),
+            ).toMatchObject({ status: "running" });
+          } else {
+            const target = await reconnected.request<SystemInfoResult>("system.info", {});
+            expect(target.deferredStopHandoff).toBe(true);
+            const handoff = {
+              suspensionId: held.suspensionId,
+              deferExit: true,
+              target: { pid: target.pid, processInstanceId: target.processInstanceId },
+            };
+            expect(await reconnected.request("gateway.suspend.handoff", handoff)).toMatchObject({
+              status: "armed",
+            });
+            expect(
+              await reconnected.request("gateway.suspend.handoff", { ...handoff, commit: true }),
+            ).toMatchObject({ status: "committed" });
+            expect(tryBeginGatewayRootWorkAdmission("must remain closed")).toBeNull();
+            // The host is still alive for its external supervisor to retire it.
+            expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(503);
+          }
         } finally {
           admitted?.release();
           await Promise.all(clients.map(disconnectGatewayClient));

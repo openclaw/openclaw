@@ -520,6 +520,40 @@ describe("external restart handoff", () => {
     expect(isGatewayWorkAdmissionClosed()).toBe(true);
   });
 
+  it("commits admission without exiting and retains the exact host handoff until its stop signal", () => {
+    const fixture = setup(false);
+    const fence = vi.fn(markGatewayRestartDraining);
+    fixture.owner.commitStopFence = fence;
+    expect(
+      armGatewaySuspendHandoff({ suspensionId: LEASE, owner: fixture.owner, deferExit: true }),
+    ).toMatchObject({ ok: true, value: { status: "armed" } });
+    expect(fixture.commit({ deferExit: true })).toMatchObject({
+      ok: true,
+      value: { status: "committed" },
+    });
+    expect(fence).toHaveBeenCalledOnce();
+    expect(fixture.commitStop).not.toHaveBeenCalled();
+    fixture.state.now += DRAIN_BUDGET_MS + 1;
+    expect(fixture.resume()).toEqual({ ok: false, reason: "gateway-restarting" });
+    expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+    expect(consumeGatewaySuspendHandoff({ isCurrent: () => true })).toEqual({
+      ok: true,
+      value: false,
+    });
+    expect(fixture.consume()).toEqual({ ok: true, value: true });
+    expect(fixture.consume()).toEqual({ ok: true, value: false });
+    expect(fixture.params.resumeScheduling).not.toHaveBeenCalled();
+  });
+
+  it("refuses deferred stop preflight when the host only supports immediate exit", () => {
+    const fixture = setup(false);
+    expect(
+      armGatewaySuspendHandoff({ suspensionId: LEASE, owner: fixture.owner, deferExit: true }).ok,
+    ).toBe(false);
+    expect(fixture.commitStop).not.toHaveBeenCalled();
+    expect(fixture.resume()).toMatchObject({ ok: true, resumed: true });
+  });
+
   it.each(["expired", "resumed", "write custody", "old host"] as const)(
     "refuses committed shutdown for %s without invoking the host exit owner",
     (reason) => {
