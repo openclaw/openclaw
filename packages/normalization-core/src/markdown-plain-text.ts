@@ -44,66 +44,44 @@ function stripCompletedLongOrTildeFences(text: string): string {
  * destinations remain visible to link parsing.
  */
 function holdInlineCodeSpans(text: string, code: string[]): string {
-  let output = "";
-  let cursor = 0;
-  for (let index = 0; index < text.length;) {
-    const char = text.charAt(index);
-    if (char === "\0") {
-      output += text.slice(cursor, index) + "\0\0";
-      cursor = index + 1;
-      index += 1;
+  let out = "";
+  let cur = 0;
+  for (let i = 0; i < text.length;) {
+    const ch = text[i];
+    if (ch === "\0") {
+      out += text.slice(cur, i) + "\0\0";
+      cur = ++i;
       continue;
     }
-    if (char !== "`") {
-      index += 1;
+    if (ch !== "`") {
+      i++;
       continue;
     }
-    let openLength = 1;
-    while (text.charAt(index + openLength) === "`") {
-      openLength += 1;
-    }
+    let n = 1;
+    while (text[i + n] === "`") n++;
     // Find the next backtick run of exactly this length, which closes the span.
-    let close = -1;
-    for (let j = index + openLength; j < text.length;) {
-      if (text.charAt(j) !== "`") {
-        j += 1;
-        continue;
-      }
-      let runLength = 1;
-      while (text.charAt(j + runLength) === "`") {
-        runLength += 1;
-      }
-      if (runLength === openLength) {
-        close = j;
-        break;
-      }
-      j += runLength;
-    }
-    if (close === -1) {
-      // Consume the whole unmatched run so its tail backticks cannot reopen as a
-      // narrower span and steal delimiters from a later valid code span.
-      index += openLength;
-      continue;
-    }
+    const re = new RegExp("(?<![`])`{" + n + "}(?!`)");
+    const m = re.exec(text.slice(i + n));
     // A backtick run at the start of a line (CommonMark allows up to three
     // spaces of indentation) opens a fenced block, which fence stripping
     // removes whole; inline code may span lines, so only line-start runs are
     // left for the fence pass.
-    let lineStart = index;
-    while (lineStart > 0 && text.charAt(lineStart - 1) === " ") {
-      lineStart -= 1;
-    }
-    const atLineStart = lineStart === 0 || text.charAt(lineStart - 1) === "\n";
-    if (atLineStart && openLength >= 3) {
-      index += openLength;
+    let at = i;
+    while (at > 0 && text[at - 1] === " ") at--;
+    const lineStart = at === 0 || text[at - 1] === "\n";
+    if (!m || (lineStart && n >= 3)) {
+      // Consume the whole unmatched run so its tail backticks cannot reopen as a
+      // narrower span and steal delimiters from a later valid code span.
+      i += n;
       continue;
     }
-    output += text.slice(cursor, index) + `\0${code.length}\0`;
-    code.push(text.slice(index + openLength, close));
-    cursor = close + openLength;
-    index = cursor;
+    const close = i + n + m.index;
+    out += text.slice(cur, i) + `\0${code.length}\0`;
+    code.push(text.slice(i + n, close));
+    cur = close + n;
+    i = cur;
   }
-  return output + text.slice(cursor);
+  return out + text.slice(cur);
 }
 
 /**
