@@ -240,7 +240,7 @@ it.for([
       if (detailedLeak) {
         const line = result.stderr.split("\n").find((entry) => entry.includes("still alive"))!;
         expect(line).toContain("; handle details: ");
-        const details = JSON.parse(line.split("; handle details: ")[1]);
+        const details = JSON.parse(line.split("; handle details: ")[1] ?? "");
         expect(details).toContain("stdout");
         expect(details).toContain("stderr");
         expect(details).toContainEqual({ tls: "exit-probe.test", remote: "127.0.0.1" });
