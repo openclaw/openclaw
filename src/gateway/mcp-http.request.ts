@@ -256,10 +256,17 @@ export function resolveMcpHttpBodyTimeoutMs(): number {
   return readPositiveIntEnv("OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS", DEFAULT_MCP_BODY_TIMEOUT_MS);
 }
 
+let nativeToolAllowlistWaitTimeoutOverrideMs: number | undefined;
+
+export function setMcpNativeToolAllowlistWaitTimeoutMsForTests(
+  timeoutMs: number | undefined,
+): void {
+  nativeToolAllowlistWaitTimeoutOverrideMs = timeoutMs;
+}
+
 export function resolveMcpNativeToolAllowlistWaitTimeoutMs(): number {
-  return readPositiveIntEnv(
-    "OPENCLAW_MCP_NATIVE_TOOL_ALLOWLIST_WAIT_TIMEOUT_MS",
-    DEFAULT_MCP_NATIVE_TOOL_ALLOWLIST_WAIT_TIMEOUT_MS,
+  return (
+    nativeToolAllowlistWaitTimeoutOverrideMs ?? DEFAULT_MCP_NATIVE_TOOL_ALLOWLIST_WAIT_TIMEOUT_MS
   );
 }
 

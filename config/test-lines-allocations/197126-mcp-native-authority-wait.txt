@@ -1,0 +1,4 @@
+# Regression tests for the bounded native tool-authority wait: grant-store waiter lifecycle (wake on capture,
+# settle on revoke/deactivate/transfer, timeout) and the loopback MCP wait-then-run / timeout-fallback paths.
+# Exact net growth for PR #197126.
+361

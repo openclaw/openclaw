@@ -16,7 +16,6 @@ import {
   deactivateMcpLoopbackClientGrantCapture as deactivateCapture,
   mintAttachGrant,
   mintMcpLoopbackClientGrant,
-  peekMcpLoopbackClientGrantNativeToolAllowlist as peekNativeToolAllowlist,
   registerMcpLoopbackClientGrantRevocationListener as registerRevocations,
   resolveAttachGrant,
   resolveMcpLoopbackClientGrant as resolveClient,
@@ -38,6 +37,9 @@ const grantParams = (token: string, captureKey: string, runtimeOwnerToken = "run
   captureKey,
   runtimeOwnerToken,
 });
+/** Reads the live allowlist through the authenticated resolver, as the HTTP handler does. */
+const liveAllowlist = (token: string, captureKey: string) =>
+  resolveClient(grantParams(token, captureKey))?.context.nativeCronCreatorToolAllowlist;
 type ClientParams = Parameters<typeof mintMcpLoopbackClientGrant>[0];
 function mintClient({
   context,
@@ -552,14 +554,14 @@ describe("mcp-grant-store", () => {
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 10);
       });
-      expect(peekNativeToolAllowlist(grant.token)).toBeNull();
+      expect(liveAllowlist(grant.token, "capture-wakes-on-capture")).toBeNull();
       expect(capture.captureNativeToolAuthority(["read", "exec"])).toBe(true);
       await waitPromise;
       expect(performance.now() - startedAt).toBeLessThan(FAST_PATH_BUDGET_MS);
       // The wait function itself returns nothing; correctness depends on the
       // caller re-reading live state afterward rather than any pre-wait
       // snapshot — assert that live read directly.
-      expect(peekNativeToolAllowlist(grant.token)).toEqual(["read", "exec"]);
+      expect(liveAllowlist(grant.token, "capture-wakes-on-capture")).toEqual(["read", "exec"]);
     });
 
     it("a captureNativeToolAuthority(null) liveness probe does not wake waiters", async () => {
@@ -583,7 +585,7 @@ describe("mcp-grant-store", () => {
       expect(waitSettled).toBe(false);
       await waitPromise;
       expect(waitSettled).toBe(true);
-      expect(peekNativeToolAllowlist(grant.token)).toBeNull();
+      expect(liveAllowlist(grant.token, "capture-null-probe-no-wake")).toBeNull();
     });
 
     it("wakes every concurrent waiter on the same grant together", async () => {
@@ -622,7 +624,7 @@ describe("mcp-grant-store", () => {
       const startedAt = performance.now();
       await waitForNativeToolAllowlist({ token: grant.token, timeoutMs: 30 });
       expect(performance.now() - startedAt).toBeGreaterThanOrEqual(25);
-      expect(peekNativeToolAllowlist(grant.token)).toBeNull();
+      expect(liveAllowlist(grant.token, "capture-timeout-fallback")).toBeNull();
     });
 
     it("does not leak a pending waiter when the grant is revoked before it ever captures", async () => {
@@ -699,7 +701,7 @@ describe("mcp-grant-store", () => {
       expect(capture.captureNativeToolAuthority(["exec"])).toBe(true);
       await waitPromise;
       expect(performance.now() - startedAt).toBeLessThan(FAST_PATH_BUDGET_MS);
-      expect(peekNativeToolAllowlist(targetToken)).toEqual(["exec"]);
+      expect(liveAllowlist(targetToken, "capture-transfer-mid-wait")).toEqual(["exec"]);
     });
   });
 });

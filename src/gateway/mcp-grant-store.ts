@@ -659,19 +659,6 @@ export function resolveMcpLoopbackClientGrant(params: {
 }
 
 /**
- * Live (non-snapshot) read of a grant's current native-tool allowlist. Unlike
- * `resolveMcpLoopbackClientGrant`'s `structuredClone`d `context`, this always
- * reflects the grant row as it stands right now — callers that waited via
- * `waitForMcpLoopbackClientGrantNativeToolAllowlist` must re-read through this
- * function rather than reuse a context snapshot taken before the wait began.
- */
-export function peekMcpLoopbackClientGrantNativeToolAllowlist(
-  token: string,
-): string[] | null | undefined {
-  return clientGrantsByToken.get(token)?.context.nativeCronCreatorToolAllowlist;
-}
-
-/**
  * Waits, bounded by `timeoutMs`, for a grant's native-tool allowlist to
  * resolve away from its initial `null` placeholder (set while a native CLI
  * backend's tool-capture handshake is still in flight; see
@@ -680,8 +667,8 @@ export function peekMcpLoopbackClientGrantNativeToolAllowlist(
  *   - `captureNativeToolAuthority` lands a real (possibly empty) allowlist;
  *   - the grant is revoked, deactivated, or transferred away with no capture;
  *   - `timeoutMs` elapses with nothing resolved.
- * This function intentionally returns no value. Callers must re-read the
- * grant's live state afterward via `peekMcpLoopbackClientGrantNativeToolAllowlist`
+ * This function intentionally returns no value. Callers must re-resolve the
+ * grant afterward via `resolveMcpLoopbackClientGrant`
  * — returning a value here would invite exactly the stale-snapshot bug this
  * primitive exists to avoid.
  */

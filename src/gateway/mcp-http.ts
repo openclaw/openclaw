@@ -247,6 +247,9 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
           return;
         }
         const cfg = getRuntimeConfig();
+        // `auth` is narrowed to non-null here, but not inside the hoisted
+        // `handlePreparedRequest` declaration below; pin the narrowed value.
+        const requestAuth = auth;
         let requestContext = resolveMcpRequestContext(req, cfg, auth);
         await withPreparedSessionCapabilityRead(
           () => {
@@ -309,6 +312,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
             requestContext.nativeCronCreatorToolAllowlist === null &&
             messages.some((message) => isJsonRpcRequest(message) && message.method === "tools/call")
           ) {
+            const admittedBeforeWait = boundClientGrant.admittedRunContext;
             await waitForMcpLoopbackClientGrantNativeToolAllowlist({
               token: boundGrantToken,
               timeoutMs: resolveMcpNativeToolAllowlistWaitTimeoutMs(),
@@ -330,7 +334,11 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
               runtimeOwnerToken: ownerToken,
               captureKey: boundClientGrant.captureKey,
             });
-            if (!refreshedGrant) {
+            // Warm turns reuse the bearer and capture key, so a successor turn can
+            // occupy this token while the request waits. Only the turn this request
+            // was admitted under may continue; a different admission means the
+            // original turn lost the token and must not run under the successor.
+            if (!refreshedGrant || refreshedGrant.admittedRunContext !== admittedBeforeWait) {
               writeJsonWithoutCharset(res, 401, { error: "unauthorized" });
               return;
             }
@@ -339,7 +347,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
             // refreshed context keeps every field that resolution adds on top of
             // the grant row (notably `currentConversationOrigin`).
             requestContext = resolveMcpRequestContext(req, cfg, {
-              ...auth,
+              ...requestAuth,
               boundClientGrant: refreshedGrant,
             });
           }
