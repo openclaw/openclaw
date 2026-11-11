@@ -1,0 +1,80 @@
+name: Retained Bun import diagnostic
+
+# Diagnostic branch only; source-only proof, never release qualification.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bun-imports:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: 0f48a2cba06b806b61d136f19d9b8d0593552a75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 0f48a2cba06b806b61d136f19d9b8d0593552a75
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .harness
+          persist-credentials: false
+      - name: Bind exact source and diagnostic harness
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          mkdir -p .artifacts/bun-imports
+          git rev-parse HEAD > .artifacts/bun-imports/source.txt
+          git -C .harness rev-parse HEAD > .artifacts/bun-imports/harness.txt
+          sha256sum src/infra/update-retained-runtime-imports.ts src/infra/update-retained-runtime-imports.process.test.ts > .artifacts/bun-imports/unmodified.sha256
+      - uses: ./.harness/.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          semantic-checks: "true"
+          cache-mode: "off"
+      - name: Verify exact runtime
+        id: runtime
+        run: |
+          node --version | tee .artifacts/bun-imports/node.txt
+          bun --version | tee .artifacts/bun-imports/bun.txt
+          test "$(bun --version)" = "1.4.4"
+      - name: Preserve unmodified Bun failure
+        id: baseline
+        run: |
+          set -euo pipefail
+          sha256sum -c .artifacts/bun-imports/unmodified.sha256
+          node scripts/run-vitest.mjs src/infra/update-retained-runtime-imports.process.test.ts --maxWorkers=1 --reporter=verbose -t "^keeps bun late imports on the old generation through replacement and teardown$" 2>&1 | tee .artifacts/bun-imports/unmodified.log
+      - name: Install logging-only owner and fixture
+        id: instrument
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' && steps.baseline.outcome != 'skipped' }}
+        run: |
+          cp .harness/src/infra/update-retained-runtime-imports.ts src/infra/update-retained-runtime-imports.ts
+          cp .harness/src/infra/update-retained-runtime-imports.process.test.ts src/infra/update-retained-runtime-imports.process.test.ts
+          git diff --binary -- src/infra/update-retained-runtime-imports.ts src/infra/update-retained-runtime-imports.process.test.ts > .artifacts/bun-imports/logging-only.patch
+          sha256sum src/infra/update-retained-runtime-imports.ts src/infra/update-retained-runtime-imports.process.test.ts > .artifacts/bun-imports/instrumented.sha256
+      - name: Capture exact Bun operands without changing assertions
+        id: diagnostic
+        if: ${{ !cancelled() && steps.instrument.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          node scripts/run-vitest.mjs src/infra/update-retained-runtime-imports.process.test.ts --maxWorkers=1 --reporter=verbose -t "^keeps bun late imports on the old generation through replacement and teardown$" 2>&1 | tee .artifacts/bun-imports/diagnostic.log
+      - name: Record outcomes without allowing failures
+        if: ${{ always() }}
+        env:
+          BASELINE: ${{ steps.baseline.outcome }}
+          INSTRUMENT: ${{ steps.instrument.outcome }}
+          DIAGNOSTIC: ${{ steps.diagnostic.outcome }}
+        run: |
+          mkdir -p .artifacts/bun-imports
+          printf 'baseline=%s\ninstrument=%s\ndiagnostic=%s\n' "$BASELINE" "$INSTRUMENT" "$DIAGNOSTIC" > .artifacts/bun-imports/outcomes.txt
+      - name: Upload baseline and diagnostic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: retained-bun-imports-${{ github.run_attempt }}
+          path: .artifacts/bun-imports/
+          if-no-files-found: error
+          retention-days: 7

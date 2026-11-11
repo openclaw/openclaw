@@ -92,6 +92,7 @@ for (const runtime of ["node", "bun", "node-short-path", "node-junction"] as con
      const importRoot = ${JSON.stringify(importRoot)};
      const url = pathToFileURL(path.join(importRoot, "dist/updater.mjs")).href;
      const updater = await import(url);
+     console.error(JSON.stringify({ phase: "bun-fixture-before-retain", root, importRoot, requested: url, observed: updater.url, runtime: process.versions }));
      if (${alias}) {
        const physicalURL = pathToFileURL(path.join(await fs.realpath(root), "dist/updater.mjs")).href;
        console.error(JSON.stringify({ phase: "alias-parent", runtime: ${JSON.stringify(runtime)}, requested: url, observed: updater.url, physicalURL }));
@@ -120,7 +121,9 @@ for (const runtime of ["node", "bun", "node-short-path", "node-junction"] as con
        await fs.writeFile(path.join(root, "node_modules/fixture-conditional/import.mjs"), 'export default "new import branch";');
        await fs.writeFile(path.join(root, "node_modules/fixture-conditional/require.cjs"), 'module.exports = "new require branch";');
        const verify = async () => {
+         console.error(JSON.stringify({ phase: "bun-fixture-before-late", updaterUrl: updater.url }));
          const late = await updater.late();
+         console.error(JSON.stringify({ phase: "bun-fixture-late-result", url: late.url, value: late.value, conditional: late.conditional, requiredConditional: late.requiredConditional, named: late.named, data: late.data, requiredJson: late.requiredJson, commonJsValue: late.commonjs?.value, sameSingleton: late.commonjs?.state === updater.preloaded, sameShared: late.shared === updater.shared }));
          assert.equal(late.value, "old dependency");
          assert.equal(late.conditional, "old import branch");
          assert.equal(late.requiredConditional, "old require branch");
@@ -175,7 +178,7 @@ for (const runtime of ["node", "bun", "node-short-path", "node-junction"] as con
               imports: [new URL("../../scripts/tsx.mjs", import.meta.url).href],
             })
           : spawnSync("bun", ["--eval", source], options);
-      if (process.env.OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS === "1") {
+      if (runtime === "bun" || process.env.OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS === "1") {
         console.error(result.stderr);
       }
       expect(result.error, result.stderr).toBeUndefined();

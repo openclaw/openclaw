@@ -78,6 +78,8 @@ export function retainUpdateRuntimeImports(
   // CLI resource disposal runs after the update command returns. Keep this
   // process on its original generation through teardown; new code runs in children.
   if (process.versions.bun) {
+    // Diagnostic branch only: synthetic fixture operands, never a product repair.
+    console.error(JSON.stringify({ phase: "bun-retained-maps", rules: prepared.rules, forward: [...forward], reverse: [...reverse] }));
     // SAFETY: Bun exposes these documented APIs whenever process.versions.bun is set.
     const bun = (globalThis as typeof globalThis & { Bun: RetainedBunRuntime }).Bun;
     const require = Module.createRequire(import.meta.url);
@@ -103,18 +105,21 @@ export function retainUpdateRuntimeImports(
                 : relocateUrl(importerUrl, reverse) !== importerUrl
                   ? importerUrl
                   : undefined;
+            console.error(JSON.stringify({ phase: "bun-resolve-enter", specifier, importer, kind, importerUrl, relocatedParent, parent, resolving, disposition: !parent ? "untracked-parent" : resolving ? "reentrant" : "retained-parent" }));
             if (!parent || resolving) {
               return undefined;
             }
             const target = path.isAbsolute(specifier) ? pathToFileURL(specifier).href : specifier;
             // Native CommonJS loading explicitly enters the retained physical file.
             if (reverse.has(target)) {
+              console.error(JSON.stringify({ phase: "bun-resolve-native", specifier, importer, kind, target }));
               return undefined;
             }
             let resolved: string;
             resolving = true;
             try {
               const retainedTarget = relocateUrl(target, forward);
+              console.error(JSON.stringify({ phase: "bun-resolve-call", specifier, importer, kind, target, retainedTarget, parent }));
               resolved =
                 kind === "require-call" || kind === "require-resolve"
                   ? Module.createRequire(parent).resolve(
@@ -128,6 +133,7 @@ export function retainUpdateRuntimeImports(
             }
             const retained = bunFileUrl(resolved);
             const original = relocateUrl(retained, reverse);
+            console.error(JSON.stringify({ phase: "bun-resolve-result", specifier, importer, kind, resolved, retained, original, existingLoad: loads.get(original) }));
             if (original !== retained) {
               const originalUrl = new URL(original);
               const filename = fileURLToPath(originalUrl);
@@ -137,6 +143,7 @@ export function retainUpdateRuntimeImports(
               }
               if (!loads.has(original)) {
                 const source = fileURLToPath(retained);
+                console.error(JSON.stringify({ phase: "bun-load-register", modulePath, source, original, retained }));
                 builder.onLoad(
                   { filter: new RegExp(`^${escapeRegExp(modulePath)}$`), namespace: "file" },
                   () => {
@@ -145,6 +152,7 @@ export function retainUpdateRuntimeImports(
                       extension === ".cjs" ||
                       extension === ".cts" ||
                       ([".js", ".ts"].includes(extension) && !isNativeEsmPackage(source));
+                    console.error(JSON.stringify({ phase: "bun-load-enter", modulePath, source, extension, commonJs, loader: extension === ".json" || commonJs ? "object" : retainedSourceLoaders[extension] ?? "js" }));
                     if (extension === ".json" || commonJs) {
                       const value: unknown = commonJs
                         ? require(source)
@@ -168,8 +176,10 @@ export function retainUpdateRuntimeImports(
                 );
                 loads.set(original, retained);
               }
+              console.error(JSON.stringify({ phase: "bun-resolve-return", specifier, importer, kind, path: modulePath, namespace: "file", disposition: "retained-load" }));
               return { path: modulePath, namespace: "file" };
             }
+            console.error(JSON.stringify({ phase: "bun-resolve-return", specifier, importer, kind, path: resolved, namespace: "file", disposition: "unmapped-result" }));
             return { path: resolved, namespace: "file" };
           },
         );
