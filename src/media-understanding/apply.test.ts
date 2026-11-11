@@ -272,17 +272,17 @@ describe("applyMediaUnderstanding", () => {
     tempMediaFileCache.clear();
   });
 
-  it("echoes an enabled audio transcript to the originating account", async () => {
-    const ctx = await createAudioCtx();
+  it("echoes current audio to the originating account but not quoted audio", async () => {
+    const quoted = await attachment("quoted.ogg", createSafeAudioFixtureBuffer(2048), "audio/ogg");
+    const now = await attachment("now.ogg", createSafeAudioFixtureBuffer(2048), "audio/ogg");
+    const ctx = mediaCtx([now, { ...quoted, source: "quote" }]);
     Object.assign(ctx, { Provider: "voicechat", From: "+10000000001", AccountId: "acc1" });
-    await applyAudio(ctx, "hello world", { cfg: createGroqAudioConfig({ echoTranscript: true }) });
+    const attachments = { mode: "all", maxAttachments: 2 } as const;
+    const cfg = createGroqAudioConfig({ echoTranscript: true, attachments });
+    await applyAudio(ctx, async (req) => ({ text: `heard ${req.fileName}` }), { cfg });
+    expect(ctx.Transcript).toContain("heard quoted.ogg");
     expect(mockDeliverOutboundPayloads).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        channel: "voicechat",
-        to: "+10000000001",
-        accountId: "acc1",
-        payloads: [{ text: '📝 "hello world"' }],
-      }),
+      expect.objectContaining({ accountId: "acc1", payloads: [{ text: '📝 "heard now.ogg"' }] }),
     );
   });
 

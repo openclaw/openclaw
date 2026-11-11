@@ -77,7 +77,13 @@ suite.define(() => {
         async ({ page }) => {
           const config = { agents: { entries: { main: {} } } };
           const gateway = await installMockGateway(page, {
-            featureMethods: [...defaultControlUiFeatureMethods, "agents.update"],
+            featureMethods: [
+              ...defaultControlUiFeatureMethods,
+              "agents.list",
+              "agents.update",
+              "config.get",
+              "agent.identity.get",
+            ],
             methodResponses: {
               "agents.update": { ok: true },
               "config.get": sourceConfigSnapshot(config, "identity-fixture"),

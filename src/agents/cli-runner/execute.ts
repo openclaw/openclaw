@@ -565,9 +565,11 @@ export async function executePreparedCliRun(
     if (!runOutput) {
       throw new Error("CLI run completed without output");
     }
+    const nativeCompaction = events.getNativeCompaction();
     return toolTracking.withExecutionEvidence({
       ...runOutput,
       toolSummary: events.getToolSummary(),
+      ...(nativeCompaction ? { nativeCompaction } : {}),
     });
   };
   try {

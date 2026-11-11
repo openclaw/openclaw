@@ -295,7 +295,8 @@ it.each(["sessionRoot", "spawnedWorkspaceDir"] as const)(
       const workspace = state.statePath("worktrees", "selected");
       const image = path.join(workspace, "selected.png");
       const sibling = state.statePath("worktrees", "sibling", "private.png");
-      for (const source of [image, sibling]) {
+      const outside = path.join(path.dirname(state.workspaceDir), "private", "finance.png");
+      for (const source of [image, sibling, outside]) {
         await fs.mkdir(path.dirname(source), { recursive: true });
         await fs.writeFile(source, PNG);
       }
@@ -306,26 +307,109 @@ it.each(["sessionRoot", "spawnedWorkspaceDir"] as const)(
         permissionMode: "workspace",
         [workspaceField]: workspace,
       });
-      fixture.params.cfgWithAgentDefaults.tools = { fs: { workspaceOnly: true } };
+      fixture.params.cfgWithAgentDefaults.tools = { profile: "full", fs: { workspaceOnly: false } };
       fixture.params.deliveryPayloads = [
-        { text: "After", mediaUrls: [image, sibling, fixture.payload.mediaUrl!] },
+        { text: "After", mediaUrls: [image, sibling, outside, fixture.payload.mediaUrl!] },
       ];
-      await expect(dispatchCronDelivery(fixture.params)).resolves.toMatchObject({
-        delivered: true,
+      const sourceOpens: string[] = [];
+      const open = fs.open.bind(fs);
+      const observer = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (typeof args[0] === "string") {
+          sourceOpens.push(args[0]);
+        }
+        return open(...args);
       });
-      const messages = await fixture.messages();
-      expect(messages).toHaveLength(1);
-      expect(readAssistantDisplayContent(readTranscriptEventMessage(messages[0]))).toEqual([
-        { type: "text", text: "After" },
-        expect.objectContaining({ type: "image", alt: "selected.png" }),
-        expect.objectContaining({ type: "attachment_error" }),
-        expect.objectContaining({ type: "attachment_error" }),
-      ]);
-      const records = await fixture.records();
-      expect(records).toHaveLength(1);
-      expect(await fixture.downloadAttachment(records[0]!.record.attachmentId)).toMatchObject({
-        type: "image",
+      try {
+        await expect(dispatchCronDelivery(fixture.params)).resolves.toMatchObject({
+          delivered: true,
+        });
+        const messages = await fixture.messages();
+        expect(messages).toHaveLength(1);
+        expect(readAssistantDisplayContent(readTranscriptEventMessage(messages[0]))).toEqual([
+          { type: "text", text: "After" },
+          expect.objectContaining({ type: "image", alt: "selected.png" }),
+          expect.objectContaining({ type: "attachment_error" }),
+          expect.objectContaining({ type: "attachment_error" }),
+          expect.objectContaining({ type: "attachment_error" }),
+        ]);
+        expect(sourceOpens).toContain(image);
+        for (const denied of [sibling, outside, fixture.payload.mediaUrl!]) {
+          expect(sourceOpens).not.toContain(denied);
+        }
+        const records = await fixture.records();
+        expect(records).toHaveLength(1);
+        expect(await fixture.downloadAttachment(records[0]!.record.attachmentId)).toMatchObject({
+          type: "image",
+        });
+      } finally {
+        observer.mockRestore();
+      }
+    }),
+);
+
+it.each(["session-root", "abort"] as const)(
+  "rejects current-session media before consumption after %s revocation",
+  (revocation) =>
+    withCompletionFixture(async (fixture, state) => {
+      const workspace = state.statePath("worktrees", "selected");
+      const source = path.join(workspace, "report.png");
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.writeFile(source, PNG);
+      const entry = {
+        sessionId: fixture.scope.sessionId,
+        lifecycleRevision: "report-generation",
+        updatedAt: 1,
+        permissionMode: "workspace" as const,
+        sessionRoot: workspace,
+      };
+      await replaceSessionEntry(fixture.scope, entry);
+      fixture.params.cfgWithAgentDefaults.tools = { profile: "full", fs: { workspaceOnly: false } };
+      fixture.params.deliveryPayloads = [{ text: "Revoked report", mediaUrl: source }];
+      const controller = new AbortController();
+      fixture.params.abortSignal = controller.signal;
+      let opened = 0;
+      const consumption: Array<() => number> = [];
+      const open = fs.open.bind(fs);
+      // Pause at real filesystem admission, before the descriptor can supply source bytes.
+      const observer = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (args[0] === source) {
+          opened += 1;
+          const read = vi.spyOn(handle, "read");
+          const readFile = vi.spyOn(handle, "readFile");
+          const stream = vi.spyOn(handle, "createReadStream");
+          consumption.push(
+            () => read.mock.calls.length + readFile.mock.calls.length + stream.mock.calls.length,
+          );
+          if (revocation === "abort") {
+            controller.abort(new Error("Synthetic media authority revoked"));
+          } else {
+            await replaceSessionEntry(fixture.scope, {
+              ...entry,
+              sessionRoot: state.statePath("worktrees", "replacement"),
+            });
+          }
+        }
+        return handle;
       });
+      try {
+        await expect(fixture.commit()).rejects.toThrow(
+          revocation === "abort"
+            ? "Synthetic media authority revoked"
+            : "Session media access changed before attachment delivery.",
+        );
+        expect(opened).toBeGreaterThan(0);
+        expect(consumption.map((count) => count())).toEqual(consumption.map(() => 0));
+        expect(await fixture.records()).toEqual([]);
+        expect(await fixture.messages()).toEqual([]);
+        for (const subdir of ["outbound", "outgoing/originals"]) {
+          await expect(fs.readdir(state.statePath("media", subdir))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        }
+      } finally {
+        observer.mockRestore();
+      }
     }),
 );
 

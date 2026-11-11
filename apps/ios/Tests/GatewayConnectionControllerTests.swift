@@ -360,6 +360,33 @@ private func pendingHandoffDiagnostic(
         #expect(!controller._test_hasOperatorFleetReconcileTask())
     }
 
+    @Test @MainActor func `concurrent resolves of one Bonjour service both finish`() async {
+        @MainActor final class Completions { var count = 0 }
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            ingress: makeOrdinaryIngress())
+        // A service nobody advertises: each resolve ends through NetService's 2 s timeout.
+        let endpoint = NWEndpoint.service(
+            name: "openclaw-missing-\(UUID().uuidString)",
+            type: "_openclaw-gw._tcp",
+            domain: "local.",
+            interface: nil)
+        let completions = Completions()
+
+        for _ in 0..<2 {
+            Task { @MainActor in
+                _ = await controller.resolveServiceEndpoint(endpoint)
+                completions.count += 1
+            }
+        }
+        await waitUntil(timeout: .seconds(10)) { completions.count == 2 }
+
+        #expect(completions.count == 2)
+    }
+
     enum LocalNetworkUserAction: String, CaseIterable {
         case explicitRequest
         case manualConnect

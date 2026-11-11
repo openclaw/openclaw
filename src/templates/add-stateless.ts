@@ -52,7 +52,7 @@ import {
   rollbackStatelessTemplateMcpServers,
   type PersistedTemplateMcpServerRef,
 } from "./mcp.js";
-import type { PersistedTemplatePackageRef } from "./package-extension-provenance.js";
+import type { TemplatePackageReceipt } from "./package-stateless-receipt.js";
 import {
   TemplatePackageInstallError,
   installTemplatePackages,
@@ -134,7 +134,7 @@ export type StatelessTemplateAddResult = {
   workspaceCreated: boolean;
   configCommitted: boolean;
   workspaceFiles: PersistedTemplateWorkspaceFile[];
-  packages: PersistedTemplatePackageRef[];
+  packages: TemplatePackageReceipt[];
   mcpServers: PersistedTemplateMcpServerRef[];
   cronJobs: PersistedTemplateCronRef[];
   error?: { code: string; message: string };
@@ -206,7 +206,7 @@ export async function applyTemplateAddPlanStateless(
   let workspaceFiles: PersistedTemplateWorkspaceFile[] = [];
   let rollbackWorkspaceFiles: (() => Promise<void>) | undefined;
   let bootstrapSeededAt: string | undefined;
-  let packages: PersistedTemplatePackageRef[] = [];
+  let packages: TemplatePackageReceipt[] = [];
   const mcpServers: PersistedTemplateMcpServerRef[] = [];
   let cronJobs: PersistedTemplateCronRef[] = [];
   const result = (

@@ -263,8 +263,8 @@ targets:
             NSExtensionActivationRule:
               NSExtensionActivationSupportsText: true
               NSExtensionActivationSupportsWebURLWithMaxCount: 1
-              NSExtensionActivationSupportsImageWithMaxCount: 10
-              NSExtensionActivationSupportsMovieWithMaxCount: 1
+              # Match ShareViewController.maxImageAttachments; videos are not sent yet.
+              NSExtensionActivationSupportsImageWithMaxCount: 3
 
   OpenClawActivityWidget:
     type: app-extension
