@@ -489,9 +489,9 @@ function retainCommandAuthorization(
   params: CommandAuthorizationParams,
   prepared: CommandAuthorizationPreparation | undefined,
   readConfig: () => OpenClawConfig,
+  requester: ReturnType<typeof getRequesterProfile>,
 ): CommandAuthorization {
   const captured = { ...params, ctx: { ...params.ctx }, cfg: readConfig() };
-  const requester = getRequesterProfile(params.ctx);
   const assertRequesterCurrent = requester
     ? () => {
         if (!requester.isCurrent()) {
@@ -541,7 +541,8 @@ export function resolveCommandAuthorization(
     method: "resolveCommandAuthorization",
     replacement: "resolveCommandAuthorizationAsync",
   });
-  return retainCommandAuthorization(params, undefined, createRuntimeConfigReader(params.cfg));
+  const readConfig = createRuntimeConfigReader(params.cfg);
+  return retainCommandAuthorization(params, undefined, readConfig, getRequesterProfile(params.ctx));
 }
 
 async function prepareCommandAuthorization(params: CommandAuthorizationParams) {
@@ -572,8 +573,11 @@ export async function resolveCommandAuthorizationAsync(
   params: CommandAuthorizationParams,
 ): Promise<CommandAuthorization> {
   const readConfig = createRuntimeConfigReader(params.cfg);
+  // A requester revoked during preparation must remain a rejected original principal,
+  // not become indistinguishable from a request that never had a linked profile.
+  const requester = getRequesterProfile(params.ctx);
   const prepared = await prepareCommandAuthorization(params);
-  return retainCommandAuthorization(params, prepared, readConfig);
+  return retainCommandAuthorization(params, prepared, readConfig, requester);
 }
 
 /** Configured owners that a turn on this channel account renders; a config fact, not authority. */

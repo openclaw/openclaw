@@ -117,8 +117,10 @@ A binding snapshot from `getCurrentConversationBinding()`, an allowlist boolean,
 owner status, session-key text, or model-supplied actor ID is not this capability.
 The capability does not grant owner privileges or application membership.
 For a linked requester, command admission retains the original host profile and
-its current role authority. Unlinking or reassigning the same transport sender ID
-invalidates that admission even if the sender string remains allowlisted. Native
+its current role authority before awaiting command preparation. Unlinking or
+reassigning the same transport sender ID during that preparation invalidates the
+original admission even if the sender string remains allowlisted; a stale linked
+requester does not become an invocation with no linked profile. Native
 command adapters keep their own command-policy checks while sharing this
 requester-current restriction.
 
