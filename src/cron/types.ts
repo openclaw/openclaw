@@ -353,6 +353,8 @@ export type CronJobState = Omit<
   runningReceiptId?: string;
   /** Receipt of the active run while its condition is still being evaluated; see the run queue. */
   conditionCheckReceiptId?: string;
+  /** Receipt of the active run while its fired condition waits for a run slot. */
+  runSlotWaitReceiptId?: string;
   /** Nonce for a committed schedule edit during the pending run. */
   runningScheduleChangeId?: string;
   /**
@@ -510,6 +512,7 @@ type CronJobStateInput = Partial<
     | "sourceIdentity"
     | "runningReceiptId"
     | "conditionCheckReceiptId"
+    | "runSlotWaitReceiptId"
     | "runningScheduleChangeId"
     | "pluginCommandRuns"
     | "pluginCommandBinding"
