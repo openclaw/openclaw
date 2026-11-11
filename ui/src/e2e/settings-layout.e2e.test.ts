@@ -102,7 +102,6 @@ const settingsRowRoutes = [
 ] as const satisfies readonly RouteId[];
 const mobileSettingsRoutes = ["profile", "plugins", "logs"] as const satisfies readonly RouteId[];
 const mobileStandaloneSettingsPageRoutes = ["memory-import"] as const satisfies readonly RouteId[];
-
 const mobileGeometryCases = [
   { route: "sessions", contentSelector: ".settings-page" },
   { route: "worktrees", contentSelector: ".settings-page" },
@@ -113,14 +112,12 @@ const mobileGeometryCases = [
   { route: "memory", contentSelector: ".memory-page__panel .settings-page" },
   { route: "plugin-settings", contentSelector: ".settings-page" },
 ] as const satisfies ReadonlyArray<{ route: RouteId; contentSelector: string }>;
-
 const responsiveViewports = [
   { width: 390, height: 844 },
   { width: 768, height: 1024 },
   { width: 1366, height: 768 },
   { width: 1440, height: 900 },
 ] as const;
-
 const standaloneHeaderCases = [
   { route: "cron", subtitle: "Schedule recurring tasks for your agent." },
   { route: "usage", subtitle: "API usage and costs." },
@@ -227,7 +224,6 @@ suite.define(() => {
           };
           page.on("response", captureScript);
           stopCapturing.push(() => page.off("response", captureScript));
-
           await page.goto(`${suite.server.baseUrl}${pathname}`);
           const ready = isSettings
             ? page.getByRole("heading", { name: /^Provider access\b/ })
@@ -277,7 +273,6 @@ suite.define(() => {
         const pathname = pathForRoute(route);
         await page.goto(new URL(pathname, suite.server.baseUrl).toString());
         await waitForControlUiRoute(page, { pathname, routeId: route });
-
         const header = page.locator(".content-header--settings").last();
         const content = page.locator(".settings-page").last();
         await Promise.all([header.waitFor(), content.waitFor()]);
