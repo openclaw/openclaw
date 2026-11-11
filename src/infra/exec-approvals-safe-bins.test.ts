@@ -195,19 +195,14 @@ describe("exec approvals safe bins", () => {
     expect(result.segments[0]?.resolution?.execution.resolvedPath).toBe(fakeHead);
   });
 
-  it("allows the -N count form of head and tail in a pipeline", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
+  it.skipIf(process.platform === "win32")("allows head -1 and tail -5 in a pipeline", async () => {
     const result = await evaluateShellAllowlistWithAuthorization({
       command: "cut -f 1 | head -1 | tail -5",
       allowlist: [],
       safeBins: resolveSafeBins(["cut", "head", "tail"]),
       cwd: "/tmp",
-      platform: process.platform,
     });
-    expect(result.analysisOk).toBe(true);
-    expect(result.allowlistSatisfied).toBe(true);
+    expect(result).toMatchObject({ analysisOk: true, allowlistSatisfied: true });
   });
 
   it("fails closed for semantic env wrappers in allowlist mode", async () => {

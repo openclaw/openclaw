@@ -74,6 +74,14 @@ describe("exec safe bin policy", () => {
     ["grep", ["-e", "needle", "--", "../secret.txt"], false],
     ["grep", ["-e", "needle", "--", "*.txt"], false],
     ["grep", ["-e", "needle", "--", "-"], true],
+    // Digits-only `-N` counts: head/tail only, standalone, never freeing a file operand slot.
+    ["head", ["-1"], true],
+    ["head", ["-q", "-20"], true],
+    ["tail", ["-5"], true],
+    ["head", ["-1", "notes.txt"], false],
+    ["tail", ["-5f"], false],
+    ["head", ["-1v"], false],
+    ["wc", ["-1"], false],
   ])("%s validates %j as %s", (bin, argv, expected) => {
     expect(validateSafeBinArgv(argv, safeProfile(bin))).toBe(expected);
   });
@@ -84,24 +92,6 @@ describe("exec safe bin policy", () => {
       expect(validateSafeBinArgv([program], safeProfile("jq"), { binName: "jq" })).toBe(false);
     },
   );
-
-  it("accepts the digits-only -N count form for head and tail", () => {
-    expect(validateSafeBinArgv(["-1"], safeProfile("head"))).toBe(true);
-    expect(validateSafeBinArgv(["-20"], safeProfile("head"))).toBe(true);
-    expect(validateSafeBinArgv(["-q", "-5"], safeProfile("head"))).toBe(true);
-    expect(validateSafeBinArgv(["-5"], safeProfile("tail"))).toBe(true);
-  });
-
-  it("keeps the -N count form narrow", () => {
-    // Still stdin-only: a count never frees a slot for a file operand.
-    expect(validateSafeBinArgv(["-1", "notes.txt"], safeProfile("head"))).toBe(false);
-    // Clusters that mix a count with other letters stay fail-closed (tail -5f follows).
-    expect(validateSafeBinArgv(["-5f"], safeProfile("tail"))).toBe(false);
-    expect(validateSafeBinArgv(["-1v"], safeProfile("head"))).toBe(false);
-    expect(validateSafeBinArgv(["-1a"], safeProfile("head"))).toBe(false);
-    // Only head and tail take it.
-    expect(validateSafeBinArgv(["-1"], safeProfile("wc"))).toBe(false);
-  });
 
   it("does not let custom config profiles widen the boolean allowlist", () => {
     const customFixtures = {
