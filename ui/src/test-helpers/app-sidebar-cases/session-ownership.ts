@@ -361,7 +361,7 @@ describe("AppSidebar session ownership", () => {
     );
   });
 
-  it("groups sessions by owner based on the live session-owner roster", async () => {
+  it("keeps owner sections tied to readable rows when the owner facet changes", async () => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
     gateway.publish({
       hello: sessionSharingHello(false),
@@ -442,12 +442,11 @@ describe("AppSidebar session ownership", () => {
     result.owners = [{ type: "human", id: "profile-zoe", label: "Zoe" }];
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
-    expect(ownerSections()).toHaveLength(0);
+    expect(ownerSections()).toHaveLength(2);
     menu = await openSessionMenu(sidebar);
-    expect(await sessionMenuChoice(menu, "grouping:person")).toBeNull();
-    expect(
-      (await sessionMenuChoice(menu, "grouping:category"))?.getAttribute("aria-selected"),
-    ).toBe("true");
+    expect((await sessionMenuChoice(menu, "grouping:person"))?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
     sidebar.dismissTransientMenus();
 
     result.owners = [
