@@ -108,6 +108,38 @@ it("resumes the bound backend session with the backend-owned command", async () 
   );
 });
 
+it("forwards the turn prompt inputs so compaction rebuilds the cached prefix", async () => {
+  await compactNativeCliSession({
+    runtime: "claude-cli",
+    compactParams: compactParams({
+      messageChannel: "webchat",
+      messageProvider: "telegram",
+      skillsSnapshot: { skills: [] },
+      toolOverrides: { allow: ["read"] },
+      ownerNumbers: ["+1555"],
+      sourceReplyDeliveryMode: "message_tool_only",
+      extraSystemPrompt: "BTW system prompt",
+      bootstrapWorkspaceDir: "/tmp/bootstrap",
+      chatType: "direct",
+      agentAccountId: "acc-1",
+    }),
+  });
+
+  expect(runCliAgentMock).toHaveBeenCalledOnce();
+  expect(runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
+    messageChannel: "webchat",
+    messageProvider: "telegram",
+    skillsSnapshot: { skills: [] },
+    toolOverrides: { allow: ["read"] },
+    ownerNumbers: ["+1555"],
+    sourceReplyDeliveryMode: "message_tool_only",
+    extraSystemPrompt: "BTW system prompt",
+    bootstrapWorkspaceDir: "/tmp/bootstrap",
+    chatType: "direct",
+    agentAccountId: "acc-1",
+  });
+});
+
 describe("session pin conversion for the CLI child", () => {
   const apiKey = { type: "api_key", provider: "anthropic", key: "metered-key" }; // pragma: allowlist secret
   const cliAccount = {

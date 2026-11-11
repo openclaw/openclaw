@@ -1277,6 +1277,160 @@ describe("prepareCliRunContext", () => {
     expect(context.systemPromptReport.tools.entries).toEqual([]);
   });
 
+  it("compact control op restores the turn request prefix for the provider cache", async () => {
+    const resolveBootstrapContextForRun = vi.fn(async () => ({
+      bootstrapFiles: [
+        { name: "AGENTS.md" as const, path: "AGENTS.md", content: "bootstrap", missing: false },
+      ],
+      contextFiles: [{ path: "context.md", content: "context" }],
+    }));
+    const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
+    setCliBackendForPrepareTest({ bundleMcp: true });
+    setCliRunnerPrepareTestDeps({
+      resolveBootstrapContextForRun,
+      ensureMcpLoopbackServer,
+      getActiveMcpLoopbackRuntime: vi
+        .fn()
+        .mockReturnValueOnce(undefined)
+        .mockReturnValue(createLoopbackRuntime()),
+    });
+
+    const baseInput = {
+      sessionKey: "agent:main:main",
+      provider: "claude-cli",
+      model: "opus",
+      config: createCliBackendConfig({ bundleMcp: true }),
+      timeoutMs: 120_000,
+      extraSystemPrompt: "BTW system prompt",
+      cliSessionId: "existing-cli-session",
+    } as const;
+    const turn = await fixture.prepare({ ...baseInput, prompt: "follow-up" });
+    const context = await fixture.prepare({
+      ...baseInput,
+      prompt: "/compact",
+      controlOperation: "compact",
+    });
+
+    // Prefix restored (system prompt was "" before the carve-out):
+    expect(context.systemPrompt).toContain("BTW system prompt");
+    expect(context.systemPrompt).toContain("context.md");
+    expect(resolveBootstrapContextForRun).toHaveBeenCalled();
+    expect(ensureMcpLoopbackServer).toHaveBeenCalled();
+    expect(turn.systemPrompt).toContain("BTW system prompt");
+    // Control-op behavior kept:
+    expect(context.params.prompt).toBe("/compact");
+    expect(context.contextEngine).toBeUndefined();
+    expect(context.openClawHistoryPrompt).toBeUndefined();
+  });
+
+  it("compact accepts a conversation tool policy instead of throwing", async () => {
+    setRawCliBackendForPrepareTest({
+      id: "test-cli",
+      pluginId: "test",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs: ({ baseArgs }) => baseArgs,
+      config: {
+        command: "test-cli",
+        args: ["--print"],
+        liveSession: "claude-stdio",
+        sessionMode: "always",
+        output: "jsonl",
+        input: "stdin",
+      },
+    });
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime: vi
+        .fn()
+        .mockReturnValueOnce(undefined)
+        .mockReturnValue(createLoopbackRuntime()),
+    });
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:main",
+      config: createCliBackendConfig({ bundleMcp: true }),
+      prompt: "/compact",
+      controlOperation: "compact",
+      timeoutMs: 120_000,
+      cliSessionId: "existing-cli-session",
+      conversationToolPolicy: { allow: ["read", "sessions_spawn"], deny: ["exec"] },
+    });
+    // Policy input flows into mediation without throwing.
+    expect(context.systemPrompt).not.toBe("");
+  });
+
+  it("compact ignores active hooks (documented cache-parity limit)", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => ({
+        prependContext: "trusted hook context",
+        systemPrompt: "hook-injected system content",
+      })),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setCliBackendForPrepareTest({ bundleMcp: true });
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime: vi
+        .fn()
+        .mockReturnValueOnce(undefined)
+        .mockReturnValue(createLoopbackRuntime()),
+    });
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:main",
+      provider: "claude-cli",
+      model: "opus",
+      config: createCliBackendConfig({ bundleMcp: true }),
+      prompt: "/compact",
+      controlOperation: "compact",
+      timeoutMs: 120_000,
+      cliSessionId: "existing-cli-session",
+    });
+    expect(hookRunner.runBeforePromptBuild).not.toHaveBeenCalled();
+    expect(context.systemPrompt).not.toContain("hook-injected");
+    expect(context.systemPrompt).not.toBe("");
+  });
+
+  it("compact on node placement keeps the empty prompt (transports stripped anyway)", async () => {
+    setCliBackendForPrepareTest({ bundleMcp: true });
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:main",
+      provider: "claude-cli",
+      model: "opus",
+      config: createCliBackendConfig({ bundleMcp: true }),
+      prompt: "/compact",
+      controlOperation: "compact",
+      timeoutMs: 120_000,
+      extraSystemPrompt: "BTW system prompt",
+      cliSessionId: "existing-cli-session",
+      sessionEntry: { execHost: "node", execNode: "paired-node" } as never,
+    });
+    expect(context.systemPrompt).toBe("");
+  });
+
+  it("compact fails loudly when the loopback server cannot start", async () => {
+    const ensureMcpLoopbackServer = vi.fn(async () => {
+      throw new Error("loopback unavailable");
+    });
+    setCliBackendForPrepareTest({ bundleMcp: true });
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
+      ensureMcpLoopbackServer,
+    });
+    await expect(
+      fixture.prepare({
+        sessionKey: "agent:main:main",
+        provider: "claude-cli",
+        model: "opus",
+        config: createCliBackendConfig({ bundleMcp: true }),
+        prompt: "/compact",
+        controlOperation: "compact",
+        timeoutMs: 120_000,
+        cliSessionId: "existing-cli-session",
+      }),
+    ).rejects.toThrow(/loopback unavailable/);
+  });
+
   it.each([
     {
       name: "full guidance for a backend with native file tools",
@@ -3464,7 +3618,9 @@ describe("prepareCliRunContext", () => {
     expect(context.reusableCliSession).toEqual(testCase.expected);
     if (testCase.controlOperation) {
       expect(context.params.prompt).toBe("/compact");
-      expect(context.systemPrompt).toBe("");
+      // Compact reuses the cached session, so it rebuilds the turn prefix
+      // instead of sending an empty system prompt (cache parity).
+      expect(context.systemPrompt).not.toBe("");
     }
   });
 

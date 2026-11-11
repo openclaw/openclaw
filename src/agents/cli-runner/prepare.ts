@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { splitSystemPromptRelocatableBoundary } from "@openclaw/ai/internal/shared";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
@@ -321,6 +322,24 @@ async function prepareCliRunContextWithinReadFence(
     );
     return prepared;
   };
+  const nodeClaudePlacement = detectNodeClaudePlacement({
+    backendId: backendResolved.id,
+    execHost: params.sessionEntry?.execHost,
+    execNode: params.sessionEntry?.execNode,
+  });
+  // Manual compaction reuses the cached native session, so unlike side questions
+  // it must rebuild the turn's request prefix (system prompt, MCP, skills) for
+  // the provider cache to hit. Node-Claude placement strips those transports
+  // anyway, so the carve-out applies to process placement only. (Side questions
+  // and control ops are mutually exclusive: the only control caller is compact,
+  // which never sets executionMode.)
+  // Known divergences from a real turn, each narrowing cache hits, never
+  // correctness: per-turn inbound metadata (unreproducible by design),
+  // hook-injected prompt/tool caps (hooks stay off), delivery-mode and
+  // silent-reply defaults (binding facts aren't persisted for regular
+  // sessions), and non-default bootstrap knobs.
+  const restoresTurnPrefixForCache = isControlOperation && !nodeClaudePlacement;
+  const skipsTurnPrefix = skipsTurnPreparation && !restoresTurnPrefixForCache;
   const toolPolicy = await resolveCliRuntimeToolPolicy({
     params,
     policySessionKey,
@@ -332,16 +351,11 @@ async function prepareCliRunContextWithinReadFence(
     resolveManagedNativeTools: backendResolved.resolveManagedNativeTools,
     sideQuestionToolMode: backendResolved.sideQuestionToolMode,
     isSideQuestion,
-    skipsTurnPreparation,
+    skipsTurnPreparation: skipsTurnPrefix,
   });
   params = toolPolicy.params;
   const { runtimeToolsAllowPolicy, managedNativeTools } = toolPolicy;
   const internalParams = params as RunCliAgentPrepareParams;
-  const nodeClaudePlacement = detectNodeClaudePlacement({
-    backendId: backendResolved.id,
-    execHost: params.sessionEntry?.execHost,
-    execNode: params.sessionEntry?.execNode,
-  });
   params.assertCurrent?.();
   params.abortSignal?.throwIfAborted();
   if (nodeClaudePlacement && params.cliToolAvailability) {
@@ -678,7 +692,7 @@ async function prepareCliRunContextWithinReadFence(
     { ...params, ...workspaceResolution, sessionRoot: params.sessionEntry?.sessionRoot },
     params.bootstrapWorkspaceDir ?? canonicalWorkspace,
   );
-  const { bootstrapFiles, contextFiles: resolvedContextFiles } = skipsTurnPreparation
+  const { bootstrapFiles, contextFiles: resolvedContextFiles } = skipsTurnPrefix
     ? { bootstrapFiles: [], contextFiles: [] }
     : await resolveBootstrapContextForRunImpl({
         workspaceDir: bootstrapWorkspaceDir,
@@ -703,7 +717,7 @@ async function prepareCliRunContextWithinReadFence(
   const systemAgentMcpConfig = internalParams.systemAgentTool
     ? buildSystemAgentToolsMcpServerConfig(internalParams.systemAgentTool)
     : undefined;
-  const canUseGatewayTools = !nodeClaudePlacement && !skipsTurnPreparation && !systemAgentMcpConfig;
+  const canUseGatewayTools = !nodeClaudePlacement && !skipsTurnPrefix && !systemAgentMcpConfig;
   const bundleMcpEnabled =
     canUseGatewayTools && backendResolved.bundleMcp && params.disableTools !== true;
   let mcpLoopbackRuntime = bundleMcpEnabled ? getActiveMcpLoopbackRuntime() : undefined;
@@ -728,7 +742,7 @@ async function prepareCliRunContextWithinReadFence(
       backend: backendResolved,
       enabled: bundleMcpEnabled,
       nodePlacement: nodeClaudePlacement,
-      skipPreparation: skipsTurnPreparation,
+      skipPreparation: skipsTurnPrefix,
     });
   const shouldMaterializeRuntimePolicy =
     runtimeToolsAllowPolicy !== undefined && canUseGatewayTools && params.disableTools !== true;
@@ -859,7 +873,7 @@ async function prepareCliRunContextWithinReadFence(
     projectedToolNames: projectedTools.map((tool) => tool.name),
   });
   const bootstrapRouting =
-    skipsTurnPreparation || !canTransportSystemPrompt(backendResolved.config)
+    skipsTurnPrefix || !canTransportSystemPrompt(backendResolved.config)
       ? undefined
       : await resolveWorkspaceBootstrapRouting({
           isWorkspaceBootstrapPending: isWorkspaceBootstrapPendingImpl,
@@ -953,7 +967,7 @@ async function prepareCliRunContextWithinReadFence(
     tools: projectedTools,
     promptBuildRestrictsTools,
     hostOwnedTools,
-    nativeAuthorityAllowed: !skipsTurnPreparation && !nodeClaudePlacement,
+    nativeAuthorityAllowed: !skipsTurnPrefix && !nodeClaudePlacement,
     projectNativeToolAuthority: backendResolved.projectNativeToolAuthority,
   });
   const extraSystemPromptHash = resolveCliBootstrapPromptHash({
@@ -1241,7 +1255,7 @@ async function prepareCliRunContextWithinReadFence(
     const claudeSkillsPlugin =
       // Exact Claude execution strips native plugins; keep selected skills in
       // the host prompt instead of suppressing them for an unusable plugin.
-      skipsTurnPreparation || nodeClaudePlacement || params.cliToolAvailability !== undefined
+      skipsTurnPrefix || nodeClaudePlacement || params.cliToolAvailability !== undefined
         ? { args: [], cleanup: async () => {} }
         : await prepareClaudeCliSkillsPlugin({
             backendId: backendResolved.id,
@@ -1399,54 +1413,53 @@ async function prepareCliRunContextWithinReadFence(
       workspaceDir,
       cwd,
       agentId: sessionAgentId,
-      skipTurnPreparation: skipsTurnPreparation,
+      skipTurnPreparation: skipsTurnPrefix,
       skipSkills: nodeClaudePlacement || claudeSkillsPlugin.args.length > 0,
       moduleUrl: import.meta.url,
     });
     const { runtimeChannel, runtimeCapabilities, customInlineButtonHint, messageToolHints } =
       resolveRuntimeChannelPromptContext({
         cfg: params.config,
-        channel: skipsTurnPreparation
-          ? undefined
-          : (params.messageChannel ?? params.messageProvider),
+        channel: skipsTurnPrefix ? undefined : (params.messageChannel ?? params.messageProvider),
         accountId: params.agentAccountId,
         requester: params,
       });
     const requesterProfileId = readRunOperatorAuthority(params)?.profileId;
-    const builtSystemPrompt = isControlOperation
-      ? ""
-      : isSideQuestion
-        ? extraSystemPrompt
-        : await prepareCliSystemPrompt({
-            preparedTtsPreferences: params.preparedTtsPreferences,
-            preparedSessionEntry: params.sessionEntry,
-            requesterProfileId,
-            workspaceDir,
-            cwd,
-            config: params.config,
-            extraSystemPrompt,
-            sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
-            requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
-            silentReplyPromptMode: params.silentReplyPromptMode,
-            runtimeChannel,
-            runtimeChatType,
-            runtimeCapabilities,
-            customInlineButtonHint,
-            messageToolHints,
-            ownerNumbers: params.ownerNumbers,
-            docsPath: openClawReferences.docsPath ?? undefined,
-            sourcePath: openClawReferences.sourcePath ?? undefined,
-            skillsPrompt: preparedSkills.prompt,
-            tools: promptTools,
-            contextFiles,
-            bootstrapMode,
-            bootstrapTruncationNotice,
-            modelDisplay,
-            agentId: sessionAgentId,
-            sessionKey: params.sessionKey,
-            sessionId: params.sessionId,
-          });
-    const transformedSystemPrompt = !skipsTurnPreparation
+    const builtSystemPrompt =
+      isControlOperation && !restoresTurnPrefixForCache
+        ? ""
+        : isSideQuestion
+          ? extraSystemPrompt
+          : await prepareCliSystemPrompt({
+              preparedTtsPreferences: params.preparedTtsPreferences,
+              preparedSessionEntry: params.sessionEntry,
+              requesterProfileId,
+              workspaceDir,
+              cwd,
+              config: params.config,
+              extraSystemPrompt,
+              sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
+              requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
+              silentReplyPromptMode: params.silentReplyPromptMode,
+              runtimeChannel,
+              runtimeChatType,
+              runtimeCapabilities,
+              customInlineButtonHint,
+              messageToolHints,
+              ownerNumbers: params.ownerNumbers,
+              docsPath: openClawReferences.docsPath ?? undefined,
+              sourcePath: openClawReferences.sourcePath ?? undefined,
+              skillsPrompt: preparedSkills.prompt,
+              tools: promptTools,
+              contextFiles,
+              bootstrapMode,
+              bootstrapTruncationNotice,
+              modelDisplay,
+              agentId: sessionAgentId,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+            });
+    const transformedSystemPrompt = !skipsTurnPrefix
       ? (backendResolved.transformSystemPrompt?.({
           config: params.config,
           workspaceDir,
@@ -1576,9 +1589,17 @@ async function prepareCliRunContextWithinReadFence(
           maxHistoryChars: autoReseedHistoryChars,
         })
       : undefined;
-    systemPrompt = skipsTurnPreparation
+    systemPrompt = skipsTurnPrefix
       ? systemPrompt
       : finalizeCliSystemPrompt(systemPrompt, { modelDisplay, backendResolved, params });
+    if (restoresTurnPrefixForCache && backendResolved.id === "claude-cli") {
+      // Turns relocate the Runtime block out of the system prompt inside
+      // prepareCliTurnPromptContext, which compact skips; strip it here so the
+      // cached prefix matches. The facts stay out of the /compact instruction
+      // deliberately: only system-prefix parity matters for the cache.
+      systemPrompt =
+        splitSystemPromptRelocatableBoundary(systemPrompt)?.remainingPrompt ?? systemPrompt;
+    }
     if (sessionPromptContext?.resumeContext) {
       promptForHooks = composeCliPromptContext(promptForHooks ?? preparedPrompt, {
         prependContext: sessionPromptContext.resumeContext,
