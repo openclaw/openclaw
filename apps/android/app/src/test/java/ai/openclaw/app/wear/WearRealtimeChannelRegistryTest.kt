@@ -7,6 +7,7 @@ import android.os.Parcel
 import com.google.android.gms.wearable.ChannelClient
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
@@ -557,12 +558,14 @@ class WearRealtimeChannelRegistryTest {
       }
     }
 
+  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun `claim keeps polling after an unclaimed channel expires`() =
     runBlocking {
+      val expiryDispatcher = UnconfinedTestDispatcher()
       val registry =
         WearRealtimeChannelRegistry(
-          scope = scope,
+          scope = CoroutineScope(scope.coroutineContext + expiryDispatcher),
           transport = transport,
           connectionReadyTimeoutMillis = 1_000L,
           pendingConnectionTimeoutMillis = 100L,
@@ -573,10 +576,16 @@ class WearRealtimeChannelRegistryTest {
       run {
         registry.accept(expired, appendAudio = { _, _ -> }, stopTalk = {})
         transport.awaitOpened(expired)
-        withTimeout(1_000L) { transport.awaitClosed(expired) }
+        withTimeout(1_000L) {
+          while (transport.closeCount(expired) == 0) {
+            expiryDispatcher.scheduler.advanceUntilIdle()
+            yield()
+          }
+          transport.awaitClosed(expired)
+        }
 
-        val claim = async { registry.claim("watch-a", "attempt-a") }
-        delay(100L)
+        // Keep the replacement alive while the real-time claim polls for publication.
+        val claim = async(start = CoroutineStart.UNDISPATCHED) { registry.claim("watch-a", "attempt-a") }
         assertFalse(claim.isCompleted)
         registry.accept(replacement, appendAudio = { _, _ -> }, stopTalk = {})
         transport.awaitOpened(replacement)
