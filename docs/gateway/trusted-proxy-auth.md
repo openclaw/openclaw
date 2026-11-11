@@ -180,9 +180,11 @@ after asynchronous waits.
 ## Enterprise browser delegation
 
 OpenClaw Enterprise (OCE) can authorize each browser request without copying its
-user roster into `allowUsers`. OCE prepares a private credential for each Agent
-revision and mounts its file only in the Gateway. Enable the following settings
-under `gateway.auth.trustedProxy` when that private transport is configured:
+user roster into `allowUsers`. When native browser access is enabled for an
+OCE-managed Agent, OCE automatically configures `gateway.auth.trustedProxy`,
+prepares a private credential for each Agent revision, and mounts its file only
+in the Gateway. No manual OpenClaw configuration is required. The following
+example shows the generated settings:
 
 ```json5
 {
