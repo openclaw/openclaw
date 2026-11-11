@@ -13,10 +13,8 @@ import { getSqliteWorkerStateIntegrityAdmission } from "../infra/sqlite-worker-s
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
-import { isVitestRuntimeEnv } from "../infra/test-runtime-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
-import { captureBootstrapRefusal } from "./openclaw-state-bootstrap-diagnostic.js";
 import { publishStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
 import { captureOpenClawStateIntegrityAdmission } from "./openclaw-state-db-cache.js";
 import {
@@ -141,9 +139,6 @@ export function ensureOpenClawStateRuntimeSchema(
         if (previousVersion === 0 && !isUninitializedNativeStartupDatabase(db)) {
           throw new Error(
             "Unrecognized native bootstrap database; preserve it and run openclaw doctor --fix.",
-            isVitestRuntimeEnv()
-              ? { cause: captureBootstrapRefusal(db, pathname, previousVersion) }
-              : undefined,
           );
         }
         if (previousVersion > 0) {
