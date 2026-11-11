@@ -39,8 +39,9 @@ async function readJson(baseUrl: string, requestPath: string) {
 // timeout, so the proof's failure mode stays diagnosable in one run.
 async function dumpGatewayTail(gateway: GatewayHandle, reason: string) {
   try {
-    const logs = await (gateway as unknown as { logs: () => Promise<string> | string }).logs();
-    const tail = `${logs}`.split(/\r?\n/u).slice(-40).join("\n");
+    const logs = (gateway as unknown as { logs: () => Promise<string> | string }).logs();
+    const text = typeof logs === "string" ? logs : await logs;
+    const tail = text.split(/\r?\n/u).slice(-40).join("\n");
     console.error(`--- gateway stdout/stderr tail (${reason}) ---`);
     console.error(tail);
   } catch (error) {
@@ -151,6 +152,7 @@ try {
   });
 
   const waitForChatFinal = async (runId: unknown, timeoutMs = 180_000) => {
+    const runIdText = String(runId);
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const finalEvent = events.find(
@@ -158,7 +160,7 @@ try {
       );
       if (finalEvent) {
         if (finalEvent.state === "error") {
-          await dumpGatewayTail(gateway, `run ${runId} errored`);
+          await dumpGatewayTail(gateway, `run ${runIdText} errored`);
           throw new Error(`turn errored: ${JSON.stringify(finalEvent)}`);
         }
         return finalEvent;
@@ -167,8 +169,8 @@ try {
         setTimeout(resolve, 100);
       });
     }
-    await dumpGatewayTail(gateway, `no final chat event for run ${runId}`);
-    throw new Error(`timed out waiting for final chat event for run ${runId}`);
+    await dumpGatewayTail(gateway, `no final chat event for run ${runIdText}`);
+    throw new Error(`timed out waiting for final chat event for run ${runIdText}`);
   };
 
   const sessionA = `agent:alice:proof-${randomUUID()}`;
@@ -184,7 +186,7 @@ try {
         idempotencyKey: randomUUID(),
       },
       { timeoutMs: 60_000 },
-    )) as { runId?: unknown; status?: unknown };
+    )) as { runId?: string; status?: unknown };
     if (!run.runId) {
       await dumpGatewayTail(gateway, `chat.send returned no runId for ${sessionKey}`);
       throw new Error(`chat.send returned no runId: ${JSON.stringify(run)}`);
@@ -198,6 +200,9 @@ try {
   await runTurn(sessionA, "Say exactly: ALICE_OK");
   await runTurn(sessionB, "Say exactly: BOB_OK");
 
+  if (!mock) {
+    throw new Error("mock provider server is not running");
+  }
   const requests = (await readJson(mock.baseUrl, "/debug/requests")) as Array<{
     cursor: number;
     model: string;
@@ -265,7 +270,7 @@ try {
     "A contains absolute heading:",
     /## ([A-Za-z]:\\|\/(?!\/)[^\n]*AGENTS)/.test(prompts[0]!),
   );
-  const firstDiff = [...prompts[0]!].findIndex((ch, i) => ch !== prompts[1]![i]);
+  const firstDiff = prompts[0]!.split("").findIndex((ch, i) => ch !== prompts[1]!.charAt(i));
   console.log("first differing char index:", firstDiff);
   const ctx = 120;
   console.log("--- A around first diff ---");
