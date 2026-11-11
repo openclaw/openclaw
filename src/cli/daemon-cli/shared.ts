@@ -16,6 +16,7 @@ import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervis
 import { parseTcpPort } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { createDaemonActionContext } from "./response.js";
 export { formatRuntimeStatus } from "../../daemon/runtime-format.js";
 
@@ -68,6 +69,22 @@ export function resolveDaemonInstallBlockMessage(
     );
   }
   return undefined;
+}
+
+/** Service-policy refusals carry their own remedy; show it instead of the generic CLI failure. */
+export function assertGatewayServiceActionAllowed(
+  label: "start" | "stop" | "uninstall",
+  action: string,
+): void {
+  const refusal = resolveGatewayServiceMutationError(action);
+  if (refusal) {
+    throw new ExpectedCliError({
+      message: refusal.message,
+      humanOutput: `Gateway ${label} blocked: ${refusal.message}`,
+      machineOutput: refusal.message,
+      cause: refusal,
+    });
+  }
 }
 
 export function formatDaemonServiceInstallCommand(env: NodeJS.ProcessEnv, port?: number): string {

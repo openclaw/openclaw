@@ -189,6 +189,17 @@ function warmPoolDemand() {
 
 beforeEach(() => {
   vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(async () => false);
+  vi.spyOn(managedWorktrees, "maintainGit").mockResolvedValue();
+});
+
+it("maintains Git while a cleanup sweep is still waiting under load", async () => {
+  await using fixture = maintenanceFixture();
+  const maintain = vi.spyOn(managedWorktrees, "maintainGit").mockResolvedValue();
+  const { owner, receipt, release } = await fixture.runHeld();
+  await fixture.clock.advanceBy(5 * 60_000);
+  expect(maintain).toHaveBeenCalledOnce();
+  expect(owner.request({ jobId: receipt.jobId }).state).toBe("running");
+  release.resolve(completedResult());
 });
 
 afterEach(() => {

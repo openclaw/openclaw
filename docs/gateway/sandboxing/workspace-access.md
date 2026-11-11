@@ -374,6 +374,14 @@ again before confirming the target and applying changes; edits made during
 preparation cause a visible conflict and remain saved. Pending base refreshes
 retain their pause until both workspaces accept the transfer.
 
+GitHub PR preparation and base refresh download commit history and missing objects
+with the guest running. After those downloads finish, OpenClaw checks the guest's
+current Git state and reacquires the pause for the workspace transfer. If another
+operation changed the host HEAD or pending integration in between, preparation
+fails with a retry message and preserves the workspace. Immutable object downloads
+do not hold the guest frozen; capture, file application, and pending-transfer
+recovery still require consistency pauses.
+
 Each successful container pause records a `sandbox/quiescence` info log with a
 bounded reason (`checkpoint`, `preparation`, `publication`, `retirement`, `restore`,
 or `reconcile`) and that reason's process-lifetime counter. Already-paused runtimes
