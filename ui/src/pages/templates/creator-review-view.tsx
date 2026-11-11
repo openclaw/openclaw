@@ -16,6 +16,7 @@ import "../../components/tooltip.ts";
 
 type CreatorView = SourceProjection<TemplateCreator, TemplateCreator>;
 type Kind = TemplateDraftReviewItem["kind"];
+type ReviewEntry = TemplateDraftReviewItem & { fileIcon?: IconName };
 const sections: Array<{ kind: Kind; key: string; icon: IconName }> = [
   { kind: "file", key: "workspaceFiles", icon: "fileText" },
   { kind: "skill", key: "skills", icon: "book" },
@@ -37,19 +38,23 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
       ? undefined
       : (state().publication?.publicationStatus ?? "unpublished");
   const schedule = createSessionAutomationSchedule();
-  const entries = (kind: Kind): TemplateDraftReviewItem[] =>
+  const fileEntries = (archive: boolean): ReviewEntry[] =>
+    review().files.flatMap((file) =>
+      (archive ? [file.path] : (file.workspacePaths ?? [])).map((label) => ({
+        id: label,
+        kind: "file",
+        included: true,
+        label,
+        detail: file.content,
+        fileIcon: fileRole(
+          archive ? (file.workspacePaths?.find((name) => agentDocuments.has(name)) ?? "") : label,
+        )[0],
+      })),
+    );
+  const entries = (kind: Kind): ReviewEntry[] =>
     kind === "file"
-      ? review().files.map((file) => ({
-          id: file.path,
-          kind: "file",
-          included: true,
-          label: file.path,
-          detail: file.content,
-        }))
+      ? fileEntries(true)
       : review().items.filter((item) => item.kind === kind && item.included);
-  const selected = createMemo(() =>
-    category() ? entries(category()!).find((item) => item.id === selectedId()) : undefined,
-  );
   const label = () =>
     t("templatesDraft." + sections.find((section) => section.kind === category())?.key);
   const currentSection = () => sections.find((entry) => entry.kind === category())!;
@@ -77,7 +82,7 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
       ?.replace(/^#+\s*/, "");
   };
   const categoryEntries = createMemo(() => {
-    const items = entries(category()!);
+    const items = category() === "file" && !allFiles() ? fileEntries(false) : entries(category()!);
     return category() === "file" && !allFiles()
       ? [
           "SOUL.md",
@@ -88,6 +93,7 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
         ].flatMap((name) => items.filter((item) => item.label === name && agentDocuments.has(name)))
       : items;
   });
+  const selected = createMemo(() => categoryEntries().find((item) => item.id === selectedId()));
   const title = () =>
     selected()?.label ??
     (category()
@@ -251,7 +257,7 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
                       >
                         <Show when={category() === "file"}>
                           <span class="template-creator__row-icon">
-                            <Icon name={fileRole(item().label)[0]} />
+                            <Icon name={item().fileIcon!} />
                           </span>
                         </Show>
                         <span>
@@ -264,13 +270,7 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
                       </button>
                     )}
                   </For>
-                  <Show
-                    when={
-                      category() === "file" &&
-                      !allFiles() &&
-                      categoryEntries().length < entries("file").length
-                    }
-                  >
+                  <Show when={category() === "file" && !allFiles()}>
                     <button
                       type="button"
                       class="template-package-row template-creator__row"

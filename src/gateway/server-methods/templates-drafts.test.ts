@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateTemplateDraftDocument } from "../../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -14,6 +15,7 @@ import {
 } from "../../templates/draft.js";
 import { createResearchBriefProposal } from "../../templates/draft.test-support.js";
 import { extractBuiltTemplateArtifact } from "../../templates/project-build.js";
+import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { gatewayProfile } from "../server/client-fixtures.test-support.js";
@@ -148,12 +150,16 @@ async function reviewDraft(
   assert(Array.isArray(payload.files));
   const files = payload.files.map((file: unknown) => {
     assert(isRecord(file) && typeof file.path === "string" && typeof file.content === "string");
-    return { path: file.path, content: file.content };
+    return { path: file.path, content: file.content, workspacePaths: file.workspacePaths };
   });
   return { reviewToken: payload.reviewToken, name: payload.name, files, items: payload.items };
 }
 
 const proposal = createResearchBriefProposal();
+let registryRequest: (request: Request) => Promise<Response | undefined>;
+let registryServer: Awaited<ReturnType<typeof reserveTestPortListener>>;
+let registryUrl: string;
+const registryErrors: unknown[] = [];
 
 async function publicationFixture(name = "@maker/research-brief") {
   const workspaceDir = tempDirs.make("template-draft-publish-");
@@ -171,97 +177,93 @@ async function publicationFixture(name = "@maker/research-brief") {
     attemptStatus: "pending_checks",
     attemptName: name,
     reads: 0,
-    postThrows: false,
+    dropUploadResponse: false,
     postRevoke: false,
   };
   const write = (document = proposal) => writeFile(draft.path, JSON.stringify(document));
   await write();
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const request = new Request(input, init);
-      if (request.method === "POST") {
-        posts += 1;
-      }
-      expect(request.headers.get("Authorization")).toBe("Bearer fixture-personal-token");
-      if (request.url.endsWith("/whoami")) {
-        if (identity.revoke) {
-          connections.delete("draft-author");
-        }
-        return Response.json({ user: { handle: identity.publisher } });
-      }
-      if (request.method === "GET") {
-        registry.reads += 1;
-        if (registry.revoke) {
-          connections.delete("draft-author");
-        }
-        if (!registry.visible) {
-          return new Response("Version not found", { status: 404 });
-        }
-        if (request.url.includes("/publish/attempts/")) {
-          return Response.json({
-            attemptId: "fixture_attempt",
-            name: registry.attemptName,
-            version: "0.1.0",
-            artifactSha256: registry.digest,
-            status: registry.attemptStatus,
-            publicationStatus:
-              registry.attemptStatus === "finalized"
-                ? "published"
-                : ["blocked", "failed", "expired"].includes(registry.attemptStatus)
-                  ? registry.attemptStatus
-                  : "pending",
-          });
-        }
-        if (request.url.endsWith("/security")) {
-          return Response.json({
-            package: { name, family: "template" },
-            release: { version: "0.1.0", artifactSha256: registry.digest },
-            overview: "Fixture audit",
-            securityAuditUrl: "https://registry.example.test/audit",
-            trust: {
-              pending: registry.pending,
-              blockedFromDownload: registry.blocked,
-              stale: false,
-              reasons: [],
-            },
-          });
-        }
-        return Response.json({
-          package: { name, family: "template" },
-          version: { version: "0.1.0", artifact: { sha256: registry.digest } },
-        });
-      }
-      expect(request.method).toBe("POST");
-      const form = await request.formData();
-      const payload = form.get("payload");
-      const archive = form.get("clawpack");
-      assert(typeof payload === "string" && archive instanceof File);
-      const bytes = Buffer.from(await archive.arrayBuffer());
-      const digest = createHash("sha256").update(bytes).digest("hex");
-      expect(JSON.parse(payload)).toMatchObject({
-        name,
-        family: "template",
-        channel: "community",
-        ownerHandle: "maker",
-        expectedArtifactSha256: digest,
-      });
-      uploads.push(bytes);
-      registry.digest = digest;
-      if (registry.postRevoke) {
+  registryRequest = async (request) => {
+    if (request.method === "POST") {
+      posts += 1;
+    }
+    expect(request.headers.get("Authorization")).toBe("Bearer fixture-personal-token");
+    if (request.url.endsWith("/whoami")) {
+      if (identity.revoke) {
         connections.delete("draft-author");
       }
-      if (registry.postThrows) {
-        throw new TypeError("Connection closed after upload");
+      return Response.json({ user: { handle: identity.publisher } });
+    }
+    if (request.method === "GET") {
+      registry.reads += 1;
+      if (registry.revoke) {
+        connections.delete("draft-author");
+      }
+      if (!registry.visible) {
+        return new Response("Version not found", { status: 404 });
+      }
+      if (request.url.includes("/publish/attempts/")) {
+        return Response.json({
+          attemptId: "fixture_attempt",
+          name: registry.attemptName,
+          version: "0.1.0",
+          artifactSha256: registry.digest,
+          status: registry.attemptStatus,
+          publicationStatus:
+            registry.attemptStatus === "finalized"
+              ? "published"
+              : ["blocked", "failed", "expired"].includes(registry.attemptStatus)
+                ? registry.attemptStatus
+                : "pending",
+        });
+      }
+      if (request.url.endsWith("/security")) {
+        return Response.json({
+          package: { name, family: "template" },
+          release: { version: "0.1.0", artifactSha256: registry.digest },
+          overview: "Fixture audit",
+          securityAuditUrl: "https://registry.example.test/audit",
+          trust: {
+            pending: registry.pending,
+            blockedFromDownload: registry.blocked,
+            stale: false,
+            reasons: [],
+          },
+        });
       }
       return Response.json({
-        ok: true,
-        artifactSha256: digest,
-        publicationStatus: "pending",
-        attemptId: "fixture_attempt",
+        package: { name, family: "template" },
+        version: { version: "0.1.0", artifact: { sha256: registry.digest } },
       });
-    }),
-  );
+    }
+    expect(request.method).toBe("POST");
+    const form = await request.formData();
+    const payload = form.get("payload");
+    const archive = form.get("clawpack");
+    assert(typeof payload === "string" && archive instanceof File);
+    const bytes = Buffer.from(await archive.arrayBuffer());
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    expect(JSON.parse(payload)).toMatchObject({
+      name,
+      family: "template",
+      channel: "community",
+      ownerHandle: "maker",
+      expectedArtifactSha256: digest,
+    });
+    uploads.push(bytes);
+    registry.digest = digest;
+    if (registry.postRevoke) {
+      connections.delete("draft-author");
+    }
+    if (registry.dropUploadResponse) {
+      return undefined;
+    }
+    return Response.json({
+      ok: true,
+      artifactSha256: digest,
+      publicationStatus: "pending",
+      attemptId: "fixture_attempt",
+    });
+  };
   return {
     workspaceDir,
     draft,
@@ -272,15 +274,12 @@ async function publicationFixture(name = "@maker/research-brief") {
     identity,
     registry,
     write,
+    disconnect: () => connections.clear(),
     check: (params: Record<string, unknown>) =>
       requestDraft(
         "review",
         workspaceDir,
-        {
-          draftId: draft.draftId,
-          checkPublication: true,
-          ...params,
-        },
+        { draftId: draft.draftId, checkPublication: true, ...params },
         undefined,
         connections,
       ),
@@ -298,13 +297,52 @@ async function publicationFixture(name = "@maker/research-brief") {
 }
 
 describe("Template draft reviewed publication", () => {
+  beforeAll(async () => {
+    registryServer = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createServer((incoming, outgoing) => {
+          void (async () => {
+            const chunks: Buffer[] = [];
+            for await (const chunk of incoming) {
+              chunks.push(Buffer.from(chunk));
+            }
+            const response = await registryRequest(
+              new Request(`${registryUrl}${incoming.url}`, {
+                method: incoming.method,
+                headers: {
+                  authorization: incoming.headers.authorization ?? "",
+                  "content-type": incoming.headers["content-type"] ?? "",
+                },
+                ...(incoming.method === "POST"
+                  ? { body: new Uint8Array(Buffer.concat(chunks)) }
+                  : {}),
+              }),
+            );
+            if (!response) {
+              return outgoing.destroy();
+            }
+            outgoing.writeHead(response.status, Object.fromEntries(response.headers));
+            return outgoing.end(new Uint8Array(await response.arrayBuffer()));
+          })().catch((error: unknown) => {
+            registryErrors.push(error);
+            outgoing.destroy();
+          });
+        }),
+    });
+    registryUrl = `http://127.0.0.1:${registryServer.claim.port}`;
+  });
+  afterAll(async () => {
+    await registryServer.releaseListener();
+    await registryServer.claim.release();
+  });
   beforeEach(() => {
     vi.stubEnv("CLAWHUB_TOKEN", "fixture-personal-token");
-    vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://registry.example.test");
+    vi.stubEnv("OPENCLAW_CLAWHUB_URL", registryUrl);
   });
   afterEach(() => {
-    vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    expect(registryErrors.splice(0)).toEqual([]);
   });
 
   it("publishes exactly the reviewed selections under the personal publisher", async () => {
@@ -355,6 +393,11 @@ Research public sources.
       "package.json",
       "workspace/AGENTS.md",
     ]);
+    expect(review.files.find((file) => file.path === "workspace/AGENTS.md")).toEqual({
+      path: "workspace/AGENTS.md",
+      content: "Keep citations.",
+      workspacePaths: ["AGENTS.md"],
+    });
     expect(review.items).toEqual([
       expect.objectContaining({ id: "file:workspace/AGENTS.md", included: true }),
       ...choices.excluded.map((id) => expect.objectContaining({ id, included: false })),
@@ -400,7 +443,7 @@ Research public sources.
     expect(result[0], JSON.stringify(result[2])).toBe(true);
     expect(result[1]).toMatchObject({
       name: review.name,
-      url: "https://registry.example.test/maker/templates/public-researcher",
+      url: `${registryUrl}/maker/templates/public-researcher`,
       publicationStatus: "pending",
     });
     expect(uploads).toHaveLength(1);
@@ -416,11 +459,7 @@ Research public sources.
     const fixture = await publicationFixture();
     const review = await fixture.review();
     expect((await fixture.publish(review.reviewToken))[0]).toBe(true);
-    const result = await requestDraft("review", fixture.workspaceDir, {
-      draftId: fixture.draft.draftId,
-      reviewToken: review.reviewToken,
-      checkPublication: true,
-    });
+    const result = await fixture.check({ reviewToken: review.reviewToken });
     expect(result[0], JSON.stringify(result[2])).toBe(true);
     expect(result[1]).toMatchObject({ publicationState: { status: "unconfirmed" } });
     expect(fixture.registry.reads).toBe(0);
@@ -472,10 +511,8 @@ Research public sources.
     if (condition === "blocked-public-release") {
       fixture.registry.blocked = true;
     }
-    const result = await requestDraft("review", fixture.workspaceDir, {
-      draftId: fixture.draft.draftId,
+    const result = await fixture.check({
       reviewToken: review.reviewToken,
-      checkPublication: true,
       attemptId: "fixture_attempt",
     });
     expect(result[0], JSON.stringify(result[2])).toBe(true);
@@ -495,22 +532,12 @@ Research public sources.
         fixture.identity.publisher = "another-person";
       }
       if (condition === "registry") {
-        vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://another-registry.example.test");
+        vi.stubEnv("OPENCLAW_CLAWHUB_URL", `${registryUrl}/another-registry`);
       }
       if (condition === "authority") {
-        fixture.registry.revoke = true;
+        fixture.disconnect();
       }
-      const result = await requestDraft(
-        "review",
-        fixture.workspaceDir,
-        {
-          draftId: fixture.draft.draftId,
-          reviewToken: review.reviewToken,
-          checkPublication: true,
-        },
-        undefined,
-        new Set(condition === "authority" ? [] : ["draft-author"]),
-      );
+      const result = await fixture.check({ reviewToken: review.reviewToken });
       expect(result[0]).toBe(false);
       expect(fixture.posts).toBe(0);
       expect(fixture.registry.reads).toBe(0);
@@ -544,10 +571,10 @@ Research public sources.
     expect(fixture.posts).toBe(1);
   });
 
-  it("never makes an uncertain upload retryable", async () => {
+  it("never makes an upload retryable after the registry receives it but closes the socket", async () => {
     const fixture = await publicationFixture();
     const review = await fixture.review();
-    fixture.registry.postThrows = true;
+    fixture.registry.dropUploadResponse = true;
     const result = await fixture.publish(review.reviewToken);
     expect(result[0]).toBe(false);
     expect(result[2]).toMatchObject({

@@ -78,7 +78,11 @@ const reviewed = {
   ],
   files: [
     { path: "CLAW.md", content: "Summarize the supplied repository. Read only." },
-    { path: "AGENTS.md", content: "Read only. Never publish without human review.\n".repeat(45) },
+    {
+      path: "workspace/AGENTS.md",
+      workspacePaths: ["AGENTS.md", "TOOLS.md"],
+      content: "Read only. Never publish without human review.\n".repeat(45),
+    },
   ],
 };
 const publication = {
@@ -270,6 +274,7 @@ it.skipIf(!available).each([true, false])(
           ).toBeGreaterThan(0);
           await card.getByRole("button", { name: "Back to contents", exact: true }).click();
           await card.getByRole("button", { name: "View all", exact: true }).click();
+          await card.getByRole("button", { name: "workspace/AGENTS.md", exact: true }).waitFor();
           await card.getByRole("button", { name: "CLAW.md", exact: true }).click();
           await card.getByRole("heading", { name: "CLAW.md", exact: true }).waitFor();
           await card.getByRole("button", { name: "Back to contents", exact: true }).click();

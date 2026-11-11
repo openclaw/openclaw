@@ -89,7 +89,7 @@ export type TemplatesDraftsReviewResult = {
   version: string;
   description: string;
   items: TemplateDraftReviewItem[];
-  files: Array<{ path: string; content: string }>;
+  files: Array<{ path: string; content: string; workspacePaths?: string[] }>;
   scope: TemplateDraftDocument["scope"];
   publicationState?:
     | { status: "pending" | "published"; publication: TemplatesDraftsPublishResult }

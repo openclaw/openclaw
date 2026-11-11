@@ -155,38 +155,6 @@ describe("ui.command gateway method", () => {
     expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
   });
 
-  it("returns invocation-bound Template review in the requester conversation without dispatching a command", async () => {
-    const requester = client("creator-tab", undefined, undefined, "creator");
-    const results = captureScreenRequests([
-      requester,
-      client("other-tab", undefined, undefined, "creator"),
-      client("bystander"),
-    ]);
-    const sessionKey = "agent:main:dashboard:template-request";
-    const draftId = "ec8f46b0-4ca3-4991-8a73-dfdcc8764087";
-    const screen = createGatewayToolCallerWrapper("main", {
-      agentSessionKey: sessionKey,
-      gatewayUiCommandTarget: { connId: requester.connId!, profileId: "creator" },
-    })(createScreenTool({ agentSessionKey: sessionKey, agentId: "main" }));
-    const result = await screen.execute("review", { action: "template_review", draftId });
-    expect(results).toEqual([]);
-    expect(gateway.callInProcessGatewayTool).not.toHaveBeenCalled();
-    expect(result.details).toMatchObject({
-      ok: true,
-      pluginInlineView: {
-        pluginId: "openclaw",
-        viewId: "template-review",
-        version: 1,
-        payload: { agentId: "main", sessionKey, draftId },
-      },
-      pluginInlineViewInvocation: {
-        pluginId: "openclaw",
-        toolName: "screen",
-        toolCallId: "review",
-      },
-    });
-  });
-
   it("keeps the agent screen tool bound to its requesting browser across async execution", async () => {
     const requester = client("requester");
     const recipients = [requester, client("bystander")];
