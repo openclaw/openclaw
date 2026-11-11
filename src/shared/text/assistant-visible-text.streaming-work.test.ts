@@ -25,17 +25,10 @@ it.each([
   expect(markdownOwnershipWork.scannedCharacters - before).toBeLessThan(source.length * 16);
 });
 
-// A bare word mention (``relevant-memories`` / ``minimax:tool_call``) is not a real tag:
-// it must not latch the delivery filter, which would re-scan the whole accumulated reply
-// on every delta. Only the actual tag shape should gate activation.
+// A bare mention is not a real tag and must not latch the delivery filter.
 it("keeps a bare relevant-memories mention off the whole-reply re-scan", () => {
-  // A bare word mention is not a real tag: the delivery transform must not latch on
-  // it and re-scan the whole accumulated reply on every delta. When the stage latches
-  // (the unfixed ``relevant-memories`` activation token), the canonical transform runs
-  // on the whole reply every delta and pays a MEMORY_TAG_QUICK_RE scan over the full
-  // accumulated text. regexWork counts the characters fed to every .test() on a
-  // memories-relevant regex, so a bounded total proves the probe only ever scans a
-  // small tail instead of the growing reply.
+  // regexWork counts characters fed to memories-relevant .test() calls; a bounded
+  // total proves the probe scans a bounded tail instead of the growing reply.
   const source = "The relevant-memories feature stays off the hot path.\n\n"
     .repeat(64)
     .slice(0, 4096);
@@ -60,10 +53,8 @@ it("strips a real relevant-memories tag when it appears", () => {
   expect(stream.text).toContain("After.");
 });
 
-// The canonical memory parser accepts whitespace after ``<`` and around ``/``, so the
-// delivery probe must accept the same grammar — including when the tag word is split
-// across deltas — or streamed whitespace-bearing tags would stay visible while the
-// batch transform removes them.
+// The canonical parser accepts whitespace after ``<`` and around ``/``; the probe
+// must match, even when the tag word is split across deltas.
 it("strips whitespace-tolerant relevant-memories tags split across deltas", () => {
   const source = "Before.\n\n< relevant-memories>\nsecret\n< / relevant_memories>\n\nAfter.\n";
   const stream = createAssistantVisibleStreamText("final_answer");
@@ -73,11 +64,8 @@ it("strips whitespace-tolerant relevant-memories tags split across deltas", () =
   expect(stream.text).toContain("After.");
 });
 
-// The probe mirrors the unbounded ``\s*`` of the canonical grammar: a whitespace run of
-// any length between ``<`` and the tag word still gates the stage on. The opener uses
-// the whitespace-bearing open form (``< relevant-memories>``) because the canonical
-// regex reads ``< / word>`` shapes as closers, and the closer is a split
-// whitespace-bearing ``</ relevant_memories>``.
+// An unbounded whitespace run between ``<`` and the tag word still gates the stage.
+// ``< / word>`` shapes are closers in the canonical regex, so the opener omits ``/``.
 it("strips a relevant-memories tag behind an unbounded whitespace gap", () => {
   const chunks = [
     "Before.\n\n<",
@@ -108,17 +96,18 @@ it("keeps a bare minimax:tool_call mention off the whole-reply re-scan", () => {
   expect(md).toBe(0);
 });
 
-// A real minimax tool-call envelope still gates on and is stripped by the existing
-// canonical parser (covered in depth by assistant-visible-text.minimax.test.ts); the
-// gate change here only keeps a bare mention from latching the whole-reply re-scan.
-it("strips a real minimax tool_call envelope when it appears", () => {
+// The canonical transform also strips a completed <invoke> block when the marker
+// occurs without an exact envelope token. Batch/streaming parity must hold for every
+// delta split; a bare mention (asserted above) must still not latch the stage.
+it("strips a completed invoke block without an exact minimax envelope", () => {
   const source =
-    'Intro.\n\n<minimax:tool_call><invoke name="exec">secret</invoke></minimax:tool_call>\n\nAfter.\n';
-  const stream = createAssistantVisibleStreamText("final_answer");
-  streamChunks(source, 4, stream);
-  expect(stream.text).not.toContain("secret");
-  expect(stream.text).toContain("Intro.");
-  expect(stream.text).toContain("After.");
+    'Ready.\n<minimax:tool_call >\n<invoke name="exec">secret</invoke>\n</minimax:tool_call >\nDone.';
+  expectPrefixParity(
+    source,
+    () => createAssistantVisibleStreamText("final_answer"),
+    (text) => sanitizeAssistantVisibleStreamText(text, "final_answer"),
+  );
+  expect(sanitizeAssistantVisibleStreamText(source, "final_answer")).not.toContain("secret");
 });
 
 it("keeps a split tool header across an unbounded whitespace gap", () => {

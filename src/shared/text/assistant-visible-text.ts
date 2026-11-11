@@ -74,102 +74,39 @@ const invisibleTextFilter: TextFilter = {
 
 const profileFilters = new Map<string, readonly TextFilter[]>();
 
-// The canonical memory parser (``MEMORY_TAG_RE`` / ``MEMORY_TAG_QUICK_RE``) accepts
-// whitespace after ``<`` and around ``/`` (``< / relevant_memories>``), so activation
-// mirrors that grammar with a bounded incremental probe: a bare ``relevant-memories``
-// mention never latches the whole-reply re-scan on every delta, while any tag shape the
-// canonical quick regex accepts does.
-const memoriesTagWords = ["relevant-memories", "relevant_memories"] as const;
-
-function createMemoriesTextProjector(): TextProjector {
-  // Probe state for ``<\s*\/?\s*relevant[-_]memories\b``: ``bracket`` means a ``<`` was
-  // seen and only whitespace plus at most one ``/`` followed (the whitespace run is
-  // unbounded, so a fixed tail window cannot represent it); ``candidates`` track the
-  // contiguous tag word across delta splits; ``boundaryPending`` holds a completed word
-  // until the next char confirms the ``\b`` boundary.
-  let bracket = false;
-  let slash = false;
-  let boundaryPending = false;
-  let candidates: Array<{ word: (typeof memoriesTagWords)[number]; offset: number }> = [];
+// Collapse each delta's whitespace runs so the canonical ``\s*`` grammar fits a
+// bounded tail. ``requires`` latches an earlier marker that must be present before
+// ``shape`` can activate: this keeps bare mentions off the whole-reply re-scan while
+// still covering the canonical transforms' invocation-cleanup paths. One char after
+// the match is required so a tag word split across deltas is confirmed at its boundary.
+function createBoundedTagProjector(
+  transform: (text: string) => string,
+  shape: RegExp,
+  requires?: RegExp,
+): TextProjector {
+  let tail = "";
+  let armed = !requires;
   let active = false;
-  const scan = (char: string): void => {
+  return createConditionalTextProjector(transform, (input) => {
     if (active) {
-      return;
-    }
-    const lower = char.toLowerCase();
-    if (boundaryPending) {
-      boundaryPending = false;
-      candidates = [];
-      if (!/[a-z0-9_]/.test(lower)) {
-        active = true;
-        return;
-      }
-      bracket = false;
-    }
-    if (!bracket) {
-      bracket = char === "<";
-      slash = false;
-      candidates = [];
-      return;
-    }
-    if (/\s/.test(lower)) {
-      if (candidates.length) {
-        // Whitespace cannot appear inside the contiguous tag word.
-        candidates = [];
-        bracket = false;
-      }
-      return;
-    }
-    if (char === "/") {
-      if (slash || candidates.length) {
-        bracket = false;
-        candidates = [];
-      } else {
-        slash = true;
-      }
-      return;
-    }
-    if (!candidates.length) {
-      if (lower === "r") {
-        candidates = memoriesTagWords.map((word) => ({ word, offset: 1 }));
-      } else {
-        bracket = char === "<";
-        slash = false;
-      }
-      return;
-    }
-    candidates = candidates.filter((candidate) => {
-      if (candidate.word[candidate.offset]!.toLowerCase() !== lower) {
-        return false;
-      }
-      candidate.offset++;
-      if (candidate.offset === candidate.word.length) {
-        boundaryPending = true;
-        return false;
-      }
       return true;
-    });
-    if (boundaryPending) {
-      candidates = [];
     }
-  };
-  return createConditionalTextProjector(stripRelevantMemoriesTags, (input) => {
-    if (!active) {
-      const appended = input.delta ?? input.text;
-      for (let at = 0; at < appended.length; at++) {
-        scan(appended.charAt(at));
-        if (active) {
-          break;
-        }
-      }
+    const folded = (input.delta ?? input.text).toLowerCase().replace(/\s+/g, " ");
+    const joined = tail + folded;
+    tail = joined.slice(-32);
+    if (requires?.test(joined)) {
+      armed = true;
     }
+    const match = armed ? shape.exec(joined) : null;
+    active = Boolean(match && match.index + match[0].length < joined.length);
     return active;
   });
 }
 
+const memoriesShape = /<\s*\/?\s*relevant[-_]memories\b/;
 const memoriesTextFilter: TextFilter = {
   transform: stripRelevantMemoriesTags,
-  create: createMemoriesTextProjector,
+  create: () => createBoundedTagProjector(stripRelevantMemoriesTags, memoriesShape),
 };
 
 export function assistantVisibleTextFilters(
@@ -236,14 +173,19 @@ export function assistantVisibleTextFilters(
 
 // Activation is a necessary condition only; the canonical parsers still own
 // syntax, code protection, and later corrections once a marker has appeared.
-// Activation latches only on the real tag shape, not a bare ``minimax:tool_call``
-// mention, so ordinary replies never pay the whole-reply re-scan on every delta.
+// The canonical transform also removes completed <invoke> blocks whenever the
+// ``minimax:tool_call`` marker occurs, even without an exact envelope token, so
+// activation needs that marker plus an invocation/tag shape. A bare mention alone
+// has no such shape and stays off the whole-reply re-scan.
+const encodedMinimaxOpen = escapeRegExp("<]minimax[>[<tool_call>");
+const minimaxShape = new RegExp(`<invoke\\b|<\\/?minimax:tool_call|${encodedMinimaxOpen}`);
+const minimaxRequires = new RegExp(`minimax:tool_call|${encodedMinimaxOpen}`);
 export function minimaxToolCallTextFilter(streaming = false): TextFilter {
   const transform = (text: string) =>
     stripMinimaxToolCallXml(text, { recoverUnclosed: !streaming });
   return {
     transform,
-    activationTokens: ["<minimax:tool_call>", "</minimax:tool_call>", "<]minimax[>[<tool_call>"],
+    create: () => createBoundedTagProjector(transform, minimaxShape, minimaxRequires),
   };
 }
 
