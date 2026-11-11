@@ -419,11 +419,21 @@ async function gatherDaemonStatusImpl(
       : undefined;
   // Only the registered service's own install says which build a restart would load.
   // A URL override, an explicit --port, or a separate-process context reaches a Gateway
-  // this service does not own, so comparing its build would name the wrong install; the
-  // service's own build id stays available as a diagnostic under service.layout.
+  // this service does not own, so comparing its build would name the wrong install; a
+  // stopped service, or one whose runtime PID is not among the port's listeners, leaves
+  // the answering Gateway to some other install. The service's own build id stays
+  // available as a diagnostic under service.layout.
+  const runtimePid = runtime?.pid;
+  const serviceOwnsListener =
+    serviceTargetsProbe &&
+    loaded &&
+    runtime?.status === "running" &&
+    (runtimePid === undefined ||
+      !portStatus?.listeners.length ||
+      portStatus.listeners.some((listener) => listener.pid === runtimePid));
   const gatewayIdentity = opts.probe
     ? resolveGatewayIdentityReport(rpc, {
-        installedBuildId: serviceTargetsProbe ? serviceLayout?.packageBuildId : undefined,
+        installedBuildId: serviceOwnsListener ? serviceLayout?.packageBuildId : undefined,
       })
     : undefined;
   const gatewayVersion = gatewayIdentity?.version;

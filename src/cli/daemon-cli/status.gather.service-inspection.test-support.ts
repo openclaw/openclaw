@@ -246,6 +246,16 @@ export function registerServiceInspectionStatusTests(params: {
     expect(status.gateway?.restartRequired).toBeUndefined();
   });
 
+  it("keeps an unloaded service's build out of a comparison with whatever answers the port", async () =>
+    await withServiceBuild("build-on-disk", async () => {
+      params.serviceIsLoaded.mockImplementationOnce(async () => false);
+      const status = await params.gatherStatus();
+
+      expect(status.service.layout?.packageBuildId).toBe("build-on-disk");
+      expect(status.gateway?.installedBuildId).toBeUndefined();
+      expect(status.gateway?.restartRequired).toBeUndefined();
+    }));
+
   it("keeps the registered service's build out of a comparison it does not target", async () =>
     await withServiceBuild("build-on-disk", async () => {
       // --port selects a Gateway by port on this host; the registered service keeps running

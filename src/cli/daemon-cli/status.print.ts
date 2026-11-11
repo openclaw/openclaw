@@ -42,7 +42,6 @@ import {
   formatRuntimeStatus,
   projectDaemonServiceForJson,
   resolveDaemonInstallBlockMessage,
-  resolveDaemonServiceInstallGuidance,
   resolveLaunchdInspectionWarnings,
   resolveRuntimeStatusColor,
   safeDaemonEnv,
