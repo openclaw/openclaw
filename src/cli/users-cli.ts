@@ -50,15 +50,15 @@ export function registerUsersCli(program: Command) {
       .action(async (opts: UsersCliOpts) => {
         const signal = getAsyncWorkSignal();
         try {
-          signal?.throwIfAborted();
           const result = await callGatewayFromCli(
             "users.list",
             opts,
             {},
             { scopes: ["operator.read"], signal },
           );
-          signal?.throwIfAborted();
-          writeUsersList(result, opts.json === true);
+          if (!signal?.aborted) {
+            writeUsersList(result, opts.json === true);
+          }
         } catch (error) {
           if (!signal?.aborted) {
             throw error;
