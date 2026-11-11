@@ -46,7 +46,7 @@ final class DashboardManager {
     @ObservationIgnored private let routeProbe: @Sendable (DashboardRouteProbePurpose) async -> Void
     @ObservationIgnored private let endpointStateProvider: @Sendable () async -> GatewayEndpointState
     @ObservationIgnored let mainWindowAutosaveName: String
-    @ObservationIgnored private let websiteDataStore: WKWebsiteDataStore
+    @ObservationIgnored let websiteDataStore: WKWebsiteDataStore
     @ObservationIgnored private var profileBrowserStores: [String: DashboardBrowserSessionStore] = [:]
     @ObservationIgnored private(set) var profileCredentialRevisions: [String: UInt64] = [:]
     @ObservationIgnored private(set) var unavailableProfileIDs: Set<String> = []
