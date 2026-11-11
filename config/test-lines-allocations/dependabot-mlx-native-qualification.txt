@@ -1,4 +1,4 @@
 # MLX native/cache and settings proof, CI routing, and UI/transcript regression coverage.
 # Includes SDK full-validation routing and timeout regression coverage.
-# Includes the released-producer direct fallback regression.
-3265
+# Includes released-producer fallback and stable goal DOM/current-ID regressions.
+3272
