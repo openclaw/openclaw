@@ -18,7 +18,7 @@ async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
 }
 
 suite.define(() => {
-  it("moves sessions between rendered groups when Person grouping falls back", async () => {
+  it("moves sessions between rendered category groups", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
       const key = "agent:main:planning";
       const rows = [
@@ -26,15 +26,13 @@ suite.define(() => {
         sessionRow("agent:main:ready", "Documentation review", 1, { category: "Ready" }),
       ];
       await page.addInitScript(() =>
-        localStorage.setItem("openclaw:sidebar:sessions:grouping", "person"),
+        localStorage.setItem("openclaw:sidebar:sessions:grouping", "category"),
       );
       const gateway = await support.installMockGateway(page, {
         sessionKey: key,
         sessionGroups: ["Planning", "Ready"],
         sessions: rows,
         methodResponses: {
-          // An authoritative roster without multiple owners renders category groups,
-          // but must retain the Person preference for later multi-owner rosters.
           "sessions.list": { ...support.sessionsListResponse(rows), owners: [] },
         },
       });
@@ -64,7 +62,7 @@ suite.define(() => {
       ]);
       expect(
         await page.evaluate(() => localStorage.getItem("openclaw:sidebar:sessions:grouping")),
-      ).toBe("person");
+      ).toBe("category");
       const reads = (await gateway.getRequests("sessions.list")).length;
       await gateway.closeLatest();
       await gateway.waitForRequest("sessions.list", { after: reads });

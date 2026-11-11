@@ -44,7 +44,6 @@ const emptyDeviceResponses = {
   "device.pair.list": { pending: [], paired: [] } satisfies DevicePairingList,
   "system-presence": [] satisfies PresenceEntry[],
 };
-
 const introRoutes = [
   "appearance",
   "approvals",
@@ -55,7 +54,6 @@ const introRoutes = [
   "talk",
   "updates",
 ] as const;
-
 const learnMoreRoutes = [
   "appearance",
   "approvals",
@@ -65,7 +63,6 @@ const learnMoreRoutes = [
   "security",
   "talk",
 ] as const;
-
 const sectionAlignmentRoutes = [
   "appearance",
   "cloud-workers",
@@ -74,9 +71,7 @@ const sectionAlignmentRoutes = [
   "talk",
   "updates",
 ] as const;
-
 const actionSectionCases = [{ route: "mcp", heading: "Servers" }] as const;
-
 const settingsRowRoutes = [
   "profile",
   "appearance",
@@ -105,9 +100,7 @@ const settingsRowRoutes = [
   "about",
   "debug",
 ] as const satisfies readonly RouteId[];
-
 const mobileSettingsRoutes = ["profile", "plugins", "logs"] as const satisfies readonly RouteId[];
-
 const mobileStandaloneSettingsPageRoutes = ["memory-import"] as const satisfies readonly RouteId[];
 
 const mobileGeometryCases = [
