@@ -21,6 +21,7 @@ import {
   readTranscriptStatsSync,
   resolveSessionTranscriptsDirForAgent,
   SessionTranscriptColdError,
+  type SessionEntrySnapshot,
   streamSessionEntriesInWorker,
   warnPluginSdkDeprecation,
 } from "./openclaw-runtime-session.js";
@@ -116,11 +117,7 @@ export type SessionEntryStream = {
   onReset?: () => void | Promise<void>;
 };
 
-export type SessionEntrySnapshot = NonNullable<
-  ReturnType<
-    typeof import("../../../../src/config/sessions/session-accessor.sqlite-export-read.js").readTranscriptExportSnapshotReadOnlySync
-  >
->;
+export type { SessionEntrySnapshot } from "./openclaw-runtime-session.js";
 
 export type BuildSessionEntryOptions = {
   /** Optional preclassification from a caller-managed dreaming transcript lookup. */
