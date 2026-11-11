@@ -3,6 +3,11 @@ name: OpenClaw Cross-OS Release Checks (Reusable)
 on:
   workflow_dispatch:
     inputs:
+      scope_checks_only:
+        description: Diagnostic-only targeted source checks without rebuilding packages
+        required: false
+        default: false
+        type: boolean
       ref:
         description: Public OpenClaw ref to validate (tag, branch, or full commit SHA)
         required: true
@@ -118,6 +123,11 @@ on:
         type: string
   workflow_call:
     inputs:
+      scope_checks_only:
+        description: Diagnostic-only targeted source checks without rebuilding packages
+        required: false
+        default: false
+        type: boolean
       ref:
         description: Public OpenClaw ref to validate (tag, branch, or full commit SHA)
         required: true
@@ -248,6 +258,7 @@ env:
 
 jobs:
   prepare:
+    if: ${{ !inputs.scope_checks_only }}
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 90
     outputs:
@@ -897,6 +908,7 @@ jobs:
           echo "value=${MATRIX_JSON}" >> "$GITHUB_OUTPUT"
 
   cross_os_release_checks:
+    if: ${{ !inputs.scope_checks_only && needs.prepare.result == 'success' }}
     name: "${{ matrix.display_name }} / ${{ matrix.suite_label }}"
     needs: prepare
     strategy:
@@ -1154,6 +1166,7 @@ jobs:
           if-no-files-found: error
 
   windows_scope_regression:
+    if: ${{ !inputs.scope_checks_only }}
     name: Windows recovery scope (Node ${{ matrix.node }})
     runs-on: windows-2025
     timeout-minutes: 30
@@ -1176,3 +1189,25 @@ jobs:
       - name: Verify retained recovery scope boundary
         shell: bash
         run: pnpm test src/infra/update-recovery-backup-reader.test.ts --maxWorkers=1
+
+  scope_semantic_checks:
+    if: ${{ inputs.scope_checks_only }}
+    name: Recovery scope targeted source checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repaired source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          semantic-checks: true
+          install-bun: false
+          cache-mode: restore
+      - name: Select changed-file checks
+        run: node scripts/check-changed.mjs --dry-run -- src/infra/update-recovery-backup-reader.ts src/infra/update-recovery-backup-reader.test.ts docs/install/updating.md
+      - name: Check changed source
+        run: node scripts/check-changed.mjs --timed -- src/infra/update-recovery-backup-reader.ts src/infra/update-recovery-backup-reader.test.ts docs/install/updating.md
