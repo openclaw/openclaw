@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveUsableAgentCredentialModes } from "../../agents/agent-auth-credentials.js";
 import type { AuthHealthSummary } from "../../agents/auth-health.js";
 import {
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -134,6 +135,7 @@ import { modelsAuthOrderHandlers } from "./models-auth-order.js";
 import { clearModelAuthStatusUsageCache } from "./models-auth-status-usage-cache.js";
 import { modelsAuthStatusHandlers } from "./models-auth-status.js";
 import { registerModelAuthLogoutTests } from "./models-auth-status.logout.test-support.js";
+import { registerModelAuthOrderTests } from "./models-auth-status.order.test-support.js";
 import { registerModelAuthSetApiKeyTests } from "./models-auth-status.set-api-key.test-support.js";
 import type { ModelAuthStatusResult } from "./models-auth-status.types.js";
 import { registerModelAuthStatusUsageRefreshTests } from "./models-auth-status.usage-refresh.test-support.js";
@@ -1007,88 +1009,12 @@ describe("models.authStatus", () => {
   });
 });
 
-describe("models.authOrderSet", () => {
-  beforeEach(() => {
-    setPreparedProfiles({
-      "openai:one": oauthCredential("openai", { access: "one", refresh: "one-refresh" }),
-      "openai:two": oauthCredential("openai", { access: "two", refresh: "two-refresh" }),
-    });
-  });
-
-  it("publishes the durable order before acknowledging it", async () => {
-    const publication = createDeferred();
-    const started = createDeferred();
-    mocks.prepareModelRuntimeSnapshot.mockImplementationOnce(() => {
-      started.resolve();
-      return publication.promise;
-    });
-    const opts = createOrderOptions({
-      provider: "openai",
-      profileIds: ["openai:two", "openai:one"],
-    });
-
-    const pending = orderHandler(opts);
-    await started.promise;
-
-    expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
-      agentDir: "/tmp/agent",
-      provider: "openai",
-      order: ["openai:two", "openai:one"],
-    });
-    expect(opts.respond).not.toHaveBeenCalled();
-
-    publication.resolve();
-    await pending;
-    expect(firstRespondCall(opts)?.slice(0, 2)).toEqual([
-      true,
-      { provider: "openai", profileIds: ["openai:two", "openai:one"] },
-    ]);
-  });
-
-  it("preserves the committed reset when runtime publication fails", async () => {
-    mocks.prepareModelRuntimeSnapshot.mockRejectedValueOnce(new Error("publication failed"));
-    const opts = createOrderOptions({ provider: "openai" });
-    await orderHandler(opts);
-    expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
-      agentDir: "/tmp/agent",
-      provider: "openai",
-      order: null,
-    });
-    expectSuccess(opts, {
-      provider: "openai",
-      profileIds: null,
-      warning: expect.stringContaining("Profile priority saved"),
-    });
-  });
-
-  it.each([
-    {
-      params: { provider: "openai", profileIds: ["openai:two", "openai:one"] },
-      config: { auth: { order: { openai: ["openai:one", "openai:two"] } } },
-      message: "auth configuration",
-    },
-    {
-      params: { provider: "openai", profileIds: ["openai:one"] },
-      message: "every available profile",
-    },
-    {
-      params: { provider: "anthropic", profileIds: ["openai:one"] },
-      message: "unavailable for provider anthropic",
-    },
-    {
-      params: { provider: "openai", unexpected: true },
-      message: "invalid models.authOrderSet params",
-    },
-  ])("rejects invalid profile priority without writing: $message", async (scenario) => {
-    if (scenario.config) {
-      mocks.getRuntimeConfig.mockReturnValue(scenario.config);
-    }
-    const opts = createOrderOptions(scenario.params);
-    await orderHandler(opts);
-    expect(mocks.setAuthProfileOrder).not.toHaveBeenCalled();
-    expect(firstRespondCall(opts)?.[0]).toBe(false);
-    expect(firstRespondCall(opts)?.[2]?.message).toContain(scenario.message);
-  });
+registerModelAuthOrderTests({
+  mocks,
+  setPreparedProfiles,
+  createOrderOptions,
+  orderHandler,
+  expectSuccess,
 });
 
 registerModelAuthSetApiKeyTests({ mocks, createOptions, setApiKeyHandler });
@@ -1106,4 +1032,41 @@ registerModelAuthLogoutTests({
   oauthCredential,
 });
 
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+it.each([["operator.admin"], ["operator.read"]])(
+  "projects prepared native billing metadata without a saved account (%s)",
+  async (scope) => {
+    const snapshot = createPreparedOwnerSnapshot("main");
+    mocks.readPreparedCatalog.mockResolvedValue({
+      ...snapshot,
+      authModes: resolveUsableAgentCredentialModes({
+        "claude-cli": {
+          type: "api_key",
+          key: "synthetic-native-presence",
+          nativeAuth: {
+            runtime: "claude-cli",
+            mode: "oauth",
+            display: { kind: "subscription", plan: "Max" },
+          },
+        },
+      }),
+    });
+    const options = createOptions({}, [scope]);
+    await handler(options);
+    expectSuccess(
+      options,
+      expect.objectContaining({
+        providers: [
+          {
+            provider: "claude-cli",
+            displayName: "Claude",
+            status: "ok",
+            profiles: [],
+            nativeAuth: { kind: "subscription", plan: "Max" },
+          },
+        ],
+      }),
+    );
+    expect(preparedAuthStore.profiles).toEqual({});
+    expect(mocks.loadDeferredCatalog).not.toHaveBeenCalled();
+  },
+);

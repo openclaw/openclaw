@@ -1374,6 +1374,39 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(existsSync(run.descriptor.directory)).toBe(false);
   });
 
+  it.each([2, 4, 8])(
+    "retains the %s CPU scheduling budget on a larger Boat host",
+    async (cpuBudget) => {
+      machine(16, 32);
+      let active = 0;
+      let peak = 0;
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      const result = await runPlans(
+        groupPlans([{ configs: ["a.config.ts"] }, { configs: ["b.config.ts"] }]),
+        {
+          env: {
+            CI: "true",
+            RUNNER_ENVIRONMENT: "self-hosted",
+            OPENCLAW_NODE_TEST_CPU_BUDGET: String(cpuBudget),
+          },
+          runChild: async () => {
+            active += 1;
+            peak = Math.max(peak, active);
+            await nextTurn();
+            active -= 1;
+            return 0;
+          },
+        },
+      );
+      expect(result).toBe(0);
+      expect(peak).toBe(cpuBudget < 8 ? 1 : 2);
+      expect(log).toHaveBeenCalledWith(`[shard:cpu-budget] logicalCpuCount=${cpuBudget}`);
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining(`logicalCpuCount=16 totalMemoryBytes=${32 * 1024 ** 3}`),
+      );
+    },
+  );
+
   it("retains the measured group's fallback ceiling below its memory floor", async () => {
     vi.spyOn(os, "availableParallelism").mockReturnValue(8);
     vi.spyOn(os, "totalmem").mockReturnValue(24 * 1024 ** 3);
