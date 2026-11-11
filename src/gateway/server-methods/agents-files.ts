@@ -27,10 +27,10 @@ import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
-import { decodeUtf8Input } from "../../infra/utf8-input.js";
+import { decodeUtf8Input, Utf8InputError } from "../../infra/utf8-input.js";
 import { resolveConfiguredAgentIdOrRespondError } from "./agent-id-shared.js";
 import { respondError } from "./response.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandler, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import { enqueueWorkspaceFileUpdate } from "./workspace-fs.js";
 
@@ -96,6 +96,30 @@ async function statWorkspaceFileSafely(
 
 function respondWorkspaceFileUnsafe(respond: RespondFn, name: string): void {
   respondError(respond, ErrorCodes.INVALID_REQUEST, `unsafe workspace file "${name}"`);
+}
+
+function respondWorkspaceFileEncodingError(respond: RespondFn, error: unknown): boolean {
+  if (!(error instanceof Utf8InputError)) {
+    return false;
+  }
+  respondError(
+    respond,
+    ErrorCodes.INVALID_REQUEST,
+    `${error.message} The original file was preserved. Convert it to UTF-8 before retrying.`,
+  );
+  return true;
+}
+
+function withWorkspaceFileEncodingErrors(handler: GatewayRequestHandler): GatewayRequestHandler {
+  return async (options) => {
+    try {
+      await handler(options);
+    } catch (error) {
+      if (!respondWorkspaceFileEncodingError(options.respond, error)) {
+        throw error;
+      }
+    }
+  };
 }
 
 export async function writeWorkspaceFileOrRespond(params: {
@@ -177,6 +201,9 @@ export async function buildIdentityMarkdownOrRespondUnsafe(params: {
   try {
     return await buildIdentityMarkdownForWrite({ ...params, readWorkspaceFileContent });
   } catch (err) {
+    if (respondWorkspaceFileEncodingError(params.respond, err)) {
+      return null;
+    }
     if (err instanceof FsSafeError) {
       respondWorkspaceFileUnsafe(params.respond, DEFAULT_IDENTITY_FILENAME);
       return null;
@@ -276,7 +303,7 @@ export const agentFileHandlers: Pick<
     );
     respond(true, { agentId, workspace: workspaceDir, files }, undefined);
   },
-  "agents.files.get": async ({ params, respond, context }) => {
+  "agents.files.get": withWorkspaceFileEncodingErrors(async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateAgentsFilesGetParams, "agents.files.get", respond)) {
       return;
     }
@@ -359,8 +386,8 @@ export const agentFileHandlers: Pick<
       };
     }
     respondFile(file);
-  },
-  "agents.files.set": async ({ params, respond, context }) => {
+  }),
+  "agents.files.set": withWorkspaceFileEncodingErrors(async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateAgentsFilesSetParams, "agents.files.set", respond)) {
       return;
     }
@@ -511,5 +538,5 @@ export const agentFileHandlers: Pick<
       },
       undefined,
     );
-  },
+  }),
 };
