@@ -1007,8 +1007,18 @@ describe("runDaemonRestart health checks", () => {
       ["stop", () => runDaemonStop({ json: true })],
       ["uninstall", () => runDaemonUninstall({ json: true })],
       ["preserved restart", () => runDaemonRestart({ json: true, preserveDefinition: true })],
-    ])("blocks native %s lifecycle access", async (_action, run) => {
-      await expect(run()).rejects.toThrow("gateway lifecycle is managed by an external supervisor");
+    ])("blocks native %s lifecycle access", async (action, run) => {
+      const refusal = await run().catch((error: unknown) => error);
+      expect(refusal).toMatchObject({
+        message: expect.stringContaining("gateway lifecycle is managed by an external supervisor"),
+      });
+      // CLI start, stop and uninstall show the remedy instead of the generic failure line.
+      if (action !== "preserved restart") {
+        expect(refusal).toBeInstanceOf(ExpectedCliError);
+        expect(refusal).toMatchObject({
+          humanOutput: expect.stringMatching(new RegExp(`^Gateway ${action} blocked: `, "u")),
+        });
+      }
 
       expectNoCalls(
         runServiceStart,
