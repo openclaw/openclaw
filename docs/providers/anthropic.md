@@ -29,6 +29,13 @@ the `anthropic/*` one.
   An Anthropic Default row also uses this label when it will clear a pinned session runtime:
   the current session route does not describe the configured route being restored.
 
+For native login, the web picker's Claude CLI group reads the billing label from
+Claude Code's `claude auth status --json`: a Claude account shows its recognized
+plan or **Subscription**, API authentication shows **API**, and an unrecognized
+login type shows **Native login**. An explicitly selected saved account takes
+precedence. This does not import a saved account or change who manages login
+and token refresh.
+
 The web picker shows route details on hover or keyboard focus. Telegram `/models`
 shows route guidance before selection and labels models when their runtime is
 known. Model IDs and explicit runtime choices remain unchanged.
@@ -182,8 +189,9 @@ OpenClaw release:
         an explicit logged-out response or a `claude` executable missing from
         `PATH` blocks the native route, while a timeout or unreadable response
         allows Claude to try the request. Captures expire
-        after one minute. If a selected native login is unavailable, spawn admission
-        rechecks it immediately, so signing in does not require a Gateway restart.
+        after one minute. Model lists, chat model pickers, and `/model` recheck an
+        expired capture, and spawn admission rechecks an unavailable native login
+        immediately, so signing in after Gateway start does not require a restart.
 
         For native-login users, the model picker reads Claude Code's own model menu
         in the background, without sending a prompt or using an inference turn.
@@ -1106,12 +1114,14 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     window by default; no `params.context1m: true` needed.
   </Accordion>
 
-  <Accordion title="Claude Code native subagents on managed turns">
+  <Accordion title="Claude Code native subagents and web search on managed turns">
     `plugins.entries.anthropic.config.managedNativeTools` keeps selected Claude
-    Code orchestration tools on `claude-cli` turns that OpenClaw manages. It is
-    off by default. `default` applies to every agent; `agents.<id>` replaces it
-    for one agent, and `[]` opts that agent out. Accepted values: `Agent`,
-    `Workflow`.
+    Code orchestration tools and native web search on `claude-cli` turns that
+    OpenClaw manages. It is off by default. `default` applies to every agent;
+    `agents.<id>` replaces it for one agent, and `[]` opts that agent out.
+    Accepted values: `Agent`, `Workflow`, `WebSearch`. `WebSearch` uses Claude Code's
+    server-side search, billed to the Claude login, so no OpenClaw search provider is needed; it
+    is kept only while the agent's tool policy allows `web_search`.
 
     ```json5
     {
@@ -1119,7 +1129,10 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
         entries: {
           anthropic: {
             config: {
-              managedNativeTools: { default: ["Agent", "Workflow"], agents: { ops: [] } },
+              managedNativeTools: {
+                default: ["Agent", "Workflow", "WebSearch"],
+                agents: { ops: [] },
+              },
             },
           },
         },

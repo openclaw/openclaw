@@ -1266,7 +1266,6 @@
 ["src/agents/cli-runner/cli-run-transcript.admission.test.ts","../../context-engine/host-compat.js","bc03844f61558be162c80fec78b35e9400590ba728f0e497d9141d2796de52f6",1]
 ["src/agents/cli-runner/cli-run-transcript.admission.test.ts","../../infra/errors.js","8d17d7e80054e346a44a4e5c09fe4da1e542eddae01e0e1ed5d551e62f3f993e",1]
 ["src/agents/cli-runner/cli-run-transcript.admission.test.ts","../../logging/subsystem.js","2d8bf8313db9f41d687cc7b5e21aded242e9039be54eb9fa972e9e771444beb5",1]
-["src/agents/cli-runner/cli-run-transcript.admission.test.ts","../../routing/session-key.js","7c925386a73b5ec4582944a2484b9c8929c1bb07493f5bc3b7fd199482decbce",1]
 ["src/agents/cli-runner/cli-run-transcript.admission.test.ts","../agent-scope.js","248ad34d96a4adc4512337112639be714881a19abe4da39814bc23c565b7ff44",1]
 ["src/agents/cli-runner/cli-run-transcript.admission.test.ts","../harness/context-engine-lifecycle.js","ad4bde279b0558066c7656870a70ba4a7598f5f5597635ee5e889ec437ca8187",1]
 ["src/agents/cli-runner/cli-run-transcript.admission.test.ts","../harness/hook-helpers.js","a44010894ca49b206feacb4b40745e86a1a53be0026f78786fdc835701a12ffa",1]

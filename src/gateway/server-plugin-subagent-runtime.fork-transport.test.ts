@@ -2,8 +2,8 @@ import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import "../agents/ai-transport-runtime-host.js";
+import { providerResponse } from "../agents/embedded-agent-runner.wire.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { closeProviderTransportDispatcherPool } from "../agents/provider-transport-dispatcher-pool.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
@@ -38,11 +38,11 @@ const API_KEY = "synthetic-fork-transport-key";
 
 type RecordedRequest = {
   url: string | undefined;
-  authorization: string | undefined;
+  apiKey: string | string[] | undefined;
   body: unknown;
 };
 
-it("sends no request for another operator's session but lets its owner reach the provider", async () => {
+it("sends no request for another operator's session but forks for its owner at the parent's thinking level", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const providerDir = state.path("provider");
     fs.mkdirSync(providerDir);
@@ -73,7 +73,7 @@ it("sends no request for another operator's session but lets its owner reach the
           }
           const recorded: RecordedRequest = {
             url: request.url,
-            authorization: request.headers.authorization,
+            apiKey: request.headers["x-api-key"],
             body: undefined,
           };
           requests.push(recorded);
@@ -84,14 +84,16 @@ it("sends no request for another operator's session but lets its owner reach the
           });
           request.on("end", () => {
             recorded.body = JSON.parse(body);
-            writeOpenAiResponsesSse(response, [
-              {
-                id: "fork-transport-response",
-                object: "chat.completion.chunk",
-                model: "fork-model",
-                choices: [{ index: 0, delta: { content: "fork-ok" }, finish_reason: "stop" }],
-              },
-            ]);
+            const { response: wire } = providerResponse({
+              api: "anthropic-messages",
+              model: "fork-model",
+              id: "msg_fork",
+              messageId: "msg_fork",
+              text: "fork-ok",
+              calls: [],
+            });
+            const sse = { "content-type": "text/event-stream" };
+            void wire.text().then((text) => response.writeHead(200, sse).end(text));
           });
         }),
     });
@@ -114,15 +116,16 @@ it("sends no request for another operator's session but lets its owner reach the
         async () => {
           // Keep Vitest's lazy module transformation outside the fork's request deadline.
           await import("../agents/btw.js");
-          const baseUrl = `http://127.0.0.1:${claim.port}/v1`;
-          const model = makeProviderModelFixture<"openai-completions">({
+          const baseUrl = `http://127.0.0.1:${claim.port}`;
+          const model = makeProviderModelFixture<"anthropic-messages">({
             provider: fixture.providerId,
             id: "fork-model",
             name: "Fork model",
-            api: "openai-completions",
+            api: "anthropic-messages",
             baseUrl,
+            reasoning: true,
             contextWindow: 8192,
-            maxTokens: 1024,
+            maxTokens: 4096,
           });
           const config: OpenClawConfig = {
             channels: { telegram: { enabled: false, dmHistoryLimit: 1 } },
@@ -130,6 +133,7 @@ it("sends no request for another operator's session but lets its owner reach the
               defaults: {
                 workspace: state.workspaceDir,
                 userTimezone: "UTC",
+                thinkingDefault: "high",
                 models: {
                   [`${fixture.providerId}/fork-model`]: { agentRuntime: { id: "openclaw" } },
                 },
@@ -139,7 +143,7 @@ it("sends no request for another operator's session but lets its owner reach the
             models: {
               providers: {
                 [fixture.providerId]: {
-                  api: "openai-completions",
+                  api: "anthropic-messages",
                   apiKey: API_KEY,
                   baseUrl,
                   request: { allowPrivateNetwork: true },
@@ -241,27 +245,23 @@ it("sends no request for another operator's session but lets its owner reach the
 
             await expect(forkAs(owner.id)).resolves.toMatchObject({ text: "fork-ok" });
             expect(requests).toHaveLength(1);
-            expect(JSON.stringify(requests[0]?.body)).not.toContain(
-              "DISCARDED_PRE_COMPACTION_1672",
-            );
-            expect(JSON.stringify(requests[0]?.body)).not.toContain("OUTSIDE_HISTORY_WINDOW_1672");
-            expect(requests[0]?.body).not.toHaveProperty("prompt_cache_key");
-            const user = (content: unknown) => ({ role: "user", content });
+            const sent = JSON.stringify(requests[0]?.body);
+            expect(sent).not.toContain("DISCARDED_PRE_COMPACTION_1672");
+            expect(sent).not.toContain("OUTSIDE_HISTORY_WINDOW_1672");
+            const user = (text: unknown) => ({ role: "user", content: [{ type: "text", text }] });
             expect(requests[0]).toMatchObject({
-              url: "/v1/chat/completions",
-              authorization: `Bearer ${API_KEY}`,
+              url: "/v1/messages",
+              apiKey: API_KEY,
               body: {
                 model: "fork-model",
+                thinking: { type: "enabled" },
+                system: [{ type: "text", text: "Stable parent instructions" }],
                 messages: [
-                  { role: "system", content: "Stable parent instructions" },
-                  user([
-                    {
-                      type: "text",
-                      text: "The conversation history before this point was compacted into the following summary:\n\n<summary>\nEarlier request summarized for review\n</summary>",
-                    },
-                  ]),
+                  user(
+                    "The conversation history before this point was compacted into the following summary:\n\n<summary>\nEarlier request summarized for review\n</summary>",
+                  ),
                   user(expect.stringContaining("[Thu 1970-01-01 00:00 UTC] Parent question")),
-                  user("Review the parent"),
+                  { role: "user", content: "Review the parent" },
                 ],
               },
             });
