@@ -463,6 +463,9 @@ export class NewSessionPageOwner {
     const gateway = this.context?.gateway.snapshot;
     return {
       currentAgentId: this.place.agentId,
+      agents: catalog.isTarget(this.data)
+        ? undefined
+        : this.context?.agents.state.agentsList?.agents,
       assistantName: agent ? normalizeAgentTargetLabel(agent, identity) : "",
       assistantAvatar: resolveAgentTextAvatar(agent ?? {}, identity),
       assistantAvatarUrl: resolveAgentAvatarUrl(agent ?? {}, identity),

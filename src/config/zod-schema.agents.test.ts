@@ -2,6 +2,29 @@ import { describe, expect, it } from "vitest";
 import { AgentsSchema } from "./zod-schema.agents.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
+describe("agent conversation starters", () => {
+  it.each([undefined, [], ["Brief me", "Set up a repository"]])(
+    "accepts optional starters %j",
+    (conversationStarters) => {
+      const result = AgentsSchema.safeParse({
+        entries: { briefing: { description: "Follows repositories.", conversationStarters } },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.entries?.briefing.conversationStarters).toEqual(conversationStarters);
+      }
+    },
+  );
+  it.each(["Brief me", [""], ["   "], [12]])(
+    "rejects invalid starters %j",
+    (conversationStarters) => {
+      expect(
+        AgentsSchema.safeParse({ entries: { briefing: { conversationStarters } } }).success,
+      ).toBe(false);
+    },
+  );
+});
+
 describe("workspace file modes", () => {
   it.each(["0600", "0620", "0640", "0660"])("accepts %s at either scope", (mode) => {
     expect(

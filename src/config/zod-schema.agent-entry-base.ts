@@ -90,6 +90,7 @@ export const AgentEntryBaseSchema = z.strictObject({
   id: z.string(),
   name: z.string().optional(),
   description: z.string().optional(),
+  conversationStarters: z.array(z.string().trim().min(1)).optional(),
   workspace: z.string().optional(),
   workspaceFileMode: WorkspaceFileModeSchema.optional(),
   cwd: z.string().optional(),

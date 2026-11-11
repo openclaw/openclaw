@@ -3466,6 +3466,15 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   margin: 0;
 }
 
+.agent-chat__description {
+  max-width: 56ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .agent-chat__welcome--setup .agent-chat__hint {
   max-width: 36ch;
   margin: 0 0 6px;

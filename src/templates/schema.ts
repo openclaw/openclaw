@@ -108,6 +108,7 @@ const agentIdentitySchema = z
     id: agentId,
     name: optionalString,
     description: optionalString,
+    conversationStarters: z.array(nonEmptyString).optional(),
     identity: identitySchema.optional(),
   })
   .strict();

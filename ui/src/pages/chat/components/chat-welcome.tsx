@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { AgentsListResult } from "../../../api/types.ts";
 import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
@@ -42,7 +42,7 @@ export type ChatWelcomeProps = {
   hint?: JSX.Element;
   /** Rendered between the hero and the recents (the new-session draft composer). */
   composer?: JSX.Element;
-  /** Hide recents and suggestions when the surrounding flow must stay ephemeral. */
+  /** Hide recents and generic suggestions in ephemeral flows; authored prompts are static. */
   hideSecondaryContent?: boolean;
   /** Visually retire secondary content while the new-session draft is active. */
   fadeSecondaryContent?: boolean;
@@ -53,6 +53,8 @@ export function ChatWelcome(
   props: ChatWelcomeProps & { preparedRecents?: readonly WelcomeRecentSession[] },
 ) {
   const welcomeRef = createBackgroundLayoutRef("welcome");
+  const agent = createMemo(() => props.agents?.find((entry) => entry.id === props.currentAgentId));
+  const customStarters = () => agent()?.conversationStarters ?? [];
   return (
     <Show
       when={!props.modelSetupRequired}
@@ -87,45 +89,53 @@ export function ChatWelcome(
             <Show when={props.assistantNameControl}>
               <div class="agent-chat__welcome-name">{props.assistantNameControl}</div>
             </Show>
+            <Show when={agent()?.description}>
+              {(description) => <p class="agent-chat__description">{description()}</p>}
+            </Show>
             <Show when={props.hint}>
               <p class="agent-chat__hint">{props.hint}</p>
             </Show>
           </div>
         </div>
         {props.composer}
-        <Show when={!props.hideSecondaryContent}>
+        <Show when={!props.hideSecondaryContent || customStarters().length}>
           <div
             class={[
               "agent-chat__welcome-secondary",
               {
                 "agent-chat__welcome-secondary--hidden": props.fadeSecondaryContent,
+                "agent-chat__welcome-secondary--custom": customStarters().length > 0,
               },
             ]}
             aria-hidden={props.fadeSecondaryContent ? "true" : "false"}
             inert={props.fadeSecondaryContent}
           >
             <div class="agent-chat__welcome-secondary-inner">
-              <Show
-                when={props.preparedRecents?.length}
-                fallback={
-                  <div class="agent-chat__suggestions">
-                    <For each={resolveWelcomeSuggestionKeys(props.operatorAuth)}>
-                      {(key) => (
-                        <button
-                          type="button"
-                          class="agent-chat__suggestion"
-                          onClick={() => {
-                            props.onDraftChange(t(key));
-                            props.onSend();
-                          }}
-                        >
-                          {t(key)}
-                        </button>
-                      )}
-                    </For>
-                  </div>
-                }
-              >
+              <Show when={customStarters().length || !props.preparedRecents?.length}>
+                <div class="agent-chat__suggestions">
+                  <For
+                    each={
+                      customStarters().length
+                        ? customStarters()
+                        : resolveWelcomeSuggestionKeys(props.operatorAuth).map((key) => t(key))
+                    }
+                  >
+                    {(prompt) => (
+                      <button
+                        type="button"
+                        class="agent-chat__suggestion"
+                        onClick={() => {
+                          props.onDraftChange(prompt);
+                          props.onSend();
+                        }}
+                      >
+                        {prompt}
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </Show>
+              <Show when={!props.hideSecondaryContent && props.preparedRecents?.length}>
                 <div class="agent-chat__recents">
                   <div class="agent-chat__recents-title">{t("chat.welcome.recentSessions")}</div>
                   <For each={props.preparedRecents}>
