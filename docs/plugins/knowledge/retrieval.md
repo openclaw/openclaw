@@ -31,10 +31,12 @@ ranked search never proves that an inventory is complete.
 Queries accept 1–64 word tokens within 500 characters. Punctuation separates
 tokens; `OR`, `NOT`, column syntax, and quotes are not executed as FTS syntax.
 Matching is case-insensitive. Decomposed diacritics fold away in any script, so
-decomposed `άλφα` and unaccented `αλφα` match alike, but precomposed diacritics
-fold only in Latin-1 (`cafe` matches `café`): an unaccented query does not reach
-a composed accented word in other scripts. There is no stemming, prefix search,
-or language-specific segmentation, so unsegmented CJK substrings may not match.
+decomposed `άλφα` and unaccented `αλφα` match alike. Precomposed letters with
+diacritics fold to their base letters across the Latin script, including Latin
+Extended-A (`cafe` matches `café`, and `c` matches `č`): an unaccented query
+does not reach a composed accented word in other scripts. There is no stemming,
+prefix search, or language-specific segmentation, so unsegmented CJK substrings
+may not match.
 Canonically equivalent Unicode spellings (composed NFC and decomposed NFD, e.g.
 Greek `άλφα`) retrieve the same records: in `all` and `any` modes each word
 matches its original spelling plus both canonical forms, so a partially
