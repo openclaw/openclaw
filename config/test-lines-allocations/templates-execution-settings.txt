@@ -1,0 +1,2 @@
+# Verified CLAW.md catalog disclosure (22) and reachable execution-summary UI regressions (127).
+149

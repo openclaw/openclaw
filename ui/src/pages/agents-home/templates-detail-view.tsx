@@ -10,6 +10,7 @@ import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "../plugins/detail-shell.tsx";
 import { PluginInstallAction } from "../plugins/install-action.tsx";
 import { renderPluginCapabilitySection, renderPublisherIdentity } from "../plugins/overview.tsx";
+import { TemplateAccessSection } from "./template-access-section.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import type { TemplateAddReviewPlan } from "./templates-catalog-client.ts";
 import "../../styles/templates-trust-warning.css";
@@ -146,6 +147,7 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
           props.view.onOpenPreview("instruction", name ?? contents().instructions[0]!.name)
         }
       />
+      <TemplateAccessSection access={props.view.readDetail()?.access} />
       {renderPluginCapabilitySection(
         t("templatesCatalog.skillsSection"),
         contents().skills.map((item) => ({

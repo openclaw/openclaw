@@ -36,6 +36,14 @@ Publishing and searching Templates through ClawHub use the separate registry
 surface. The Control UI can browse official and community Templates from **Pages → Templates** at `/templates`
 when **Templates** is enabled in **Settings → Labs**.
 
+Template details include **Execution settings**, a compact summary of the declared
+sandbox mode, file restrictions, and tool policy. **View access details** expands the
+full alphabetical declarations, including tool lists and sandbox scope. These are
+Template requests, not grants: omitted settings remain unspecified, and host policy
+and available runtimes determine effective access. Existing Templates need no new
+fields or republication. The entire section is omitted when none of these settings
+are explicitly declared.
+
 ## Create with an agent
 
 Ask the agent, “create a new template from this agent.” The bundled

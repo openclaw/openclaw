@@ -110,11 +110,33 @@ export const TemplatesCatalogDetailParamsSchema = closedObject({
   packageName: TemplatePackageName,
   version: Type.Optional(NonEmptyString),
 });
+const TemplatesCatalogAccessSchema = closedObject({
+  sandbox: Type.Optional(
+    closedObject({
+      mode: Type.Optional(stringLiteralUnion(["off", "non-main", "all"])),
+      scope: Type.Optional(stringLiteralUnion(["session", "agent", "shared"])),
+      workspaceAccess: Type.Optional(stringLiteralUnion(["none", "ro", "rw"])),
+    }),
+  ),
+  tools: Type.Optional(
+    closedObject({
+      profile: Type.Optional(NonEmptyString),
+      allow: Type.Optional(Type.Array(NonEmptyString)),
+      alsoAllow: Type.Optional(Type.Array(NonEmptyString)),
+      deny: Type.Optional(Type.Array(NonEmptyString)),
+      fs: Type.Optional(closedObject({ workspaceOnly: Type.Optional(Type.Boolean()) })),
+    }),
+  ),
+});
+
+export type TemplateCatalogAccess = Static<typeof TemplatesCatalogAccessSchema>;
+
 export const TemplatesCatalogDetailSchema = closedObject({
   ...TemplatesCatalogEntrySchema.properties,
   version: NonEmptyString,
   agentName: Type.Optional(NonEmptyString),
   agentDescription: Type.Optional(Type.String()),
+  access: Type.Optional(TemplatesCatalogAccessSchema),
   workspaceFiles: Type.Integer({ minimum: 0 }),
   skills: Type.Integer({ minimum: 0 }),
   plugins: Type.Integer({ minimum: 0 }),

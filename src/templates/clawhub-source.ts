@@ -2,7 +2,10 @@
 import fs from "node:fs/promises";
 import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
-import type { TemplatesCatalogDetailResult } from "../../packages/gateway-protocol/src/schema/templates.js";
+import type {
+  TemplateCatalogAccess,
+  TemplatesCatalogDetailResult,
+} from "../../packages/gateway-protocol/src/schema/templates.js";
 import { stripFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import {
   downloadClawHubPackageArchive,
@@ -74,18 +77,10 @@ export type ClawHubTemplateCatalogOverview = {
   featured: ClawHubTemplateCatalogEntry[];
   sections: Array<{ category: string; entries: ClawHubTemplateCatalogEntry[] }>;
 };
-export type ClawHubTemplateCatalogDetail = ClawHubTemplateCatalogEntry & {
-  version: string;
-  agentName?: string;
-  agentDescription?: string;
-  workspaceFiles: number;
-  skills: number;
-  plugins: number;
-  mcpServers: number;
-  scheduledJobs: number;
-  contents: NonNullable<TemplatesCatalogDetailResult["detail"]["contents"]>;
-  scanStatus?: string;
-};
+export type ClawHubTemplateCatalogDetail = ClawHubTemplateCatalogEntry &
+  TemplatesCatalogDetailResult["detail"] & {
+    contents: NonNullable<TemplatesCatalogDetailResult["detail"]["contents"]>;
+  };
 type AcceptedTrust = Extract<Awaited<ReturnType<typeof checkClawHubPackageTrust>>, { ok: true }>;
 export type ClawHubTemplateTrust = {
   trustWarning?: string;
@@ -372,7 +367,7 @@ export async function readClawHubTemplateDetail(
       );
     }
     const summary = parseTemplateManifestSummary(release.version.templateManifestSummary);
-    const { contents } = await readClawHubTemplateContents(
+    const { contents, access } = await readClawHubTemplateContents(
       {
         ...params,
         packageName: pkg.name,
@@ -394,6 +389,7 @@ export async function readClawHubTemplateDetail(
       plugins: contents.integrations.filter((item) => item.kind === "plugin").length,
       mcpServers: contents.integrations.filter((item) => item.kind === "mcpServer").length,
       scheduledJobs: contents.automations.length,
+      access,
       contents,
     };
   } catch (error) {
@@ -441,6 +437,7 @@ async function readClawHubTemplateContents(
   },
 ): Promise<{
   contents: ClawHubTemplateCatalogDetail["contents"];
+  access: TemplateCatalogAccess;
   preview?: ClawHubTemplateCatalogPreview;
 }> {
   const artifactResponse =
@@ -477,6 +474,12 @@ async function readClawHubTemplateContents(
           artifactByteLength,
         });
         const manifest = verified.manifest;
+        const agent = manifest.agent;
+        // Disclose only validated declarations, never resolved host defaults or setup secrets.
+        const access: TemplateCatalogAccess = {
+          ...(agent.sandbox ? { sandbox: agent.sandbox } : {}),
+          ...(agent.tools ? { tools: agent.tools } : {}),
+        };
         const instructions = [
           ...Object.entries(manifest.workspace.bootstrapFiles)
             .filter(([, declaration]) => Boolean(declaration))
@@ -542,6 +545,7 @@ async function readClawHubTemplateContents(
         return {
           ok: true as const,
           value: {
+            access,
             contents: {
               instructions: describedInstructions,
               skills: describedSkills,
