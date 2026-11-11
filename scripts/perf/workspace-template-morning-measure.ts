@@ -13,16 +13,25 @@ import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewaySchedulerClock } from "../../src/infra/gateway-scheduler.js";
+import {
+  morningSessionMaintenance,
+  verifyMorningAgentSeed,
+} from "./workspace-template-agent-seed.js";
 
 const { values } = parseArgs({
   options: {
     fixture: { type: "string" },
     output: { type: "string" },
     image: { type: "string" },
+    "state-dir": { type: "string" },
     prewarm: { type: "boolean" },
   },
 });
 assert(values.fixture && values.output && values.image, "--fixture, --output and --image required");
+assert(
+  values["state-dir"],
+  "--state-dir must be a pristine writable snapshot of the synthetic agent seed",
+);
 const output = path.resolve(values.output);
 await fs.mkdir(output);
 const repo = path.join(output, "source");
@@ -35,7 +44,7 @@ for (const key of Object.keys(process.env)) {
   }
 }
 Object.assign(process.env, {
-  OPENCLAW_STATE_DIR: path.join(output, "state"),
+  OPENCLAW_STATE_DIR: path.resolve(values["state-dir"]),
   OPENCLAW_HOME: output,
   TMPDIR: path.join(output, "tmp"),
   XDG_CONFIG_HOME: path.join(output, "config"),
@@ -44,6 +53,11 @@ Object.assign(process.env, {
   GIT_CONFIG_NOSYSTEM: "1",
 });
 await fs.mkdir(process.env.TMPDIR!, { recursive: true });
+const agentSeedBefore = verifyMorningAgentSeed(process.env.OPENCLAW_STATE_DIR!);
+assert(
+  agentSeedBefore.fullScale,
+  "Morning replay requires the allocated 35 GiB / 10k-session seed",
+);
 // Borrow only immutable synthetic objects. Every ref and checkout below is task-owned.
 command(output, "clone", "--quiet", "--bare", path.resolve(values.fixture), origin);
 command(origin, "update-ref", "refs/heads/main", "refs/tags/fixture-base");
@@ -75,6 +89,7 @@ assert.equal(
 
 const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snapshot.js");
 const config: OpenClawConfig = {
+  session: { maintenance: morningSessionMaintenance },
   worktreeRoot: path.join(output, "managed"),
   agents: {
     defaults: {
@@ -218,6 +233,7 @@ const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
   }
 });
 const campaignStart = performance.now();
+let registeredSessions = 0;
 async function request(label: string, commit: string, guest = true, discover = false) {
   const sessionKey = `agent:fixture:${label}`;
   const phases: Record<string, number> = {};
@@ -254,6 +270,7 @@ async function request(label: string, commit: string, guest = true, discover = f
           { agentId: "fixture", sessionKey },
           { sessionId: randomUUID(), updatedAt: Date.now(), worktree: { id, branch, repoRoot } },
         );
+        registeredSessions++;
         destination = await withWorktreePreparationTiming("sandbox", async () => {
           using projection = await prepareLocalSandboxWorkspace({
             cfg: config,
@@ -378,6 +395,8 @@ try {
         replayOrigin,
         files: shape.length,
         payloadBytes: 1_100_004_000,
+        agentSeedBefore,
+        sessionMaintenance: morningSessionMaintenance,
         commits,
         rows,
         events,
@@ -393,6 +412,14 @@ try {
   }
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
+  const agentSeedAfter = verifyMorningAgentSeed(
+    process.env.OPENCLAW_STATE_DIR!,
+    registeredSessions,
+  );
+  await fs.writeFile(
+    path.join(output, "agent-state-after.json"),
+    JSON.stringify(agentSeedAfter, null, 2) + "\n",
+  );
   for (const directory of ["managed", "state", "source", "origin.git", "tmp", "config"]) {
     const target = path.join(output, directory);
     if (

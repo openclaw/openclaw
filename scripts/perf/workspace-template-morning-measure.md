@@ -6,10 +6,14 @@ sandbox-projection owners against seven first-parent main advances. Reuse the
 fixture must contain `fixture-base`, its real pnpm lockfile, and its source-dependent
 installation script. The input repository is read-only. Every output directory
 must be new, and each run clones its own source repository and local origin.
+Each arm also requires a pristine writable snapshot of the synthetic agent state
+described below. Both fixture entrypoints must be copied unchanged into the
+baseline checkout.
 
 ```sh
 node --import ./scripts/tsx.mjs scripts/perf/workspace-template-morning-measure.ts \
   --fixture /path/to/synthetic-fixture --output /path/to/new-output \
+  --state-dir /path/to/pristine-writable-state-snapshot \
   --image local-node-pnpm-image --prewarm
 ```
 
@@ -19,6 +23,61 @@ subscriber in changed production code is not an exact-parent comparison. Never
 mix candidate source with baseline compiled workers. Use at least five samples
 per arm in counterbalanced order and matched baseline A/A controls on the same
 host; record source hashes and the image identity with the campaign results.
+
+For lane 2416, the baseline is `3a6cc659` plus the isolated known-ID registry-guard
+repair from `694ffbdda9f5d`, also present in the candidate. The unmodified parent
+failed the concurrent owner-resolution flow because unrelated publication revoked
+its wildcard read. Record the exact single-file repair patch hash and resulting
+baseline tree; do not copy the candidate projection module, which also contains
+prewarm changes. Preserve the original failed run separately.
+
+Create the agent-state seed once, outside every measured arm, using the existing
+canonical session/transcript fixture writer:
+
+```sh
+nice -n 19 node --max-old-space-size=2048 --import ./scripts/tsx.mjs \
+  scripts/perf/workspace-template-agent-seed.ts \
+  --state-dir /path/to/empty-seed-state --sessions 10000 --transcript-mib 12096
+```
+
+The helper generates deterministic synthetic session metadata, participants and
+real transcript rows for agent `fixture`. It adds no tables or schema changes.
+`--transcript-mib` measures logical text; canonical transcript/search storage
+amplifies those bytes. Bounded 64/256 MiB calibration produced approximately
+2.96 database bytes per logical byte, so the full input targets approximately
+35 GiB. The full seed must actually contain 10,000 sessions and a 34–36 GiB agent
+database, with filesystem-reported allocated bytes at least 95% of file size.
+Wrong size fails setup; padding a file or attaching an unrelated database is not
+scale proof. `morning-agent-seed.json` records file/page/allocated bytes, row counts,
+schema version, source head, seed resources, all seeded metadata's digest, and a
+bounded transcript-payload sample digest.
+
+On Btrfs, create the seed directory as a subvolume, let the helper close all storage
+owners, mark that seed read-only, then create one writable subvolume snapshot per
+arm. This shares the 35 GiB immutable extents rather than copying them for every
+sample. The payload owns these snapshots and removes each only after the replay
+exits and its builders/storage owners settle. The replay never deletes the supplied
+`--state-dir`. Reserve enough actual host space for an 80 GiB loop filesystem,
+tooling and host headroom; require at least 96 GiB free after tooling preparation.
+The loop must fit the seed, workspace/template working set and the real owner's
+8 GiB safety reserve. A 40 GiB loop cannot hold this combined fixture safely.
+Seed serially at low priority, keep Node's heap bounded, record peak RSS and CPU,
+and retain Linux dirty-memory/disk admission guards. Do not seed during timings.
+
+All arms use the same existing session-maintenance settings: `mode: enforce`,
+`maxEntries: 20000`, `pruneAfter: 365d`, `archiveDashboardAfter: 365d`,
+`maxDiskBytes: 64 GiB`, and `highWaterBytes: 48 GiB`. Maintenance stays enabled;
+these fixture limits keep the deliberately large history below eviction thresholds.
+Defaults of 5,000 entries and 10 GiB would prune the seed and change the workload.
+Before first use and after all storage owners close, the replay verifies seeded
+metadata, transcript count/sample digest and schema version. A complete arm adds
+exactly nine session entries/windows through the normal writer. Results retain the
+before evidence; `agent-state-after.json` records the verified final shape. Source
+and installer-output assertions still apply to every foreground request.
+
+Earlier runs with a small agent database remain archived separately and cannot
+qualify this combined scale requirement. The push pattern, request composition,
+idle compression, acceptance thresholds and A/A/paired order are unchanged.
 
 The replay preserves seven advances across a logical thirty-minute morning,
 including three adjacent advances five seconds apart. Only scheduler idle time
@@ -75,9 +134,11 @@ workers/native code; process CPU includes JS workers but excludes Git, Docker,
 and container CPU. Report these boundaries explicitly.
 
 The script closes its scheduler, retires only builders registered in its isolated
-state, closes that state, and removes its generated trees through the native
-filesystem owner. JSON and runtime logs remain. Cleanup is outside measured rows.
-The workload contains 62,000 payload files / 1,100,004,000 bytes per checkout; it
-does not manufacture a 35 GiB agent database or claim full Gateway startup proof.
-An APFS run does not establish Btrfs latency or physical write behavior. No Team
-data, credentials, configuration, or running Gateway is used.
+state, closes that state, and removes its generated source/workspace trees through
+the native filesystem owner. The payload separately retires the supplied state
+snapshot. JSON and runtime logs remain. Cleanup and seed verification are outside
+measured rows. The combined workload contains 62,000 payload files /
+1,100,004,000 bytes per checkout plus an approximately 35 GiB agent database with
+10,000 sessions. It does not claim full Gateway/model/channel startup proof or
+cold-cache equivalence. An APFS smoke does not establish Btrfs latency or physical
+write behavior. No Team data, credentials, configuration, or running Gateway is used.
