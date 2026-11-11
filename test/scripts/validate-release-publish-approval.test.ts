@@ -366,8 +366,8 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
 
   it.each(["", ".github/workflows/plugin-npm-release.yml"])(
     "rejects a matching run name with untrusted workflow path %j",
-    (path) => {
-      const result = runApprovalScript(approvalRun({ path }));
+    (workflowPath) => {
+      const result = runApprovalScript(approvalRun({ path: workflowPath }));
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("untrusted workflow path");
     },
