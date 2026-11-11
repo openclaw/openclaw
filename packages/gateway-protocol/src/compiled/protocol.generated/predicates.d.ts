@@ -39,6 +39,11 @@ export function isMigrationsMemoryApplyParams(
 ): value is import("typebox").Static<
   typeof import("../../schema/migrations.js").MigrationsMemoryApplyParamsSchema
 >;
+export function isDiagnosticsCpuProfileParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema/diagnostics-schemas.js").DiagnosticsCpuProfileParamsSchema
+>;
 export function isDiagnosticsHeapProfileParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -756,6 +761,11 @@ export function isChatPendingInputsDismissParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ChatPendingInputsDismissParamsSchema
+>;
+export function isChatSteerNowParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ChatSteerNowParamsSchema
 >;
 export function isChatPredictParams(
   value: unknown,
@@ -2093,6 +2103,11 @@ export function isSessionsGroupsDefaultsResult(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsGroupsDefaultsResultSchema
 >;
+export function isSessionsGroupsCreateParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsGroupsCreateParamsSchema
+>;
 export function isSessionsGroupsPutParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2436,6 +2451,11 @@ export function isDevicePairRemoveParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").DevicePairRemoveParamsSchema
+>;
+export function isDevicePairCodeParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").DevicePairCodeParamsSchema
 >;
 export function isDevicePairSetupCodeParams(
   value: unknown,

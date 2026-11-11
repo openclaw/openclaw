@@ -6,7 +6,6 @@ import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IMessageRpcClient } from "./client.js";
 
-let createMessageReceiptFromOutboundResults: typeof import("openclaw/plugin-sdk/channel-outbound").createMessageReceiptFromOutboundResults;
 let sendDurableMessageBatch: typeof import("openclaw/plugin-sdk/channel-outbound").sendDurableMessageBatch;
 let createTestRegistry: typeof import("openclaw/plugin-sdk/channel-test-helpers").createTestRegistry;
 let resetPluginRuntimeStateForTest: typeof import("openclaw/plugin-sdk/channel-test-helpers").resetPluginRuntimeStateForTest;
@@ -19,8 +18,7 @@ let sendMessageIMessage: typeof import("./send.js").sendMessageIMessage;
 
 beforeEach(async () => {
   vi.resetModules();
-  ({ createMessageReceiptFromOutboundResults, sendDurableMessageBatch } =
-    await import("openclaw/plugin-sdk/channel-outbound"));
+  ({ sendDurableMessageBatch } = await import("openclaw/plugin-sdk/channel-outbound"));
   ({ createTestRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
     await import("openclaw/plugin-sdk/channel-test-helpers"));
   ({ drainPendingDeliveries } = await import("openclaw/plugin-sdk/delivery-queue-runtime"));
@@ -64,14 +62,6 @@ function mediaAccessFor(workspaceDir: string) {
 
 function delivery(messageId: string) {
   return { channel: "imessage" as const, messageId };
-}
-
-function receipt(messageId: string, kind: "text" | "media" | "voice" = "text", replyToId?: string) {
-  return createMessageReceiptFromOutboundResults({
-    results: [delivery(messageId)],
-    kind,
-    replyToId,
-  });
 }
 
 function nativeSender(request: () => Promise<unknown>) {
@@ -188,23 +178,35 @@ describe("imessagePlugin contracts", () => {
         workspaceDir: "/trusted/workspace",
         readFile: trustedReader,
       };
-      const sendIMessage = vi.fn(
-        async (
-          _to: string,
-          _text: string,
-          _options: {
-            mediaAccess?: typeof mediaAccess;
-            mediaReadFile?: typeof legacyReader;
-            audioAsVoice?: boolean;
+      const nativeReceipt = {
+        primaryPlatformMessageId: "p:0/trusted-media",
+        platformMessageIds: ["p:0/trusted-media"],
+        parts: [
+          {
+            platformMessageId: "p:0/trusted-media",
+            kind: "voice" as const,
+            index: 0,
+            replyToId: "reply-1",
+            raw: delivery("p:0/trusted-media"),
           },
-        ) => ({
-          messageId: "p:0/trusted-media",
-          receipt: receipt("p:0/trusted-media", _options.audioAsVoice ? "voice" : "media"),
-        }),
-      );
+        ],
+        replyToId: "reply-1",
+        sentAt: 123,
+        raw: [delivery("p:0/trusted-media")],
+        sourceResults: [delivery("p:0/trusted-media")],
+      };
+      const sendIMessage = vi.fn<typeof sendMessageIMessage>().mockResolvedValue({
+        messageId: "p:0/trusted-media",
+        sentText: "caption",
+        receipt: structuredClone(nativeReceipt),
+      });
+      const cfg: OpenClawConfig = { channels: { imessage: { accounts: { secondary: {} } } } };
       const context = {
         ...messageContext(sendIMessage),
+        cfg,
         text: "caption",
+        accountId: "secondary",
+        replyToId: "reply-1",
         mediaUrl: "workspace-image.png",
         mediaAccess,
         mediaLocalRoots: ["/untrusted/legacy"],
@@ -218,8 +220,20 @@ describe("imessagePlugin contracts", () => {
           : imessagePlugin.outbound?.sendMedia,
       );
       const result = await sendMedia(context);
-      expect(result.receipt?.platformMessageIds).toEqual(["p:0/trusted-media"]);
-      expect(result.receipt?.parts.map((part) => part.kind)).toEqual(["voice"]);
+      expect(sendIMessage).toHaveBeenCalledTimes(1);
+      expect(sendIMessage).toHaveBeenCalledWith(
+        "+15551234567",
+        "caption",
+        expect.objectContaining({
+          config: cfg,
+          accountId: "secondary",
+          replyToId: "reply-1",
+          mediaUrl: "workspace-image.png",
+          audioAsVoice: true,
+        }),
+      );
+      expect(result.messageId).toBe("p:0/trusted-media");
+      expect(result.receipt).toStrictEqual(nativeReceipt);
 
       const forwarded = sendIMessage.mock.calls[0]?.[2];
       expect(forwarded?.mediaAccess).toBe(mediaAccess);
@@ -282,23 +296,47 @@ describe("imessagePlugin contracts", () => {
 
   it("carries the stable iMessage GUID beside the broad adapter delivery identity", async () => {
     const sendText = required(imessagePlugin.message?.send?.text);
-    const sendIMessage = async (_to: string, _text: string, options?: { replyToId?: string }) => ({
+    const nativeReceipt = {
+      primaryPlatformMessageId: "42",
+      platformMessageIds: ["42"],
+      parts: [
+        {
+          platformMessageId: "42",
+          kind: "text" as const,
+          index: 0,
+          replyToId: "reply-1",
+          raw: delivery("42"),
+        },
+      ],
+      replyToId: "reply-1",
+      sentAt: 456,
+      raw: [delivery("42")],
+      sourceResults: [delivery("42")],
+    };
+    const sendIMessage = vi.fn<typeof sendMessageIMessage>().mockResolvedValue({
       messageId: "42",
       guid: "p:0/stable-guid",
       sentText: "hello",
-      receipt: receipt("42", "text", options?.replyToId),
+      receipt: structuredClone(nativeReceipt),
     });
+    const cfg: OpenClawConfig = { channels: { imessage: { accounts: { secondary: {} } } } };
 
     const result = await sendText({
       ...messageContext(sendIMessage),
+      cfg,
       text: "hello",
+      accountId: "secondary",
       replyToId: "reply-1",
     });
 
+    expect(sendIMessage).toHaveBeenCalledTimes(1);
+    expect(sendIMessage).toHaveBeenCalledWith(
+      "+15551234567",
+      "hello",
+      expect.objectContaining({ config: cfg, accountId: "secondary", replyToId: "reply-1" }),
+    );
     expect(result.messageId).toBe("42");
-    expect(result.receipt.primaryPlatformMessageId).toBe("42");
-    expect(result.receipt.platformMessageIds).toEqual(["42"]);
-    expect(result.receipt.replyToId).toBe("reply-1");
+    expect(result.receipt).toStrictEqual(nativeReceipt);
     expect((result as typeof result & { meta?: Record<string, unknown> }).meta).toEqual({
       imessageMessageGuid: "p:0/stable-guid",
       imessageVisibleText: "hello",

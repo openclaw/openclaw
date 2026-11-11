@@ -163,9 +163,11 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             onPreparedAgentRunStart: ({ runId }) => {
               turn.transcriptMirrorRunId = runId;
             },
-            ...(context.ctxPayload.CommandSource === "native"
-              ? { [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" as const } }
-              : {}),
+            ...(context.pluginCommandDispatch
+              ? { [PLUGIN_COMMAND_DISPATCH]: context.pluginCommandDispatch }
+              : context.ctxPayload.CommandSource === "native"
+                ? { [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" as const } }
+                : {}),
             groupThreadReplyFormatter: formatTelegramGroupThreadReply,
             skillFilter: context.skillFilter,
             disableBlockStreaming: turn.disableBlockStreaming,

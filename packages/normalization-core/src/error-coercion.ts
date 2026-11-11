@@ -1,4 +1,6 @@
 // Structural formatting stays policy-free; diagnostic adapters supply their redaction policy.
+export { toStringifiedError } from "./stringified-error.js";
+
 export type FormatErrorMessageOptions = {
   includeCode?: boolean;
   redact?: (text: string) => string;
@@ -266,11 +268,6 @@ export function toStructuredErrorObject(value: unknown): Error {
     // Opaque proxies may reject enumeration; preserve the original failure as the cause.
   }
   return error;
-}
-
-/** Preserves Error values and stringifies every other value into a new Error. */
-export function toStringifiedError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value));
 }
 
 /** Reads Error messages unchanged and stringifies every other value. */

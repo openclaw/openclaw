@@ -107,7 +107,12 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
   const current = () => signal.throwIfAborted();
   const policy = () => {
     const source = options.resolveHumanPresenceDemand?.();
-    return source && options.presenceDemandStore ? { ...source } : undefined;
+    return source &&
+      options.presenceDemandStore &&
+      options.getConfig().cloudWorkers?.profiles?.[source.profileId]?.workspaceDurability?.mode !==
+        "retained-disk"
+      ? { ...source }
+      : undefined;
   };
   const read = async () => {
     if (!loaded) {
@@ -152,14 +157,19 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
       return undefined;
     }
     const source = options.resolveHumanPresenceDemand?.();
-    return source && { profileId: source.profileId, executionMode: source.executionMode };
+    return source &&
+      options.getConfig().cloudWorkers?.profiles?.[source.profileId]?.workspaceDurability?.mode !==
+        "retained-disk"
+      ? { profileId: source.profileId, executionMode: source.executionMode }
+      : undefined;
   };
   const standingLimits = (profileId: string) => {
     const config = options.getConfig().cloudWorkers;
     const profile = config?.profiles?.[profileId];
     return (
       profile && {
-        target: profile.readyWorkers ?? 1,
+        target:
+          profile.workspaceDurability?.mode === "retained-disk" ? 0 : (profile.readyWorkers ?? 1),
         maxTotal: config?.preparedPool?.maxTotal ?? 4,
       }
     );
@@ -312,7 +322,8 @@ export function createPreparedPoolPresence(options: PreparedPoolPresenceOptions)
       throw new Error("Human-presence worker profile changed during preparation");
     }
     const limits = {
-      target: profile.readyWorkers ?? 1,
+      target:
+        profile.workspaceDurability?.mode === "retained-disk" ? 0 : (profile.readyWorkers ?? 1),
       maxTotal: config?.preparedPool?.maxTotal ?? 4,
     };
     const previous = state;

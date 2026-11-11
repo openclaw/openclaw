@@ -1,5 +1,5 @@
 import { createDefaultDeps } from "../cli/deps.js";
-import { throwExpectedCliError } from "../cli/failure-output.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";

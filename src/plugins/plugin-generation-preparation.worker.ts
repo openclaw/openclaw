@@ -5,7 +5,7 @@ import { withArtifactPreservingStateReads } from "../state/artifact-preserving-s
 import { withPluginInstallRoots } from "./install-root-context.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
-  capturePluginGenerationArtifactInScope,
+  createPluginGenerationArtifact,
   capturePluginSnapshotGeneration,
   capturePluginSourceSnapshot,
 } from "./plugin-generation-capture.js";
@@ -16,6 +16,7 @@ import {
 import {
   markPluginSourceCaptureOperation,
   type PluginRecoverySource,
+  type PluginSourceCustodyFork,
 } from "./plugin-generation-source-lookup.js";
 import { GenerationCodec } from "./plugin-generation-worker-codec.js";
 import type {
@@ -52,6 +53,24 @@ function createPreparationSession(context: CaptureCommand) {
   const sentRoots = new Set<string>();
   const borrowedRootIds = new WeakMap<object, number>();
   const snapshotReaders = new Set<Awaited<ReturnType<typeof acquirePluginSourceSnapshot>>>();
+  let forkSourceCustody: (() => PluginSourceCustodyFork) | undefined;
+
+  function borrowNativeRoot(root: PluginNativeAdmissionTransfer["roots"][number]): number {
+    let id = borrowedRootIds.get(root);
+    if (id === undefined) {
+      // A private fork retains actual host custody, never authority from a pathname.
+      const reference = requestHost({
+        kind: "native-root-reference",
+        directory: root.directory,
+      }).root;
+      if (!reference) {
+        throw new Error("Plugin native root is not owned by the preparation host");
+      }
+      id = reference.id;
+      borrowedRootIds.set(root, id);
+    }
+    return id;
+  }
 
   function admissionChanges() {
     const state = nativeAdmissionStateFor();
@@ -125,13 +144,7 @@ function createPreparationSession(context: CaptureCommand) {
       throw new Error("Host functions cannot enter plugin preparation");
     },
     {
-      exportRoot(root) {
-        const id = borrowedRootIds.get(root);
-        if (id === undefined) {
-          throw new Error("Plugin native root is not owned by the preparation host");
-        }
-        return id;
-      },
+      exportRoot: borrowNativeRoot,
       importRoot() {
         throw new Error("Native root leases cannot enter plugin preparation");
       },
@@ -146,7 +159,10 @@ function createPreparationSession(context: CaptureCommand) {
     }
   }
   function requestHost(
-    request: { kind: "mapping"; captureId: number; filename: string } | { kind: "native-root" },
+    request:
+      | { kind: "mapping"; captureId: number; filename: string }
+      | { kind: "native-root" }
+      | { kind: "native-root-reference"; directory: string },
   ): Extract<GenerationWorkerCallback, { kind: "callback-result" }> {
     if (!callbacks) {
       throw new Error("Plugin preparation host is unavailable");
@@ -327,23 +343,60 @@ function createPreparationSession(context: CaptureCommand) {
               if (snapshot) {
                 snapshotReaders.add(snapshot);
               }
-              const artifact = own(
-                snapshot
-                  ? capturePluginSnapshotGeneration(
-                      snapshot,
-                      command.entryFile,
-                      (run) => run(),
-                      (filename) => mapSource(command.captureId, filename),
-                    )
-                  : capturePluginGenerationArtifactInScope(
-                      command.rootDir,
-                      command.entryFile,
-                      (run) => run(),
-                      (filename) => mapSource(command.captureId, filename),
-                    ),
-              );
+              const retained =
+                command.sourceCustodyId === undefined
+                  ? undefined
+                  : sessions.get(command.sourceCustodyId)?.forkSourceCustody();
+              if (command.sourceCustodyId !== undefined && !retained) {
+                throw new Error("Plugin preparation source custody has closed");
+              }
+              let artifact;
+              try {
+                retained?.source.native?.retain(cache);
+                if (retained) {
+                  // Unchanged receipts need no transfer reply, but the child must
+                  // keep its native files alive after the seed session closes.
+                  for (const root of state.roots) {
+                    borrowNativeRoot(root);
+                  }
+                }
+                artifact = own(
+                  snapshot
+                    ? capturePluginSnapshotGeneration(
+                        snapshot,
+                        command.entryFile,
+                        (run) => run(),
+                        (filename) => mapSource(command.captureId, filename),
+                      )
+                    : createPluginGenerationArtifact(
+                        command.rootDir,
+                        command.entryFile,
+                        (run) => run(),
+                        (filename) => mapSource(command.captureId, filename),
+                        undefined,
+                        undefined,
+                        command.bundledReloadSource,
+                        retained,
+                        command.retainSourceCustody,
+                      ),
+                );
+              } catch (error) {
+                await retained?.source.disposeAsync();
+                throw error;
+              }
               failedCapture = artifact;
               snapshot?.assertCurrent();
+              if (
+                command.sourceCustodyDigest !== undefined &&
+                artifact.sourceDigest !== command.sourceCustodyDigest
+              ) {
+                throw new Error("Plugin source custody digest changed during preparation");
+              }
+              if (command.retainSourceCustody) {
+                // Keep the admitted artifact pristine. Each consumer copies it once,
+                // with independent custody; no extra seed copy is needed.
+                forkSourceCustody = artifact.retainSourceCustody.bind(artifact);
+              }
               const captureRecovery = artifact.captureRecoverySource.bind(artifact);
               artifact.captureRecoverySource = markPluginSourceCaptureOperation(() =>
                 ownRecovery(captureRecovery()),
@@ -354,7 +407,11 @@ function createPreparationSession(context: CaptureCommand) {
                 ownRecovery(custody.source);
                 return custody;
               });
-              result = artifact;
+              if (command.retainSourceCustody) {
+                result = { sourceDigest: artifact.sourceDigest };
+              } else {
+                result = artifact;
+              }
             }
           } else {
             if (command.asynchronous) {
@@ -423,6 +480,12 @@ function createPreparationSession(context: CaptureCommand) {
   callbacks?.unref();
   return {
     execute,
+    forkSourceCustody() {
+      if (!forkSourceCustody) {
+        throw new Error("Plugin preparation source custody is unavailable");
+      }
+      return forkSourceCustody();
+    },
     async close() {
       await scoped(close);
       callbacks?.close();

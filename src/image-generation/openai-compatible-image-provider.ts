@@ -22,12 +22,8 @@ import {
   resolveInlineImageJsonResponseMaxBytes,
 } from "./image-assets.js";
 import { inlineOpenAiCompatibleImageUrls } from "./openai-compatible-image-urls.js";
-import type {
-  ImageGenerationProvider,
-  ImageGenerationProviderCapabilities,
-  ImageGenerationRequest,
-  ImageGenerationResult,
-} from "./types.js";
+import type { ImageGenerationProvider, ImageGenerationRequest } from "./provider-types.js";
+import type { ImageGenerationProviderCapabilities, ImageGenerationResult } from "./types.js";
 
 // Match the guarded HTTP default, including when no request timeout is supplied.
 const DEFAULT_IMAGE_OPERATION_TIMEOUT_MS = 60_000;

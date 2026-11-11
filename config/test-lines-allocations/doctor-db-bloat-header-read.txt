@@ -1,0 +1,4 @@
+# Header fast-path tests cover rollback/checkpointed-WAL reads, page-size and
+# auto-vacuum decoding pinned to PRAGMA ground truth, plus damaged-header
+# and live-writer WAL fallback regressions.
+173

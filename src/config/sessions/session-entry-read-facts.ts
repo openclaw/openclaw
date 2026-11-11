@@ -39,10 +39,13 @@ type WriterReads = {
   entries: (request: SessionEntryCohortRequest) => Promise<SessionExactEntriesWorkerResult>;
 };
 type WriterReadContext = {
-  database: Database;
-  reads: WriterReads;
-  queue: <T>(read: () => Promise<T>) => Promise<T>;
-  active: boolean;
+  borrowed:
+    | {
+        database: Database;
+        reads: WriterReads;
+        queue: <T>(read: () => Promise<T>) => Promise<T>;
+      }
+    | undefined;
   parent?: WriterReadContext;
 };
 const writerReads = resolveGlobalSingleton(
@@ -58,16 +61,14 @@ export async function withSessionEntryWriterReads<T>(
 ): Promise<T> {
   return withTranscriptLockSettlement(async (queue) => {
     const context: WriterReadContext = {
-      database,
-      reads,
-      queue,
-      active: true,
+      borrowed: { database, reads, queue },
       parent: writerReads.getStore(),
     };
     try {
       return await runWithAsyncStore(writerReads, context, run);
     } finally {
-      context.active = false;
+      // The queue also closes over this invocation; release the complete borrow from snapshots.
+      context.borrowed = undefined;
     }
   });
 }
@@ -78,17 +79,18 @@ function readFromSessionWriter<T>(
 ): Promise<T> | undefined {
   let context = writerReads.getStore();
   while (context) {
+    const borrowed = context.borrowed;
     if (
-      context.active &&
-      context.database.agentId === database.agentId &&
-      context.database.path === database.path
+      borrowed &&
+      borrowed.database.agentId === database.agentId &&
+      borrowed.database.path === database.path
     ) {
-      const reads = context.reads;
+      const reads = borrowed.reads;
       // Transcript appends have their own acceptance queue, including a nested preparation
       // queue. Joining it prevents a read from overtaking an accepted, not-yet-dispatched write.
       return (
         runLockedSessionTranscriptRead(database, () => read(reads)) ??
-        context.queue(() => read(reads))
+        borrowed.queue(() => read(reads))
       );
     }
     context = context.parent;

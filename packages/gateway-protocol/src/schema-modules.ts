@@ -1,7 +1,6 @@
 /** Canonical owner-module barrel for gateway protocol schemas. */
 export * from "./schema/primitives.js";
 export * from "./schema/agent.js";
-export * from "./schema/agents-detach.js";
 export * from "./schema/agents-files.js";
 export * from "./schema/agents-models-skills.js";
 export * from "./schema/agents-workspace.js";
@@ -30,6 +29,7 @@ export * from "./schema/error-codes.js";
 export * from "./schema/environments.js";
 export * from "./schema/exec-approvals.js";
 export * from "./schema/devices.js";
+export * from "./schema/diagnostics.js";
 export * from "./schema/desktop.js";
 export * from "./schema/frames.js";
 export * from "./schema/fs.js";

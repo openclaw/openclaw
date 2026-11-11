@@ -1,11 +1,8 @@
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
-import {
-  loadNpmPackageVersions,
-  resolveNpmSpecMetadata,
-  type NpmSpecResolution,
-} from "../infra/install-source-utils.js";
+import { loadNpmPackageVersions, resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import {
   isPrereleaseSemverVersion,
+  type NpmSpecResolution,
   type ParsedRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
 import { comparePackageUpdateVersions } from "../infra/package-update-utils.js";

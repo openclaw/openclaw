@@ -127,6 +127,15 @@ export function createAgentDatabaseNativeGeneration(
   let nativeLossReason: Error | undefined;
   const sharedPreparation = createSharedAgentDatabasePreparation(() => assertCurrent());
 
+  // Terminal readers belong to this generation, not its initiating request.
+  const onNativeStopped: NonNullable<
+    Parameters<typeof openAgentDatabaseSqliteWorkerStore>[1]["onNativeStopped"]
+  > = (stopped, readReceipt, readRefused) => {
+    nativeStopped = stopped;
+    readCloseReceipt = readReceipt;
+    readOpenRefused = readRefused;
+  };
+
   // The actor retains this observer; keep it outside the opening caller's scope.
   const onNativeLost = (reason: Error) => {
     nativeLossReason ??= reason;
@@ -482,11 +491,7 @@ export function createAgentDatabaseNativeGeneration(
                 registration,
                 preparingShared ? undefined : assertCallerCurrent,
               ),
-              onNativeStopped: (stopped, readReceipt, readRefused) => {
-                nativeStopped = stopped;
-                readCloseReceipt = readReceipt;
-                readOpenRefused = readRefused;
-              },
+              onNativeStopped,
               onNativeLost,
             },
           );

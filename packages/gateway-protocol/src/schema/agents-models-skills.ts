@@ -43,6 +43,7 @@ export { SkillWorkshopDraftSchema } from "./skill-workshop-drafts.js";
 export type { SkillWorkshopDraft } from "./skill-workshop-drafts.js";
 
 export {
+  ProviderPresentationSchema,
   ModelChoiceSchema,
   ModelRuntimeChoiceSchema,
   ModelCatalogProviderOutcomeSchema,
@@ -50,6 +51,7 @@ export {
   ModelsListResultSchema,
 } from "./model-catalog.js";
 export type {
+  ProviderPresentation,
   ModelChoice,
   ModelRuntimeChoice,
   ModelCatalogProviderOutcome,
@@ -101,6 +103,8 @@ export const AgentSummarySchema = closedObject({
   thinkingDefault: Type.Optional(NonEmptyString),
   // Configured posture for display only, never an authorization decision.
   defaultPermissionMode: Type.Optional(SessionPermissionModeSchema),
+  /** Explicit default for new attended sessions; existing-session Default keeps tool policy. */
+  newSessionPermissionMode: Type.Optional(SessionPermissionModeSchema),
 });
 
 export const AgentsListResultSchema = closedObject({
@@ -135,6 +139,11 @@ export const AgentsUpdateResultSchema = closedObject({
 export const AgentsDeleteParamsSchema = closedObject({
   agentId: NonEmptyString,
   deleteFiles: Type.Optional(Type.Boolean()),
+});
+
+/** Detaches an agent from this Gateway while preserving its store and files. */
+export const AgentsDetachParamsSchema = closedObject({
+  agentId: NonEmptyString,
 });
 
 /** Result returned after deleting an agent and unbinding sessions. */
@@ -780,6 +789,7 @@ export type GatewayAgentRuntime = Static<typeof GatewayAgentRuntimeSchema>;
 export type AgentsUpdateParams = Static<typeof AgentsUpdateParamsSchema>;
 export type AgentsUpdateResult = Static<typeof AgentsUpdateResultSchema>;
 export type AgentsDeleteParams = Static<typeof AgentsDeleteParamsSchema>;
+export type AgentsDetachParams = Static<typeof AgentsDetachParamsSchema>;
 export type AgentsDeleteResult = Static<typeof AgentsDeleteResultSchema>;
 export type AgentsListResult = Static<typeof AgentsListResultSchema>;
 export type ModelsAuthSetApiKeyParams = Static<typeof ModelsAuthSetApiKeyParamsSchema>;

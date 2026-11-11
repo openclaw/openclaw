@@ -231,7 +231,9 @@
   background: var(--muted);
   content: "";
 }
-.chat-processes__metadata[data-status="running"] .chat-processes__status::before,
+.chat-processes__metadata[data-status="running"] .chat-processes__status::before {
+  background: var(--status-running);
+}
 .chat-processes__metadata[data-status="completed"] .chat-processes__status::before {
   background: var(--ok);
 }

@@ -7,6 +7,10 @@ import {
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
+import type {
+  ImageDescriptionResult,
+  ImagesDescriptionResult,
+} from "../../packages/media-understanding-common/src/types.js";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import { requireApiKey, resolveApiKeyForProviderCore } from "../agents/model-auth.js";
@@ -30,12 +34,7 @@ import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createMediaAssistantTextCoercer, MediaAssistantNoTextError } from "./assistant-text.js";
 import { resolveImageRuntime } from "./image-model-runtime.js";
-import type {
-  ImageDescriptionRequest,
-  ImageDescriptionResult,
-  ImagesDescriptionRequest,
-  ImagesDescriptionResult,
-} from "./types.js";
+import type { ImageDescriptionRequest, ImagesDescriptionRequest } from "./provider-types.js";
 
 const coerceImageAssistantText = createMediaAssistantTextCoercer("Image");
 

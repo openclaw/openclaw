@@ -44,17 +44,12 @@ export async function resumeAgentDeletions(
       return;
     }
     try {
-      const result = await deleteGatewayAgent(journal.agentId, journal.deleteFiles, context, {
+      await deleteGatewayAgent(journal.agentId, journal.deleteFiles, context, {
         recoveryOperationId: journal.operationId,
         detach: journal.phase === "detach-draining" || journal.phase === "detach-retiring",
       });
-      if (result.purgeFailed || result.failed?.length) {
-        context.logGateway.warn(`Agent ${journal.agentId} deletion cleanup remains pending.`);
-      }
-    } catch (error) {
-      context.logGateway.warn(
-        `Agent ${journal.agentId} deletion recovery failed: ${String(error)}`,
-      );
+    } catch {
+      // The deletion owner records one actionable outcome after its bounded retries.
     }
   }
 }

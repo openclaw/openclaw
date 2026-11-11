@@ -91,52 +91,62 @@ export async function prepareCommandTranscriptInput(
   return redactCommandTranscriptText(commandText, await redactConfigCommandInput(commandText));
 }
 
+type CommandExchangeParams = Pick<
+  Parameters<typeof appendAssistantMessageToSessionTranscript>[0],
+  | "agentId"
+  | "sessionKey"
+  | "expectedSessionId"
+  | "expectedLifecycleRevision"
+  | "expectedWriterRunId"
+  | "storePath"
+  | "config"
+  | "assertCurrent"
+  | "beforeMessageWrite"
+  | "contextFreeCommand"
+> & {
+  commandText: string;
+  replyText: string;
+  commandId: string;
+  replyId: string;
+  /** The command already committed its input as a user turn; record only the reply. */
+  commandInputCommitted?: boolean;
+};
+
+/** A local effect committed; this records its outcome, not delivery of the reply. */
+export function recordCommittedCommandExchange(params: CommandExchangeParams) {
+  return recordCommandExchange(params);
+}
+
 /** Records only settled command output; callers must first confirm delivery. */
-export async function recordDeliveredCommandExchange(
-  params: Pick<
-    Parameters<typeof appendAssistantMessageToSessionTranscript>[0],
-    | "agentId"
-    | "sessionKey"
-    | "expectedSessionId"
-    | "expectedLifecycleRevision"
-    | "expectedWriterRunId"
-    | "storePath"
-    | "config"
-    | "assertCurrent"
-    | "beforeMessageWrite"
-  > & {
-    commandText: string;
-    replyText: string;
-    commandId: string;
-    replyId: string;
-    /** The command already committed its input as a user turn; record only the reply. */
-    commandInputCommitted?: boolean;
-  },
-) {
-  const commandText = normalizeCommandTranscriptText(params.commandText);
-  if (isEphemeralCommandTranscript(commandText)) {
-    return { ok: false as const, reason: "ephemeral command" };
-  }
+export async function recordDeliveredCommandExchange(params: CommandExchangeParams) {
   try {
-    return await appendAssistantMessageToSessionTranscript({
-      ...params,
-      text: redactCommandTranscriptText(commandText, params.replyText),
-      ...(params.commandInputCommitted
-        ? {}
-        : {
-            command: {
-              text: redactCommandTranscriptText(
-                commandText,
-                await redactConfigCommandInput(commandText),
-              ),
-              idempotencyKey: `command-input:${params.commandId}`,
-            },
-          }),
-      idempotencyKey: `command-reply:${params.commandId}:${params.replyId}`,
-    });
+    return await recordCommandExchange(params);
   } catch {
     // Delivery has already succeeded. A transcript failure must not trigger a resend.
     logVerbose("Command transcript recording failed after delivery");
     return { ok: false as const, reason: "transcript recording failed" };
   }
+}
+
+async function recordCommandExchange(params: CommandExchangeParams) {
+  const commandText = normalizeCommandTranscriptText(params.commandText);
+  if (isEphemeralCommandTranscript(commandText)) {
+    return { ok: false as const, reason: "ephemeral command" };
+  }
+  return appendAssistantMessageToSessionTranscript({
+    ...params,
+    text: redactCommandTranscriptText(commandText, params.replyText),
+    ...(params.commandInputCommitted
+      ? {}
+      : {
+          command: {
+            text: redactCommandTranscriptText(
+              commandText,
+              await redactConfigCommandInput(commandText),
+            ),
+            idempotencyKey: `command-input:${params.commandId}`,
+          },
+        }),
+    idempotencyKey: `command-reply:${params.commandId}:${params.replyId}`,
+  });
 }

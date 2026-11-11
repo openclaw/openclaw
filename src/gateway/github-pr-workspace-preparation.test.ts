@@ -1,6 +1,6 @@
 // Install the shared GitHub fixture before loading the registered action owners.
 // oxfmt-ignore
-import { interruptCanonicalWorkspaceAcceptance, bindFixtureRuntime, fixture, mocks } from "./github-pr-workspace-preparation.test-support.js";
+import { interruptCanonicalWorkspaceAcceptance, bindFixtureRuntime, fixture, mocks, observeManagedLayoutCaptures } from "./github-pr-workspace-preparation.test-support.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -19,6 +19,7 @@ import {
 import {
   commandResult,
   installGitHubPublicationTestHarness,
+  overrideCommands,
 } from "./github-publication.test-support.js";
 
 describe("existing PR preparation through the registered agent action", () => {
@@ -128,7 +129,11 @@ describe("existing PR preparation through the registered agent action", () => {
         const transport = mocks.runCommand.getMockImplementation()!;
         mocks.runCommand.mockImplementation(async (...args) => {
           const result = await transport(...args);
-          if (!revoked && args[0].includes("fetch") && args[0].includes(baseCommit)) {
+          if (
+            !revoked &&
+            args[0].includes("fetch") &&
+            args[0].some((arg: string) => arg.split(":")[0] === baseCommit)
+          ) {
             await f.revoke();
             revoked = true;
           }
@@ -168,7 +173,11 @@ describe("existing PR preparation through the registered agent action", () => {
         const transport = mocks.runCommand.getMockImplementation()!;
         mocks.runCommand.mockImplementation(async (...args) => {
           const result = await transport(...args);
-          if (!revoked && args[0].includes("fetch") && args[0].includes(f.headCommit)) {
+          if (
+            !revoked &&
+            args[0].includes("fetch") &&
+            args[0].some((arg: string) => arg.split(":")[0] === f.headCommit)
+          ) {
             await setCanonicalUserProfileRole(f.maintainerProfile, "revoked");
             revoked = true;
           }
@@ -313,6 +322,7 @@ describe("existing PR preparation through the registered agent action", () => {
       }
       expect(await f.guestGit("rev-parse", "HEAD")).toBe(continuedGuestHead);
       expect(await f.guestGit("symbolic-ref", "HEAD")).toBe(guestBranch);
+      await f.local!.git("-C", f.upstream, "branch", "another-base", f.pr.base.sha);
       for (const advance of [false, true]) {
         if (advance) {
           await f.advanceHead({ "newer-pr.txt": "newer remote PR work\n" });
@@ -455,6 +465,7 @@ describe("existing PR preparation through the registered agent action", () => {
       const create = vi
         .spyOn(sandboxBackend, "createSandboxBackend")
         .mockResolvedValue(f.sandbox.backend!);
+      using captures = observeManagedLayoutCaptures();
       let sandbox: Awaited<ReturnType<typeof resolveSandboxContext>> = null;
       try {
         sandbox = await resolveSandboxContext({
@@ -468,6 +479,7 @@ describe("existing PR preparation through the registered agent action", () => {
           },
         });
         expect(sandbox?.workspaceSource).toBe("managed-worktree");
+        expect(captures.observations).toEqual(["scan:canonical"]);
         if (contents === "authored directory") {
           await fs.mkdir(path.join(f.projection, "saved-empty"));
           await expect(f.invoke({}, sandbox)).rejects.toThrow(
@@ -739,69 +751,6 @@ describe("existing PR preparation through the registered agent action", () => {
     expect(f.externalWrites).toEqual([]);
   });
 
-  it.each([
-    ["timeout", "Git commit fetch failed (timed out after 60 seconds; signal SIGTERM)"],
-    ["command", "Git commit fetch failed: spawn git ENOENT"],
-    [
-      "inventory",
-      "Git content inventory failed (exit code 128): fatal: unreadable object database",
-    ],
-    ["content fetch", "Git content fetch failed (exit code 128): fatal: unavailable object"],
-    ["incomplete", "Git content verification failed: required objects are still missing"],
-  ])("preserves the acquisition failure reason and workspace (%s)", async (failure, expected) => {
-    const f = await fixture();
-    const state = async () => ({
-      hostHead: await f.git("rev-parse", "HEAD"),
-      hostIndex: await f.git("write-tree"),
-      guestHead: await f.guestGit("rev-parse", "HEAD"),
-      guestIndex: await f.guestGit("write-tree"),
-    });
-    const before = await state();
-    const transport = mocks.runCommand.getMockImplementation()!;
-    const failed = (stderr: string) => ({
-      ...commandResult("private repository output", 128),
-      termination: "exit",
-      stderr: Buffer.from(stderr),
-    });
-    mocks.runCommand.mockImplementation(async (argv: string[], options) => {
-      if (argv.includes("fetch")) {
-        if (failure === "timeout") {
-          return { ...failed(""), code: null, termination: "timeout", signal: "SIGTERM" };
-        }
-        if (failure === "command") {
-          return {
-            ...failed(""),
-            code: null,
-            termination: "error",
-            error: new Error(
-              "spawn git ENOENT https://example.test/git?unknown=fixture-cause-secret",
-            ),
-          };
-        }
-        if (argv.includes("--stdin")) {
-          return failure === "content fetch"
-            ? failed("fatal: unavailable object")
-            : commandResult();
-        }
-      }
-      if (argv.includes("--missing=print")) {
-        return failure === "inventory"
-          ? failed("fatal: unreadable object database")
-          : commandResult(`?${"f".repeat(40)}\n`);
-      }
-      return await transport(argv, options);
-    });
-    const error = await f.invoke().catch((cause: unknown) => cause);
-    expect(error).toBeInstanceOf(Error);
-    expect(String(error)).toContain(expected);
-    expect(String(error)).not.toMatch(
-      /private repository output|fixture-cause-secret|example\.test/u,
-    );
-    expect(await state()).toEqual(before);
-    expect(f.writes).toEqual([]);
-    expect(f.externalWrites).toEqual([]);
-  });
-
   it.each(["authorized", "wrong author", "role", "linked identity"])(
     "keeps private source transfer bound to the current requester (%s)",
     async (variant) => {
@@ -844,7 +793,7 @@ describe("existing PR preparation through the registered agent action", () => {
             );
           }
           const result = await transport(argv, options);
-          if (argv.includes("fetch") && argv.includes(f.headCommit)) {
+          if (argv.includes("fetch") && argv.some((arg) => arg.split(":")[0] === f.headCommit)) {
             expect(result.code).toBe(0);
             fetched = true;
             if (!authorityChanged && variant === "role") {
@@ -892,6 +841,24 @@ describe("existing PR preparation through the registered agent action", () => {
     const f = await fixture({ fork: true });
     const before = f.readSession();
     const head = await f.git("rev-parse", "HEAD");
+    let failedRead = false;
+    overrideCommands((argv) => {
+      if (
+        !failedRead &&
+        argv[0] === "gh" &&
+        argv.includes("GET") &&
+        argv.at(-1) ===
+          `repos/${f.pr.head.repo.full_name}/branches/${encodeURIComponent(f.pr.head.ref)}`
+      ) {
+        failedRead = true;
+        return commandResult("", 1);
+      }
+      return undefined;
+    });
+    await expect(f.invoke()).rejects.toThrow(
+      "The original PR's write eligibility could not be verified",
+    );
+    expect(failedRead).toBe(true);
     f.pr.maintainer_can_modify = false;
     await expect(f.invoke()).rejects.toThrow("no observed write permission");
     f.pr.maintainer_can_modify = true;

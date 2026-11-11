@@ -23,6 +23,11 @@ import {
   resolveSessionAgentIds,
 } from "../agent-scope.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
+import {
+  CliExecutionAuthProfileError,
+  cliBackendAcceptsAuthProfileForwarding,
+  resolveCliExecutionAuthProfileId,
+} from "../cli-execution-auth.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { coerceToFailoverError } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
@@ -32,6 +37,7 @@ import { runWithModelFallback } from "../model-fallback-runner.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
 import { prepareAgentPromptProjects } from "../prompt-projects.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { buildProviderAuthRecoveryHint } from "../provider-auth-recovery-hint.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
@@ -50,7 +56,7 @@ import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compact
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { resolveSharedPluginRuntimeWorkspace } from "./run/prepared-runtime-context.js";
-import type { EmbeddedAgentCompactResult } from "./types.js";
+import type { EmbeddedAgentCompactResult, EmbeddedAgentMeta } from "./types.js";
 
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 
@@ -90,15 +96,59 @@ export async function compactNativeCliSession(params: {
     config: params.compactParams.config,
     agentId: params.compactParams.agentId,
   }).sessionAgentId;
+  // The session pin names the model provider's credential (for example the auto-selected
+  // "anthropic:default" API key). Reply turns convert it for the CLI child; compaction must too,
+  // or the native session is compacted on the metered key instead of the backend's own login.
+  let forwardedAuthProfileId = cliSessionBinding?.authProfileId;
+  if (!forwardedAuthProfileId && params.compactParams.authProfileId) {
+    const config = params.compactParams.config ?? {};
+    if (
+      cliBackendAcceptsAuthProfileForwarding({
+        provider: runtime,
+        config,
+        agentId: params.compactParams.agentId,
+      })
+    ) {
+      try {
+        forwardedAuthProfileId = await resolveCliExecutionAuthProfileId({
+          cliExecutionProvider: runtime,
+          authProfileProvider: params.compactParams.provider ?? DEFAULT_PROVIDER,
+          config,
+          agentDir: params.compactParams.agentDir ?? resolveAgentDir(config, sessionAgentId),
+          selected: {
+            authProfileId: params.compactParams.authProfileId,
+            authProfileIdSource: params.compactParams.authProfileIdSource,
+          },
+          sessionBinding: cliSessionBinding,
+        });
+      } catch (err) {
+        if (err instanceof CliExecutionAuthProfileError) {
+          // Never substitute another account; tell the user how to restore or switch it.
+          const recovery = buildProviderAuthRecoveryHint({
+            provider: params.compactParams.provider ?? DEFAULT_PROVIDER,
+            config,
+            workspaceDir: params.compactParams.workspaceDir,
+          });
+          return buildCompactionFailureResult(
+            `CLI backend "${runtime}" cannot compact with the selected account: ${err.message} ${recovery} Or select an available account with /model, then run /compact again.`,
+          );
+        }
+        throw err;
+      }
+    } else {
+      forwardedAuthProfileId = params.compactParams.authProfileId;
+    }
+  }
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
     params.compactParams.config ?? {},
     runId,
     sessionAgentId,
     "agents.native-compaction",
   );
+  let compactedMeta: EmbeddedAgentMeta | undefined;
   try {
     const runControlOperation = async () => {
-      await runCliAgent({
+      const result = await runCliAgent({
         replyOperation: params.replyOperation,
         preparedRunAdmission,
         sessionId: params.compactParams.sessionId,
@@ -118,11 +168,7 @@ export async function compactNativeCliSession(params: {
         runId,
         cliSessionId,
         ...(cliSessionBinding ? { cliSessionBinding } : {}),
-        ...(cliSessionBinding?.authProfileId
-          ? { authProfileId: cliSessionBinding.authProfileId }
-          : params.compactParams.authProfileId
-            ? { authProfileId: params.compactParams.authProfileId }
-            : {}),
+        ...(forwardedAuthProfileId ? { authProfileId: forwardedAuthProfileId } : {}),
         ...(params.compactParams.sessionEntry
           ? { sessionEntry: params.compactParams.sessionEntry }
           : {}),
@@ -136,6 +182,7 @@ export async function compactNativeCliSession(params: {
         allowEmptyAssistantReplyAsSilent: true,
         abortSignal: params.compactParams.abortSignal,
       });
+      compactedMeta = result.meta.agentMeta;
     };
     await (params.runControlOperation
       ? params.runControlOperation(runControlOperation)
@@ -151,10 +198,15 @@ export async function compactNativeCliSession(params: {
   } finally {
     preparedRunAdmission.close();
   }
+  // Sizes come from the backend's own compaction record, when it reports one.
+  const tokensBefore = compactedMeta?.compactionTokensBefore;
   return {
     ok: true,
     compacted: true,
     reason: `CLI backend "${runtime}" compacted its native session.`,
+    ...(tokensBefore !== undefined
+      ? { result: { tokensBefore, tokensAfter: compactedMeta?.compactionTokensAfter } }
+      : {}),
   };
 }
 

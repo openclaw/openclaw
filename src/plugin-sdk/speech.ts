@@ -6,17 +6,19 @@
 export type { SpeechProviderPlugin } from "../plugins/types.js";
 export type {
   SpeechDirectiveTokenParseContext,
-  SpeechDirectiveTokenParseResult,
   SpeechListVoicesRequest,
   SpeechModelOverridePolicy,
+  SpeechSynthesisRequest,
+  SpeechTelephonySynthesisRequest,
+} from "../tts/provider-types.js";
+export type {
+  SpeechDirectiveTokenParseResult,
   SpeechProviderConfig,
   SpeechProviderOverrides,
-  SpeechSynthesisRequest,
   SpeechSynthesisTarget,
-  SpeechTelephonySynthesisRequest,
   SpeechVoiceOption,
   TtsDirectiveOverrides,
-} from "../tts/provider-types.js";
+} from "../tts/tts-runtime-types.js";
 
 export { parseTtsDirectives } from "../tts/directives.js";
 export { getSpeechProvider } from "../tts/provider-registry.js";

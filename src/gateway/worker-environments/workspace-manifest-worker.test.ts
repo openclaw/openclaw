@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import {
   resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerThreadExecArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -60,6 +62,60 @@ async function runScript(script: string, timeoutMs = 60_000, execArgv: string[] 
   expect(result.code, result.stderr).toBe(0);
   return JSON.parse(result.stdout);
 }
+
+it("keeps snapshot worker scans equivalent and services cancellation during a large path depth", async () => {
+  const root = await fs.realpath(tempDirs.make("workspace-snapshot-worker-"));
+  const files = Array.from({ length: 128 }, (_, index) => `file-${index}.txt`);
+  await Promise.all(files.map((file) => fs.writeFile(path.join(root, file), "inside")));
+  const scannerUrl = new URL("./workspace-actual-manifest.ts", import.meta.url);
+  const source = `
+    import { parentPort, workerData } from "node:worker_threads";
+    import { setImmediate } from "node:timers";
+    import { scanActualWorkspaceManifest } from ${JSON.stringify(scannerUrl.href)};
+    const input = { root: workerData.root, baseCommit: null, includePaths: new Set(workerData.files) };
+    const normal = [];
+    const snapshot = [];
+    await scanActualWorkspaceManifest({ ...input, onEntry: entry => normal.push(entry) });
+    await scanActualWorkspaceManifest({ ...input, btrfsSnapshot: true, onEntry: entry => snapshot.push(entry) });
+    const accepted = new Map(normal.map(entry => [entry.path, entry]));
+    const controller = new AbortController();
+    let observed = 0;
+    let failure;
+    try {
+      await scanActualWorkspaceManifest({
+        ...input, btrfsSnapshot: true, signal: controller.signal,
+        reuseFile: relative => accepted.get(relative),
+        onEntry: () => {
+          if (++observed === 1) setImmediate(() => controller.abort(new Error("cancel snapshot")));
+        },
+      });
+    } catch (error) { failure = error.message; }
+    const sorted = entries => entries.sort((left, right) => left.path.localeCompare(right.path));
+    parentPort.postMessage({ normal: sorted(normal), snapshot: sorted(snapshot), observed, failure });
+  `;
+  const worker = new Worker(new URL(`data:text/javascript,${encodeURIComponent(source)}`), {
+    workerData: { root, files },
+    execArgv: resolveRuntimeWorkerThreadExecArgv(scannerUrl),
+  });
+  try {
+    const result = await new Promise<{
+      normal: unknown[];
+      snapshot: unknown[];
+      observed: number;
+      failure: string;
+    }>((resolve, reject) => {
+      worker.once("message", resolve);
+      worker.once("error", reject);
+    });
+    expect(result.snapshot).toEqual(result.normal);
+    expect(result.snapshot).toHaveLength(files.length);
+    expect(result.failure).toBe("cancel snapshot");
+    expect(result.observed).toBeGreaterThan(0);
+    expect(result.observed).toBeLessThanOrEqual(32);
+  } finally {
+    await worker.terminate();
+  }
+});
 
 it("releases decoded tree entries while their encoded worker operation is pending", async () => {
   const result = await runScript(
@@ -206,12 +262,14 @@ it("captures eligible files outside the Gateway thread and returns the canonical
   const root = await fs.realpath(tempDirs.make("workspace-worker-capture-"));
   const content = "worker computation";
   await fs.writeFile(path.join(root, "input.txt"), content);
+  await fs.writeFile(path.join(root, "dist"), "generated output");
   await fs.mkdir(path.join(root, "preserved", "node_modules"), { recursive: true });
   const selection = {
     root,
     baseCommit: null,
-    includePaths: new Set(["input.txt", "preserved"]),
+    includePaths: new Set(["input.txt", "preserved", "dist"]),
     preserveDirectories: new Set(["preserved"]),
+    gitIgnore: { paths: new Set(["dist"]), retainedPaths: new Set(["input.txt", "preserved"]) },
   };
   const lstat = fs.lstat.bind(fs);
   vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {

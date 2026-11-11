@@ -14,6 +14,7 @@ import {
   prepareClaudeCli,
   recordCredentialBuffers,
   waitForProcessExit,
+  withClaudeCliTestDeadline,
 } from "./cli-runtime.test-support.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
 import { executeClaudeCli } from "./cli.runtime.js";
@@ -115,11 +116,12 @@ async function transportFor(
   context: CliBackendExecuteContext,
   options: Partial<Parameters<typeof createClaudeCliTransport>[0]> = {},
 ) {
+  const request = withClaudeCliTestDeadline(context);
   const transport = await createClaudeCliTransport({
-    context,
+    context: request,
     args: [...context.args],
     initialize: {},
-    currentContext: () => context,
+    currentContext: () => request,
     onMessage: async () => {},
     onRequest: async () => () => ({}),
     onError: () => {},
@@ -194,7 +196,7 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       );
       context.env.CLAUDE_FIXTURE_SCENARIO = "cancel";
       const current = attachLiveSession(context);
-      const events = executeClaudeCli(context);
+      const events = executeClaudeCli(withClaudeCliTestDeadline(context));
       const iterator = events[Symbol.asyncIterator]();
       const first = await withinTest(iterator.next(), signal);
       expect(first.value).toMatchObject({ type: "system", subtype: "hook_started", hook_id: "0" });
@@ -275,8 +277,9 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       context.argv0 = "/opt/shims/claude";
       context.env.OPENCLAW_CHILD_OOM_SCORE_ADJ = "1";
       const parentScore = await readFile("/proc/self/oom_score_adj", "utf8");
-      using owner = cliProcess.createClaudeCliProcessOwner(() => context);
-      const child = await owner.spawn(context);
+      const request = withClaudeCliTestDeadline(context);
+      using owner = cliProcess.createClaudeCliProcessOwner(() => request);
+      const child = await owner.spawn({ ...request, signal: request.abortSignal });
       let output = "";
       const consumed = child.consumeStdout((chunk) => {
         output += chunk;
@@ -362,6 +365,14 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       const diagnosticsStarted = createDeferred<void>();
       const releaseDiagnostics = createDeferred<void>();
       const inputErrors: unknown[] = [];
+      const expectPipeFailures = () => {
+        // A closed write and the queued stream error can both notify the adapter.
+        // Cancellation must survive every pipe failure, not depend on their count.
+        expect(inputErrors.length).toBeGreaterThan(0);
+        for (const error of inputErrors) {
+          expect(error).toMatchObject({ code: "EPIPE" });
+        }
+      };
       observeChild((child, owner) => {
         child.onError((error, source) => {
           if (source === "stdin") {
@@ -390,18 +401,21 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
     `,
       );
       context.systemPrompt = LARGE_INPUT;
-      context.abortSignal = AbortSignal.any([controller.signal, context.abortSignal ?? signal]);
+      context.abortSignal = AbortSignal.any([
+        controller.signal,
+        withClaudeCliTestDeadline(context).abortSignal,
+      ]);
       const result = collect(context);
       void result.catch(() => {});
       try {
         if (stage === "diagnostic drainage") {
           await withinTest(diagnosticsStarted.promise, signal);
-          expect(inputErrors).toMatchObject([{ code: "EPIPE" }]);
+          expectPipeFailures();
           controller.abort(reason);
           releaseDiagnostics.resolve();
         }
         await expect(result).rejects.toBe(reason);
-        expect(inputErrors).toMatchObject([{ code: "EPIPE" }]);
+        expectPipeFailures();
       } finally {
         releaseDiagnostics.resolve();
         await result.catch(() => {});
@@ -619,7 +633,16 @@ it("discovers native models without a turn, resolving aliases and retaining unma
       resolvedModel,
       displayName,
       supportedEffortLevels: ["low", "max"],
+      supportsThinkingOff: false,
+      supportsFastMode: true,
     })),
+    {
+      value: "claude-zzz-9-9",
+      resolvedModel: "claude-zzz-9-9",
+      displayName: "Zzz 9.9",
+      supportedEffortLevels: ["low"],
+      supportsThinkingOff: true,
+    },
     { value: "default", resolvedModel: "claude-hidden", displayName: "Default (recommended)" },
   ];
   const context = await contextForChild(`
@@ -644,8 +667,10 @@ it("discovers native models without a turn, resolving aliases and retaining unma
     expect.objectContaining({
       id: "claude-future[1m]",
       name: "Future",
+      // The menu, not the model id, decides off and Fast for models OpenClaw has never seen.
+      params: { claudeCodeFastMode: true, nativeModelAliases: ["future"] },
       thinkingLevelMap: {
-        off: "off",
+        off: null,
         minimal: null,
         low: "low",
         medium: null,
@@ -659,6 +684,55 @@ it("discovers native models without a turn, resolving aliases and retaining unma
       name: "Opus",
       thinkingLevelMap: expect.objectContaining({ off: null, low: "low", max: "max" }),
     }),
+    expect.objectContaining({
+      id: "claude-zzz-9-9",
+      thinkingLevelMap: expect.objectContaining({ off: "off", low: "low", max: null }),
+    }),
     expect.objectContaining({ id: "claude-hidden", name: "Default (recommended)" }),
   ]);
+});
+
+// Shape captured from Claude Code 2.1.314's logged-in initialize menu on 2026-11-10.
+it("keeps Claude Code's alias selectors on the models its menu resolves them to", async () => {
+  const models = [
+    ["default", "claude-opus-5-5", "Default (recommended)"],
+    ["opus", "claude-opus-5-5", "Opus 5.5"],
+    ["claude-fable-5-2", "claude-fable-5-2", "Fable 5.2"],
+    ["sonnet", "claude-sonnet-5-5", "Sonnet 5.5"],
+    ["haiku", "claude-haiku-5-5", "Haiku 5.5"],
+    ["fable", "claude-fable-5-1", "Fable 5.1"],
+    ["claude-opus-5", "claude-opus-5", "Opus 5"],
+  ].map(([value, resolvedModel, displayName]) => ({
+    value,
+    resolvedModel,
+    displayName,
+    description: `${displayName} description`,
+    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+  }));
+  const context = await contextForChild(`
+    ${PROTOCOL_SETUP}
+    createInterface({ input: process.stdin }).on("line", (line) => {
+      const message = JSON.parse(line);
+      send({ type: "control_response", response: {
+        subtype: "success", request_id: message.request_id,
+        response: { models: ${JSON.stringify(models)} },
+      } });
+    });
+  `);
+  interceptSpawn(
+    (_owner, spawn) => (options) =>
+      spawn({ ...options, command: context.command, args: context.args }),
+  );
+  const discovered = await discoverClaudeCliModels({ env: context.env });
+  const aliasesById = Object.fromEntries(
+    discovered.map((model) => [model.id, model.params?.nativeModelAliases]),
+  );
+  expect(aliasesById).toEqual({
+    "claude-opus-5-5": ["opus"],
+    "claude-fable-5-2": undefined,
+    "claude-sonnet-5-5": ["sonnet"],
+    "claude-haiku-5-5": ["haiku"],
+    "claude-fable-5-1": ["fable"],
+    "claude-opus-5": undefined,
+  });
 });

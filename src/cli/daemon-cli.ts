@@ -37,6 +37,7 @@ export const waitForGatewayUpdateRecovery = lifecycleContext(
 export {
   adoptUpdateRun,
   getUpdateRun,
+  listUpdateRuns,
   recordUpdateRunDiagnostic,
   recordUpdateRunStep,
   recordUpdateRunVerification,

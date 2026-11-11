@@ -32,13 +32,20 @@ export function createContext(
     runtimeConfig?: ReturnType<typeof createRuntimeConfigStub>;
     /** Route query, e.g. "?skill=deploy" from a chat notice link. */
     search?: string;
+    /** A Gateway without the skill-workshop plugin advertises none of its methods. */
+    withoutPlugin?: boolean;
   },
 ): ApplicationContext {
   const client = { request } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    hello: gatewayHelloForMethods(options?.methods ?? [], options?.scopes),
+    hello: gatewayHelloForMethods(
+      options?.withoutPlugin
+        ? (options.methods ?? [])
+        : ["skills.workshop.list", ...(options?.methods ?? [])],
+      options?.scopes,
+    ),
     assistantAgentId: "research",
     sessionKey: "global",
   });

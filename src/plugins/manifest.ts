@@ -10,7 +10,10 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { validatePluginUiCapabilities } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
-import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.js";
+import {
+  validatePluginCategories,
+  validatePluginRecommendedPrompts,
+} from "../../packages/plugin-package-contract/src/index.js";
 import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
@@ -109,7 +112,8 @@ function parseManifestBackupResources(
     if (
       !isRecord(entry) ||
       Object.keys(entry).some(
-        (key) => !["disposition", "scope", "relativePath", "databaseFamily"].includes(key),
+        (key) =>
+          !["disposition", "scope", "relativePath", "databaseFamily", "profile"].includes(key),
       ) ||
       !("disposition" in entry) ||
       !("scope" in entry) ||
@@ -117,12 +121,18 @@ function parseManifestBackupResources(
     ) {
       return {
         ok: false,
-        error: `backupResources[${index}] requires disposition, scope, relativePath, and optional databaseFamily`,
+        error: `backupResources[${index}] requires disposition, scope, relativePath, and optional databaseFamily or profile`,
       };
     }
-    const { disposition, scope, relativePath, databaseFamily } = entry;
+    const { disposition, scope, relativePath, databaseFamily, profile } = entry;
     if (disposition !== "include" && disposition !== "regenerable") {
       return { ok: false, error: `backupResources[${index}].disposition is invalid` };
+    }
+    if (profile !== undefined && (profile !== "local-companion" || disposition !== "regenerable")) {
+      return {
+        ok: false,
+        error: `backupResources[${index}].profile requires a local-companion regenerable resource`,
+      };
     }
     if (scope !== "state" && scope !== "agent") {
       return { ok: false, error: `backupResources[${index}].scope is invalid` };
@@ -153,8 +163,12 @@ function parseManifestBackupResources(
       scope,
       relativePath,
       ...(databaseFamily !== undefined ? { databaseFamily } : {}),
+      ...(profile !== undefined ? { profile } : {}),
     };
-    resources.set(`${scope}\0${relativePath}\0${disposition}\0${databaseFamily ?? ""}`, resource);
+    resources.set(
+      `${scope}\0${relativePath}\0${disposition}\0${databaseFamily ?? ""}\0${profile ?? ""}`,
+      resource,
+    );
   }
   return {
     ok: true,
@@ -467,6 +481,7 @@ export function loadPluginManifest(
     return fail(`invalid plugin manifest dashboard: ${dashboardResult.error}`);
   }
   const uiCapabilities = validatePluginUiCapabilities(raw.uiCapabilities);
+  const recommendedPrompts = validatePluginRecommendedPrompts(raw.recommendedPrompts);
   const controlUiResult = loadPluginControlUiDeclaration({
     rootDir,
     controlUi: raw.controlUi,
@@ -495,8 +510,17 @@ export function loadPluginManifest(
     ok: true,
     // Older readers ignored this advisory field; invalid display metadata must
     // not prevent an installed plugin from loading after an OpenClaw update.
-    ...(!uiCapabilities.ok
-      ? { warnings: [`ignoring invalid plugin manifest uiCapabilities: ${uiCapabilities.error}`] }
+    ...(!uiCapabilities.ok || !recommendedPrompts.ok
+      ? {
+          warnings: [
+            ...(!uiCapabilities.ok
+              ? [`ignoring invalid plugin manifest uiCapabilities: ${uiCapabilities.error}`]
+              : []),
+            ...(!recommendedPrompts.ok
+              ? [`ignoring invalid plugin manifest recommendedPrompts: ${recommendedPrompts.error}`]
+              : []),
+          ],
+        }
       : {}),
     manifest: {
       ...manifestBeforeDashboard,
@@ -504,6 +528,9 @@ export function loadPluginManifest(
       controlUi: controlUiResult.value,
       ...(uiCapabilities.ok && uiCapabilities.capabilities !== undefined
         ? { uiCapabilities: uiCapabilities.capabilities }
+        : {}),
+      ...(recommendedPrompts.ok && recommendedPrompts.recommendedPrompts !== undefined
+        ? { recommendedPrompts: recommendedPrompts.recommendedPrompts }
         : {}),
       themes: themesResult.themes,
       mcpServers: capabilityNormalizers.normalizeManifestMcpServers(raw.mcpServers),

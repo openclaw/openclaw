@@ -1,7 +1,7 @@
 import type { Virtualizer } from "@tanstack/virtual-core";
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { CONTROL_UI_BUILD_INFO } from "../../../build-info.ts";
 import { i18n } from "../../../i18n/index.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { getExpandedToolCards, getExpandedUserMessages } from "../chat-thread.ts";
 import type { ChatWidgetLayout } from "../session-message-cache.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -40,7 +40,7 @@ export function unscaledBorderBox(element: HTMLElement, style = getComputedStyle
 /** The native scroll range changes only at these viewport and content writes. */
 export class TranscriptLayoutOwner {
   ready = false;
-  /** Row-column offset held back from scrollTop while iOS momentum is running. */
+  /** Row-column offset held back from scrollTop while native scrolling is running. */
   rowShift = 0;
   private rowGeometry: readonly TranscriptRowGeometry[] = [];
   rowLayout?: ChatWidgetLayout;
@@ -98,8 +98,12 @@ export class TranscriptLayoutOwner {
   }
 
   readonly rowMinimum = (index: number): number => {
+    const heights = this.rowLayout?.readRows();
+    if (!heights) {
+      return 0;
+    }
     const key = this.rowLayoutKey(index);
-    return key ? (this.rowLayout?.read(key) ?? 0) : 0;
+    return key ? (heights[key] ?? 0) : 0;
   };
 
   restoreRows(
@@ -378,27 +382,32 @@ export class TranscriptLayoutOwner {
       : style.paddingBottom;
   }
 
-  commitRange(element: HTMLElement, rangeHeight: number): void {
+  commitRange(element: HTMLElement, rangeHeight: number): boolean {
     // The shifted column starts above its header; the native end stays where the rows end.
     const height = rangeHeight - this.rowShift;
     const previous = this.rangeHeights.get(element);
     if (previous === height) {
-      return;
+      return false;
     }
     const shrinking =
       element.parentElement === this.viewport && previous !== undefined && height < previous;
     const before = shrinking ? this.viewport?.scrollTop : undefined;
+    // The direct child's height alone keeps an interior viewport in range.
+    // Read before writing; only a possible native clamp needs a second layout.
+    const staysInRange =
+      before !== undefined && before >= 0 && height - this.viewport!.clientHeight > before + 1;
     this.rangeHeights.set(element, height);
     element.style.height = `${height}px`;
-    if (before !== undefined) {
-      this.publishResize(before);
+    if (before !== undefined && !staysInRange) {
+      return this.publishResize(before);
     }
+    return false;
   }
 
-  private publishResize(before: number): void {
+  private publishResize(before: number): boolean {
     const viewport = this.viewport;
     if (!viewport) {
-      return;
+      return false;
     }
     // Publish the native clamp before another measurement can move the anchor.
     const measuredViewport = readTranscriptViewport(viewport);
@@ -410,6 +419,7 @@ export class TranscriptLayoutOwner {
       viewport: measuredViewport,
       ...(before !== after ? { scrollCorrection: { before, after } } : {}),
     });
+    return before !== after;
   }
 
   disconnect(): void {

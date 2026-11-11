@@ -32,7 +32,7 @@ final class ScreenRecordService {
         screenIndex: Int?,
         durationMs: Int?,
         fps: Double?,
-        includeAudio: Bool?) async throws -> (path: String, hasAudio: Bool)
+        includeAudio: Bool?) async throws -> (path: String, durationMs: Int, fps: Double, hasAudio: Bool)
     {
         try await ScreenCaptureSupport.requirePermission()
         let durationMs = CaptureRateLimits.clampDurationMs(durationMs)
@@ -85,7 +85,7 @@ final class ScreenRecordService {
         }
 
         try await recorder.finish()
-        return (path: outURL.path, hasAudio: recorder.hasAudio)
+        return (path: outURL.path, durationMs: durationMs, fps: fps, hasAudio: recorder.hasAudio)
     }
 }
 

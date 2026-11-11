@@ -408,9 +408,7 @@ async function runManagedMediaScenario() {
       const renderedImages = bubble.locator("img.chat-message-image");
       // A durable reply can briefly overlap its live tail until the run retires.
       await expect.poll(() => bubble.count()).toBeGreaterThan(0);
-      await page
-        .getByRole("button", { name: "Stop generating", exact: true })
-        .waitFor({ state: "detached" });
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ state: "detached" });
       await bubble.getByText(closing, { exact: true }).waitFor();
       const assertDecoded = async () => {
         // Run retirement starts a final history read that can replace live image nodes.

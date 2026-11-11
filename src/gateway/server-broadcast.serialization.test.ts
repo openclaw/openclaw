@@ -307,6 +307,7 @@ describe("broadcast serialization failures", () => {
     broadcast("sessions.changed", { reason: "delete" });
     broadcast("users.prefs.changed", { profileId: "other", keys: ["ui.theme"] });
     broadcast("mentions.changed", { gatewayInstanceId: "gateway", revision: 1 });
+    broadcast("projects.checkoutOptions.changed", { projectId: "project" });
     broadcast("chat.metadata.changed", { content: "Hidden content" });
     broadcastToConnIds("sessions.changed", dynamic, recipients);
     expect(scoped.socket.send).not.toHaveBeenCalled();
@@ -323,11 +324,13 @@ describe("broadcast serialization failures", () => {
       { gatewayInstanceId: "gateway", revision: 1 },
       recipients,
     );
+    broadcastToConnIds("projects.checkoutOptions.changed", { projectId: "project" }, recipients);
     expect(frameSummaries(scoped)).toEqual([
       { event: "chat.metadata.changed", seq: 1 },
       { event: "sessions.changed", seq: 2 },
       { event: "users.prefs.changed", seq: 3 },
       { event: "mentions.changed", seq: 4 },
+      { event: "projects.checkoutOptions.changed", seq: 5 },
     ]);
   });
 

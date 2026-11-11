@@ -123,21 +123,36 @@ it.each([
   );
 });
 
-it("still requires the live executor for a shipped post-core parent", async () => {
+it.each([
+  { parent: "run-bearing shipped post-core parent", runId: "run-without-executor" },
+  { parent: "run-less legacy post-core parent", runId: undefined },
+])("binds post-core convergence to the $parent contract", async ({ runId }) => {
   await withOpenClawTestState(
-    { label: "updater-post-core-native-authority", env: { OPENCLAW_UPDATE_POST_CORE: "1" } },
+    {
+      label: "updater-post-core-native-authority",
+      env: { OPENCLAW_UPDATE_POST_CORE: "1", OPENCLAW_UPDATE_RUN_ID: runId },
+    },
     async (state) => {
-      await state.writeConfig({ plugins: { enabled: false } });
+      await prepareUpdate(state, { plugins: { enabled: false } });
       const original = await fs.readFile(state.configPath, "utf8");
-      await expect(
-        convergePostCoreUpdatePlugins({
-          root: state.root,
-          channel: "stable",
-          requestedChannel: null,
-          opts: { json: true },
-          timeoutMs: 1_000,
-        }),
-      ).rejects.toThrow("Plugin cohort convergence requires its live outer update executor");
+      if (!runId) {
+        mocks.convergence.mockImplementationOnce(async ({ cfg }) => convergenceResult(cfg));
+      }
+      const convergence = convergePostCoreUpdatePlugins({
+        root: state.root,
+        channel: "stable",
+        requestedChannel: null,
+        opts: { json: true },
+        timeoutMs: 1_000,
+      });
+      if (!runId) {
+        // Parents before the run ledger (2026.6.x) never pass an executor and keep plain convergence.
+        await expect(convergence).resolves.toBeDefined();
+        return;
+      }
+      await expect(convergence).rejects.toThrow(
+        "Plugin cohort convergence requires its live outer update executor",
+      );
       expect(await fs.readFile(state.configPath, "utf8")).toBe(original);
     },
   );

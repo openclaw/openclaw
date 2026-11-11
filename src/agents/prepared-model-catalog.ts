@@ -6,6 +6,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveAmbientOwnerAgentId,
+  tryResolveAmbientOwnerAgentId,
 } from "./agent-scope.js";
 import {
   getPreparedSharedAuthStoreOwnership,
@@ -16,6 +17,7 @@ import { findModelInCatalog } from "./model-catalog-lookup.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
+import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import type { ResolvedPublishedModelCatalogOwner } from "./prepared-model-catalog.types.js";
@@ -25,6 +27,7 @@ import {
   loadPreparedModelRuntimeAuth,
   bindPreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
+import { isPreparedModelRuntimeGatewayLifecycleActive } from "./prepared-model-runtime-gateway-lifecycle.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
@@ -49,7 +52,10 @@ import {
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
 import { prepareScopedReadOnlyModelCatalog } from "./prepared-model-runtime.scoped-catalog.js";
-import { normalizeThinkingCatalogProviders } from "./thinking-runtime.js";
+import {
+  normalizeThinkingCatalogProviders,
+  resolveEffectiveAgentRuntime,
+} from "./thinking-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
 export { withPreparedModelRuntimeReadBatch } from "./prepared-model-runtime.owner.js";
@@ -163,6 +169,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
   full: PreparedModelRuntimeInput;
   activationExact: PreparedModelRuntimeInput;
   activationFull: PreparedModelRuntimeInput;
+  inventory: PreparedModelRuntimeInput;
 } {
   const config = params.config ?? getRuntimeConfig();
   const explicitOrDefaultAgentId =
@@ -195,9 +202,17 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
     activationWorkspaceDir && activationWorkspaceDir !== full.workspaceDir
       ? { ...full, workspaceDir: activationWorkspaceDir }
       : full;
+  // Gateway inventory belongs to the configured agent; a session cwd only controls execution.
+  // Without a workspace, lookup resolves that configured owner, as turn admission does.
+  // Standalone hosts keep workspace-scoped discovery.
+  const inventory =
+    full.workspaceDir === undefined || !isPreparedModelRuntimeGatewayLifecycleActive()
+      ? full
+      : { ...full, workspaceDir: undefined };
   return {
     exact,
     full,
+    inventory,
     activationFull,
     activationExact:
       activationFull === full
@@ -228,8 +243,11 @@ export function getPreparedModelCatalogOwnerSnapshot(
   if (!getPreparedSharedAuthStoreOwnership(params.env ?? process.env)) {
     return undefined;
   }
-  const { activationExact, activationFull, exact, full } = resolveInputs(params);
-  return findPreparedCatalogOwner([full, activationFull, exact, activationExact], "exact");
+  const { activationExact, activationFull, exact, full, inventory } = resolveInputs(params);
+  return findPreparedCatalogOwner(
+    [full, activationFull, exact, activationExact, inventory],
+    "exact",
+  );
 }
 
 /**
@@ -242,8 +260,8 @@ export function getPublishedPreparedModelCatalogOwnerSnapshot(
   if (!getPreparedSharedAuthStoreOwnership(params.env ?? process.env)) {
     return undefined;
   }
-  const { activationFull, full } = resolveInputs(params);
-  return findPreparedCatalogOwner([full, activationFull], "published");
+  const { activationFull, full, inventory } = resolveInputs(params);
+  return findPreparedCatalogOwner([full, activationFull, inventory], "published");
 }
 
 /** Requests expiry renewal for an inventory consumer without waiting for discovery. */
@@ -269,8 +287,8 @@ async function resolveReadOnlyPublishedModelCatalogOwner(
   preparePublishedOwner = preparePublishedCatalogOwner,
   selection: "owner" | "completed-inventory" = "owner",
 ): Promise<PreparedModelCatalogOwner | undefined> {
-  const { activationFull, full } = resolveInputs(params);
-  for (const candidate of new Set([full, activationFull])) {
+  const { activationFull, full, inventory } = resolveInputs(params);
+  for (const candidate of new Set([full, activationFull, inventory])) {
     try {
       // Full lifecycle owners include provider augmentation omitted by read-only fallback builds.
       const prepared = await preparePublishedOwner(candidate);
@@ -563,6 +581,38 @@ export async function loadProviderScopedThinkingCatalog(params: {
     }
   }
   return entries;
+}
+
+/**
+ * Acquires the default agent's native harness catalog once the Gateway is ready, so the first
+ * turn's thinking-level lookup reads it instead of starting a native app-server itself. Other
+ * agents and session-selected models keep acquiring on their first turn.
+ */
+export async function prewarmDefaultNativeModelCatalog(config: OpenClawConfig): Promise<void> {
+  // Rosters without one default agent pick theirs per turn.
+  const agentId = tryResolveAmbientOwnerAgentId(config);
+  if (!agentId) {
+    return;
+  }
+  const { provider, model } = resolveDefaultModelForAgent({ cfg: config, agentId });
+  // The turn chooses its runtime from the published row's transport; match it.
+  const selected = findModelInCatalog(
+    getPublishedPreparedModelCatalogOwnerSnapshot({ config, agentId })?.modelCatalog.entries ?? [],
+    provider,
+    model,
+  );
+  const agentRuntime = resolveEffectiveAgentRuntime({
+    cfg: config,
+    provider,
+    modelId: model,
+    modelApi: selected?.api,
+    modelBaseUrl: selected?.baseUrl,
+    agentId,
+  });
+  if (agentRuntime === "openclaw") {
+    return;
+  }
+  await loadProviderScopedThinkingCatalog({ config, agentId, provider, model, agentRuntime });
 }
 
 /** Retains published or temporary catalog resources through an asynchronous read. */

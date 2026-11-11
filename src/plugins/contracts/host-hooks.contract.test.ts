@@ -51,11 +51,7 @@ import {
   patchPluginSessionExtension,
   projectPluginSessionExtensionsSync,
 } from "../host-hook-state.js";
-import {
-  buildPluginAgentTurnPrepareContext,
-  isPluginJsonValue,
-  type PluginTrustedToolPolicyRegistration,
-} from "../host-hooks.js";
+import { isPluginJsonValue, type PluginTrustedToolPolicyRegistration } from "../host-hooks.js";
 import { getPluginInstance } from "../plugin-instance-scope.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
@@ -1165,21 +1161,6 @@ describe("host-hook fixture plugin contract", () => {
     );
   });
 
-  it("skips malformed persisted next-turn injection records during prompt assembly", () => {
-    const queuedContext = buildPluginAgentTurnPrepareContext({
-      queuedInjections: [
-        { ...injection("approval-plugin", "bad-text", "", "prepend_context"), text: 123 } as never,
-        {
-          ...injection("approval-plugin", "bad-placement", "wrong placement"),
-          placement: "middle_context",
-        } as never,
-        injection("approval-plugin", "valid", "  approval workflow resumed  "),
-      ],
-    });
-
-    expect(queuedContext).toEqual({ appendContext: "approval workflow resumed" });
-  });
-
   it("rejects malformed next-turn injection input before persisting records", async () => {
     for (const invalid of [
       { placement: "middle_context" as never },
@@ -1228,7 +1209,7 @@ describe("host-hook fixture plugin contract", () => {
     });
   });
 
-  it("suppresses stale next-turn injections from plugins that are no longer loaded", async () => {
+  it("rejects malformed and inactive next-turn injections while draining", async () => {
     activateInjectors(
       ["active-injector"],
       ["disabled-injector", "disabled"],
@@ -1239,7 +1220,12 @@ describe("host-hook fixture plugin contract", () => {
         await seedSession(storePath, {
           pluginNextTurnInjections: {
             "active-injector": [
-              injection("active-injector", "active", "active prompt contribution"),
+              injection("active-injector", "active", "  active prompt contribution  "),
+              { ...injection("active-injector", "bad-text", ""), text: 123 } as never,
+              {
+                ...injection("active-injector", "bad-placement", "wrong placement"),
+                placement: "middle_context",
+              } as never,
             ],
             "disabled-injector": [
               injection("disabled-injector", "stale", "stale", "prepend_context"),
@@ -1250,22 +1236,24 @@ describe("host-hook fixture plugin contract", () => {
           },
         });
 
-        const { queuedInjections: drained } = await drainPluginNextTurnInjectionContext({
-          cfg: tempConfig,
-          sessionKey: "agent:main:main",
-        });
+        const { queuedInjections: drained, appendContext } =
+          await drainPluginNextTurnInjectionContext({
+            cfg: tempConfig,
+            sessionKey: "agent:main:main",
+          });
         expect(drained).toHaveLength(1);
         expect(drained[0]).toMatchObject({
           id: "active",
           pluginId: "active-injector",
-          text: "active prompt contribution",
+          text: "  active prompt contribution  ",
         });
+        expect(appendContext).toBe("active prompt contribution");
         expect(loadSession(storePath)?.pluginNextTurnInjections).toBeUndefined();
       },
       (storePath) => ({
         session: { store: storePath },
         plugins: {
-          entries: { "policy-blocked-injector": { hooks: { allowPromptInjection: false } } },
+          entries: { "policy-blocked-injector": { hooks: { allowPromptModification: false } } },
         },
       }),
     );

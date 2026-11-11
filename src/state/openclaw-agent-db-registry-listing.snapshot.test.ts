@@ -2,9 +2,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { assert, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { forceFullGc } from "../test-utils/retention.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-db-contract.js";
 
@@ -219,7 +219,7 @@ it("retains registration authority without retaining the discovery async context
   const retained = capture();
   try {
     await setImmediate();
-    queryObjects(WeakRef);
+    forceFullGc();
     expect(retained.control.deref()).toBeUndefined();
     expect(retained.payload.deref()).toBeUndefined();
     const owned = invalidateMemo(options);

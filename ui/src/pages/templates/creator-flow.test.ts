@@ -118,6 +118,66 @@ it("invokes the bundled skill in the existing main session, then reviews and pub
   expect(calls.some(([method]) => method === "sessions.create")).toBe(false);
 });
 
+it("reviews an agent-authored draft in the requesting conversation without another model turn or publication", async () => {
+  const request = vi.fn(async (method: string) => {
+    if (method === "templates.drafts.read") {
+      return { revision: "a".repeat(64), content: JSON.stringify({ scope }) };
+    }
+    if (method === "templates.drafts.review") {
+      return {
+        revision: "a".repeat(64),
+        reviewToken: "b".repeat(64),
+        name: "@maker/research-brief",
+        displayName: "Research Brief",
+        description: "Research summaries",
+        items: [],
+        files: [],
+        scope,
+      };
+    }
+    throw new Error(`Unexpected RPC ${method}`);
+  });
+  const context = createContext(request);
+  const flow = new TemplateCreatorFlow(context);
+  const sessionKey = "agent:research:dashboard:requesting-conversation";
+  flow.open("research", draftId, sessionKey);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(flow).toMatchObject({ modalOpen: true, reviewCurrent: true });
+  expect(context.navigate).toHaveBeenCalledWith(
+    "chat",
+    expect.objectContaining({
+      pathname: expect.stringContaining("requesting-conversation"),
+    }),
+  );
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "templates.drafts.read",
+    "templates.drafts.review",
+  ]);
+  expect(request).toHaveBeenCalledWith("templates.drafts.review", { agentId: "research", draftId });
+});
+
+it("does not let an earlier sidebar initiation replace a newer chat review", async () => {
+  const created = Promise.withResolvers<{ draftId: string; prompt: string }>();
+  const request = vi.fn((method: string) => {
+    if (method === "templates.drafts.create") {
+      return created.promise;
+    }
+    throw new Error(`Unexpected RPC ${method}`);
+  });
+  const context = createContext(request);
+  const flow = new TemplateCreatorFlow(context);
+  const starting = flow.start("research");
+  flow.open("research", draftId, "agent:research:dashboard:newer-review");
+  created.resolve({ draftId: "older-draft", prompt: "Older sidebar request" });
+  await starting;
+  expect(context.navigate).toHaveBeenCalledTimes(1);
+  expect(context.navigate).toHaveBeenCalledWith(
+    "chat",
+    expect.objectContaining({ pathname: expect.stringContaining("newer-review") }),
+  );
+  expect(request.mock.calls.map(([method]) => method)).toEqual(["templates.drafts.create"]);
+});
+
 it("keeps overlapping skill turns bound to their own draft ids", async () => {
   const ids = {
     research: draftId,

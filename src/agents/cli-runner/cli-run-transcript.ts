@@ -20,6 +20,7 @@ import {
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/sessions/session-store-owner.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   SessionTranscriptWriterClaimReboundError,
@@ -493,7 +494,9 @@ export async function persistCliRunBlock(
           write.readScope,
           write.assertCurrent,
           async () => {
-            const manager = await SessionManager.openAsync(write.readScope);
+            const manager = await withSessionTranscriptHydrationCaller("cli-context", () =>
+              SessionManager.openAsync(write.readScope),
+            );
             write.assertCurrent();
             await manager.appendMessageAsync(redactedUserMessage);
           },

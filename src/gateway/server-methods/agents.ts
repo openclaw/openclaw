@@ -15,7 +15,11 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { validateAgentIdInput } from "../../agents/agent-create.js";
 import { AgentSharedStoreOwnerError } from "../../agents/agent-delete-databases.js";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentConfig,
+  resolveAgentWorkspaceDir,
+} from "../../agents/agent-scope.js";
 import {
   createAgentIdentityConfig,
   normalizeIdentityForFile,
@@ -49,6 +53,7 @@ import {
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import type { PreparedGatewayModelCatalog } from "../server-model-catalog.types.js";
 import { reviveAgentDatabasesAfterConfigCommit } from "../server-reload-agent-databases.js";
+import { resolveAttendedSessionPermissionDefault } from "../session-create-permission-default.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { listAgentsForGateway } from "../session-utils.js";
 import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
@@ -103,7 +108,7 @@ function createAgentConfigApplication(respond: RespondFn) {
       if (outcome === "applied") {
         return true;
       }
-      const message = `Agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); run config.get, then apply the saved config or restart the Gateway.`;
+      const message = `Agent configuration was saved but its application to the active Gateway was not confirmed (${typeof outcome === "object" ? outcome.status : outcome}); run config.get, then apply the saved config or restart the Gateway.`;
       if (onUnconfirmed) {
         onUnconfirmed(message);
       } else {
@@ -232,10 +237,19 @@ export const agentsHandlers: GatewayRequestHandlers = {
       }
       // Grants during enrichment appear on the next request; revocations apply now.
       const allowedAgents = resolveOperatorRolePolicy(client, currentConfig)?.agents;
-      const agents =
+      const agents = (
         allowedAgents && allowedAgents !== "*"
           ? result.agents.filter((agent) => allowedAgents.includes(agent.id))
-          : result.agents;
+          : result.agents
+      ).map((agent) => {
+        const newSessionPermissionMode = resolveAttendedSessionPermissionDefault(
+          resolveAgentConfig(currentConfig, agent.id)?.newSessionPermissionMode,
+          client?.connect.scopes ?? [],
+        );
+        return newSessionPermissionMode === agent.newSessionPermissionMode
+          ? agent
+          : Object.assign(agent, { newSessionPermissionMode });
+      });
       const policy = prepareOperatorModelPresentation({
         cfg: currentConfig,
         policyConfig: context.getCommittedRuntimeConfig?.() ?? currentConfig,
@@ -388,7 +402,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
               }),
               error: applicationError,
             }
-          : await completeAgentOnboarding(options, result.agentId, result.name)
+          : await completeAgentOnboarding(options, result.agentId)
         : undefined;
       let onboardingOperatorAuthority:
         | Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>

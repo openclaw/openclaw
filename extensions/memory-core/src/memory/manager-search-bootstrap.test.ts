@@ -25,7 +25,6 @@ const {
 async function emptyManager(options: Parameters<typeof createCfg>[0]) {
   await fs.unlink(path.join(fixture.paths.memory, "2026-01-12.md"));
   const cfg = createCfg(options);
-  cfg.agents = { defaults: cfg.agents?.defaults, entries: { main: {} } };
   return { cfg, manager: await getFreshManager(cfg, "cli") };
 }
 const seedTranscript = (sessionId: string, content: string) =>

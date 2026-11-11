@@ -624,7 +624,7 @@ export function createCorePluginStateKeyedStoreV2<T>(
 
 /** Bind a core catalog read and its later replacement to the same physical store. */
 export function prepareCorePluginStateReplacement<T>(
-  options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
+  options: OpenAsyncKeyedStoreOptions & { ownerId: `core:${string}` },
 ) {
   const prepared = prepareKeyedStoreOptions(options.ownerId, options);
   const context = captureOpenClawStateWorkerContext({ env: prepared.env });
@@ -634,11 +634,11 @@ export function prepareCorePluginStateReplacement<T>(
       // SAFETY: This namespace stores the core caller's serialized JSON value type.
       return (await listPluginStateInWorker(scope)) as PluginStateEntry<T>[];
     },
-    async replace(entries: ReadonlyMap<string, T>): Promise<void> {
+    async replace(entries: ReadonlyMap<string, T>, assertCurrent?: () => void): Promise<void> {
       const values = Array.from(entries, ([key, value]) =>
         prepareRegisterParams(key, value, prepared.defaultTtlMs, undefined, prepared.namespace),
       );
-      await replacePluginStateInWorker({ ...scope, entries: values });
+      await replacePluginStateInWorker({ ...scope, entries: values, assertCurrent });
     },
   };
 }

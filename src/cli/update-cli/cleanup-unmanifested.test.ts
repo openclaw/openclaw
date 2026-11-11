@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
-  collectUpdateCleanupInventory,
+  collectUpdateCleanupInventoryAsync,
   type RecoveryCleanupReport,
 } from "../../commands/doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "../../commands/doctor-session-sqlite-retirement.js";
@@ -110,8 +110,12 @@ function orphan(f: Fixture) {
   return directory;
 }
 
-function preview(f: Fixture, paths: string[]) {
-  const inventory = collectUpdateCleanupInventory({ cfg: {}, env: f.env });
+async function preview(f: Fixture, paths: string[]) {
+  const inventory = await collectUpdateCleanupInventoryAsync({
+    cfg: {},
+    env: f.env,
+    current: true,
+  });
   selectUnmanifestedRecovery({ inventory, paths, cfg: {}, env: f.env });
   return inventory.report;
 }
@@ -301,7 +305,7 @@ it.each(["symlink", "hardlink", "wal"])(
     } else {
       fs.writeFileSync(unsafe, "WAL");
     }
-    expect(() => preview(f, [capture])).toThrow(/sidecar|hardlink|nonregular/);
+    await expect(preview(f, [capture])).rejects.toThrow(/sidecar|hardlink|nonregular/);
     expect(fs.existsSync(unsafe)).toBe(true);
     expect(fs.readFileSync(f.other, "utf8")).toBe("other retained original");
   },
@@ -309,7 +313,7 @@ it.each(["symlink", "hardlink", "wal"])(
 
 it.each(["direct", "aliased directory", "aliased manifest"])(
   "protects %s pending recovery references even when the capture has no matching update run",
-  (kind) => {
+  async (kind) => {
     const f = fixture();
     const capture = orphan(f);
     let manifest = path.join(capture, "manifest.json");
@@ -323,7 +327,7 @@ it.each(["direct", "aliased directory", "aliased manifest"])(
       manifest = reference;
     }
     pendingRecovery(f, manifest);
-    expect(() => preview(f, [capture])).toThrow(/pending or retained recovery/);
+    await expect(preview(f, [capture])).rejects.toThrow(/pending or retained recovery/);
     expect(fs.existsSync(capture)).toBe(true);
   },
 );
@@ -334,7 +338,7 @@ it.each(["replacement", "same-size-edit", "pending-reference", "new-sidecar"])(
     const f = fixture();
     const restoreTimestamp =
       change === "same-size-edit" ? preserveOriginalTimestamps(f.original) : undefined;
-    const initial = preview(f, [f.original]);
+    const initial = await preview(f, [f.original]);
     await expect(
       retireSessionSqliteRecovery({
         env: f.env,
@@ -374,7 +378,7 @@ it.each(["file replacement", "configured live store"])(
     let cfg: OpenClawConfig = {};
     const result = await retireSessionSqliteRecovery({
       env: f.env,
-      preview: preview(f, [f.original]),
+      preview: await preview(f, [f.original]),
       includeUnmanifested: [f.original],
       readConfig: async () => cfg,
       confirm: async () => true,
@@ -405,7 +409,7 @@ it("refuses explicit cleanup while another Gateway owns the selected state", asy
     await expect(
       retireSessionSqliteRecovery({
         env: f.env,
-        preview: preview(f, [f.original]),
+        preview: await preview(f, [f.original]),
         includeUnmanifested: [f.original],
         readConfig: async () => ({}),
         confirm: async () => true,
@@ -417,10 +421,10 @@ it("refuses explicit cleanup while another Gateway owns the selected state", asy
   }
 });
 
-it("retains a configured live store even when its name is classified as a recovery original", () => {
+it("retains a configured live store even when its name is classified as a recovery original", async () => {
   const f = fixture();
   const cfg = { session: { store: f.original } };
-  const inventory = collectUpdateCleanupInventory({ cfg, env: f.env });
+  const inventory = await collectUpdateCleanupInventoryAsync({ cfg, env: f.env, current: true });
   expect(inventory.report.artifacts.find((item) => item.path === f.original)?.reason).toBe(
     "unmanifested-recovery-original",
   );
@@ -430,14 +434,14 @@ it("retains a configured live store even when its name is classified as a recove
   expect(fs.readFileSync(f.original, "utf8")).toBe("retained original");
 });
 
-it("refuses explicit retirement if stored recovery references cannot be decoded", () => {
+it("refuses explicit retirement if stored recovery references cannot be decoded", async () => {
   const f = fixture();
   const runId = pendingRecovery(f, path.join(f.home, "unrelated", "manifest.json"));
   openOpenClawStateDatabase({ env: f.env })
     .db.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?")
     .run("unreadable", "update.recovery." + runId);
   closeOpenClawStateDatabaseForTest();
-  expect(() => preview(f, [f.original])).toThrow();
+  await expect(preview(f, [f.original])).rejects.toThrow();
   expect(fs.readFileSync(f.original, "utf8")).toBe("retained original");
 });
 

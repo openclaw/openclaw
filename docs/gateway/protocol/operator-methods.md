@@ -88,6 +88,9 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - Owner-only core wrappers such as `cron`, `gateway`, and `nodes` require
     owner/admin identity (`operator.admin`) even though `tools.invoke` itself
     is `operator.write`.
+  - Configured MCP tools are invocable by their `<server>__<tool>` name on a
+    private per-call MCP runtime, with `source="mcp"` in the response; see
+    [Configured MCP tools](/gateway/tools-invoke-http-api#configured-mcp-tools).
   - The response is an SDK-facing envelope with `ok`, `toolName`, optional
     `output`, and typed `error` fields. Approval or policy refusals return
     `ok:false` in the payload rather than bypassing the gateway tool policy
@@ -212,7 +215,10 @@ An unchanged catalog renewal emits `chat.metadata.changed` with
 `modelCatalogChanged: false` and `modelCatalogStatusChanged: true`. The Control UI
 refreshes only cached receipts that still contain `pendingProviders`; settled
 catalogs remain reusable. Inventory, availability, and account changes still
-invalidate affected catalogs.
+invalidate affected catalogs. Agent-specific metadata publications include
+`agentId`, so other agents retain their catalog and auth receipts. Configuration,
+plugin, and owner replacement changes still invalidate all agents. Discovery
+settlements can accompany scoped changes as a separate pending-only notification.
 
 The Control UI shares the initial `models.snapshot` with matching configured
 catalog readers. If bootstrap does not deliver it within one second, readers

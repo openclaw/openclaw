@@ -61,6 +61,7 @@ export function makeOverflowError(message: string = DEFAULT_OVERFLOW_ERROR_MESSA
 type MockRuntimePlan = Pick<AgentRuntimePlan, "auth"> & {
   transport: Pick<AgentRuntimePlan["transport"], "resolveExtraParams">;
   observability: Pick<AgentRuntimePlan["observability"], "harnessId">;
+  prompt: Pick<AgentRuntimePlan["prompt"], "provider" | "resolveSystemPromptContribution">;
 };
 
 export function makeMockRuntimePlan(): MockRuntimePlan {
@@ -71,6 +72,10 @@ export function makeMockRuntimePlan(): MockRuntimePlan {
     },
     observability: {
       harnessId: "codex",
+    },
+    prompt: {
+      provider: "openai",
+      resolveSystemPromptContribution: () => undefined,
     },
     transport: {
       resolveExtraParams: () => ({}),
