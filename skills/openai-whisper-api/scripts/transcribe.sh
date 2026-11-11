@@ -25,7 +25,7 @@ json_output=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --model|--out|--language|--prompt)
-      if [[ $# -lt 2 || "$2" == --* ]]; then
+      if [[ $# -lt 2 || "$2" =~ ^--(model|out|language|prompt|json)$ ]]; then
         echo "$1 requires a value" >&2
         usage
       fi
