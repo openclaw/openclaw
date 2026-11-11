@@ -1,5 +1,8 @@
+import crypto from "node:crypto";
 import { expect, type Mock } from "vitest";
-import type { requestExecHostViaSocket } from "../infra/exec-host.js";
+import type * as approvalsStore from "../infra/exec-approvals-store.test-support.js";
+import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
+import type { ExecHostResponse, requestExecHostViaSocket } from "../infra/exec-host.js";
 import type { handleSystemRunInvoke } from "./invoke-system-run.js";
 
 type InvokeOptions = Parameters<typeof handleSystemRunInvoke>[0];
@@ -14,6 +17,65 @@ export type InvokeSpies = {
   sendInvokeResult: MockedSendInvokeResult;
   sendNodeEvent: MockedSendNodeEvent;
 };
+
+export function localResult(stdout = "local-ok") {
+  return {
+    success: true,
+    stdout,
+    stderr: "",
+    timedOut: false,
+    truncated: false,
+    exitCode: 0,
+    error: null,
+  };
+}
+
+export function macSuccess(stdout = "app-ok"): ExecHostResponse {
+  return {
+    ok: true,
+    payload: {
+      success: true,
+      stdout,
+      stderr: "",
+      timedOut: false,
+      exitCode: 0,
+      error: null,
+    },
+  };
+}
+
+export function allowlistPolicy(params?: {
+  autoAllowSkills?: boolean;
+  agents?: Parameters<typeof approvalsStore.saveExecApprovals>[0]["agents"];
+}): Parameters<typeof approvalsStore.saveExecApprovals>[0] {
+  return {
+    version: 1,
+    defaults: {
+      security: "allowlist",
+      ask: "on-miss",
+      askFallback: "deny",
+      ...(params?.autoAllowSkills ? { autoAllowSkills: true } : {}),
+    },
+    agents: params?.agents ?? {},
+  };
+}
+
+export function policy(
+  security: ExecSecurity,
+  ask: ExecAsk,
+  askFallback: ExecSecurity,
+  agents?: Parameters<typeof approvalsStore.saveExecApprovals>[0]["agents"],
+): Parameters<typeof approvalsStore.saveExecApprovals>[0] {
+  return {
+    version: 1,
+    defaults: { security, ask, askFallback },
+    ...(agents === undefined ? {} : { agents }),
+  };
+}
+
+export function createExactCommandPattern(commandText: string): string {
+  return `=command:${crypto.createHash("sha256").update(commandText).digest("hex").slice(0, 16)}`;
+}
 
 export function expectOk(sendInvokeResult: MockedSendInvokeResult, payloadContains?: string) {
   const result = invokeResult(sendInvokeResult);
