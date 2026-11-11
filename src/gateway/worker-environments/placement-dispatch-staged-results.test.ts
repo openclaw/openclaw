@@ -3,6 +3,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, vi } from "vitest";
 import { createCommandTest } from "../../../test/helpers/command-fixture.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { runGit } from "../../agents/worktrees/git.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -29,8 +30,14 @@ import {
   applyStagedWorkerWorkspaceResult,
   cleanupWorkerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
+import { resolveWorkspaceResultStorage } from "./workspace-result-storage.js";
 
 const it = createCommandTest();
+
+async function resultGit(root: string, ref: string, args = ["show-ref", "--verify", ref]) {
+  const storage = await resolveWorkspaceResultStorage(root, ref);
+  return await runGit(storage.root, args, storage);
+}
 
 describe("worker placement result recovery", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -183,14 +190,17 @@ describe("worker placement result recovery", () => {
       base: "base\n",
       current: "worker\n",
     });
+    // A retained pre-upgrade conflict uses the original repository; the new result is isolated.
+    const storage = await resolveWorkspaceResultStorage(workspacePath, staged.stagedResultRef);
     expect(
-      (
-        await runCommandWithTimeout(
-          ["git", "-C", workspacePath, "update-ref", priorConflictRef, staged.stagedResultRef],
-          { timeoutMs: 10_000 },
-        )
-      ).code,
-    ).toBe(0);
+      await runGit(workspacePath, [
+        "fetch",
+        "--no-tags",
+        "--no-write-fetch-head",
+        storage.root,
+        `${staged.stagedResultRef}:${priorConflictRef}`,
+      ]),
+    ).toMatchObject({ code: 0 });
     await placementStore.handoffWorkspaceResultRecovery(claim);
 
     await harness.service.reconcile();
@@ -208,28 +218,14 @@ describe("worker placement result recovery", () => {
     expect(harness.environments.destroy).toHaveBeenCalledWith(active.environmentId);
     expect(prepareAcceptedWorkspacePublication).toHaveBeenCalledWith(claim);
     expect(publishAcceptedWorkspace).toHaveBeenCalledWith(claim);
-    expect(
-      (
-        await runCommandWithTimeout(
-          ["git", "-C", workspacePath, "show-ref", "--verify", staged.stagedResultRef],
-          { timeoutMs: 10_000 },
-        )
-      ).code,
-    ).not.toBe(0);
+    expect(await resultGit(workspacePath, staged.stagedResultRef)).not.toMatchObject({ code: 0 });
     expect(harness.reportWorkspaceResultConflict).toHaveBeenCalledWith({
       sessionId: REQUEST.sessionId,
       sessionKey: REQUEST.sessionKey,
       agentId: REQUEST.agentId,
       cleared: true,
     });
-    expect(
-      (
-        await runCommandWithTimeout(
-          ["git", "-C", workspacePath, "show-ref", "--verify", priorConflictRef],
-          { timeoutMs: 10_000 },
-        )
-      ).code,
-    ).not.toBe(0);
+    expect(await resultGit(workspacePath, priorConflictRef)).not.toMatchObject({ code: 0 });
   });
 
   it.each(["retained", "removed-before-restart"] as const)(
@@ -332,17 +328,11 @@ describe("worker placement result recovery", () => {
       let recovery = harness;
       if (refState === "removed-before-restart") {
         expect(
-          await runCommandWithTimeout(
-            [
-              "git",
-              "-C",
-              workspacePath,
-              "update-ref",
-              "-d",
-              cleanupWorkerWorkspaceResultRef(pending.stagedResultRef),
-            ],
-            { timeoutMs: 10_000 },
-          ),
+          await resultGit(workspacePath, pending.stagedResultRef, [
+            "update-ref",
+            "-d",
+            cleanupWorkerWorkspaceResultRef(pending.stagedResultRef),
+          ]),
         ).toMatchObject({ code: 0 });
         const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
         await restartedStore.clearLocalTurnClaimsAfterRestartAsync();
@@ -673,17 +663,7 @@ describe("worker placement result recovery", () => {
       if (placementState === "accepted-reclaim") {
         expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
         expect(
-          await runCommandWithTimeout(
-            [
-              "git",
-              "-C",
-              workspacePath,
-              "show-ref",
-              "--verify",
-              cleanupWorkerWorkspaceResultRef(staged.stagedResultRef),
-            ],
-            { timeoutMs: 10_000 },
-          ),
+          await resultGit(workspacePath, cleanupWorkerWorkspaceResultRef(staged.stagedResultRef)),
         ).not.toMatchObject({ code: 0 });
       }
     },
@@ -775,12 +755,7 @@ describe("worker placement result recovery", () => {
     expect(restartedHarness.reportWorkspaceResultRecoveryFailure).toHaveBeenCalledTimes(2);
     expect(await restartedStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
     expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
-    expect(
-      await runCommandWithTimeout(
-        ["git", "-C", workspacePath, "show-ref", "--verify", staged.stagedResultRef],
-        { timeoutMs: 10_000 },
-      ),
-    ).toMatchObject({ code: 0 });
+    expect(await resultGit(workspacePath, staged.stagedResultRef)).toMatchObject({ code: 0 });
     await fs.writeFile(path.join(workspacePath, "result.txt"), "later local edit\n");
     const finalStore = createWorkerSessionPlacementStore({ database, now: () => 3_000 });
     const finalHarness = await createHarness(database, finalStore, { workspacePath });
@@ -814,12 +789,7 @@ describe("worker placement result recovery", () => {
     await expect(fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).resolves.toBe(
       "later local edit\n",
     );
-    expect(
-      await runCommandWithTimeout(
-        ["git", "-C", workspacePath, "show-ref", "--verify", staged.stagedResultRef],
-        { timeoutMs: 10_000 },
-      ),
-    ).toMatchObject({ code: 0 });
+    expect(await resultGit(workspacePath, staged.stagedResultRef)).toMatchObject({ code: 0 });
   });
 
   it("reports a post-accept revert to the original base as a conflict", async () => {

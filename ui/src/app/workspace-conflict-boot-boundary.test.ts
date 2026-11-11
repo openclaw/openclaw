@@ -82,7 +82,7 @@ it("keeps composer conflict recovery outside the durable transcript entry", asyn
   expect(hot.code).toContain("Local versions were kept for these paths");
   for (const marker of [
     "chat-workspace-conflict-notice",
-    "git show ",
+    "openclaw-worker-results/result-",
     "Local versions kept. Review them or use the cloud version.",
   ]) {
     expect(hot.code).not.toContain(marker);

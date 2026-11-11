@@ -974,6 +974,7 @@ src/gateway/worker-environments/workspace-result-git.ts
 src/gateway/worker-environments/workspace-result-inventory.runtime.ts
 src/gateway/worker-environments/workspace-result-inventory.ts
 src/gateway/worker-environments/workspace-result-preparation.runtime.ts
+src/gateway/worker-environments/workspace-result-storage.ts
 src/gateway/workspace-file-limits.ts
 src/global-state.ts
 src/globals.ts

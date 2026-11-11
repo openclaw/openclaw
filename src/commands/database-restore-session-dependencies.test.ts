@@ -79,6 +79,7 @@ beforeAll(async () => {
   const current = await captureWorkspaceSnapshot({ root, baseCommit });
   await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
     root,
+    sharedResultStore: true,
     stagingRoot: root,
     stagedResultRef: checkpointRef,
     baseManifestRef: base.manifestRef,

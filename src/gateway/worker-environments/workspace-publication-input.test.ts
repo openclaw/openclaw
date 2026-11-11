@@ -20,6 +20,7 @@ import {
   withStagedWorkerWorkspaceManifest,
   workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
+import { resolveWorkspaceResultStorage } from "./workspace-result-storage.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -146,8 +147,9 @@ async function sourceInventory(root: string) {
   return entries;
 }
 
-async function gitRaw(root: string, args: string[]) {
-  const result = await runUtf8CommandWithTimeout(workspaceResultGitCommand(root, args), {
+async function gitRaw(root: string, ref: string, args: string[]) {
+  const storage = await resolveWorkspaceResultStorage(root, ref);
+  const result = await runUtf8CommandWithTimeout(workspaceResultGitCommand(storage.root, args), {
     timeoutMs: 10_000,
     maxOutputBytes: 1024 * 1024,
   });
@@ -235,7 +237,7 @@ it.each(["metadata-only", "mixed"] as const)(
         expect(await stagedContents(newResult)).toEqual(f.contents);
       },
     );
-    const commit = await gitRaw(root, ["cat-file", "commit", newRef]);
+    const commit = await gitRaw(root, newRef, ["cat-file", "commit", newRef]);
     const separator = commit.indexOf("\n\n");
     expect(commit.slice(0, separator)).toMatch(
       /^tree [a-f0-9]{40}\nauthor OpenClaw <openclaw@localhost> 0 \+0000\ncommitter OpenClaw <openclaw@localhost> 0 \+0000$/u,
@@ -252,9 +254,11 @@ it.each(["metadata-only", "mixed"] as const)(
         legacy.baseManifestRaw + legacy.currentManifestRaw,
       ].join("\n"),
     );
-    expect(await gitRaw(root, ["for-each-ref", "--format=%(refname) %(objectname)"])).toBe(
-      newRef + " " + newOid + "\n" + oldRef + " " + oldOid + "\n",
-    );
+    for (const ref of [newRef, oldRef]) {
+      expect(await gitRaw(root, ref, ["for-each-ref", "--format=%(refname) %(objectname)"])).toBe(
+        ref + " " + newOid + "\n",
+      );
+    }
     expect(await sourceInventory(f.stagingRoot)).toEqual(sourceBefore);
   },
 );

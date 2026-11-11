@@ -31,6 +31,7 @@ import {
   workerWorkspaceResultStaging,
   workerWorkspaceTransferPaths,
 } from "./workspace-result-staging.js";
+import { resolveWorkspaceResultStorage } from "./workspace-result-storage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => drainGlobalSingletonLifecycleState());
@@ -355,8 +356,11 @@ it("stages only a one-file delta for a 31,274-entry Git baseline", async () => {
     preview: new Uint8Array(currentContent),
   });
 
-  expect((await git(local, "ls-tree", "-r", "--name-only", ref)).stdout).toBe("changed.txt\n");
-  const message = await git(local, "show", "-s", "--format=%B", ref);
+  const staged = await resolveWorkspaceResultStorage(local, ref);
+  expect((await git(staged.root, "ls-tree", "-r", "--name-only", ref)).stdout).toBe(
+    "changed.txt\n",
+  );
+  const message = await git(staged.root, "show", "-s", "--format=%B", ref);
   expect(message.stdout).toContain("version 2\n");
   const committed = vi.fn(async () => {});
   await fixture.apply(emptyJournal({ commit: committed }));
@@ -365,7 +369,10 @@ it("stages only a one-file delta for a 31,274-entry Git baseline", async () => {
 
   const unchangedRef = workerWorkspaceResultRef("claim-large-baseline-unchanged");
   await fixture.stage(false, current, current, unchangedRef);
-  expect((await git(local, "ls-tree", "-r", "--name-only", unchangedRef)).stdout).toBe("");
+  const unchangedStore = await resolveWorkspaceResultStorage(local, unchangedRef);
+  expect(
+    (await git(unchangedStore.root, "ls-tree", "-r", "--name-only", unchangedRef)).stdout,
+  ).toBe("");
   const unchanged = await fixture.apply(emptyJournal(), current.ref, unchangedRef);
   expect(unchanged.changed).toBe(false);
 });

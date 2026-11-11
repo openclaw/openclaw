@@ -65,10 +65,10 @@ function workspaceConflictGitCommands(
   );
   const resolveResult = `result=$(git rev-parse --absolute-git-dir) && if [ -d "$result"/${privateDirectory} ]; then result="$result"/${privateDirectory}; fi`;
   const resultGit = 'git --git-dir="$result"';
-  // Promote the selected blob before staging it; retained result storage can then be deleted.
+  // Promote every selected blob before staging it, including children of directory conflicts.
   return {
     inspect: `(${resolveResult} && ${resultGit} show ${stagedPath})`,
-    takeCloud: `(set -o pipefail; cd "$(git rev-parse --show-toplevel)" && ${resolveResult} && mode=$(${resultGit} ls-tree --format='%(objectmode)' ${stagedRef} -- ${literalPathspec}) && blob=$(${resultGit} cat-file blob ${stagedPath} | git hash-object -w --stdin) && git update-index --add --cacheinfo "$mode" "$blob" ${shellQuote(entryPath)} && git checkout-index -f -- ${shellQuote(entryPath)})`,
+    takeCloud: `(set -o pipefail; cd "$(git rev-parse --show-toplevel)" && ${resolveResult} && ${resultGit} cat-file -e ${stagedPath} && ${resultGit} ls-tree -rz --format='%(objectmode) %(objectname)%x09%(path)' ${stagedRef} -- ${literalPathspec} | while IFS= read -r -d '' item; do mode=\${item%% *}; item=\${item#* }; blob=\${item%%$'\\t'*}; file=\${item#*$'\\t'}; ${resultGit} cat-file blob "$blob" | git hash-object -w --stdin >/dev/null && git update-index --add --cacheinfo "$mode" "$blob" "$file" && git checkout-index -f -- "$file" || exit; done)`,
   };
 }
 

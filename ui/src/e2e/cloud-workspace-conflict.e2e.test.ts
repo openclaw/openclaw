@@ -24,11 +24,15 @@ const workerFailureDiagnostic = [
   "Final diagnostic line: enrollment did not complete.",
 ].join("\n");
 
-const conflictPaths: [string, string] = ["src/[local] 'file.ts", "ui/src/app.ts"];
+const conflictPaths: [string, string, string] = [
+  "src/[local] 'file.ts",
+  "ui/src/app.ts",
+  "retained",
+];
 const conflict = {
   paths: conflictPaths,
   stagedResultRef: "refs/openclaw/worker-results/claim-proof",
-  totalCount: 2,
+  totalCount: 3,
 };
 
 async function verifyRecoveryCommands(commands: { inspect: string; take: string }[]) {
@@ -45,6 +49,9 @@ async function verifyRecoveryCommands(commands: { inspect: string; take: string 
       const workspace = path.join(root, "linked workspace");
       await mkdir(base);
       git(base, ["init", "-q"]);
+      await mkdir(path.join(base, "retained"));
+      await writeFile(path.join(base, "retained/old.txt"), "base\n");
+      git(base, ["add", "retained"]);
       git(base, [
         "-c",
         "user.name=Proof",
@@ -56,6 +63,8 @@ async function verifyRecoveryCommands(commands: { inspect: string; take: string 
         "--allow-empty",
       ]);
       git(base, ["worktree", "add", "--detach", "-q", workspace]);
+      await rm(path.join(workspace, "retained"), { recursive: true });
+      git(workspace, ["add", "-A", "--", "retained"]);
       git(workspace, ["config", "core.filemode", "false"]);
       const gitDir = git(workspace, ["rev-parse", "--absolute-git-dir"]);
       const storage = isolated
@@ -66,14 +75,19 @@ async function verifyRecoveryCommands(commands: { inspect: string; take: string 
       }
       const resultGit = (args: string[], input?: string) =>
         git(base, [`--git-dir=${storage}`, ...args], input);
-      const contents = ["#!/bin/sh\nprintf cloud\\n\n", "../../src/[local] 'file.ts"];
+      const contents = [
+        "#!/bin/sh\nprintf cloud\\n\n",
+        "../../src/[local] 'file.ts",
+        "cloud child\n",
+      ];
       const blobs = contents.map((content) => resultGit(["hash-object", "-w", "--stdin"], content));
       const sourceTree = resultGit(["mktree"], `100755 blob ${blobs[0]}\t[local] 'file.ts\n`);
       const appTree = resultGit(["mktree"], `120000 blob ${blobs[1]}\tapp.ts\n`);
       const uiTree = resultGit(["mktree"], `040000 tree ${appTree}\tsrc\n`);
+      const retainedTree = resultGit(["mktree"], `100644 blob ${blobs[2]}\tnew file.txt\n`);
       const tree = resultGit(
         ["mktree"],
-        `040000 tree ${sourceTree}\tsrc\n040000 tree ${uiTree}\tui\n`,
+        `040000 tree ${sourceTree}\tsrc\n040000 tree ${uiTree}\tui\n040000 tree ${retainedTree}\tretained\n`,
       );
       const commit = resultGit([
         "-c",
@@ -92,7 +106,11 @@ async function verifyRecoveryCommands(commands: { inspect: string; take: string 
       for (const [index, command] of commands.entries()) {
         const execute = (text: string) =>
           execFileSync(shell, ["-c", text], { cwd: path.join(workspace, "src"), encoding: "utf8" });
-        expect(execute(command.inspect)).toBe(contents[index]);
+        if (index === 2) {
+          expect(execute(command.inspect)).toContain("new file.txt");
+        } else {
+          expect(execute(command.inspect)).toBe(contents[index]);
+        }
         execute(command.take);
       }
       if (isolated) {
@@ -100,10 +118,16 @@ async function verifyRecoveryCommands(commands: { inspect: string; take: string 
       }
       expect(await readFile(path.join(workspace, conflict.paths[0]), "utf8")).toBe(contents[0]);
       expect(await readlink(path.join(workspace, conflict.paths[1]))).toBe(contents[1]);
-      for (const [index, entry] of conflict.paths.entries()) {
+      expect(await readFile(path.join(workspace, "retained/new file.txt"), "utf8")).toBe(
+        contents[2],
+      );
+      for (const [index, entry] of [
+        ...conflict.paths.slice(0, 2),
+        "retained/new file.txt",
+      ].entries()) {
         expect(git(workspace, ["show", `:${entry}`])).toBe(contents[index]!.trimEnd());
         expect(git(workspace, ["ls-files", "--stage", "--", entry])).toMatch(
-          index === 0 ? /^100755 / : /^120000 /,
+          index === 0 ? /^100755 / : index === 1 ? /^120000 / : /^100644 /,
         );
       }
     } finally {
@@ -200,17 +224,17 @@ suite.define(() => {
     await suite.withPage(options, async ({ page }) => {
       const gateway = await openSession(
         page,
-        [historyEvent("cloud-workspace-conflict", "2 cloud conflicts.", conflict)],
+        [historyEvent("cloud-workspace-conflict", "3 cloud conflicts.", conflict)],
         sessionsList(true),
       );
 
       const notice = page.locator(".chat-workspace-conflict-notice");
       const sessionRow = page.locator(`[data-session-key="${sessionKey}"]`);
       await notice.waitFor({ timeout: 10_000 });
-      await sessionRow.locator('.session-row-badge--cloud[data-workspace-conflicts="2"]').waitFor();
+      await sessionRow.locator('.session-row-badge--cloud[data-workspace-conflicts="3"]').waitFor();
       const historyCard = page.locator(".chat-workspace-conflict-event");
       await historyCard.waitFor();
-      expect(await notice.textContent()).toContain("2 cloud workspace conflicts");
+      expect(await notice.textContent()).toContain("3 cloud workspace conflicts");
       expect(await historyCard.textContent()).toContain(conflict.stagedResultRef);
 
       await page.setViewportSize({ width: 390, height: 844 });
@@ -268,7 +292,7 @@ suite.define(() => {
         expect(copied).toHaveLength(2);
         commands.push({ inspect: copied[0]!, take: copied[1]! });
       }
-      expect(commands).toHaveLength(2);
+      expect(commands).toHaveLength(3);
       await verifyRecoveryCommands(commands);
 
       await dismiss.click();

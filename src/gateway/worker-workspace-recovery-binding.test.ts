@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { runGit } from "../agents/worktrees/git.js";
 import {
   getRuntimeConfig,
   resetConfigRuntimeState,
@@ -18,7 +19,6 @@ import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sql
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { enqueueGitRefMutation } from "../infra/git-exec.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -50,6 +50,7 @@ import {
   applyStagedWorkerWorkspaceResult,
   workerWorkspaceResultStaging,
 } from "./worker-environments/workspace-result-staging.js";
+import { resolveWorkspaceResultStorage } from "./worker-environments/workspace-result-storage.js";
 
 const boundary = vi.hoisted(() => ({
   worktreePath: "",
@@ -141,10 +142,8 @@ async function applyRecoveryResult(request: WorkerWorkspaceReconcileRequest) {
 }
 
 async function readRef(ref: string) {
-  const result = await runCommandWithTimeout(
-    ["git", "-C", boundary.worktreePath, "show-ref", "--verify", ref],
-    { timeoutMs: 10_000 },
-  );
+  const storage = await resolveWorkspaceResultStorage(boundary.worktreePath, ref);
+  const result = await runGit(storage.root, ["show-ref", "--verify", ref], storage);
   expect(result.code).toBe(0);
   return result.stdout;
 }
@@ -385,13 +384,14 @@ it.each(["SQL recovery report", "Git conflict retirement"] as const)(
         if (report) {
           await applyRecoveryResult(request);
         }
+        const storage = await resolveWorkspaceResultStorage(boundary.worktreePath, priorRef);
         blocker = report
           ? runExclusiveSqliteSessionWrite(
               { agentId: REQUEST.agentId, path: a.storePath },
               wait,
               "session.transcript.batch",
             )
-          : enqueueGitRefMutation(boundary.worktreePath, ".git", wait);
+          : enqueueGitRefMutation(storage.root, storage.commonDir ?? ".git", wait);
         await held.promise;
         boundary[hook] = () => queued.resolve();
         if (report) {
