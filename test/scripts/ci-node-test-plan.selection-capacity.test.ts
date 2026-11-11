@@ -53,9 +53,16 @@ it("retains canonical capacity and exact scope for a compact selection", () => {
 });
 
 it("maps final Boat plans without changing hybrid groups, packing, or timings", () => {
+  const compilerTargets = [
+    "test/scripts/run-vitest-bounded.test.ts",
+    "test/scripts/run-vitest-state-cleanup.test.ts",
+    "test/scripts/vitest-worker-artifacts.test.ts",
+    "test/scripts/test-projects-empty-native.test.ts",
+  ];
   const targets = [
     "src/gateway/mcp-app-extension-runtime.test.ts",
     "src/agents/cli-runner.helpers.test.ts",
+    ...compilerTargets,
   ];
   const expectedCapacity: Record<string, [string, number]> = {
     "blacksmith-4vcpu-ubuntu-2404": ["boat", 2],
@@ -63,15 +70,27 @@ it("maps final Boat plans without changing hybrid groups, packing, or timings", 
     "blacksmith-16vcpu-ubuntu-2404": ["boat-large", 4],
     "blacksmith-32vcpu-ubuntu-2404": ["boat-xlarge", 8],
   };
-  const expectedJob = <T extends Pick<NodeTestShard, "runner" | "checkName">>(job: T) => {
+  const expectedJob = <
+    T extends Pick<NodeTestShard, "runner" | "checkName" | "groups" | "includePatterns">,
+  >(
+    job: T,
+  ) => {
     const capacity = expectedCapacity[job.runner];
+    const compilesWorkers = [
+      ...(job.includePatterns ?? []),
+      ...(job.groups ?? []).flatMap((group) => group.includePatterns ?? []),
+    ].some((file) => compilerTargets.includes(file));
     const promoted =
       job.runner === "blacksmith-8vcpu-ubuntu-2404" &&
       ["checks-node-compact-large-9", "checks-node-compact-large-5"].includes(job.checkName);
     return promoted
       ? { ...job, runner: "boat-large", cpuBudget: 4 }
       : capacity
-        ? { ...job, runner: capacity[0], cpuBudget: capacity[1] }
+        ? {
+            ...job,
+            runner: capacity[0] === "boat" && compilesWorkers ? "boat-large" : capacity[0],
+            cpuBudget: capacity[1],
+          }
         : job;
   };
   for (const compactMode of [undefined, "pull-request", "push"] as const) {

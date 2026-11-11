@@ -484,12 +484,13 @@ admission and checks the target PR author as well as the starting actor.
 Final Linux jobs map the Blacksmith 4/8-class to `boat`, 16-class to `boat-large`,
 and 32-class to `boat-xlarge`. Node jobs retain their logical 2/4/8-CPU budgets;
 group memory floors can select a larger physical runner without increasing those
-budgets. The selected board-store job requires 28 GiB and uses `boat-xlarge` with
+budgets. Rows that prepare the real worker compiler use at least `boat-large`
+(8 CPUs, 16 GiB), retaining their logical CPU budget. The selected board-store job requires 28 GiB and uses `boat-xlarge` with
 a 4-CPU budget. Baseline ratchets use the 16-GiB `boat-large` class. Actual RAM
 still gates overlap and memory-qualified workers. Node test children drop the
 inherited read/search capability so ordinary Unix permission checks apply.
-Android compact and main-PR test profiles retain their logical two-CPU budget
-even on four-CPU runners. Full core lint uses five separate stripes within the
+Android uses `boat-large`; its compact and main-PR test profiles retain their
+logical two-CPU budget. Full core lint uses five separate stripes within the
 existing 15-minute job timeout. Node packing, groups, timing identities, explicit
 workers, heaps, native providers, and release runner groups are unchanged. The
 build retains its 35-minute Boat budget.

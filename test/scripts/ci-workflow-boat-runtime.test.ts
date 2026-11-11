@@ -96,6 +96,18 @@ it.each(routes)("preserves Android build JVM options for $name", (route) => {
       placement_runner_backend: route.backend === "boat" ? "hybrid" : route.backend,
     },
   };
+  const runner = route.boat ? "boat-large" : route.attempt > 1 ? "ubuntu-24.04" : route.runner;
+  const job = readCiWorkflow().jobs.android;
+  expect(evaluateWorkflowExpression(job["runs-on"], context)).toBe(runner);
+  expect(
+    evaluateWorkflowExpression(job["runs-on"], {
+      ...context,
+      eventName: "workflow_dispatch",
+      dispatchId: "full-release-validation-fixture",
+      releaseRunnerGroup: "fixture-group",
+      preflightOutputs: { ...context.preflightOutputs, ci_qualification: "true" },
+    }),
+  ).toEqual({ group: "fixture-group", labels: runner });
   const result = runWorkflowShellScript(step.run, {
     linuxWorkflow: true,
     cwd: android,

@@ -112,11 +112,18 @@ const BOAT_NODE_TEST_CAPACITY: Record<string, { runner: string; cpuBudget: numbe
   "blacksmith-16vcpu-ubuntu-2404": { runner: "boat-large", cpuBudget: 4 },
   "blacksmith-32vcpu-ubuntu-2404": { runner: "boat-xlarge", cpuBudget: 8 },
 };
+const BOAT_PREPARED_COMPILER_TEST_FILES = new Set([
+  "test/scripts/run-vitest-bounded.test.ts",
+  "test/scripts/run-vitest-state-cleanup.test.ts",
+  "test/scripts/vitest-worker-artifacts.test.ts",
+  "test/scripts/test-projects-empty-native.test.ts",
+]);
 
 export function resolveBoatNodeTestCapacity(
   runner: string,
   checkName?: string,
   minTotalMemoryBytes = 0,
+  files: readonly string[] = [],
 ) {
   // These rows already receive the 16-class physical runner in the workflow.
   const promotedRunner =
@@ -132,7 +139,12 @@ export function resolveBoatNodeTestCapacity(
   if (minTotalMemoryBytes > 16 * 1024 ** 3) {
     return { ...capacity, runner: "boat-xlarge" };
   }
-  if (minTotalMemoryBytes > 8 * 1024 ** 3 && capacity.runner === "boat") {
+  // Prepared compiler fixtures build the application graph before their tests.
+  if (
+    capacity.runner === "boat" &&
+    (minTotalMemoryBytes > 8 * 1024 ** 3 ||
+      files.some((file) => BOAT_PREPARED_COMPILER_TEST_FILES.has(file)))
+  ) {
     return { ...capacity, runner: "boat-large" };
   }
   return capacity;
@@ -140,13 +152,17 @@ export function resolveBoatNodeTestCapacity(
 
 // Map only final jobs: group runners remain logical placement/timing identities.
 export function routeBoatNodeTestJobs<
-  T extends Pick<NodeTestShard, "runner" | "checkName" | "groups">,
+  T extends Pick<NodeTestShard, "runner" | "checkName" | "groups" | "includePatterns">,
 >(jobs: T[]): T[] {
   return jobs.map((job) => {
     const capacity = resolveBoatNodeTestCapacity(
       job.runner,
       job.checkName,
       Math.max(0, ...(job.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0)),
+      [
+        ...(job.includePatterns ?? []),
+        ...(job.groups ?? []).flatMap((group) => group.includePatterns ?? []),
+      ],
     );
     return capacity ? { ...job, ...capacity } : job;
   });

@@ -5987,6 +5987,45 @@ describe("ci workflow guards", () => {
     ]);
   });
 
+  it("preserves prepared compiler capacity through the packed Boat manifest", () => {
+    const targets = [
+      "test/scripts/run-vitest-bounded.test.ts",
+      "test/scripts/run-vitest-state-cleanup.test.ts",
+      "test/scripts/vitest-worker-artifacts.test.ts",
+      "test/scripts/test-projects-empty-native.test.ts",
+    ];
+    const selected = expectDefined(
+      createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
+      "selected compiler plan",
+    );
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      eventName: "push",
+      runnerBackend: "hybrid",
+      nodeRunnerBackend: "hybrid",
+      nodeTestShards: selected,
+      scopeEnv: { OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND: "boat" },
+    });
+    expect(result.status, result.output).toBe(0);
+    const rows = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include;
+    expect(rows).toHaveLength(selected.length);
+    for (const row of rows) {
+      expect(row).toMatchObject({
+        runner: "boat-large",
+        runner_label: "boat-large",
+        cpu_budget: 2,
+      });
+    }
+    expect(
+      rows.flatMap((row: { groups_gzip_base64: string }) =>
+        decodeNodeTestGroups(row.groups_gzip_base64),
+      ),
+    ).toMatchObject(
+      selected.flatMap((shard) => shard.groups.map(({ includePatterns }) => ({ includePatterns }))),
+    );
+  });
+
   it("keeps the Boat failure reporter hosted when preflight emits no backend outputs", () => {
     const reporter = readCiWorkflow().jobs["pr-failure-report"];
     const context = {

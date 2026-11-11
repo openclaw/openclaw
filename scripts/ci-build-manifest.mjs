@@ -150,7 +150,10 @@ const createMatrix = (include) => ({
     // Project before serialization so direct and late-planned matrices agree.
     const capacity =
       process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat"
-        ? resolveBoatNodeTestCapacity(row.runner, row.check_name)
+        ? resolveBoatNodeTestCapacity(row.runner, row.check_name, undefined, [
+            ...(row.includePatterns ?? []),
+            ...(row.groups ?? []).flatMap((group) => group.includePatterns ?? []),
+          ])
         : undefined;
     if (capacity) {
       return { ...row, runner: capacity.runner, runner_label: capacity.runner };
@@ -1458,7 +1461,10 @@ const nodeTestShards = targetNodeTestShards
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
     const capacity =
       process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat"
-        ? resolveBoatNodeTestCapacity(shard.runner, shard.checkName, minTotalMemoryBytes)
+        ? resolveBoatNodeTestCapacity(shard.runner, shard.checkName, minTotalMemoryBytes, [
+            ...(shard.includePatterns ?? []),
+            ...(shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
+          ])
         : undefined;
     const row = {
       check_name: shard.checkName,
