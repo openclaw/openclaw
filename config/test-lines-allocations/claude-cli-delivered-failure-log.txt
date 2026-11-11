@@ -1,0 +1,2 @@
+# Regression for logging the cause once when a claude-cli run fails after a message-tool send (the delivered-failure path skipped the terminal failure warning). Exact net growth for the claude-cli delivered-failure log lane.
+24

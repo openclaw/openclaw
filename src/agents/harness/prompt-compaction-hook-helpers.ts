@@ -1,4 +1,5 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginHookPromptContinuity } from "../../plugins/hook-before-agent-start.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { buildPromptBuildDropResult } from "../../plugins/prompt-build-drop.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
@@ -45,6 +46,8 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     activeToolNames: () => readonly string[];
     assertActive: () => void;
   };
+  /** The harness session owner's decision for this request; reported to authorized hooks. */
+  continuity?: PluginHookPromptContinuity;
 }): Promise<AgentHarnessPromptBuildResult> {
   const inputPrompt = buildCurrentInboundPrompt({
     context: params.currentInboundContext,
@@ -106,11 +109,15 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   const authorizedPromptBuildResult =
     hookRunner && toolAuthorityFingerprint && toolAuthority
       ? await hookRunner
-          .runAuthorizedPromptBuild(promptEvent, hookCtx, {
-            toolAuthorityFingerprint,
-            activeToolNames: toolAuthority.activeToolNames(),
-            assertHostActive: toolAuthority.assertActive,
-          })
+          .runAuthorizedPromptBuild(
+            { ...promptEvent, ...(params.continuity ? { continuity: params.continuity } : {}) },
+            hookCtx,
+            {
+              toolAuthorityFingerprint,
+              activeToolNames: toolAuthority.activeToolNames(),
+              assertHostActive: toolAuthority.assertActive,
+            },
+          )
           .catch((error: unknown) => {
             log.warn(`authorized before_prompt_build hook failed: ${String(error)}`);
             // Same contract as the ordinary phase above: this prompt continues,

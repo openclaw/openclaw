@@ -1,0 +1,2 @@
+# Regressions for Claude CLI sign-ins made after Gateway start: the native-login recheck must publish after its triggering read's plugin scope closes, and /models, the Discord picker data, and /model must recheck. Exact net growth for the claude-cli auth-status lane.
+74

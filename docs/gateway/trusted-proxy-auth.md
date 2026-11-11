@@ -177,6 +177,56 @@ A configuration writer receives its accepted result before its connection closes
 Pending handshakes and HTTP requests recheck the policy applicable to their authority
 after asynchronous waits.
 
+## Enterprise browser delegation
+
+OpenClaw Enterprise (OCE) can authorize each browser request without copying its
+user roster into `allowUsers`. When native browser access is enabled for an
+OCE-managed Agent, OCE automatically configures `gateway.auth.trustedProxy`,
+prepares a private credential for each Agent revision, and mounts its file only
+in the Gateway. No manual OpenClaw configuration is required. The following
+example shows the generated settings:
+
+```json5
+{
+  userHeader: "x-occ-identity",
+  delegation: {
+    credentialFile: "/var/run/openclaw/browser-delegation/browser-key",
+  },
+}
+```
+
+The file contains 32 random bytes encoded as 64 lowercase hexadecimal characters,
+with an optional final newline. The proxy sends that value in
+`x-occ-browser-key`, the verified subject in `x-occ-identity`, and exactly
+`operator.admin` or `operator.sessions.write` in `x-openclaw-scopes`. Existing
+trusted-source, required-header, and browser-origin checks still apply. Ingress
+must strip client-supplied headers; only the private OCE browser route may assert
+a reserved OCE subject and revision credential.
+
+The `oce` authority and `oce:v1:` subject prefix are fixed protocol values, not
+configuration settings. The subject contains 64 lowercase hexadecimal characters
+derived by OCE from its Installation and Principal. It resolves to a durable Gateway-local
+profile through an external identity binding, separate from email aliases.
+Native linking and merges cannot change that binding. An OCE account with
+multiple linked sign-in methods keeps one profile. Display-name changes do not
+change identity. Retain Gateway storage to retain profiles and attribution.
+
+Delegated scopes are both the initial grant and the maximum authority. Native
+roles and session-sharing rules can narrow them. Static `identityScopes`, device
+grants, and `deviceAutoApprove` cannot widen them; delegated connections never
+enroll devices or issue device tokens or ambient plugin-auth cookies. Session-only operators can read their own
+profile and use authorized sessions, but cannot invoke administrative methods.
+Separate profiles do not isolate Agent tools, files, or credentials.
+
+Missing credentials, invalid reserved subjects, unsupported scope values, and
+profile-store failures refuse access. Reserved claims cannot fall back to
+password, token, device, or other ingress authentication. Static non-OCE users
+retain the normal trusted-proxy behavior. OCE checks its live session and Agent
+permissions; the Gateway checks its own live profile and authorization policy.
+Credential-file replacement or removal invalidates admitted grants when the
+one-second credential-file poll observes the change. Reconnect with a current grant;
+restoring a previous key does not revive old connections.
+
 ## Per-identity scope grants
 
 Use `gateway.auth.identityScopes` to give selected verified users additional
