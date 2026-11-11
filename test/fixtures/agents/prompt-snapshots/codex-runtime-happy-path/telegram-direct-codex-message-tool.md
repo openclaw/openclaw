@@ -253,20 +253,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 2004
   },
   "openClawDeveloperInstructions": {
-    "chars": 3045,
-    "roughTokens": 762
+    "chars": 3071,
+    "roughTokens": 768
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 13736,
-    "roughTokens": 3434
+    "chars": 13762,
+    "roughTokens": 3441
   },
   "totalWithDynamicToolsJson": {
-    "chars": 99711,
-    "roughTokens": 24928
+    "chars": 99737,
+    "roughTokens": 24935
   },
   "userInputText": {
     "chars": 879,
@@ -416,6 +416,7 @@ When explicitly_mentioned_bot is true, the incoming message mentions your channe
 ```
 
 
+### Conversation Behavior
 You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.
 </thread_policy>
 ````

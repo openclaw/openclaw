@@ -603,11 +603,13 @@ export async function logWorktreeBase(
       },
     ),
   );
-  const ageDays = Math.max(0, (context.now / 1000 - committedAt) / 86_400);
-  const stale = ageDays > 7;
+  // Epoch-zero roots (including empty workspaces) do not carry a meaningful creation date.
+  const ageDays =
+    committedAt === 0 ? undefined : Math.max(0, (context.now / 1000 - committedAt) / 86_400);
+  const stale = ageDays !== undefined && ageDays > 7;
   const label = base.noOrigin ? "local HEAD (no origin remote)" : base.recordRef;
   const staleHint = `; base is older than 7 days. Check ${base.noOrigin ? "local HEAD" : "origin"} before starting work.`;
-  const message = `worktree base ${label} at ${commit} (commit age ${ageDays.toFixed(1)} days; fetch ${base.fetchSucceeded === undefined ? "not requested" : base.fetchSucceeded ? "succeeded" : "failed"})${base.warning ? `: ${base.warning}` : ""}${stale ? staleHint : ""}`;
+  const message = `worktree base ${label} at ${commit} (commit age ${ageDays === undefined ? "unspecified" : `${ageDays.toFixed(1)} days`}; fetch ${base.fetchSucceeded === undefined ? "not requested" : base.fetchSucceeded ? "succeeded" : "failed"})${base.warning ? `: ${base.warning}` : ""}${stale ? staleHint : ""}`;
   const metadata = {
     worktreePath: context.worktreePath,
     ownerId: context.ownerId,
