@@ -24,6 +24,7 @@ import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { searchClawHub } from "../../lib/skills/clawhub-search.ts";
 import {
   closeClawHubDetail,
@@ -38,6 +39,7 @@ import {
   reconcileSkillsAgentId,
   saveSkillApiKey,
   setSkillsAgentId,
+  storedSkillApiKeySource,
   updateSkillEdit,
   updateSkillEnabled,
   type SkillsState,
@@ -102,6 +104,12 @@ export function SkillsPage(props: SkillsPageProps) {
     },
   });
   const data = skills.state;
+  // Save key needs the stored key's source; until the snapshot loads, it stays locked.
+  const configSnapshot = projectOwner(
+    context.runtimeConfig,
+    (config) => config.state.configSnapshot,
+  );
+  void context.runtimeConfig.ensureLoaded();
   const verdictCompletion = createMemo(() => skills.read().clawhubVerdictsRead);
   const acceptedVerdicts = createMemo(() => skills.read().clawhubVerdicts);
   // Optional verdict enrichment must not hold independent inventory or detail selection.
@@ -665,6 +673,7 @@ export function SkillsPage(props: SkillsPageProps) {
                 updateSkillEdit(data, key, value);
               }
             }}
+            apiKeySource={(key) => storedSkillApiKeySource(configSnapshot.read(), key)}
             onSaveKey={(key) => {
               if (canUpdateSkills()) {
                 void mutations.run(() => saveSkillApiKey(data, key, canUpdateSkills));

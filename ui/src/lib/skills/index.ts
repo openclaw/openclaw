@@ -3,10 +3,12 @@ import type {
   SkillsSecurityVerdictsResult,
   SkillsSkillCardResult,
 } from "@openclaw/gateway-protocol";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readClawHubTrustErrorDetails } from "../../../../packages/gateway-protocol/src/clawhub-trust-error-details.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
+  ConfigSnapshot,
   SkillClawHubLink,
   SkillStatusEntry,
   SkillStatusReport,
@@ -17,6 +19,11 @@ import {
   createConfigMutationRunner,
   type ConfigMutationOwner,
 } from "../config/config-mutation-runner.ts";
+import {
+  resolveEditableSnapshotConfig,
+  type RuntimeConfigState,
+} from "../config/config-state-model.ts";
+import { storedSecretSource, type StoredSecretSource } from "../config/stored-secret-source.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
 import { registerEnglishCatalog } from "../reactive/i18n.ts";
 import type { ClawHubSearchResult } from "./clawhub-search.ts";
@@ -75,7 +82,9 @@ const runSkillConfigMutation = createConfigMutationRunner(
 export type SkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
-  runtimeConfig: ConfigMutationOwner;
+  runtimeConfig: ConfigMutationOwner & {
+    readonly state: Pick<RuntimeConfigState, "configSnapshot">;
+  };
   skillsAgentId: string | null;
   skillsAgentRevision: number;
   skillsLoading: boolean;
@@ -628,6 +637,26 @@ async function runSkillConfigUpdate(
   });
 }
 
+/**
+ * Where a skill's stored API key comes from: null when none is stored, undefined until the config
+ * snapshot loads. Only a plain value in the file may be typed over; saving over a SecretRef or
+ * ${VAR} would replace the reference with plaintext in openclaw.json.
+ */
+export function storedSkillApiKeySource(
+  snapshot: ConfigSnapshot | null | undefined,
+  skillKey: string,
+): StoredSecretSource | null | undefined {
+  if (!snapshot) {
+    return undefined;
+  }
+  const skills = resolveEditableSnapshotConfig(snapshot)?.skills;
+  const entry = isRecord(skills) && isRecord(skills.entries) ? skills.entries[skillKey] : undefined;
+  if (!isRecord(entry) || entry.apiKey === undefined) {
+    return null;
+  }
+  return storedSecretSource(snapshot, ["skills", "entries", skillKey, "apiKey"]);
+}
+
 export async function saveSkillApiKey(
   state: SkillsState,
   skillKey: string,
@@ -636,6 +665,14 @@ export async function saveSkillApiKey(
   // Blank skills.update API keys clear credentials; this UI only replaces them.
   const apiKey = state.skillEdits[skillKey]?.trim();
   if (!apiKey) {
+    return;
+  }
+  const source = storedSkillApiKeySource(state.runtimeConfig.state.configSnapshot, skillKey);
+  if (source !== null && source?.kind !== "literal") {
+    setSkillMessage(state, skillKey, {
+      kind: "error",
+      message: `API key not saved — skills.entries.${skillKey}.apiKey is set by a SecretRef or environment variable. Change it in openclaw.json.`,
+    });
     return;
   }
   await runSkillConfigUpdate(

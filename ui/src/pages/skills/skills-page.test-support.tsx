@@ -7,8 +7,8 @@ import type { SkillStatusReport } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
-import type { SkillsState } from "../../lib/skills/index.ts";
 import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -90,8 +90,11 @@ export function mountSkills(
     ],
   });
   onTestFinished(() => router.stop());
-  const runtimeConfig: SkillsState["runtimeConfig"] = {
-    runExternalMutation: async (task) => ({
+  const runtimeConfig = {
+    state: { configSnapshot: configSnapshot({}) },
+    subscribe: () => () => undefined,
+    ensureLoaded: async () => undefined,
+    runExternalMutation: async (task: (client: GatewayBrowserClient) => Promise<unknown>) => ({
       ok: true,
       value: await task(client),
       refresh: { ok: true },

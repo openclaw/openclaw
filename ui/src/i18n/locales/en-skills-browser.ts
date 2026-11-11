@@ -46,6 +46,8 @@ const catalog = {
     apiKey: "API key",
     getKey: "Get your key:",
     saveKey: "Save key",
+    apiKeyFromEnvironment: "From environment · {name}",
+    apiKeyFromSecretRef: "Set by a SecretRef. Change it in the config file.",
     source: "Source",
     package: "Package",
     securityCheck: "Security check",

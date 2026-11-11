@@ -3,6 +3,7 @@ import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/sr
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { StoredSecretSource } from "../../lib/config/stored-secret-source.ts";
 import type {
   ClawHubSkillDetail,
   ClawHubSkillSecurityVerdict,
@@ -70,6 +71,8 @@ export type SkillsProps = {
   onToggle: (skillKey: string, enabled: boolean) => void;
   onEdit: (skillKey: string, value: string) => void;
   onSaveKey: (skillKey: string) => void;
+  /** Stored API key source: null when unset, undefined while the config loads. */
+  apiKeySource: (skillKey: string) => StoredSecretSource | null | undefined;
   onInstall: (skillKey: string, name: string, installId: string) => void;
   onDetailOpen: (skillKey: string) => void;
   onDetailClose: () => void;

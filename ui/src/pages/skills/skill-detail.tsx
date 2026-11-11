@@ -32,6 +32,20 @@ export function SkillDetail(props: {
     resolveSafeExternalUrl(props.skill.homepage ?? "", window.location.href),
   );
   const editValue = createMemo(() => props.view.state.skillEdits[props.skill.skillKey] ?? "");
+  const keySource = createMemo(() => props.view.apiKeySource(props.skill.skillKey));
+  // Typing over a SecretRef or ${VAR} would store the key as plaintext, as in the Settings forms.
+  const keyLocked = createMemo(() => {
+    const source = keySource();
+    return source !== null && source?.kind !== "literal";
+  });
+  const keyPlaceholder = createMemo(() => {
+    const source = keySource();
+    return source?.kind === "environment"
+      ? t("skillsPage.apiKeyFromEnvironment", { name: source.name })
+      : source?.kind === "reference"
+        ? t("skillsPage.apiKeyFromSecretRef")
+        : undefined;
+  });
   const message = () => props.view.state.skillMessages[props.skill.skillKey] ?? null;
   const installOption = createMemo(() => {
     const missingBins = new Set([...props.skill.missing.bins, ...props.skill.missing.anyBins]);
@@ -76,7 +90,7 @@ export function SkillDetail(props: {
             <Show when={props.skill.primaryEnv}>
               <button
                 class="btn primary"
-                disabled={updateLocked() || !editValue().trim()}
+                disabled={updateLocked() || keyLocked() || !editValue().trim()}
                 onClick={() => props.view.onSaveKey(props.skill.skillKey)}
               >
                 {t("skillsPage.saveKey")}
@@ -194,7 +208,8 @@ export function SkillDetail(props: {
               <input
                 type="password"
                 required
-                disabled={updateLocked()}
+                disabled={updateLocked() || keyLocked()}
+                placeholder={keyPlaceholder()}
                 value={editValue()}
                 onInput={(event) =>
                   props.view.onEdit(props.skill.skillKey, event.currentTarget.value)

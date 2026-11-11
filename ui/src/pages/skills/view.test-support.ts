@@ -95,6 +95,7 @@ export function createProps(overrides: SkillsTestOverrides = {}): SkillsProps {
     onToggle: () => undefined,
     onEdit: () => undefined,
     onSaveKey: () => undefined,
+    apiKeySource: () => null,
     onInstall: () => undefined,
     onDetailOpen: () => undefined,
     onDetailClose: () => undefined,

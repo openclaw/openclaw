@@ -1,8 +1,12 @@
 // @vitest-environment node
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { resolveConfigEnvVars } from "../../../../src/config/env-substitution.js";
+import { redactConfigSnapshot } from "../../../../src/config/redact-snapshot.js";
+import { buildConfigSchemaCore } from "../../../../src/config/schema.js";
+import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { SkillStatusReport } from "../../api/types.ts";
+import type { ConfigSnapshot, SkillStatusReport } from "../../api/types.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
 import { createProps, createSkill } from "../../pages/skills/view.test-support.ts";
@@ -36,6 +40,7 @@ beforeEach(() => {
   state.skillsAgentId = "main";
   state.client = { request } as unknown as SkillsState["client"];
   state.runtimeConfig = {
+    state: { configSnapshot: configSnapshot({}) },
     runExternalMutation: async (task) => {
       try {
         return {
@@ -388,6 +393,44 @@ describe("skill mutations", () => {
       kind: "success",
       message: "API key saved — stored in openclaw.json (skills.entries.github)",
     });
+  });
+
+  it.each([
+    ["a SecretRef", { source: "env", provider: "default", id: "SKILL_KEY" }, false],
+    ["a ${VAR}", "${SKILL_KEY}", false],
+    ["plaintext", "old-key-not-real", true],
+  ])("only replaces a stored API key written as plaintext: %s", async (_name, apiKey, replaced) => {
+    request.mockResolvedValue({});
+    const authored = { skills: { entries: { github: { apiKey } } } };
+    const resolved = resolveConfigEnvVars(authored, {
+      SKILL_KEY: "env-key-not-real",
+    }) as OpenClawConfig;
+    // SAFETY: the Gateway's own redaction produces the config.get payload the UI types as ConfigSnapshot.
+    const snapshot = redactConfigSnapshot(
+      {
+        path: "/fixture/openclaw.json",
+        exists: true,
+        raw: JSON.stringify(authored, null, 2),
+        parsed: authored,
+        sourceConfig: resolved,
+        resolved,
+        config: resolved,
+        runtimeConfig: resolved,
+        valid: true,
+        hash: "fixture",
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      },
+      buildConfigSchemaCore().uiHints,
+    ) as unknown as ConfigSnapshot;
+    state.runtimeConfig = { ...state.runtimeConfig, state: { configSnapshot: snapshot } };
+    state.skillEdits.github = "new-key-not-real";
+
+    await saveSkillApiKey(state, "github");
+
+    expect(request.mock.calls.some(([method]) => method === "skills.update")).toBe(replaced);
+    expect(state.skillMessages.github?.kind).toBe(replaced ? "success" : "error");
   });
 
   it("does not clear an existing API key when its replacement is blank", async () => {

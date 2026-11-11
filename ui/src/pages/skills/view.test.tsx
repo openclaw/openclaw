@@ -200,6 +200,34 @@ describe("renderSkills", () => {
     },
   );
 
+  it.each([
+    [{ kind: "environment", name: "OPENAI_API_KEY" } as const, "From environment · OPENAI_API_KEY"],
+    [{ kind: "reference" } as const, "Set by a SecretRef. Change it in the config file."],
+  ])("never offers to type over a key stored by reference: %o", async (source, placeholder) => {
+    const container = document.createElement("div");
+    installDialogMethod("showModal", function () {
+      this.setAttribute("open", "");
+    });
+    const onSaveKey = vi.fn();
+    renderView(container, {
+      detailKey: "repo-skill",
+      edits: { "repo-skill": "sk-test" },
+      apiKeySource: () => source,
+      onSaveKey,
+    });
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    await getRenderedModalDialog(container);
+
+    const input = container.querySelector<HTMLInputElement>('input[type="password"]');
+    const save = findButton(container, "Save key");
+    expect(input?.disabled).toBe(true);
+    expect(input?.placeholder).toBe(placeholder);
+    expect(save?.disabled).toBe(true);
+    save?.click();
+    expect(onSaveKey).not.toHaveBeenCalled();
+  });
+
   it("distinguishes an empty inventory from a search with no matches", async () => {
     const { container, render } = createView();
     render({ report: skillReport([]) });
