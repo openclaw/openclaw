@@ -51,17 +51,20 @@ if (mode === "collect") {
 } else {
   assert.equal(process.env.GITHUB_ACTIONS, "true", "diagnostic runner is CI-only");
   const { createChangedCheckPlan, createPnpmManagedCommand } = await loadOwner("check-changed.mts");
-  const { detectChangedLanes } = await loadOwner("changed-lanes.mts");
+  const { detectChangedLanes, getChangedCoreTestPaths } = await loadOwner("changed-lanes.mts");
   const { TSGO_CORE_TEST_SHARDS, selectTsgoCoreTestStripe } =
     await loadOwner("lib/tsgo-core-test-shards.mts");
-  const commands = createChangedCheckPlan(detectChangedLanes(files), { base, head: "HEAD" }).commands;
+  const lanes = detectChangedLanes(files);
+  const commands = createChangedCheckPlan(lanes, { base, head: "HEAD" }).commands;
   const replacements = commands.flatMap((command, index) =>
     command.bin === undefined && command.args.length === 1 && command.args[0] === "tsgo:core:test"
       ? [index] : []);
   assert.equal(replacements.length, 1, "expected exactly one full core-test command");
-  assert.ok(commands.every((command) => !command.coreTestCheck),
-    "this diagnostic adapter requires the full original plan, not a narrowed boundary callback");
   const replacement = replacements[0];
+  assert.ok(commands.every((command, index) => !command.coreTestCheck ||
+    command.coreTestCheck === "checkBoundary" ||
+    (index === replacement && command.coreTestCheck === "checkTypes")),
+    "unexpected changed-check callback");
   const stripes = [1, 2, 3, 4, 5].map((stripe) => {
     const graphs = selectTsgoCoreTestStripe(stripe + "/5");
     assert.ok(graphs?.length);
@@ -83,6 +86,7 @@ if (mode === "collect") {
   const plan = {
     base, source: source(), files: files.map((file) => ({ path: file, sha256: digest(readFileSync(file)) })),
     commands: commands.map(identity), replacement, stripes, invocations,
+    coreTestCoverage: "Full canonical stripes replace checkTypes consumer narrowing; checkBoundary is retained.",
   };
   if (mode === "plan") {
     mkdirSync(directory, { recursive: true });
@@ -95,6 +99,15 @@ if (mode === "collect") {
     const selected = invocations.filter((entry) => entry.row === row);
     assert.ok(selected.length, "unknown diagnostic row");
     const { runManagedCommand } = await loadOwner("lib/managed-child-process.mts");
+    let coreTestCheck;
+    if (selected.some(({ originalIndex }) => commands[originalIndex].coreTestCheck === "checkBoundary")) {
+      const paths = getChangedCoreTestPaths(lanes);
+      assert.ok(paths, "canonical boundary callback requires eligible changed paths");
+      const { createChangedCoreTestCheck } = await loadOwner("run-tsgo-core-test-shards.mts");
+      const { resolveLocalCheckEnv } = await loadOwner("lib/local-check-runtime.mts");
+      const { createSparseTsgoSkipEnv } = await loadOwner("lib/tsgo-sparse-guard.mts");
+      coreTestCheck = createChangedCoreTestCheck(paths, createSparseTsgoSkipEnv(resolveLocalCheckEnv()));
+    }
     const receipt = { row, source: plan.source, files: plan.files,
       planSha256: digest(readFileSync(path.join(directory, "plan.json"))), completed: [] };
     const output = path.join(process.env.RUNNER_TEMP, "recovery-scope-receipts");
@@ -107,7 +120,12 @@ if (mode === "collect") {
       const startedAt = performance.now();
       let status = 1;
       try {
-        status = await runManagedCommand({ bin: managed.bin, args: managed.args, env: managed.env ?? process.env });
+        // Preserve the canonical in-process boundary callback, not just its CLI label.
+        // Its cached inventories normally narrow checkTypes; this diagnostic deliberately
+        // runs every graph through independent full stripes instead (recorded in plan.json).
+        status = command.coreTestCheck === "checkBoundary"
+          ? await coreTestCheck.checkBoundary()
+          : await runManagedCommand({ bin: managed.bin, args: managed.args, env: managed.env ?? process.env });
       } catch (error) {
         console.error(error);
       }
