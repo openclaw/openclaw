@@ -1,9 +1,25 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
+import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.js";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createPackageSwapFixture } from "../infra/package-update-swap.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRetainedRuntimeTestRoot } from "../infra/update-retained-runtime-alias.test-support.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import { cliCleanupRetirementEntrypoints } from "./cli-entrypoint.test-support.js";
-import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import {
+  cliCleanupRetirementEntrypoints,
+  cliRetainedCompositionEntrypoint,
+} from "./cli-entrypoint.test-support.js";
+import {
+  CLI_PROCESS_DEADLOCK_GUARD_MS,
+  formatCliProcessFailure,
+  getCliProcessTestTimeout,
+  runCliProcessChild,
+} from "./cli-process-child.test-helpers.js";
+import { copyCliRetainedCompositionGraph } from "./runtime-cleanup-retained.test-support.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 const entries = Object.fromEntries(
@@ -141,3 +157,113 @@ it.each(["success", "failure"])(
     expect(result.stdout, failure).toContain("cleanup joined after source retirement");
   },
 );
+
+// Distinct from the captured-callback test above: this runs the real outer CLI,
+// exit finalization and nonempty resource owners after a real package swap.
+const compositionEntrypoint = resolveRuntimeWorkerUrl(cliRetainedCompositionEntrypoint);
+const composition = createFixtureLifetime();
+afterEach(async () => await composition.cleanup());
+
+for (const runtime of ["node", "node-short-path"] as const) {
+  it.skipIf(runtime === "node-short-path" && process.platform !== "win32")(
+    "drains real CLI resources after " + runtime + " retained-update composition",
+    async () => {
+      // Keep unchanged external package dependencies available through ordinary
+      // Node ancestry, without copying the workspace's node_modules into retention.
+      const scratch = path.resolve(".openclaw/tmp");
+      await fs.mkdir(scratch, { recursive: true });
+      const directory = composition.createTempDir("cli-retained-composition-", scratch);
+      const fixture = await createPackageSwapFixture(directory);
+      const importRoot = await resolveRetainedRuntimeTestRoot(fixture.packageRoot, runtime);
+      await copyCliRetainedCompositionGraph({
+        preparedEntrypoint: compositionEntrypoint,
+        root: fixture.packageRoot,
+        importRoot,
+      });
+      await fs.writeFile(
+        path.join(fixture.packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "1.0.0", type: "module" }),
+      );
+      await writePackageDistInventory(fixture.packageRoot);
+      const stateDirectory = path.join(directory, "state");
+      const nodeExecutable = resolveTestNodeExecPath();
+      const result = await composition.track(
+        runCliProcessChild({
+          nodeExecutable,
+          nodeArgs: [
+            ...resolveRuntimeWorkerArgv(compositionEntrypoint, nodeExecutable),
+            "--retained-cli-composition",
+            JSON.stringify({ root: fixture.packageRoot, importRoot, swap: fixture.params }),
+          ],
+          env: {
+            PATH: process.env.PATH,
+            SystemRoot: process.env.SystemRoot,
+            HOME: stateDirectory,
+            USERPROFILE: stateDirectory,
+            OPENCLAW_STATE_DIR: stateDirectory,
+            OPENCLAW_CONFIG_PATH: path.join(stateDirectory, "openclaw.json"),
+            OPENCLAW_TEST_FAST: "1",
+            NODE_DISABLE_COMPILE_CACHE: "1",
+            TMPDIR: directory,
+            TMP: directory,
+            TEMP: directory,
+          },
+          timeoutMs: CLI_PROCESS_DEADLOCK_GUARD_MS,
+        }),
+      );
+      const failure = formatCliProcessFailure({
+        reason: "CLI retained-update composition failed",
+        ...result,
+      });
+      expect(result.signal, failure).toBeNull();
+      expect(result.code, failure).toBe(0);
+      expect(result.stderr, failure).not.toMatch(
+        /CLI cleanup (?:failed|timed out|deferred)|Plugin CLI resource disposal failed|watchdog|descendant completion is unverified/iu,
+      );
+      const line = result.stdout
+        .split(/\r?\n/u)
+        .find((value) => value.startsWith('{"phase":"cli-retained-composition"'));
+      expect(line, failure).toBeDefined();
+      const receipt = JSON.parse(line!) as {
+        requested: string;
+        observed: string;
+        physical: string;
+        phases: string[];
+        disposeCalls: number;
+        supervisors: number;
+        joined: boolean;
+        databasePath: string;
+        retainedRegistryUrl: string;
+        resolvedRegistryUrl: string;
+      };
+      expect(receipt.observed).toBe(receipt.requested);
+      if (runtime === "node-short-path") {
+        expect(receipt.observed).not.toBe(receipt.physical);
+      }
+      expect(receipt.phases).toEqual([
+        "source-replaced",
+        "retention-settled",
+        "dispose-after-retention",
+        "write-committed",
+        "shared-state-closed",
+      ]);
+      expect(receipt.resolvedRegistryUrl).toBe(receipt.retainedRegistryUrl);
+      expect(receipt.resolvedRegistryUrl).not.toBe(receipt.requested);
+      expect(receipt.disposeCalls).toBe(1);
+      expect(receipt.supervisors).toBeGreaterThan(0);
+      expect(receipt.joined).toBe(true);
+      // The child has exited and its actual async close has settled. Read the
+      // durable file independently; a callback flag is not persistence proof.
+      const database = new DatabaseSync(receipt.databasePath, { readOnly: true });
+      try {
+        expect(database.prepare("SELECT flow_id FROM capture_events").all()).toEqual([
+          { flow_id: "accepted-after-retention" },
+        ]);
+      } finally {
+        database.close();
+      }
+      console.log(line);
+    },
+    getCliProcessTestTimeout(CLI_PROCESS_DEADLOCK_GUARD_MS),
+  );
+}

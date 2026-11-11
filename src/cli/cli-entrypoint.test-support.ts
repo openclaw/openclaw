@@ -123,6 +123,13 @@ export const cliCleanupRetirementEntrypoints = {
   },
 } as const;
 
+// The composition fixture preserves real CLI/finalizer module identities.
+export const cliRetainedCompositionEntrypoint = {
+  currentModuleUrl: import.meta.url,
+  sourceWorkerName: "runtime-cleanup-retained.test-support",
+  distWorkerPath: "legacy-finalizer/src/cli/runtime-cleanup-retained.test-support.js",
+} as const;
+
 // Compile the cleanup graph at collection, before the Windows ownership deadline starts.
 export const windowsProcessOwnershipEntrypoint = {
   currentModuleUrl: import.meta.url,
