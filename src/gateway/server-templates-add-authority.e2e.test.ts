@@ -89,16 +89,15 @@ async function makeFixture(label: string): Promise<Fixture> {
     "package.json": JSON.stringify({
       name: templateName,
       version,
-      openclaw: { template: "template.json" },
+      openclaw: { template: "CLAW.md" },
     }),
-    "CLAW.md": `# ${label} Template\n`,
-    "template.json": JSON.stringify({
+    "CLAW.md": `---\n${JSON.stringify({
       schemaVersion: 1,
       agent: { id: agentId, name: `${label} Template` },
       workspace: { bootstrapFiles: {}, files: [] },
       packages: [{ kind: "plugin", source: "clawhub", ref: pluginName, version }],
       mcpServers: {},
-      cronJobs:
+      automations:
         label === "allowed"
           ? [
               {
@@ -109,7 +108,7 @@ async function makeFixture(label: string): Promise<Fixture> {
               },
             ]
           : [],
-    }),
+    })}\n---\n# ${label} Template\n`,
   });
   const pluginArchive = await createArchive({
     "package.json": JSON.stringify({

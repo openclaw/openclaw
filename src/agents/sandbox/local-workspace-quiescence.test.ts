@@ -14,7 +14,18 @@ const mocks = vi.hoisted(() => ({
   browserCurrent: vi.fn(),
   custody: vi.fn(),
   custodyCurrent: vi.fn(),
+  pauseLog: vi.fn(),
 }));
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (name: string) => ({
+      ...actual.createSubsystemLogger(name),
+      info: mocks.pauseLog,
+    }),
+  };
+});
 // mock-isolation: Registry generations are fixture-owned; do not read the real state database.
 vi.mock("./registry.js", () => ({
   assertSandboxRegistryEntryCurrent: mocks.liveCurrent,
@@ -119,6 +130,7 @@ it.each(["true", "false"])("recovers only owned pauses (Running=%s)", async (run
   const { resume } = await quiesce({ retained: [{ name: "owned", id }] });
   await resume();
   expect(commands("pause")).toHaveLength(0);
+  expect(mocks.pauseLog).not.toHaveBeenCalled();
   expect(commands("unpause").length).toBeGreaterThan(0);
 });
 
@@ -134,7 +146,14 @@ it("persists exact container and browser custody before pausing and resumes only
       expect(persist).toHaveBeenLastCalledWith(target === id ? expected.slice(0, 1) : expected);
     }
   });
-  const { resume } = await quiesce();
+  const { resume } = await quiesce({ reason: "checkpoint" });
+  expect(mocks.pauseLog.mock.calls).toEqual([
+    [
+      "Local workspace pause: reason=checkpoint count=1",
+      { engine: "docker", runtime: "container" },
+    ],
+    ["Local workspace pause: reason=checkpoint count=2", { engine: "docker", runtime: "browser" }],
+  ]);
   expect(mocks.browserCurrent).toHaveBeenCalledTimes(3);
   await resume();
   expect(commands("unpause")).toEqual([browserId, id].map((runtimeId) => ["unpause", runtimeId]));

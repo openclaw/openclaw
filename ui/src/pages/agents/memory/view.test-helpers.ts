@@ -22,6 +22,20 @@ export function createDreamingViewProps(
 ): DreamingProps {
   const props: DreamingProps = {
     access: fullDreamingViewAccess,
+    header: {
+      configuredDreaming: {
+        pluginId: "memory-core",
+        enabled: true,
+        overridden: false,
+        engineOff: false,
+      },
+      dreamingOn: true,
+      loading: false,
+      canUpdateConfig: true,
+      refreshLoading: false,
+    },
+    onRefresh: () => {},
+    onSetEnabled: () => {},
     viewState,
     active: true,
     selectedAgentId: "main",

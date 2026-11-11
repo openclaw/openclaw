@@ -37,7 +37,7 @@ import { withChannelReadAuthority } from "../../shared/channel-read-authority.js
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
-import { findCodeRegions } from "../../shared/text/code-regions.js";
+import { findCodeRegions, isInsideCode } from "../../shared/text/code-regions.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
@@ -140,9 +140,10 @@ export async function buildMessagePayload(params: {
       allowEmpty: true,
       trim: false,
     }) ?? "";
-  if (message.includes("\\n")) {
-    message = message.replaceAll("\\n", "\n");
-  }
+  let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
+  message = message.replace(/\\n/g, (match, offset: number) =>
+    isInsideCode(offset, (codeRegions ??= findCodeRegions(message))) ? match : "\n",
+  );
   if (!message.trim()) {
     message = caption.trim() ? caption : "";
   }
@@ -245,8 +246,7 @@ export async function buildMessagePayload(params: {
   applySendLocationToActionParams(actionParams, location);
 
   if (params.channel && params.target) {
-    const channel = params.channel;
-    const target = params.target;
+    const { channel, target } = params;
     message = await withChannelReadAuthority(
       input.messageActionAuthorization?.scheduled ? input.assertDirectAdapterHandoff : undefined,
       () =>
@@ -384,15 +384,18 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   // egress and prepend messages.responsePrefix here too; otherwise the disambiguation
   // prefix is silently dropped on tool sends while replies keep it. Interpolate the
   // template like normalize-reply.ts so identity tokens render. model/provider/thinking
-  // tokens need the live model selection that a tool send never performs, so when any
-  // placeholder stays unresolved we skip prefixing instead of leaking a literal `{model}`.
+  // tokens come from the calling run's model selection; callers without one (CLI, Gateway
+  // RPC) leave them unresolved, and we skip prefixing instead of leaking a literal `{model}`.
   // The startsWith guard matches normalize-reply.ts and keeps re-runs idempotent.
   const responsePrefix = resolveResponsePrefixTemplate(
     resolveResponsePrefix(cfg, agentId ?? "", {
       channel,
       accountId: accountId ?? undefined,
     }),
-    { identityName: normalizeOptionalString(resolveAgentIdentity(cfg, agentId ?? "")?.name) },
+    {
+      ...input.responsePrefixContext,
+      identityName: normalizeOptionalString(resolveAgentIdentity(cfg, agentId ?? "")?.name),
+    },
   );
   const prefixHasUnresolvedVar =
     responsePrefix !== undefined && UNRESOLVED_PREFIX_VAR_PATTERN.test(responsePrefix);
@@ -492,14 +495,14 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     const preparedTtsPreferences = await prepareTtsPreferences();
     if (
       explicitTts ||
-      shouldAttemptTtsPayload({
+      (await shouldAttemptTtsPayload({
         cfg,
         preparedTtsPreferences,
         ttsAuto,
         agentId,
         channelId: channel,
         accountId: accountId ?? undefined,
-      })
+      }))
     ) {
       const { maybeApplyTtsToPayload } = await loadMessageActionTtsRuntime();
       ttsPayload = await maybeApplyTtsToPayload({

@@ -319,13 +319,17 @@ it.each([
   expect(read).toHaveBeenCalledOnce();
 });
 
-it("rejects an oversized worker before the full verifier reads its contents", () => {
+it.each([
+  `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+  "managed-handoff-runtime.mjs",
+  "package-update-activation-recovery.mjs",
+])("rejects oversized %s before the full verifier reads its contents", (entry) => {
   const packageRoot = makeInstalledPackageRoot();
 
   writeInstalledFile(packageRoot, "package.json", '{"version":"2026.3.23"}\n');
   const workerPath = writeInstalledFile(
     packageRoot,
-    `dist/worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+    `dist/${entry}`,
     "/* Failed to load legacy context engine runtime. */\n",
   );
   fs.truncateSync(workerPath, 80 * 1024 * 1024 + 1);
@@ -335,13 +339,36 @@ it("rejects an oversized worker before the full verifier reads its contents", ()
     installedVersion: version,
     packageRoot,
   });
-  const sizeError = `installed package root dist file 'worker/${WORKER_BUNDLE_ENTRY_PATH}' is invalid or exceeds 83886080 bytes.`;
+  const sizeError = `installed package root dist file '${entry}' is invalid or exceeds 83886080 bytes.`;
 
   expect(errors.filter((error) => error === sizeError)).toEqual([sizeError]);
   expect(errors).not.toContain(
     "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
   );
 });
+
+it.each(["managed-handoff-runtime.mjs", "package-update-activation-recovery.mjs", "ordinary.js"])(
+  "applies the sealed bundle limit only to known entries (%s)",
+  (entry) => {
+    const root = makeInstalledPackageRoot({ version, dependencies: {} });
+    writePackageFile(root, "dist/postinstall-inventory.json", []);
+    writeInstalledFile(root, "dist/facade-activation-check.runtime.js");
+    writeInstalledFile(
+      root,
+      `dist/${entry}`,
+      "// sealed bundle\n".padEnd(6 * 1024 * 1024 + 1, " "),
+    );
+    const errors =
+      entry === "ordinary.js" ? [expect.stringContaining("exceeds 6291456 bytes")] : [];
+    expect(
+      collectInstalledPackageErrors({
+        expectedVersion: version,
+        installedVersion: version,
+        packageRoot: root,
+      }),
+    ).toEqual(errors);
+  },
+);
 
 it("verifies the published bundled inventory instead of the checker checkout", () => {
   const packageRoot = makeInstalledPackageRoot();

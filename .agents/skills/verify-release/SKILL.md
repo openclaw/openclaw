@@ -61,8 +61,9 @@ Use these checks only for the regular orchestrated release track.
      immutable publication plans, registry readback, and workflow jobs. A selected
      recovery subset must not narrow the full expected release set:
      `gh api repos/openclaw/openclaw/actions/runs/<RUN>/jobs --paginate`.
-   - Each expected npm plugin must have version `<VERSION>` and
-     `dist-tags.latest === <VERSION>`.
+   - For each expected npm plugin, verify the planned version and npm selector
+     from that immutable publication plan. A regular beta publishes to `beta`;
+     do not require it to move `latest`. Verify any planned mirror tags separately.
 4. ClawHub:
    - Check the Plugin ClawHub Release workflow conclusion and publish job count.
    - Use OpenClaw itself for live registry proof:
@@ -82,6 +83,20 @@ Use these checks only for the regular orchestrated release track.
      soak, and blocking performance evidence.
    - Summarize only relevant successful/failed jobs; ignore routine skipped
      optional lanes unless the release body promised them.
+6. Container registries:
+   - Resolve `VERCEL_VCR_IMAGE` from the repository variable and use the
+     trusted tooling checkout to run `scripts/container-registry-readback.mjs`
+     with the exact version, both `ghcr.io/openclaw/openclaw` and
+     `docker.io/openclaw/openclaw`, and the Vercel image. Pass
+     `--include-browser` when the release Dockerfile includes that variant.
+   - Require every default, slim, browser, amd64, and arm64 immutable tag in all
+     three registries, matching cross-registry platform descriptors, and every
+     policy-owned moving alias at the immutable digest and descriptor set.
+     Beta intentionally has zero moving aliases; do not require a `beta`
+     container alias.
+   - Use existing Docker credential state for private Vercel reads. If it is
+     unavailable, report Vercel live readback as a gap rather than treating the
+     workflow conclusion as equivalent proof.
 
 ## Extended-stable checks
 
@@ -111,13 +126,15 @@ the live tag, workflow, registry, provenance, and image state.
    `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <VERSION>`.
    Require signatures, canonical-branch provenance, and publish/preflight
    digest binding to the release SHA. Preserve output and workflow URLs.
-5. **Docker:** verify exact default, slim, browser, and architecture images and
-   attestations in both registries. Only the three `extended-stable*` aliases may
-   resolve to those digests. Require the successful `OpenClaw Release Publish`
-   parent run and its completed Docker verification. The normal route finalizes
-   afterward; an explicitly requested fast path may activate GitHub first. Repair
-   aliases through current-main `Docker Channel Promotion` for the exact tag,
-   without rebuilding.
+5. **Docker:** run `scripts/container-registry-readback.mjs` against
+   GHCR, Docker Hub, and the repository's `VERCEL_VCR_IMAGE`. Require exact
+   default, slim, browser, and architecture images, matching platform descriptor
+   sets, and only the three `extended-stable*` aliases at those immutable
+   digests. Separately verify attestations in GHCR and Docker Hub. Require the
+   successful `OpenClaw Release Publish` parent run and its completed Docker
+   verification. The normal route finalizes afterward; an explicitly requested
+   fast path may activate GitHub first. Repair aliases through current-main
+   `Docker Channel Promotion` for the exact tag, without rebuilding.
 6. **Recovery:** never republish. Use `promote_extended_stable` in the
    `openclaw/releases` dist-tag workflow for the root selector (an unsuffixed
    final patch `33+`) and approved credential-isolated tooling for others, then repeat

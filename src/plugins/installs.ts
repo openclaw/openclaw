@@ -5,14 +5,13 @@ import {
 } from "../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import type { NpmSpecResolution } from "../infra/install-source-utils.js";
-import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { parseRegistryNpmSpec, type NpmSpecResolution } from "../infra/npm-registry-spec.js";
 import { resolveUserPath } from "../utils.js";
 
 /** Plugin install record update with the target plugin id attached. */
 export type PluginInstallUpdate = PluginInstallRecord & { pluginId: string };
 
-export { buildNpmResolutionFields as buildNpmResolutionInstallFields } from "../infra/install-source-utils.js";
+export { buildNpmResolutionFields as buildNpmResolutionInstallFields } from "../infra/npm-registry-spec.js";
 
 type NpmInstallPathRecord = Pick<PluginInstallRecord, "source" | "installPath">;
 

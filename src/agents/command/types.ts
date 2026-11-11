@@ -30,11 +30,8 @@ import type { ReplyExpectation } from "../reply-completion.js";
 import type { RequesterOrigin } from "../requester-origin.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
-import type {
-  AgentRunTranscriptContext,
-  AgentStreamParams,
-  ClientToolDefinition,
-} from "./shared-types.js";
+import type { AgentRunTranscriptContext } from "./execution-context.types.js";
+import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 export type ImageContent = Pick<LlmImageContent, "type" | "data" | "mimeType">;
 

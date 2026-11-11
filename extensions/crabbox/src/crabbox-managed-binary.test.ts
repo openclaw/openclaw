@@ -138,7 +138,7 @@ async function fixture(version = "0.66.0") {
 }
 
 describe("managed Crabbox", () => {
-  it.each(["0.80.0-local.g22111202", "missing"])(
+  it.each(["0.81.0-local.g22111202", "missing"])(
     "keeps the managed fallback when the deployed default is %s",
     async (version) => {
       const test = await fixture();
@@ -177,7 +177,7 @@ describe("managed Crabbox", () => {
         runCommand: async (argv, options) => {
           if (argv[0] === deployed) {
             controller.abort(new Error("deployment probe cancelled"));
-            return versionResult("0.80.0+local.g22111202");
+            return versionResult("0.82.0+local.g22111202");
           }
           return runCommand(argv, options);
         },
@@ -257,11 +257,11 @@ describe("managed Crabbox", () => {
         expect((await fs.stat(path.join(test.directory, name))).mode & 0o111).toBe(0o111);
       }
     }
-    await fs.writeFile(test.binary, "0.80.1");
+    await fs.writeFile(test.binary, "0.82.1");
     test.fetch.mockRejectedValue(new Error("offline"));
     await expect(test.ensure()).resolves.toEqual({
       ...test.installed,
-      version: "0.80.1",
+      version: "0.82.1",
     });
     expect(await test.entries()).toEqual([path.basename(test.directory)]);
   });
@@ -631,12 +631,12 @@ describe("Crabbox version admission", () => {
   });
 
   it.each([
-    ["0.72.0", "outdated"],
     ["0.79.2", "outdated"],
-    ["0.80.0", "supported"],
-    ["0.80.0-rc.1", "outdated"],
-    ["0.80.0+build.1", "supported"],
-    ["0.80.1", "supported"],
+    ["0.81.0", "outdated"],
+    ["0.82.0", "supported"],
+    ["0.82.0-rc.1", "outdated"],
+    ["0.82.0+build.1", "supported"],
+    ["0.82.1", "supported"],
     ["unparseable", "indeterminate"],
     ["0.9007199254740993.0", "indeterminate"],
   ])("classifies %s as %s", async (version, status) => {

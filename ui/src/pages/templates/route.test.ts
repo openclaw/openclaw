@@ -85,7 +85,7 @@ it.each([
   const loading = () => view.container.querySelector(".plugin-catalog-detail--loading");
   const explore = () => view.container.querySelector("[data-templates-explore]");
   expect(loading()).not.toBeNull();
-  expect(view.container.textContent).not.toContain("Templates is disabled");
+  expect(view.container.textContent).not.toContain("Templates is turned off");
   expect(explore()).toBeNull();
 
   const request = vi.fn(async () => ({ entries: [] }));
@@ -99,7 +99,7 @@ it.each([
   await vi.waitFor(() => expect(loading()).toBeNull());
   await vi.waitFor(() => expect(explore() !== null).toBe(enabled));
   if (!enabled) {
-    expect(view.container.textContent).toContain("Templates is disabled");
+    expect(view.container.textContent).toContain("Templates is turned off");
     expect(request).not.toHaveBeenCalled();
   }
   expect(fixture.history.location().pathname).toBe(pathname);

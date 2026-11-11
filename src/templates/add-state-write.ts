@@ -1,5 +1,6 @@
 import {
   mergeWorkspaceSetupState,
+  rollbackWorkspaceBootstrapSeed,
   type WorkspaceSetupState,
 } from "../agents/workspace-state-store.js";
 import { readTemplateInventory } from "./inventory-read.js";
@@ -47,5 +48,21 @@ export async function mergeWorkspaceBootstrapSetupStateForAdd(
   return execute(options, {
     type: "templates.add.mergeBootstrapSetupState",
     input: { workspaceDir, bootstrapSeededAt, nowMs },
+  });
+}
+
+export async function rollbackWorkspaceBootstrapSeedForAdd(
+  workspaceDir: string,
+  bootstrapSeededAt: string,
+  options: TemplateAddStateOptions = {},
+): Promise<void> {
+  if (options.stateMode !== "worker") {
+    await options.prepareEffect?.();
+    options.assertCurrent?.();
+    return rollbackWorkspaceBootstrapSeed(workspaceDir, bootstrapSeededAt, options);
+  }
+  return execute(options, {
+    type: "templates.add.rollbackBootstrapSeed",
+    input: { workspaceDir, bootstrapSeededAt },
   });
 }

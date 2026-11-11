@@ -20,6 +20,7 @@ import { resolveUserPath } from "../utils.js";
 import { addTemplateAgentToConfig } from "./add-agent-config.js";
 import { TemplateAddMutationError } from "./add-mutation-error.js";
 import { planWithPackageActions, sameCommittedAgent } from "./add-plan-helpers.js";
+import { rollbackWorkspaceBootstrapSeedForAdd } from "./add-state-write.js";
 import { TEMPLATE_ADD_RESULT_SCHEMA_VERSION } from "./add.js";
 import { seedTemplatePackageBootstrap } from "./bootstrap.js";
 import {
@@ -203,6 +204,7 @@ export async function stageTemplateAddHostRequirementsStateless(
   let configCommitted = false;
   let configCommitAttempted = false;
   let workspaceFiles: PersistedTemplateWorkspaceFile[] = [];
+  let bootstrapSeededAt: string | undefined;
   let packages: PersistedTemplatePackageRef[] = [];
   const mcpServers: PersistedTemplateMcpServerRef[] = [];
   let cronJobs: PersistedTemplateCronRef[] = [];
@@ -312,6 +314,10 @@ export async function stageTemplateAddHostRequirementsStateless(
         options.assertCurrent?.();
         await rm(workspace, { recursive: true, force: false });
         workspaceCreated = false;
+        if (bootstrapSeededAt) {
+          // A retry must not mistake this rolled-back seed for a consumed bootstrap.
+          await rollbackWorkspaceBootstrapSeedForAdd(workspace, bootstrapSeededAt, options);
+        }
       } catch (error) {
         errors.push(`workspace cleanup failed: ${coerceErrorMessage(error)}`);
       }
@@ -385,7 +391,14 @@ export async function stageTemplateAddHostRequirementsStateless(
       assertWorkspacePathUnchanged(workspace);
       await mkdir(workspace);
       workspaceCreated = true;
-      await seedTemplatePackageBootstrap(plan, stageOptions());
+      const bootstrapNow = Date.now();
+      const bootstrap = await seedTemplatePackageBootstrap(plan, {
+        ...stageOptions(),
+        nowMs: bootstrapNow,
+      });
+      if (bootstrap === "seeded") {
+        bootstrapSeededAt = new Date(bootstrapNow).toISOString();
+      }
       workspaceFiles = await createTemplateWorkspaceFiles(plan, stageOptions());
       const workspacePlan = planWithPackageActions(
         plan,

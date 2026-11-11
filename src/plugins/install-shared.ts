@@ -200,9 +200,23 @@ export function emitSuccessfulPluginInstallSecurityEvent(
   });
 }
 
-function buildBlockedInstallResult(params: {
+export function reportBlockedPluginInstall(params: {
   blocked: NonNullable<NonNullable<InstallSecurityScanResult>["blocked"]>;
+  pluginId?: string;
+  mode?: "install" | "update";
+  sourceFamily?: PluginSecuritySourceFamily;
 }): Extract<InstallPluginResult, { ok: false }> {
+  const reason =
+    params.blocked.code === "security_scan_failed"
+      ? "security_scan_failed"
+      : "security_scan_blocked";
+  emitPluginAuditSecurityEvent({
+    outcome: pluginAuditOutcomeForReason(reason),
+    reason,
+    pluginId: params.pluginId,
+    mode: params.mode,
+    sourceFamily: params.sourceFamily,
+  });
   return {
     ok: false,
     error: params.blocked.reason,
@@ -306,18 +320,12 @@ export async function runInstallSourceScan(params: {
   try {
     const scanResult = await params.scan();
     if (scanResult?.blocked) {
-      const reason =
-        scanResult.blocked.code === "security_scan_failed"
-          ? "security_scan_failed"
-          : "security_scan_blocked";
-      emitPluginAuditSecurityEvent({
-        outcome: pluginAuditOutcomeForReason(reason),
-        reason,
+      return reportBlockedPluginInstall({
+        blocked: scanResult.blocked,
         pluginId: params.pluginId,
         mode: params.mode,
         sourceFamily: params.sourceFamily,
       });
-      return buildBlockedInstallResult({ blocked: scanResult.blocked });
     }
     return null;
   } catch (err) {

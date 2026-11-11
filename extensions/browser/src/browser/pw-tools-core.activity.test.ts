@@ -55,23 +55,22 @@ it.each(["cancel", "timeout"])("settles a stalled selector probe on %s", async (
   expect(innerText).not.toHaveBeenCalled();
 });
 
-it.each([".excerpt", undefined])("extracts the first matching element (%s)", async (selector) => {
-  installTextPage(
-    selector ? { ".excerpt": "Selected", article: "Article", body: "Body" } : { body: "Body" },
-  );
-  expect(await readText({ ...target, selector })).toEqual({
-    text: selector ? "Selected" : "Body",
-    truncated: false,
-  });
-});
-
-it("caps article text at the hard limit", async () => {
-  const text = "x".repeat(DEFAULT_AI_SNAPSHOT_MAX_CHARS + 1);
-  installTextPage({ article: text, main: "Main", body: "Body" });
-  expect(await readText({ ...target, maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS * 2 })).toEqual({
-    text: text.slice(0, DEFAULT_AI_SNAPSHOT_MAX_CHARS),
-    truncated: true,
-  });
+it.each([
+  [".excerpt", undefined, "Selected", false],
+  [undefined, 2, "Bo", true],
+  [undefined, 3, "A😀", true],
+  ["article", 2, "A", true],
+  ["article", 3, "A😀", true],
+  ["article", 4, "A😀B", false],
+  ["main", DEFAULT_AI_SNAPSHOT_MAX_CHARS * 2, "x".repeat(DEFAULT_AI_SNAPSHOT_MAX_CHARS), true],
+] as const)("extracts bounded text from %s (%s)", async (selector, maxChars, text, truncated) => {
+  const contents = {
+    ".excerpt": "Selected",
+    article: "A😀B",
+    main: "x".repeat(DEFAULT_AI_SNAPSHOT_MAX_CHARS + 1),
+  };
+  installTextPage(selector || maxChars === 3 ? contents : { body: "Body" });
+  expect(await readText({ ...target, selector, maxChars })).toEqual({ text, truncated });
 });
 
 it("filters by URL or resource type and clears the full network buffer", async () => {

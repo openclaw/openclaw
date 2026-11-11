@@ -104,6 +104,7 @@ export async function startGatewayCoreRuntime(input: {
     workerPlacementControlAvailable,
     desktopSessionRegistry,
     gatewayComputerService,
+    openclawIdService,
     listStartupChannelGatewayMethods,
     workerEnvironmentStartup,
     activateRuntimeSecrets,
@@ -115,6 +116,10 @@ export async function startGatewayCoreRuntime(input: {
       await gatewayComputerService.close();
       await desktopSessionRegistry.stopAll();
     },
+  });
+  runtime.registerGatewayLifetimeSidecars({
+    name: "openclaw-id",
+    stop: () => openclawIdService.stop(),
   });
   const secretEgressProxy =
     cfgAtStart.secrets?.egressProxy?.enabled === true

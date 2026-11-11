@@ -3,11 +3,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { resolveAttemptWorkspaceSandbox } from "../workspace-sandbox.js";
 import { registerSandboxBackend } from "./backend.js";
 import { SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH } from "./constants.js";
 import * as custody from "./context-custody.test-support.js";
-import { resolveSandboxContext } from "./context.js";
-import { resolvePreparedSandboxRuntimeStatus } from "./runtime-status.js";
 
 const docker = vi.hoisted(() => ({
   dockerContainerState: vi.fn(),
@@ -66,25 +65,25 @@ it.each([false, true])(
       const config = createBrowserConfig(root);
       const sessionKey = "agent:main:subagent:tool-free";
       try {
-        const preparation = resolveSandboxContext({
+        const preparation = resolveAttemptWorkspaceSandbox({
           config,
+          sessionId: "tool-free",
           sessionKey,
           workspaceDir: path.join(root, "workspace"),
           disableTools,
-          preparedRuntimeStatus: resolvePreparedSandboxRuntimeStatus({
-            cfg: config,
-            sessionKey,
-            preparedSessionEntry: null,
-          }),
         });
         if (disableTools) {
-          const sandbox = await preparation;
+          const workspace = await preparation;
           try {
-            expect(sandbox).toMatchObject({ enabled: true, backendId: "docker", runtimeId });
-            expect(sandbox?.browser).toBeUndefined();
+            expect(workspace.sandbox).toMatchObject({
+              enabled: true,
+              backendId: "docker",
+              runtimeId,
+            });
+            expect(workspace.sandbox?.browser).toBeUndefined();
             expect(docker.dockerContainerState).not.toHaveBeenCalled();
           } finally {
-            sandbox?.[Symbol.dispose]?.();
+            workspace[Symbol.dispose]();
           }
         } else {
           await expect(preparation).rejects.toThrow("Synthetic browser inspection reached");

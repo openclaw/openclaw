@@ -47,23 +47,26 @@ const WEIGHTED_CJK_RANGES = [
   [[0x1d360, 0x1d371]],
   [
     [0x16fe0, 0x16fff],
+    [0x17000, 0x18d0f],
     [0x1aff0, 0x1afff],
-    [0x1b000, 0x1b16f],
+    [0x1b000, 0x1b2ff],
     [0x1f200, 0x1f2ff],
     [0x20000, 0x2fa1f],
     [0x30000, 0x3347f],
   ],
 ] as const;
 
-const WEIGHTED_CJK_RE = new RegExp(
-  `[${WEIGHTED_CJK_RANGES.flatMap((ranges) =>
-    ranges.map(([start, end]) => `\\u{${start.toString(16)}}-\\u{${end.toString(16)}}`),
-  ).join("")}]`,
-  "u",
-);
+// Consumers of only the constants do not need the static character tables.
+const WEIGHTED_CJK_RE = /* @__PURE__ */ (() =>
+  new RegExp(
+    `[${WEIGHTED_CJK_RANGES.flatMap((ranges) =>
+      ranges.map(([start, end]) => `\\u{${start.toString(16)}}-\\u{${end.toString(16)}}`),
+    ).join("")}]`,
+    "u",
+  ))();
 
 // A fixed 205 KiB lookup avoids rescanning multilingual text for each weight.
-const CJK_CATEGORY: Readonly<ArrayLike<number>> = (() => {
+const CJK_CATEGORY: Readonly<ArrayLike<number>> = /* @__PURE__ */ (() => {
   const maxCodePoint = Math.max(
     ...WEIGHTED_CJK_RANGES.flatMap((ranges) => ranges.map(([, end]) => end)),
   );

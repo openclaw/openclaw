@@ -81,6 +81,12 @@ export function snapshotSessions(
       ]);
       const display = presentation?.(row);
       const state = {
+        pinnable: row.snapshot ? row.snapshot.pinnable : row.pinnable ? undefined : false,
+        childCount: privateChildren
+          ? undefined
+          : row.snapshot
+            ? row.snapshot.childCount
+            : row.childSessionKeys.filter((key) => !isIncognitoSessionKey(key)).length || undefined,
         ...snapshotChildren(privateChildren ? undefined : row),
         unread: row.unread || undefined,
         isRunVisuallyActive: (row.isRunVisuallyActive ?? row.hasActiveRun) || undefined,
@@ -110,6 +116,7 @@ export function snapshotSessions(
         isChild: row.isChild,
         category: row.category,
         archived: row.archived,
+        snoozedUntil: row.snoozedUntil,
         boardFace: row.boardFace,
         state: Object.values(state).some((value) => value !== undefined) ? state : undefined,
         childrenDisplayMode: display?.childrenDisplayMode,

@@ -13,7 +13,7 @@ import { parseArgs } from "node:util";
 import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
 import type { ContextEngineFactoryResources } from "../../src/context-engine/registry.resources.js";
 import type { ContextEngine } from "../../src/context-engine/types.js";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { summarizeDurationDistribution } from "../lib/perf-duration-distribution.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -69,16 +69,11 @@ process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
 const profilePath = path.resolve(
   `${values.output ?? path.join(stateDir, "allocation")}.heapprofile`,
 );
-const marker = (phase: string) =>
-  writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
 // Identify the main isolate before Gateway startup introduces worker isolates.
 if (values.mode === "promotion") {
-  marker("identify-start");
+  writeGatewayGcTraceMarker("identify-start", profilePath);
   global.gc();
-  marker("identify-stop");
+  writeGatewayGcTraceMarker("identify-stop", profilePath);
 }
 
 const { LegacyContextEngine } = await import("../../src/context-engine/legacy.js");
@@ -372,12 +367,12 @@ try {
     const cpu = process.cpuUsage();
     const memoryBefore = process.memoryUsage();
     loop.reset();
-    marker("diagnostics-start");
+    writeGatewayGcTraceMarker("diagnostics-start", profilePath);
     measuredStart = performance.now();
     await run(operations, latencies);
     measuredEnd = performance.now();
     const usedCpu = process.cpuUsage(cpu);
-    marker("diagnostics-stop");
+    writeGatewayGcTraceMarker("diagnostics-stop", profilePath);
     loop.disable();
     await nextTurn();
     recordGcCollections(observer.takeRecords(), collections, measuredStart, measuredEnd);

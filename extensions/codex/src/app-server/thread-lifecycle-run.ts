@@ -277,7 +277,7 @@ export async function startOrResumeThread(
         threadId: current.threadId,
         ...details,
       });
-      stageBindingReplacement("rotating a stale thread binding");
+      stageBindingReplacement(`changing ${changed}`);
     };
     const transientDelegationRestriction =
       params.params.delegationCapability === "report_only" ||

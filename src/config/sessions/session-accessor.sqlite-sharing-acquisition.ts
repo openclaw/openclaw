@@ -60,6 +60,7 @@ export type SessionSharingAcquisition = {
   entry?: SessionSharingEntry;
   sessionId?: string;
   membership: Map<string, boolean>;
+  membershipPostimage?: ReadonlySet<string>;
 };
 
 export type PreparedSessionSharingRead = {
@@ -223,7 +224,7 @@ export function reconcileSessionSharingAcquisition(
   ) {
     throw new Error("Session sharing acquisition is no longer current");
   }
-  const membership = new Set(snapshot.membership);
+  const membership = new Set(acquisition.membershipPostimage ?? snapshot.membership);
   for (const [identityId, present] of acquisition.membership) {
     if (present) {
       membership.add(identityId);

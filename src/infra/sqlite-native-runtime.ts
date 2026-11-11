@@ -107,7 +107,7 @@ export function installSqliteNativeRuntimeAdmission(value: unknown): void {
   }
 }
 
-export function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
+function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
   if (validatedSqliteModule === sqlite) {
     return;
   }

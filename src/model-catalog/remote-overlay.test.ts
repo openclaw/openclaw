@@ -122,6 +122,17 @@ describe("remote model catalog overlay", () => {
         pricing: { "openai/gpt-external": { input: 5, output: 20 } },
       });
       const next = expectDefined(await readUpdate({}), "compatible catalog");
+      for (const snapshot of [previous, next]) {
+        const pending: unknown[] = [snapshot];
+        while (pending.length) {
+          const value = pending.pop();
+          if (value && typeof value === "object") {
+            expect(Object.isFrozen(value)).toBe(true);
+            expect(Reflect.set(value, "unexpected", "mutation")).toBe(false);
+            pending.push(...Object.values(value));
+          }
+        }
+      }
       expectPair([oldModels, oldPrice]);
       expect(publishSnapshot(next, previous)).toBe(true);
       expectPair([[{ id: "downloaded" }], 5]);

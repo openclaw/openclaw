@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, realpathSync, statSync } from "node:fs";
-import { createRequire, registerHooks } from "node:module";
+import module, { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveConfiguredModulesDir } from "./tsx-cli-shim.mjs";
@@ -200,7 +200,7 @@ if (root) {
     }
     return { directory, manifest: manifests.get(directory) };
   };
-  registerHooks({
+  module.registerHooks({
     resolve(specifier, context, nextResolve) {
       if (isAbsolute(specifier) || /^(?:\.{1,2}(?:\/|$)|[a-z][a-z\d+.-]*:|#)/i.test(specifier)) {
         return nextResolve(specifier, context);

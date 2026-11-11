@@ -1,7 +1,10 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
-import type { TranscriptSessionSummary } from "../../../packages/gateway-protocol/src/schema/transcripts.js";
+import {
+  TRANSCRIPTS_LIST_MAX,
+  type TranscriptSessionSummary,
+} from "../../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
@@ -43,7 +46,7 @@ import {
 import { TranscriptsSummaryChangedError } from "../../transcripts/store-errors.js";
 import { transcriptSessionSelector, type TranscriptsStore } from "../../transcripts/store.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import type { AnyAgentTool } from "./common.js";
+import { readNonNegativeIntegerParam, type AnyAgentTool } from "./common.js";
 import {
   toolText,
   transcriptStartToolResult,
@@ -68,30 +71,28 @@ async function listPastTranscripts({ ctx, store, rawParams }: ReadParams) {
   if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 50) {
     throw new Error("limit must be an integer from 1 to 50.");
   }
+  const offset = readNonNegativeIntegerParam(rawParams, "offset") ?? 0;
   const sessions: Omit<TranscriptSessionSummary, "overview">[] = [];
-  // Page before authorization, but limit after it: hidden meetings must not crowd
-  // accessible captures out of the result. No per-meeting database queries.
-  for (let offset = 0; sessions.length < limit; offset += 200) {
-    const { entries, hasMore } = await store.listReadEntries({ limit: 200, offset });
-    ctx.assertCallerActive?.();
-    for (const entry of entries) {
-      if (!(await canAccessTranscriptSession(ctx, entry.session, "list"))) {
-        continue;
-      }
-      const { overview: _overview, ...session } = presentTranscriptSession(
-        projectTranscriptSession(entry),
-        undefined,
-        resolveSourceProvider(entry.session.source.providerId, ctx)?.name,
-      );
-      sessions.push(session);
-      if (sessions.length === limit) {
-        break;
-      }
+  // Bound work before authorization; denied rows advance the continuation too.
+  const { entries, hasMore } = await store.listReadEntries({ limit: TRANSCRIPTS_LIST_MAX, offset });
+  ctx.assertCallerActive?.();
+  let scanned = 0;
+  for (const entry of entries) {
+    scanned++;
+    if (!(await canAccessTranscriptSession(ctx, entry.session, "list"))) {
+      continue;
     }
-    if (!hasMore) {
+    const { overview: _overview, ...session } = presentTranscriptSession(
+      projectTranscriptSession(entry),
+      undefined,
+      resolveSourceProvider(entry.session.source.providerId, ctx)?.name,
+    );
+    sessions.push(session);
+    if (sessions.length === limit) {
       break;
     }
   }
+  const nextOffset = scanned < entries.length || hasMore ? offset + scanned : undefined;
   ctx.assertCallerActive?.();
   const lines: string[] = [];
   for (const session of sessions) {
@@ -108,7 +109,13 @@ async function listPastTranscripts({ ctx, store, rawParams }: ReadParams) {
     }
     lines.push(line);
   }
-  return toolText(lines.join("\n") || "No accessible meeting transcripts found.", { sessions });
+  if (nextOffset !== undefined) {
+    lines.push(`More meetings may be available; call list with offset=${nextOffset}.`);
+  }
+  return toolText(lines.join("\n") || "No accessible meeting transcripts found.", {
+    sessions,
+    ...(nextOffset !== undefined ? { nextOffset } : {}),
+  });
 }
 
 async function showPastTranscript(params: ReadParams) {
@@ -192,6 +199,9 @@ const TranscriptsSchema = Type.Object(
       }),
     ),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 20 })),
+    offset: Type.Optional(
+      Type.Integer({ minimum: 0, description: "For list: continue from details.nextOffset." }),
+    ),
     title: Type.Optional(Type.String({ minLength: 1 })),
     providerId: Type.Optional(Type.String({ minLength: 1 })),
     accountId: Type.Optional(Type.String({ minLength: 1 })),

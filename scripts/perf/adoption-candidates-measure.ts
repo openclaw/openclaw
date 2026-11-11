@@ -16,7 +16,7 @@ import type {
 } from "../../extensions/codex/src/app-server/session-binding.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { SessionCatalogEntrySnapshot } from "../../src/plugins/session-catalog.js";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -70,14 +70,9 @@ process.env = {
   TMPDIR: path.join(stateDir, "tmp"),
 };
 const profilePath = path.join(stateDir, "allocation.heapprofile");
-const marker = (phase: string) =>
-  writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
-marker("identify-start");
+writeGatewayGcTraceMarker("identify-start", profilePath);
 global.gc();
-marker("identify-stop");
+writeGatewayGcTraceMarker("identify-stop", profilePath);
 // This source-owner harness accepts a sibling baseline module without expanding the plugin API.
 const ownerUrl = values.owner
   ? pathToFileURL(path.resolve(values.owner))
@@ -274,7 +269,7 @@ try {
   const before = process.memoryUsage();
   const cpu = process.cpuUsage();
   loop.reset();
-  marker("heap-start");
+  writeGatewayGcTraceMarker("heap-start", profilePath);
   measuredStart = performance.now();
   for (let index = 0; index < operations; index++) {
     if (!values.unchanged) {
@@ -287,7 +282,7 @@ try {
     await (yieldMs ? delay(yieldMs) : nextTurn());
   }
   measuredEnd = performance.now();
-  marker("heap-stop");
+  writeGatewayGcTraceMarker("heap-stop", profilePath);
   const usedCpu = process.cpuUsage(cpu);
   const after = process.memoryUsage();
   loop.disable();

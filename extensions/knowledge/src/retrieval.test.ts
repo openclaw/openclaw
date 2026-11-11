@@ -1,57 +1,36 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile, readFile, rm, rename, link, symlink } from "node:fs/promises";
 import path from "node:path";
+import { constants } from "node:sqlite";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { stringify } from "yaml";
 import { contract } from "./contract.js";
 import { SqliteIdentityStore } from "./identity-store.js";
 import { isFullHit } from "./retrieval-hit.js";
-import { keywordExpression } from "./retrieval.js";
+import { keywordExpression, keywordSearch } from "./retrieval.js";
 import { AGENT_HIT_LIMIT, COMPACT_SNIPPET_CHARS } from "./search-detail.js";
 import { createKnowledgeService } from "./service.js";
-import { apiFor, useTestTempDirs, defaultOrder, type TestStoreConfig } from "./test-support.js";
+import { KnowledgeStorage } from "./storage.js";
+import {
+  apiFor,
+  useTestTempDirs,
+  defaultOrder,
+  plainAccess,
+  createVault,
+  toolContext,
+  operatorContext,
+} from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
 
 async function fixture() {
   const base = tempDirs.make("knowledge-retrieval-");
-
-  const root = path.join(base, "vault"),
-    sessionId = randomUUID();
-  const manifest = {
-    format: "knowledge-vault-v2",
-    vaultId: randomUUID(),
-    generation: 0,
-    publicationId: randomUUID(),
-  };
-  await mkdir(root);
-  await mkdir(path.join(root, "private"));
-  await writeFile(path.join(root, "vault.json"), JSON.stringify(manifest));
-  const config: TestStoreConfig = {
-    root,
-    statePath: path.join(base, "state.sqlite"),
-    vaultId: manifest.vaultId,
-    publicationId: manifest.publicationId,
-    writesEnabled: false,
-    operatorRead: true,
-  };
+  const sessionId = randomUUID();
+  const { root, manifest, config } = await createVault(base, { writesEnabled: false });
   const api = apiFor(base, config);
-  const owner: any = {
-    source: "tool",
-    api,
-    tool: {
-      agentId: "main",
-      memoryAudience: { kind: "owner-private", agentId: "main" },
-      assertInvocationCurrent() {},
-      assertMemoryAudienceCurrent() {},
-    },
-  };
-  const operator: any = {
-    source: "session-action",
-    api,
-    action: { client: { connId: "test", scopes: ["operator.read"] } },
-  };
+  const owner = toolContext(api);
+  const operator = operatorContext(api, ["operator.read"]);
   const service = createKnowledgeService(api),
     store = new SqliteIdentityStore(config.statePath);
   async function put(id: any, title: any, body: any, metadata = {}, partition = "private") {
@@ -83,7 +62,6 @@ async function fixture() {
     total: async (input: any) => (await service.grep(input, owner)).total,
     outcome: async (input: any) => (await service.lookup(input, owner)).outcome,
     root,
-    base,
     config,
     manifest,
     sessionId,
@@ -104,6 +82,7 @@ async function fixture() {
   };
 }
 const ids = (result: any) => result.hits.map((h: any) => h.record.id);
+const superseded = (by: string) => ({ lifecycle: "superseded", superseded_by: by });
 const stable = (value: any) =>
   JSON.parse(JSON.stringify(value), (k, v) =>
     ["checkedAt", "indexedAt", "queriedAt", "scannedAt"].includes(k) ? undefined : v,
@@ -403,10 +382,10 @@ it("FTS operators are literal words, malformed/oversized input is rejected, Unic
   }
 });
 
-it("ranking emphasizes titles, deterministic pagination and scoped index reuse", async () => {
+it("ranking preserves pagination and scope without rereading the filtered corpus", async () => {
   const f = await fixture();
-  await f.put("title_record", "Needle", "text");
-  await f.put("body_record", "Other", "needle");
+  await f.put("title_record", "Needle", "text", { tags: ["chosen"] });
+  await f.put("body_record", "Other", "needle", { tags: ["chosen"] });
   for (let n = 0; n <= AGENT_HIT_LIMIT; n++) {
     await f.put(`haystack_${n}`, "Other", "haystack");
   }
@@ -423,6 +402,28 @@ it("ranking emphasizes titles, deterministic pagination and scoped index reuse",
   const agentPage = await f.service.grep({ query: "haystack" }, f.owner);
   expect(agentPage.hits.length).toBe(AGENT_HIT_LIMIT);
   expect(agentPage.nextOffset).toBe(AGENT_HIT_LIMIT);
+  await f.put("outside_record", "Needle", "needle ".repeat(100));
+  const storage = new KnowledgeStorage(f.config, f.store);
+  const data = await storage.run(plainAccess(), (vault) => vault.scan());
+  f.store.withDatabase((db) => {
+    expect(keywordSearch(db, data, { query: "needle" }, "test", "1").total).toBe(3);
+    let corpusReads = 0;
+    db.setAuthorizer((action, table) => {
+      if (action === constants.SQLITE_READ && table?.startsWith("keyword_fts_v1_")) {
+        corpusReads++;
+      }
+      return constants.SQLITE_OK;
+    });
+    try {
+      const result = keywordSearch(db, data, { query: "needle", tag: "chosen" }, "test", "1");
+      expect(result.index.state).toBe("ready");
+      expect(ids(result)).toEqual(["title_record", "body_record"]);
+      expect(result.total).toBe(2);
+      expect(corpusReads).toBe(0);
+    } finally {
+      db.setAuthorizer(null);
+    }
+  });
 });
 
 it("published pages are immediately searchable without approval; restored generations cannot serve a newer index", async () => {
@@ -523,4 +524,97 @@ it("an index built before row tracking is repopulated, never left empty and read
     }
   });
   expect(await f.total({ query: "lanternword" })).toBe(1);
+});
+
+it("an active search follows superseded wording to the current replacement after direct matches", async () => {
+  const f = await fixture();
+  // v1 → v2 → v3: only v1 holds the query's words; v3 is current.
+  await f.put("pilot_v1", "Pilot plan", "Pilot starts at the Harbor plot.\n", {
+    ...superseded("pilot_v2"),
+    revision: 3,
+  });
+  await f.put("pilot_v2", "Pilot plan", "Pilot pushed back a month.\n", superseded("pilot_v3"));
+  await f.put("pilot_v3", "Pilot plan", "Moved to June after the soil test.\n", { tags: ["kept"] });
+  // Already a direct match: listed once, as the direct hit.
+  await f.put("venue_v1", "Venue", "Harbor plot boathouse.\n", superseded("venue_v2"));
+  await f.put("venue_v2", "Venue", "Harbor plot library annex.\n");
+  // Chains ending in a withdrawn record or looping never surface a record.
+  await f.put("gone_old", "Gone", "Harbor plot shed.\n", superseded("gone_new"));
+  await f.put("gone_new", "Gone", "Withdrawn.\n", { lifecycle: "withdrawn" });
+  await f.put("loop_one", "Loop", "Harbor plot loop.\n", superseded("loop_two"));
+  await f.put("loop_two", "Loop", "Other loop.\n", superseded("loop_one"));
+
+  const full = await f.service.grep({ query: "harbor plot", detail: "full" }, f.owner);
+  expect(Check(contract.operations.grep.output, full)).toBeTruthy();
+  expect(ids(full)).toStrictEqual(["venue_v2", "pilot_v3"]);
+  expect(full.hits[1]).toMatchObject({
+    matches: ["superseded"],
+    score: null,
+    snippet: { matchLocated: false },
+    citation: { id: "pilot_v3" },
+    via: {
+      id: "pilot_v1",
+      revision: 3,
+      path: "notes/pilot_v1.md",
+      hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    },
+  });
+  const compact = await f.service.grep({ query: "harbor plot" }, f.owner);
+  expect(Check(contract.operations.grep.output, compact)).toBeTruthy();
+  expect(compact.hits[1]!.via).toStrictEqual({ id: "pilot_v1", title: "Pilot plan", revision: 3 });
+
+  // Pagination spans direct and followed hits as one list.
+  const second = await f.service.grep({ query: "harbor plot", offset: 1, limit: 1 }, f.owner);
+  expect([ids(second), second.total, second.nextOffset]).toStrictEqual([["pilot_v3"], 2, null]);
+  // Filters apply to the current record; explicit history returns the earlier
+  // records themselves, including the eligible dead-end chains above.
+  const kept = await f.service.grep({ query: "harbor plot", tag: "kept" }, f.owner);
+  expect(ids(kept)).toStrictEqual(["pilot_v3"]);
+  const history = await f.service.grep({ query: "harbor plot", lifecycle: "superseded" }, f.owner);
+  expect(ids(history).toSorted()).toStrictEqual(["gone_old", "loop_one", "pilot_v1", "venue_v1"]);
+  expect(history.hits.some((hit) => hit.via)).toBe(false);
+});
+
+it("superseded wording ranks only among histories whose current records pass the filters", async () => {
+  const f = await fixture();
+  await f.put("alpha_old", "Earlier", "Earlier orchid.\n", superseded("alpha_now"));
+  await f.put("alpha_now", "Current A", "Current A.\n", { tags: ["kept"] });
+  await f.put("bravo_old", "Earlier", "Earlier tulip.\n", superseded("bravo_now"));
+  await f.put("bravo_now", "Current B", "Current B.\n", { tags: ["kept"] });
+  // Histories of records outside the tag filter must not change term statistics.
+  for (const n of [1, 2, 3]) {
+    await f.put(`other_old_${n}`, "Earlier", "Earlier orchid.\n", superseded(`other_now_${n}`));
+    await f.put(`other_now_${n}`, `Other ${n}`, "Other.\n");
+  }
+  const query = { query: "orchid tulip", mode: "any", tag: "kept" } as const;
+  expect(ids(await f.service.grep(query, f.owner))).toStrictEqual(["alpha_now", "bravo_now"]);
+});
+
+it("superseded-record edits update the persistent history index and the search snapshot", async () => {
+  const f = await fixture();
+  await f.put("plan_one", "Plan", "Original quillword wording.\n", superseded("plan_two"));
+  await f.put("plan_two", "Plan", "Current wording.\n");
+  const before = await f.service.grep({ query: "quillword" }, f.owner);
+  expect(ids(before)).toStrictEqual(["plan_two"]);
+
+  // Only the superseded record changes; the current-record corpus does not.
+  const revised = { ...superseded("plan_two"), revision: 2 };
+  await f.put("plan_one", "Plan", "Revised inkword wording.\n", revised);
+  const after = await f.service.grep({ query: "inkword" }, f.owner);
+  expect(ids(after)).toStrictEqual(["plan_two"]);
+  expect(after.hits[0]!.via!.revision).toBe(2);
+  expect(after.index.snapshot).not.toBe(before.index.snapshot);
+  expect(await f.total({ query: "quillword" })).toBe(0);
+
+  // A dropped history index is rebuilt instead of served empty under a matching
+  // snapshot, even when its row tracking survives.
+  f.store.withDatabase((db) => {
+    const fts = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE name LIKE 'keyword_history_fts_v1_%' AND sql LIKE 'CREATE VIRTUAL%'",
+      )
+      .get()!;
+    db.exec(`DROP TABLE ${String(fts.name)}`);
+  });
+  expect(ids(await f.service.grep({ query: "inkword" }, f.owner))).toStrictEqual(["plan_two"]);
 });

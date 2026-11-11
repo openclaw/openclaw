@@ -705,7 +705,13 @@ describe("session event target custody", () => {
         resetSystemEventsForTest();
       }
       await expect(receipt.accepted).resolves.toMatchObject({ ok: false });
-      await expectStopped(receipt, boundary === "reject" ? "failed" : "cancelled");
+      await expectStopped(receipt, "cancelled");
+      if (boundary === "reject") {
+        await expect(receipt.settled).resolves.toMatchObject({
+          terminalOutcome: { stopReason: "restart" },
+          interruptedByRestart: true,
+        });
+      }
       expect(isSystemEventTurnOwned(sessionKey, occurrence)).toBe(false);
       expect(peekSystemEventEntries(sessionKey)).toEqual(
         boundary === "removed" ? [] : [occurrence],

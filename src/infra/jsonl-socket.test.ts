@@ -250,7 +250,7 @@ describe.runIf(process.platform !== "win32")("exec host JSONL framing", () => {
   });
 
   it.each([
-    { commandTimeoutMs: undefined, timeoutMs: 50, responseTimeoutMs: 50 },
+    { commandTimeoutMs: null, timeoutMs: 50, responseTimeoutMs: 50 },
     { commandTimeoutMs: 30_000, timeoutMs: undefined, responseTimeoutMs: 50_000 },
     { commandTimeoutMs: 1_000, timeoutMs: undefined, responseTimeoutMs: 21_000 },
     { commandTimeoutMs: undefined, timeoutMs: undefined, responseTimeoutMs: 20_000 },
@@ -284,11 +284,11 @@ describe.runIf(process.platform !== "win32")("exec host JSONL framing", () => {
     });
   });
 
-  it("can wait without a transport deadline when command timeoutMs is zero", async () => {
+  it.each([0, null])("waits without a deadline for timeoutMs=%s", async (timeoutMs) => {
     await withWaitingClock(async (socketPath, received) => {
       const completed = vi.fn();
       const pending = requestExec(socketPath, {
-        request: { ...request, timeoutMs: 0 },
+        request: { ...request, timeoutMs },
         timeoutMs: undefined,
       }).then(completed);
       const socket = await received;

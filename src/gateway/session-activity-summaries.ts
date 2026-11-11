@@ -26,6 +26,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
 import {
   isCronSessionKey,
   isIncognitoSessionKey,
@@ -684,7 +685,8 @@ export function createSessionActivitySummaries(deps: {
       );
       if (target) {
         states.get(activitySummaryScope(target))?.completion?.markTerminal();
-        requestInBackground(target, true);
+        // Run-end events arrive inside the finished run's plugin scope; the recap outlives it.
+        pluginInvocationContext.exit(() => requestInBackground(target, true));
       }
     },
     handleLifecycle(event) {

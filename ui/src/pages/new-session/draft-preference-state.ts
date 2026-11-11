@@ -362,6 +362,7 @@ export class DraftPreferenceState {
       writer.write = pending.then((confirmed) => {
         if (confirmed === false && isCurrent()) {
           showToast({
+            severity: "error",
             message: t(
               accepted
                 ? "newSession.worktreeNameClearUnconfirmed"

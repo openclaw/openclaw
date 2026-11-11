@@ -16,8 +16,8 @@ import {
 import { createMockPluginRegistry } from "../src/plugins/hooks.test-helpers.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../src/plugins/runtime.js";
+import { registerSkillUsageTracking } from "../src/skills/runtime/skill-usage.js";
 import { createCanonicalFixtureSkill } from "../src/skills/test-support/test-helpers.js";
-import { registerSkillUsageTracking } from "../src/skills/workshop/skill-usage.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,

@@ -27,6 +27,9 @@ export function cronRunResultEvent(
     summary: quiet ? undefined : result.summary,
     result: quiet ? undefined : result.result,
     diagnostics: result.diagnostics,
+    ...(result.status === "error" && result.agentTerminal
+      ? { agentTerminal: result.agentTerminal }
+      : {}),
     delivered: result.deliveryState.delivered,
     deliveryStatus: result.deliveryState.status,
     deliveryError: result.deliveryState.error,

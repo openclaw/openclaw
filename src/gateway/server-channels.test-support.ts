@@ -25,6 +25,23 @@ export type TestAccount = {
   credentialDiagnostics?: ReturnType<typeof getCredentialUnavailableDiagnostics>;
 };
 
+export function createRawHealthOverrideFixture(rawId: string) {
+  return {
+    resolveAccount: vi.fn<TestPlugin["config"]["resolveAccount"]>(() => {
+      throw new Error("health overrides must not resolve credentials");
+    }),
+    getRuntimeConfig: () => ({
+      channels: {
+        discord: {
+          accounts: {
+            [rawId]: { healthMonitor: { enabled: false } },
+          },
+        },
+      },
+    }),
+  };
+}
+
 export function createTestNativeApprovalRuntime(): GatewayNativeApprovalRuntime {
   return {
     getRuntimeConfig: () => ({}),

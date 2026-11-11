@@ -12,9 +12,11 @@ import {
   summarizeUpdateRunResponse,
 } from "../../gateway/update-run-summary.js";
 import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { hasGatewayOwnerToolAuthority } from "../../security/dangerous-tools.js";
 import { parseConfigPathArrayIndex } from "../../shared/path-array-index.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { getAdmittedRunSource } from "../admitted-run-context.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
@@ -99,6 +101,7 @@ const GatewayUpdateToolSchema = Type.Object({
 export function createGatewayTool(options?: {
   allowConfigReads?: boolean;
   senderIsOwner?: boolean;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   requesterSenderId?: string | null;
 }): AnyAgentTool {
   const allowConfigReads = options?.allowConfigReads !== false;
@@ -117,7 +120,12 @@ export function createGatewayTool(options?: {
         const operatorSchedule =
           !options?.requesterSenderId &&
           getAdmittedRunSource(caller?.approvalAuthority) === "operator-schedule";
-        if (options?.senderIsOwner !== true && !operatorSchedule) {
+        const operatorAuthority = caller?.operatorAuthority ?? options?.operatorAuthority;
+        const ownerEligible = hasGatewayOwnerToolAuthority(
+          options?.senderIsOwner,
+          operatorAuthority,
+        );
+        if (!ownerEligible && !(operatorSchedule && !operatorAuthority)) {
           const hint = formatCommandOwnerHint({
             channel: caller?.turnSourceChannel,
             id: options?.requesterSenderId,

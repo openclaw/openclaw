@@ -14,7 +14,7 @@ import {
   isCompactionCheckpointTranscriptFileName,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
-  materializeSessionArchiveForRead,
+  readSessionArchiveText,
   parseUsageCountedSessionIdFromFileName,
   prepareSessionEntryInWorker,
   prepareSessionEntriesInWorker,
@@ -534,17 +534,13 @@ async function buildSessionEntryFromSource(
         sessionKind: opts.sessionKind ?? "unknown",
       };
     }
-    const raw = (
-      await retryTransientMemoryRead(
-        () =>
-          readRegularFile({
-            filePath: isUsageCountedSessionArchiveTranscriptPath(absPath)
-              ? materializeSessionArchiveForRead(absPath)
-              : absPath,
-          }),
-        `read session transcript ${absPath}`,
-      )
-    ).buffer.toString("utf-8");
+    const raw = await retryTransientMemoryRead(
+      async () =>
+        isUsageCountedSessionArchiveTranscriptPath(absPath) && absPath.endsWith(".zst")
+          ? readSessionArchiveText(absPath)
+          : (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8"),
+      `read session transcript ${absPath}`,
+    );
     const classification =
       opts.generatedByDreamingNarrative === undefined || opts.generatedByCronRun === undefined
         ? await classifySessionTranscriptFromSessionStore(absPath)

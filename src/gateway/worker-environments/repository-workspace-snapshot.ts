@@ -1,17 +1,23 @@
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { assertRepositoryWorkspaceDiskIdentity } from "../../state/session-repository-workspaces.authority.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { isExactAttachedEnvironment } from "./placement-target.js";
+import { isWorkerRetainedWindowOpen } from "./retained-work-window.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import { aliasSessionRepositoryCheckpoint } from "./session-repository-checkpoint-refs.js";
+import {
+  aliasSessionRepositoryCheckpoint,
+  publicationRef,
+} from "./session-repository-checkpoint-refs.js";
 import {
   readSessionRepositoryArtifacts,
   stageSessionRepositoryCheckpoint,
 } from "./session-repository-checkpoints.js";
 import type { WorkerWorkspaceQuiescence } from "./tunnel-contract.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import { updateWorkspaceResultRefs } from "./workspace-result-git.js";
 import { hasWorkerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 /** Caller owns the existing session reservation/result claim; transport joins its workspace commands. */
@@ -21,9 +27,9 @@ export async function captureRepositoryDiskCheckpoint<T>(
     repository: SessionRepositoryWorkspaceRecord;
     checkpointRef: string;
     additionalRefs?: readonly string[];
-    purpose: "publication" | "gateway-move";
+    purpose: "publication" | "gateway-move" | "child-fork";
     placements: WorkerSessionPlacementStore;
-    environments: Pick<WorkerEnvironmentService, "get" | "startTunnel">;
+    environments: Pick<WorkerEnvironmentService, "get" | "startTunnel" | "ensureRetainedRunning">;
     assertCurrent: () => void;
     quiescence?: WorkerWorkspaceQuiescence;
   },
@@ -41,6 +47,10 @@ export async function captureRepositoryDiskCheckpoint<T>(
     throw new Error("Repository disk export requires its admitted Move quiescence owner");
   }
   const store = getSessionRepositoryWorkspaceStore();
+  const cleanupSource =
+    params.purpose === "child-fork"
+      ? captureOpenClawStateWorkerContext({ path: store.path })
+      : undefined;
   params.assertCurrent();
   if (
     params.purpose === "publication" &&
@@ -102,6 +112,18 @@ export async function captureRepositoryDiskCheckpoint<T>(
     }
   };
   assertCurrent();
+  // Move prepares before quiescing. Refresh here could stop its admitted native owner.
+  if (
+    !params.quiescence &&
+    !isWorkerRetainedWindowOpen(environments.get(authority.environmentId))
+  ) {
+    await environments.ensureRetainedRunning({
+      environmentId: authority.environmentId,
+      expectedOwnerEpoch: placement.activeOwnerEpoch,
+      assertCurrent,
+    });
+    assertCurrent();
+  }
   const tunnel = await environments.startTunnel({
     environmentId: authority.environmentId,
     ownerEpoch: placement.activeOwnerEpoch,
@@ -151,7 +173,7 @@ export async function captureRepositoryDiskCheckpoint<T>(
             );
           }
           if (
-            params.purpose === "gateway-move" &&
+            params.purpose !== "publication" &&
             (!payload.gitHistory?.descendsFromBase || payload.gitHistory.unavailableReason)
           ) {
             throw new Error(
@@ -163,6 +185,7 @@ export async function captureRepositoryDiskCheckpoint<T>(
             workspaceId: repository.workspaceId,
             expectedRevision: repository.revision,
             checkpointRef,
+            requireGitHistory: params.purpose === "child-fork",
             assertCurrent,
           });
           staged = checkpoint;
@@ -191,8 +214,20 @@ export async function captureRepositoryDiskCheckpoint<T>(
     try {
       await staged?.discard();
     } finally {
-      if (!params.quiescence) {
-        await quiescence.resume();
+      try {
+        if (!params.quiescence) {
+          await quiescence.resume();
+        }
+      } finally {
+        if (cleanupSource) {
+          // The child copied these unique temporary refs. Neither success nor failure
+          // may retain a second reachable snapshot in the parent for its lifetime.
+          await updateWorkspaceResultRefs(
+            store.artifactPath(repository.workspaceId),
+            [{ ref: checkpointRef }, { ref: publicationRef(checkpointRef) }],
+            () => cleanupSource.admission.assertCurrent(),
+          );
+        }
       }
     }
   }

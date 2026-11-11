@@ -87,7 +87,7 @@ const reply = (runId: string, timestamp: number, content = "Finished " + runId) 
   runId,
 });
 
-it("keeps the recap duration when zero runtime cannot label completed work", async () => {
+it("shows no duration when zero runtime cannot label completed work", async () => {
   const runId = "zero-runtime";
   const props = propsFor(runId, [prompt(runId, 1_000), work(runId, 1_000)]);
   running(props, runId, 42);
@@ -100,8 +100,7 @@ it("keeps the recap duration when zero runtime cannot label completed work", asy
   rerender();
   await flushDeferredRowPrune();
   expect(text(".chat-activity-group__label")).toBe("Worked");
-  expect(text(".chat-turn-recap")).toContain("Done in 1 second");
-  expect(text(".chat-turn-recap")).toContain("42 output tokens");
+  expect(text(".chat-turn-recap")).toBe("42 output tokens");
 });
 
 it.each([
@@ -110,7 +109,7 @@ it.each([
   [true, "live"],
   [true, "cached"],
 ] as const)(
-  "restores the visible answer's duration without a work rollup (bubble=%s, source=%s)",
+  "shows no duration line for an answer without a work rollup (bubble=%s, source=%s)",
   async (bubbleMode, source) => {
     const runId = "restored-duration";
     const props = propsFor(runId, [
@@ -124,10 +123,12 @@ it.each([
       source === "live" ? saved : { key: saved.key, kind: saved.kind, updatedAt: 1 };
     props.transcriptMetadata =
       source === "cached" ? projectChatTranscriptMetadata(saved) : undefined;
-    const { container, text } = mount(props);
+    const { container } = mount(props);
     await flushDeferredRowPrune();
     expect(container.querySelector(".chat-work-group")).toBeNull();
-    expect(text(".chat-turn-recap")).toContain("Done in 13 seconds");
+    expect(container.textContent).toContain("Finished " + runId);
+    expect(container.textContent).not.toContain("Done in");
+    expect(container.textContent).not.toContain("13 seconds");
   },
 );
 
@@ -185,7 +186,8 @@ it.each([false, true])(
     const messages = [
       prompt("first", 1_000),
       work("first", 2_000),
-      ...(steer ? [] : [reply("first", 3_000)]),
+      // The earlier run's reply was written after its creation timestamp.
+      ...(steer ? [] : [{ ...reply("first", 3_000), __openclaw: { recordTimestampMs: 9_000 } }]),
       prompt("second", 4_000, steer ? "first" : undefined),
       work(runId, 5_000),
       reply(runId, 6_000),
@@ -201,7 +203,7 @@ it.each([false, true])(
       summaries.map(
         (summary) => summary.querySelector(".chat-activity-group__label")?.textContent ?? null,
       ),
-    ).toEqual(steer ? ["Worked for 20s"] : ["Worked", "Worked for 20s"]);
+    ).toEqual(steer ? ["Worked for 20s"] : ["Worked for 8s", "Worked for 20s"]);
   },
 );
 it("keeps progress after accepted steers and before queued input", async () => {

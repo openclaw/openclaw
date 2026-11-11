@@ -328,10 +328,9 @@ struct DashboardExperienceTests {
 
         await manager.show(atPath: "/settings/devices", target: .primary)
         let primary = try #require(manager._testAuxiliaryWindows().first { $0.target == .primary }?.controller)
-        try await DashboardTestWait.document(primary, "primary handoff document") {
-            try await primary.webView.evaluateJavaScript("document.readyState === 'complete'") as? Bool == true
+        try await TestWait.state("primary handoff route") {
+            try await primary.webView.evaluateJavaScript("window.routes") as? [String] == ["/settings/devices"]
         }
-        #expect(try await primary.webView.evaluateJavaScript("window.routes") as? [String] == ["/settings/devices"])
         #expect(manager._testMainTarget() == .profile("saved"))
         #expect(manager._testController() === saved)
         #expect(try await saved.webView.evaluateJavaScript("window.fixtureDraft") as? String == "Saved Gateway draft")

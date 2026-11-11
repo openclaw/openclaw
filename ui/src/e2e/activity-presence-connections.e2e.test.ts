@@ -89,7 +89,7 @@ suite.define(() => {
         await page.emulateMedia({ colorScheme: "dark" });
         await capture("desktop-mixed.png");
         await gateway.emitGatewayEvent("presence", { presence: [] });
-        await expectBrowser(card).toContainText("Offline");
+        await expectBrowser(card).toContainText("Disconnected");
         await expectBrowser(card.locator("details")).toHaveCount(0);
       },
     );

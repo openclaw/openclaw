@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/memory-lancedb",
-  "version": "2026.10.9",
+  "version": "2026.11.2",
   "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall, auto-capture, and vector search.",
   "repository": {
     "type": "git",
@@ -12,21 +12,21 @@
   ],
   "dependencies": {
     "apache-arrow": "21.2.0",
-    "openai": "7.43.0",
+    "openai": "7.47.0",
     "typebox": "1.4.3"
   },
   "devDependencies": {
-    "@lancedb/lancedb": "0.40.0",
+    "@lancedb/lancedb": "0.41.0",
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "optionalDependencies": {
-    "@lancedb/lancedb-darwin-arm64": "0.40.0",
-    "@lancedb/lancedb-linux-arm64-gnu": "0.40.0",
-    "@lancedb/lancedb-linux-arm64-musl": "0.40.0",
-    "@lancedb/lancedb-linux-x64-gnu": "0.40.0",
-    "@lancedb/lancedb-linux-x64-musl": "0.40.0",
-    "@lancedb/lancedb-win32-arm64-msvc": "0.40.0",
-    "@lancedb/lancedb-win32-x64-msvc": "0.40.0"
+    "@lancedb/lancedb-darwin-arm64": "0.41.0",
+    "@lancedb/lancedb-linux-arm64-gnu": "0.41.0",
+    "@lancedb/lancedb-linux-arm64-musl": "0.41.0",
+    "@lancedb/lancedb-linux-x64-gnu": "0.41.0",
+    "@lancedb/lancedb-linux-x64-musl": "0.41.0",
+    "@lancedb/lancedb-win32-arm64-msvc": "0.41.0",
+    "@lancedb/lancedb-win32-x64-msvc": "0.41.0"
   },
   "openclaw": {
     "extensions": [
@@ -39,10 +39,10 @@
       "minHostVersion": ">=2026.5.31"
     },
     "compat": {
-      "pluginApi": ">=2026.10.9"
+      "pluginApi": ">=2026.11.2"
     },
     "build": {
-      "openclawVersion": "2026.10.9",
+      "openclawVersion": "2026.11.2",
       "workerEntries": [
         "./memory-stats.worker.ts"
       ]

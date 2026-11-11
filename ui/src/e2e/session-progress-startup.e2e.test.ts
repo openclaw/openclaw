@@ -204,7 +204,7 @@ suite.define(() => {
         expect(await page.locator('[data-progress-card-placement="details"]').count()).toBe(0);
         if (outcome === "error") {
           expect(
-            await page.getByText("Session progress is unavailable.", { exact: true }).count(),
+            await page.getByText("Couldn’t load progress. Try again.", { exact: true }).count(),
           ).toBe(0);
         }
       }

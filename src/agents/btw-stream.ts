@@ -9,6 +9,7 @@ import type { RunBtwSideQuestionParams } from "./btw-runtime.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
+import { wrapStreamFnSanitizeMalformedToolCalls } from "./embedded-agent-runner/run/attempt-tool-call-replay-sanitization.js";
 import { materializeProviderContext } from "./embedded-agent-runner/run/images.js";
 import { wrapStreamFnWithMessageTransform } from "./embedded-agent-runner/run/message-transform-stream-wrapper.js";
 import { prepareEmbeddedSessionForkContext } from "./embedded-agent-runner/session-fork-context.js";
@@ -20,6 +21,7 @@ import { registerProviderStreamForModel } from "./provider-stream.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
+import { resolveTranscriptPolicy } from "./transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "./usage.js";
 
 const log = createSubsystemLogger("agents/btw");
@@ -172,7 +174,20 @@ export async function runLightweightBtwStream(
 ): Promise<ReplyPayload | undefined> {
   const { params, runtimeModel, apiKey, imageLimits, messages, inFlightPrompt, recordBtwUsage } =
     input;
-  const streamFn = resolveSideQuestionStream(input);
+  const streamFn = wrapStreamFnSanitizeMalformedToolCalls(
+    resolveSideQuestionStream(input),
+    undefined,
+    resolveTranscriptPolicy({
+      provider: runtimeModel.provider,
+      modelId: runtimeModel.id,
+      modelApi: runtimeModel.api,
+      model: runtimeModel,
+      config: params.cfg,
+      workspaceDir: input.workspaceDir,
+      directApiKey: Boolean(apiKey) && !isAnthropicOAuthApiKey(apiKey),
+    }),
+    runtimeModel.provider,
+  );
 
   const chunker =
     params.opts?.onBlockReply && params.blockReplyChunking

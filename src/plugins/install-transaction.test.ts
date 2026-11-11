@@ -16,20 +16,10 @@ import {
   type PluginCohortInstallObserver,
 } from "./install-transaction.js";
 import { beginUpdatePluginCohort } from "./update-cohort-recovery.js";
-import {
-  createPluginUpdateTransactionState,
-  finalizePluginUpdateSummary,
-} from "./update-summary.js";
-
-const repairPeerLinks = vi.hoisted(() => vi.fn());
 const createCohortPublication = vi.hoisted(() => vi.fn());
 vi.mock("./update-cohort-recovery.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-cohort-recovery.js")>()),
   createPluginCohortPublication: createCohortPublication,
-}));
-vi.mock("./plugin-peer-link.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./plugin-peer-link.js")>()),
-  repairInstalledOpenClawHostLinks: repairPeerLinks,
 }));
 
 function retainTransaction(owner: object, transaction: PluginInstallTransaction) {
@@ -303,33 +293,6 @@ it("retains failed rollback for recovery without replaying settled siblings", as
   await settlePluginInstallTransactions([pending, settled], "rollback");
   expect(pending.rollback).toHaveBeenCalledTimes(2);
   expect(settled.rollback).toHaveBeenCalledOnce();
-});
-
-it.each([false, true])("retains peer-link failure (rollbackFails=%s)", async (rollbackFails) => {
-  const root = new Error("Cannot repair OpenClaw peer link: target is not a directory");
-  const cleanup = new Error("Cannot restore plugin backup");
-  repairPeerLinks.mockRejectedValueOnce(root);
-  const transaction = makeTransaction();
-  if (rollbackFails) {
-    transaction.rollback.mockRejectedValueOnce(cleanup);
-  }
-  const transactionState = createPluginUpdateTransactionState({});
-  transactionState.transactions.push(transaction);
-
-  const summary = { config: {}, changed: true, outcomes: [], ranNpmInstaller: true, logger: {} };
-  const failure: unknown = await finalizePluginUpdateSummary({
-    ...summary,
-    transactionState,
-  }).catch((error: unknown) => error);
-
-  expect(failure).toBeInstanceOf(Error);
-  expect(String(failure)).toContain(root.message);
-  if (rollbackFails) {
-    expect(failure).toMatchObject({ cause: root, errors: [root, cleanup] });
-  } else {
-    expect(failure).toBe(root);
-  }
-  expect(transaction.rollback).toHaveBeenCalledOnce();
 });
 
 it.each(["commit", "rollback"] as const)(

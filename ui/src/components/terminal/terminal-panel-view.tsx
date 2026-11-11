@@ -182,6 +182,7 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
         icon: terminalPanelTabIcon(),
         domId: `${idPrefix}-tab-${tab.id}`,
         closeLabel: `${t("terminal.closeSession")}: ${tab.label}`,
+        onActivate: () => props.view().onSelect(tab.id),
       }),
     ),
   );

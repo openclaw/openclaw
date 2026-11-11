@@ -103,13 +103,11 @@ new evidence. Invalid or mismatched assets remain blocking.
    publishing again to repair a receipt.
    Push runs are never cancelled by later `main` pushes; verification serializes
    per resolved stable tag.
-7. Verify the public website through its existing read-only
-   `companion-downloads-deployed.yml` workflow on `openclaw/openclaw.ai` main.
-   Require success for that exact run: stable download routes resolve current
-   assets at request time, and the verifier follows every homepage/install button
-   to its current stable artifact. New app releases need no website rebuild or
-   source change. The website cache expires within five minutes of resolution;
-   a check during propagation can fail and be resumed after expiry.
+7. Follow the [website publication owner](platform-publication.md#website) to
+   verify public downloads. Its workflow can request a production rebuild and
+   requires release/deployment authority; it is not a read-only check. Require
+   success for that exact run and follow the owner's outcome reconciliation
+   before retrying an uncertain dispatch.
    The orchestrator performs this gate even when immutable closeout assets
    already exist; those assets are not evidence of current website downloads.
    Record failed runs and permit a fresh verification on resume. Permit

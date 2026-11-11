@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { GitCommandTimeoutError } from "../../infra/git-exec.js";
+import { createOpenClawStateLeaseAbortError } from "../../state/openclaw-state-lease-error.js";
 import {
   markManagedWorktreePreparation,
   setWorktreePreparationTemplate,
@@ -19,56 +20,74 @@ vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => ({ i
 afterEach(vi.restoreAllMocks);
 afterEach(vi.resetAllMocks);
 
-it("attributes nested preparation once per owner and retains failed phase time", async () => {
-  let clock = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => clock);
-  const failure = new GitCommandTimeoutError("synthetic private setup output");
-  const warm = Object.freeze({ reason: "ready", backend: "btrfs", cloneBytes: 42 });
-  const phases = { templateApply: 52, containerStart: 8 };
-  await expect(
-    withTiming("sandbox", async () => {
-      markManagedWorktreePreparation();
-      setWorktreePreparationTemplate("warm", warm);
-      await timeWorktreePreparationPhase("templateApply", async () => {
-        clock += 12;
-        await withTiming("managed", () =>
-          timeWorktreePreparationPhase("checkout", async () => (clock += 40)),
-        );
-      });
-      await timeWorktreePreparationPhase("baseWait", () =>
-        timeWorktreePreparationPhase("containerStart", async () => {
-          clock += 8;
-          throw failure;
-        }),
-      );
-    }),
-  ).rejects.toBe(failure);
-  expect(event.mock.calls[0]?.[0]).toMatchObject({
-    durationMs: 40,
-    details: { kind: "managed", template: "unavailable", outcome: "returned", checkout: 40 },
-  });
-  expect(event).toHaveBeenCalledTimes(2);
-  expect(event.mock.calls[1]?.[0]).toMatchObject({
-    name: "worktree.preparation",
-    durationMs: 60,
-    details: {
-      kind: "sandbox",
-      template: "warm",
-      outcome: "threw",
-      errorClass: "GitCommandTimeoutError",
-      errorPhase: "containerStart",
-      unattributedMs: 0,
-      ...phases,
-      ...Object.fromEntries(Object.entries(warm).map(([key, value]) => [`template.${key}`, value])),
-    },
-  });
-  expect(JSON.stringify(log.mock.calls)).not.toContain(failure.message);
-  expect(log.mock.calls[1]?.[1]).toMatchObject({
-    errorClass: "GitCommandTimeoutError",
-    errorPhase: "containerStart",
-  });
-  expect(log.mock.calls[1]?.[1].consoleMessage).toContain('"errorPhase":"containerStart"');
-});
+it.each(["original", "lease", "unrelated"] as const)(
+  "attributes nested preparation through lease wrapping (%s)",
+  async (wrapped) => {
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const failure = new GitCommandTimeoutError("synthetic private setup output");
+    const reported =
+      wrapped === "original"
+        ? failure
+        : createOpenClawStateLeaseAbortError(
+            AbortSignal.abort(wrapped === "lease" ? failure : new Error("separate cancellation")),
+            "operation",
+            "workspace",
+          );
+    const errorPhase = wrapped === "unrelated" ? "unattributed" : "containerStart";
+    const warm = Object.freeze({ reason: "ready", backend: "btrfs", cloneBytes: 42 });
+    const phases = { templateApply: 52, containerStart: 8 };
+    await expect(
+      withTiming("sandbox", async () => {
+        markManagedWorktreePreparation();
+        setWorktreePreparationTemplate("warm", warm);
+        await timeWorktreePreparationPhase("templateApply", async () => {
+          clock += 12;
+          await withTiming("managed", () =>
+            timeWorktreePreparationPhase("checkout", async () => (clock += 40)),
+          );
+        });
+        try {
+          await timeWorktreePreparationPhase("baseWait", () =>
+            timeWorktreePreparationPhase("containerStart", async () => {
+              clock += 8;
+              throw failure;
+            }),
+          );
+        } catch {
+          throw reported;
+        }
+      }),
+    ).rejects.toBe(reported);
+    expect(event.mock.calls[0]?.[0]).toMatchObject({
+      durationMs: 40,
+      details: { kind: "managed", template: "unavailable", outcome: "returned", checkout: 40 },
+    });
+    expect(event).toHaveBeenCalledTimes(2);
+    expect(event.mock.calls[1]?.[0]).toMatchObject({
+      name: "worktree.preparation",
+      durationMs: 60,
+      details: {
+        kind: "sandbox",
+        template: "warm",
+        outcome: "threw",
+        errorClass: reported.name,
+        errorPhase,
+        unattributedMs: 0,
+        ...phases,
+        ...Object.fromEntries(
+          Object.entries(warm).map(([key, value]) => [`template.${key}`, value]),
+        ),
+      },
+    });
+    expect(JSON.stringify(log.mock.calls)).not.toContain(failure.message);
+    expect(log.mock.calls[1]?.[1]).toMatchObject({
+      errorClass: reported.name,
+      errorPhase,
+    });
+    expect(log.mock.calls[1]?.[1].consoleMessage).toContain(`"errorPhase":"${errorPhase}"`);
+  },
+);
 
 it("omits unmanaged sandboxes and preserves results if a diagnostics sink fails", async () => {
   await withTiming("sandbox", async () => "unmanaged");

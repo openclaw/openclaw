@@ -42,6 +42,11 @@ export function readLocalWorkspaceCommit(
         ...Object.fromEntries(
           Object.entries(mutation.patch).filter(([, entry]) => entry !== undefined),
         ),
+        ...(mutation.rejectedResult
+          ? { rejectedResult: mutation.rejectedResult }
+          : mutation.patch.checkpoint_json !== undefined
+            ? { rejectedResult: undefined }
+            : {}),
         ...(mutation.manifest
           ? {
               baseline_ref: mutation.manifest.resultingRoot,

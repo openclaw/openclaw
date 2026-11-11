@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { filterStringEntries } from "@openclaw/normalization-core";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -11,6 +12,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import { monotonicNow } from "../shared/monotonic-time.js";
+import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { applyTemplateAddPlanStateless } from "../templates/add-stateless.js";
 import { TEMPLATE_ADD_RESULT_SCHEMA_VERSION, TemplateAddMutationError } from "../templates/add.js";
@@ -18,6 +23,11 @@ import {
   findTemplateExtensionPackageCollisions,
   planTemplateExtensions,
 } from "../templates/application-plan.js";
+import {
+  ClawHubSourceError,
+  withResolvedClawHubSource,
+  type ClawHubTemplateTrust,
+} from "../templates/clawhub-source.js";
 import {
   assertTemplatesLabsEnabled,
   TEMPLATES_LABS_DISABLED_MESSAGE,
@@ -30,12 +40,14 @@ import {
   type TemplateSkillInstallConsent,
 } from "../templates/packages.js";
 import { readTemplateManifestFile } from "../templates/reader.js";
+import { isCanonicalClawHubPackageName } from "../templates/schema-portability.js";
 import { collectTemplateSkillWarningReviews } from "../templates/skill-warning-review.js";
 import {
   TEMPLATE_INSPECT_RESULT_SCHEMA_VERSION,
   TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
   TEMPLATE_OUTPUT_STABILITY,
   type TemplateAddPlan,
+  type TemplateReadResult,
 } from "../templates/types.js";
 import { sleep } from "../utils/sleep.js";
 import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
@@ -105,7 +117,7 @@ function logTemplateAddPlanSummary(plan: TemplateAddPlan): void {
           : "invalid declaration";
     runtime.log(`  MCP ${sanitizeTerminalText(action.id)}: ${sanitizeTerminalText(target)}`);
   }
-  runtime.log(`Cron jobs: ${plan.summary.cronJobActions}`);
+  runtime.log(`Automations: ${plan.summary.cronJobActions}`);
   if (plan.capabilityChanges.length > 0) {
     runtime.log(`Capability escalations (${plan.capabilityChanges.length}):`);
     for (const change of plan.capabilityChanges) {
@@ -181,320 +193,385 @@ export async function runTemplatesInspectCommand(
     );
   }
   runtime.log(`MCP servers: ${Object.keys(result.manifest.mcpServers).length}`);
-  runtime.log(`Cron jobs: ${result.manifest.cronJobs.length}`);
+  runtime.log(`Automations: ${result.manifest.automations.length}`);
   if (!valid) {
     runtime.error(formatTemplateDiagnostics(diagnostics));
     runtime.exit(1);
   }
 }
 
-// Add's planning and application both read or mutate Gateway-owned state.
+// Preview inspects existing state; only Add acquires mutation ownership.
 export async function runTemplatesAddCommand(
   sourcePath: string,
   opts: TemplatesAddOptions,
 ): Promise<void> {
+  const run = async () => {
+    const config = opts.dryRun
+      ? readCurrentConfigForPolicyCheck({ configPath: resolveConfigPath(), env: process.env })
+      : getRuntimeConfig();
+    if (!isTemplatesLabsEnabled(config)) {
+      emitTemplateFailure(opts.json, TEMPLATES_LABS_DISABLED_MESSAGE, {
+        schemaVersion: TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
+        stability: TEMPLATE_OUTPUT_STABILITY,
+        ok: false,
+        error: { code: "templates_labs_disabled", message: TEMPLATES_LABS_DISABLED_MESSAGE },
+      });
+      return;
+    }
+
+    if (existsSync(sourcePath) || !isCanonicalClawHubPackageName(sourcePath)) {
+      return await runTemplatesAddFromSource(
+        await readTemplateManifestFile(sourcePath),
+        opts,
+        config,
+      );
+    }
+    let sourceRunStarted = false;
+    let sourceRunFinished = false;
+    try {
+      await withResolvedClawHubSource({
+        coordinate: { packageName: sourcePath },
+        mode: opts.dryRun ? "preview" : "apply",
+        acknowledgeClawHubRisk: opts.acknowledgeClawhubRisk,
+        run: async (source, trust) => {
+          sourceRunStarted = true;
+          await runTemplatesAddFromSource(source, opts, config, trust);
+          sourceRunFinished = true;
+        },
+      });
+    } catch (error) {
+      // Cleanup must not replace an already reported Add outcome.
+      if (sourceRunFinished) {
+        runtime.error("Template source cleanup failed after Add; temporary files may remain.");
+        return;
+      }
+      if (sourceRunStarted) {
+        throw error;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      emitTemplateFailure(opts.json, message, {
+        schemaVersion: TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
+        stability: TEMPLATE_OUTPUT_STABILITY,
+        ok: false,
+        error: {
+          code: error instanceof ClawHubSourceError ? error.code : "clawhub_source_failed",
+          message,
+        },
+        ...(error instanceof ClawHubSourceError && error.warning
+          ? { trustWarning: error.warning }
+          : {}),
+      });
+    }
+  };
+  if (opts.dryRun) {
+    return await withArtifactPreservingStateReads(() => withOpenClawStateDatabaseReadSnapshot(run));
+  }
   return await runWithLocalStateOwner({
     method: "templates.add",
     params: {},
     target: "Template configuration and provenance",
     onForeignOwner: "refuse",
-    runLocal: async () => {
-      const config = getRuntimeConfig();
-      if (!isTemplatesLabsEnabled(config)) {
-        emitTemplateFailure(opts.json, TEMPLATES_LABS_DISABLED_MESSAGE, {
-          schemaVersion: TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
-          stability: TEMPLATE_OUTPUT_STABILITY,
-          ok: false,
-          error: { code: "templates_labs_disabled", message: TEMPLATES_LABS_DISABLED_MESSAGE },
-        });
-        return;
-      }
+    runLocal: run,
+  });
+}
 
-      const result = await readTemplateManifestFile(sourcePath);
-      if (!result.ok) {
-        emitTemplateFailure(opts.json, formatTemplateDiagnostics(result.diagnostics), {
-          schemaVersion: TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
-          stability: TEMPLATE_OUTPUT_STABILITY,
-          valid: false,
-          diagnostics: result.diagnostics,
-        });
-        return;
-      }
+async function runTemplatesAddFromSource(
+  result: TemplateReadResult,
+  opts: TemplatesAddOptions,
+  config: OpenClawConfig,
+  trust?: ClawHubTemplateTrust,
+): Promise<void> {
+  if (!result.ok) {
+    emitTemplateFailure(opts.json, formatTemplateDiagnostics(result.diagnostics), {
+      schemaVersion: TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
+      stability: TEMPLATE_OUTPUT_STABILITY,
+      valid: false,
+      diagnostics: result.diagnostics,
+    });
+    return;
+  }
 
-      const listedMcpServers = await listConfiguredMcpServers();
-      if (!listedMcpServers.ok) {
-        runtime.error(listedMcpServers.error);
-        runtime.exit(1);
-        return;
-      }
-      const existingAgentIds = listAgentIds(config);
-      const plan = await buildTemplateAddPlan({
-        manifest: result.manifest,
-        templateMarkdownBody: result.templateMarkdownBody,
-        packageBootstrap: result.packageBootstrap,
-        openClawProfile: result.openClawProfile,
-        source: result.source,
-        diagnostics: result.diagnostics,
-        context: {
-          config,
-          ...(opts.agentId ? { agentId: opts.agentId } : {}),
-          ...(opts.workspace ? { workspace: opts.workspace } : {}),
-          existingAgentIds,
-          existingWorkspacePaths: existingAgentIds.map((agentId) =>
-            resolveAgentWorkspaceDir(config, agentId),
-          ),
-          existingMcpServers: listedMcpServers.mcpServers,
-          packagePreflight: (
-            pkg: Parameters<typeof preflightTemplatePackage>[0],
-            workspace: string,
-          ) => preflightTemplatePackage(pkg, workspace, { config }),
-        },
-      });
-
-      if (plan.blockers.length > 0) {
-        if (opts.json) {
-          writeRuntimeJson(runtime, plan);
-        } else {
-          logTemplateAddPlanSummary(plan);
-          runtime.error(formatTemplateDiagnostics(plan.blockers));
-        }
-        runtime.exit(1);
-        return;
-      }
-
-      if (opts.dryRun) {
-        if (opts.json) {
-          writeRuntimeJson(runtime, plan);
-        } else {
-          runtime.log(
-            `Template add preview: ${sanitizeTerminalText(plan.template.name)}@${sanitizeTerminalText(plan.template.version)}`,
-          );
-          logTemplateAddPlanSummary(plan);
-        }
-        return;
-      }
-
-      const warnedPackages = plan.actions.flatMap((action) => {
-        const details = action.details;
-        return action.kind === "package" &&
-          details?.ownerAction === "install" &&
-          typeof details.riskWarning === "string" &&
-          details.riskWarning
-          ? [{ target: action.target, warning: details.riskWarning }]
-          : [];
-      });
-      let riskApproved = Boolean(opts.acknowledgeClawhubRisk);
-      if (warnedPackages.length > 0 && !riskApproved) {
-        if (process.stdin.isTTY && process.stdout.isTTY && !opts.json) {
-          runtime.log("ClawHub trust warnings:");
-          for (const { target, warning } of warnedPackages) {
-            runtime.log(redactSensitiveText(`  ${target}: ${warning}`));
-          }
-          riskApproved = await promptYesNo("Acknowledge these warnings and Add the Template?");
-        }
-        if (!riskApproved) {
-          const message =
-            "ClawHub trust warnings require --acknowledge-clawhub-risk or interactive confirmation.";
-          emitTemplateFailure(opts.json, message, {
-            schemaVersion: TEMPLATE_ADD_RESULT_SCHEMA_VERSION,
-            stability: TEMPLATE_OUTPUT_STABILITY,
-            status: "failed",
-            error: { code: "clawhub_risk_acknowledgement_required", message },
-            warnings: warnedPackages,
-          });
-          return;
-        }
-      }
-
-      const hasPluginInstall = plan.actions.some(
-        (action) =>
-          action.kind === "package" &&
-          action.details?.kind === "plugin" &&
-          action.details.ownerAction === "install",
-      );
-      if (
-        hasPluginInstall &&
-        !opts.acceptCapabilities &&
-        (!process.stdin.isTTY || !process.stdout.isTTY || opts.json)
-      ) {
-        const message =
-          "Plugin capabilities require --accept-capabilities in a non-interactive Add.";
-        emitTemplateFailure(opts.json, message, {
-          schemaVersion: TEMPLATE_ADD_RESULT_SCHEMA_VERSION,
-          stability: TEMPLATE_OUTPUT_STABILITY,
-          status: "failed",
-          error: { code: "plugin_capability_consent_required", message },
-        });
-        return;
-      }
-
-      const warnings = addPlanSkillWarnings(plan);
-      let skillConsent: TemplateSkillInstallConsent | undefined;
-      if (warnings.length > 0) {
-        const byRef = new Map<string, TemplateCliSkillWarning>();
-        for (const warning of warnings) {
-          if (byRef.has(warning.ref)) {
-            throw new Error("The Template skill trust review contains a duplicate package.");
-          }
-          byRef.set(warning.ref, warning);
-        }
-        skillConsent = {
-          assertApproved: (pkg) => {
-            const reviewed = byRef.get(pkg.ref);
-            if (
-              !reviewed ||
-              reviewed.version !== pkg.version ||
-              reviewed.integrity !== pkg.integrity ||
-              reviewed.riskWarning !== pkg.riskWarning
-            ) {
-              throw new Error("Skill trust state changed; review the Template again.");
-            }
-          },
-        };
-      }
-      let addResult;
-      try {
-        const configPath = resolveConfigPath();
-        const configEnv = process.env;
-        const assertCurrentLab = () =>
-          assertTemplatesLabsEnabled(
-            readCurrentConfigForPolicyCheck({ configPath, env: configEnv }),
-          );
-        assertCurrentLab();
-        addResult = await withOpenClawStateLease(
-          {
-            scope: "core:agent-deletion",
-            key: plan.agent.finalId,
-            database: { scope: "shared", options: {} },
-            leaseMs: 60_000,
-            waitMs: 5_000,
-            heartbeat: "worker",
-            leaseLabel: "Template add",
-            operationLabel: "template.add.lease",
-          },
-          async (lease) => {
-            assertCurrentLab();
-            const onCapabilityConsent = resolvePluginCapabilityConsentCliOptions({
-              action: "install",
-              acceptCapabilities: opts.acceptCapabilities,
-              runtime,
-            }).onCapabilityConsent;
-            return await applyTemplateAddPlanStateless(plan, {
-              config,
-              assertCurrent: () => lease.assertOwned(),
-              assertForwardCurrent: assertCurrentLab,
-              pluginConsent: {
-                onCapabilityConsent: async (review) => await onCapabilityConsent?.(review),
-                confirmInstall: async (_pluginId, warning) =>
-                  !warning || (riskApproved && warnedPackages.length > 0),
-              },
-              ...(skillConsent ? { skillConsent } : {}),
-              reloadPlugins: await resolvePluginBatchReload(),
-              consentPlanIntegrity: plan.planIntegrity,
-              runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
-              cronGateway: {
-                add: async (input) => await callGatewayFromCli("cron.add", {}, input),
-                list: async (agentId) =>
-                  await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
-                get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
-                writeScratch: async (id, content, commitGuard) => {
-                  commitGuard();
-                  const scratchResult = await callGatewayFromCli(
-                    "cron.scratch.set",
-                    {},
-                    {
-                      id,
-                      content,
-                      expectedRevision: 0,
-                    },
-                  );
-                  if (!scratchResult.ok) {
-                    throw new Error("Template automation scratch changed before import.");
-                  }
-                },
-                enable: async (id, expectedConfigRevision, commitGuard) => {
-                  commitGuard();
-                  await callGatewayFromCli(
-                    "cron.update",
-                    {},
-                    {
-                      id,
-                      patch: { enabled: true },
-                      expectedConfigRevision,
-                    },
-                  );
-                },
-                remove: async (id, options) =>
-                  await callGatewayFromCli(
-                    "cron.remove",
-                    {},
-                    {
-                      id,
-                      expectedConfigRevision: options.expectedConfigRevision,
-                    },
-                  ),
-                waitUntilAgentAvailable: async (agentId) => {
-                  const deadline = monotonicNow() + TEMPLATE_AGENT_RELOAD_TIMEOUT_MS;
-                  let lastError: unknown;
-                  while (monotonicNow() < deadline) {
-                    try {
-                      const response = await callGatewayFromCliWithTransport<{
-                        config?: OpenClawConfig;
-                        configRevisionHash?: unknown;
-                        appliedConfigHash?: unknown;
-                      }>("config.get", { timeout: "5000" }, {});
-                      // Matching tokens can describe a cached roster from before this agent was added.
-                      if (
-                        Object.hasOwn(response.config?.agents?.entries ?? {}, agentId) &&
-                        typeof response.configRevisionHash === "string" &&
-                        response.configRevisionHash === response.appliedConfigHash
-                      ) {
-                        return;
-                      }
-                      lastError = undefined;
-                    } catch (error) {
-                      lastError = error;
-                    }
-                    await sleep(TEMPLATE_AGENT_RELOAD_POLL_MS);
-                  }
-                  const suffix = lastError instanceof Error ? `: ${lastError.message}` : "";
-                  throw new Error(
-                    `Gateway did not apply the Template agent configuration in time${suffix}`,
-                  );
-                },
-              },
-            });
-          },
-        );
-      } catch (error) {
-        const code =
-          error instanceof TemplatesLabsDisabledError
-            ? "templates_labs_disabled"
-            : error instanceof TemplateAddMutationError
-              ? error.code
-              : "add_failed";
-        const message = error instanceof Error ? error.message : String(error);
-        emitTemplateFailure(opts.json, message, {
-          schemaVersion: TEMPLATE_ADD_RESULT_SCHEMA_VERSION,
-          stability: TEMPLATE_OUTPUT_STABILITY,
-          status: "failed",
-          error: { code, message },
-        });
-        return;
-      }
-
-      if (opts.json) {
-        writeRuntimeJson(runtime, addResult);
-      } else {
-        runtime.log(`Added agent: ${addResult.agent.finalId}`);
-        runtime.log(`Workspace: ${addResult.agent.workspace}`);
-        if (addResult.error) {
-          runtime.error(addResult.error.message);
-        }
-      }
-      if (addResult.status !== "complete") {
-        runtime.exit(1);
-      }
+  const listedMcpServers = await listConfiguredMcpServers(
+    opts.dryRun ? { observe: false } : undefined,
+  );
+  if (!listedMcpServers.ok) {
+    runtime.error(listedMcpServers.error);
+    runtime.exit(1);
+    return;
+  }
+  const existingAgentIds = listAgentIds(config);
+  const plan = await buildTemplateAddPlan({
+    manifest: result.manifest,
+    templateMarkdownBody: result.templateMarkdownBody,
+    packageBootstrap: result.packageBootstrap,
+    openClawProfile: result.openClawProfile,
+    source: result.source,
+    diagnostics: result.diagnostics,
+    context: {
+      config,
+      agentId: opts.agentId,
+      ...(opts.workspace ? { workspace: opts.workspace } : {}),
+      existingAgentIds,
+      existingWorkspacePaths: existingAgentIds.map((agentId) =>
+        resolveAgentWorkspaceDir(config, agentId),
+      ),
+      existingMcpServers: listedMcpServers.mcpServers,
+      packagePreflight: (pkg: Parameters<typeof preflightTemplatePackage>[0], workspace: string) =>
+        preflightTemplatePackage(pkg, workspace, { config }),
     },
   });
+
+  const preview = {
+    ...plan,
+    ...(trust
+      ? {
+          trustWarning: trust.trustWarning,
+          riskAcknowledgementRequired: trust.riskAcknowledgementRequired,
+        }
+      : {}),
+  };
+  if (trust?.trustWarning && !opts.json) {
+    runtime.log(redactSensitiveText(`ClawHub trust warning: ${trust.trustWarning}`));
+  }
+  if (plan.blockers.length > 0) {
+    if (opts.json) {
+      writeRuntimeJson(runtime, preview);
+    } else {
+      logTemplateAddPlanSummary(plan);
+      runtime.error(formatTemplateDiagnostics(plan.blockers));
+    }
+    runtime.exit(1);
+    return;
+  }
+
+  if (opts.dryRun) {
+    if (opts.json) {
+      writeRuntimeJson(runtime, preview);
+    } else {
+      runtime.log(
+        `Template add preview: ${sanitizeTerminalText(plan.template.name)}@${sanitizeTerminalText(plan.template.version)}`,
+      );
+      logTemplateAddPlanSummary(plan);
+    }
+    return;
+  }
+
+  const warnedPackages = plan.actions.flatMap((action) => {
+    const details = action.details;
+    return action.kind === "package" &&
+      details?.ownerAction === "install" &&
+      typeof details.riskWarning === "string" &&
+      details.riskWarning
+      ? [{ target: action.target, warning: details.riskWarning }]
+      : [];
+  });
+  let riskApproved = Boolean(opts.acknowledgeClawhubRisk);
+  if (warnedPackages.length > 0 && !riskApproved) {
+    if (process.stdin.isTTY && process.stdout.isTTY && !opts.json) {
+      runtime.log("ClawHub trust warnings:");
+      for (const { target, warning } of warnedPackages) {
+        runtime.log(redactSensitiveText(`  ${target}: ${warning}`));
+      }
+      riskApproved = await promptYesNo("Acknowledge these warnings and Add the Template?");
+    }
+    if (!riskApproved) {
+      const message =
+        "ClawHub trust warnings require --acknowledge-clawhub-risk or interactive confirmation.";
+      emitTemplateFailure(opts.json, message, {
+        schemaVersion: TEMPLATE_ADD_RESULT_SCHEMA_VERSION,
+        stability: TEMPLATE_OUTPUT_STABILITY,
+        status: "failed",
+        error: { code: "clawhub_risk_acknowledgement_required", message },
+        warnings: warnedPackages,
+      });
+      return;
+    }
+  }
+
+  const hasPluginInstall = plan.actions.some(
+    (action) =>
+      action.kind === "package" &&
+      action.details?.kind === "plugin" &&
+      action.details.ownerAction === "install",
+  );
+  if (
+    hasPluginInstall &&
+    !opts.acceptCapabilities &&
+    (!process.stdin.isTTY || !process.stdout.isTTY || opts.json)
+  ) {
+    const message = "Plugin capabilities require --accept-capabilities in a non-interactive Add.";
+    emitTemplateFailure(opts.json, message, {
+      schemaVersion: TEMPLATE_ADD_RESULT_SCHEMA_VERSION,
+      stability: TEMPLATE_OUTPUT_STABILITY,
+      status: "failed",
+      error: { code: "plugin_capability_consent_required", message },
+    });
+    return;
+  }
+
+  const warnings = addPlanSkillWarnings(plan);
+  let skillConsent: TemplateSkillInstallConsent | undefined;
+  if (warnings.length > 0) {
+    const byRef = new Map<string, TemplateCliSkillWarning>();
+    for (const warning of warnings) {
+      if (byRef.has(warning.ref)) {
+        throw new Error("The Template skill trust review contains a duplicate package.");
+      }
+      byRef.set(warning.ref, warning);
+    }
+    skillConsent = {
+      assertApproved: (pkg) => {
+        const reviewed = byRef.get(pkg.ref);
+        if (
+          !reviewed ||
+          reviewed.version !== pkg.version ||
+          reviewed.integrity !== pkg.integrity ||
+          reviewed.riskWarning !== pkg.riskWarning
+        ) {
+          throw new Error("Skill trust state changed; review the Template again.");
+        }
+      },
+    };
+  }
+  let addResult;
+  try {
+    const configPath = resolveConfigPath();
+    const configEnv = process.env;
+    const assertCurrentLab = () =>
+      assertTemplatesLabsEnabled(readCurrentConfigForPolicyCheck({ configPath, env: configEnv }));
+    assertCurrentLab();
+    addResult = await withOpenClawStateLease(
+      {
+        scope: "core:agent-deletion",
+        key: plan.agent.finalId,
+        database: { scope: "shared", options: {} },
+        leaseMs: 60_000,
+        waitMs: 5_000,
+        heartbeat: "worker",
+        leaseLabel: "Template add",
+        operationLabel: "template.add.lease",
+      },
+      async (lease) => {
+        assertCurrentLab();
+        const onCapabilityConsent = resolvePluginCapabilityConsentCliOptions({
+          action: "install",
+          acceptCapabilities: opts.acceptCapabilities,
+          runtime,
+        }).onCapabilityConsent;
+        return await applyTemplateAddPlanStateless(plan, {
+          config,
+          assertCurrent: () => lease.assertOwned(),
+          assertForwardCurrent: assertCurrentLab,
+          pluginConsent: {
+            onCapabilityConsent: async (review) => await onCapabilityConsent?.(review),
+            confirmInstall: async (_pluginId, warning) =>
+              !warning || (riskApproved && warnedPackages.length > 0),
+          },
+          ...(skillConsent ? { skillConsent } : {}),
+          reloadPlugins: await resolvePluginBatchReload(),
+          consentPlanIntegrity: plan.planIntegrity,
+          runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
+          cronGateway: {
+            add: async (input) => await callGatewayFromCli("cron.add", {}, input),
+            list: async (agentId) =>
+              await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
+            get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
+            writeScratch: async (id, content, commitGuard) => {
+              commitGuard();
+              const scratchResult = await callGatewayFromCli(
+                "cron.scratch.set",
+                {},
+                {
+                  id,
+                  content,
+                  expectedRevision: 0,
+                },
+              );
+              if (!scratchResult.ok) {
+                throw new Error("Template automation scratch changed before import.");
+              }
+            },
+            enable: async (id, expectedConfigRevision, commitGuard) => {
+              commitGuard();
+              await callGatewayFromCli(
+                "cron.update",
+                {},
+                {
+                  id,
+                  patch: { enabled: true },
+                  expectedConfigRevision,
+                },
+              );
+            },
+            remove: async (id, options) =>
+              await callGatewayFromCli(
+                "cron.remove",
+                {},
+                {
+                  id,
+                  expectedConfigRevision: options.expectedConfigRevision,
+                },
+              ),
+            waitUntilAgentAvailable: async (agentId) => {
+              const deadline = monotonicNow() + TEMPLATE_AGENT_RELOAD_TIMEOUT_MS;
+              let lastError: unknown;
+              while (monotonicNow() < deadline) {
+                try {
+                  const response = await callGatewayFromCliWithTransport<{
+                    config?: OpenClawConfig;
+                    configRevisionHash?: unknown;
+                    appliedConfigHash?: unknown;
+                  }>("config.get", { timeout: "5000" }, {});
+                  // Matching tokens can describe a cached roster from before this agent was added.
+                  if (
+                    Object.hasOwn(response.config?.agents?.entries ?? {}, agentId) &&
+                    typeof response.configRevisionHash === "string" &&
+                    response.configRevisionHash === response.appliedConfigHash
+                  ) {
+                    return;
+                  }
+                  lastError = undefined;
+                } catch (error) {
+                  lastError = error;
+                }
+                await sleep(TEMPLATE_AGENT_RELOAD_POLL_MS);
+              }
+              const suffix = lastError instanceof Error ? `: ${lastError.message}` : "";
+              throw new Error(
+                `Gateway did not apply the Template agent configuration in time${suffix}`,
+              );
+            },
+          },
+        });
+      },
+    );
+  } catch (error) {
+    const code =
+      error instanceof TemplatesLabsDisabledError
+        ? "templates_labs_disabled"
+        : error instanceof TemplateAddMutationError
+          ? error.code
+          : "add_failed";
+    const message = error instanceof Error ? error.message : String(error);
+    emitTemplateFailure(opts.json, message, {
+      schemaVersion: TEMPLATE_ADD_RESULT_SCHEMA_VERSION,
+      stability: TEMPLATE_OUTPUT_STABILITY,
+      status: "failed",
+      error: { code, message },
+    });
+    return;
+  }
+
+  if (opts.json) {
+    writeRuntimeJson(runtime, addResult);
+  } else {
+    runtime.log(`Added agent: ${addResult.agent.finalId}`);
+    runtime.log(`Workspace: ${addResult.agent.workspace}`);
+    if (addResult.error) {
+      runtime.error(addResult.error.message);
+    }
+  }
+  if (addResult.status !== "complete") {
+    runtime.exit(1);
+  }
 }

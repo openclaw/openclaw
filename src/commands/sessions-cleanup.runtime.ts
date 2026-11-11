@@ -1,6 +1,6 @@
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
 import {
   createSessionsCleanupFailure,
   resolveSessionCleanupAction,
@@ -21,7 +21,7 @@ import { loadPluginRegistryHandle } from "../plugins/loader.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease.js";
+import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease-inspection.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import {
   DoctorSqliteMaintenanceLockUnavailableError,
@@ -204,9 +204,11 @@ export async function runLocalSessionsCleanup(
         (target) => resolveSqliteTargetFromSessionStorePath(target.storePath, target).path,
       ),
       run: async (authority) => {
-        const owner = readActiveOpenClawAgentDatabaseLeasesReadOnly(
-          {},
-          openDoctorStateSchemaReadAdmission,
+        const owner = (
+          await readActiveOpenClawAgentDatabaseLeasesReadOnly(
+            {},
+            openDoctorStateSchemaReadAdmission,
+          )
         ).find((lease) => lease.owner_pid !== process.pid);
         if (owner) {
           throw cleanupOwnerRefusal(`agent ${owner.agent_id} (PID ${owner.owner_pid})`);

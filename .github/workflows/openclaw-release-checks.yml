@@ -88,6 +88,7 @@ on:
           - windows-node
           - live-e2e
           - package
+          - qualified-package
           - qa
           - qa-parity
           - qa-live
@@ -934,6 +935,15 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
+
+      - name: Materialize release package source
+        if: needs.resolve_target.outputs.package_mode == 'source'
+        env:
+          PACKAGE_REF: ${{ needs.resolve_target.outputs.revision }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --no-recurse-submodules --depth=1 --refetch --no-filter origin "$PACKAGE_REF"
+          git rev-parse --verify "$PACKAGE_REF^{commit}" >/dev/null
 
       - name: Validate release package source metadata
         if: needs.resolve_target.outputs.package_mode == 'source'
@@ -2231,7 +2241,7 @@ jobs:
     if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
     # Pinned: hosted ubuntu-24.04 failed the core lane in both runs after a backend flip
     # (36639549086, 36639978260). An outage queues this lane instead of failing it.
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('blacksmith-8vcpu-ubuntu-2404'))) || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('blacksmith-2vcpu-ubuntu-2404'))) || 'blacksmith-2vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false

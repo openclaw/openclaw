@@ -4,6 +4,10 @@ Use this before selecting backports for any OpenClaw release line: regular
 beta/stable, extended-stable, or a release-repair branch. It is an audit before the candidate is
 mutated, not a title search and not permission to expand a frozen release.
 
+For an individual fix-status check or a verified cumulative source count, use
+[fix-inclusion tracing](fix-inclusion.md). Keep its source-to-carrier mapping in
+this inventory, not a second release-state store.
+
 ## Start from the shared ledger
 
 Start with [shared candidates and assessments](hotfix-ledger-management.md),
@@ -193,8 +197,12 @@ That decision invalidates affected evidence; it never authorizes publication of
 untested changes.
 
 Before changing release refs, present the complete categorized ledger and the
-proposed set for maintainer approval. After approval, backport with provenance,
-update the ledger, run focused proof plus the release-appropriate validation,
+proposed set for maintainer approval. After approval, apply each backport directly
+to the canonical release branch with `git cherry-pick -x`, one at a time in
+dependency order; do not open individual or combined backport PRs. Follow
+[backports and new fixes](../SKILL.md#backports-and-new-fixes) for CI recovery
+and fixes not yet on main. Update the ledger, run focused proof plus
+release-appropriate validation,
 and keep the final branch/tag/version/SHA identity in that record. Dispatch npm
 preflight only after the canonical release branch or tag has that exact final
 version and SHA.

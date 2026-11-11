@@ -17,6 +17,10 @@ import {
 } from "./github-publication-availability.js";
 import { integrateManagedWorkspaceSource } from "./github-publication-base-refresh.js";
 import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
+import {
+  createGitHubPublicationCommandRunner,
+  readGitHubPublicationBaseSha,
+} from "./github-publication-git-transport.js";
 import { inspectOwnGitHubPullRequest } from "./github-publication-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
 import {
@@ -319,6 +323,25 @@ export async function performSessionGitHubPreparation(
       pendingBase = merge.code === 0;
     }
     if (
+      !pendingBase &&
+      (refreshingBase ||
+        (previous?.base.branch === pullRequest.base.branch &&
+          previous.base.commit !== pullRequest.base.commit))
+    ) {
+      // PR details can lag the live ref, including after a completed base refresh.
+      const { run } = createGitHubPublicationCommandRunner(assertCurrent);
+      pullRequest.base = {
+        ...pullRequest.base,
+        commit: await readGitHubPublicationBaseSha(
+          run,
+          pullRequest.base.repository,
+          pullRequest.base.branch,
+          pullRequest.host,
+          identity.env,
+        ),
+      };
+    }
+    if (
       !refreshingBase &&
       previous &&
       previous.preparedHeadCommit === previous.head.commit &&
@@ -391,7 +414,7 @@ export async function performSessionGitHubPreparation(
         throw new Error("The accepted PR source changed; saved work was preserved.");
       }
     };
-    const accept = async () => {
+    const verify = async () => {
       if (preparedHead) {
         // Source fetches can outlive a remote head or permission observation.
         await assertExistingPullRequestWriteAccess({
@@ -401,6 +424,9 @@ export async function performSessionGitHubPreparation(
           requirePublicRepositories: inspected.requirePublicRepositories,
         });
       }
+      assertReserved();
+    };
+    const accept = async () => {
       assertReserved();
       const committedEntry = await patchSessionEntryCore(
         scope,
@@ -444,6 +470,7 @@ export async function performSessionGitHubPreparation(
               commit: binding.base.commit,
               githubHost: binding.host,
               resuming: pendingBase,
+              verify,
               accept,
             },
           }
@@ -460,6 +487,7 @@ export async function performSessionGitHubPreparation(
               emptySource,
               resuming:
                 previous !== undefined && previous.preparedHeadCommit !== previous.head.commit,
+              verify,
               accept,
             },
           }),

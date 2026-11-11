@@ -10,7 +10,7 @@ import {
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import {
   attachPluginInstallTransaction,
-  resolvePluginInstallTransaction,
+  takePluginInstallTransaction,
   resolvePluginInstallTransactionRequest,
 } from "./install-transaction.js";
 import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
@@ -309,7 +309,7 @@ describe("managed plugin install transactions", () => {
       });
       if (failure === "none") {
         await expect(installed).resolves.toMatchObject({ ok: true });
-        expect(resolvePluginInstallTransaction({ ...(await installed) })).toBeUndefined();
+        expect(takePluginInstallTransaction({ ...(await installed) })).toBeUndefined();
       } else if (failure === "authority-closed") {
         await expect(installed).rejects.toThrow("authority-closed");
         expect(mocks.commit).not.toHaveBeenCalled();

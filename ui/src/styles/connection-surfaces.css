@@ -6,7 +6,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 100vh;
   height: 100dvh;
   max-height: 100%;
   overflow-y: auto;
@@ -30,7 +29,7 @@
   align-items: center;
   gap: 8px;
   margin-bottom: 24px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1;
 }
 
@@ -51,8 +50,7 @@
   gap: 20px;
 }
 
-.login-gate__status-icon,
-.gateway-switch__icon {
+.login-gate__status-icon {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -60,9 +58,6 @@
   width: 40px;
   height: 40px;
   border-radius: var(--radius-full);
-}
-
-.login-gate__status-icon {
   color: var(--login-gate-tone, var(--accent));
   background: color-mix(in srgb, var(--login-gate-tone, var(--accent)) 12%, transparent);
 }
@@ -88,7 +83,7 @@
 .login-gate__heading,
 .login-gate__failure-title {
   margin: 0;
-  font-size: 22px;
+  font-size: calc(22px * var(--control-ui-text-scale));
   font-weight: 700;
   line-height: 1.2;
   letter-spacing: -0.02em;
@@ -99,7 +94,7 @@
 .login-gate__failure-summary {
   margin: 0;
   overflow-wrap: anywhere;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   line-height: 1.5;
   color: var(--muted);
 }
@@ -112,7 +107,7 @@
 .login-gate__failure-steps {
   margin: 0;
   padding-left: 20px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.55;
   color: var(--text);
 }
@@ -131,7 +126,7 @@
   margin: 1px 2px;
   padding: 1px 4px 1px 8px;
   vertical-align: middle;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .login-gate__failure-steps .login-gate__command code {
@@ -171,7 +166,7 @@
   margin-top: 2px;
   justify-content: center;
   padding: 10px 16px;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 600;
 }
 
@@ -189,7 +184,7 @@
   align-items: center;
   gap: 6px;
   list-style: none;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   color: var(--muted);
   cursor: var(--cursor-action);
 }
@@ -242,7 +237,7 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .login-gate__failure-detail {
@@ -277,14 +272,14 @@
 
 .login-gate__help-title {
   font-weight: 600;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--text);
 }
 
 .login-gate__steps {
   margin: 10px 0 0;
   padding-left: 20px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.6;
   color: var(--muted);
 }
@@ -299,7 +294,7 @@
 
 .login-gate__docs {
   margin-top: 10px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 /* The outer app owns safe areas for the login gate as well as the shell. */
@@ -319,7 +314,7 @@
 
   .login-gate__heading,
   .login-gate__failure-title {
-    font-size: 20px;
+    font-size: calc(20px * var(--control-ui-text-scale));
   }
 
   /* 44px touch targets per platform guidelines. */
@@ -350,75 +345,31 @@
 /* A link pointed this browser at another Gateway. Show where it goes and what
    travels with it; the guard is honest, not alarmed. */
 
-.gateway-switch {
-  display: grid;
-  gap: 18px;
-  width: min(520px, 100%);
-  padding: 22px 24px 24px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
-}
-
-.login-gate__status-head,
-.gateway-switch__head {
+.login-gate__status-head {
   display: flex;
   align-items: flex-start;
   gap: 14px;
 }
 
-.gateway-switch__icon {
-  color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
-}
-
-.login-gate__status-icon svg,
-.gateway-switch__icon svg {
+.login-gate__status-icon svg {
   width: 20px;
   height: 20px;
 }
 
-.gateway-switch__title {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1.25;
-  letter-spacing: -0.01em;
-  color: var(--text-strong);
-}
-
-.gateway-switch__summary {
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--muted);
-}
-
 .gateway-switch__hosts {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
+  gap: var(--space-3);
 }
 
 .gateway-switch__host {
   display: grid;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-accent);
-}
-
-.gateway-switch__host--next {
-  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
 }
 
 .login-gate__hero-label,
 .gateway-switch__label {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -427,42 +378,15 @@
 
 .gateway-switch__host code {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.45;
   color: var(--text-strong);
   overflow-wrap: anywhere;
 }
 
-.gateway-switch__arrow {
-  display: inline-flex;
-  color: var(--muted);
-}
-
-.gateway-switch__arrow svg {
-  width: 18px;
-  height: 18px;
-}
-
 .gateway-switch__note {
   margin: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.5;
   color: var(--text);
-}
-
-@media (max-width: 560px) {
-  .gateway-switch__hosts {
-    grid-template-columns: 1fr;
-  }
-
-  .gateway-switch__arrow {
-    justify-self: center;
-    transform: rotate(90deg);
-  }
-}
-
-.gateway-switch__text {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
 }

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile, rm, rename, symlink } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { LiveState } from "./live-state.js";
 import { createKnowledgeService } from "./service.js";
 import {
@@ -37,13 +37,19 @@ async function until(fn: any) {
 
 it("external changes invalidate; events contain no data; authorized reads reconcile edits/renames/deletions", async () => {
   const f = await fixture();
+  const watch = vi.spyOn(LiveState.prototype, "start");
+  afterTest(() => watch.mockRestore());
   f.services[0].start();
   const r = await f.service.save_page(
     { requestId: randomUUID(), title: "Live fixture", type: "note", body: "Original" },
     f.context,
   );
-  await until(() => f.emitted.length);
-  await delay(200);
+  expect(watch).not.toHaveBeenCalled();
+  // Begin observation on a populated vault: the save's explicit hint cannot
+  // stand in for native delivery of its initial directory/file creation.
+  await f.services[0].stop();
+  f.service = createKnowledgeService(f.context.api, { emit: (...args) => f.emitted.push(args) });
+  f.services[1].start();
   f.emitted.length = 0;
   const original = (await f.service.record({ id: r.id, view: "raw" }, f.context)).record!.raw;
   const file = f.root + "/private/" + r.path;
@@ -62,6 +68,8 @@ it("external changes invalidate; events contain no data; authorized reads reconc
   f.emitted.length = 0;
   await rm(file + "-renamed.md"); // Native watchers can coalesce rapid rename/delete; periodic UI reads cover this.
   expect((await f.service.record({ id: r.id }, f.context)).record).toBe(null);
+  expect((await f.service.status({}, f.context)).live).toBe("watching");
+  expect(watch).not.toHaveBeenCalled();
 });
 
 it("watcher stop cancels queued events; restart has one subscription; unrelated scopes stay silent", async () => {

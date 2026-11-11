@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type {
@@ -41,6 +42,7 @@ import {
   createApplicationContextProvider,
   hiddenScopeUpgradeCapability,
 } from "./application-context.ts";
+import { sessionListResult } from "./chat-model.ts";
 import { sidebarGatewayHello } from "./gateway-methods.ts";
 import { waitForSolid } from "./solid-settle.ts";
 
@@ -138,26 +140,16 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
   };
 }
 
-export function createSessionState(agentId: string, keys: string[]): SessionState {
-  const result = {
-    ts: 1,
-    path: "",
-    count: keys.length,
-    defaults: {
-      modelProvider: null,
-      model: null,
-      contextTokens: null,
-    },
-    sessions: keys.map((key, index) => ({
-      key,
-      sessionId: `session:${key}`,
-      kind: "direct" as const,
-      updatedAt: index + 1,
-    })),
-  } satisfies SessionsListResult;
+export function createSessionState(agentId: string, keys: string[]) {
+  const rows = keys.map((key, index) => ({
+    key,
+    sessionId: `session:${key}`,
+    kind: "direct" as const,
+    updatedAt: index + 1,
+  }));
   return {
     ...emptySessionState(),
-    result,
+    result: sessionListResult(1, rows),
     agentId,
   };
 }
@@ -182,7 +174,7 @@ function usesPrimarySessionList(scope: SessionListOptions = {}) {
 }
 
 export function createSessionsHarness(agentId: string, keys: string[]) {
-  let state = createSessionState(agentId, keys);
+  let state: SessionState = createSessionState(agentId, keys);
   let revision = 0;
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
@@ -433,11 +425,21 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     );
     scopedSessions.subscribe(notify);
   });
+  const fixtureResult = () => expectDefined(state.result, "session list fixture");
   const publish = (statePatch: Partial<SessionState>) => {
     state = { ...state, ...statePatch };
     notify();
   };
   return {
+    get result() {
+      return fixtureResult();
+    },
+    row(key: string) {
+      return expectDefined(
+        fixtureResult().sessions.find((row) => row.key === key),
+        key,
+      );
+    },
     sessions,
     groupsPut,
     groupsRename,

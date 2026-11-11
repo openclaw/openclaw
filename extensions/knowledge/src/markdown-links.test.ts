@@ -1,13 +1,14 @@
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { connections } from "./connections.js";
-import { markdown, resolveLinks } from "./markdown-links.js";
+import { linkSpans, markdown, resolveLinks } from "./markdown-links.js";
 import { effectiveRecord } from "./merge.js";
 import type { Envelope, LoadedRecord } from "./model.js";
 import { recordPath } from "./record-path.js";
-import { useTestTempDirs } from "./test-support.js";
+import { afterTest, useTestTempDirs } from "./test-support.js";
 import type { ScanResult } from "./vault.js";
 
 const tempDirs = useTestTempDirs();
+beforeEach(() => afterTest(() => vi.restoreAllMocks()));
 const record = (
   id: string,
   title: string,
@@ -38,17 +39,13 @@ it("keeps a live record's link parse warm across unrelated document churn", () =
     resolveLinks(record(`other-${index}`, "Other", "people/other.md", `churn ${index}`), []);
   }
   const lexer = vi.spyOn(markdown, "lexer");
-  try {
-    resolveLinks({ ...source }, candidates);
-    expect(lexer).not.toHaveBeenCalled();
-    source.body = "[[changed cache owner]]";
-    expect(resolveLinks(source, candidates)).toEqual([
-      { href: "#wiki=changed%20cache%20owner", status: "missing" },
-    ]);
-    expect(lexer).toHaveBeenCalledOnce();
-  } finally {
-    lexer.mockRestore();
-  }
+  resolveLinks({ ...source }, candidates);
+  expect(lexer).not.toHaveBeenCalled();
+  source.body = "[[changed cache owner]]";
+  expect(resolveLinks(source, candidates)).toEqual([
+    { href: "#wiki=changed%20cache%20owner", status: "missing" },
+  ]);
+  expect(lexer).toHaveBeenCalledOnce();
 });
 
 it("shares link extraction with merged projections before their first parse", () => {
@@ -59,23 +56,19 @@ it("shares link extraction with merged projections before their first parse", ()
   const redirects = new Map([["old-target", "target"]]);
   const candidates = [target];
   const lexer = vi.spyOn(markdown, "lexer");
-  try {
-    expect(resolveLinks(effectiveRecord(source, redirects), candidates)).toEqual([
-      { href: "#wiki=Target", status: "resolved", id: "target" },
-    ]);
-    resolveLinks(effectiveRecord(source, redirects), candidates);
-    resolveLinks(source, candidates);
-    expect(lexer).toHaveBeenCalledOnce();
-    const projection = effectiveRecord(source, redirects);
-    expect(resolveLinks({ ...projection, body: "[[Changed]]" }, candidates)).toEqual([
-      { href: "#wiki=Changed", status: "missing" },
-    ]);
-    expect(resolveLinks(source, candidates)).toEqual([
-      { href: "#wiki=Target", status: "resolved", id: "target" },
-    ]);
-  } finally {
-    lexer.mockRestore();
-  }
+  expect(resolveLinks(effectiveRecord(source, redirects), candidates)).toEqual([
+    { href: "#wiki=Target", status: "resolved", id: "target" },
+  ]);
+  resolveLinks(effectiveRecord(source, redirects), candidates);
+  resolveLinks(source, candidates);
+  expect(lexer).toHaveBeenCalledOnce();
+  const projection = effectiveRecord(source, redirects);
+  expect(resolveLinks({ ...projection, body: "[[Changed]]" }, candidates)).toEqual([
+    { href: "#wiki=Changed", status: "missing" },
+  ]);
+  expect(resolveLinks(source, candidates)).toEqual([
+    { href: "#wiki=Target", status: "resolved", id: "target" },
+  ]);
 });
 
 it("revalidates unsettled files while reusing links only for unchanged bytes", async () => {
@@ -86,24 +79,19 @@ it("revalidates unsettled files while reusing links only for unchanged bytes", a
   await cp(sampleVaultRoot(), root, { recursive: true });
   const cache: import("./vault.js").ScanCache = {};
   const vault = new SampleVault(root, { visibility: "sample" }, false, undefined, cache);
-  const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+  vi.spyOn(Date, "now").mockReturnValue(0);
   const lexer = vi.spyOn(markdown, "lexer");
-  try {
-    const first = await vault.scan();
-    lexer.mockClear();
-    expect(await vault.scan()).not.toBe(first);
-    expect(lexer).not.toHaveBeenCalled();
-    const file = root + "/people/alex-rivera.md";
-    await writeFile(file, (await readFile(file, "utf8")) + "\n[[New missing target]]\n");
-    const changed = await vault.scan();
-    expect(changed.issues.some((issue) => issue.message.includes("New%20missing%20target"))).toBe(
-      true,
-    );
-    expect(lexer).toHaveBeenCalledOnce();
-  } finally {
-    lexer.mockRestore();
-    clock.mockRestore();
-  }
+  const first = await vault.scan();
+  lexer.mockClear();
+  expect(await vault.scan()).not.toBe(first);
+  expect(lexer).not.toHaveBeenCalled();
+  const file = root + "/people/alex-rivera.md";
+  await writeFile(file, (await readFile(file, "utf8")) + "\n[[New missing target]]\n");
+  const changed = await vault.scan();
+  expect(changed.issues.some((issue) => issue.message.includes("New%20missing%20target"))).toBe(
+    true,
+  );
+  expect(lexer).toHaveBeenCalledOnce();
 });
 
 it("Markdown tokenization excludes code, escapes, HTML, images and generated backlinks", () => {
@@ -113,6 +101,26 @@ it("Markdown tokenization excludes code, escapes, HTML, images and generated bac
     resolveLinks(record("source", "Source", "source.md", body), []).map(({ href }) => href),
   ).toStrictEqual(["../people/alex.md", "#wiki=Alex", "people/alex.md"]);
 });
+it("ignores image-alt links while retaining visible links in containers", () => {
+  const body = [
+    "> ![alt [[Hidden wiki]]](image.png) [[Quoted]]",
+    "",
+    "- ![alt [Hidden](hidden.md)](image.png) [Listed](listed.md)",
+    "",
+    "| Links |",
+    "| --- |",
+    "| ![alt [[Hidden cell]]](image.png) [[Cell]] |",
+  ].join("\n");
+  const rendered = markdown.parse(body);
+  const expected = ["#wiki=Quoted", "listed.md", "#wiki=Cell"];
+  expect(
+    resolveLinks(record("source", "Source", "source.md", body), []).map(({ href }) => href),
+  ).toStrictEqual(expected);
+  expect(linkSpans(body).map(({ href }) => href)).toStrictEqual(expected);
+  expect(rendered).not.toMatch(/<a href="(?:#wiki=Hidden|hidden\.md)/);
+  expect(markdown.parse(body)).toBe(rendered);
+});
+
 it("comments are invisible while code examples and other HTML stay escaped", () => {
   const source =
     "Before <!-- project: path:/private/workspace --> after\n\n<!-- hidden\n[[Secret]]\n-->\n\n`<!-- inline example -->`\n\n```html\n<!-- fenced example -->\n```\n\n&lt;!-- escaped example --&gt;\n\n<script>unsafe()</script>";
@@ -241,13 +249,25 @@ it("real scans expose scoped link resolutions and diagnostics without invalidati
   await cp(sampleVaultRoot(), root, { recursive: true });
   const file = root + "/people/alex-rivera.md";
   const before = await readFile(file, "utf8");
-  await writeFile(file, before + "\n[[Missing page]] [self](alex-rivera.md)\n");
+  await writeFile(
+    root + "/people/alex-rivera#v2.md",
+    before.replaceAll("sample_person_alex", "sample_person_hash").replaceAll("Alex", "Hashed"),
+  );
+  const appended =
+    "\n[[Missing page]] [self](alex-rivera.md) [hash](alex-rivera%23v2.md) [hash-fragment](alex-rivera%23v2.md#Details)\n";
+  await writeFile(file, before + appended);
   const vault = new SampleVault(root),
     detail = await inspectRecord(vault, { id: "sample_person_alex" });
   expect(detail.record!.valid).toBeTruthy();
   expect(detail.links!.some((l) => l.status === "missing")).toBeTruthy();
   expect(detail.issues.some((i) => i.code === "missing-link")).toBeTruthy();
   expect(detail.links!.some((l) => l.id === "sample_person_alex")).toBeTruthy();
+  expect(detail.links!.filter((l) => l.href.startsWith("alex-rivera%23")).map((l) => l.id)).toEqual(
+    ["sample_person_hash", "sample_person_hash"],
+  );
+  expect(
+    connections(await vault.scan(), { id: "sample_person_hash", direction: "backlinks" }).total,
+  ).toBe(1);
   await rename(file, root + "/people/alex-renamed.md");
   const changed = await inspectRecord(vault, { id: "sample_person_alex" });
   expect(changed.record!.path).toBe("people/alex-renamed.md");
