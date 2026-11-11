@@ -13,6 +13,7 @@ import {
   McpAppViewExpiredErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   OutboundDeliveryQueuedErrorDetailsSchema,
+  OutboundDeliveryUnknownErrorDetailsSchema,
   SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
   ProjectCloneErrorDetailsSchema,
   missingScopeErrorShape,
@@ -162,6 +163,15 @@ describe("gateway error details", () => {
     expect(Value.Check(OutboundDeliveryQueuedErrorDetailsSchema, details)).toBe(true);
     expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
     expect(Value.Check(OutboundDeliveryQueuedErrorDetailsSchema, { ...details, retry: true })).toBe(
+      false,
+    );
+  });
+
+  it("validates unknown outbound delivery details", () => {
+    const details = { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_UNKNOWN };
+    expect(Value.Check(OutboundDeliveryUnknownErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(OutboundDeliveryUnknownErrorDetailsSchema, { ...details, retry: true })).toBe(
       false,
     );
   });

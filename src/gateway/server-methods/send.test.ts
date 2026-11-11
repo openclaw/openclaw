@@ -665,6 +665,26 @@ describe("gateway send conversation ownership", () => {
     expect(firstRespondCall(respond)[2]?.retryable).toBeUndefined();
   });
 
+  it("reports send evidence without custody as unknown and non-retryable", async () => {
+    const error = new OutboundDeliveryError("MatrixError: [429] Server is unavailable", {
+      cause: new Error("429"),
+      sentBeforeError: true,
+      stage: "platform_send",
+    });
+    mocks.dispatchChannelMessageAction.mockRejectedValueOnce(error);
+    const { respond } = await runMessageActionRequest(
+      {
+        params: { channelId: "C1", message: "hi" },
+      },
+      directCliClient(),
+    );
+    expect(firstRespondCall(respond)[2]).toMatchObject({
+      code: ErrorCodes.UNAVAILABLE,
+      details: { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_UNKNOWN },
+      retryable: false,
+    });
+  });
+
   it.each(["delegated", "caller"] as const)(
     "does not send after %s authority closes during session preparation",
     async (authority) => {

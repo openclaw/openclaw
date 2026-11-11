@@ -59,6 +59,10 @@ export const OutboundDeliveryQueuedErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED),
 });
 
+export const OutboundDeliveryUnknownErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.OUTBOUND_DELIVERY_UNKNOWN),
+});
+
 export const UserPrefsLimitExceededErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED),
   limit: Type.Integer({ minimum: 1 }),
@@ -129,6 +133,7 @@ export const GatewayErrorDetailsSchema = Type.Union([
   MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetailsSchema,
   OutboundDeliveryQueuedErrorDetailsSchema,
+  OutboundDeliveryUnknownErrorDetailsSchema,
   UserPrefsLimitExceededErrorDetailsSchema,
   ProjectCloneErrorDetailsSchema,
   UnknownAgentIdErrorDetailsSchema,

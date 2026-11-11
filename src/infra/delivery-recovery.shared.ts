@@ -243,6 +243,47 @@ export function isRetryableDeliveryNotSentError(err: unknown): boolean {
   return deliveryNotSentRetryability(err, false) ?? false;
 }
 
+/**
+ * True when the error graph shows a send may have reached recipients without
+ * proof either way: send evidence exists, but no branch proves a no-send.
+ * Callers must report "unknown, do not resend", never "failed".
+ */
+export function isAmbiguousDeliveryOutcomeError(err: unknown): boolean {
+  const candidates = collectErrorGraphCandidates(err, nestedErrorCandidates);
+  return hasDeliverySendEvidence(candidates) && !hasDeliveryNotSentProof(candidates);
+}
+
+/** Provider-accepted message IDs found anywhere in the error graph, deduplicated. */
+export function collectAmbiguousDeliveryMessageIds(err: unknown): string[] {
+  const ids = new Set<string>();
+  for (const candidate of collectErrorGraphCandidates(err, nestedErrorCandidates)) {
+    if (isOutboundDeliveryError(candidate)) {
+      for (const result of candidate.results) {
+        ids.add(result.messageId);
+      }
+      for (const outcome of candidate.payloadOutcomes) {
+        if ("results" in outcome) {
+          for (const result of outcome.results ?? []) {
+            ids.add(result.messageId);
+          }
+        }
+      }
+    }
+    if (
+      isRecord(candidate) &&
+      isRecord(candidate.deliveryResult) &&
+      Array.isArray(candidate.deliveryResult.messageIds)
+    ) {
+      for (const id of candidate.deliveryResult.messageIds) {
+        if (typeof id === "string") {
+          ids.add(id);
+        }
+      }
+    }
+  }
+  return [...ids];
+}
+
 /** True when the durable queue retained the exact failed attempt for recovery. */
 export function isDeliveryRecoveryOwnedRetry(err: unknown): boolean {
   return collectErrorGraphCandidates(err, nestedErrorCandidates).some(

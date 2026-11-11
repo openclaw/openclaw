@@ -32,6 +32,7 @@ export const GatewayErrorDetailCodes = {
   MISSING_SCOPE: MISSING_SCOPE_ERROR_CODE,
   MCP_APP_VIEW_EXPIRED,
   OUTBOUND_DELIVERY_QUEUED: "OUTBOUND_DELIVERY_QUEUED",
+  OUTBOUND_DELIVERY_UNKNOWN: "OUTBOUND_DELIVERY_UNKNOWN",
   USER_PREFS_LIMIT_EXCEEDED: "USER_PREFS_LIMIT_EXCEEDED",
   SESSION_COMPANION_BUSY: "SESSION_COMPANION_BUSY",
   PROJECT_CLONE_FAILED: "PROJECT_CLONE_FAILED",
@@ -59,6 +60,10 @@ export type McpAppViewExpiredErrorDetails = Static<
 
 export type OutboundDeliveryQueuedErrorDetails = Static<
   typeof ErrorSchemas.OutboundDeliveryQueuedErrorDetailsSchema
+>;
+
+export type OutboundDeliveryUnknownErrorDetails = Static<
+  typeof ErrorSchemas.OutboundDeliveryUnknownErrorDetailsSchema
 >;
 
 /** Per-profile preference quota details returned by users.prefs.set. */
@@ -128,6 +133,7 @@ export type GatewayErrorDetails =
   | MissingScopeErrorDetails
   | McpAppViewExpiredErrorDetails
   | OutboundDeliveryQueuedErrorDetails
+  | OutboundDeliveryUnknownErrorDetails
   | UserPrefsLimitExceededErrorDetails
   | ProjectCloneErrorDetails
   | UnknownAgentIdErrorDetails

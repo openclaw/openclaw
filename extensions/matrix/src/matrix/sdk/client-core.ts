@@ -3,7 +3,7 @@ import { EventStatus } from "matrix-js-sdk/lib/models/event-status.js";
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { MatrixSyncIngressHandler } from "../client/file-sync-store.js";
-import { formatMatrixErrorReason } from "../errors.js";
+import { asDefinitiveMatrixRejection, formatMatrixErrorReason } from "../errors.js";
 import { MATRIX_REACTION_EVENT_TYPE } from "../reaction-common.js";
 import { MatrixClientBase } from "./client-base.js";
 import { matrixEventToRaw, parseMxc } from "./event-helpers.js";
@@ -213,8 +213,14 @@ export abstract class MatrixClientCore extends MatrixClientBase {
             }
           }
           await this.prepareRoomForMessageSend(roomId, content);
-          const sent = await this.client.sendMessage(roomId, content as never, wireTransactionId);
-          return sent.event_id;
+          try {
+            const sent = await this.client.sendMessage(roomId, content as never, wireTransactionId);
+            return sent.event_id;
+          } catch (error) {
+            // Definitive rejections (non-429 4xx) prove nothing was stored;
+            // anything else stays ambiguous for the queue to reconcile.
+            throw asDefinitiveMatrixRejection(error) ?? error;
+          }
         },
       });
     });

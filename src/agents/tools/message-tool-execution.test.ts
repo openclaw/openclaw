@@ -22,6 +22,10 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
 import type {
   MessageActionInput,
   MessageActionResult,
@@ -389,6 +393,65 @@ describe("message tool queued gateway delivery", () => {
           "Delivery is pending: connect ECONNREFUSED. The gateway owns retry or reconciliation; delivery is not yet confirmed. Do not resend it.",
       },
     });
+    await tool.execute("send-again", { action: "send", message: "hello" });
+    expect(sentIdempotencyKey(runMessageAction, 0)).toBeDefined();
+    expect(sentIdempotencyKey(runMessageAction, 1)).toBe(sentIdempotencyKey(runMessageAction, 0));
+  });
+});
+
+describe("message tool ambiguous delivery", () => {
+  it("reports unknown instead of failed when the send may have dispatched", async () => {
+    const error = new OutboundDeliveryError("MatrixError: [429] Server is unavailable", {
+      cause: new Error("429"),
+      sentBeforeError: true,
+    });
+    const { tool } = createFailingMessageTool(error);
+    expect(await tool.execute("send", { action: "send", message: "hello" })).toMatchObject({
+      details: {
+        status: "delivery_unknown",
+        delivered: false,
+        message: expect.stringContaining("Do not resend it"),
+      },
+    });
+  });
+
+  it("reports unknown for gateway-relayed ambiguous sends", async () => {
+    const error = new GatewayClientRequestError({
+      code: ErrorCodes.UNAVAILABLE,
+      message: "MatrixError: [429] Server is unavailable",
+      details: { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_UNKNOWN },
+    });
+    const { tool } = createFailingMessageTool(error);
+    expect(await tool.execute("send", { action: "send", message: "hello" })).toMatchObject({
+      details: {
+        status: "delivery_unknown",
+        delivered: false,
+      },
+    });
+  });
+
+  it("still throws proven-not-sent failures as retryable", async () => {
+    const error = new Error("connect ECONNREFUSED");
+    const { tool } = createFailingMessageTool(error);
+    await expect(tool.execute("send", { action: "send", message: "hello" })).rejects.toBe(error);
+  });
+
+  it("still throws typed no-send markers", async () => {
+    const error = new PlatformMessageNotDispatchedError("rejected before dispatch", {
+      cause: new Error("policy"),
+      retryable: false,
+    });
+    const { tool } = createFailingMessageTool(error);
+    await expect(tool.execute("send", { action: "send", message: "hello" })).rejects.toBe(error);
+  });
+
+  it("collapses same-key resends after an ambiguous result", async () => {
+    const error = new OutboundDeliveryError("MatrixError: [429]", {
+      cause: new Error("429"),
+      sentBeforeError: true,
+    });
+    const { tool, runMessageAction } = createFailingMessageTool(error);
+    await tool.execute("send", { action: "send", message: "hello" });
     await tool.execute("send-again", { action: "send", message: "hello" });
     expect(sentIdempotencyKey(runMessageAction, 0)).toBeDefined();
     expect(sentIdempotencyKey(runMessageAction, 1)).toBe(sentIdempotencyKey(runMessageAction, 0));

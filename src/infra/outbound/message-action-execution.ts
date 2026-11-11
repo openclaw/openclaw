@@ -28,6 +28,10 @@ import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
+import {
+  collectAmbiguousDeliveryMessageIds,
+  isAmbiguousDeliveryOutcomeError,
+} from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
@@ -105,8 +109,15 @@ export function projectMessageActionPartialDelivery(error: unknown) {
       };
 }
 
+function isGatewayRequestError(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    (error.name === "GatewayClientRequestError" || error.name === "GatewayProtocolRequestError")
+  );
+}
+
 export function projectGatewayQueuedDeliveryResult(error: unknown) {
-  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
+  if (!isGatewayRequestError(error)) {
     return undefined;
   }
   const details = asResultRecord(asResultRecord(error)?.details);
@@ -117,6 +128,31 @@ export function projectGatewayQueuedDeliveryResult(error: unknown) {
     status: "delivery_queued",
     delivered: false as const,
     message: `Delivery is pending: ${error.message}. The gateway owns retry or reconciliation; delivery is not yet confirmed. Do not resend it.`,
+  };
+}
+
+export function projectAmbiguousDeliveryResult(error: unknown) {
+  const gatewayAmbiguous =
+    isGatewayRequestError(error) &&
+    asResultRecord(asResultRecord(error)?.details)?.code ===
+      GatewayErrorDetailCodes.OUTBOUND_DELIVERY_UNKNOWN;
+  if (!gatewayAmbiguous && !isAmbiguousDeliveryOutcomeError(error)) {
+    return undefined;
+  }
+  const messageIds = gatewayAmbiguous ? [] : collectAmbiguousDeliveryMessageIds(error);
+  const knownIds =
+    messageIds.length > 0 ? ` Known message IDs: ${messageIds.join(", ")}.` : "";
+  const ownership = gatewayAmbiguous
+    ? "The gateway owns reconciliation."
+    : "Reconciliation is owned downstream.";
+  return {
+    status: "delivery_unknown",
+    delivered: false as const,
+    sentBeforeError: true as const,
+    message:
+      `Delivery state is unknown: ${formatErrorMessage(error)}.` +
+      ` The message may already be delivered; ${ownership}` +
+      ` Do not resend it; check history instead.${knownIds}`,
   };
 }
 

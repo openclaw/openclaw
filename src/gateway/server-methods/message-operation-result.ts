@@ -6,6 +6,7 @@ import {
 import { isChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import { OutboundHandoffRejectedError } from "../../infra/outbound/deliver-handoff.js";
 import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
+import { isAmbiguousDeliveryOutcomeError } from "../../infra/delivery-recovery.shared.js";
 import { mirrorDeliveredSourceReplyToTranscript } from "../../infra/outbound/source-reply-mirror.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
@@ -96,6 +97,10 @@ export function createGatewayInflightFailure(
     !partialDelivery &&
     params.err instanceof OutboundDeliveryError &&
     params.err.queueCustody === "held";
+  // Send evidence without queue custody (e.g. dispatch fired, then 429) must
+  // survive the relay, or the agent reads it as failed and resends a duplicate.
+  const ambiguousDelivery =
+    !partialDelivery && !queuedDelivery && isAmbiguousDeliveryOutcomeError(params.err);
   const error = errorShape(
     ErrorCodes.UNAVAILABLE,
     String(params.err),
@@ -103,7 +108,12 @@ export function createGatewayInflightFailure(
       ? { details: { partialDelivery }, retryable: false }
       : queuedDelivery
         ? { details: { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED } }
-        : undefined,
+        : ambiguousDelivery
+          ? {
+              details: { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_UNKNOWN },
+              retryable: false,
+            }
+          : undefined,
   );
   return createGatewayInflightResult({
     ...params,

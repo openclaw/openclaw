@@ -19,7 +19,10 @@ import {
   validateExplicitMessageAccountSelection,
 } from "../../infra/outbound/message-account-selection.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
-import { projectGatewayQueuedDeliveryResult } from "../../infra/outbound/message-action-execution.js";
+import {
+  projectAmbiguousDeliveryResult,
+  projectGatewayQueuedDeliveryResult,
+} from "../../infra/outbound/message-action-execution.js";
 import { hasAcceptedMessageActionResult } from "../../infra/outbound/message-action-result-acceptance.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { enforceMessageActionAllowlist } from "../../infra/outbound/outbound-policy.js";
@@ -635,6 +638,14 @@ function* createMessageToolSteps(
               const queuedDelivery = projectGatewayQueuedDeliveryResult(error);
               if (queuedDelivery) {
                 return jsonResult(queuedDelivery);
+              }
+              // Send evidence without proof (e.g. dispatch fired, then 429):
+              // report unknown, never failed, so the model doesn't resend a
+              // duplicate. Cron/queue/scheduled-direct callers still throw;
+              // only this tool result is projected.
+              const ambiguousDelivery = projectAmbiguousDeliveryResult(error);
+              if (ambiguousDelivery) {
+                return jsonResult(ambiguousDelivery);
               }
               decisions.recordTypedDenial(error);
               throw error;
