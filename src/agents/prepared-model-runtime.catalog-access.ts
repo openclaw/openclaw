@@ -1,10 +1,9 @@
 import pLimit from "p-limit";
 import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
+import { pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
 import { createPreparedRuntimeAuthProfileUsageReader } from "./auth-profiles/runtime-snapshots.js";
-import {
-  augmentPreparedModelCatalogWithAgentHarness,
-  isPreparedNativeModelCatalogReady,
-} from "./harness/model-catalog.js";
+import { isPreparedNativeModelCatalogReady } from "./harness/model-catalog.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
@@ -49,6 +48,7 @@ import {
   markPreparedModelCatalogFull,
 } from "./prepared-model-runtime.full-catalog.js";
 import { capturePreparedModelRuntimeLifetime } from "./prepared-model-runtime.lifecycle.js";
+import { acquireNativeCatalogRows } from "./prepared-model-runtime.native-harness.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import {
   createCatalogAttemptReporter,
@@ -161,10 +161,7 @@ export async function createFullModelCatalogAccess(
   const worker = withRemoteModelCatalogSnapshot(params.pluginGeneration.remoteCatalog, () =>
     createPreparedModelCatalogWorker({
       pluginRegistry: params.pluginGeneration.pluginRegistry,
-      agentFacts: {
-        ...params.agentFacts,
-        configuredRuntimeModels: params.catalogFacts.configuredRuntimeModels,
-      },
+      agentFacts: params.agentFacts,
       pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
       preferBuiltPluginArtifacts: params.pluginGeneration.preferBuiltPluginArtifacts,
       isCurrent: params.isCurrent,
@@ -405,7 +402,11 @@ export async function createFullModelCatalogAccess(
     }
     const previousNative = nativePending;
     let failedProviders: readonly string[] | undefined;
-    const promise = (async () => {
+    // The acquisition outlives its starting turn: the foreground wait can
+    // expire while the native read runs, and the turn's plugin invocation
+    // scope closes with the turn (#196968). Running outside that scope keeps
+    // its plugin calls from throwing "Plugin invocation scope is closed".
+    const runAcquisition = async () => {
       await previousNative?.catch(() => undefined);
       const settledCatalog = readReadyCatalog();
       if (settledCatalog) {
@@ -415,39 +416,20 @@ export async function createFullModelCatalogAccess(
         [Symbol.asyncDispose]: retainPreparedPluginGeneration(params.pluginGeneration),
       };
       attempt.setPending([], "native");
-      let discoveredProviders: string[] = [];
-      let completed = false;
-      const failures: Array<{ error: unknown; providers?: readonly string[] }> = [];
-      const startupProviders = new Set(params.agentFacts.providerIds.map(normalizeProvider));
-      const rawCatalog = await augmentPreparedModelCatalogWithAgentHarness({
-        input,
-        nativeSelection: selection,
-        snapshot: params.isCurrent()
-          ? (published.inventory?.catalog ?? params.catalogFacts.modelCatalog)
-          : readCatalog(),
-        normalizeProvider,
-        preparedSnapshot: readCatalog(),
-        pluginRegistry: params.pluginGeneration.pluginRegistry,
-        includesProvider: providerIds
-          ? (provider) => providerIds.includes(normalizeProvider(provider))
-          : undefined,
-        onDiscoveryStarted: (provider) => {
-          attempt.setPending([normalizeProvider(provider)], "native");
-        },
-        onError: (error, failedProviderIds) => {
-          failures.push({ error, providers: failedProviderIds?.map(normalizeProvider) });
-        },
-        onDiscoveryCompleted: (rows) => {
-          completed = true;
-          discoveredProviders = [
-            ...new Set(
-              rows
-                .map((entry) => normalizeProvider(entry.provider))
-                .filter((provider) => !startupProviders.has(provider)),
-            ),
-          ];
-        },
-      });
+      const { rawCatalog, completed, discoveredProviders, failures } =
+        await acquireNativeCatalogRows({
+          input,
+          selection,
+          isCurrent: params.isCurrent,
+          getPublishedCatalog: () =>
+            published.inventory?.catalog ?? params.catalogFacts.modelCatalog,
+          readCatalog,
+          normalizeProvider,
+          pluginRegistry: params.pluginGeneration.pluginRegistry,
+          providerIds,
+          agentProviderIds: params.agentFacts.providerIds,
+          attempt,
+        });
       assertObservationCurrent();
       if (!params.isCurrent()) {
         if (!completed && failures.length) {
@@ -532,7 +514,9 @@ export async function createFullModelCatalogAccess(
         throw failures[0]!.error;
       }
       return published.catalog ?? staticCatalog;
-    })()
+    };
+    const promise = pluginInvocationContext
+      .exit(() => pluginInstanceInvocation.exit(runAcquisition))
       .catch((error: unknown) => {
         attempt.failed(error, failedProviders ?? providerIds, "native");
         if (published.catalog) {
