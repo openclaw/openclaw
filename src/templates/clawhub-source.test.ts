@@ -414,6 +414,28 @@ describe("public ClawHub Template catalog", () => {
     },
   );
 
+  it.each([
+    { profile: "full", allow: ["read"], deny: ["browser"], fs: { workspaceOnly: true } },
+    { profile: "minimal", alsoAllow: ["read"] },
+  ])(
+    "discloses declared access from verified agent frontmatter without resolving host defaults",
+    async (tools) => {
+      const sandbox = { mode: "off", scope: "agent", workspaceAccess: "ro" };
+      const manifest = { ...emptyManifest, agent: { ...emptyManifest.agent, sandbox, tools } };
+      await fs.writeFile(
+        path.join(fixtureRoot, "CLAW.md"),
+        `---\n${JSON.stringify(manifest)}\n---\n`,
+      );
+      const detail = await readClawHubTemplateDetail({ packageName });
+      expect(detail).toMatchObject({ access: { sandbox, tools } });
+      expect(validateTemplatesCatalogDetailResult({ detail })).toBe(true);
+    },
+  );
+
+  it("leaves access unspecified when agent frontmatter does not declare it", async () => {
+    await expect(readClawHubTemplateDetail({ packageName })).resolves.toMatchObject({ access: {} });
+  });
+
   it("projects a personal publisher release from its verified archive", async () => {
     await selectPackage(communityPackage());
     mocks.skillCard.mockResolvedValueOnce(

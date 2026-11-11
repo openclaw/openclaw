@@ -8,6 +8,7 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
+import { TemplateAccessSection } from "./template-access-section.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplateAddFeedback } from "./templates-detail-view.tsx";
@@ -174,6 +175,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                     when={category()}
                     fallback={
                       <div class="template-preview__contents">
+                        <TemplateAccessSection access={props.view.readDetail()?.access} />
                         <For each={categories}>
                           {(item) => (
                             <button
