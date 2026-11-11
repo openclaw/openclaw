@@ -12,7 +12,6 @@ import { recordSignalEditRevision, resolveSignalEditTarget } from "./edit-revisi
 import { normalizeSignalReactionRecipient } from "./normalize.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
 import { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
-import { sendMessageSignal } from "./send.js";
 
 const providerId = "signal";
 const GROUP_PREFIX = "group:";
@@ -157,6 +156,7 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       if (!text) {
         throw new Error("Signal edit requires text, newText, or message.");
       }
+      const { sendMessageSignal } = await import("./send.js");
       const target = { accountId: account.accountId, to, timestamp };
       const result = await sendMessageSignal(to, text, {
         cfg,
