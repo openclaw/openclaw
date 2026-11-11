@@ -265,6 +265,11 @@ history. Larger summaries increase context usage and replay cost on subsequent
 requests. They do not increase the summarizer's input or output allowance, recover
 facts already lost from earlier summaries, or change provider-native compaction.
 
+Text quoted from the conversation into a compaction summary—including recent turns,
+split-turn context, the latest request, and extracted identifiers—has recognized
+credential shapes redacted before excerpts are clipped. The stored transcript
+keeps its original text.
+
 ### Identifier preservation
 
 Compaction summarization requests exact opaque identifier retention by default (`agents.defaults.compaction.identifierPolicy: "strict"`). Degraded summaries may omit identifiers that cannot fit. Set `agents.defaults.compaction.identifierPolicy: "off"` to disable the retention guidance. Custom guidance belongs in a compaction provider's `summarize()` implementation.
