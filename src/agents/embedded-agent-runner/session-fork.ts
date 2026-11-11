@@ -92,15 +92,9 @@ export async function runEmbeddedSessionFork(params: {
         }
         // Mutate the prepared body: provider wrappers reapply their defaults to
         // replacement objects, but preserve an in-place caller override.
-        const tools = Array.isArray(payload.tools) ? payload.tools : [];
-        if (FORK_TOOL_CHOICE_SHAPES.get(model.api) === "object") {
-          // Changing Anthropic tool_choice invalidates every cached message block, so keep the
-          // parent's and deny client calls below. Hosted server tools run before any denial.
-          if (tools.some((tool) => isRecord(tool) && tool.type && tool.type !== "custom")) {
-            payload.tool_choice = { type: "none" };
-          }
-        } else if (tools.length > 0) {
-          payload.tool_choice = "none";
+        if (Array.isArray(payload.tools) && payload.tools.length > 0) {
+          payload.tool_choice =
+            FORK_TOOL_CHOICE_SHAPES.get(model.api) === "object" ? { type: "none" } : "none";
         } else {
           delete payload.tool_choice;
         }

@@ -2513,6 +2513,9 @@ importers:
       grammy:
         specifier: 1.46.0
         version: 1.46.0(supports-color@10.2.2)
+      quickjs-wasi:
+        specifier: 3.6.3
+        version: 3.6.3
       typebox:
         specifier: 1.4.3
         version: 1.4.3
