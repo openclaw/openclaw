@@ -1,5 +1,7 @@
+import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
+import { hasKnownPricing } from "../../model-catalog/pricing.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { providerOwnsDynamicModelPreparation } from "../../plugins/provider-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
@@ -66,8 +68,19 @@ type AsyncModelResolutionOptions = {
  * authored prices, then the hosted catalog over the bundled row it supersedes. The runtime row's
  * own cost is a bundled snapshot or a discovery zero placeholder (a newly released Claude model,
  * for example) and stays only when the owner has no price, as for private endpoints.
+ * Configured overrides already priced a provider whose source config authors model costs, with
+ * their own alias and tier rules; those rows keep their price. Accepted edge: an authored cost on
+ * any row of a provider keeps that provider's other priced rows on their bundled snapshot.
  */
 function withResolvedPricing(model: Model, cfg: OpenClawConfig | undefined, agentDir: string) {
+  const source = cfg && projectConfigOntoRuntimeSourceSnapshot(cfg);
+  const authoredRows = resolveConfiguredProviderConfig(source, model.provider)?.models ?? [];
+  if (
+    hasKnownPricing(model.cost) &&
+    authoredRows.some((row) => Object.keys(row.cost ?? {}).length > 0)
+  ) {
+    return model;
+  }
   const cost = resolveModelCostConfig({
     provider: model.provider,
     model: model.id,
