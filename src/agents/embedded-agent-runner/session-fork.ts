@@ -145,8 +145,6 @@ export async function runEmbeddedSessionFork(params: {
           delete payload.tool_choice;
         }
         delete payload.previous_response_id;
-        // Reconstruction does not share the parent's one-shot request preparation.
-        delete payload.prompt_cache_key;
         return payload;
       },
     };

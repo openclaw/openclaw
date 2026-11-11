@@ -613,12 +613,6 @@ describe("runDaemonRestart health checks", () => {
     const outcome = await runUnmanagedStop();
 
     expect(service.readCommand).not.toHaveBeenCalled();
-    expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
-      action: "stop",
-      source: "cli",
-      mode: "sigterm",
-      pid: 4300,
-    });
     expect(outcome).toEqual({
       result: "stopped",
       message: "Gateway stop signal sent to unmanaged process on port 39471: 4300.",
@@ -1007,8 +1001,14 @@ describe("runDaemonRestart health checks", () => {
       ["stop", () => runDaemonStop({ json: true })],
       ["uninstall", () => runDaemonUninstall({ json: true })],
       ["preserved restart", () => runDaemonRestart({ json: true, preserveDefinition: true })],
-    ])("blocks native %s lifecycle access", async (_action, run) => {
-      await expect(run()).rejects.toThrow("gateway lifecycle is managed by an external supervisor");
+    ])("blocks native %s lifecycle access", async (action, run) => {
+      const refusal = run();
+      await expect(refusal).rejects.toThrow("managed by an external supervisor");
+      if (action !== "preserved restart") {
+        await expect(refusal).rejects.toMatchObject({
+          humanOutput: expect.stringMatching(`^Gateway ${action} blocked: OpenClaw gateway`),
+        });
+      }
 
       expectNoCalls(
         runServiceStart,

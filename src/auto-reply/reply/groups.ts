@@ -171,11 +171,13 @@ export function buildSourceConversationContext(
   params: Parameters<typeof buildGroupChatContext>[0],
 ): string {
   const chatType = normalizeOptionalLowercaseString(params.sessionCtx.ChatType);
-  return chatType === "direct" || chatType === "dm"
-    ? buildDirectChatContext(params)
-    : chatType === "group" || chatType === "channel"
-      ? buildGroupChatContext(params)
-      : "";
+  const context =
+    chatType === "direct" || chatType === "dm"
+      ? buildDirectChatContext(params)
+      : chatType === "group" || chatType === "channel"
+        ? buildGroupChatContext(params)
+        : "";
+  return context ? `### Conversation Behavior\n${context}` : "";
 }
 
 /** Builds the channel-specific group intro injected into the system prompt. */

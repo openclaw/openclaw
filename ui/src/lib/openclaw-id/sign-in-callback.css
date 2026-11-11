@@ -1,0 +1,17 @@
+body.openclaw-id-callback {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  text-align: center;
+  color-scheme: light dark;
+}
+
+.openclaw-id-callback > main {
+  margin-block-end: 12dvh;
+  font-size: 15px;
+  line-height: 1.5;
+}

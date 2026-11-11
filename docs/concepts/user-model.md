@@ -148,6 +148,14 @@ GitHub-backed sign-in is supported through Cloudflare Access and Tailscale Serve
 
 OIDC without a trusted GitHub claim keeps email-only sign-in and any existing linked identity. Trusted OIDC enrichment preserves an existing email profile's role and saved co-author preference; conflicting identities require explicit administrator linking rather than an automatic merge or email reassignment.
 
+[Enterprise browser delegation](/gateway/trusted-proxy-auth#enterprise-browser-delegation)
+uses the OCE Principal instead of an email alias. Each Principal gets a durable
+profile in this Gateway. Native email linking and profile merges cannot combine
+these identities; attach sign-in methods to the same account in OCE. Reconnects
+and restored permissions reuse the profile while Gateway storage is retained.
+Native roles and session-sharing rules still apply, and separate profiles do not
+isolate Agent execution, files, or credentials.
+
 Enterprise GitHub sign-in uses `gateway.github.host` to admit `github:<host>:<account-id>` principals from the trusted sign-in proxy. The existing `x-factory-*` ingress header names remain unchanged. Set this to your enterprise hostname; the default `github.com` does not admit enterprise principals. Enterprise GitHub sign-in retains its verified enterprise account separately from github.com accounts, even when their numeric IDs match. The Profile page shows the enterprise account without disclosing its verified commit address. Enterprise logins do not match public-GitHub operator-role rules. Existing historical metadata does not establish a current identity; sign in again to refresh the authenticated binding.
 
 For new profiles or an unset display name, OpenClaw prefers the public name from the verified GitHub account. When GitHub has none, it uses the sign-in provider's name. A saved name is upgraded only when it exactly matches the current verified GitHub login, including case. All other saved names remain unchanged, including custom names and previously adopted full names. This takes effect on the next successful identity sync through sign-in, reconnect, or a Profile refresh that retries the lookup. Existing profiles are not renamed in a background migration.

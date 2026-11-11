@@ -7,10 +7,25 @@ import {
 import { isSummaryProviderError } from "../../packages/agent-core/src/harness/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { setCompactionSafeguardCancellation } from "./agent-hooks/compaction-safeguard-runtime.js";
+import {
+  getCompactionSafeguardRuntime,
+  setCompactionSafeguardCancellation,
+} from "./agent-hooks/compaction-safeguard-runtime.js";
 import { createSessionManagerRuntimeRegistry } from "./agent-hooks/session-manager-runtime-registry.js";
+import { describeCompactionFailure } from "./embedded-agent-runner/compact-reasons.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
+
+/** A transcript custom entry: persisted and readable, never projected into model context. */
+const COMPACTION_ATTEMPT_CUSTOM_TYPE = "openclaw.compaction-attempt";
+type CompactionAttempt = {
+  /** `refusal`, the provider failover class (timeout, overloaded, format...), or `unknown`. */
+  failure: string;
+  /** The pending request needed this compaction (a required preflight). */
+  required: boolean;
+  tokensBefore: number;
+  outcome: "cancelled" | "floor";
+};
 
 /**
  * How one compaction attempt treats a summary refusal. Unset keeps the refusal floor in place.
@@ -109,6 +124,51 @@ export function withCompactionSummaryRoute<T extends { details?: unknown }>(
   }
   const summaryRoute = `${model.provider}/${model.id}`;
   return { ...result, details: { ...asOptionalRecord(result.details), summaryRoute } };
+}
+
+/**
+ * Settles a safeguard cancellation and records the attempt. A non-refusal failure of a required
+ * compaction commits the floor, because the pending request cannot run until history shrinks;
+ * otherwise history is kept. Streak and overflow escalation wait on the recorded attempt rate.
+ * Caller aborts never escalate. Cancels from other hooks record no safeguard cancellation and
+ * stay intentional declines.
+ */
+export async function settleCompactionSafeguardCancellation(
+  sessionManager: {
+    appendCustomEntryAsync(customType: string, data: CompactionAttempt): Promise<string>;
+  },
+  preparation: CompactionPreparation,
+  request: { signal: AbortSignal; requestRequiresCompaction?: true },
+) {
+  const cancellation = getCompactionSafeguardRuntime(sessionManager)?.cancellation;
+  if (!cancellation || request.signal.aborted) {
+    return undefined;
+  }
+  // The owner's fact, not an estimate: a required preflight cannot run its pending request.
+  const required = request.requestRequiresCompaction === true;
+  const refused = isCompactionSummaryRefusal(cancellation.error);
+  const floor = !refused && required ? compactWithoutSummary(preparation) : undefined;
+  // Best effort: a lost row hides one failure from the attempt rate.
+  await sessionManager
+    .appendCustomEntryAsync(COMPACTION_ATTEMPT_CUSTOM_TYPE, {
+      failure: refused
+        ? "refusal"
+        : (describeCompactionFailure(cancellation.error).reason ?? "unknown"),
+      required,
+      tokensBefore: preparation.tokensBefore,
+      outcome: floor?.ok ? "floor" : "cancelled",
+    })
+    .catch((error: unknown) => {
+      log.warn(`Compaction attempt was not recorded: ${formatErrorMessage(error)}`);
+    });
+  if (!floor?.ok) {
+    return undefined;
+  }
+  log.warn(
+    "Compaction summarization failed while a pending request needs room; committing the floor without a summary.",
+  );
+  setCompactionSafeguardCancellation(sessionManager, undefined);
+  return { ...floor.value, details: { ...floor.value.details, qualityDegraded: true as const } };
 }
 
 /** Hook errors must remain cancellations: throwing would invoke the raw core summarizer. */
