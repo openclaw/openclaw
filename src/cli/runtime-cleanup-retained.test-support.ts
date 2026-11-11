@@ -142,7 +142,10 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
       runtime.setActivePluginRegistry(activeRegistry);
       // Acquire outside the update worker generation: the executable owns this
       // resource until its later finalizers, not just until retention settlement.
+      stage("capture-store-acquire-start");
       ({ store } = await acquireDebugProxyCaptureStoreAsync());
+      stage("capture-store-acquired");
+      stage("initial-write-start");
       await store.upsertSession({
         id: "retained-cli",
         startedAt: 1,
@@ -150,6 +153,7 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
         sourceScope: "openclaw",
         sourceProcess: "fixture",
       });
+      stage("initial-write-completed");
       assert(supervisors.some((worker) => worker.threadId !== -1));
       const harness: AgentHarness = {
         id: "retained-cli",
@@ -163,11 +167,13 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
           return [];
         },
         dispose: async () => {
+          stage("harness-dispose-start");
           disposeCalls++;
           assert(settled, "harness disposal preceded update retention settlement");
           assert(resource?.hasRef(), "harness never acquired its referenced resource");
           assert(store && !store.isClosed, "shared state closed before harness disposal");
           phases.push("dispose-after-retention");
+          stage("terminal-write-start");
           await store.recordEvent({
             sessionId: "retained-cli",
             ts: 2,
@@ -180,9 +186,12 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
           });
           committed = true;
           phases.push("write-committed");
+          stage("terminal-write-completed");
           clearInterval(resource);
+          stage("harness-dispose-completed");
         },
       };
+      stage("harness-acquire-start");
       runtime.withPluginRegistrationContext(activeRegistry, "fixture", () =>
         registry.registerAgentHarness(harness),
       );
@@ -194,26 +203,34 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
         agentDir: fixture.root,
         workspaceDir: fixture.root,
       });
+      stage("harness-acquired");
+      stage("retention-start");
       await withRetainedUpdateRuntime(cleanupUrl, async (retain) => {
+        stage("source-retain-start");
         const retained = await retain({
           mutationRoots: [fixture.root],
           installTarget: fixture.swap.installTarget,
           timeoutMs: 30_000,
           assertCurrent() {},
         });
+        stage("source-retain-completed");
         assert(retained && retained.entries > 0, "running source was not retained");
         retainedRegistryUrl = captureRuntimeWorkerSource(new URL(registryUrl)).moduleUrl.href;
         retainedCleanupUrl = captureRuntimeWorkerSource(new URL(cleanupUrl)).moduleUrl.href;
         assert.notEqual(retainedRegistryUrl, registryUrl, "registry source was not retained");
+        stage("package-swap-start");
         const result = await swapStagedPackageInstall({ ...fixture.swap, timeoutMs: 30_000 });
+        stage("package-swap-completed");
         assert.equal(result.status, "committed", JSON.stringify(result));
         await assert.rejects(fs.stat(new URL(physicalUrl("cli/runtime-cleanup.js"))), {
           code: "ENOENT",
         });
         phases.push("source-replaced");
+        stage("source-removal-verified");
       });
       settled = true;
       phases.push("retention-settled");
+      stage("retention-settled");
       observation = registerHooks({
         resolve(specifier, context, nextResolve) {
           if (context.parentURL === cleanupUrl && settled) {
@@ -223,6 +240,7 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
           return nextResolve(specifier, context);
         },
       });
+      stage("command-return");
     },
   });
   const argv = [process.execPath, fileURLToPath(moduleUrl("entry.js")), "config", "get", "fixture"];
@@ -231,10 +249,12 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
   await withCliProcessScope(() =>
     runMainOrRootHelp(argv, {
       finalize: async () => {
+        stage("finalizer-entered");
         assert.equal(disposeCalls, 1, "real CLI finalizer did not dispose the retained harness");
         assert(committed, "late accepted database write did not commit");
         assert(store?.isClosed, "canonical shared-state finalizer did not close the store");
         await assert.rejects(store.listSessions(), /closed/iu);
+        stage("closed-store-read-rejected");
         assert(supervisors.length > 0);
         assert(
           supervisors.every((worker) => worker.threadId === -1),
@@ -264,9 +284,11 @@ async function runComposition(fixture: CliRetainedCompositionFixture): Promise<v
             resolvedRegistryUrl,
           }),
         );
+        stage("finalizer-completed");
       },
     }),
   );
+  stage("cli-returned");
   observation?.deregister();
   sourceObservation.deregister();
   process.off("worker", observeWorker);
