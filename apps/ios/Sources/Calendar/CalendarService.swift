@@ -52,13 +52,12 @@ final class CalendarService: CalendarServicing {
             ])
         }
 
-        let formatter = ISO8601DateFormatter()
-        guard let start = formatter.date(from: params.startISO) else {
+        guard let start = OpenClawISO8601.date(from: params.startISO) else {
             throw NSError(domain: "Calendar", code: 4, userInfo: [
                 NSLocalizedDescriptionKey: "CALENDAR_INVALID: startISO required",
             ])
         }
-        guard let end = formatter.date(from: params.endISO) else {
+        guard let end = OpenClawISO8601.date(from: params.endISO) else {
             throw NSError(domain: "Calendar", code: 5, userInfo: [
                 NSLocalizedDescriptionKey: "CALENDAR_INVALID: endISO required",
             ])
@@ -82,7 +81,8 @@ final class CalendarService: CalendarServicing {
 
         try store.save(event, span: .thisEvent)
 
-        return OpenClawCalendarAddPayload(event: Self.payload(from: event, fallbackTitle: title, formatter: formatter))
+        return OpenClawCalendarAddPayload(
+            event: Self.payload(from: event, fallbackTitle: title, formatter: ISO8601DateFormatter()))
     }
 
     private static func payload(
@@ -132,9 +132,8 @@ final class CalendarService: CalendarServicing {
     }
 
     private static func resolveRange(startISO: String?, endISO: String?) -> (Date, Date) {
-        let formatter = ISO8601DateFormatter()
-        let start = startISO.flatMap { formatter.date(from: $0) } ?? Date()
-        let end = endISO.flatMap { formatter.date(from: $0) } ?? start.addingTimeInterval(7 * 24 * 3600)
+        let start = startISO.flatMap(OpenClawISO8601.date(from:)) ?? Date()
+        let end = endISO.flatMap(OpenClawISO8601.date(from:)) ?? start.addingTimeInterval(7 * 24 * 3600)
         return (start, end)
     }
 }

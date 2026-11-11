@@ -11,6 +11,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { prepareDelegationCapability } from "../../delegation-capability.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/tool-surface.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
+import { resolveTurnCyberAccessProgram } from "../../model-catalog-access-programs.js";
 import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
 import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
@@ -106,6 +107,14 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
   });
   const attemptFastMode = resolveAttemptFastModeParam();
+  // Each candidate, including fallbacks and live switches, applies Access to its own provider.
+  const attemptAccessProgram = resolveTurnCyberAccessProgram({
+    program: params.cyberAccessProgram,
+    provider,
+    model: modelId,
+    noticeScope: `log:${resolvedSessionKey ?? params.sessionId}`,
+    notify: (notice) => log.info(notice),
+  });
   const selectedPromptTarget = { ...sessionPromptState.sessionTarget };
   const resolvedSessionTarget = await resolveAttemptDispatchSessionTarget({
     agentId: workspaceResolution.agentId,
@@ -537,7 +546,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     agentId: workspaceResolution.agentId,
     thinkLevel: runtime.thinkLevel,
     thinkingExplicit: params.thinkingExplicit,
-    cyberAccessProgram: params.cyberAccessProgram,
+    cyberAccessProgram: attemptAccessProgram,
     onToolOutcome: input.observeToolOutcome,
     isTurnTainted: input.isTurnTainted,
     allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,

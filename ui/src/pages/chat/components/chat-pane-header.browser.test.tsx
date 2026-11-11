@@ -71,6 +71,45 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       },
     );
 
+    it("keeps desktop title padding while placing the session menu directly beside it", () => {
+      const { container } = mountChatPaneHeader(containers, {
+        sessionMenuAction: chatPaneHeaderSessionMenu(),
+      });
+      const title = container.querySelector<HTMLElement>(".chat-pane__session-title-button")!;
+      const actions = container.querySelector<HTMLElement>(".chat-pane__identity-actions")!;
+      const style = getComputedStyle(title);
+      expect(style.paddingInlineStart).toBe("8px");
+      expect(style.paddingInlineEnd).toBe("8px");
+      expect(actions.getBoundingClientRect().left).toBeCloseTo(title.getBoundingClientRect().right);
+    });
+
+    it.each(["Hello hello", "A long session title that should use the available header width"])(
+      "fits the loaded title and keeps its menu adjacent: %s",
+      async (title) => {
+        const { container, update } = mountChatPaneHeader(containers, {
+          title: "",
+          titlePending: true,
+          sessionMenuAction: chatPaneHeaderSessionMenu(),
+        });
+        const menu = container.querySelector<HTMLElement>(".chat-pane__identity-actions")!;
+        update({ title, titlePending: false });
+        await waitForSolid(() => expect(container.textContent).toContain(title));
+        const text = container.querySelector<HTMLElement>(".chat-pane__session-title-text")!;
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        expect(text.getBoundingClientRect().width).toBeCloseTo(
+          range.getBoundingClientRect().width,
+          1,
+        );
+        expect(text.scrollWidth).toBeLessThanOrEqual(text.clientWidth);
+        const button = container.querySelector<HTMLElement>(".chat-pane__session-title-button")!;
+        expect(menu.getBoundingClientRect().left).toBeCloseTo(
+          button.getBoundingClientRect().right,
+          1,
+        );
+      },
+    );
+
     it.each([false, true])(
       "reserves the trailing header region before actions arrive (agent=%s)",
       async (agent) => {
@@ -130,6 +169,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
 
     it.each([
       [390, 844, null, ""],
+      [768, 1024, null, ""],
       [1366, 768, null, ""],
       [1440, 900, "start", "90px"],
       [1440, 900, "end", "146px"],
@@ -154,40 +194,44 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           header.style[inset === "start" ? "paddingLeft" : "paddingRight"] = value;
         }
         const trigger = findElement(container, ".chat-pane__agent-identity");
-        const name = findElement(container, ".chat-pane__agent-name");
         const actions = findElement(container, ".chat-pane__header-trailing");
-        const settings = findElement(container, ".chat-pane__agent-settings");
+        const avatar = findElement(container, ".chat-pane__agent-avatar");
         expect(trigger.checkVisibility()).toBe(true);
-        expect(name.getBoundingClientRect().width).toBeGreaterThan(40);
-        const headerCenter = header.getBoundingClientRect().left + header.clientWidth / 2;
-        const identity = findElement(container, ".chat-pane__header-agent");
-        const identityCenter = identity.getBoundingClientRect().left + identity.clientWidth / 2;
-        expect(Math.abs(identityCenter - headerCenter)).toBeLessThanOrEqual(inset ? 1 : 2);
+        if (width <= 768) {
+          const name = findElement(container, ".chat-pane__agent-name");
+          expect(name.getBoundingClientRect().width).toBeGreaterThan(40);
+          const headerCenter = header.getBoundingClientRect().left + header.clientWidth / 2;
+          const identity = findElement(container, ".chat-pane__header-agent");
+          const identityCenter = identity.getBoundingClientRect().left + identity.clientWidth / 2;
+          expect(Math.abs(identityCenter - headerCenter)).toBeLessThanOrEqual(2);
+        } else {
+          expect(findElement(container, ".chat-pane__session-title").checkVisibility()).toBe(true);
+        }
         expect(trigger.getBoundingClientRect().right).toBeLessThanOrEqual(
           actions.getBoundingClientRect().left,
         );
         expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
-        // Idle pill is only avatar and name; the settings glyph is collapsed inside it.
         expect(trigger.getAttribute("aria-label")).toBe(
           t("agentChip.namedSettings", { name: props.agent!.name }),
         );
         expect(trigger.hasAttribute("title")).toBe(false);
-        expect(getComputedStyle(settings).opacity).toBe("0");
-        expect(settings.getBoundingClientRect().width).toBe(0);
-        const idlePill = trigger.getBoundingClientRect();
-        const idleBackground = getComputedStyle(settings).backgroundColor;
+        const idle = trigger.getBoundingClientRect();
+        const avatarBounds = avatar.getBoundingClientRect();
+        if (width <= 768) {
+          const nameBounds = findElement(
+            container,
+            ".chat-pane__agent-name",
+          ).getBoundingClientRect();
+          expect(nameBounds.top).toBeGreaterThanOrEqual(avatarBounds.bottom);
+        }
+        expect(getComputedStyle(trigger).backgroundColor).toBe("rgba(0, 0, 0, 0)");
         await userEvent.hover(trigger);
-        // Hover widens the pill rightward to hold settings; the avatar stays put.
-        const hoverPill = trigger.getBoundingClientRect();
-        const hoverSettings = settings.getBoundingClientRect();
-        expect(getComputedStyle(settings).opacity).toBe("1");
-        expect(getComputedStyle(settings).backgroundColor).toBe(idleBackground);
-        expect(hoverPill.width).toBeGreaterThan(idlePill.width + 10);
-        expect(hoverPill.left).toBeCloseTo(idlePill.left, 0);
-        expect(hoverSettings.width).toBe(28);
-        expect(hoverSettings.left).toBeGreaterThanOrEqual(name.getBoundingClientRect().right - 0.5);
-        expect(hoverSettings.right).toBeLessThanOrEqual(hoverPill.right);
-        expect(hoverPill.right).toBeLessThanOrEqual(actions.getBoundingClientRect().left);
+        const hovered = trigger.getBoundingClientRect();
+        expect(hovered.width).toBeCloseTo(idle.width);
+        expect(hovered.left).toBeCloseTo(idle.left);
+        await click(avatar);
+        expect(props.onOpenAgentSettings).toHaveBeenCalledExactlyOnceWith("research");
+        vi.mocked(props.onOpenAgentSettings!).mockClear();
         trigger.focus();
         await userEvent.keyboard("{Enter}");
         expect(props.onOpenAgentSettings).toHaveBeenCalledExactlyOnceWith("research");

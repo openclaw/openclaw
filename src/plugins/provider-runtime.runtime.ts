@@ -1,35 +1,38 @@
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
 
-const providerRuntimeLoader = createLazyImportLoader(() => import("./provider-runtime.js"));
-// Keep the heavy provider runtime behind an actual async boundary so callers
-// can import this wrapper eagerly without collapsing the lazy chunk.
-const bindProviderRuntime = createLazyRuntimeMethodBinder(providerRuntimeLoader.load);
+// Keep each execution owner behind the same deferred invocation boundary.
+const bindProviderAuth = createLazyRuntimeMethodBinder(
+  createLazyImportLoader(() => import("./provider-runtime-auth.js")).load,
+);
+const bindProviderCatalog = createLazyRuntimeMethodBinder(
+  createLazyImportLoader(() => import("./provider-catalog-augment.js")).load,
+);
 
-export const augmentModelCatalogWithProviderPlugins = bindProviderRuntime(
+export const augmentModelCatalogWithProviderPlugins = bindProviderCatalog(
   (runtime) => runtime.augmentModelCatalogWithProviderPlugins,
 );
 
-export const formatProviderAuthProfileApiKeyWithPlugin = bindProviderRuntime(
+export const formatProviderAuthProfileApiKeyWithPlugin = bindProviderAuth(
   (runtime) => runtime.formatProviderAuthProfileApiKeyWithPlugin,
 );
 
-export const loginProviderOAuthWithPlugin = bindProviderRuntime(
+export const loginProviderOAuthWithPlugin = bindProviderAuth(
   (runtime) => runtime.loginProviderOAuthWithPlugin,
 );
 
-export const resolveProviderOAuthCredentialWithPlugin = bindProviderRuntime(
+export const resolveProviderOAuthCredentialWithPlugin = bindProviderAuth(
   (runtime) => runtime.resolveProviderOAuthCredentialWithPlugin,
 );
 
-export const resolveProviderOAuthRefreshCapabilityWithPlugin = bindProviderRuntime(
+export const resolveProviderOAuthRefreshCapabilityWithPlugin = bindProviderAuth(
   (runtime) => runtime.resolveProviderOAuthRefreshCapabilityWithPlugin,
 );
 
-export const prepareProviderRuntimeAuth = bindProviderRuntime(
+export const prepareProviderRuntimeAuth = bindProviderAuth(
   (runtime) => runtime.prepareProviderRuntimeAuth,
 );
 
-export const refreshProviderOAuthCredentialWithPlugin = bindProviderRuntime(
+export const refreshProviderOAuthCredentialWithPlugin = bindProviderAuth(
   (runtime) => runtime.refreshProviderOAuthCredentialWithPlugin,
 );

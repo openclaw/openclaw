@@ -491,6 +491,21 @@ async function start(args: string[]) {
 }
 
 describe("full-suite timing metadata", () => {
+  it.each([
+    { extra: [], preset: "runtime" },
+    { extra: [modelTarget], preset: "full" },
+  ])(
+    "prepares the $preset worker owner before lending selected test artifacts",
+    async ({ extra, preset }) => {
+      await start(["src/auto-reply/reply/dispatch-from-config.delivery.test.ts", ...extra]);
+      await expectPassed();
+      expect(commands.reader.mock.calls.length).toBeGreaterThan(0);
+      for (const [spec] of commands.reader.mock.calls) {
+        expect(spec.workerRun?.descriptor.preset).toBe(preset);
+      }
+    },
+  );
+
   it("records inherited include selections without replacing whole-config history", async () => {
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_TIMINGS", "1");
     const timings = await import("../../scripts/lib/vitest-shard-timings.mts");
@@ -583,6 +598,8 @@ describe("full-suite timing metadata", () => {
         files.map((file) =>
           ["exec", "node"].concat(maglev === "0" ? ["--no-maglev"] : [], [
             "--no-concurrent-sparkplug",
+            "--js-base-64",
+            "--expose-gc",
             resolveVitestCliEntry(),
             "run",
             "--config",

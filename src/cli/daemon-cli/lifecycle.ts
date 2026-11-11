@@ -395,8 +395,17 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
         );
         return;
       }
+      // Health can fail well before the deadline; only a spent deadline is a timeout.
+      const timedOut = health.healthy || health.waitOutcome === "timeout";
       fail(
-        `Gateway start timed out after ${Math.round(deadlineMs / 1000)}s waiting for /healthz and /readyz.`,
+        timedOut
+          ? `Gateway start timed out after ${Math.round(deadlineMs / 1000)}s waiting for /healthz and /readyz.`
+          : formatGatewayRestartFailure({
+              health,
+              port,
+              defaultTimeoutSeconds: Math.round(deadlineMs / 1000),
+              action: "start",
+            }).failMessage,
         [formatCliCommand("openclaw gateway status --deep"), formatCliCommand("openclaw doctor")],
       );
     },

@@ -24,6 +24,7 @@ import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 
 type CompletedCronRunOutcomeFinalizationOptions = {
   discardWhenStopped?: boolean;
+  onReceiptSettlement?: (settlement: Promise<void>) => void;
 };
 
 /** Sends terminal facts to the worker; the host only publishes committed results. */
@@ -96,7 +97,7 @@ export async function finalizeCompletedCronRunOutcomes(
         if (!outcome.executionSettlement || !outcome.runReceipt) {
           continue;
         }
-        void trackAsyncWork(async () => {
+        const settlement = trackAsyncWork(async () => {
           await Promise.allSettled([outcome.executionSettlement]);
           await executeOpenClawStateWorker(context, {
             type: "cron.finalizeRuns",
@@ -116,6 +117,7 @@ export async function finalizeCompletedCronRunOutcomes(
             "cron: execution receipt settlement failed",
           );
         });
+        opts?.onReceiptSettlement?.(settlement);
       }
       applyCronRuntimeRowsToState(
         state,
@@ -151,6 +153,9 @@ export async function finalizeCompletedCronRunOutcomes(
           if (quietTrigger) {
             eventContext = { ...eventContext, quietTrigger: true };
           }
+          // The terminal event publishes this wake time; only a different resident
+          // schedule (or a quiet evaluation without an event) still needs publication.
+          state.durableNextRunAtMsByJobId.set(plan.job.id, plan.job.state.nextRunAtMs);
           emit(
             state,
             cronRunResultEvent(plan.job, outcome),

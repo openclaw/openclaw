@@ -610,7 +610,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   }
 
   return {
-    async mentionable(client, input, publish) {
+    async mentionable(client, input, publish, displayIds) {
       try {
         // A committed profile change can invalidate preparation before this continuation runs.
         while (policy.needsDirectoryPreparation()) {
@@ -633,7 +633,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       }
       try {
         // Current policy selection and response publication must not cross another await.
-        publish(readOperation(() => policy.mentionable(client, input, prepared)));
+        publish(readOperation(() => policy.mentionable(client, input, prepared, displayIds)));
       } finally {
         prepared.release();
       }

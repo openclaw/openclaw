@@ -47,8 +47,7 @@
   font-size: var(--control-ui-text-xs);
 }
 
-.cron-admin-note svg,
-.cron-row-run svg {
+.cron-admin-note svg {
   width: 12px;
   height: 12px;
 }
@@ -187,6 +186,17 @@
   color: var(--text);
   font-size: var(--control-ui-text-sm);
   line-height: 1.45;
+}
+
+.cron-failure-details__cause {
+  overflow-wrap: anywhere;
+}
+
+.cron-failure-details__cause--preview {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 /* ── Jobs table (escape hatch inside the tasks group) ── */
@@ -425,14 +435,6 @@
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-}
-
-.cron-row-run {
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  justify-content: center;
-  flex: 0 0 auto;
 }
 
 .cron-empty-state {
@@ -761,15 +763,6 @@
 
 .cron-job-menu__trigger {
   list-style: none;
-  width: 30px;
-  height: 26px;
-  justify-content: center;
-  padding: 0;
-}
-
-.cron-job-menu__trigger > .oc-menu-item__label {
-  display: flex;
-  justify-content: center;
 }
 
 .cron-job-menu__item {
@@ -1178,10 +1171,7 @@
   }
 
   .cron-table .cron-table__row :is(.cron-row-run, .cron-job-menu__trigger) {
-    width: 32px;
-    min-width: 32px;
-    height: 32px;
-    min-height: 32px;
+    --oc-icon-button-size: 32px;
   }
 
   .cron-table .cron-table__row .settings-toggle {

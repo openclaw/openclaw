@@ -59,14 +59,18 @@ as schedules or read `HEARTBEAT.md`.
 ### Monitoring policies
 
 Use job-level policies for periodic checks that should respect quiet hours and
-foreground work. They apply through ordinary scheduler and session admission;
+agent-wide activity. They apply through ordinary scheduler and session admission;
 no separate heartbeat runner is involved.
 
 | Field                                    | Behavior                                                                                                               |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `activeHours: { start, end, timezone? }` | Restricts execution to a timezone-aware window. Start is inclusive; end is exclusive. Overnight windows are supported. |
-| `idleOnly: true`                         | Gives foreground work priority without occupying a running slot while waiting.                                         |
+| `idleOnly: true`                         | Waits for agent-wide quiet, including other cron jobs and foreground sessions, without occupying a running slot.       |
 | `payload.skipIfScratchEmpty: true`       | Skips an agent turn with explicitly empty scratch. Missing scratch still runs.                                         |
+
+`idleOnly: true` checks the whole agent, not just the target session. On busy
+shared agents, continuations may defer indefinitely. Set `idleOnly: false` or
+leave it unset to use normal admission.
 
 Omitting these fields keeps ordinary automation defaults. A manual force-run
 bypasses cadence, but still respects active hours, authorization, lifecycle, and
@@ -99,8 +103,8 @@ openclaw automations add \
 
 The same flags work with `automations edit`. Supply both window endpoints when
 adding a window; edits can change one field of an existing window. Use
-`--clear-active-hours` to remove the window, `--no-idle-only` to turn off idle
-priority, or `--clear-idle-only` to remove that stored policy.
+`--clear-active-hours` to remove the window, `--no-idle-only` to turn off the
+idle-only policy, or `--clear-idle-only` to remove that stored policy.
 
 Keep instructions explicit: name the sources or checklist, do not infer old
 tasks from past chats, and report changes that need attention. A human check-in
@@ -328,6 +332,10 @@ watcher keeps its usual `once` behavior; renaming it does not reset its conditio
 
 If condition-evaluation capacity is busy, the unevaluated occurrence stays due
 through the scheduler's existing admission deferral rather than counting as a quiet check.
+
+Cold runtime preparation can continue after an evaluation times out, so a later
+tick can reuse it. Preparation is limited to two minutes, or the script payload's
+budget when longer; cancelling the evaluation that started it still cancels preparation.
 
 Scripts call configured MCP server tools through the same `MCP.<server>.<tool>({ ...input })` namespace that interactive Code Mode uses. MCP is opt-in per server: a script can reach only the servers its job's `toolsAllow` (`--tools`) names with a server prefix, either an exact tool such as `wispr-flow__search_meetings` or a server-scoped glob such as `wispr-flow__*`. A wildcard `*`, a missing `toolsAllow`, or a glob without a server prefix gives the script no `MCP` namespace and starts no server, because evaluations can run every 30 seconds. A script whose source never mentions `MCP` also starts no server, even when `toolsAllow` names one for the payload. Within a named server, the owning agent's tool policy still applies, as in an interactive run. MCP calls go through the same before-tool-call hooks and approvals and return the same untrusted-content results. Each evaluation starts its own runtime for the named servers only and retires it when the evaluation ends; a slow server shutdown finishes in the background after a 1-second grace. Connecting and listing tools count toward the 30-second budget, and each MCP call counts toward the 5-call limit. A named server that fails to start is absent from `MCP`; if the script then fails, the run error ends with `MCP server "<name>" is unavailable: <reason>`.
 

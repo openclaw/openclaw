@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { linkSync, symlinkSync } from "node:fs";
+import fs, { linkSync, symlinkSync } from "node:fs";
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
@@ -219,6 +219,27 @@ it.each(["shared-state", "agent", "external"] as const)(
 
 await initializeSqliteRuntimeCapabilities();
 const { databasePath } = useSqliteWorkerStoreFixture("sqlite-capacity-drain-");
+it("settles cold admission filesystem failures before draining the broker", async () => {
+  const pathname = databasePath();
+  const failure = Object.assign(new Error("cold database permission denied"), { code: "EACCES" });
+  const stat = fs.statSync;
+  using _ = vi.spyOn(fs, "statSync").mockImplementation((file, options) => {
+    if (String(file) === pathname) {
+      throw failure;
+    }
+    return stat(file, options);
+  });
+  const broker = new SqliteWorkerBroker();
+  await expect(
+    broker.open({
+      moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+      databasePath: pathname,
+      input: undefined,
+    }),
+  ).rejects.toBe(failure);
+  await broker.close();
+});
+
 it.for(["shared-state", "agent", "external"] as const)(
   "keeps one physical owner across %s and ordinary opens",
   async (carrierClass, { signal }) => {

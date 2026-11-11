@@ -249,6 +249,7 @@ extension SettingsProTab {
     func syncAfterOnboardingReset() {
         self.invalidateGatewaySetupAttempt()
         self.setupStatusText = nil
+        self.setupCode = ""
         self.stagedGatewaySetupLink = nil
         self.gatewayAuthFields.pendingOverride = nil
         self.syncSettingsState()
@@ -668,6 +669,7 @@ extension SettingsProTab {
 
     func title(for route: SettingsRoute) -> String {
         switch route {
+        case .deviceSettings: String(localized: "Device Settings")
         case .gateway: String(localized: "Gateway")
         case .appleWatch: String(localized: "Apple Watch")
         case .espSetup: String(localized: "ESP device setup")

@@ -313,8 +313,10 @@ describe("Codex app-server startup retry", () => {
     fixture.pluginConfig.appServer.command = command;
     const spawnSpy = vi.spyOn(stdioWorker, "spawnCodexStdio");
     const error = await startFixtureAttempt(fixture).catch((caught: unknown) => caught);
-    expect(findCodexAppServerSpawnError(error)).toMatchObject({
+    expect(findCodexAppServerSpawnError(error)).toBe(error);
+    expect(error).toMatchObject({
       command,
+      message: `Codex cannot run: ${command} or its working directory was not found. Repair the executable or working directory and restart the Gateway.`,
       cause: expect.objectContaining({ code: "ENOENT" }),
     });
     await expect(startFixtureAttempt(fixture)).rejects.toBe(error);

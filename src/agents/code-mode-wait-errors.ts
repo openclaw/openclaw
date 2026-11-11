@@ -11,7 +11,9 @@ function codeModeWaitRunUnavailableMessage(ctx: ToolSearchToolContext): string {
   const processTool =
     !ctx.toolExecutionAllow || isToolExecutionAllowed(ctx.toolExecutionAllow, "process")
       ? createCodeModeCatalogBindings(
-          entries.map((entry) => compactToolSearchCatalogEntry(entry)),
+          entries
+            .filter((entry) => entry.source !== "mcp")
+            .map((entry) => compactToolSearchCatalogEntry(entry)),
         ).find((entry) => entry.id === "openclaw:core:process")
       : undefined;
   return (

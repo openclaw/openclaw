@@ -80,6 +80,29 @@ function dropOn(row: Element | null, types: string[], data: Record<string, strin
 }
 
 describe("sessions view", () => {
+  it("retains accepted empty controls during refresh but retires them with the query", async () => {
+    document.body.append(container);
+    const result = buildMultiResult([]);
+    const initial = { searchQuery: "missing", roster: Promise.resolve(null) };
+    renderView(result, initial);
+    await vi.waitFor(() => expect(query(".data-table-empty-state button")).not.toBeNull());
+    const button = getButton(".data-table-empty-state button")!;
+    button.focus();
+    const pending = createDeferred<null>();
+    onTestFinished(() => pending.resolve(null));
+    renderView(result, { ...initial, roster: pending.promise, loading: true });
+    flush();
+    expect(query(".data-table-empty-state button")).toBe(button);
+    expect(document.activeElement).toBe(button);
+    renderView(result, { ...initial, roster: pending.promise, error: "Access denied" });
+    flush();
+    expect(query(".data-table-empty-state")).toBeNull();
+    renderView(result, { ...initial, result: null, roster: pending.promise, loading: true });
+    flush();
+    expect(query(".data-table-empty-state")).toBeNull();
+    expect(queryAll(".session-skeleton-row")).toHaveLength(4);
+  });
+
   it.each(["bulk", "empty"] as const)(
     "uses current callbacks on retained %s buttons",
     async (kind) => {
@@ -738,7 +761,7 @@ describe("sessions transcript search view", () => {
           .querySelector(".sessions-transcript-search__form")
           ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       } else {
-        expect(trigger?.closest("openclaw-tooltip")).toBeNull();
+        expect(trigger?.closest("openclaw-tooltip")?.content).toBe(unavailable);
         render({ transcriptSearchAvailable: true });
         await Promise.resolve();
         expect(connectionStatus()).toBeNull();
@@ -850,8 +873,8 @@ describe("sessions view at phone width", () => {
     const onSearchChange = vi.fn();
     await renderSettled(
       [
-        createRow("agent:main:alpha", { label: "Alpha", updatedAt: Date.now() }),
-        createRow("agent:main:beta", { label: "Beta", updatedAt: Date.now() }),
+        createRow("agent:main:alpha", { label: "Alpha", updatedAt: 1 }),
+        createRow("agent:main:beta", { label: "Beta", updatedAt: 1 }),
       ],
       { onSearchChange },
     );

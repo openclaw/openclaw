@@ -128,7 +128,7 @@ export function prepareStateDatabaseSchemaRepair(
   database: DatabaseSync,
   pathname: string,
   env: NodeJS.ProcessEnv,
-): () => string[] {
+): { needed: boolean; apply(): string[]; applyReadability(): string[] } {
   const danglingWorkshopIndex = hasDanglingSkillWorkshopCollectionReviewIndex(database);
   const assertWriteAllowed = () =>
     assertOpenClawStateWriteAllowed({
@@ -149,7 +149,7 @@ export function prepareStateDatabaseSchemaRepair(
   } else {
     admit();
   }
-  return () => {
+  const apply = () => {
     // Recheck ownership after BEGIN IMMEDIATE and before catalog mutation.
     if (danglingWorkshopIndex) {
       withSqliteWritableSchema(database, assertWriteAllowed);
@@ -160,31 +160,28 @@ export function prepareStateDatabaseSchemaRepair(
       ? ["Removed dangling legacy Skill Workshop review index"]
       : [];
   };
-}
-
-/** Commit recognized catalog readability before a private preservation reader inspects it. */
-export function repairStateDatabaseSchemaReadability(
-  database: DatabaseSync,
-  pathname: string,
-  env: NodeJS.ProcessEnv,
-): string[] {
-  const repair = prepareStateDatabaseSchemaRepair(database, pathname, env);
-  return runSqliteImmediateTransactionSync(
-    database,
-    () => {
-      const changes = repair();
-      if (changes.length > 0) {
-        assertOpenClawStateDatabaseOwner(database, { pathname });
-        assertSqliteTableIntegrity(database, pathname, "skill_workshop_collection_reviews");
-      }
-      return changes;
+  return {
+    needed: danglingWorkshopIndex,
+    apply,
+    applyReadability() {
+      return runSqliteImmediateTransactionSync(
+        database,
+        () => {
+          const changes = apply();
+          if (changes.length > 0) {
+            assertOpenClawStateDatabaseOwner(database, { pathname });
+            assertSqliteTableIntegrity(database, pathname, "skill_workshop_collection_reviews");
+          }
+          return changes;
+        },
+        {
+          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+          databaseLabel: pathname,
+          operationLabel: "state.schema.readability-repair",
+        },
+      );
     },
-    {
-      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-      databaseLabel: pathname,
-      operationLabel: "state.schema.readability-repair",
-    },
-  );
+  };
 }
 
 type OpenClawStateMigrationVersion = (typeof STATE_MIGRATION_VERSIONS)[number];

@@ -175,7 +175,15 @@ classic wizard also retains its custom-provider setup.
 If the endpoint refuses the connection or its hostname cannot be found, setup
 reports the failed connection immediately instead of waiting through normal
 chat retries. Start the server or correct the URL and network settings on the
-Gateway host, then retry. Ordinary agent sessions keep their connection retries.
+Gateway host, then retry. Server errors, rate limits, and overload responses
+are also reported after the first attempt, so retry setup once the provider
+recovers. Ordinary agent sessions keep their retries.
+
+While the check runs, the dialog shows how long it has been waiting, and you
+can cancel at any time without changing your configuration. A remote API that
+has not answered after 30 seconds fails the check. Local model servers, CLI
+runtimes, and native harnesses get up to 90 seconds because they may need to
+start or load a model first.
 
 ## Related
 

@@ -24,8 +24,8 @@ private final class DashboardWindowContentView: NSView {
     }
 }
 
-/// The dashboard's empty unified toolbar exists only to grow the titlebar to
-/// 52pt so the traffic lights align with the hosted web chrome. `View > Hide
+/// The empty compact toolbar keeps the traffic lights aligned with the
+/// hosted web chrome's 40pt row. `View > Hide
 /// Toolbar` (and ⌥⌘T) would collapse the titlebar while the web inset stays
 /// pinned at `--openclaw-native-titlebar-height`, resurrecting the traffic-light
 /// misalignment. Refusing the toggle keeps the two heights in lockstep.
@@ -34,6 +34,8 @@ private final class DashboardWindow: ExperienceWindow {
     /// User intent belongs to the native window, not the privileged document it hosts.
     var userIntentGeneration: UInt64 = 0
     var lifetimeRevision: UInt64 = 0
+    /// Set while a launch preload has never been shown; window counts skip it.
+    var isUnshownPreload = false
     var pendingGatewaySwitch: DashboardGatewaySwitchIntent?
     var documentLoad: DashboardDocumentLoad?
 
@@ -412,6 +414,16 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.isWindowOpen || self.isHiddenForExperience
     }
 
+    var isUnshownPreload: Bool {
+        (self.window as? DashboardWindow)?.isUnshownPreload == true
+    }
+
+    /// A window that was never shown keeps the experience-hidden lifetime until `show()`.
+    func retainHidden() {
+        (self.window as? DashboardWindow)?.isHiddenForExperience = true
+        (self.window as? DashboardWindow)?.isUnshownPreload = true
+    }
+
     func hideForExperience() {
         guard let window else { return }
         // Keep the document and drafts, but retire actions admitted by the
@@ -433,6 +445,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     func show() {
         (self.window as? DashboardWindow)?.isHiddenForExperience = false
+        (self.window as? DashboardWindow)?.isUnshownPreload = false
         self.window?.isExcludedFromWindowsMenu = false
         self.deviceSettingsMessageHandler.startObserving()
         if let window {
@@ -680,11 +693,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         window.title = title
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        // An empty unified toolbar grows the transparent titlebar to 52pt so the
-        // traffic lights sit vertically centered against the web titlebar row
-        // (--openclaw-native-titlebar-height); without it they hug the top edge.
+        // Keep AppKit's traffic lights and the web titlebar on the same centerline.
+        // DashboardWindowLayout supplies this style and the CSS row height.
         window.toolbar = NSToolbar(identifier: "DashboardWindowTitlebar")
-        window.toolbarStyle = .unified
+        window.toolbarStyle = DashboardWindowLayout.toolbarStyle
         window.titlebarSeparatorStyle = .none
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
@@ -938,11 +950,11 @@ extension DashboardWindowController {
     }
 
     func navigateBack() {
-        self.activeNavigationWebView.goBack()
+        self.nativeBrowser.goBack(in: self.activeNavigationWebView)
     }
 
     func navigateForward() {
-        self.activeNavigationWebView.goForward()
+        self.nativeBrowser.goForward(in: self.activeNavigationWebView)
     }
 
     fileprivate func closeFocusedPanelOrWindow() {
@@ -1333,6 +1345,8 @@ extension DashboardWindowController {
                     url,
                     navigationType: navigationAction.navigationType,
                     buttonNumber: navigationAction.buttonNumber)
+                // A physical click is a new user navigation; page script cannot fake one.
+                if nativeTab.navigationWasUserActivated { nativeTab.resetAutomaticReloads() }
             }
             // Page-initiated downloads keep their external-browser behavior.
             // The explicit toolbar action owns the native Save dialog.
@@ -1468,9 +1482,9 @@ extension DashboardWindowController {
         self.webView(webView, didFail: navigation, withError: error)
     }
 
-    func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: Error) {
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         if self.nativeBrowser.owns(webView) {
-            self.nativeBrowser.navigationDidFail(for: webView, error: error)
+            self.nativeBrowser.navigationDidFail(navigation, for: webView, error: error)
             return
         }
         guard webView === self.webView else { return }
@@ -1495,7 +1509,7 @@ extension DashboardWindowController {
                 message: String(localized: "The dashboard page stopped unexpectedly."),
                 detail: String(localized: "Choose Reload to try loading the dashboard again."))
         } else if self.nativeBrowser.owns(webView) {
-            webView.reload()
+            self.nativeBrowser.webContentProcessDidTerminate(webView)
         }
     }
 

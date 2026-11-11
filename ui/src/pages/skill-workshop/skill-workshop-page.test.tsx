@@ -311,6 +311,25 @@ describe("without the skill-workshop plugin", () => {
 
     await waitText(page, "An admin can turn it on from Plugins.");
     expect(button(page, "Turn on Skill Workshop")).toBeNull();
+    // Non-admins are not told to turn it on themselves.
+    expect(page.textContent).not.toContain("Turn it on to let");
+  });
+
+  it("does not offer the button when plugins are turned off on the Gateway", async () => {
+    const request = pluginGateway({ enabled: false });
+    const runtimeConfig = createRuntimeConfigStub({
+      sourceConfig: { plugins: { enabled: false } },
+    });
+    const page = await mount(request, {
+      withoutPlugin: true,
+      methods: pluginMethods,
+      runtimeConfig,
+    });
+
+    await waitText(page, "Plugins are turned off on this Gateway.");
+    expect(button(page, "Turn on Skill Workshop")).toBeNull();
+    expect(runtimeConfig.ensureLoaded).toHaveBeenCalled();
+    expect(request.mock.calls.some(([method]) => method === "plugins.setEnabled")).toBe(false);
   });
 
   it.each([

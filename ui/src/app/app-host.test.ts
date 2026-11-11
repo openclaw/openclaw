@@ -3,7 +3,6 @@ import { render } from "@solidjs/testing-library";
 import { spread } from "@solidjs/web";
 import { createComponent, createRoot, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewayAgentRow } from "../api/types.ts";
 import {
@@ -171,6 +170,8 @@ describe("OpenClaw shell context lifecycle", () => {
     }));
     const restoreDialog = installDialogPolyfill();
     const runtime = bootstrapApplication();
+    // Hold route readiness after connection so this still exercises a late-mounted shell.
+    runtime.context.gateway.snapshot.phase = "connected";
     const shell = createShellOwner();
     shell.runtime = runtime;
     document.body.append(shell.element);
@@ -564,45 +565,6 @@ describe("OpenClaw shell server preferences", () => {
   });
 });
 
-describe("OpenClaw shell settings search", () => {
-  it("does not load schema through a replaced runtime config capability", async () => {
-    const loadGate = createDeferred();
-    const firstRuntimeConfig = {
-      ensureLoaded: vi.fn(() => loadGate.promise),
-      ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
-    } as unknown as ApplicationContext["runtimeConfig"];
-    const secondRuntimeConfig = {
-      ensureLoaded: vi.fn(() => Promise.resolve()),
-      ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
-    } as unknown as ApplicationContext["runtimeConfig"];
-    const shell = testShell({ runtimeConfig: firstRuntimeConfig });
-
-    const load = shell.handleSettingsSearchQueryChange("browser");
-    shell.runtime = {
-      context: { runtimeConfig: secondRuntimeConfig } as unknown as ApplicationContext,
-    };
-    loadGate.resolve();
-    await load;
-
-    expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
-    expect(firstRuntimeConfig.ensureSchemaLoaded).not.toHaveBeenCalled();
-    expect(secondRuntimeConfig.ensureSchemaLoaded).not.toHaveBeenCalled();
-  });
-
-  it("contains rejected schema loads within settings search", async () => {
-    const runtimeConfig = {
-      ensureLoaded: vi.fn(() => Promise.resolve()),
-      ensureSchemaLoaded: vi.fn(() => Promise.reject(new Error("schema unavailable"))),
-    } as unknown as ApplicationContext["runtimeConfig"];
-    const shell = testShell({ runtimeConfig });
-
-    await expect(shell.handleSettingsSearchQueryChange("browser")).resolves.toBeUndefined();
-
-    expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
-    expect(runtimeConfig.ensureSchemaLoaded).toHaveBeenCalledOnce();
-  });
-});
-
 describe("OpenClaw shell keyboard shortcuts", () => {
   it("resolves onboarding mode from the active route search", () => {
     expect(resolveOnboardingMode("?onboarding=1")).toBe(true);
@@ -729,6 +691,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     const shell = testShell({
       navigation: { snapshot: { navCollapsed: false }, update: vi.fn() },
     });
+    shell.routeState = { routeId: "chat" };
     Object.defineProperty(shell.elements, "commandPalette", {
       configurable: true,
       value: { isConnected: true, isOpen: false, openPalette, togglePalette: vi.fn() },

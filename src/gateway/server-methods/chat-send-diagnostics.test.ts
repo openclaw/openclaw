@@ -16,6 +16,8 @@ import {
   measureDiagnosticsTimelineSpan as measureSpan,
   measureDiagnosticsTimelineSpanSync as measureSpanSync,
   withDiagnosticsTimelineObserver as observeTimeline,
+  transitionAdmissionPhase,
+  type AdmissionDiagnostics,
 } from "../../infra/diagnostics-timeline.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { startChatSendDiagnostics } from "./chat-send-diagnostics.js";
@@ -209,4 +211,20 @@ test("slow startup separates allocation wait from the sandbox owner's nested pre
     info,
     "slow chat send 546000ms stage=startup ack=0ms detail.attempt.setup=546000ms detail.worktree.sandbox=546000ms detail.worktree.sandbox.allocationWait=490000ms detail.worktree.sandbox.containerStart=6000ms detail.worktree.sandbox.reservation=56000ms detail.worktree.sandbox.templatePrepare=50000ms detail.worktree.sandbox.unattributed=0ms",
   );
+});
+
+test("slow sends retain admission time across fallback attempts", () => {
+  const { info, diagnostics } = createDiagnostics();
+  diagnostics.acknowledge();
+  const first: AdmissionDiagnostics = {};
+  const second: AdmissionDiagnostics = {};
+  observeTimeline(diagnostics.observeSpan, () => {
+    transitionAdmissionPhase(first, "writerMs");
+    at(120_000, () => transitionAdmissionPhase(first));
+    transitionAdmissionPhase(second, "writerMs");
+    at(130_000, () => transitionAdmissionPhase(second, "placementMs"));
+    at(135_000, () => transitionAdmissionPhase(second));
+  });
+  diagnostics.finish();
+  expect(info.mock.calls[0]?.[0]).toContain('"writerMs":130000,"placementMs":5000');
 });

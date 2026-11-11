@@ -71,6 +71,7 @@ async function customEntry() {
   const root = pickers[0]!;
   flush();
   root.querySelector<HTMLButtonElement>(".trigger")!.click();
+  await waitForSolid(() => expect(root.querySelector(".palette")).not.toBeNull());
   root.querySelector<HTMLButtonElement>(".more")!.click();
   await waitForSolid(() =>
     expect(root.querySelector<HTMLInputElement>(".emoji-search-panel__search")).not.toBeNull(),
@@ -133,6 +134,7 @@ describe("transcript message reactions", () => {
     flush();
     expect(picker.querySelector(".palette")).toBeNull();
     picker.querySelector<HTMLButtonElement>(".trigger")!.click();
+    await waitForSolid(() => expect(picker.querySelector(".palette")).not.toBeNull());
     const pressed = pickerButton(picker, "👍")!;
     expect(pressed.getAttribute("aria-pressed")).toBe("true");
     const didHide = hidden(picker);
@@ -159,7 +161,7 @@ describe("transcript message reactions", () => {
     expect(locations(new Map([["message-1", []]]))).toEqual(["actions"]);
   });
 
-  it("keeps reactions actionable in the reserved footer through an active continuation", () => {
+  it("keeps reactions actionable in the reserved footer through an active continuation", async () => {
     host = document.body.appendChild(document.createElement("div"));
     const harness = createMessageGroupHarness(host);
     const group = createMessageGroup(
@@ -189,6 +191,7 @@ describe("transcript message reactions", () => {
       expect(onReact).toHaveBeenLastCalledWith("message-1", "👍", true);
       const picker = footer.querySelector<HTMLElement>("openclaw-message-reaction-picker")!;
       picker.querySelector<HTMLButtonElement>(".trigger")!.click();
+      await waitForSolid(() => expect(picker.querySelector(".palette")).not.toBeNull());
       pickerButton(picker, "🚀")!.click();
       expect(onReact).toHaveBeenLastCalledWith("message-1", "🚀", false);
     }

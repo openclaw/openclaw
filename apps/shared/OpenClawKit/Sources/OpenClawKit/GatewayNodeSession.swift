@@ -110,6 +110,7 @@ public actor GatewayNodeSession {
     var reactionAccess: GatewayReactionAccessFacts?
     private var attachmentLimits: GatewayAttachmentLimits?
     private var mainSessionKey: String?
+    private var controlUiBasePath: String?
     // `computer.act` is not safe to repeat after a response is lost. Keep recent
     // in-flight/results on the long-lived node session so a channel reconnect can
     // replay the receipt without posting input twice. App restart intentionally
@@ -664,6 +665,10 @@ public actor GatewayNodeSession {
         self.currentRouteValue(self.attachmentLimits, ifCurrentRoute: route)
     }
 
+    public func currentControlUiBasePath(ifCurrentRoute route: GatewayNodeSessionRoute) -> String? {
+        self.currentRouteValue(self.controlUiBasePath, ifCurrentRoute: route)
+    }
+
     private func currentRouteValue<T>(
         _ value: T?,
         ifCurrentRoute route: GatewayNodeSessionRoute) -> T?
@@ -836,6 +841,7 @@ extension GatewayNodeSession {
         self.reactionAccess = GatewayReactionAccessFacts(hello: snapshot)
         self.attachmentLimits = snapshot.advertisedAttachmentLimits()
         self.mainSessionKey = snapshot.snapshot.sessiondefaults?["mainSessionKey"]?.stringValue?.trimmedNonEmpty
+        self.controlUiBasePath = snapshot.controluibasepath?.trimmedNonEmpty
     }
 
     private func handlePush(
@@ -876,6 +882,7 @@ extension GatewayNodeSession {
         self.reactionAccess = nil
         self.attachmentLimits = nil
         self.mainSessionKey = nil
+        self.controlUiBasePath = nil
     }
 
     private func handleChannelDisconnected(

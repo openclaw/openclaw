@@ -105,18 +105,23 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
   });
   afterEach(clearRuntimeConfigSnapshot);
 
-  it.each([false, true])(
-    "requires an explicit Blue grant for fallback (granted=%s)",
-    async (granted) => {
+  it.each([
+    { scope: "operator.admin", grants: undefined, allowed: true },
+    { scope: "operator.write", grants: undefined, allowed: false },
+    { scope: "operator.admin", grants: [] as const, allowed: false },
+    { scope: "operator.write", grants: ["daybreak_blue"] as const, allowed: true },
+  ])(
+    "honors $scope authority and ceiling $grants for automatic fallback",
+    async ({ scope, grants, allowed }) => {
       const authority = createAdmittedRunOperatorAuthority({
         profileId: "fallback-role",
-        scopes: ["operator.admin"],
+        scopes: [scope],
         assertCurrent() {},
         rolePolicy: {
           sessionAccessCap: "none",
           sandboxRequired: false,
           agents: "*",
-          accessPrograms: { cyber: granted ? ["daybreak_blue"] : [] },
+          ...(grants ? { accessPrograms: { cyber: grants } } : {}),
         },
       });
       const admission = prepareSystemAgentRunAdmission(
@@ -134,8 +139,8 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
       );
       try {
         await runEntry(candidate, { preparedRunAdmission: admission });
-        expect(candidate).toHaveBeenCalledTimes(granted ? 2 : 1);
-        if (granted) {
+        expect(candidate).toHaveBeenCalledTimes(allowed ? 2 : 1);
+        if (allowed) {
           expect(candidate.mock.calls[1]?.[2].cyberAccessProgram).toBe("daybreak_blue");
         }
       } finally {

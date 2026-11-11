@@ -7,7 +7,7 @@ import type {
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
-import { resolveModelRuntimeEntry, type ModelRuntimeEntry } from "../model-runtime-choice.ts";
+import { resolveModelRuntimeEntry } from "../model-runtime-choice.ts";
 import {
   buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
@@ -231,7 +231,7 @@ export function hasChatModelCatalogSelection(
 }
 
 export function chatModelUnavailableMessage(
-  reason: ModelRuntimeEntry["unavailableReason"],
+  reason: ModelCatalogEntry["unavailableReason"],
   inference?: "worker",
 ): string | undefined {
   if (inference === "worker" && (reason === "missing-auth" || reason === "auth-failed")) {
@@ -391,7 +391,7 @@ function resolveFastModeProvider(
 }
 
 function isChatStandardOnlySpeed(
-  entry: Pick<ModelRuntimeEntry, "supportsFastMode" | "serviceTiers"> | undefined,
+  entry: Pick<ModelCatalogEntry, "supportsFastMode" | "serviceTiers"> | undefined,
   canRecoverRejectedTier: boolean,
 ): boolean {
   return (
@@ -494,9 +494,9 @@ export function resolveChatFastModeSelectState(input: {
           ? effectiveMode
           : "off"
       : configuredOverride;
-  const supported = standardOnly || requestSupported || Boolean(configuredOverride);
+  const supported = requestSupported && !standardOnly;
   // A request that cannot carry Fast runs at its standard tier, whatever the saved or
-  // inherited preference says; the preference stays selected so it can be cleared.
+  // inherited preference says. Keep that preference without exposing a no-op speed control.
   // A saved Ultrafast setting remains Ultrafast when only Ultrafast access is unavailable.
   const runningMode = requestSupported ? effectiveMode : false;
   const active = runningMode === true || runningMode === "auto" || runningMode === "ultrafast";
@@ -510,8 +510,6 @@ export function resolveChatFastModeSelectState(input: {
           : isOpenAI || currentOverride === "off"
             ? "Standard"
             : "Default";
-  // A legacy override on a provider without a wire mapping stays visible so it
-  // can be cleared, but the toggle must not write a new no-op fast override.
   // For mapped providers an active toggle always writes an explicit off: the
   // inherited baseline is unknowable while an override exists, and clearing
   // could land on a fast default, turning the click into a visible no-op.
@@ -531,8 +529,7 @@ export function resolveChatFastModeSelectState(input: {
     active,
     currentOverride,
     persistedOverride: configuredOverride,
-    disabled:
-      standardOnly || !supported || !input.connected || input.loading || !input.gatewayAvailable,
+    disabled: !supported || !input.connected || input.loading || !input.gatewayAvailable,
     label,
     hint: observation
       ? observation.responseTier

@@ -333,9 +333,8 @@ it.each([
         expect(JSON.stringify(replayMessages.at(-2))).toContain("Review answer");
         expect(JSON.stringify(replayMessages.at(-1))).toContain("Review only");
         expect(JSON.stringify(replay.tools)).toBe(JSON.stringify(original.tools));
-        expect(replay.tool_choice).toEqual(
-          api === "anthropic-messages" ? { type: "none" } : "none",
-        );
+        const toolChoice = api === "anthropic-messages" ? original.tool_choice : "none";
+        expect(replay.tool_choice).toEqual(toolChoice);
         if (api === "openai-responses") {
           expect(original.tools).toEqual(expect.arrayContaining([{ type: "web_search" }]));
         }
@@ -361,21 +360,23 @@ it.each([
         await expect(fork()).rejects.toThrow("after three attempts");
         expect(payloads.length - beforeDenied).toBe(3);
         expect(await readTranscript()).toEqual(parentTranscript);
+        const assertImagesBlocked = () => {
+          const body = JSON.stringify(payloads.at(-1));
+          expect(body).toContain("Image reading is disabled.");
+          expect(body).toContain("PRIVATE_TOOL_IMAGE");
+          expect(body).not.toContain(image.data);
+          expect(body).not.toContain('"input_image"');
+          expect(body).not.toContain('"image_url"');
+        };
         if (api === "openai-responses") {
           imageResultMode = true;
           toolsRemaining = 1;
           await runParent("Inspect private images", "fork-parent-images", true);
           imageResultMode = false;
-          const assertImagesBlocked = () => {
-            const body = JSON.stringify(payloads.at(-1));
-            expect(body).toContain("Image reading is disabled.");
-            expect(body).toContain("PRIVATE_TOOL_IMAGE");
-            expect(body).not.toContain(image.data);
-            expect(body).not.toContain('"input_image"');
-            expect(body).not.toContain('"image_url"');
-          };
           await expect(fork()).resolves.toEqual({ text: "Review answer" });
           assertImagesBlocked();
+        }
+        if (api !== "openai-completions") {
           holdParentTool = true;
           toolsRemaining = 1;
           const activeParent = runParent("Run the lookup", "fork-parent-active");
@@ -389,11 +390,14 @@ it.each([
             const whileRunning = await readTranscript();
             await expect(fork()).resolves.toEqual({ text: "Review answer" });
             expect(payloads.at(-1)?.prompt_cache_key).toBeUndefined();
-            expect(JSON.stringify(payloads.at(-1))).toContain("This tool call is still running");
-            expect(JSON.stringify(payloads.at(-1))).not.toContain("LIVE_TOOL_RESULT_1672");
+            const forkBody = JSON.stringify(payloads.at(-1));
+            expect(forkBody).toContain("This tool call is still running");
+            expect(forkBody).not.toMatch(/LIVE_TOOL_RESULT_1672|interrupted/);
             expect(await readTranscript()).toEqual(whileRunning);
-            expect(executeTool).toHaveBeenCalledTimes(2);
-            assertImagesBlocked();
+            expect(executeTool).toHaveBeenCalledTimes(api === "openai-responses" ? 2 : 1);
+            if (api === "openai-responses") {
+              assertImagesBlocked();
+            }
           } finally {
             releaseTool.resolve();
             await activeParent;

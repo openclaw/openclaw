@@ -210,7 +210,7 @@ export async function prepareTemplateDraft(params: {
   for (const [name, server] of Object.entries(draftManifest.mcpServers)) {
     add({ id: `mcp:${name}`, kind: "mcp", label: name, detail: JSON.stringify(server, null, 2) });
   }
-  for (const job of draftManifest.cronJobs) {
+  for (const job of draftManifest.automations) {
     add({
       id: `cron:${job.id}`,
       kind: "automation",
@@ -253,7 +253,9 @@ export async function prepareTemplateDraft(params: {
       delete draftManifest.mcpServers[key];
     }
   }
-  draftManifest.cronJobs = draftManifest.cronJobs.filter((job) => !excluded.has(`cron:${job.id}`));
+  draftManifest.automations = draftManifest.automations.filter(
+    (job) => !excluded.has(`cron:${job.id}`),
+  );
   const removedPluginRefs = new Set(
     items.filter((item) => item.kind === "plugin" && !item.included).map((item) => item.label),
   );

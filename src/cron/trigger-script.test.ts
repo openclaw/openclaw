@@ -62,6 +62,33 @@ function createEvaluator(
 const INPUT = { jobId: "probe", script: "return result", state: null };
 const INTERNAL_ERROR = expect.objectContaining({ kind: "error", code: "internal_error" });
 
+it("snapshots a cron tool result without temporary object-value arrays", async () => {
+  const details = {
+    rows: Array.from({ length: 40 }, (_, snapshotRow) => ({ snapshotRow, state: "ready" })),
+  };
+  const probe = makeTool("snapshot_probe", async () => jsonResult(details));
+  const { evaluate } = createEvaluator(runCodeModeScriptHeadless, {
+    prepareRuntime: async ({ runtimeConfig }) => createPreparedRuntime(runtimeConfig, [probe]),
+  });
+  const objectValues = Object.values;
+  let snapshotArraySlots = 0;
+  const values = vi.spyOn(Object, "values").mockImplementation((object) => {
+    const members = objectValues(object);
+    if (Object.hasOwn(object, "snapshotRow")) {
+      snapshotArraySlots += members.length;
+    }
+    return members;
+  });
+  try {
+    await expect(
+      evaluate({ script: "return { fire: true, state: await snapshot_probe({}) };" }),
+    ).resolves.toMatchObject({ kind: "evaluated", fire: true, state: details });
+    expect(snapshotArraySlots).toBe(0);
+  } finally {
+    values.mockRestore();
+  }
+});
+
 function execEvaluator(host: "auto" | "node" | "gateway", node?: string) {
   return createCronScriptRuntime({
     config: {
@@ -308,6 +335,124 @@ it("starts cold after cancellation without waiting for the old preparation to se
     controller.abort();
     release.resolve();
     await Promise.allSettled([cancelled, ...(next ? [next] : [])]);
+  }
+});
+
+it("reuses a preparation that outlives its first evaluation's deadline", async () => {
+  vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
+  const release = createDeferred();
+  let first = true;
+  const { evaluate, prepareRuntime } = createEvaluator(undefined, {
+    prepareRuntime: async (params) => {
+      if (first) {
+        first = false;
+        await release.promise;
+        params.signal?.throwIfAborted();
+      }
+      return createPreparedRuntime(params.runtimeConfig);
+    },
+  });
+  try {
+    const timedOut = evaluate();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(timedOut).resolves.toMatchObject({ kind: "error", code: "timeout" });
+
+    release.resolve();
+    await expect(evaluate()).resolves.toMatchObject({ kind: "evaluated", fire: false });
+    expect(prepareRuntime).toHaveBeenCalledOnce();
+  } finally {
+    release.resolve();
+    vi.useRealTimers();
+  }
+});
+
+it("keeps preparation past the trigger deadline and evicts it at its own limit", async () => {
+  vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
+  const signals: AbortSignal[] = [];
+  const release = createDeferred();
+  const dispose = vi.fn();
+  const { evaluate, prepareRuntime } = createEvaluator(undefined, {
+    prepareRuntime: async (params) => {
+      if (params.signal) {
+        signals.push(params.signal);
+      }
+      if (signals.length === 1) {
+        // A non-cooperative preparation can finish after its cache entry expires.
+        await release.promise;
+        return { ...createPreparedRuntime(params.runtimeConfig), [Symbol.dispose]: dispose };
+      }
+      return createPreparedRuntime(params.runtimeConfig);
+    },
+  });
+  try {
+    const timedOut = evaluate();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(timedOut).resolves.toMatchObject({ kind: "error", code: "timeout" });
+    expect(signals[0]?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(signals[0]?.aborted).toBe(true);
+    await expect(evaluate()).resolves.toMatchObject({ kind: "evaluated", fire: false });
+    expect(prepareRuntime).toHaveBeenCalledTimes(2);
+    release.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dispose).toHaveBeenCalledOnce();
+  } finally {
+    release.resolve();
+    vi.useRealTimers();
+  }
+});
+
+it("keeps shared preparation when a later waiter is cancelled", async () => {
+  vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
+  const release = createDeferred();
+  const controller = new AbortController();
+  let first = true;
+  const { evaluate, prepareRuntime } = createEvaluator(undefined, {
+    prepareRuntime: async (params) => {
+      if (first) {
+        first = false;
+        await release.promise;
+        params.signal?.throwIfAborted();
+      }
+      return createPreparedRuntime(params.runtimeConfig);
+    },
+  });
+  try {
+    const timedOut = evaluate();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(timedOut).resolves.toMatchObject({ kind: "error", code: "timeout" });
+
+    const cancelled = evaluate({ abortSignal: controller.signal });
+    controller.abort();
+    await expect(cancelled).resolves.toMatchObject({ kind: "error", code: "aborted" });
+
+    release.resolve();
+    await expect(evaluate()).resolves.toMatchObject({ kind: "evaluated", fire: false });
+    expect(prepareRuntime).toHaveBeenCalledOnce();
+  } finally {
+    release.resolve();
+    vi.useRealTimers();
+  }
+});
+
+it("lets a script payload prepare for its whole budget", async () => {
+  vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
+  const { executePayload } = createEvaluator(completed({}), {
+    prepareRuntime: async (params) => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 150_000);
+      });
+      params.signal?.throwIfAborted();
+      return createPreparedRuntime(params.runtimeConfig);
+    },
+  });
+  try {
+    const result = executePayload({ timeoutSeconds: 300 });
+    await vi.advanceTimersByTimeAsync(150_000);
+    await expect(result).resolves.toMatchObject({ kind: "completed" });
+  } finally {
+    vi.useRealTimers();
   }
 });
 

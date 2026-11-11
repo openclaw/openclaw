@@ -23,10 +23,14 @@ beforeAll(async () => {
   proof = createControlUiE2eArtifactDir("chat-mcp-fullscreen");
   server = await startControlUiE2eServer();
   claim = await acquireGatewayE2ePortBlock();
-  await new Promise<void>((resolve) => sandbox.listen(claim.port, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    sandbox.listen(claim.port, "127.0.0.1", resolve);
+  });
 }, 120_000);
 afterAll(async () => {
-  await new Promise<void>((resolve) => sandbox.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    sandbox.close(() => resolve());
+  });
   await claim?.release();
   await server?.close();
 }, 120_000);
