@@ -50,8 +50,7 @@ const mediaFixture = (
   fileName: string,
   contentType: string,
   bytes: string,
-  encoding: BufferEncoding = "utf8",
-) => ({ kind, fileName, contentType, buffer: Buffer.from(bytes, encoding) });
+) => ({ kind, fileName, contentType, buffer: Buffer.from(bytes) });
 
 function installChunkSender(prefix: string) {
   const sendMessage = vi.fn<ActiveWebListener["sendMessage"]>();
@@ -206,8 +205,7 @@ it("preserves accepted receipts and callback order after caption failure", async
       "audio",
       "voice.ogg",
       "audio/ogg",
-      "4f676753000200000000000000009f942946000000001863d23601134f707573486561640102380180bb0000000000",
-      "hex",
+      `OggS${"\0".repeat(22)}\x01\x13OpusHead`.padEnd(64, "\0"),
     ),
   } as const;
   mocks.loadOutboundMediaFromUrl.mockImplementation(async (url: string) => {

@@ -365,19 +365,7 @@ describe("deliverWebReply", () => {
     const audio = ext !== "pdf";
     const mime = { ogg: "audio/ogg", mp3: "audio/mpeg", pdf: "application/pdf" }[ext];
     hoisted.transcodeAudioBufferToOpus.mockResolvedValue(Buffer.from("opus-output"));
-    const buffer =
-      ext === "ogg"
-        ? Buffer.from(
-            "4f676753000200000000000000009f942946000000001863d23601134f707573486561640102380180bb0000000000",
-            "hex",
-          )
-        : Buffer.from(ext);
-    vi.mocked(loadWebMedia).mockResolvedValueOnce({
-      buffer,
-      contentType: mime,
-      kind: audio ? "audio" : "document",
-      ...(ext === "mp3" ? { fileName: "voice.mp3" } : {}),
-    });
+    mockLoadedMedia(ext, mime, audio ? "audio" : "file", ext === "mp3" ? "voice.mp3" : undefined);
     const msg = await deliver({
       text: "cap",
       mediaUrl: audio
@@ -388,7 +376,7 @@ describe("deliverWebReply", () => {
       msg,
       audio
         ? {
-            audio: ext === "mp3" ? Buffer.from("opus-output") : buffer,
+            audio: Buffer.from("opus-output"),
             ptt: true,
             mimetype: "audio/ogg; codecs=opus",
           }
