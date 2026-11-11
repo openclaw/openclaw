@@ -165,7 +165,7 @@ workers.Worker = class extends NativeWorker {
               ...options.env,
               OPENCLAW_IDLE_MEASURE_CHANNEL: channelName,
               OPENCLAW_IDLE_MEASURE_TIMERS: process.env.OPENCLAW_IDLE_MEASURE_TIMERS,
-              OPENCLAW_IDLE_MEASURE_FS_CENSUS: censusDirectory,
+              ...(censusDirectory ? { OPENCLAW_IDLE_MEASURE_FS_CENSUS: censusDirectory } : {}),
               ...(process.env.NODE_DEBUG_NATIVE
                 ? { NODE_DEBUG_NATIVE: process.env.NODE_DEBUG_NATIVE }
                 : {}),

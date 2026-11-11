@@ -1,3 +1,4 @@
-40
+90
 # One committed-write regression counts sibling store opens through real SQLite
 # writes. Existing remount coverage now enters Gateway startup instead of a helper.
+# A real worker regression protects timer-only measurement without filesystem census.

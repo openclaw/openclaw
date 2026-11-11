@@ -463,7 +463,7 @@ try {
   const heapProfilePath = path.join(output, "idle.heapprofile");
   const diagnosticsId = path.join(output, "idle-diagnostics");
   if (values.profile && !values["watcher-failure"]) {
-    await controlGatewayProfile(child, "cpu", "start", cpuProfilePath);
+    await controlGatewayProfile(child, "cpu", "start", cpuProfilePath, { includeWorkers: true });
   }
   if (values.allocations) {
     await controlGatewayProfile(child, "heap", "start", heapProfilePath, {
