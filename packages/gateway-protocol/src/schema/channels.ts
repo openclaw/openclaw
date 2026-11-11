@@ -318,6 +318,8 @@ const TalkCatalogProviderSchema = closedObject({
   brains: Type.Optional(Type.Array(TalkBrainSchema)),
   inputAudioFormats: Type.Optional(Type.Array(closedObject(TalkCatalogAudioFormatProperties))),
   outputAudioFormats: Type.Optional(Type.Array(closedObject(TalkCatalogAudioFormatProperties))),
+  // OpenAI Platform auth, independent of subscription-ready relay configuration.
+  platformAuth: Type.Optional(Type.Boolean()),
   supportsBrowserSession: Type.Optional(Type.Boolean()),
   supportsBargeIn: Type.Optional(Type.Boolean()),
   supportsToolCalls: Type.Optional(Type.Boolean()),

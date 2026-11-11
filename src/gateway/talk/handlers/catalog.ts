@@ -381,6 +381,26 @@ async function buildTalkCatalog(
               capabilities?.supportsBrowserSession ?? provider.createBrowserSession,
             ),
           };
+          if (available && provider.id === "openai") {
+            // The public bridge predicate checks Platform credentials. The internal
+            // relay predicate also accepts OAuth, which Settings routes via WebRTC.
+            entry.platformAuth = await Promise.resolve()
+              .then(
+                () =>
+                  provider.isConfiguredAsync?.({
+                    cfg: config,
+                    providerConfig,
+                    agentId: realtimeAgentId,
+                  }) ??
+                  provider.isConfigured?.({
+                    cfg: config,
+                    providerConfig,
+                    agentId: realtimeAgentId,
+                  }) ??
+                  false,
+              )
+              .catch(onReadinessError);
+          }
           const defaultModel =
             normalizeOptionalString(defaultProviderConfig.model) ?? provider.defaultModel;
           if (defaultModel) {

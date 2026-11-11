@@ -20,6 +20,46 @@ import {
 import { expectRespondError, expectRespondOk, mockCallArg } from "./responses.test-support.js";
 
 describe("talk.catalog handler", () => {
+  it.each([false, true, "reject"])(
+    "separates relay readiness from Platform credentials: %s",
+    async (platformAuth) => {
+      const provider = {
+        id: "openai",
+        label: "OpenAI",
+        defaultModel: "gpt-live-1-codex",
+        isConfigured: vi.fn(() => false),
+        isConfiguredAsync: vi.fn(async () => {
+          if (platformAuth === "reject") {
+            throw new Error("auth store unavailable");
+          }
+          return platformAuth;
+        }),
+        capabilities: { transports: ["webrtc", "gateway-relay"], supportsBrowserSession: true },
+      };
+      mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
+      mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockResolvedValue({
+        provider,
+        providerConfig: { model: "gpt-live-1-codex" },
+        capabilities: provider.capabilities,
+      } as never);
+      const respond = await invokeTalkHandler("talk.catalog", {
+        client: readClient(),
+        config: realtimeConfig({ provider: "openai", transport: "gateway-relay" }),
+      });
+      expectRespondOk(respond, {
+        realtime: expect.objectContaining({
+          providers: [
+            expect.objectContaining({
+              id: "openai",
+              configured: true,
+              platformAuth: platformAuth === true,
+            }),
+          ],
+        }),
+      });
+    },
+  );
+
   it("returns only dictation availability to session-scoped callers", async () => {
     const config = rolePolicyConfig();
     const client = roleClient("view", "dictation-catalog");
@@ -311,6 +351,7 @@ describe("talk.catalog handler", () => {
               },
               {
                 ...expected.otherRealtime,
+                platformAuth: false,
                 configured: false,
                 modes: ["realtime"],
                 brains: ["agent-consult"],

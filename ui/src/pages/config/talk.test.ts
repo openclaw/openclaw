@@ -242,7 +242,7 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
 
 async function selectMutation(
   field: "model" | "provider",
-  value: string,
+  value: string | null,
   options: TalkMutationHarnessOptions = {},
 ) {
   const harness = createTalkMutationHarness(options);
@@ -258,7 +258,11 @@ async function selectMutation(
   } else {
     harness.page.changeProvider(value);
   }
-  expect(harness.runtimeConfig.patchForm).toHaveBeenCalledWith(realtimePath(field), value);
+  if (value === null) {
+    expect(harness.runtimeConfig.removeFormValue).toHaveBeenCalledWith(realtimePath(field));
+  } else {
+    expect(harness.runtimeConfig.patchForm).toHaveBeenCalledWith(realtimePath(field), value);
+  }
   return {
     remove: harness.runtimeConfig.removeFormValue,
     patchForm: harness.runtimeConfig.patchForm,
@@ -912,6 +916,19 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     },
   );
 
+  it.each(["gpt-live-1-codex", null])(
+    "routes an OAuth-only OpenAI model change %s over WebRTC",
+    async (model) => {
+      const { patchForm } = await selectMutation("model", model, {
+        provider: "openai",
+        transport: "gateway-relay",
+        transports: ["webrtc", "gateway-relay"],
+        providerOption: { configured: true, platformAuth: false, supportsBrowserSession: true },
+      });
+      expect(patchForm).toHaveBeenCalledWith(realtimePath("transport"), "webrtc");
+    },
+  );
+
   it.each([
     [
       "no family facts",
@@ -944,11 +961,24 @@ describe("TalkSettingsPage realtime transport mutation", () => {
         defaultModel: "gpt-live-1-codex",
         transport: "gateway-relay",
         transports: ["webrtc", "gateway-relay"],
-        providerOption: { configured: true, supportsBrowserSession: true },
+        providerOption: { configured: true, platformAuth: true, supportsBrowserSession: true },
       },
       null,
       ["transport"],
       null,
+    ],
+    [
+      "OAuth-only OpenAI uses WebRTC even when relay is configured",
+      {
+        model: "grok-voice-latest",
+        defaultModel: "gpt-live-1-codex",
+        transport: "gateway-relay",
+        transports: ["webrtc", "gateway-relay"],
+        providerOption: { configured: true, platformAuth: false, supportsBrowserSession: true },
+      },
+      null,
+      [],
+      "webrtc",
     ],
     [
       "relay not configured for target provider",

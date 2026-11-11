@@ -505,7 +505,16 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
           talkProviderRejectsTransport(provider?.transports, transport));
       // Preserve configured transports unless the selected provider positively
       // advertises that it cannot serve them.
-      if (family && rejectsTransport) {
+      if (
+        transport === "gateway-relay" &&
+        provider?.id === "openai" &&
+        provider.platformAuth === false &&
+        provider.supportsBrowserSession === true &&
+        provider.transports?.includes("webrtc") &&
+        !family?.unsupportedTransports.includes("webrtc")
+      ) {
+        runtimeConfig.patchForm(["talk", "realtime", "transport"], "webrtc");
+      } else if (family && rejectsTransport) {
         runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
       } else if (
         family?.gatewayRelayHandlesAgentConsult &&
@@ -515,6 +524,19 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
         runtimeConfig.removeFormValue(["talk", "realtime", "consultRouting"]);
       }
       return;
+    }
+    const selection = liveSelection();
+    const provider = selectedTalkProviderOption(catalogState.value, selection);
+    const family = resolveTalkModelFamilySettings(provider, provider?.defaultModel ?? null);
+    if (
+      selection.transport === "gateway-relay" &&
+      provider?.id === "openai" &&
+      provider.platformAuth === false &&
+      provider.supportsBrowserSession === true &&
+      provider.transports?.includes("webrtc") &&
+      !family?.unsupportedTransports.includes("webrtc")
+    ) {
+      runtimeConfig.patchForm(["talk", "realtime", "transport"], "webrtc");
     }
     setModelDefaultResetIntent({
       gatewayUrl: context.gateway.connection.gatewayUrl,
@@ -595,16 +617,19 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
       ).model ?? option?.defaultModel;
     const family = resolveTalkModelFamilySettings(option, targetModel ?? null);
     const unsupportedTransports = family?.unsupportedTransports ?? [];
-    const relayUnavailable =
+    // OAuth-only OpenAI is deliberately routed through browser-owned WebRTC.
+    const relayNeedsWebRtc =
       configuredTransport === "gateway-relay" &&
-      option?.configured === false &&
+      (option?.configured === false ||
+        (option?.id === "openai" && option.platformAuth === false)) &&
       option.supportsBrowserSession === true &&
+      !unsupportedTransports.includes("webrtc") &&
       Boolean(option.transports?.some((transport) => transport === "webrtc"));
     const rejectsTransport =
       configuredTransport !== null &&
       (family?.unsupportedTransports.some((candidate) => candidate === configuredTransport) ||
         talkProviderRejectsTransport(option?.transports, configuredTransport) ||
-        relayUnavailable);
+        relayNeedsWebRtc);
     const supportedTransports = option?.transports?.filter(
       (transport) => !unsupportedTransports.some((candidate) => candidate === transport),
     );
