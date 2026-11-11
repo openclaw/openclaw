@@ -4071,12 +4071,12 @@ console.error = function (...args) {
     // First probe is SIGKILLed at 25ms; the retry gets the full generous timeout
     // and reads the (80ms) stderr help, so the wrapper must not hard-fail.
     const result = runWrapper(helpText, ["--version"], {
-      env: { OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS: "25" },
+      env: { CRABBOX_PROVIDER: "aws", OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS: "25" },
       extraPathEntries: [makeSlowHelpCrabbox(helpText, 80)],
     });
 
     expect(result.error).toBeUndefined();
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).not.toContain("could not parse provider list");
     expect(result.stderr).not.toContain("selected binary failed --help sanity checks");
     expect(result.stderr).toContain(
