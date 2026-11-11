@@ -13,6 +13,7 @@ import {
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
 import { closeAdmittedRunDelegatedAuthority } from "../../../agents/admitted-run-context.js";
 import { listAgentIds } from "../../../agents/agent-roster.js";
+import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
 import { resolveAcpSpawnRuntimePolicyError } from "../../../agents/subagents/spawn/acp-spawn-policy.js";
 import { resolveRuntimeCwdForAcpSpawn } from "../../../agents/subagents/spawn/acp-spawn-runtime.js";
@@ -147,6 +148,7 @@ export async function handleAcpSpawnAction(
     runtimeCwd = await resolveRuntimeCwdForAcpSpawn({
       resolvedCwd,
       explicitCwd: spawn.cwd,
+      managedWorkspaceDir: resolveAgentWorkspaceDir(params.cfg, ownerAgentId),
     });
   } catch (error) {
     const unavailable = replyForUnavailableWorkspace(error);

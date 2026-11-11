@@ -59,7 +59,7 @@ docker_e2e_docker_cmd image inspect "$IMAGE_NAME" >"$ARTIFACTS/image.json"
 node "$ROOT_DIR/scripts/e2e/lib/container-image-upgrade/assert-launch.mjs" "$ARTIFACTS/image.json"
 IMAGE_ID="$(docker_e2e_docker_cmd image inspect -f '{{.Id}}' "$IMAGE_NAME")"
 
-for cell in default compose old-shape unsafe; do
+for cell in default compose bad-local old-shape unsafe; do
   name="openclaw-image-upgrade-$RUN_ID-$cell"
   volume="$name-state"
   if docker_e2e_docker_cmd volume inspect "$volume" >/dev/null 2>&1; then
@@ -89,7 +89,7 @@ for cell in default compose old-shape unsafe; do
   ACTIVE_HELPER=""
   CONTAINERS+=("$name")
   case "$cell" in
-    default | unsafe)
+    default | bad-local | unsafe)
       docker_e2e_docker_cmd run -d --name "$name" --label "$LABEL=$RUN_ID" \
         "${mounts[@]}" "${environment[@]}" "$IMAGE_ID" >/dev/null ;;
     compose)
@@ -103,10 +103,13 @@ for cell in default compose old-shape unsafe; do
         "${mounts[@]}" "${environment[@]}" --entrypoint tini "$IMAGE_ID" \
         -s -- node openclaw.mjs gateway >/dev/null ;;
   esac
-  if [ "$cell" = default ] || [ "$cell" = compose ]; then
+  if [ "$cell" = default ] || [ "$cell" = compose ] || [ "$cell" = bad-local ]; then
     docker_e2e_wait_container_bash "$name" 180 1 'node /proof/scripts/e2e/lib/container-image-upgrade/fixture.mjs ready'
     docker_e2e_docker_cmd exec "$name" node /proof/scripts/e2e/lib/container-image-upgrade/fixture.mjs ready >"$ARTIFACTS/$cell-ready.json"
     docker_e2e_docker_cmd exec "$name" node /proof/scripts/e2e/lib/container-image-upgrade/fixture.mjs history >"$ARTIFACTS/$cell-history.json"
+    if [ "$cell" = bad-local ]; then
+      docker_e2e_docker_cmd exec "$name" node /proof/scripts/e2e/lib/container-image-upgrade/fixture.mjs turn >"$ARTIFACTS/$cell-turn.json"
+    fi
     docker_e2e_docker_cmd inspect "$name" >"$ARTIFACTS/$cell-launch.json"
     node "$ROOT_DIR/scripts/e2e/lib/container-image-upgrade/assert-launch.mjs" \
       "$ARTIFACTS/image.json" "$ARTIFACTS/$cell-launch.json" "$cell"
@@ -116,6 +119,7 @@ for cell in default compose old-shape unsafe; do
       "$ARTIFACTS/image.json" "$ARTIFACTS/$cell-stop.json" "$cell" "" stopped \
       >"$ARTIFACTS/$cell-stop-assertion.json"
     verify=migrated
+    if [ "$cell" = bad-local ]; then verify=bad-local; fi
   else
     # Require a natural refusal, not a timeout kill. Poll readiness while it can run.
     for attempt in $(seq 1 180); do

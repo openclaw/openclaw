@@ -36,7 +36,7 @@ import { recordSessionCreated } from "../../../sessions/session-created.js";
 import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
 import { recordSubagentSpawned } from "../../../sessions/session-state-events.js";
 import { resolveConfiguredAcpSubagentTargetIds } from "../../agent-roster.js";
-import { resolveSessionAgentId } from "../../agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "../../agent-tool-source-execution-guard.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import {
@@ -371,7 +371,8 @@ export async function spawnAcpDirect(
   try {
     runtimeCwd = await resolveRuntimeCwdForAcpSpawn({
       resolvedCwd,
-      explicitCwd: senderRestricted ? requesterRoot : params.cwd,
+      explicitCwd: params.cwd,
+      managedWorkspaceDir: resolveAgentWorkspaceDir(cfg, ownerAgentId),
     });
   } catch (error) {
     return buildAcpSpawnError(

@@ -70,9 +70,13 @@ function readSession(file, { sessionKey, sessionId }) {
     return events.map((event) => readSqliteTranscriptPayload(event));
   });
 }
-function assertSession(file) {
+function assertSession(file, allowAppended = false) {
   for (const session of readJson(recordPath).sessions) {
-    assert.deepEqual(readSession(file, session), session.events);
+    const events = readSession(file, session);
+    assert.deepEqual(
+      allowAppended ? events.slice(0, session.events.length) : events,
+      session.events,
+    );
   }
 }
 function backups(file) {
@@ -148,7 +152,10 @@ function seed(mode) {
     }
   }
   fs.mkdirSync(workspace, { recursive: true });
-  fs.writeFileSync(path.join(workspace, "openclaw-workspace-state.json"), JSON.stringify(setup));
+  fs.writeFileSync(
+    path.join(workspace, "openclaw-workspace-state.json"),
+    mode === "bad-local" ? "not-json" : JSON.stringify(setup),
+  );
   if (mode === "old-shape") {
     const attestationDir = path.join(state, "workspace-attestations");
     fs.mkdirSync(attestationDir, { recursive: true });
@@ -194,8 +201,8 @@ function seed(mode) {
 }
 function verify(mode) {
   const before = readJson(recordPath);
-  assertSession(agentPath);
-  if (mode !== "migrated") {
+  assertSession(agentPath, mode === "bad-local");
+  if (mode !== "migrated" && mode !== "bad-local") {
     assert.equal(
       sha(fs.readFileSync(agentPath)),
       before.agentSha256,
@@ -238,12 +245,18 @@ function verify(mode) {
   const sharedBackup = verifyBackup(sharedPath, before.shared);
   assert.equal(agentBackup.backupId, sharedBackup.backupId, "Migration backups are not paired");
   assertSession(agentBackup.path);
+  if (mode === "bad-local") {
+    assert.equal(
+      fs.readFileSync(path.join(workspace, "openclaw-workspace-state.json"), "utf8"),
+      "not-json",
+    );
+  }
   console.log(
     JSON.stringify({
       mode,
       agentBackup,
       sharedBackup,
-      workspace: verifyWorkspace(true),
+      workspace: mode === "bad-local" ? { legacyPreserved: true } : verifyWorkspace(true),
     }),
   );
 }
@@ -309,6 +322,40 @@ if (action === "seed") {
     return { sessionKey: session.sessionKey, value };
   });
   console.log(JSON.stringify(histories));
+} else if (action === "turn") {
+  const sessionKey = readJson(recordPath).sessions[0].sessionKey;
+  const runId = "bad-local-turn";
+  const started = rpc("chat.send", {
+    sessionKey,
+    message: "Check the retained workspace",
+    idempotencyKey: runId,
+  });
+  assert.equal(started.status, "started");
+  assert.equal(typeof started.runId, "string");
+  assert.equal(rpc("agent.wait", { runId: started.runId, timeoutMs: 30000 }).status, "ok");
+  let reply;
+  for (let attempt = 0; attempt < 30 && !reply; attempt++) {
+    const history = rpc("chat.history", { sessionKey, limit: 100 });
+    reply = history.messages?.find((entry) => {
+      const message = entry.message ?? entry;
+      return (
+        message.role === "assistant" &&
+        message.idempotencyKey === runId &&
+        message.content?.some(
+          (part) => part.type === "text" && part.text.includes("openclaw doctor --fix"),
+        )
+      );
+    });
+    if (!reply) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  assert(reply, "Affected workspace did not return repair guidance");
+  assert.equal(
+    fs.readFileSync(path.join(workspace, "openclaw-workspace-state.json"), "utf8"),
+    "not-json",
+  );
+  console.log(JSON.stringify({ runId, guided: true, legacyPreserved: true }));
 } else {
   throw new Error(`Unknown fixture action: ${action}`);
 }

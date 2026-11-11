@@ -16,6 +16,7 @@ import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-termi
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { clearAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import {
   getRpcSourceIdentity,
   getRpcSourceLifecycleGeneration,
@@ -140,6 +141,9 @@ type PendingDispatchLifecycleError = {
 };
 
 function resolveDesktopChatSendErrorNotice(error: unknown): string | undefined {
+  if (findStartupMaintenanceRequiredError(error)?.kind === "legacy-workspace") {
+    return "This agent's workspace needs migration.";
+  }
   // Provisioning preserves the typed cause; never expose its paths or raw diagnostics.
   if (
     collectNestedErrorCandidates(error).some(
@@ -165,6 +169,9 @@ function formatChatSendError(error: unknown): string {
       "Your message didn't run because the conversation changed. Refresh the conversation, then send it again." +
       `\n\n${String(error)}`
     );
+  }
+  if (findStartupMaintenanceRequiredError(error)?.kind === "legacy-workspace") {
+    return "This agent's workspace needs migration. Ask the gateway operator to run `openclaw doctor --fix`.";
   }
   return (
     resolveStateContentionPresentation(error)?.errorMessage ??

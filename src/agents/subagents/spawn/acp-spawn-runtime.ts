@@ -15,6 +15,7 @@ import {
   getSessionBindingService,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
+import { isPathInside } from "../../../infra/path-guards.js";
 import { resolveAgentConfig } from "../../agent-scope.js";
 import { splitTrailingAuthProfile } from "../../model-ref-profile.js";
 import {
@@ -24,6 +25,7 @@ import {
 import { buildThinkingCatalog } from "../../model-thinking-default-core.js";
 import type { PreparedSpawnThreadBinding } from "../../spawn-plan.js";
 import { assertNoUnmigratedWorkspaceState } from "../../workspace-legacy-state.js";
+import { resolveCanonicalWorkspacePath } from "../../workspace-state-identity.js";
 import { buildSpawnThreadBinding } from "./spawn-thread-binding.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
@@ -33,6 +35,7 @@ const ACP_RUNTIME_TIMEOUT_MAX_SECONDS = 24 * 60 * 60;
 export async function resolveRuntimeCwdForAcpSpawn(params: {
   resolvedCwd?: string;
   explicitCwd?: string;
+  managedWorkspaceDir: string;
 }): Promise<string | undefined> {
   if (!params.resolvedCwd) {
     return undefined;
@@ -46,8 +49,15 @@ export async function resolveRuntimeCwdForAcpSpawn(params: {
       }
       throw error;
     }
+    assertNoUnmigratedWorkspaceState({ workspaceDir: params.resolvedCwd });
+  } else if (
+    isPathInside(
+      resolveCanonicalWorkspacePath(params.managedWorkspaceDir),
+      resolveCanonicalWorkspacePath(params.resolvedCwd),
+    )
+  ) {
+    assertNoUnmigratedWorkspaceState({ workspaceDir: params.managedWorkspaceDir });
   }
-  assertNoUnmigratedWorkspaceState({ workspaceDir: params.resolvedCwd });
   return params.resolvedCwd;
 }
 

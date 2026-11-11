@@ -19,6 +19,7 @@ import {
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { getAgentEventLifecycleGeneration, onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { StartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import {
   GatewayDrainingError,
   markGatewayRestartDraining,
@@ -54,6 +55,41 @@ const policyMessage =
   "OpenCode cannot run with this chat's tool restrictions. Choose a different model provider or update the tool settings.";
 
 describe("handleChatSendSetupError", () => {
+  it("keeps a workspace migration path out of chat setup failures", async () => {
+    const privatePath = "/private/workspaces/retained/openclaw-workspace-state.json";
+    const activeRunAbort = registerRpcSourceForTest({
+      runId: "workspace-migration-setup",
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    try {
+      await handleChatSendSetupError({
+        admission: {
+          activeRunAbort,
+          cleanupAdmittedRun: vi.fn(),
+          lifecycleGeneration: "test-generation",
+        },
+        context: createDirectChatContext({ broadcast, getRuntimeConfig: () => ({}) }),
+        error: new StartupMaintenanceRequiredError("legacy-workspace", `Repair ${privatePath}`),
+        respond,
+        session: {
+          agentId: "main",
+          clientRunId: "workspace-migration-setup",
+          sessionKey: "agent:main:main",
+        },
+      });
+      const [ok, payload, error] = respond.mock.calls[0]!;
+      expect(JSON.stringify([ok, payload, error])).toContain("openclaw doctor --fix");
+      expect(JSON.stringify([ok, payload, error])).not.toContain(privatePath);
+      expect(JSON.stringify(broadcast.mock.calls)).not.toContain(privatePath);
+    } finally {
+      activeRunAbort.cleanup();
+    }
+  });
+
   it.each([false, true])("preserves an uncertain setup outcome (cleanup: %s)", async (cleanup) => {
     const primary = new SqliteWorkerError("PRIVATE_WRITE_DETAIL", "outcome-unknown");
     const error = cleanup

@@ -1,2 +1,2 @@
-306
-# Covers local marker isolation, container activation, retained attestation admission, affected-workspace repair guidance, attachment preparation, early provisioning, ACP spawning, and sandbox copy ordering.
+391
+# Covers local marker isolation, container activation, retained attestation admission, affected-workspace repair guidance, attachment preparation, chat steering, early provisioning, ACP spawning, and sandbox copy ordering.
