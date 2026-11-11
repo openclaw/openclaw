@@ -4,4 +4,5 @@
 # Exact net LF growth for the current-base #162980 permission-view implementation.
 # Includes the shared People page-census integration regression.
 # Includes the two-line host catalog regression for lazy person-card copy.
-420
+# Includes 15 LF for deterministic first-attempt connection fixture ownership.
+435
