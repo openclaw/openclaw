@@ -1,2 +1,2 @@
-# Discriminant tests for raceWithTimeout clamping oversized deadlines to the native timer ceiling (native overflow would fire early).
-28
+# Discriminant tests for raceWithTimeout saturating overflowing deadlines to the native timer ceiling (2^31-1) so native overflow cannot fire early.
+43

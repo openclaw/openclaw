@@ -5,6 +5,9 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import * as retry from "./index.js";
 
 const TIMER_MAX = 2_147_000_000;
+// Node's native timer overflow threshold: 2^31-1 ms and anything above wraps.
+const NATIVE_MAX = 2_147_483_647;
+const NATIVE_OVERFLOW = 2_147_483_648;
 const retryOptions = { attempts: 2, minDelayMs: 0, maxDelayMs: 0 };
 
 beforeEach(() => vi.useFakeTimers());
@@ -83,27 +86,39 @@ it.each([
   }
 });
 
-it("clamps an oversized deadline so native timers do not overflow to an early wake", async () => {
+it("saturates an overflowing deadline to the native timer ceiling instead of firing early", async () => {
   const scheduled = vi.spyOn(globalThis, "setTimeout");
   const source = createDeferred<string>();
-  const pending = retry.raceWithTimeout(source.promise, TIMER_MAX + 1, () => "expired");
+  const pending = retry.raceWithTimeout(source.promise, NATIVE_OVERFLOW, () => "expired");
   const lastCall = scheduled.mock.calls.at(-1);
-  expect(lastCall?.[1]).toBe(TIMER_MAX);
+  expect(lastCall?.[1]).toBe(NATIVE_MAX);
   expect(vi.getTimerCount()).toBe(1);
   const settled = pending.then(
     () => "done",
     () => "timed out",
   );
-  await vi.advanceTimersByTimeAsync(TIMER_MAX - 1);
+  await vi.advanceTimersByTimeAsync(NATIVE_MAX - 1);
   expect(await Promise.race([settled, Promise.resolve("still pending")])).toBe("still pending");
   source.resolve("done");
   expect(await settled).toBe("done");
   scheduled.mockRestore();
 });
 
+it("preserves a deadline at the native timer ceiling unchanged", async () => {
+  const scheduled = vi.spyOn(globalThis, "setTimeout");
+  const source = createDeferred<string>();
+  void retry.raceWithTimeout(source.promise, NATIVE_MAX, () => "expired");
+  expect(scheduled.mock.calls.at(-1)?.[1]).toBe(NATIVE_MAX);
+  scheduled.mockRestore();
+  source.resolve("done");
+  await vi.advanceTimersByTimeAsync(0);
+});
+
 it("does not hand a non-finite deadline to a native timer", async () => {
   const scheduled = vi.spyOn(globalThis, "setTimeout");
   const source = createDeferred<string>();
+  // A non-finite deadline keeps native immediate-fire semantics (0) instead of
+  // being passed through as an invalid delay; only the timer argument changes.
   void retry.raceWithTimeout(source.promise, Number.NaN, () => "expired");
   expect(scheduled.mock.calls.at(-1)?.[1]).toBe(0);
   scheduled.mockRestore();

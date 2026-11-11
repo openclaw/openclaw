@@ -1,4 +1,6 @@
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
+// Node's native timer limit: delays above 2^31-1 ms overflow to a near-immediate wake.
+const MAX_NATIVE_TIMER_MS = 2_147_483_647;
 
 export function createAbortError(message: string, options?: ErrorOptions): Error {
   const error = new Error(message, options);
@@ -60,11 +62,12 @@ export async function raceWithTimeout<T, F>(
           reject(error);
         }
       };
-      // Native timers overflow to a near-immediate wake above MAX_TIMER_TIMEOUT_MS;
-      // clamp the deadline so a large configured timeout cannot fire early.
+      // Native timers overflow to a near-immediate wake above MAX_NATIVE_TIMER_MS;
+      // saturate the deadline there so a large configured timeout cannot fire early.
+      // Values within Node's native range (<= 2^31-1) are preserved unchanged.
       timer = setTimeout(
         () => settle(onTimeout),
-        Number.isFinite(timeoutMs) ? Math.min(timeoutMs, MAX_TIMER_TIMEOUT_MS) : 0,
+        Number.isFinite(timeoutMs) ? Math.min(timeoutMs, MAX_NATIVE_TIMER_MS) : 0,
       );
       if (options.ref === false) {
         timer.unref?.();
