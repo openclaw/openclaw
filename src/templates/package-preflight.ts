@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
 import { preflightSkillFromClawHub } from "../skills/lifecycle/clawhub.js";
+import { preflightBundledTemplatePlugin } from "./bundled-plugin.js";
 import { preflightBundledTemplateSkill } from "./bundled-skill.js";
 import {
   preflightTemplatePluginPackage,
@@ -35,11 +36,19 @@ export async function preflightTemplatePackage(
           snapshot: options.snapshot,
           config: options.config,
         })
-      : {
-          ok: false,
-          code: "bundled_plugin_unavailable",
-          message: "Bundled plugin installation is unavailable.",
-        };
+      : options.snapshot
+        ? preflightBundledTemplatePlugin({
+            dependency: pkg,
+            rootDir: options.packageRoot,
+            snapshot: options.snapshot,
+            config: options.config,
+            env: options.env,
+          })
+        : {
+            ok: false,
+            code: "bundled_source_unavailable",
+            message: "Bundled plugin has no reviewed snapshot.",
+          };
   }
   if (pkg.kind === "skill") {
     const result = await preflightSkillFromClawHub({

@@ -40,12 +40,21 @@ export async function planBundledTemplateDependency(params: {
       params.skillTargets.has(preflight.installId.toLowerCase()) ||
       (preflight.name && params.skillNames.has(preflight.name.normalize("NFC").toLowerCase())) ||
       templateManifestWorkspaceConflictsWithPath(params.manifest, `skills/${preflight.installId}`));
+  const incompletePlugin =
+    dependency.kind === "plugin" &&
+    (!preflight.detectedFormat ||
+      !preflight.adapterIdentity ||
+      !preflight.declaredCapabilities ||
+      !preflight.capabilityGrants ||
+      !preflight.capabilityGrantsByPluginId ||
+      Object.keys(preflight.capabilityGrantsByPluginId).length === 0);
   const blocked =
     !preflight.ok ||
     !preflight.snapshot ||
     !preflight.name ||
     !preflight.installId ||
-    Boolean(collision);
+    Boolean(collision) ||
+    incompletePlugin;
   if (dependency.kind === "skill") {
     if (preflight.name) {
       params.skillNames.add(preflight.name.normalize("NFC").toLowerCase());
@@ -61,7 +70,10 @@ export async function planBundledTemplateDependency(params: {
         path: params.declarationPath,
         code: collision
           ? "bundled_skill_collision"
-          : (preflight.code ?? "bundled_dependency_invalid"),
+          : (preflight.code ??
+            (incompletePlugin
+              ? "plugin_capability_provenance_incomplete"
+              : "bundled_dependency_invalid")),
         message: collision
           ? "Bundled skill identity or destination conflicts with another declaration."
           : (preflight.message ?? "Bundled dependency identity is incomplete."),

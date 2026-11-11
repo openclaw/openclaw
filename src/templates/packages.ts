@@ -18,6 +18,11 @@ import {
   type ClawPackageLifecycleLease,
 } from "../state/claw-package-lifecycle-lease.js";
 import { readTemplatePackageRefsForAdd } from "./add-state-write.js";
+import {
+  BundledTemplatePluginInstallError,
+  installBundledTemplatePlugin,
+  rollbackBundledTemplatePlugins,
+} from "./bundled-plugin.js";
 import { installBundledTemplateSkill } from "./bundled-skill.js";
 import type { InstallTemplatePackagesOptions } from "./package-install-options.js";
 import { bundledDependencyFromAction, packageFromAction } from "./package-plan-action.js";
@@ -66,11 +71,14 @@ export async function installTemplatePackages(
   const pluginIds = plan.actions
     .filter((action) => action.kind === "package" && action.details?.kind === "plugin")
     .map((action) => {
-      const pkg = packageFromAction(action);
-      if (!pkg.installId) {
+      const pluginId =
+        action.details?.source === "bundled"
+          ? bundledDependencyFromAction(action).installId
+          : packageFromAction(action).installId;
+      if (!pluginId) {
         throw new Error("Template plugin requirement has no install owner");
       }
-      return pkg.installId;
+      return pluginId;
     });
   if (pluginIds.length === 0) {
     return await installTemplatePackagesUnlocked(plan, options);
@@ -102,7 +110,7 @@ export async function rollbackStatelessTemplatePackages(
     "assertCurrent" | "prepareEffect" | "env" | "path" | "runtime"
   > = {},
 ): Promise<string[]> {
-  const errors: string[] = [];
+  const errors = await rollbackBundledTemplatePlugins(packages, options);
   const runtime = options.runtime ?? defaultRuntime;
   for (const pkg of packages.toReversed()) {
     if (pkg.source !== "clawhub" || pkg.kind !== "plugin" || pkg.origin !== "template-introduced") {
@@ -206,8 +214,35 @@ async function installTemplatePackagesUnlocked(
     try {
       if (action.details?.source === "bundled") {
         const dependency = bundledDependencyFromAction(action);
-        if (dependency.kind !== "skill") {
-          throw new Error("Bundled plugin installation is unavailable.");
+        if (dependency.kind === "plugin") {
+          if (dependency.ownerAction === "install") {
+            pluginNotice = {
+              type: "template_plugin_install",
+              pluginId: dependency.installId,
+              packageName: dependency.name,
+              displayName: dependency.name,
+              status: "error",
+            };
+          }
+          try {
+            installedPackages.push(
+              await installBundledTemplatePlugin({ plan, dependency, options }),
+            );
+          } catch (error) {
+            if (error instanceof BundledTemplatePluginInstallError && error.receipt) {
+              installedPackages.push(error.receipt);
+            }
+            throw error;
+          }
+          if (pluginNotice) {
+            pluginCompleted = true;
+            await options.onSetupOutcome?.({
+              kind: "plugin-install",
+              plugin: { ...pluginNotice, status: "installed" },
+            });
+            options.assertCurrent?.();
+          }
+          continue;
         }
         await installBundledTemplateSkill({
           rootDir: plan.template.packageRoot,
@@ -573,7 +608,10 @@ async function installTemplatePackagesUnlocked(
       }
       const message = coerceErrorMessage(error);
       throw new TemplatePackageInstallError(
-        error instanceof TemplatePackageInstallError ? error.code : "package_install_failed",
+        error instanceof TemplatePackageInstallError ||
+          error instanceof BundledTemplatePluginInstallError
+          ? error.code
+          : "package_install_failed",
         message,
         installedPackages,
         { cause: error },
