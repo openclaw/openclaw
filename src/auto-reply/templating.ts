@@ -50,8 +50,10 @@ export type ChannelStructuredContextEntry = {
   sessionTranscriptMode?: "preserve";
   /** Internal exact-id hints for canonical transcript/live-cache deduplication. */
   sessionTranscriptDedupeMessageIds?: string[];
-  /** Internal visible-text hints for legacy assistant rows without transcript ids. */
+  /** Internal presentation hints; body: keys coalesce exact text without linking message identities. */
   sessionTranscriptAssistantTextDedupeKeys?: string[];
+  /** Native context candidates take available slots after explicit reply targets. */
+  sessionTranscriptPriorityMessageIds?: string[];
 };
 
 export type SessionTranscriptContext = {

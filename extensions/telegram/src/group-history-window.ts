@@ -4,8 +4,11 @@ import type {
   TelegramAmbientTranscriptWatermark,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
+import { resolveCompleteTelegramPromptContextProjectionIds } from "./prompt-context-projection.js";
 
 const TELEGRAM_SELF_SENDER_SUFFIX = " (you)";
+const RECENT_SELF_CONTEXT_MAX_AGE_MS = 15 * 60_000;
+const RECENT_SELF_CONTEXT_LIMIT = 3;
 
 export function buildTelegramSelfSenderName(
   configuredName?: string,
@@ -114,6 +117,7 @@ export function selectTelegramGroupPromptContext(params: {
   historyLimit: number;
   ambientWatermark?: TelegramAmbientTranscriptWatermark;
   includeBeforeSelf: boolean;
+  currentTimestampMs?: number;
 }): TelegramPromptContextEntry[] {
   return params.promptContext.flatMap((entry) => {
     if (!isTelegramChatWindowPromptContext(entry)) {
@@ -146,21 +150,85 @@ export function selectTelegramGroupPromptContext(params: {
             typeof message["sender"] === "string" && isTelegramSelfSenderName(message["sender"]),
         );
     const selected = new Set(recentMessages.slice(lastSelfIndex + 1));
+    const recentSelfMessages: typeof recentMessages = [];
+    // Independent outbound notifications may have no canonical assistant turn.
+    // Keep recent authenticated self entries as candidates, not reply targets.
+    // Their labels are authenticated by the message-context owner before selection.
+    const now = params.currentTimestampMs;
+    if (!params.includeBeforeSelf && typeof now === "number" && Number.isFinite(now)) {
+      for (const message of recentMessages
+        .filter((message) => {
+          const timestamp = message["timestamp_ms"];
+          return (
+            typeof message["sender"] === "string" &&
+            isTelegramSelfSenderName(message["sender"]) &&
+            typeof timestamp === "number" &&
+            Number.isFinite(timestamp) &&
+            timestamp <= now &&
+            now - timestamp <= RECENT_SELF_CONTEXT_MAX_AGE_MS
+          );
+        })
+        .slice(-RECENT_SELF_CONTEXT_LIMIT)) {
+        selected.add(message);
+        recentSelfMessages.push(message);
+      }
+    }
     const messages = sourceMessages.filter(
       (message) => message["is_reply_target"] === true || selected.has(message),
     );
     if (messages.length === 0) {
       return [];
     }
+    const assistantTextKeys = [
+      ...(messages.length === sourceMessages.length
+        ? (entry.sessionTranscriptAssistantTextDedupeKeys ?? [])
+        : []),
+      ...recentSelfMessages.flatMap((message) =>
+        typeof message["body"] === "string" && message["body"].trim()
+          ? [`body:${message["body"].trim()}`]
+          : [],
+      ),
+    ];
+    const priorityMessageIds = recentSelfMessages.flatMap((message) =>
+      typeof message["message_id"] === "string" ? [message["message_id"]] : [],
+    );
+    const recentContextMetadata = {
+      ...(assistantTextKeys.length > 0
+        ? { sessionTranscriptAssistantTextDedupeKeys: [...new Set(assistantTextKeys)] }
+        : {}),
+      ...(priorityMessageIds.length > 0
+        ? { sessionTranscriptPriorityMessageIds: priorityMessageIds }
+        : {}),
+    };
     if (messages.length === sourceMessages.length) {
-      return [entry];
+      return [{ ...entry, ...recentContextMetadata }];
     }
-    // A clipped projection must not hide a complete transcript message.
+    // Clipping unrelated ambient rows must not duplicate a complete final reply;
+    // clipping any physical projection part must restore its canonical text.
+    const completeProjectionIds = resolveCompleteTelegramPromptContextProjectionIds(
+      messages.map((message) =>
+        typeof message["message_id"] === "string"
+          ? entry.telegramTranscriptProjections?.[message["message_id"]]
+          : undefined,
+      ),
+    );
+    const retainedProjectionIds = entry.sessionTranscriptDedupeMessageIds?.filter((id) =>
+      completeProjectionIds.has(id),
+    );
     const {
       sessionTranscriptDedupeMessageIds: _projectionIds,
       sessionTranscriptAssistantTextDedupeKeys: _assistantTextKeys,
       ...selectedEntry
     } = entry;
-    return [{ ...selectedEntry, payload: { ...payload, messages } }];
+    return [
+      {
+        ...selectedEntry,
+        ...recentContextMetadata,
+        ...(retainedProjectionIds?.length
+          ? { sessionTranscriptDedupeMessageIds: retainedProjectionIds }
+          : {}),
+        payload: { ...payload, messages },
+      },
+    ];
   });
 }

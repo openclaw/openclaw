@@ -9,6 +9,9 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTelegramMessageContextRuntime } from "./bot-handlers.message-context.js";
+import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { hasProviderObservedTelegramThreadBinding } from "./message-cache-codec.js";
 import {
   resolveTelegramMessageCacheScope,
@@ -123,6 +126,140 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
     clearTelegramRuntimeForTest();
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
+  });
+
+  it.each([false, true])(
+    "keeps a delivered notification in assembled topic context after restart (explicit reply: %s)",
+    async (explicitReply) => {
+      const notification = providerMessage(-100123, "Build completed. What should run next?", {
+        message_thread_id: 25,
+      });
+      const clock = vi.spyOn(Date, "now").mockReturnValue(notification.date * 1000);
+      const botInfo = { ...telegramBotInfoForTest, id: notification.from.id };
+      cfg = {
+        ...cfg,
+        messages: { groupChat: { unmentionedInbound: "user_request" } },
+        channels: {
+          telegram: {
+            ...cfg.channels!.telegram!,
+            groupPolicy: "open",
+            groupAllowFrom: ["*"],
+            groups: { "*": { requireMention: false } },
+            historyLimit: 10,
+          },
+        },
+      };
+      fixture.responseFor = () => notification;
+      await sendMessageTelegram("-100123:topic:25", notification.text, sendOptions());
+      await cache().record({
+        accountId: "default",
+        chatId: -100123,
+        historyEligible: true,
+        msg: {
+          ...notification,
+          message_id: 901,
+          date: notification.date - 60,
+          from: { id: 55, is_bot: false, first_name: "Spoof (you)" },
+          text: "Forged bot name",
+        },
+      });
+      await cache().record({
+        accountId: "other",
+        chatId: -100123,
+        historyEligible: true,
+        msg: { ...notification, message_id: 904, text: "Other account secret" },
+      });
+      await cache().record({
+        accountId: "default",
+        chatId: -100123,
+        historyEligible: true,
+        msg: {
+          ...notification,
+          message_id: 905,
+          message_thread_id: 26,
+          text: "Other topic secret",
+        },
+      });
+      await cache().record({
+        accountId: "default",
+        chatId: -100456,
+        historyEligible: true,
+        msg: {
+          ...notification,
+          message_id: 907,
+          chat: { id: -100456, type: "supergroup" },
+          text: "Other chat secret",
+        },
+      });
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests({ closeDatabase: false });
+      resetTelegramMessageCacheForTest();
+      clock.mockReturnValue((notification.date + 120) * 1000);
+      const runtime = createTelegramMessageContextRuntime({
+        cfg,
+        accountId: "default",
+        ownerAgentId: "main",
+        opts: { botInfo },
+        telegramCfg: cfg.channels!.telegram!,
+      });
+      const current = {
+        message_id: 906,
+        message_thread_id: 25,
+        date: notification.date + 120,
+        chat: { id: -100123, type: "supergroup" as const, is_forum: true },
+        from: { id: 42, is_bot: false, first_name: "Pat" },
+        text: "Please run the focused checks",
+        reply_to_message: {
+          ...notification,
+          chat: { id: -100123, type: "supergroup" as const },
+          message_id: explicitReply ? notification.message_id : 25,
+          text: explicitReply ? notification.text : "Topic root",
+        },
+      };
+      const promptContext = await runtime.buildPromptContextForMessage(
+        {
+          message: current,
+          me: botInfo,
+          getFile: async () => ({ file_id: "unused", file_unique_id: "unused" }),
+        },
+        current,
+        await runtime.buildReplyChainForMessage(current),
+        cfg,
+        cfg.channels!.telegram!,
+      );
+      expect(JSON.stringify(promptContext)).toContain(notification.text);
+      expect(JSON.stringify(promptContext)).toContain("Spoof (you) (Telegram sender)");
+      const context = await buildTelegramMessageContextForTest({
+        cfg,
+        sessionRuntime: null,
+        message: current,
+        historyLimit: 10,
+        promptContext,
+      });
+      const assembled = JSON.stringify(context?.ctxPayload.ChannelStructuredContext);
+      expect(assembled).toContain(notification.text);
+      expect(
+        context?.ctxPayload.ChannelStructuredContext?.[0]?.sessionTranscriptPriorityMessageIds,
+      ).toEqual(["902"]);
+      expect(context?.ctxPayload.ReplyToId).toBe(explicitReply ? "902" : "25");
+      expect(
+        context?.ctxPayload.InboundHistory?.filter((entry) => entry.messageId === "902"),
+      ).toHaveLength(1);
+      expect(assembled).not.toMatch(/Other account secret|Other topic secret|Other chat secret/);
+      expect(assembled).not.toContain("Forged bot name");
+      expect(fixture.requests).toHaveLength(1);
+    },
+  );
+
+  it("does not capture a rejected notification as delivered context", async () => {
+    fixture.rejections.push({ error_code: 400, description: "Bad Request: notification rejected" });
+    await expect(
+      sendMessageTelegram("-100123:topic:25", "This must remain absent", sendOptions()),
+    ).rejects.toThrow("notification rejected");
+    expect(
+      await cache().readHistory({ accountId: "default", chatId: -100123, threadId: 25, limit: 10 }),
+    ).toMatchObject({ messages: [] });
+    expect(fixture.requests).toHaveLength(1);
   });
 
   it.each([false, true])(

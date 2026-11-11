@@ -434,6 +434,7 @@ export async function buildTelegramInboundContextPayload(
         historyLimit,
         ambientWatermark: ambientTranscriptWatermark,
         includeBeforeSelf: inboundEventKind === "room_event",
+        currentTimestampMs: messageTimestamp,
       })
     : baseVisiblePromptContext;
   const groupHistoryPromptEntries = telegramPromptContextHistory(visiblePromptContext);

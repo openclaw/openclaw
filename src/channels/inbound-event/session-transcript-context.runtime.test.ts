@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_CONTEXT_JSON_STRING_CHARS } from "../../auto-reply/reply/channel-prompt-context.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
@@ -63,6 +64,44 @@ describe("session transcript inbound context", () => {
     ]);
   });
 
+  it("keeps a selected native notification through transcript merge and prompt rendering", async () => {
+    // Telegram's native history/selection suite owns capture and selection. This
+    // boundary starts with its selected window and supplies only older storage rows.
+    readRecent.mockResolvedValue([
+      {
+        id: "old-1",
+        role: "user",
+        text: "Older discussion. ".repeat(MAX_CONTEXT_JSON_STRING_CHARS),
+        timestamp: 1_000,
+      },
+      {
+        id: "old-2",
+        role: "assistant",
+        text: "Earlier repair. ".repeat(MAX_CONTEXT_JSON_STRING_CHARS),
+        timestamp: 2_000,
+      },
+    ]);
+    const notification = "Build completed. What should run next?";
+    const ctx = await merged({
+      Provider: "telegram",
+      ReplyToId: "25",
+      SessionTranscriptContext: { chatWindow: true, historyLimit: 3 },
+      ChannelStructuredContext: chatWindow(
+        [{ message_id: "902", sender: "OpenClaw (you)", body: notification, timestamp_ms: 3_000 }],
+        { source: "telegram" },
+      ),
+    });
+    const prompt = buildInboundUserContextPrefix(ctx);
+    expect(prompt.split(notification)).toHaveLength(2);
+    expect(prompt).toContain("[omitted]");
+    expect(ctx.ReplyToId).toBe("25");
+    expect(ctx.ChannelStructuredContext?.[0]?.payload).toMatchObject({
+      messages: expect.arrayContaining([
+        expect.objectContaining({ message_id: "902", body: notification }),
+      ]),
+    });
+  });
+
   it("renders the configured native window without restoring stale transcript content", async () => {
     readRecent.mockResolvedValue([{ role: "user", text: "deleted platform message" }]);
     const ctx = await merged({
@@ -80,6 +119,88 @@ describe("session transcript inbound context", () => {
     );
     expect(prompt).not.toContain("deleted platform message");
   });
+
+  it("coalesces assistant text without merging distinct native candidates or matching user turns", async () => {
+    readRecent.mockResolvedValue([
+      { id: "background", role: "assistant", text: "Build complete", timestamp: 2_000 },
+      { id: "user", role: "user", text: "Build complete", timestamp: 3_000 },
+    ]);
+    const ctx = await merged({
+      ReplyToId: "25",
+      SessionTranscriptContext: { historyLimit: 4 },
+      ChannelStructuredContext: chatWindow(
+        [
+          {
+            message_id: "902",
+            sender: "OpenClaw (you)",
+            body: "Build complete",
+            timestamp_ms: 1_000,
+          },
+          {
+            message_id: "903",
+            sender: "OpenClaw (you)",
+            body: "Build complete",
+            timestamp_ms: 1_500,
+          },
+        ],
+        {
+          source: "telegram",
+          sessionTranscriptAssistantTextDedupeKeys: ["body:Build complete"],
+          sessionTranscriptPriorityMessageIds: ["902", "903"],
+        },
+      ),
+    });
+    expect(ctx.ChannelStructuredContext?.[0]?.payload).toMatchObject({
+      messages: [{ message_id: "902" }, { message_id: "903" }, { message_id: "session:user" }],
+    });
+    expect(ctx.ReplyToId).toBe("25");
+  });
+
+  it.each([false, true])(
+    "keeps recent native context ahead of unmatched formatted copies (explicit: %s)",
+    async (explicit) => {
+      readRecent.mockResolvedValue([
+        { id: "background", role: "assistant", text: "**Build complete**", timestamp: 2_000 },
+      ]);
+      const ctx = await merged({
+        SessionTranscriptContext: { historyLimit: 2 },
+        ChannelStructuredContext: chatWindow(
+          [
+            ...(explicit
+              ? [
+                  {
+                    message_id: "25",
+                    body: "explicit target",
+                    timestamp_ms: 0,
+                    is_reply_target: true,
+                  },
+                ]
+              : []),
+            {
+              message_id: "902",
+              sender: "OpenClaw (you)",
+              body: "Build complete",
+              timestamp_ms: 1_000,
+            },
+            { message_id: "903", sender: "Pat", body: "next?", timestamp_ms: 3_000 },
+          ],
+          {
+            source: "telegram",
+            sessionTranscriptAssistantTextDedupeKeys: ["body:Build complete"],
+            sessionTranscriptPriorityMessageIds: ["902"],
+          },
+        ),
+      });
+      expect(ctx.ChannelStructuredContext?.[0]?.payload).toMatchObject({
+        messages: explicit
+          ? [{ message_id: "25" }, { message_id: "902" }]
+          : [{ message_id: "902" }, { message_id: "903" }],
+      });
+      const prompt = buildInboundUserContextPrefix(ctx);
+      expect(prompt).toContain("Build complete");
+      expect(prompt).not.toContain("sessionTranscriptPriorityMessageIds");
+    },
+  );
 
   it("restores marked Cron delivery context when no live chat window survives", async () => {
     readRecent.mockImplementation(async (params) =>

@@ -227,7 +227,7 @@ it("keeps current discussion alongside stale ancestry and persists edited self t
   const bot = await createBot(false, true, cfg);
   const old = reply("Old deployment answer", {
     chat: group,
-    date: Math.floor(Date.now() / 1000) - 20,
+    date: Math.floor(Date.now() / 1000) - 20 * 60,
   });
   const botReply = message("K", { chat: group, from: bot.botInfo, date: old.date + 1 });
   await receive(bot, { message: old });

@@ -225,13 +225,12 @@ export async function mergeSessionTranscriptContext(params: {
       }
       const message = historyMessage(item.entry);
       const keys = messageKeys(message);
-      const visibleAssistantKeys =
-        item.role === "assistant"
-          ? messageKeys({
-              ...message,
-              body: stripInlineDirectiveTagsForDelivery(item.entry.body).text,
-            })
-          : keys;
+      // Exact body hints coalesce supplemental text, not identities or stored turns.
+      let visibleAssistantKeys = keys;
+      if (item.role === "assistant") {
+        const body = stripInlineDirectiveTagsForDelivery(item.entry.body).text;
+        visibleAssistantKeys = [...messageKeys({ ...message, body }), `body:${body.trim()}`];
+      }
       if (
         keys.some((key) => seenTranscript.has(key)) ||
         (item.role === "assistant" &&
@@ -246,12 +245,25 @@ export async function mergeSessionTranscriptContext(params: {
     let messages = [...added, ...existing].toSorted(compareMessages);
     if (!(messages.length <= limit)) {
       const pinned = messages.filter((message) => message.is_reply_target === true);
-      const available = Math.max(0, limit - pinned.length);
+      const priorityIds = new Set(filterStringEntries(window.sessionTranscriptPriorityMessageIds));
+      const priority = messages.filter(
+        (message) =>
+          message.is_reply_target !== true &&
+          typeof message.message_id === "string" &&
+          priorityIds.has(message.message_id),
+      );
+      const prioritySlots = Math.max(0, limit - pinned.length);
+      const selectedPriority = prioritySlots === 0 ? [] : priority.slice(-prioritySlots);
+      const available = Math.max(0, prioritySlots - selectedPriority.length);
       const recent =
         available === 0
           ? []
-          : messages.filter((message) => message.is_reply_target !== true).slice(-available);
-      messages = [...pinned.slice(-limit), ...recent].toSorted(compareMessages);
+          : messages
+              .filter((message) => message.is_reply_target !== true && !priority.includes(message))
+              .slice(-available);
+      messages = [...pinned.slice(-limit), ...selectedPriority, ...recent].toSorted(
+        compareMessages,
+      );
     }
     window.payload = { ...window.payload, messages };
     if (added.length > 0) {
