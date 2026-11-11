@@ -2,6 +2,7 @@ import {
   normalizeSortedUniqueTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import { GATEWAY_CLIENT_IDS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   buildPairingConnectCloseReason,
   buildPairingConnectErrorDetails,
@@ -33,6 +34,7 @@ import { isScopelessNodePairingRequest } from "../../node-pairing-auto-approve.j
 import {
   openclawIdPeerKeyOf,
   recordDeviceTokenPeer,
+  recordTokenlessOpenClawIdOperator,
 } from "../../openclaw-id/device-token-binding.js";
 import { approveOpenClawIdNodePairing } from "../../openclaw-id/node-pairing.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
@@ -266,7 +268,9 @@ export async function authorizeGatewayConnectDevice(
           : undefined,
       );
       const operatorApprovalScopes =
-        pairing.request.isRepair !== true || plan.isSameKeyScopeUpgrade
+        pairing.request.isRepair !== true ||
+        plan.isSameKeyScopeUpgrade ||
+        plan.restoresApprovedAccess
           ? plan.autoApproveOperatorScopes
           : null;
       const requestContext = buildRequestContext();
@@ -493,8 +497,12 @@ export async function authorizeGatewayConnectDevice(
             : {}),
           ...(resolution ? { waitForResolution: true } : {}),
           deviceId: device.id,
-          requestedRole: role,
-          requestedScopes: scopes,
+          // Approval grants the merged pending request, which can carry an earlier role.
+          requestedRole:
+            (pairing.request.roles ?? [pairing.request.role]).find(
+              (pendingRole) => pendingRole && !approvedRoles.includes(pendingRole),
+            ) ?? role,
+          requestedScopes: pairing.request.scopes ?? scopes,
           ...(approvedRoles.length > 0 ? { approvedRoles } : {}),
           ...(approvedScopes.length > 0 ? { approvedScopes } : {}),
         });
@@ -646,6 +654,16 @@ export async function authorizeGatewayConnectDevice(
           role: issued.role,
           peerKey: issuedPeerKey,
         });
+      }
+    }
+    if (role === "operator" && !deviceToken && state.isControlUi) {
+      // Lanes that issue no token still mark the browser as managed on the Access page.
+      // Approval may have persisted a token this lane never delivers; binding it keeps that
+      // token on the membership lifecycle. Browser device keys are per origin, so a token
+      // issued to this key on ordinary ingress needs the same origin there too (accepted).
+      const current = await getPairedDevice(state.device.id);
+      if (current?.clientId === GATEWAY_CLIENT_IDS.CONTROL_UI) {
+        await recordTokenlessOpenClawIdOperator(state.device.id, issuedPeerKey);
       }
     }
   }

@@ -27,10 +27,7 @@ import {
   resolveSessionResetType,
   resolveThreadFlag,
 } from "../../config/sessions/reset.js";
-import {
-  commitReplySessionInitialization,
-  loadReplySessionInitializationSnapshot,
-} from "../../config/sessions/session-accessor.js";
+import { commitReplySessionInitialization } from "../../config/sessions/session-accessor.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -126,9 +123,9 @@ import type {
 } from "./session-init.types.js";
 import {
   assertReplySessionInitializationAllowed,
+  loadReplySessionInitializationForAttempt,
   prepareReplySessionInitialization,
   resolveInitSessionStateAttemptContext,
-  resolveInitializationSessionReader,
   type InitSessionStateParams,
   type InitSessionStateAttemptContext,
 } from "./session-initialization-admission.js";
@@ -358,13 +355,11 @@ async function initSessionStateAttemptLocked(
   const initializationSnapshot = await measureDiagnosticsTimelineSpan(
     "reply.session.snapshot",
     () =>
-      loadReplySessionInitializationSnapshot(
+      loadReplySessionInitializationForAttempt(
         { ...sessionTarget, relatedSessionKeys },
-        {
-          reader: resolveInitializationSessionReader(params, attemptContext),
-          includeLifecycle: true,
-          assertCurrent: () => params.signal?.throwIfAborted(),
-        },
+        params,
+        attemptContext,
+        mainSessionKey,
       ),
   );
   if (ingressTimingEnabled) {
