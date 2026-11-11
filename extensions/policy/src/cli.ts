@@ -2,6 +2,7 @@ import { isAbsolute, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Command } from "commander";
 import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   exitCodeFromFindings,
   healthFindingMeetsSeverity,
@@ -108,6 +109,8 @@ export function registerPolicyCli(program: Command): void {
         // Retain signal custody until an already-admitted evaluation has settled.
         process.on("SIGINT", onSigint);
         process.on("SIGTERM", onSigterm);
+        // A closed output pipe ends the command scope; the watch must stop with it.
+        getAsyncWorkSignal()?.addEventListener("abort", () => controller.abort(), { once: true });
         let previousKey: string | undefined;
         try {
           while (!controller.signal.aborted) {
