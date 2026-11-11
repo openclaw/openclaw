@@ -152,7 +152,7 @@ async function resolveUploadPaths({
       return managedMediaPathResult;
     }
 
-    let uploadPathsResult: ExistingPathsResult | StrictExistingPathsResult | undefined;
+    let uploadPathsResult: ExistingPathsResult | undefined;
     if (managedMediaPathResult?.uploadRootPrecedence !== false) {
       const resolvePaths =
         strict || managedMediaPathResult?.uploadRootPrecedence === true
