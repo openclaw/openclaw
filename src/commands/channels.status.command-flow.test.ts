@@ -102,7 +102,8 @@ type AccountSnapshotParams = {
   accountId: string;
 };
 
-vi.mock("../channels/plugins/status.js", () => ({
+vi.mock("../channels/plugins/status.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/plugins/status.js")>()),
   buildReadOnlySourceChannelAccountSnapshot: async (params: AccountSnapshotParams) => ({
     accountId: params.accountId,
     ...params.plugin.config.inspectAccount(params.cfg),
